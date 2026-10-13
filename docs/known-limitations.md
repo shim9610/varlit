@@ -110,34 +110,28 @@ keeps it open pays this once and does not care.
   and each reader owns its cache.
 - Nothing needs doing about memory: an open retains no commit-map payload.
 
-**Planned.** No further reduction of the verifying open is scheduled; a pass that
-did not read the candidate set would not be a verification. The residual cost of a
-*non*-verifying open is the persisted page index — 8 bytes per live page
-(`PAGE_INDEX_ENTRY_LEN`), enumerated into a resident map at open
-(`SparseBitmap::indexed_pages`) — so it is `O(live pages)` too, 512x smaller per
-entry than the 4,096-byte page a verifying open reads for the same entry, but not
-gone. Making that index demand-paged would mean making it searchable on disk
-rather than enumerated, which would also put §1.4's "not cached is not the same as
-not published" guarantee behind an I/O, since that guarantee rests on the index
-being complete in memory. It is a different structure, not a tuning change
-(open item 30).
+**VMAT v5.** OnDemand opens now read validated directory headers without
+traversing the live-page list. Direct page-to-slot metadata replaces the old
+reconstructed mirror. AtOpen still performs full verification by choice.
+Earlier timing/byte tables in this section describe the older representation.
 
 <a id="12-what-residency-still-costs-the-page-index-mirror-and-a-per-bitmap-cache-bound"></a>
 
-### 1.2 Bitmap directories use private temporary storage
+### 1.2 Bitmap directories read original metadata
 
-Open still enumerates the persisted page index, but its slot-to-page and
-page-to-first-slot mirrors use an owner-local temporary COW tree. Only fixed
-roots and a recent-lookup hint are retained; there is no whole live-set RAM map.
-Follow stages changed slots in a private root and changed-page lists in bounded
-spill buffers. Adoption is infallible after preparation; corruption or scratch
-I/O failure preserves the previously held generation. No reader/writer mutex
-or process-wide cache is involved.
+Each directory stores a count, forward slots and a sparse reverse array in the
+matrix generation. The reverse entry is addressed by bitmap page number; its
+forward link is cross-checked before a published page is used. Readers cache
+bounded metadata windows, configured through `with_matrix_directory_cache_bytes`
+(default 1 MiB per bitmap). Zero disables retention. A miss reads the same
+original metadata regardless of cache capacity; no mirror or scratch index is
+constructed. Normal follow streams changed metadata ranges and keeps the old
+root on any preparation failure. Aggregate queries still stream relevant pages.
 
-This adds scratch-file I/O and disk usage. Open is still proportional to index
-entries, and aggregate queries still visit relevant pages. The scratch tree has
-fixed page/framing workspace even with a zero cache setting. This release has
-not established large-scale throughput for these new scratch paths.
+The reverse array doubles the logical entry-region reservation from 8 to 16
+bytes per possible bitmap page, plus the existing header. Zero extents and the
+COW generation layer avoid eagerly writing that entire reservation. Actual
+physical size follows touched metadata windows and publication history.
 
 <a id="13-max_matrix_bitmap_bytes-bounds-a-cache-and-the-residual-admission-limit-is-the-index-mirror"></a>
 
@@ -205,10 +199,10 @@ under any policy**, so none of this is a soundness hole: every page faulted in i
 authenticated against its stored digest before a bit of it is reported, and so is
 every page an aggregate count reads.
 
-**What the default does not fix.** Open still reads the **persisted page index in
-full**. That is 8 bytes per live page — 512x smaller than a page — but still
-`O(live pages)`, not `O(1)`. At one million live pages that is 8 MB read and
-temporary-index construction (§1.2) before a single cell is addressed.
+**Verification remains work.** AtOpen streams entries and verifies candidate
+pages. OnDemand defers entry reads and validation to access, so it does not give
+an all-directory corruption verdict at open. Explicit verification restores that
+scan; destructive CRC rebuild validates its directory before trusting absences.
 
 **Three consequences of demand residency that are part of the declaration, not
 defects:**
@@ -218,9 +212,9 @@ defects:**
    touches it. That is a per-page refusal, not a verdict on the map; the verdict is
    `MatrixMetadataVerification`.
 2. **A page absent from the persisted index still reads as clear.** That is a
-   fact the file supplied, not a guess: the index is loaded in full at open and is
-   authoritative. "Not cached" and "not published" stay distinct, verified across
-   cache eviction.
+   fact read from the original directory, not a cache miss. "Not cached" and
+   "not published" stay distinct across eviction. OnDemand cannot diagnose
+   unrelated directory corruption until that metadata is read or scrubbed.
 3. **Cache residency does not decide visibility.** Every fault reads the captured
    generation, including after eviction; `follow()` explicitly adopts a new one.
 
@@ -1087,7 +1081,7 @@ The rows that remain unexecuted:
 
 | Row | Evidence | What it does not cover |
 | --- | --- | --- |
-| Matrix `VMAT` v1/v2/v3 refused | `matrix_integrity_scaling.rs` writes a current file and **patches its version field** | that a genuinely old matrix file's other regions also refuse rather than misparse |
+| Matrix `VMAT` v1/v2/v3/v4 refused | `matrix_integrity_scaling.rs` writes a current file and **patches its version field** | that a genuinely old matrix file's other regions also refuse rather than misparse |
 | Pre-nonce matrix refused at the nonce region | **no test, no manual check** | the whole row |
 | Matrix and disk-index sidecar version refusals | source inspection only | the whole rows |
 

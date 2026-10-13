@@ -63,6 +63,7 @@ impl BitmapDirectory {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn set_limit(&mut self, limit: usize) -> Result<()> {
         if limit == self.limit {
             return Ok(());
@@ -264,6 +265,7 @@ impl BitmapDirectory {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn swapped(&self, page: u64, slot: u64, moved: u64, last: u64) -> Result<Self> {
         let mut next = self.clone();
         // On header failure with no swap the persisted array is unchanged.

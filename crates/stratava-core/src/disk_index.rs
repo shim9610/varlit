@@ -3468,6 +3468,7 @@ impl std::fmt::Debug for ScratchIndex {
     }
 }
 impl ScratchIndex {
+    #[cfg(test)]
     pub(crate) fn set_cache_bytes(&mut self, bytes: usize) {
         if self.cache_bytes != bytes {
             self.cache_bytes = bytes;

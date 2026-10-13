@@ -6,9 +6,14 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
-- Keep small matrix directories and merge scratch in bounded RAM, spilling only
-  after the working budget fills. Add `with_matrix_directory_cache_bytes` and
-  batch private tree edits. Follow invalidates cache entries from changed pages.
+- Store directly addressed bitmap page-to-slot metadata in VMAT v5 alongside
+  the counted forward list. OnDemand opens read headers without reconstructing
+  a directory; cache misses read original metadata. `with_matrix_directory_cache_bytes`
+  controls the bounded per-bitmap cache; zero disables it. AtOpen verification
+  and explicit scrubs still stream the directory. Older VMAT layouts are rejected.
+- Keep small merge scratch in bounded RAM, spilling only after its budget fills.
+- Follow streams changed metadata and invalidates only affected cached bitmap
+  pages. Failed forward/reverse writes poison the writer and cannot be published.
 - Honor explicit finite native/merge index budgets and batch spilled row reads
   through a bounded private read window. Publication and sync points are unchanged.
 
@@ -36,8 +41,8 @@ increment the minor version.
   temporary files. Preserve explicit owned-result limits and atomic reader adoption.
 - Use external temporary indexes for keyed merge/compact, preserving key equality,
   shard/sequence ordering, tombstones, ops and atomic output replacement.
-- Page matrix bitmap index mirrors and stage follow deltas on disk. Small bitmap
-  budgets no longer reject open/follow merely because more pages were published.
+- Small bitmap cache budgets no longer reject open/follow merely because more
+  pages were published. Matrix directory reads require no temporary mirror.
 - Remove the standard matrix dimension/cell, CRC-extent and slot-region size caps;
   checked address arithmetic, working-memory budgets and explicit user caps remain.
 - Add `StratavaFile::mmap_payload_window` and `MmapPayloadWindow` for independent
@@ -2731,7 +2736,7 @@ typed error rather than migrated in place.
   so `append_log_start` and the total matrix file length change. A version 2
   artifact older than the shipped layout is refused at open with a typed
   `Error::FormatVersionMismatch`, the same stale-regenerable contract version 1
-  already had; recreate it. The shipped expectation is `expected: 4`.
+  already had; recreate it. The shipped expectation is `expected: 5`.
 - **Breaking (compile):** `PackedBitmap` is no longer accepted as a fixed-width
   matrix field. It owns a `Vec<u8>` and encodes a `bit_len` plus a variable byte
   string, so it has no encoded width fixed by its type and therefore no
@@ -2770,7 +2775,7 @@ typed error rather than migrated in place.
   3 -> 4 (page-index occupancy header and live-set semantics); only the final
   state ships. Region lengths, `append_log_start`, and total matrix file length
   all change. A version 1, 2, or 3 artifact is refused at open with the typed
-  `Error::FormatVersionMismatch { expected: 4, actual: <1, 2, or 3> }`
+  `Error::FormatVersionMismatch { expected: 5, actual: <1, 2, 3, or 4> }`
   (previously the generic `InvalidMatrixLayout` for v1); recreate it.
 - Wire-breaking, stale-regenerable: the disk-index sidecar metadata record is
   version 3 (length 260 -> 300, carrying the primary-generation witness) and the

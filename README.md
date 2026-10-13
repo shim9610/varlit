@@ -89,10 +89,10 @@ is covered in **[API Changes](docs/api-changes.md)**.
   `MatrixMetadataVerification::OnDemand` takes that to **32 bytes over 0 pages**,
   and what you give up is the matrix announcing commit-map damage at open — see
   the [Capability Boundary](#capability-boundary) below for the exact trade.
-  Residency is no longer part of this problem: an open retains **no** commit-map
-  payload. What no declaration removes is the persisted page index, read in full
-  at open and mirrored in a bounded owner-local directory, so open remains
-  `O(live pages)`. The directory uses temporary storage only beyond its budget.
+  VMAT v5 OnDemand opens read directory headers without enumerating live pages.
+  Lookups use the original directly addressed metadata, with bounded private
+  caches. The default AtOpen policy still performs the selected verification.
+
 - **Measured petabyte-scale merge throughput.** Merge/compact now spill state
   and values to private temporary files, but require scratch disk and one
   operation's decode workspace. Large-scale throughput has not been established.
@@ -174,11 +174,13 @@ commit-map page addressed, evicted LRU at the declared bound — so
 normally. Declaring `MatrixMetadataVerification::OnDemand` takes the same opens
 down to 32 and 1,040 bytes and 0 pages; what you give up is the matrix announcing
 commit-map damage at open, the whole-category quarantine, and the strict-recovery
-writer gate. The persisted page index is still enumerated and mirrored in a
-bounded owner-local directory. Small directories stay in RAM; larger ones
-spill, adding scratch I/O. `with_matrix_directory_cache_bytes(bytes)` controls
-this separate working budget (1 MiB per bitmap by default, clamped to the bitmap
-ceiling). Zero selects immediate spill. User publication points are unchanged.
+writer gate. VMAT v5 removes the residual full-directory scan from OnDemand
+open: it reads validated directory headers and fetches metadata windows when
+needed. `with_matrix_directory_cache_bytes(bytes)` controls this cache (1 MiB
+per bitmap by default, clamped to the bitmap ceiling); zero disables it.
+Cache misses read the original generation, without creating a temporary index.
+User publication points are unchanged. Earlier byte counts above describe the
+previous representation, not VMAT v5 measurements.
 
 **What `OnDemand` actually costs you, since it is the one knob here worth
 understanding.** The commit-map half of `MatrixRecoveryReport` is produced by the
@@ -430,7 +432,7 @@ are regenerable, and the difference is what it costs you:
 
 | Class | Outcome | Cost to you |
 | --- | --- | --- |
-| **Matrix native file** (`VMAT` v1/v2/v3) | `Error::FormatVersionMismatch { expected: 4, .. }` | **recreate the matrix and copy its contents yourself** — Stratava has no migration tool |
+| **Matrix native file** (`VMAT` v1/v2/v3/v4) | `Error::FormatVersionMismatch { expected: 5, .. }` | **recreate the matrix and copy its contents yourself** — Stratava has no migration tool |
 | **Native file pinned with a computed schema hash** from 0.3.0 or earlier | `Error::SchemaHashMismatch` | **recreate the file, or re-derive the pinned literal** — the hash algorithm changed twice |
 | Matrix sidecar written before sidecar v3 | `Error::MatrixSidecarMismatch("sidecar version")` | regenerate; sidecars are resume state, not data |
 | Stream/indexed primaries and disk sidecars written before the generation nonce | typed refusal; `rebuild_disk_index` for the sidecar | regenerate. Hypothetical in practice — this family never shipped |

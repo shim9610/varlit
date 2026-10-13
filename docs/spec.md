@@ -74,7 +74,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   only when the epoch changes. `flush()` does not publish; `sync()` does.
   All matrix reads use the captured root until explicit `follow()`. The companion
   is persistent data and must accompany the primary in backups and moves.
-- `VMAT` layout version 4 stores runtime dimensions, matrix block layout,
+- `VMAT` layout version 5 stores runtime dimensions, matrix block layout,
   commit bitmap offsets, slot region offsets, derived static aux region
   placement, optional offset-table metadata, region CRC metadata,
   `append_log_start`, and the persisted page-index region
@@ -101,6 +101,14 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   the pages it visits from this index unioned with the allocated ranges the
   platform reports, never from the logical page count.
 
+  VMAT v5 reserves a second array after the forward array's full capacity:
+  `header | forward[page_count] | reverse[page_count]`, with total virtual length
+  `(1 + 2 * page_count) * 8`. `reverse[page]` is zero for absent pages, otherwise
+  `slot + 1`. Queries cross-check `forward[slot] == page + 1`. Both directions and
+  the count are updated within the same working generation. An I/O failure
+  poisons the writer; the incomplete root cannot be published. Readers retain
+  their confirmed root and fetch original metadata windows on demand.
+
   Layout version 3 used a terminator-scanned array with no count field, which is
   why a v3 artifact is refused rather than migrated (see the version contract
   below): under that encoding a damaged entry was indistinguishable from the end
@@ -114,7 +122,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 - Static matrix aux regions are declared in the format spec, preallocated after
   slot payloads, excluded from commit bitmap validity, and exposed through
   `matrix_aux_len`, `read_matrix_aux`, and writer-only `write_matrix_aux`.
-- With `integrity: crc32`, `VMAT` v4 includes an `MCRC` v2 table after the slot
+- With `integrity: crc32`, `VMAT` v5 includes an `MCRC` v2 table after the slot
   region, any static aux regions, and the page index. It stores a CRC32 over the metadata tables,
   an 8-byte digest (`crc32` plus a state word) per 4 KiB page of every commit
   map, and a CRC32 plus a validity bit per dense cell slot. A commit-bit
@@ -126,11 +134,12 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   extent, and those bitmaps are held sparsely in memory after open, so neither
   create-time metadata I/O nor post-open bitmap residency scales with cell
   count.
-- A `VMAT` layout version 1, 2, or 3 artifact is refused at open with
-  `Error::FormatVersionMismatch { expected: 4, actual: <1, 2, or 3> }`; it is
+- A `VMAT` layout version 1, 2, 3, or 4 artifact is refused at open with
+  `Error::FormatVersionMismatch { expected: 5, actual: <1, 2, 3, or 4> }`; it is
   stale and regenerable, not migratable. Version 1 describes the pre-paging
   physical representation, version 2 carries no page-index region, and version 3
-  carries the superseded terminator-scanned page-index encoding. The `MCRC`
+  carries the superseded terminator-scanned page-index encoding. Version 4 has
+  no directly addressed reverse array. The `MCRC`
   integrity table remains version 2.
 - P0 commit operations are logical visibility operations under the explicit
   `flush`/`sync` durability model, not implicit per-cell fsync operations.

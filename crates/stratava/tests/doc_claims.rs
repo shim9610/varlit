@@ -108,7 +108,7 @@ fn shipped_vmat_version() -> u16 {
 ///
 /// The claim is located by a literal prefix; the numeral is whatever decimal
 /// digits immediately follow it. `suffix`, when non-empty, must follow the
-/// digits, so `## VMAT Version 4 Header` is a claim and `## VMAT Version 4
+/// digits, so `## VMAT Version 5 Header` is a claim and `## VMAT Version 5
 /// Rationale` is not.
 ///
 /// This exists because iterating the versions *below* the shipped one only

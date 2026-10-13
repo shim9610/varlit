@@ -233,10 +233,10 @@ Three consequences are part of the residency declaration:
   touches it, so no read ever answers from unverified bytes. Whether the *map as a
   whole* is checked, and when, is `MatrixMetadataVerification`.
 * A page the persisted index does not name still reads as clear, and that is a
-  fact the file supplied rather than a guess: the index is loaded in full at
-  open and is authoritative for which pages hold state, so "not cached" and "not
-  published" stay distinct. An index that cannot be enumerated in full is a fatal
-  finding at open.
+  fact read from the original directory rather than inferred from the cache.
+  "Not cached" and "not published" stay distinct. AtOpen detects invalid directory
+  entries at open; OnDemand checks accessed metadata and leaves the full scan to
+  `verify_matrix_metadata()` or a destructive CRC rebuild.
 * Cache misses and evictions preserve the captured confirmed generation.
   Only `follow(&mut self)` adopts later published pages.
 
@@ -1118,15 +1118,16 @@ a later generation explicitly. Old readers never delay publication or compaction
 The generation page cache defaults to 2 MiB and is configured at open with
 `ReadLimits::with_matrix_generation_cache_bytes(bytes)` (zero disables it).
 
-The owner-local page-index mirror has a separate working budget:
-`ReadLimits::with_matrix_directory_cache_bytes(bytes)`. It defaults to 1 MiB
-per bitmap, clamped to `max_matrix_bitmap_bytes`. Small directories stay in RAM;
-excess entries spill to a private COW index with a bounded page cache and edit
-buffer. Zero selects immediate spill. COW staging and fixed page workspace are
-additional; this is not a total-reader budget. Compaction/follow temporary sets
-use the same allowance. No file admission limit or automatic sync is introduced.
-The legacy `matrix_resident_page_index_bytes` diagnostic counts mandatory
-non-cache residency, not this optional bounded cache.
+The original forward/reverse directory has a separate owner-local cache:
+`ReadLimits::with_matrix_directory_cache_bytes(bytes)`, default 1 MiB per bitmap,
+clamped to `max_matrix_bitmap_bytes`. Cache admission charges 4096 bytes plus a
+128-byte entry allowance. Zero or an undersized budget reads without retaining
+windows. Fixed read buffers are additional. Misses read the original generation;
+no temporary mirror is built at open or follow. The legacy
+`matrix_resident_page_index_bytes` diagnostic excludes this optional cache.
+VMAT v5 adds the directly addressed reverse array; older layouts are rejected.
+OnDemand validates headers at open and entries as accessed. AtOpen also streams
+all entries; explicit verification and CRC rebuild validate the directory too.
 It is separate from the per-bitmap residency budget. `matrix_generation()` exposes
 the captured generation and `matrix_generation_path()` names the required `.vmg`
 companion. `compact_matrix()` on a synced writer reclaims obsolete matrix pages
@@ -1645,7 +1646,7 @@ minor-version policy as the rest of the library.
 | `MatrixSidecarMismatch(reason)` | matrix sidecar rejected: wrong native identity, layout generation, creation nonce, or sidecar version; regenerate the sidecar |
 | `InvalidMatrixLayout` | matrix layout bytes are not valid for this build — including a matrix file created before the creation-nonce region existed; recreate the matrix file |
 | `MatrixSizeMismatch` | encoded matrix payload does not match slot stride |
-| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1, 2, or 3 matrix file (v4 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
+| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1, 2, 3, or 4 matrix file (v5 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
 | `KeyedChainRequiresKeyedApi { block_id }` | generic `push`/`push_info` cannot maintain the keyed offset chain; use `push_keyed`/`push_keyed_info` or the generated keyed writer |
 | `LimitExceeded { resource: "variable field ids" }` | decoding charged the materialization budget for distinct variable field ids above 63 and the budget ran out |
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |

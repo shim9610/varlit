@@ -33,21 +33,15 @@ there is no automatic migration path for these surfaces:
 - The matrix sidecar envelope is version 3. Version-1/2 sidecars are refused
   as `MatrixSidecarMismatch("sidecar version")` and simply regenerate —
   sidecars are regenerable resume state, not data.
-- The matrix layout is `VMAT` version 4 with an `MCRC` version 2 integrity
-  region. Within this release the layout moved 1 -> 2 -> 3 -> 4; only version 4
-  ships. Version 2 introduced per-page commit digests instead of one CRC per
-  commit category and stopped explicitly initializing per-cell metadata at
-  create; version 3 adds the persisted page-index region between the static aux
-  regions and the `MCRC` region, described by two header fields appended after
-  `append_log_start` (so every earlier field keeps its index) with the reserved
-  tail shrinking from 32 to 16 bytes. Layout version 4 then changed the
-  page-index encoding: the region gained a validated occupancy header slot and
-  became `(page_count + 1) * 8` bytes, entry count comes from that header rather
-  than from a terminator scan, and entries are released when a page empties. A
-  version 1, 2, or 3 matrix file is refused with
-  `Error::FormatVersionMismatch { expected: 4, actual: <1, 2, or 3> }` and must
-  be recreated; region lengths and total matrix file length change, so there is
-  no in-place fixup.
+- The current matrix layout is `VMAT` version 5 with `MCRC` version 2.
+  Version 5 adds directly addressed page-to-slot metadata after the counted
+  forward array. The directory occupies `(1 + 2 * page_count) * 8` virtual bytes;
+  untouched windows remain zero extents. OnDemand readers retain offsets and
+  bounded caches instead of reconstructing the complete live-page directory.
+  Layout versions 1 through 4 are refused with
+  `Error::FormatVersionMismatch { expected: 5, actual: <1, 2, 3, or 4> }`; recreate those files.
+  There is no automatic matrix migration tool. Non-matrix formats are unchanged.
+
 - Matrix open no longer walks every logical bitmap page: the pages it visits come
   from the page index unioned with the filesystem allocated-range map, merged in
   one linear pass with no sort. Recorded trade-off — where no allocation map is

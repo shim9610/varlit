@@ -31,7 +31,7 @@ const PAGE_BYTES: u64 = 4096;
 const NATIVE_PREFIX_LEN: u64 = 18 + 24;
 /// Current on-disk matrix layout version (v4 gives the persisted page index a
 /// validated occupancy header and makes it the live set, not the history).
-const VMAT_VERSION: u16 = 4;
+const VMAT_VERSION: u16 = 5;
 /// One persisted page-index slot.
 const PAGE_INDEX_SLOT_LEN: u64 = 8;
 
@@ -385,7 +385,10 @@ fn open_bitmap_bytes_read_do_not_scale_with_cell_count() -> stratava::Result<()>
     // 4 KiB of map, i.e. 1/4096 of a bit per cell, and only inside allocation
     // granules the filesystem already reports as written.
     let digest_bytes = |scans: u64| (scans * CHANNELS / 8).div_ceil(PAGE_BYTES) * 8;
-    let allowance = digest_bytes(LARGE_WIDE_SCANS) - digest_bytes(SMALL_WIDE_SCANS);
+    // Each of the two direct directories fetches at most two 4 KiB windows
+    // (forward and reverse); partial final windows depend on layout width.
+    let allowance =
+        digest_bytes(LARGE_WIDE_SCANS) - digest_bytes(SMALL_WIDE_SCANS) + 4 * PAGE_BYTES;
     assert!(
         large <= small + allowance,
         "open-time bitmap reads scaled with cell count: {small} vs {large} \
@@ -492,10 +495,9 @@ fn open_stays_bounded_without_an_allocation_map() -> stratava::Result<()> {
         "open page visits scaled with cell count without an allocation map: {small} vs {large}"
     );
     let (small_bytes, large_bytes) = (read_bytes[0], read_bytes[1]);
-    assert_eq!(
-        small_bytes, large_bytes,
-        "open reads scaled with cell count without an allocation map: \
-         {small_bytes} vs {large_bytes}"
+    assert!(
+        large_bytes <= small_bytes + 4 * PAGE_BYTES,
+        "direct metadata exceeded four bounded windows: {small_bytes} vs {large_bytes}"
     );
     // Without an allocation map the old loader read the complete commit map and
     // validity bitmap: a quarter of the cell count in bytes.
@@ -1707,120 +1709,54 @@ fn page_index_state(path: &Path, entries: u64) -> (u64, Vec<u64>) {
     (header, values)
 }
 
-/// F-03. Page-index compaction used to write the new sorted entry order to disk
-/// and only then perform the fallible `try_reserve` for the in-memory slot map
-/// that mirrors it. A typed `AllocationFailed` there returned an `Err` from a
-/// writer that ordinary matrix mutation handling does **not** poison — it
-/// poisons only `Error::Io` — so the session continued with a slot map that no
-/// longer described the array on disk, and the next removal overwrote a live
-/// page's only entry.
-///
-/// The fixture starts from the state that makes the divergence lethal: a
-/// duplicate-entry array left by a crash-interrupted removal, `[2, 1, 2]`, which
-/// is also full, so the next publication has to compact. Compaction sorts that
-/// to `[1, 2]`, moving page 1 into slot 0 — a slot the stale mirror still
-/// believes holds page 2. Releasing page 2 through the stale mirror then wrote
-/// page 2 over slot 0 and shortened the count to two, and the only entry naming
-/// page 1 was gone. With no allocation map there is no second way to find it.
-///
-/// Every fallible step of a page-index mutation is now a precondition of its
-/// first disk byte, so the refusal happens with the array byte-for-byte
-/// untouched and the mirror still describing it exactly.
+/// A failed direct forward/reverse update cannot be published. The writer
+/// becomes unusable, readers keep their confirmed root, and reopening discards
+/// the incomplete working pages before another removal is attempted.
 #[test]
-fn a_refused_page_index_compaction_leaves_disk_and_mirror_in_the_same_order() -> stratava::Result<()>
-{
-    let dir = temp_dir("index-compaction-refusal");
+fn failed_direct_directory_removal_cannot_publish_mismatched_metadata() -> stratava::Result<()> {
+    let dir = temp_dir("direct-removal-failure");
     let path = dir.path().join("matrix.stratava");
-
-    // (1) Publish one page each into commit-map pages 0, 1 and 2. The array is
-    // then [0, 1, 2] with a count of three, which is its full capacity.
     {
         let mut writer = spec().create_writer_with_dims(&path, dims(THREE_PAGE_SCANS))?;
         for ordinal in PAGE_ORDINALS {
             writer.write_matrix_cell(key(ordinal), &ScalingCell { value: 7 })?;
             writer.commit_matrix_cell::<ScalingCell>(key(ordinal))?;
         }
-        // (2) Empty page 0 with the removal's *header* write failing. The swap
-        // lands and the shorter count does not, which is exactly what a crash
-        // between the two leaves: entries [2, 1, 2] under a count of three.
-        MatrixRecoveryReport::inject_matrix_page_index_header_write_failure(1);
-        writer.clear_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[0]))?;
-        MatrixRecoveryReport::inject_matrix_page_index_header_write_failure(0);
         writer.sync()?;
+        let held = spec().open_reader(&path)?;
+        let prior = page_index_state(&path, 3);
+        MatrixRecoveryReport::inject_matrix_page_index_header_write_failure(1);
+        let result = writer.clear_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[0]));
+        MatrixRecoveryReport::inject_matrix_page_index_header_write_failure(0);
+        assert!(matches!(result, Err(Error::Io(_))));
+        assert!(
+            writer.sync().is_err(),
+            "incomplete reverse directory was published"
+        );
+        assert_eq!(page_index_state(&path, 3), prior);
+        for ordinal in PAGE_ORDINALS {
+            assert_eq!(held.read_matrix_cell::<ScalingCell>(key(ordinal))?.value, 7);
+        }
     }
-    let duplicate_state = page_index_state(&path, 3);
-    assert_eq!(
-        duplicate_state,
-        (3, vec![3, 2, 3]),
-        "the fixture did not produce the interrupted-removal duplicate state"
-    );
-
-    // (3) Republishing page 0 has to compact first. Fail the mirror reservation
-    // that compaction needs.
     {
         let mut writer = spec().open_writer(&path)?;
-        writer.write_matrix_cell(key(PAGE_ORDINALS[0]), &ScalingCell { value: 9 })?;
-        // Committing publishes the validity bit before the commit bit, and the
-        // validity bitmap keeps its own page index, so the compaction this test
-        // is aiming at is the *second* mirror reservation of the call.
-        MatrixRecoveryReport::inject_matrix_page_index_mirror_reservation_failure(2);
-        let refused = writer.commit_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[0]));
-        MatrixRecoveryReport::inject_matrix_page_index_mirror_reservation_failure(0);
-        assert!(
-            matches!(refused, Err(Error::AllocationFailed { .. })),
-            "the injected mirror reservation failure did not surface as a typed \
-             allocation failure: {refused:?}"
-        );
-        writer.sync()?;
-        assert_eq!(
-            page_index_state(&path, 3),
-            duplicate_state,
-            "a refused page-index mutation rewrote the persisted array"
-        );
-
-        // (4) The divergence only becomes data loss at the *next* removal, and
-        // it has to happen in the *same* session: a reopen would rebuild the
-        // mirror from disk and hide the disagreement. Emptying page 2 releases
-        // its entry through whatever slot positions the mirror believes in.
+        writer.clear_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[0]))?;
         writer.clear_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[2]))?;
         writer.sync()?;
     }
-    assert_eq!(
-        page_index_state(&path, 2).1[1],
-        2,
-        "a removal trusting a stale mirror overwrote the live page entry"
-    );
-
-    // (5) Reopen with the persisted index as the only way to find a page.
     let reader = open_without_allocation_map(&path, false)?;
-    assert!(
-        !MatrixRecoveryReport::matrix_open_allocation_map_available(),
-        "the allocation map was not actually disabled for this fixture"
-    );
-    assert!(
-        !reader
-            .matrix_recovery_report()
-            .findings
-            .iter()
-            .any(|finding| finding.severity == MatrixCorruptionSeverity::Fatal),
-        "the surviving index was reported as fatally damaged: {:?}",
-        reader.matrix_recovery_report().findings
-    );
     assert_eq!(
-        reader.matrix_cell_status::<ScalingCell>(key(PAGE_ORDINALS[1]))?,
-        MatrixCellStatus::Committed,
-        "the live page that compaction moved was lost from the persisted index"
+        reader
+            .read_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[1]))?
+            .value,
+        7
     );
-    assert_eq!(
-        reader.matrix_cell_status::<ScalingCell>(key(PAGE_ORDINALS[0]))?,
-        MatrixCellStatus::NotCommitted,
-        "the refused commit was published anyway"
-    );
-    assert_eq!(
-        reader.matrix_cell_status::<ScalingCell>(key(PAGE_ORDINALS[2]))?,
-        MatrixCellStatus::NotCommitted,
-        "the cleared cell is still committed"
-    );
+    for ordinal in [PAGE_ORDINALS[0], PAGE_ORDINALS[2]] {
+        assert_eq!(
+            reader.matrix_cell_status::<ScalingCell>(key(ordinal))?,
+            MatrixCellStatus::NotCommitted
+        );
+    }
     Ok(())
 }
 
@@ -1835,7 +1771,7 @@ fn validity_page_index_off(path: &Path, scans: u64) -> u64 {
     let bitmap_bytes = scans * CHANNELS / 8;
     let pages = bitmap_bytes.div_ceil(PAGE_BYTES);
     // One occupancy header slot plus one entry per page.
-    page_index_off(path) + (pages + 1) * PAGE_INDEX_SLOT_LEN
+    page_index_off(path) + (pages * 2 + 1) * PAGE_INDEX_SLOT_LEN
 }
 
 /// F-04. CRC commit-map rebuild derives every bit from the block's CRC-validity
@@ -1917,8 +1853,8 @@ fn crc_rebuild_refuses_an_incompletely_loaded_validity_index() -> stratava::Resu
     //     of what the file once held, and nothing has re-enumerated it. The
     //     completeness fact travels with the bitmap and stays false for the
     //     life of the session, so rebuild keeps refusing.
-    writer.write_matrix_cell(key(FIRST), &ScalingCell { value: 9 })?;
-    writer.commit_matrix_cell::<ScalingCell>(key(FIRST))?;
+    writer.write_matrix_cell(key(FIRST + 1), &ScalingCell { value: 9 })?;
+    writer.commit_matrix_cell::<ScalingCell>(key(FIRST + 1))?;
     let after_write = writer.rebuild_matrix_commit_from_crc::<ScalingCell>();
     assert!(
         matches!(after_write, Err(Error::MatrixFatalCorruption)),
@@ -1936,12 +1872,12 @@ fn crc_rebuild_refuses_an_incompletely_loaded_validity_index() -> stratava::Resu
     let reader = open_without_allocation_map(&path, true)?;
     let unreadable = reader.read_matrix_cell::<ScalingCell>(key(SECOND));
     assert!(
-        matches!(unreadable, Err(Error::MatrixChecksumMismatch { .. })),
+        matches!(unreadable, Err(Error::MatrixFatalCorruption)),
         "a cell whose validity page was never loaded was read as if its stored \
          checksum had been established: {unreadable:?}"
     );
     assert_eq!(
-        reader.read_matrix_cell::<ScalingCell>(key(FIRST))?,
+        reader.read_matrix_cell::<ScalingCell>(key(FIRST + 1))?,
         ScalingCell { value: 9 },
         "the fail-closed reader refused a cell whose validity page *was* loaded"
     );
@@ -2253,5 +2189,42 @@ fn measured_resident_bitmap_bytes_against_the_ceiling() -> stratava::Result<()> 
         cached <= ceiling,
         "(B) residency {cached} exceeded the ceiling {ceiling} it is derived from"
     );
+    Ok(())
+}
+
+/// Lazy admission is not permission for recovery to trust unchecked absences.
+/// A later scrub detects a broken link, and CRC rebuild refuses before writing.
+#[test]
+fn on_demand_directory_damage_is_detected_by_access_scrub_and_rebuild() -> stratava::Result<()> {
+    let dir = temp_dir("direct-lazy-damage");
+    let path = dir.path().join("matrix.stratava");
+    fill_pages(&path, LARGE_SCANS, &[0, 1])?;
+    let base = validity_page_index_off(&path, LARGE_SCANS);
+    patch_u64(&path, base + 2 * PAGE_INDEX_SLOT_LEN, 0);
+    let lazy = spec().with_resource_limits(
+        ReadLimits::STANDARD
+            .with_matrix_metadata_verification(MatrixMetadataVerification::OnDemand)
+            .with_matrix_directory_cache_bytes(0),
+    );
+    let reader = lazy.open_reader(&path)?;
+    assert!(matches!(
+        reader.read_matrix_cell::<ScalingCell>(key(32768)),
+        Err(Error::MatrixFatalCorruption)
+    ));
+    let report = reader.verify_matrix_metadata()?;
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.severity == MatrixCorruptionSeverity::Fatal)
+    );
+    let before = page_index_state(&path, 2);
+    let mut writer = lazy.open_writer(&path)?;
+    assert!(matches!(
+        writer.rebuild_matrix_commit_from_crc::<ScalingCell>(),
+        Err(Error::MatrixFatalCorruption)
+    ));
+    writer.sync()?;
+    assert_eq!(page_index_state(&path, 2), before);
     Ok(())
 }

@@ -279,13 +279,16 @@ Each head persists a `compaction_epoch` (u64, initially zero). Only explicit
 `compact_matrix()` increments it; every ordinary publication carries it forward.
 Thus a reader detects replacement even after skipping the compaction generation
 and several subsequent commits. Equal epochs permit comparing COW roots: equal
-subtree pointers are skipped, changed bitmap index slots are patched, and only
+subtree pointers are skipped, changed original directory windows are validated, and only
 changed metadata pages are reverified under the default verification policy.
 Unchanged bitmap and physical-page caches survive. Different epochs trigger the
 full layout load against the replacement file. Follow never initiates compaction.
 All fallible work precedes adoption; a refused delta leaves the old root, bitmap
-state and log EOF visible. A damaged or quarantined old mirror requires reopening
-for recovery rather than treating an incomplete mirror as a valid diff base.
+state and log EOF visible. A damaged or quarantined old directory requires
+reopening for recovery. VMAT v5 stores both forward and directly addressed reverse
+metadata inside the same generation; readers do not reconstruct a private mirror.
+A failure while updating either direction poisons the writer, so a partially
+updated working root cannot become a confirmed generation.
 
 
 The generation page cache defaults to **2 MiB per handle**, independent of the

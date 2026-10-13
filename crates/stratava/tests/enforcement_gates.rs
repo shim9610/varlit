@@ -830,10 +830,18 @@ fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
         "the bitmap must stay a private field of `CrcValidEvidence`"
     );
     assert_eq!(
-        gate.matches("fn complete(&self)").count(),
+        gate.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .matches("fncomplete(&self,read:BitmapRead<'_>,)")
+            .count(),
         1,
         "`CrcValidEvidence::complete` must remain the only producer of the witness, because it \
          is where the F-04 refusal lives"
+    );
+    assert!(
+        gate.contains("self.bits.visit_index(read, |_, _| Ok(()))?;"),
+        "a recovery witness must validate the original directory, including after OnDemand open"
     );
     assert_eq!(
         gate.matches("fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool>")
@@ -902,7 +910,7 @@ fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
         );
     }
     assert!(
-        outside.contains("let evidence = block.crc_valid_bits.complete()?;"),
+        outside.contains("let evidence = block.crc_valid_bits.complete(BitmapRead::new(file))?;"),
         "the CRC commit-map rebuild must keep obtaining the completeness witness before it \
          reads any validity bit (F-04)"
     );

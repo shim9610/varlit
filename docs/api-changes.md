@@ -15,8 +15,9 @@ and the [Changelog](../CHANGELOG.md).
   limit. Scratch I/O failure is still an error, before the data append.
 - Matrix dirty-page directories spill without sync or generation publication.
   Compaction enumerates pages incrementally; follow traverses changed subtrees
-  only in the metadata ranges it needs. Bitmap index mirrors use private paged
-  roots; staged bitmap deltas spill without changing the held generation.
+  only in the metadata ranges it needs. VMAT v5 adds directly addressed bitmap
+  directory metadata; readers fetch original windows and retain bounded caches.
+  OnDemand opens and normal follow do not construct temporary index mirrors.
 - With `mmap`, `StratavaFile::mmap_payload_window` maps one record's stored payload
   without requiring a resident directory or a whole-file mapping budget. The
   returned `MmapPayloadWindow` owns the mapping. External immutability remains
@@ -39,13 +40,20 @@ and the [Changelog](../CHANGELOG.md).
   to `u64::MAX`. Checked arithmetic, explicit user admission caps and finite
   working-memory limits remain. Shapes still declare at most one growing axis.
 
-Existing method signatures and persisted formats are unchanged by these budget
-changes. `ReadLimits::with_matrix_directory_cache_bytes(bytes)` adds control of
-the per-bitmap directory working budget (1 MiB by default, clamped to the bitmap
-ceiling). Small directories and merge scratch remain in RAM until their buffers
-fill. Explicit finite native/merge index budgets are no longer capped at 2 MiB. Scratch disk availability is now part of ordinary large-directory
-open/follow and merge execution. Native open can still scan records; replacement
-staging and explicitly owned results can still be proportional to their output.
+Method signatures are unchanged, but matrix layout **VMAT v5** is incompatible
+with older matrix artifacts, which are rejected by the existing version check.
+The directory contains a count, a compact slot-to-page array and a sparse
+page-to-slot array. Address arithmetic locates either entry directly.
+`ReadLimits::with_matrix_directory_cache_bytes(bytes)` controls the per-bitmap
+cache (default 1 MiB, clamped to the bitmap ceiling); zero disables it. Misses
+read original metadata. OnDemand opens validate headers and defer entry checks;
+AtOpen and `verify_matrix_metadata()` stream and validate the directory. CRC
+rebuild additionally validates its complete input directory before any mutation.
+
+Merge scratch remains in RAM until its buffers fill. Explicit finite native/merge
+index budgets are honored. Temporary storage is still used by native directories,
+merge, writer working-page spill and explicit recovery operations. Native open can
+still scan records; explicitly owned results still scale with their output.
 
 ## L. 0.11.0 → 0.12.0: Stratava rename
 
@@ -1069,7 +1077,7 @@ typed refusal:
 | --- | --- | --- |
 | Plain native append-log file | opens normally | none needed |
 | Native file pinned with a **computed** schema hash from 0.3.0 or earlier | `Error::SchemaHashMismatch` | recreate the file, or re-derive the pinned literal |
-| Matrix native file (`VMAT` v1/v2/v3) | `Error::FormatVersionMismatch { expected: 4, actual }` | recreate the matrix |
+| Matrix native file (`VMAT` v1/v2/v3/v4) | `Error::FormatVersionMismatch { expected: 5, actual }` | recreate the matrix |
 | Matrix native file created before the creation-nonce region | `Error::InvalidMatrixLayout` at the nonce region | recreate the matrix |
 | Matrix sidecar (v1/v2) | `Error::MatrixSidecarMismatch("sidecar version")` | regenerate — sidecars are resume state |
 | Disk-index sidecar (metadata v2, or a stale plan digest) | `DiskIndexError::MetadataLength` — the v2 record is 260 bytes where 300 is required (never shipped; see below) | `rebuild_disk_index` |
@@ -1107,7 +1115,7 @@ rows nor the sidecar rows, which remain inspection-only. See
 
 | Region | Constant | Value in 0.4.0 | Was |
 | --- | --- | --- | --- |
-| Matrix layout | `VMAT_VERSION` | **4** | 3 |
+| Matrix layout | `VMAT_VERSION` | **5** | 3 |
 | Matrix header length | `VMAT_HEADER_LEN` | 160 | — |
 | Matrix creation nonce | `MATRIX_CREATION_NONCE_VERSION` / `_MAGIC` | 1 / `VMNC`, 24-byte region | did not exist |
 | Matrix sidecar | `MATRIX_SIDECAR_VERSION` | **3** (fixed header 88 → 104 bytes) | 2 |

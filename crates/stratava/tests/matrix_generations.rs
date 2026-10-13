@@ -833,3 +833,73 @@ fn matrix_cell_mapping_charges_only_its_window_and_cow_pages() -> stratava::Resu
     }
     Ok(())
 }
+
+/// Opening a direct directory reads its header only. Increasing the number of
+/// live pages must not trigger an enumeration, an in-memory mirror, or a spill.
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn on_demand_open_reads_no_page_list_even_with_zero_directory_cache() -> stratava::Result<()> {
+    use stratava::{MatrixMetadataVerification, MatrixRecoveryReport as Counters, ReadLimits};
+    for cache in [0, 4096, 1024 * 1024] {
+        let mut open_bytes = Vec::new();
+        for pages in [16, 1024] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("direct-directory.stratava");
+            let spec = Generations::spec().with_resource_limits(
+                ReadLimits::STANDARD
+                    .with_matrix_directory_cache_bytes(cache)
+                    .with_matrix_metadata_verification(MatrixMetadataVerification::OnDemand),
+            );
+            let mut writer = spec.create_writer_with_dims(
+                &path,
+                stratava::MatrixDimensions::from_pairs([("scan", pages * 32768), ("ch", 1)]),
+            )?;
+            for page in 0..pages {
+                let key = stratava::MatrixKey::new(page * 32768, 0);
+                writer.write_matrix_cell(key, &Cell { value: page })?;
+                writer.commit_matrix_cell::<Cell>(key)?;
+            }
+            writer.sync()?;
+            Counters::reset_matrix_integrity_counters();
+            let mut reader = spec.open_reader(&path)?;
+            open_bytes.push(Counters::matrix_open_bitmap_bytes_read());
+            assert_eq!(Counters::matrix_open_bitmap_pages_visited(), 0);
+            for page in [pages - 1, 0, pages / 2, pages - 1] {
+                Counters::reset_matrix_integrity_counters();
+                assert_eq!(
+                    reader
+                        .read_matrix_cell::<Cell>(stratava::MatrixKey::new(page * 32768, 0))?
+                        .value,
+                    page
+                );
+                assert!(
+                    Counters::matrix_open_bitmap_bytes_read() <= 4 * 4096,
+                    "point lookup enumerated directory entries"
+                );
+            }
+            let removed = stratava::MatrixKey::new((pages / 2) * 32768, 0);
+            writer.clear_matrix_cell::<Cell>(removed)?;
+            // A freshly opened reader still binds the old confirmed metadata.
+            assert_eq!(
+                spec.open_reader(&path)?
+                    .read_matrix_cell::<Cell>(removed)?
+                    .value,
+                pages / 2
+            );
+            writer.sync()?;
+            reader.follow()?;
+            assert_eq!(
+                reader.matrix_cell_status::<Cell>(removed)?,
+                MatrixCellStatus::NotCommitted
+            );
+            let tail = stratava::MatrixKey::new((pages - 1) * 32768, 0);
+            assert_eq!(reader.read_matrix_cell::<Cell>(tail)?.value, pages - 1);
+        }
+        assert_eq!(open_bytes[0], open_bytes[1]);
+        assert!(
+            open_bytes[1] <= 16,
+            "open enumerated the live page list: {open_bytes:?}"
+        );
+    }
+    Ok(())
+}

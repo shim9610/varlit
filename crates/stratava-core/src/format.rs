@@ -497,8 +497,9 @@ pub struct ReadLimits {
     /// Missing resolves to 2 MiB; zero disables it. This is separate from the
     /// bitmap cache and excludes fixed page buffers and map bookkeeping.
     pub matrix_generation_cache_bytes: ReadLimit,
-    /// Per-bitmap owner-local directory working budget. Missing defaults to
-    /// 1 MiB, clamped to the bitmap ceiling. Zero selects immediate spill.
+    /// Per-bitmap cache for original forward/reverse directory windows. Missing
+    /// defaults to 1 MiB, clamped to the bitmap ceiling. Zero disables this cache;
+    /// misses read the original file, never a reconstructed temporary index.
     /// Separate from bitmap payload and generation caches; not a file limit.
     pub matrix_directory_cache_bytes: ReadLimit,
     /// Declared matrix commit-metadata verification policy.
@@ -633,9 +634,10 @@ impl ReadLimits {
         usize::try_from(bytes).unwrap_or(usize::MAX)
     }
 
-    /// Sets each matrix page-directory working budget. Small directories stay
-    /// in RAM; excess state spills to a private file. The default is 1 MiB.
-    /// COW staging and fixed page workspace are additional. No sync is implied.
+    /// Sets each matrix directory's original-page cache budget (default 1 MiB).
+    /// Zero disables it. Cache admission charges 4096 bytes plus a conservative
+    /// 128-byte entry allowance; undersized budgets read without retaining pages.
+    /// Fixed page workspace is additional. No sync or temporary mirror is implied.
     pub const fn with_matrix_directory_cache_bytes(mut self, bytes: u64) -> Self {
         self.matrix_directory_cache_bytes = ReadLimit::Finite(bytes);
         self
