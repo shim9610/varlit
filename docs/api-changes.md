@@ -1,5 +1,14 @@
 # API Changes — 0.3.0 through 0.12.0
 
+## Unreleased 0.12.0: fixed byte-array decoding
+
+`StratavaDecode::decode_array` is an additive default method. Existing manual
+codecs require no changes: the default preserves element decoding, partial-drop
+behavior and resource accounting. The built-in `u8` implementation copies bounded
+arrays in one operation, including through type aliases. Larger arrays retain
+fallible heap staging. Custom codecs with `WireType::U8` keep their own validation.
+Wire bytes, schema identities and existing read signatures are unchanged.
+
 ## Unreleased 0.12.0: contiguous matrix reads
 
 `read_matrix_run_into`, `read_matrix_run_bytes_into` and `read_matrix_row_into`

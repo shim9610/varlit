@@ -6,6 +6,11 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Decode bounded fixed byte arrays with one checked copy instead of constructing
+  each byte through a generic temporary array. Preserve input validation,
+  materialization budgets, custom element codecs and oversized-array heap staging.
+  Existing codecs inherit the additive `StratavaDecode::decode_array` default.
+
 - Add shared-borrow matrix run and row reads into caller-owned typed or encoded
   buffers. Batch payload, commit and checksum reads across fixed regions and
   growing chunks; compressed sub-blocks are decoded per batch. The second

@@ -232,3 +232,58 @@ fn fixed_arrays_round_trip_unchanged() {
         );
     }
 }
+
+#[test]
+fn byte_array_fast_path_keeps_limits_framing_and_aliases() {
+    use stratava::Decoder;
+    type Byte = u8;
+    for endian in [Endian::Little, Endian::Big] {
+        let bytes: Vec<u8> = (0..48).collect();
+        let value = Decoder::decode_from_slice_limited::<[Byte; 48]>(&bytes, endian, 48)
+            .expect("exact byte budget");
+        assert_eq!(&value[..], bytes);
+        assert!(matches!(
+            Decoder::decode_from_slice_limited::<[Byte; 48]>(&bytes, endian, 47),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert!(matches!(
+            decode_from_slice::<[Byte; 48]>(&bytes[..47], endian),
+            Err(Error::UnexpectedEof)
+        ));
+        assert!(matches!(
+            decode_from_slice::<[Byte; 47]>(&bytes, endian),
+            Err(Error::TrailingBytes { remaining: 1 })
+        ));
+        assert_eq!(decode_from_slice::<[Byte; 0]>(&[], endian).unwrap(), []);
+        // Nested arrays still account for both the outer array and its elements.
+        assert!(Decoder::decode_from_slice_limited::<[[Byte; 24]; 2]>(&bytes, endian, 95).is_err());
+        assert!(Decoder::decode_from_slice_limited::<[[Byte; 24]; 2]>(&bytes, endian, 96).is_ok());
+    }
+    let bytes = vec![37; 16 * 1024 + 1];
+    let (value, calls, _) =
+        counting_allocations::measure(|| decode_from_slice::<[u8; 16385]>(&bytes, Endian::Little));
+    assert_eq!(&value.unwrap()[..], bytes);
+    assert!(calls > 0, "large byte arrays retain fallible heap staging");
+}
+
+#[test]
+fn a_custom_u8_wire_codec_keeps_its_element_validation() {
+    use stratava::{Decoder, StratavaDecode, WireType};
+    #[derive(Debug, PartialEq)]
+    struct Restricted(u8);
+    impl StratavaDecode for Restricted {
+        const WIRE_TYPE: WireType = WireType::U8;
+        fn decode_stratava(decoder: &mut Decoder<'_>) -> stratava::Result<Self> {
+            match decoder.read_u8()? {
+                7 => Ok(Self(7)),
+                _ => Err(Error::InvalidCanonicalEncoding("expected seven")),
+            }
+        }
+    }
+    assert_eq!(
+        decode_from_slice::<[Restricted; 2]>(&[7, 7], Endian::Little).unwrap(),
+        [Restricted(7), Restricted(7)]
+    );
+    assert!(decode_from_slice::<[Restricted; 2]>(&[7, 8], Endian::Little).is_err());
+    assert!(decode_from_slice::<[bool; 2]>(&[1, 2], Endian::Little).is_err());
+}

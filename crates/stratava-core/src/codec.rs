@@ -157,6 +157,26 @@ pub trait StratavaDecode: Sized {
     const SCHEMA_ID: u64 = 0;
 
     fn decode_stratava(decoder: &mut Decoder<'_>) -> Result<Self>;
+
+    /// Decode a fixed array, including its input and materialization checks.
+    ///
+    /// The default calls the element codec and drops the initialized prefix on
+    /// failure. Implementations may batch equivalent operations, but must retain
+    /// the same validation and resource accounting. Existing custom codecs need
+    /// not implement this method.
+    fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+        decoder.preflight_count(
+            N,
+            minimum_wire_size(Self::WIRE_TYPE),
+            size_of::<Self>(),
+            "array",
+        )?;
+        if size_of::<Option<Self>>().saturating_mul(N) <= ARRAY_STACK_DECODE_BUDGET {
+            decode_array_on_stack(decoder)
+        } else {
+            decode_array_on_heap(decoder)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -779,7 +799,34 @@ macro_rules! signed {
     };
 }
 
-unsigned!(u8, U8, write_u8, read_u8);
+impl StratavaEncode for u8 {
+    const WIRE_TYPE: WireType = WireType::U8;
+    const SCHEMA_ID: u64 = leaf_schema_id(b"u8");
+
+    fn encode_stratava(&self, encoder: &mut Encoder) -> Result<()> {
+        encoder.write_u8(*self);
+        Ok(())
+    }
+}
+
+impl StratavaDecode for u8 {
+    const WIRE_TYPE: WireType = WireType::U8;
+    const SCHEMA_ID: u64 = leaf_schema_id(b"u8");
+
+    fn decode_stratava(decoder: &mut Decoder<'_>) -> Result<Self> {
+        decoder.read_u8()
+    }
+
+    fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+        decoder.preflight_count(N, 1, 1, "array")?;
+        if N <= ARRAY_STACK_DECODE_BUDGET {
+            decode_byte_array_on_stack(decoder)
+        } else {
+            // Keep large array temporaries behind the fallible heap reservation.
+            decode_array_on_heap(decoder)
+        }
+    }
+}
 unsigned!(u16, U16, write_u16, read_u16);
 unsigned!(u32, U32, write_u32, read_u32);
 unsigned!(u64, U64, write_u64, read_u64);
@@ -986,7 +1033,7 @@ const ARRAY_STACK_DECODE_BUDGET: usize = 16 * 1024;
 /// Decodes `[T; N]` through a stack `[Option<T>; N]`, allocating nothing.
 ///
 /// `#[inline(never)]` is load-bearing here, not a hint. The budget test in
-/// `<[T; N] as StratavaDecode>::decode_stratava` is an ordinary runtime `if` over
+/// `StratavaDecode::decode_array` is an ordinary runtime `if` over
 /// const-foldable operands, so were this body inlined the `[Option<T>; N]` slot
 /// would sit in that function's frame whichever branch runs — and a debug
 /// build, which is how `cargo test` runs, folds nothing away. Kept as its own
@@ -1008,6 +1055,18 @@ where
         *slot = Some(T::decode_stratava(decoder)?);
     }
     Ok(slots.map(|value| value.expect("every array slot was filled by the loop above")))
+}
+
+// A byte array has no per-element validity or endian work. Resolve this via
+// the actual u8 implementation (including aliases), never via a wire tag that
+// a custom codec could also declare. Keep oversized stack frames out of the
+// caller just as for the generic array helper.
+#[inline(never)]
+fn decode_byte_array_on_stack<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[u8; N]> {
+    decoder
+        .read_exact(N)?
+        .try_into()
+        .map_err(|_| Error::UnexpectedEof)
 }
 
 /// Decodes `[T; N]` through one fallible heap reservation — the behaviour every
@@ -1038,19 +1097,7 @@ where
     const SCHEMA_ID: u64 = container_schema_id_with_arity(b"array", N as u64, &[T::SCHEMA_ID]);
 
     fn decode_stratava(decoder: &mut Decoder<'_>) -> Result<Self> {
-        // Unchanged: this is the EOF screen and the materialization charge, and
-        // the charge stays at `size_of::<T>()` rather than
-        // `size_of::<Option<T>>()`. The budget models retained heap
-        // materialization; the `Option` padding is transient stack already
-        // bounded by `ARRAY_STACK_DECODE_BUDGET`, and raising the charge would
-        // turn previously accepted decodes into `LimitExceeded` for niche-less
-        // `T` under a tight `max_materialized_bytes`.
-        decoder.preflight_count(N, minimum_wire_size(T::WIRE_TYPE), size_of::<T>(), "array")?;
-        if size_of::<Option<T>>().saturating_mul(N) <= ARRAY_STACK_DECODE_BUDGET {
-            decode_array_on_stack(decoder)
-        } else {
-            decode_array_on_heap(decoder)
-        }
+        T::decode_array(decoder)
     }
 }
 
