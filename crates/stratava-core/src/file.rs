@@ -4230,6 +4230,24 @@ impl StratavaReader {
         self.file.read_matrix_run_bytes_into::<T>(start, out)
     }
 
+    /// See [`StratavaFile::read_matrix_column_into`].
+    pub fn read_matrix_column_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_column_into(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_column_bytes_into`].
+    pub fn read_matrix_column_bytes_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_column_bytes_into::<T>(start, out)
+    }
+
     /// See [`StratavaFile::read_matrix_row_into`].
     pub fn read_matrix_row_into<T: StratavaMatrixBlock>(
         &self,
@@ -5011,6 +5029,24 @@ impl StratavaWriter {
         out: &mut [u8],
     ) -> Result<()> {
         self.file.read_matrix_run_bytes_into::<T>(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_column_into`].
+    pub fn read_matrix_column_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_column_into(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_column_bytes_into`].
+    pub fn read_matrix_column_bytes_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_column_bytes_into::<T>(start, out)
     }
 
     /// See [`StratavaFile::read_matrix_row_into`].

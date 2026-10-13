@@ -1142,6 +1142,8 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
 | `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
 | `read_matrix_row_into::<T>(first_axis, out)` | read one complete storage row; slice length equals dimension 1 |
+| `read_matrix_column_into::<T>(start, out)` | hold dimension 1 fixed and read `out.len()` cells along dimension 0 |
+| `read_matrix_column_bytes_into::<T>(start, out)` | same selected cells packed into encoded bytes; length divisible by slot stride |
 | `matrix_cell_status::<T>(key)` | committed/not committed status |
 | `clear_matrix_cell::<T>(key)` | clear one cell commit bit |
 | `clear_matrix_category(category)` | clear a whole commit category |
@@ -1154,9 +1156,10 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `rebuild_matrix_commit_from_crc::<T>()` | rebuild commit map from slot CRC evidence; refuses when the CRC-validity evidence is incomplete |
 | `write_matrix_cell_durable` | write/commit with ordered durability barrier, then a post-commit hook |
 
-Matrix run reads take `&self` on `StratavaFile`, `StratavaReader` and
+Matrix run and column reads take `&self` on `StratavaFile`, `StratavaReader` and
 `StratavaWriter`. Format-first readers also expose `cell_run_into`,
-`cell_run_bytes_into`, and `cell_row_into` for a block named `Cell`, including
+`cell_run_bytes_into`, `cell_row_into`, `cell_column_into`, and
+`cell_column_bytes_into` for a block named `Cell`, including
 through the generated read trait.
 
 **Select the contiguous direction in the schema.** `dims = [row, col]` stores
@@ -1165,8 +1168,11 @@ next row. `dims = [col, row]` stores adjacent rows together within each column.
 Declare the commit keyspace in the same order. Generated keys retain the named
 fields; low-level `MatrixKey::new(first, second)` follows declaration order.
 The growing dimension must remain the first axis for every matrix block.
-A row-oriented file does not also provide contiguous physical column access;
-use individual reads for its strided direction, or choose the other schema order.
+Use `read_matrix_column_into(start, out)` for the opposite axis. It returns
+`(start.first + i, start.second)` in declaration order: a logical column with
+`dims = [row, col]`, or a logical row with `dims = [col, row]`. Its length is chosen
+by the caller, including for growing files. This provides a bulk API over strided
+storage; it does not change the physical layout.
 
 For example, with a row-oriented block and 128 columns:
 
@@ -1176,7 +1182,31 @@ reader.read_matrix_row_into::<Cell>(42, &mut row)?;
 // Several rows, or a partial row followed by later rows, use a run:
 let mut cells = vec![Cell { value: 0 }; 4096];
 reader.read_matrix_run_into::<Cell>(MatrixKey::new(42, 16), &mut cells)?;
+// Hold column 16 fixed and read 256 successive rows starting at row 42:
+let mut column = vec![Cell { value: 0 }; 256];
+reader.read_matrix_column_into::<Cell>(MatrixKey::new(42, 16), &mut column)?;
 ```
+
+Column segments cross growing-chunk boundaries and split into bounded batches.
+Only selected cells must be committed; missing cells in the gaps do not cause
+`MatrixNotCommitted`. Bitmap pages are checked in groups, and chunk descriptors
+are resolved per batch. Close payload/CRC entries share at most 4 KiB read windows,
+with gap coalescing limited to four times useful bytes; distant entries are read
+at their exact offsets. A compressed sub-block is decoded once for its selected
+cells within a batch. No scalar cell API is called.
+
+Physical generation pages and compression can still amplify reads. A strided
+working set larger than the generation cache can repeatedly fault 4 KiB pages;
+`with_matrix_generation_cache_bytes` lets the caller tune that private cache.
+Choose schema order for the primary access direction. A column call does not
+implicitly enlarge caches or retain a transposed copy of the matrix.
+
+Typed column reads budget the caller's output, at most 64 KiB of payload scratch
+(or one larger cell), cumulative decode allocations, and compression workspace.
+Encoded column reads budget output and compression workspace. Metadata scratch
+is fixed-size. On an error discard the output, which may already contain a prefix.
+Like run reads, column reads take `&self` and stay on the captured generation;
+only explicit `follow` advances a reader.
 
 A run crosses row and growing-chunk boundaries internally. Plain runs read
 contiguous payload batches, bitmap spans and checksum spans, rather than calling

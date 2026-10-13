@@ -147,6 +147,9 @@ hypothetical fully resident size, not the current external implementation's peak
 
 Matrix runs can read consecutive cells into caller-owned buffers with
 `read_matrix_run_into`, `read_matrix_run_bytes_into`, or `read_matrix_row_into`.
+For a segment in the opposite direction, use `read_matrix_column_into` or
+`read_matrix_column_bytes_into`; these hold the second coordinate fixed and
+advance the first, using bounded batches even across growing chunks.
 They batch metadata and payload reads across growing chunks. The second axis in
 `dims = [first, second]` is contiguous: choose the declaration order for row or
 column scans. See [matrix APIs](docs/api-reference.md) for memory and hole handling.

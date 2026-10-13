@@ -1,5 +1,16 @@
 # API Changes — 0.3.0 through 0.12.0
 
+## Unreleased 0.12.0: opposite-axis matrix ranges
+
+Add `read_matrix_column_into` and `read_matrix_column_bytes_into` on file, reader
+and writer handles. Generated readers and their read traits add
+`<block>_column_into` and `<block>_column_bytes_into`. Start with a matrix key;
+output length selects how many dimension-0 entries to read while dimension 1
+stays fixed. Only selected cells must be committed. Calls batch bitmap/chunk
+metadata, gather payloads with bounded scratch, and reuse compressed sub-blocks.
+All queries use `&self`; snapshot/follow rules and VMAT v5 bytes are unchanged.
+See [the matrix API](api-reference.md) for physical-order and memory costs.
+
 ## Unreleased 0.12.0: fixed byte-array decoding
 
 `StratavaDecode::decode_array` is an additive default method. Existing manual

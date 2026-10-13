@@ -5960,6 +5960,8 @@ fn matrix_reader_methods(
         let run = format_ident!("{}_run_into", singular_method_name(ty));
         let run_bytes = format_ident!("{}_run_bytes_into", singular_method_name(ty));
         let row = format_ident!("{}_row_into", singular_method_name(ty));
+        let column = format_ident!("{}_column_into", singular_method_name(ty));
+        let column_bytes = format_ident!("{}_column_bytes_into", singular_method_name(ty));
         match target {
             MatrixMethodTarget::Inherent => quote! {
                 pub fn #run(&self, start: #key_ty, out: &mut [#ty]) -> ::stratava::__core::Result<()> {
@@ -5967,6 +5969,12 @@ fn matrix_reader_methods(
                 }
                 pub fn #run_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()> {
                     self.inner.read_matrix_run_bytes_into::<#ty>(start.into(), out)
+                }
+                pub fn #column(&self, start: #key_ty, out: &mut [#ty]) -> ::stratava::__core::Result<()> {
+                    self.inner.read_matrix_column_into::<#ty>(start.into(), out)
+                }
+                pub fn #column_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()> {
+                    self.inner.read_matrix_column_bytes_into::<#ty>(start.into(), out)
                 }
                 pub fn #row(&self, first_axis: u64, out: &mut [#ty]) -> ::stratava::__core::Result<()> {
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)
@@ -5986,6 +5994,8 @@ fn matrix_reader_methods(
             MatrixMethodTarget::Trait => quote! {
                 fn #run(&self, start: #key_ty, out: &mut [#ty]) -> ::stratava::__core::Result<()>;
                 fn #run_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()>;
+                fn #column(&self, start: #key_ty, out: &mut [#ty]) -> ::stratava::__core::Result<()>;
+                fn #column_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()>;
                 fn #row(&self, first_axis: u64, out: &mut [#ty]) -> ::stratava::__core::Result<()>;
 
                 fn #method(&self, key: #key_ty) -> ::stratava::__core::Result<#ty>;
@@ -6001,6 +6011,12 @@ fn matrix_reader_methods(
                 }
                 fn #run_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()> {
                     self.inner.read_matrix_run_bytes_into::<#ty>(start.into(), out)
+                }
+                fn #column(&self, start: #key_ty, out: &mut [#ty]) -> ::stratava::__core::Result<()> {
+                    self.inner.read_matrix_column_into::<#ty>(start.into(), out)
+                }
+                fn #column_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::stratava::__core::Result<()> {
+                    self.inner.read_matrix_column_bytes_into::<#ty>(start.into(), out)
                 }
                 fn #row(&self, first_axis: u64, out: &mut [#ty]) -> ::stratava::__core::Result<()> {
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)

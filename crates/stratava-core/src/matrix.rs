@@ -2652,6 +2652,47 @@ impl SparseBitmap {
         Ok(None)
     }
 
+    /// Check only the selected bits, retaining each faulted page for its whole group.
+    fn first_unset_strided(
+        &self,
+        first: u64,
+        step: u64,
+        count: u64,
+        read: BitmapRead<'_>,
+    ) -> Result<Option<u64>> {
+        if step == 0
+            || (count != 0
+                && first
+                    .checked_add(
+                        (count - 1)
+                            .checked_mul(step)
+                            .ok_or(Error::InvalidMatrixLayout)?,
+                    )
+                    .is_none_or(|last| last >= self.bit_count))
+        {
+            return Err(Error::InvalidMatrixLayout);
+        }
+        let mut done = 0;
+        while done < count {
+            let at = first + done * step;
+            let page = at / (BITMAP_PAGE_BYTES * 8);
+            let take = (count - done)
+                .min((BITMAP_PAGE_BYTES * 8 - 1 - at % (BITMAP_PAGE_BYTES * 8)) / step + 1);
+            let store = self.faulted_store(page, read)?;
+            let Some(held) = store.pages.get(&page) else {
+                return Ok(Some(at));
+            };
+            for i in 0..take {
+                let bit = at + i * step;
+                if held.bytes[(bit / 8 % BITMAP_PAGE_BYTES) as usize] & (1 << (bit % 8)) == 0 {
+                    return Ok(Some(bit));
+                }
+            }
+            done += take;
+        }
+        Ok(None)
+    }
+
     fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool> {
         if ordinal >= self.bit_count {
             return Err(Error::InvalidMatrixLayout);
@@ -3579,6 +3620,21 @@ pub(crate) mod crc_valid_evidence {
             read: BitmapRead<'_>,
         ) -> Result<()> {
             match self.bits.first_unset(first, count, read)? {
+                Some(ordinal) => Err(absent(ordinal)?),
+                None => Ok(()),
+            }
+        }
+
+        /// Fail-closed selected-cell check; never exposes absence as recovery evidence.
+        pub(super) fn require_meaningful_strided(
+            &self,
+            first: u64,
+            step: u64,
+            count: u64,
+            absent: impl FnOnce(u64) -> Result<Error>,
+            read: BitmapRead<'_>,
+        ) -> Result<()> {
+            match self.bits.first_unset_strided(first, step, count, read)? {
                 Some(ordinal) => Err(absent(ordinal)?),
                 None => Ok(()),
             }
@@ -4860,6 +4916,151 @@ pub(crate) fn read_run_payload<T: StratavaMatrixBlock>(
             if expected != actual {
                 return Err(Error::MatrixChecksumMismatch {
                     offset: layout.slot_offset(block_index, first + i as u64)?,
+                    expected,
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Gather selected fixed-width items. Close items share a bounded read window;
+/// distant items use exact reads, so gap coalescing never exceeds 4x useful bytes.
+/// The caller proves the items belong to its selected region before calling.
+pub(crate) fn read_strided_bytes(
+    mut read: impl FnMut(u64, &mut [u8]) -> Result<()>,
+    first: u64,
+    step: u64,
+    item: usize,
+    out: &mut [u8],
+) -> Result<()> {
+    if item == 0 || step < item as u64 || !out.len().is_multiple_of(item) {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    let count = out.len() / item;
+    if count == 0 {
+        return Ok(());
+    }
+    first
+        .checked_add(
+            (count as u64 - 1)
+                .checked_mul(step)
+                .ok_or(Error::InvalidMatrixLayout)?,
+        )
+        .and_then(|v| v.checked_add(item as u64))
+        .ok_or(Error::InvalidMatrixLayout)?;
+    let mut window = [0u8; 4096];
+    let mut done = 0;
+    while done < count {
+        let mut take = if item <= window.len() {
+            ((window.len() - item) as u64 / step + 1).min((count - done) as u64) as usize
+        } else {
+            1
+        };
+        let span = (take as u64 - 1) * step + item as u64;
+        if span > (take as u64).saturating_mul(item as u64).saturating_mul(4) {
+            take = 1;
+        }
+        let offset = first + done as u64 * step;
+        if take == 1 {
+            read(offset, &mut out[done * item..(done + 1) * item])?;
+        } else {
+            read(offset, &mut window[..span as usize])?;
+            for i in 0..take {
+                let begin = (i as u64 * step) as usize;
+                out[(done + i) * item..(done + i + 1) * item]
+                    .copy_from_slice(&window[begin..begin + item]);
+            }
+        }
+        done += take;
+    }
+    Ok(())
+}
+
+/// A bounded column segment: resolve the layout and fault bitmap pages per group,
+/// then gather only selected payload/CRC entries. Gaps need not be committed.
+pub(crate) fn read_column_payload<T: StratavaMatrixBlock>(
+    spec: FormatSpec,
+    layout: &MatrixLayout,
+    reader: MatrixRegionReader<'_>,
+    key: MatrixKey,
+    out: &mut [u8],
+) -> Result<()> {
+    let category = ensure_matrix_block::<T>(spec)?;
+    let allowed = ensure_commit_publishable(layout, category)?;
+    let block_index = layout.block_index(&allowed, T::ID)?;
+    let block = &layout.blocks[block_index];
+    let first = layout.ordinal_for_block(block_index, key)?;
+    let step = layout
+        .dimension(T::DIMENSIONS[1])
+        .ok_or(Error::InvalidMatrixLayout)?;
+    let stride = usize::try_from(block.slot_stride).map_err(|_| Error::InvalidMatrixLayout)?;
+    if stride == 0 || step == 0 || !out.len().is_multiple_of(stride) {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    let count = (out.len() / stride) as u64;
+    if count == 0 {
+        return Ok(());
+    }
+    if count > 1024
+        || first
+            .checked_add(
+                (count - 1)
+                    .checked_mul(step)
+                    .ok_or(Error::InvalidMatrixLayout)?,
+            )
+            .is_none_or(|last| last >= block.cell_count)
+    {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    let commit = &layout.commits[layout.commit_index(&allowed, category)?];
+    if commit
+        .bits
+        .first_unset_strided(first, step, count, reader.bitmap_read())?
+        .is_some()
+    {
+        return Err(Error::MatrixNotCommitted);
+    }
+    read_strided_bytes(
+        |at, bytes| reader.read_exact_at(at, bytes),
+        layout.slot_offset(block_index, first)?,
+        step.checked_mul(block.slot_stride)
+            .ok_or(Error::InvalidMatrixLayout)?,
+        stride,
+        out,
+    )?;
+    if let Some(base) = block.crc_offset {
+        let mut crcs = [0u8; 4096];
+        read_strided_bytes(
+            |at, bytes| reader.read_exact_at(at, bytes),
+            indexed_crc_offset(base, first)?,
+            step.checked_mul(4).ok_or(Error::InvalidMatrixLayout)?,
+            4,
+            &mut crcs[..count as usize * 4],
+        )?;
+        if block.crc_valid_offset.is_some() {
+            block.crc_valid_bits.require_meaningful_strided(
+                first,
+                step,
+                count,
+                |ordinal| {
+                    let at = ((ordinal - first) / step) as usize * stride;
+                    Ok(Error::MatrixChecksumMismatch {
+                        offset: layout.slot_offset(block_index, ordinal)?,
+                        expected: 0,
+                        actual: crc32_bytes(&out[at..at + stride])?,
+                    })
+                },
+                reader.bitmap_read(),
+            )?;
+        }
+        for (i, payload) in out.chunks_exact(stride).enumerate() {
+            let expected = u32::from_le_bytes(crcs[i * 4..i * 4 + 4].try_into().expect("checksum"));
+            let actual = crc32_bytes(payload)?;
+            if expected != actual {
+                return Err(Error::MatrixChecksumMismatch {
+                    offset: layout.slot_offset(block_index, first + i as u64 * step)?,
                     expected,
                     actual,
                 });
@@ -10449,6 +10650,36 @@ mod crc_valid_evidence_tests {
         ));
     }
 
+    #[test]
+    fn selected_validity_bits_fail_closed_on_incomplete_evidence() {
+        let incomplete = evidence(false);
+        incomplete
+            .require_meaningful_strided(
+                0,
+                2,
+                1,
+                |_| Ok(Error::InvalidMatrixLayout),
+                BitmapRead::Stored,
+            )
+            .unwrap();
+        let mut missing = None;
+        assert!(matches!(
+            incomplete.require_meaningful_strided(
+                0,
+                2,
+                3,
+                |ordinal| {
+                    missing = Some(ordinal);
+                    Ok(Error::InvalidMatrixLayout)
+                },
+                BitmapRead::Stored
+            ),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert_eq!(missing, Some(2));
+        assert!(incomplete.complete(BitmapRead::Stored).is_err());
+    }
+
     /// Clearing the map is not re-enumeration. A session that opened on a
     /// damaged validity index has no basis for reading absence as proof, and
     /// clearing a category does not give it one, so the refusal survives until
@@ -10713,5 +10944,54 @@ mod bypass_catalogue {
             .complete(BitmapRead::Stored)
             .expect("newly created is complete");
         assert!(!witness.get(7, BitmapRead::Stored).expect("clear bit"));
+    }
+}
+
+#[cfg(test)]
+mod column_gather_tests {
+    use super::*;
+
+    #[test]
+    fn coalesced_windows_preserve_selected_bytes_and_bound_gap_reads() {
+        for item in [1usize, 4, 8, 48, 4097] {
+            for multiplier in [1u64, 3, 5, 640] {
+                let step = item as u64 * multiplier;
+                let first = 123;
+                let mut out = vec![0; item * 73];
+                let mut read_bytes = 0;
+                read_strided_bytes(
+                    |at, bytes| {
+                        assert!(at >= first);
+                        assert!(at + bytes.len() as u64 <= first + 72 * step + item as u64);
+                        read_bytes += bytes.len();
+                        for (i, byte) in bytes.iter_mut().enumerate() {
+                            *byte = ((at + i as u64) % 251) as u8;
+                        }
+                        Ok(())
+                    },
+                    first,
+                    step,
+                    item,
+                    &mut out,
+                )
+                .unwrap();
+                for (i, payload) in out.chunks_exact(item).enumerate() {
+                    for (j, byte) in payload.iter().enumerate() {
+                        assert_eq!(*byte, ((first + i as u64 * step + j as u64) % 251) as u8);
+                    }
+                }
+                assert!(read_bytes <= out.len() * 4);
+            }
+        }
+        assert!(
+            read_strided_bytes(
+                |_, _| panic!("overflow must be refused before I/O"),
+                u64::MAX - 1,
+                16,
+                8,
+                &mut [0; 16]
+            )
+            .is_err()
+        );
     }
 }

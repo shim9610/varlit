@@ -482,6 +482,11 @@ fn check_format_roundtrip(dir: &std::path::Path) {
     reader
         .cell_run_bytes_into(key, &mut encoded)
         .expect("read encoded matrix run");
+    reader.cell_column_into(key, &mut run).expect("read matrix column segment");
+    assert_eq!(run[0], cell);
+    let mut column_encoded = vec![0; encoded.len()];
+    reader.cell_column_bytes_into(key, &mut column_encoded).expect("read encoded matrix column");
+    assert_eq!(encoded, column_encoded);
 
     println!("  file ok: fixed + variable + matrix blocks round-tripped");
 }

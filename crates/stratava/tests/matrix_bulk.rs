@@ -201,6 +201,23 @@ fn declaration_order_selects_contiguous_columns_and_generated_run_methods() -> s
         r.column_run_into(ColumnKey { col: 0, row: 0 }, out)
     }
     via_trait(&r, &mut out)?;
+    let mut across = vec![Column { value: 0 }; 3];
+    r.column_column_into(ColumnKey { col: 0, row: 2 }, &mut across)?;
+    assert_eq!(
+        across.iter().map(|v| v.value).collect::<Vec<_>>(),
+        [2, 102, 202]
+    );
+    fn opposite_via_trait(
+        r: &impl ColumnsRead,
+        out: &mut [Column],
+        raw: &mut [u8],
+    ) -> stratava::Result<()> {
+        r.column_column_into(ColumnKey { col: 0, row: 2 }, out)?;
+        r.column_column_bytes_into(ColumnKey { col: 0, row: 2 }, raw)
+    }
+    let mut raw = [0; 24];
+    opposite_via_trait(&r, &mut across, &mut raw)?;
+    assert_eq!(u64::from_le_bytes(raw[16..].try_into().unwrap()), 202);
     Ok(())
 }
 
@@ -259,6 +276,12 @@ fn corrupted_chunk_cell_is_not_returned_by_bulk_read() -> stratava::Result<()> {
     f.write_all(&[0])?;
     drop(f);
     let r = spec.open_reader(&path)?;
+    let mut one = [Cell { value: 0 }];
+    assert!(matches!(
+        r.read_matrix_column_into(MatrixKey::new(7, 1), &mut one),
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    r.read_matrix_column_into(MatrixKey::new(7, 0), &mut one)?;
     let mut out = vec![Cell { value: 0 }; 3];
     assert!(matches!(
         r.read_matrix_run_into(key(21, 3), &mut out),
@@ -315,6 +338,29 @@ fn compressed_runs_cross_subblocks_and_match_encoded_output() -> stratava::Resul
     }
     w.sync()?;
     let r = spec.open_reader(&path)?;
+    let mut column = vec![Cell { value: 0 }; 13];
+    r.read_matrix_column_into(MatrixKey::new(2, 11), &mut column)?;
+    let mut encoded_column = vec![0; 13 * 8];
+    r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(2, 11), &mut encoded_column)?;
+    for (i, (v, b)) in column
+        .iter()
+        .zip(encoded_column.chunks_exact(8))
+        .enumerate()
+    {
+        assert_eq!(v.value, (i as u64 + 2) * 1024 + 11);
+        assert_eq!(v.value, u64::from_le_bytes(b.try_into().unwrap()));
+    }
+    let limited = spec
+        .with_resource_limits(ReadLimits::STANDARD.with_max_materialized_bytes(1024))
+        .open_reader(&path)?;
+    assert!(matches!(
+        limited.read_matrix_column_into(MatrixKey::new(2, 11), &mut column),
+        Err(Error::LimitExceeded { .. })
+    ));
+    assert!(matches!(
+        limited.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(2, 11), &mut encoded_column),
+        Err(Error::LimitExceeded { .. })
+    ));
     let first = 7 * 1024 - 3;
     let mut out = vec![Cell { value: 0 }; 8 * 1024];
     r.read_matrix_run_into(key(first, 1024), &mut out)?;
@@ -325,6 +371,176 @@ fn compressed_runs_cross_subblocks_and_match_encoded_output() -> stratava::Resul
     r.read_matrix_run_bytes_into::<Cell>(key(first, 1024), &mut raw)?;
     for (i, b) in raw.chunks_exact(8).enumerate() {
         assert_eq!(u64::from_le_bytes(b.try_into().unwrap()), first + i as u64);
+    }
+    Ok(())
+}
+
+#[test]
+fn sparse_columns_cross_batches_and_chunks_without_requiring_gap_cells() -> stratava::Result<()> {
+    for crc in policies() {
+        for growing in [false, true] {
+            for width in [5, 37] {
+                let dir = tempfile::tempdir()?;
+                let path = dir.path().join("sparse-columns");
+                let spec = spec(crc, growing);
+                let mut w = spec.create_writer_with_dims(
+                    &path,
+                    MatrixDimensions::from_pairs([
+                        ("row", if growing { 7 } else { 1060 }),
+                        ("col", width),
+                    ]),
+                )?;
+                for row in 0..1060 {
+                    let key = MatrixKey::new(row, 2);
+                    w.write_matrix_cell(
+                        key,
+                        &Cell {
+                            value: row * width + 2,
+                        },
+                    )?;
+                    w.commit_matrix_cell::<Cell>(key)?;
+                }
+                let mut tail = vec![Cell { value: 0 }; 17];
+                w.read_matrix_column_into(MatrixKey::new(1043, 2), &mut tail)?;
+                assert_eq!(tail[16].value, 1059 * width + 2);
+                w.sync()?;
+                let r = spec.open_reader(&path)?;
+                let mut out = vec![Cell { value: 0 }; 1051];
+                r.read_matrix_column_into(MatrixKey::new(3, 2), &mut out)?;
+                for (i, v) in out.iter().enumerate() {
+                    assert_eq!(v.value, (i as u64 + 3) * width + 2);
+                }
+                let mut raw = vec![0; out.len() * 8];
+                r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(3, 2), &mut raw)?;
+                for (v, b) in out.iter().zip(raw.chunks_exact(8)) {
+                    assert_eq!(v.value, u64::from_le_bytes(b.try_into().unwrap()));
+                }
+                assert!(matches!(
+                    r.read_matrix_column_into(MatrixKey::new(3, 1), &mut out[..2]),
+                    Err(Error::MatrixNotCommitted)
+                ));
+                let mut sentinel = vec![Cell { value: u64::MAX }; 2];
+                assert!(
+                    r.read_matrix_column_into(MatrixKey::new(u64::MAX, 2), &mut sentinel)
+                        .is_err()
+                );
+                assert!(
+                    r.read_matrix_column_into(MatrixKey::new(0, width), &mut sentinel)
+                        .is_err()
+                );
+                if !growing {
+                    assert!(
+                        r.read_matrix_column_into(MatrixKey::new(1059, 2), &mut sentinel)
+                            .is_err()
+                    );
+                }
+                assert!(sentinel.iter().all(|x| x.value == u64::MAX));
+                assert!(
+                    r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(0, 2), &mut [0; 7])
+                        .is_err()
+                );
+                r.read_matrix_column_into::<Cell>(MatrixKey::new(u64::MAX, u64::MAX), &mut [])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn column_snapshots_follow_deletes_and_budget_refusals() -> stratava::Result<()> {
+    for growing in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("column-follow");
+        let base = spec(IntegrityPolicy::None, growing);
+        let mut w = base.create_writer_with_dims(
+            &path,
+            MatrixDimensions::from_pairs([("row", if growing { 7 } else { 128 }), ("col", 3)]),
+        )?;
+        for row in 0..128 {
+            let k = MatrixKey::new(row, 1);
+            w.write_matrix_cell(k, &Cell { value: row })?;
+            w.commit_matrix_cell::<Cell>(k)?;
+        }
+        w.sync()?;
+        let held = base.open_reader(&path)?;
+        let mut follow = base.open_reader(&path)?;
+        for row in 0..128 {
+            let k = MatrixKey::new(row, 1);
+            w.write_matrix_cell(k, &Cell { value: row + 1000 })?;
+            w.commit_matrix_cell::<Cell>(k)?;
+        }
+        let dirty = base.open_reader(&path)?;
+        let mut out = vec![Cell { value: 0 }; 128];
+        dirty.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
+        assert_eq!(out[127].value, 127);
+        w.sync()?;
+        follow.follow()?;
+        follow.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
+        assert_eq!(out[127].value, 1127);
+        held.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
+        assert_eq!(out[127].value, 127);
+        let limited = base
+            .with_resource_limits(ReadLimits::STANDARD.with_max_materialized_bytes(1024))
+            .open_reader(&path)?;
+        out.fill(Cell { value: u64::MAX });
+        assert!(matches!(
+            limited.read_matrix_column_into(MatrixKey::new(0, 1), &mut out),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert!(out.iter().all(|v| v.value == u64::MAX));
+        let mut raw = vec![0; 1024];
+        limited.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(0, 1), &mut raw)?;
+        assert_eq!(u64::from_le_bytes(raw[1016..].try_into().unwrap()), 1127);
+        w.clear_matrix_cell::<Cell>(MatrixKey::new(64, 1))?;
+        w.sync()?;
+        follow.follow()?;
+        assert!(matches!(
+            follow.read_matrix_column_into(MatrixKey::new(0, 1), &mut out),
+            Err(Error::MatrixNotCommitted)
+        ));
+        held.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
+        if !growing {
+            w.compact_matrix()?;
+            follow.follow()?;
+            assert!(matches!(
+                follow.read_matrix_column_into(MatrixKey::new(0, 1), &mut out),
+                Err(Error::MatrixNotCommitted)
+            ));
+            held.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn column_chunk_metadata_is_batched_and_payload_amplification_is_bounded() -> stratava::Result<()> {
+    for width in [1, 3, 640] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("column-io");
+        let spec = spec(IntegrityPolicy::None, true).with_growing_matrix_dimension("row", 256);
+        let mut w = spec.create_writer_with_dims(
+            &path,
+            MatrixDimensions::from_pairs([("row", 256), ("col", width)]),
+        )?;
+        for row in 256..512 {
+            let k = MatrixKey::new(row, width - 1);
+            w.write_matrix_cell(k, &Cell { value: row })?;
+            w.commit_matrix_cell::<Cell>(k)?;
+        }
+        w.sync()?;
+        let r = spec.open_reader(&path)?;
+        r.read_matrix_cell::<Cell>(MatrixKey::new(256, width - 1))?;
+        let before = stratava::StratavaFile::chunk_bytes_read();
+        let mut out = vec![Cell { value: 0 }; 256];
+        r.read_matrix_column_into(MatrixKey::new(256, width - 1), &mut out)?;
+        let read = stratava::StratavaFile::chunk_bytes_read() - before;
+        // At most four times useful payload + the covered bitmap + one descriptor.
+        assert!(
+            read <= 256 * 8 * 4 + (256 * width).div_ceil(8) + 256,
+            "width={width}, read={read}"
+        );
+        assert_eq!(out[255].value, 511);
     }
     Ok(())
 }

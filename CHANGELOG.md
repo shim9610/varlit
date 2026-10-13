@@ -6,6 +6,11 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Add typed and encoded matrix column-segment reads along the noncontiguous
+  dimension, with generated reader methods. Batch bitmap checks and chunk
+  lookups, bound payload/CRC coalescing, and reuse compressed sub-blocks while
+  allowing uncommitted gaps. Preserve snapshots, explicit follow and VMAT v5.
+
 - Decode bounded fixed byte arrays with one checked copy instead of constructing
   each byte through a generic temporary array. Preserve input validation,
   materialization budgets, custom element codecs and oversized-array heap staging.
