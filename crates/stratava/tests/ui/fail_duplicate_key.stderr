@@ -1,0 +1,5 @@
+error: duplicate stratava key field
+ --> tests/ui/fail_duplicate_key.rs:4:47
+  |
+4 | #[stratava(id = 403, kind = "variable", key = "id,id")]
+  |                                               ^^^^^^^

@@ -1,6 +1,6 @@
 # Migration Guide
 
-Varve migrations are explicit. Normal typed reads reject block version
+Stratava migrations are explicit. Normal typed reads reject block version
 mismatches; migration code names both the source and target block types and
 performs semantic conversion in Rust.
 
@@ -12,18 +12,18 @@ there is no automatic migration path for these surfaces:
 - The computed schema hash algorithm moved to version 3
   (`FormatSpec::SCHEMA_HASH_ALGORITHM_VERSION`, domain tag
   `varve-schema-v3`). Every computed value changes. Version 3 folds each
-  field's resolved codec identity (`VarveEncode::SCHEMA_ID` /
-  `VarveDecode::SCHEMA_ID`) into the block fingerprint, so two blocks whose
+  field's resolved codec identity (`StratavaEncode::SCHEMA_ID` /
+  `StratavaDecode::SCHEMA_ID`) into the block fingerprint, so two blocks whose
   field types are spelled identically but whose custom codecs emit different
   bytes no longer share a hash. Files whose header pins a v1 or v2 computed
   hash fail open with `SchemaHashMismatch`; recreate them (or re-derive and
   re-pin literal hashes in the declaration). Files with `schema_hash` omitted
   (stored 0) are unaffected because the comparison is disabled.
-- `#[derive(VarveBlock)]` now rejects, at compile time, any field whose codec
+- `#[derive(StratavaBlock)]` now rejects, at compile time, any field whose codec
   declares no `SCHEMA_ID` (the trait default `0`). Built-in scalars,
   containers and derived blocks always declare one; a hand-written codec used
   as a block field must add `const SCHEMA_ID: u64 = ...;` to both its
-  `VarveEncode` and `VarveDecode` impls, choosing a value that changes
+  `StratavaEncode` and `StratavaDecode` impls, choosing a value that changes
   whenever its emitted bytes change. Wrapping such a codec in
   `Option`/`Vec`/array/map/tuple does not satisfy the requirement: the
   container fold propagates the missing identity outward.
@@ -94,7 +94,7 @@ there is no automatic migration path for these surfaces:
   both it and `ChunkedBytes` now declare the stable non-zero codec `SCHEMA_ID`
   that derived fields require — before that they could not be used as derived
   fields at all.
-- A `VarveBlock` whose `ENDIAN`, resolved through `FormatSpec::endian`,
+- A `StratavaBlock` whose `ENDIAN`, resolved through `FormatSpec::endian`,
   contradicts the format's own declaration for that block id is now rejected at
   typed registration with `Error::EndianMismatch`. Manual mirrors of a generated
   block must copy its `ENDIAN` alongside its `SCHEMA_FINGERPRINT`.
@@ -167,9 +167,9 @@ variants refused, and the route that worked was reachable only by naming
 
 Two smaller consequences. `replace` now returns the published sequence
 (`Result<u64>`) instead of `Result<()>`; ignore it with `let _ =` if you do not
-want it. And its bound tightened to `T: VarveReplaceBlock`, which
-`#[derive(VarveBlock)]` already emits for every block — only a hand-written
-`VarveBlock` impl needs one added, and it is trivially `Ok(())` for an unkeyed
+want it. And its bound tightened to `T: StratavaReplaceBlock`, which
+`#[derive(StratavaBlock)]` already emits for every block — only a hand-written
+`StratavaBlock` impl needs one added, and it is trivially `Ok(())` for an unkeyed
 block.
 
 If you want a specific mechanism rather than the replacement, keep calling the
@@ -207,7 +207,7 @@ and ordering rules if they accept hostile input.
 The 0.2 release intentionally changes three source contracts from 0.1:
 `FormatSpec` requires `read_limits`, `ReplaceStrategy::FixedInPlace` is removed,
 and `ReplaceStrategy::FixedCopyOnWrite` is added. Facade users of the re-exported
-core types are source-affected even when they depend only on `varve`. These
+core types are source-affected even when they depend only on `stratava`. These
 changes avoid preserving a misleading safe in-place contract. Existing valid
 native 0.1 files do not require a wire migration.
 
@@ -217,16 +217,16 @@ Keep the same block id when the new type represents the same logical block, and
 bump the block version when existing bytes no longer decode as the new type.
 
 ```rust
-use varve::{VarveBlock, VarveMigration};
+use stratava::{StratavaBlock, StratavaMigration};
 
-#[derive(Clone, Debug, PartialEq, VarveBlock)]
-#[varve(id = 20, version = 1, kind = "fixed")]
+#[derive(Clone, Debug, PartialEq, StratavaBlock)]
+#[stratava(id = 20, version = 1, kind = "fixed")]
 struct CounterV1 {
     value: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, VarveBlock)]
-#[varve(id = 20, version = 2, kind = "fixed")]
+#[derive(Clone, Debug, PartialEq, StratavaBlock)]
+#[stratava(id = 20, version = 2, kind = "fixed")]
 struct CounterV2 {
     value: u32,
     doubled: u32,
@@ -234,8 +234,8 @@ struct CounterV2 {
 
 struct CounterMigration;
 
-impl VarveMigration<CounterV1, CounterV2> for CounterMigration {
-    fn migrate(from: CounterV1) -> varve::Result<CounterV2> {
+impl StratavaMigration<CounterV1, CounterV2> for CounterMigration {
+    fn migrate(from: CounterV1) -> stratava::Result<CounterV2> {
         Ok(CounterV2 {
             value: from.value,
             doubled: from.value.saturating_mul(2),
@@ -249,7 +249,7 @@ impl VarveMigration<CounterV1, CounterV2> for CounterMigration {
 values.
 
 ```rust
-let file = OldFormat::open_readonly("old.varve")?;
+let file = OldFormat::open_readonly("old.stratava")?;
 let values = file.blocks_migrated::<CounterV1, CounterV2, CounterMigration>()?;
 ```
 
@@ -259,10 +259,10 @@ let values = file.blocks_migrated::<CounterV1, CounterV2, CounterMigration>()?;
 an output with the new format and push the migrated values.
 
 ```rust
-let old = OldFormat::open_readonly("old.varve")?;
+let old = OldFormat::open_readonly("old.stratava")?;
 let migrated = old.blocks_migrated::<CounterV1, CounterV2, CounterMigration>()?;
 
-let mut out = NewFormat::create("new.varve")?;
+let mut out = NewFormat::create("new.stratava")?;
 for value in &migrated {
     out.push(value)?;
 }
@@ -284,8 +284,8 @@ For preallocated matrix data, unchanged fixed-stride cell payloads can be copied
 without decoding and re-encoding:
 
 ```rust
-let mut old = OldMatrixFormat::open_reader("old.varve")?;
-let mut out = NewMatrixFormat::create_writer_with_dims("new.varve", dims)?;
+let mut old = OldMatrixFormat::open_reader("old.stratava")?;
+let mut out = NewMatrixFormat::create_writer_with_dims("new.stratava", dims)?;
 
 out.copy_matrix_cell_bytes_from::<OldCell, NewCell>(&mut old, key)?;
 ```
@@ -313,9 +313,9 @@ large keyed state, rewrites output files, or changes codecs used by migrated
 blocks:
 
 ```powershell
-cargo test -p varve --test perf_smoke -- --ignored --nocapture
-cargo test -p varve --features mmap --test perf_smoke -- --ignored --nocapture
-cargo test -p varve --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
+cargo test -p stratava --test perf_smoke -- --ignored --nocapture
+cargo test -p stratava --features mmap --test perf_smoke -- --ignored --nocapture
+cargo test -p stratava --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
 ```
 
 For expensive semantic conversions, add a local migration-sized case and compare

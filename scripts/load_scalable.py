@@ -72,7 +72,7 @@ def atomic_json(path, value):
 
 def evict_files(directory):
     advice = []
-    for file in sorted(directory.glob("data.varve*")):
+    for file in sorted(directory.glob("data.stratava*")):
         if not file.is_file():
             continue
         try:
@@ -242,7 +242,7 @@ def main():
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=False)
     data_root = args.data_root.resolve(); data_root.mkdir(parents=True, exist_ok=False)
-    (data_root / ".varve-load-owner").write_text(str(output))
+    (data_root / ".stratava-load-owner").write_text(str(output))
     environment = os.environ.copy()
     report = {"schema_version": 1, "suite": args.suite, "platform": platform.platform(),
               "binary": str(binary), "binary_sha256": binary_hash,
@@ -296,7 +296,7 @@ def main():
                         record["files"] = [{"path": file.name, "logical_bytes": file.stat().st_size,
                                             "allocated_bytes": file.stat().st_blocks * 512}
                                            for file in directory.iterdir() if file.is_file()]
-                        native = next(file for file in record["files"] if file["path"] == "data.varve")
+                        native = next(file for file in record["files"] if file["path"] == "data.stratava")
                         if native["allocated_bytes"] < total * 0.99:
                             raise RuntimeError("native file is sparse/compressed below the real-byte acceptance bound")
                     atomic_json(output / "report.json", report)
@@ -306,7 +306,7 @@ def main():
                 before_free = shutil.disk_usage(data_root).free
                 before_delete = io_stat()
                 deletion = time.monotonic()
-                if directory.parent != data_root or directory.is_symlink() or (data_root / ".varve-load-owner").read_text() != str(output):
+                if directory.parent != data_root or directory.is_symlink() or (data_root / ".stratava-load-owner").read_text() != str(output):
                     raise RuntimeError("refusing cleanup outside this run's owned directory")
                 shutil.rmtree(directory)
                 fd = os.open(data_root, os.O_RDONLY | os.O_DIRECTORY)

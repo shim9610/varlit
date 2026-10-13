@@ -61,7 +61,7 @@ def summarize(path):
             "write_amplification": write["child_write_bytes"] / total,
             "sidecar_mib": sidecar_bytes / MIB,
             "sidecar_allocated_mib": sum(f["allocated_bytes"] for name, f in files.items() if name.endswith((".vki", ".vks"))) / MIB,
-            "native_allocated_gib": files.get("data.varve", {}).get("allocated_bytes", 0) / GIB,
+            "native_allocated_gib": files.get("data.stratava", {}).get("allocated_bytes", 0) / GIB,
             "user_seconds": write["user_seconds"], "system_seconds": write["system_seconds"],
             "cpu_cores_used": (write["user_seconds"] + write["system_seconds"]) / duration,
             "cgroup_throttled_seconds": write["cpu_stat_delta"].get("throttled_usec", 0) / 1e6,

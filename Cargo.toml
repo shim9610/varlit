@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/varve",
-    "crates/varve-core",
-    "crates/varve-macros",
-    "tools/varve-test-runner",
+    "crates/stratava",
+    "crates/stratava-core",
+    "crates/stratava-macros",
+    "tools/stratava-test-runner",
 ]
 resolver = "3"
 exclude = ["vendor/redb"]
@@ -13,15 +13,10 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/shim9610/varve"
 rust-version = "1.95"
-version = "0.11.0"
+version = "0.12.0"
 
 [workspace.dependencies]
 crc32fast = "1.5.2"
-# Upstream fixes for epoch/skiplist Stacked Borrows and range reclamation are
-# not released yet (PRs #871, #1297, #1217). Direct Git dependencies also carry
-# the fixed epoch/utils sources to downstream Git consumers; a root [patch]
-# would not. Keep this immutable revision until a verified release replaces it.
-crossbeam-skiplist = { version = "=0.1.3", git = "https://github.com/crossbeam-rs/crossbeam", rev = "099d0469efcfacb32527bd9451a4fb62586ae537" }
 libc = "0.2.189"
 memmap2 = "0.9.11"
 proc-macro2 = "1.0.107"

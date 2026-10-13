@@ -1,7 +1,73 @@
-# API Changes — 0.3.0 through 0.11.0
+# API Changes — 0.3.0 through 0.12.0
 
 Migration document. Companion to [Known Limitations](known-limitations.md)
 and the [Changelog](../CHANGELOG.md).
+
+## Resource-budget changes in unreleased 0.12.0
+
+- `LayoutReader` caps its segment-position buffer at the smaller of the index
+  budget and 2 MiB, then spills to a private temporary directory. Opening and
+  iterating no longer charge for `LayoutSegmentInfo` values they do not retain.
+  `LayoutWriter` charges no per-segment resident index. Explicit segment/scan
+  work limits remain enforced; `segments_into` still checks the owned result.
+- Writer keyed-tail caches spill to a temporary paged index rather than refusing
+  open or append when the cache budget is reached. The owned-map API keeps its
+  limit. Scratch I/O failure is still an error, before the data append.
+- Matrix dirty-page directories spill without sync or generation publication.
+  Compaction enumerates pages incrementally; follow traverses changed subtrees
+  only in the metadata ranges it needs. Bitmap mirrors and staged bitmap deltas
+  still have separate resident limits.
+- With `mmap`, `StratavaFile::mmap_payload_window` maps one record's stored payload
+  without requiring a resident directory or a whole-file mapping budget. The
+  returned `MmapPayloadWindow` owns the mapping. External immutability remains
+  an unsafe caller contract; compressed payloads remain compressed.
+- `StratavaFile::mmap_matrix_cell` and `StratavaReader::mmap_matrix_cell` map one
+  committed matrix cell. Visibility and optional CRC checks use that reader's
+  generation. Only intersecting COW pages are copied into the private mapping;
+  unrelated matrix pages do not consume its materialization budget.
+- File diagnostics consume one payload budget per record and visit the directory
+  incrementally. Previously released payloads no longer count against that
+  budget. An individually oversized payload still fails validation.
+
+These changes do not remove the resident native-open directory, resident keyed
+merge/compact, or matrix bitmap-index mirror requirements. Their bounded-memory
+replacements are separate work; increasing their limits is not a substitute.
+
+## L. 0.11.0 → 0.12.0: Stratava rename
+
+Stratava is the new name of this binary-format library. The old `varve` and
+`varve-core` registry names belong to an unrelated project. Do not replace a
+Git dependency with a registry dependency using those old names.
+
+| Before | After |
+| --- | --- |
+| `varve`, `varve-core`, `varve-macros` | `stratava`, `stratava-core`, `stratava-macros` |
+| `varve::…`, `varve_core::…` | `stratava::…`, `stratava_core::…` |
+| `VarveBlock`, `VarveReader`, `VarveWriter`, other `Varve*` identifiers | corresponding `Stratava*` identifiers |
+| `varve_format!`, `#[varve(...)]` | `stratava_format!`, `#[stratava(...)]` |
+| `encode_varve`, `decode_varve` | `encode_stratava`, `decode_stratava` |
+| `LayoutPreset::VarveNative`, `varve_native()` | `LayoutPreset::StratavaNative`, `stratava_native()` |
+| DSL `preset: varve_native` | DSL `preset: stratava_native` |
+| `VARVE_*` tool/test environment variables | corresponding `STRATAVA_*` variables |
+| `varve-test-runner` | `stratava-test-runner` |
+
+Dependency aliases remain supported, for example `sv = { package = "stratava",
+path = "…/crates/stratava" }`. Derived code resolves that alias automatically.
+Older public names are not retained as aliases. Historical sections below use
+the API names that existed at their release dates.
+
+The rename preserves versioned container/index markers, schema-hash domains,
+finite-key codec identities and writer-lock metadata. A name change alone does
+not require rewriting stored files or changing schema declarations' field/block
+names. As before, changing the spelling of a declared field type (including a
+fully qualified crate path) can change its derived fingerprint; compare computed
+schema hashes when migrating such declarations. The repository URL and old Git tags retain `varve`; a Stratava package
+cannot be loaded from the old `v0.11.0` tag.
+
+This release also removes Crossbeam: the matrix writer owns its pending page
+directory and bitmap reads borrow the current view. Reader queries still take
+`&self`, and readers and writers retain ownership transfer between threads.
+Durability and compaction remain explicit caller operations.
 
 ## K. 0.10.2 → 0.11.0: explicit contracts and owned index state
 

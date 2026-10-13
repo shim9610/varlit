@@ -1,0 +1,5 @@
+error: invalid stratava key field "id-number"; expected a Rust identifier
+ --> tests/ui/fail_invalid_key.rs:4:47
+  |
+4 | #[stratava(id = 415, kind = "variable", key = "id-number")]
+  |                                               ^^^^^^^^^^^

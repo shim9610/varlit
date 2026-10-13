@@ -1,28 +1,28 @@
-//! API2-05 regression fixture: the `varve` dependency is renamed to `vv` in
-//! Cargo.toml and there is deliberately NO `extern crate vv as varve`
+//! API2-05 regression fixture: the `stratava` dependency is renamed to `vv` in
+//! Cargo.toml and there is deliberately NO `extern crate vv as stratava`
 //! workaround anywhere. Every macro expansion below must reference the facade
 //! through the resolved name, otherwise this crate fails to compile with
-//! E0433 ("cannot find `varve` in the crate root").
+//! E0433 ("cannot find `stratava` in the crate root").
 //!
 //! Compiling this crate is the regression test; the `main` body additionally
 //! round-trips a file so the generated code is exercised, not just
 //! type-checked.
 
-use vv::{VarveBlock, varve_format};
+use vv::{StratavaBlock, stratava_format};
 
-// Exercises the derive path, including the `IDENT: ::varve::__core::…`
+// Exercises the derive path, including the `IDENT: ::stratava::__core::…`
 // type-ascription shape (const items, typed params) that a colon-run rewrite
 // bug once missed.
-#[derive(Clone, Debug, PartialEq, VarveBlock)]
-#[varve(id = 7, version = 1, kind = "fixed")]
+#[derive(Clone, Debug, PartialEq, StratavaBlock)]
+#[stratava(id = 7, version = 1, kind = "fixed")]
 struct Point {
     x: u32,
     y: u32,
 }
 
-// Exercises the full varve_format! expansion (spec construction, block
+// Exercises the full stratava_format! expansion (spec construction, block
 // registration, generated reader/writer APIs, keyed blocks).
-varve_format! {
+stratava_format! {
     pub format RenamedFormat {
         magic: b"RNMD";
         version: 1;
@@ -70,12 +70,12 @@ fn main() {
     assert_eq!(Point::ID, 7);
 
     // Runtime round-trip in a self-cleaning temp directory.
-    let dir = std::env::temp_dir().join(format!("varve-rename-fixture-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("stratava-rename-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let result = std::panic::catch_unwind(|| {
         let path = dir.join("renamed.vrnm");
         {
-            let mut file = vv::VarveFile::create(spec, &path).unwrap();
+            let mut file = vv::StratavaFile::create(spec, &path).unwrap();
             file.push(&Cell { a: 1, b: 2 }).unwrap();
             // API2-05: `Item` is keyed and this format enables
             // `keyed_offset_chain`, so the generic `push` entry point refuses
@@ -89,7 +89,7 @@ fn main() {
             .unwrap();
             file.flush().unwrap();
         }
-        let file = vv::VarveFile::open_readonly(spec, &path).unwrap();
+        let file = vv::StratavaFile::open_readonly(spec, &path).unwrap();
         let cells = file.blocks::<Cell>().unwrap();
         let cells: Vec<Cell> = cells.iter().collect::<Result<_, _>>().unwrap();
         assert_eq!(cells, vec![Cell { a: 1, b: 2 }]);

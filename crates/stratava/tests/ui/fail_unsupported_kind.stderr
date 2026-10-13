@@ -1,0 +1,5 @@
+error: unsupported stratava kind "stream"; use "fixed", "variable", or "matrix"
+ --> tests/ui/fail_unsupported_kind.rs:4:22
+  |
+4 | #[stratava(id = 410, kind = "stream")]
+  |                      ^^^^^^^^^^^^^^^

@@ -1,20 +1,23 @@
-# Varve
+# Stratava
 
-Varve is a Rust library for building append-friendly, segment-oriented custom
+Formerly Varve. The 0.12.0 rename changes the Rust API and package names; existing
+versioned file markers remain unchanged.
+
+Stratava is a Rust library for building append-friendly, segment-oriented custom
 binary formats from typed block definitions. It is not one fixed file format.
 The main workflow is format-first: declare a file contract with
-`varve_format!`, then use the generated typed reader and writer APIs.
+`stratava_format!`, then use the generated typed reader and writer APIs.
 
 For a small, schema-defined keyspace, declare `key_values` or `key_domain`.
-Varve compiles the permitted value combinations into a two-byte enum, with at
+Stratava compiles the permitted value combinations into a two-byte enum, with at
 most 4,096 combinations per block; growing log records remain identified by
 offsets. See [finite schema keys](docs/scalable-io.md#finite-schema-keys).
 
 The workspace contains:
 
-- `varve`: public facade crate
-- `varve-core`: runtime, codecs, file I/O, diagnostics
-- `varve-macros`: `varve_format!` and derive support
+- `stratava`: public facade crate
+- `stratava-core`: runtime, codecs, file I/O, diagnostics
+- `stratava-macros`: `stratava_format!` and derive support
 
 ## What This Is And Is Not Ready For
 
@@ -35,8 +38,8 @@ is covered in **[API Changes](docs/api-changes.md)**.
   build no directory at all, leaving the caller to build only the part it needs
   with `record_map`. Measured on a 50,000-record file: **100,316 read syscalls
   at open, 516, and 20.**
-- Bounded-memory ingest and indexed point lookup through `VarveStreamReader`,
-  `VarveStreamWriter`, `VarveIndexedReader` and `VarveIndexedWriter`. These are
+- Bounded-memory ingest and indexed point lookup through `StratavaStreamReader`,
+  `StratavaStreamWriter`, `StratavaIndexedReader` and `StratavaIndexedWriter`. These are
   part of the default public API since 0.10.0, including with
   `--no-default-features`. Choose these constructors explicitly for large logs;
   `create_writer` and `open_reader` keep their existing resident behavior.
@@ -102,7 +105,7 @@ is covered in **[API Changes](docs/api-changes.md)**.
   refuse an open is the page-index mirror above: it is charged against the same
   ceiling and is not evictable.
 - **Petabyte-scale merge or compact.** Keyed merge and compact are resident-only.
-  Varve exports no bounded-memory external merge or compact.
+  Stratava exports no bounded-memory external merge or compact.
 - **Channel-selective reads.** Reading a subset of channels without paying full
   block I/O has been designed but not implemented: there is no `channel_view`
   type, no DSL key, and no generated method anywhere in the workspace. Nothing
@@ -122,7 +125,7 @@ is covered in **[API Changes](docs/api-changes.md)**.
   that has never failed, not as a search that has finished; see
   [Known Limitations §6](docs/known-limitations.md#6-not-verified).
 
-## What Varve Provides
+## What Stratava Provides
 
 - Compile-time format declarations with generated typed reader and writer APIs.
 - Fixed and variable blocks with canonical encoding instead of Rust memory
@@ -139,12 +142,12 @@ is covered in **[API Changes](docs/api-changes.md)**.
 
 ## Capability Boundary
 
-Varve has two API families with different scale contracts. Pick deliberately.
+Stratava has two API families with different scale contracts. Pick deliberately.
 
 | Family | Entry points | State | Suited to |
 | --- | --- | --- | --- |
-| Resident | `VarveFile`, generated typed readers/writers, keyed collections, `merge_keyed_files`, `compact_keyed_file(s)` | index and merge state live in memory, sized by record and key counts | files that fit comfortably in RAM alongside the application |
-| Stream/indexed (default API) | `VarveStreamWriter`, `VarveIndexedWriter`, their readers, and `.vks`/`.vki` sidecars | bounded resident state, sized by declared blocks and bounded buffers | high-rate append and point lookup over data far larger than RAM |
+| Resident | `StratavaFile`, generated typed readers/writers, keyed collections, `merge_keyed_files`, `compact_keyed_file(s)` | index and merge state live in memory, sized by record and key counts | files that fit comfortably in RAM alongside the application |
+| Stream/indexed (default API) | `StratavaStreamWriter`, `StratavaIndexedWriter`, their readers, and `.vks`/`.vki` sidecars | bounded resident state, sized by declared blocks and bounded buffers | high-rate append and point lookup over data far larger than RAM |
 
 The scalable family covers bounded ingest and lookup only. **Keyed merge and
 compact are resident-only and explicitly not petabyte-scale**: they retain one
@@ -199,7 +202,7 @@ than deferred rather than merely later: the candidate set is the persisted page
 index **unioned with** the platform's allocation map, and that second term is the
 only thing that ever examines a page the matrix never published, so **stray bytes
 there are never looked at at all**. `verify_matrix_metadata()` on a reader, writer
-or `VarveFile` runs the same pass on demand and recovers the findings and the
+or `StratavaFile` runs the same pass on demand and recovers the findings and the
 recommendations — but not the quarantine and not the writer gate, which are derived
 once, at open. No read answers from unverified bytes under any policy: every page
 faulted in is authenticated against its stored digest first, so this is a choice
@@ -224,7 +227,7 @@ Full numbers, arithmetic you can apply to your own cell count, and the trade-off
 of each policy are in
 [Known Limitations §1](docs/known-limitations.md#1-matrix-opening-a-matrix-is-not-o1-because-opening-it-verifies-it).
 
-Varve should own the reusable binary-format mechanics. Application-specific
+Stratava should own the reusable binary-format mechanics. Application-specific
 meaning, domain transforms, and compatibility with an external specification
 remain caller code.
 
@@ -234,10 +237,10 @@ remain caller code.
 | --- | --- |
 | [Quickstart](docs/quickstart.md) | shortest path from format declaration to write/read |
 | [Known Limitations](docs/known-limitations.md) | what a user actually hits: matrix open cost and residency, resident-API scale, unimplemented features, and what is not verified |
-| [How Varve Works](docs/how-it-works.md) | mental model of the declaration, the generated code, append logs, matrix storage, and durability |
+| [How Stratava Works](docs/how-it-works.md) | mental model of the declaration, the generated code, append logs, matrix storage, and durability |
 | [API Reference](docs/api-reference.md) | practical public API map, including the resource-limit surface and the generic adapter toolkit |
 | [Format Author Guide](docs/format-author-guide.md) | policy choices, compression, commit modes, matrix blocks |
-| [Custom Codec Guide](docs/custom-codec-guide.md) | writing `VarveEncode`/`VarveDecode` for a field type with its own stable wire meaning |
+| [Custom Codec Guide](docs/custom-codec-guide.md) | writing `StratavaEncode`/`StratavaDecode` for a field type with its own stable wire meaning |
 | [Update And Compact Guide](docs/update-compact-guide.md) | keyed put/op/tombstone/compact workflows, and when direct replacement is the right tool instead |
 | [Scalable I/O](docs/scalable-io.md) | the default stream/indexed APIs, batching, sidecars, recovery, and exact cost model |
 | [Immediate policy](docs/immediate-policy.md) | block and value declarations, automatic durability conditions, and explicit `immediate()` |
@@ -261,24 +264,23 @@ the assurance those notes record — together with its limits — is summarised 
 
 ## Add It To Your Project
 
-For the 0.11.0 repository release, depend on the versioned Git tag. This
-repository release does not imply that 0.11.0 is available on crates.io:
+This checkout contains the unreleased Stratava 0.12.0 packages. Until they are
+published, use a local checkout:
 
 ```toml
 [dependencies]
-varve = { git = "https://github.com/shim9610/varve", tag = "v0.11.0" }
+stratava = { path = "../stratava/crates/stratava" }
 ```
 
-The `v0.11.0` release pins Crossbeam to upstream commit
-`099d0469efcfacb32527bd9451a4fb62586ae537`, which includes the epoch/skiplist
-borrow fixes and range-reference reclamation fix. It also retains a temporary
-matrix working-map reclamation workaround; revalidate it when updating Crossbeam.
-The Git dependencies propagate to downstream projects without a root `[patch]`.
-crates.io publication is not currently supported; replacing the pin requires a
-released source containing the fixes.
+Replace the path with the location of your checkout. The GitHub repository is
+still [shim9610/varve](https://github.com/shim9610/varve); the existing `v0.11.0`
+tag contains the old `varve` packages and cannot provide `stratava`.
 
-Version 0.11.0 removes process-wide snapshot retention APIs and requires explicit
-static identities for typed manual schemas. See the [API migration notes](docs/api-changes.md#k-0102--0110-explicit-contracts-and-owned-index-state).
+The runtime no longer depends on Crossbeam. The matrix writer owns its pending
+page directory and lends it to bitmap reads. See the
+[0.11.0 → 0.12.0 migration notes](docs/api-changes.md#l-0110--0120-stratava-rename)
+for crate imports, derive attributes, codec methods and tool environment names.
+Registry publication remains a separate release step.
 
 Requires Rust **1.95** or newer. Resident, matrix, streaming and indexed APIs
 are included even with `default-features = false`. The removed
@@ -286,7 +288,7 @@ are included even with `default-features = false`. The removed
 Cargo manifests. Optional capabilities remain opt-in:
 
 ```toml
-varve = { git = "https://github.com/shim9610/varve", tag = "v0.11.0",
+stratava = { path = "../stratava/crates/stratava",
           features = ["integrity", "compression-zstd"] }
 ```
 
@@ -304,9 +306,9 @@ choices require which feature, and what each costs.
 ## Minimal Shape
 
 ```rust
-use varve::varve_format;
+use stratava::stratava_format;
 
-varve_format! {
+stratava_format! {
     pub format AppFormat {
         magic: b"APP";
         version: 1;
@@ -328,21 +330,21 @@ varve_format! {
     }
 }
 
-let mut writer = AppFormat::create_writer("app.varve")?;
+let mut writer = AppFormat::create_writer("app.stratava")?;
 writer.push_point(&Point { x: 1, y: 2 })?;
 writer.push_user(&User { id: 7, name: "Ada".to_string(), flags: 0 })?;
 writer.flush()?;
 
-let reader = AppFormat::open_reader("app.varve")?;
+let reader = AppFormat::open_reader("app.stratava")?;
 let user = reader.users()?.get(&7)?;
 ```
 
-The user declares the format and block types. Varve generates the typed
+The user declares the format and block types. Stratava generates the typed
 methods, block metadata, required field encoding, record headers, commit
 handling, offset-chain metadata, and diagnostics.
 
 Resource limits are runtime policy, not part of the file format. Ordinary
-opens use Varve's allocation-safe standard policy. Use generated
+opens use Stratava's allocation-safe standard policy. Use generated
 `*_with_resource_limits` methods to raise or lower policy for a handle, or the
 legacy `*_with_limits` methods when only fieldwise tightening is desired. An
 optional, partial `limits { ... }` declaration can provide format defaults but
@@ -360,31 +362,31 @@ spec's and now also takes a runtime one where the spec declared none. Through
 `Lazy { cache_bytes }` to the eager policy, discarding the only bound on matrix
 metadata memory and often failing the open on the very admission limit you were
 raising. **If you wrote a workaround for that, it is no longer needed.** There is
-still no `varve_format!` DSL key for any of the three; declare them on the spec
+still no `stratava_format!` DSL key for any of the three; declare them on the spec
 with `FormatSpec::with_read_limits` or pass them in a `ReadLimits` value. See
-[Known Limitations §1.6](docs/known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varve_format-dsl-key)
+[Known Limitations §1.6](docs/known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-stratava_format-dsl-key)
 for the two matrix policies.
 
 ## Examples
 
 | Example | Role |
 | --- | --- |
-| `crates/varve/examples/bmp_physical.rs` | Small physical-format adapter proof for BMP-style headers and raw pixel data, verified against Pillow. |
-| `crates/varve/examples/perf_bench.rs` | Local throughput check for append, open, scan, and block access paths. |
-| `crates/varve/examples/tdms_physical_reader.rs` | Thin reader entry point for the TDMS physical adapter example. |
-| `crates/varve/examples/tdms_physical_writer.rs` | Thin writer entry point for the TDMS physical adapter example. |
-| `crates/varve/examples/tdms_physical_adapter.rs` | CLI wrapper around the TDMS adapter for write, append, read, read-bytes, and inspect flows. |
-| `crates/varve/examples/tdms_physical/common/adapter.rs` | Large TDMS physical adapter proof using Varve's generic adapter APIs. |
-| `crates/varve/examples/tdms_physical/common/example_data.rs` | Multi-channel TDMS scenario fixtures. |
-| `crates/varve/examples/tdms_physical/common/verify.rs` | Regression checks for TDMS round trips and segment-layout behavior. |
+| `crates/stratava/examples/bmp_physical.rs` | Small physical-format adapter proof for BMP-style headers and raw pixel data, verified against Pillow. |
+| `crates/stratava/examples/perf_bench.rs` | Local throughput check for append, open, scan, and block access paths. |
+| `crates/stratava/examples/tdms_physical_reader.rs` | Thin reader entry point for the TDMS physical adapter example. |
+| `crates/stratava/examples/tdms_physical_writer.rs` | Thin writer entry point for the TDMS physical adapter example. |
+| `crates/stratava/examples/tdms_physical_adapter.rs` | CLI wrapper around the TDMS adapter for write, append, read, read-bytes, and inspect flows. |
+| `crates/stratava/examples/tdms_physical/common/adapter.rs` | Large TDMS physical adapter proof using Stratava's generic adapter APIs. |
+| `crates/stratava/examples/tdms_physical/common/example_data.rs` | Multi-channel TDMS scenario fixtures. |
+| `crates/stratava/examples/tdms_physical/common/verify.rs` | Regression checks for TDMS round trips and segment-layout behavior. |
 
 The TDMS example is intentionally larger than a quickstart. Its job is to prove
-that Varve can support a demanding external binary format without hard-coding
+that Stratava can support a demanding external binary format without hard-coding
 TDMS-specific behavior into the library. It also acts as a regression harness so
 combined changes do not silently break segment appends, metadata reuse, scalar
 types, or cross-tool compatibility.
 
-The boundary it demonstrates is the general one for external formats. Varve owns
+The boundary it demonstrates is the general one for external formats. Stratava owns
 the reusable mechanics: declaring and validating file headers, segment lead-ins,
 metadata and raw regions and footers, finalized offsets and segment bounds;
 appending complete segments; and exposing offsets, lengths, field values, byte
@@ -393,8 +395,8 @@ tagged-value codecs, chunk index builders over raw regions, segment reducers, an
 adapter self-checks. The adapter author owns the domain meaning: for TDMS that
 means object paths, raw-data-index grammar, property typing, timestamp and
 waveform conversion, scaling, DAQmx raw scalers, interleaving, sidecar policy and
-export. **Varve provides no TDMS reader or writer**; the files under
-`crates/varve/examples/` are adapter proofs, not a supported TDMS API.
+export. **Stratava provides no TDMS reader or writer**; the files under
+`crates/stratava/examples/` are adapter proofs, not a supported TDMS API.
 
 ## Self-Check
 
@@ -402,8 +404,8 @@ Generated formats expose diagnostics and end-to-end self-test helpers:
 
 ```rust
 let diagnostics = AppFormat::diagnostics();
-let file_report = AppFormat::diagnose_file("data.varve");
-let self_test = AppFormat::self_test("self-check.varve")
+let file_report = AppFormat::diagnose_file("data.stratava");
+let self_test = AppFormat::self_test("self-check.stratava")
     .with_block(Point { x: 1, y: 2 })
     .cleanup(true)
     .run();
@@ -415,7 +417,7 @@ gate, file data, environment, or library invariant issues. See
 
 ## Status
 
-Varve 0.10.0 includes the stream/indexed family in the default, supported
+Stratava 0.10.0 includes the stream/indexed family in the default, supported
 public API. The former development-only Cargo gate is removed. API
 changes follow the same pre-1.0 minor-version policy as the resident and matrix
 families. Promotion changes API availability; it does not assert completion of
@@ -438,7 +440,7 @@ are regenerable, and the difference is what it costs you:
 
 | Class | Outcome | Cost to you |
 | --- | --- | --- |
-| **Matrix native file** (`VMAT` v1/v2/v3) | `Error::FormatVersionMismatch { expected: 4, .. }` | **recreate the matrix and copy its contents yourself** — Varve has no migration tool |
+| **Matrix native file** (`VMAT` v1/v2/v3) | `Error::FormatVersionMismatch { expected: 4, .. }` | **recreate the matrix and copy its contents yourself** — Stratava has no migration tool |
 | **Native file pinned with a computed schema hash** from 0.3.0 or earlier | `Error::SchemaHashMismatch` | **recreate the file, or re-derive the pinned literal** — the hash algorithm changed twice |
 | Matrix sidecar written before sidecar v3 | `Error::MatrixSidecarMismatch("sidecar version")` | regenerate; sidecars are resume state, not data |
 | Stream/indexed primaries and disk sidecars written before the generation nonce | typed refusal; `rebuild_disk_index` for the sidecar | regenerate. Hypothetical in practice — this family never shipped |
@@ -465,15 +467,15 @@ for reproducible commands and the limits of these checks.
 
 Earlier 20 GiB load testing found that opening new indexed readers could
 interrupt the sole writer. Reader open now uses read-only confirmed checkpoints
-without writer admission, and the runtime uses Varve's own index storage.
+without writer admission, and the runtime uses Stratava's own index storage.
 Regression tests cover concurrent opens; timed campaigns qualify the exact
 source and binary recorded by their reports, independently of release tags.
 
 The performance checks are in the same position. They are regression guards
 rather than product benchmarks, and **they run in no job**:
-`crates/varve/tests/perf_smoke.rs` is entirely `#[ignore]`d, as is the
+`crates/stratava/tests/perf_smoke.rs` is entirely `#[ignore]`d, as is the
 one-million-key allocator stress probe in
-`crates/varve/tests/high_cardinality.rs`. Every performance number in this
+`crates/stratava/tests/high_cardinality.rs`. Every performance number in this
 documentation therefore comes from a manual run on a named date and host.
 The qualification runner explicitly enforces heap budgets when invoked, but
 the long campaigns are not automatically scheduled in CI.
@@ -501,9 +503,9 @@ see [Known Limitations §6](docs/known-limitations.md#6-not-verified).
 
 ```powershell
 cargo fmt --all -- --check
-cargo run -p varve-test-runner -- test --workspace
-cargo run -p varve-test-runner -- test --workspace --all-features
-cargo run -p varve-test-runner -- clippy --workspace --all-targets --all-features -- -D warnings
+cargo run -p stratava-test-runner -- test --workspace
+cargo run -p stratava-test-runner -- test --workspace --all-features
+cargo run -p stratava-test-runner -- clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 The runner gives every command a fresh temporary root, preserves that root on
@@ -515,7 +517,7 @@ CI (`.github/workflows/ci.yml`) runs on Ubuntu and Windows: `cargo fmt --all
 covering no-default-features, default, each optional feature alone
 (`integrity`, `mmap`, `zero-copy`, `compression-zstd`,
 `scalable-fault-injection`), and the all-feature workspace union; default and
-all-feature test runs through `varve-test-runner` so a leaked test artifact
+all-feature test runs through `stratava-test-runner` so a leaked test artifact
 fails the build; test runs for the two singleton feature configurations that own
 `cfg`-exclusive behaviour (compression without integrity, integrity without
 compression), which the default and all-feature runs both compile out; a job
@@ -536,7 +538,7 @@ out-of-workspace fixtures) so an uncommitted workspace member cannot pass CI.
 
 Two of those jobs build crates that deliberately sit outside the workspace,
 because some contracts only exist from a consumer's point of view:
-`tools/rename-fixture` proves the macros work when the `varve` dependency is
+`tools/rename-fixture` proves the macros work when the `stratava` dependency is
 renamed, and `tools/public-api-fixture` derives fixed, variable, and matrix
 blocks over **every** public codec and field type the documentation lists and
 round-trips each one. The second exists because a mandatory field-codec identity
@@ -559,9 +561,10 @@ evaluates a fixed toolchain.
 Source distribution is checked by `source contents`, `clean source archive`,
 and `Git consumer + pinned dependency sources`. The consumer builds and runs
 the public-API fixture from a separate project with a Git dependency on the
-tested Varve commit and no root `[patch]`. It also checks that all four
-Crossbeam crates resolve to the intended upstream source. crates.io archive
-checks must be restored before introducing crates.io distribution.
+tested Stratava commit and no root `[patch]`. It also checks that redb and Crossbeam
+are absent from the consumer dependency graph. `verified package archives` builds
+and verifies the three publishable `.crate` files, checks their package names and
+licenses, and rejects private process documents. Registry publication is separate.
 `rustdoc (-D warnings)` builds the published documentation surface for all three
 crates with warnings denied.
 
@@ -573,13 +576,13 @@ Python 3.12 or newer (NumPy 2.5):
 
 ```powershell
 .\.venv-tdms\Scripts\python.exe scripts\verify_tdms_with_nptdms.py
-.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_varve.py
+.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_stratava.py
 .\.venv-tdms\Scripts\python.exe scripts\verify_bmp_with_pillow.py
 ```
 
 ## License
 
-Varve is licensed under either of:
+Stratava is licensed under either of:
 
 - [MIT License](LICENSE-MIT)
 - [Apache License, Version 2.0](LICENSE-APACHE)

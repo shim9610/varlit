@@ -11,8 +11,8 @@ RESUMED = re.compile(r"^\d+\.\d+\s+<\.\.\. (\w+) resumed>(.*)")
 
 
 def category(line):
-    for suffix, label in [("data.varve.vki", "index"), ("data.varve.vks", "state"),
-                          ("data.varve.lock", "writer_marker"), ("data.varve", "native")]:
+    for suffix, label in [("data.stratava.vki", "index"), ("data.stratava.vks", "state"),
+                          ("data.stratava.lock", "writer_marker"), ("data.stratava", "native")]:
         if suffix in line:
             return label
     return "other"

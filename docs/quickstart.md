@@ -1,4 +1,4 @@
-# Varve Quickstart
+# Stratava Quickstart
 
 This guide shows the shortest path from format declaration to reading and
 writing a file. For deeper API lists, see `docs/api-reference.md`. For failure
@@ -10,9 +10,9 @@ Prefer the format-first macro. It generates block structs, typed reader/writer
 wrappers, and the static `FormatSpec`.
 
 ```rust
-use varve::varve_format;
+use stratava::stratava_format;
 
-varve_format! {
+stratava_format! {
     pub format AppFormat {
         magic: b"APP";
         version: 1;
@@ -55,11 +55,11 @@ Legacy `*_with_limits` calls only tighten the resolved policy.
 
 ## 2. Self-Check The Format
 
-Run this before wiring Varve into application logic. It verifies that generated
+Run this before wiring Stratava into application logic. It verifies that generated
 APIs, codecs, keyed lookup, and file roundtrip agree for representative values.
 
 ```rust
-let report = AppFormat::self_test("app.selfcheck.varve")
+let report = AppFormat::self_test("app.selfcheck.stratava")
     .with_block(Point { x: 1, y: 2 })
     .with_keyed_block(User {
         id: 7,
@@ -79,7 +79,7 @@ environment, or a possible library invariant.
 ## 3. Write Data
 
 ```rust
-let mut writer = AppFormat::create_writer("app.varve")?;
+let mut writer = AppFormat::create_writer("app.stratava")?;
 
 writer.push_point(&Point { x: 1, y: 2 })?;
 writer.push_user(&User {
@@ -95,7 +95,7 @@ writer.sync()?;  // asks the OS for durable persistence
 `create_writer` truncates the target file. Use `open_writer` to append to an
 existing file.
 
-Native records can be replaced even when their encoded size changes. Varve
+Native records can be replaced even when their encoded size changes. Stratava
 streams a new file generation and publishes it atomically; already-open readers
 keep their previous snapshot.
 
@@ -113,7 +113,7 @@ writer.replace_user(
 ## 4. Read Data
 
 ```rust
-let reader = AppFormat::open_reader("app.varve")?;
+let reader = AppFormat::open_reader("app.stratava")?;
 
 let points = reader.points()?;
 let first = points.get(0)?;
@@ -134,7 +134,7 @@ for copying the file pair, configuring private caches and `compact_matrix()`.
 ## 5. Diagnose Existing Files
 
 ```rust
-let report = AppFormat::diagnose_file("app.varve");
+let report = AppFormat::diagnose_file("app.stratava");
 for item in &report.items {
     eprintln!("{:?} {:?} {}: {}", item.severity, item.domain, item.code, item.message);
 }
@@ -150,9 +150,9 @@ Matrix blocks are for bounded, runtime-sized grids with direct cell addressing.
 They are not append-log records.
 
 ```rust
-use varve::varve_format;
+use stratava::stratava_format;
 
-varve_format! {
+stratava_format! {
     pub format AnalysisFormat {
         magic: b"ANL";
         version: 1;
@@ -195,7 +195,7 @@ varve_format! {
 }
 
 let dims = AnalysisFormatDims { scan: 2, ch: 3 };
-let mut writer = AnalysisFormat::create_writer_with_dims("analysis.varve", dims)?;
+let mut writer = AnalysisFormat::create_writer_with_dims("analysis.stratava", dims)?;
 let key = CellKey { scan: 1, ch: 2 };
 
 writer.write_cell(key, &Cell { value: 99 })?;
@@ -203,7 +203,7 @@ writer.commit_cell(key)?;
 writer.write_thumbnail_aux(0, &[1, 2, 3, 4])?;
 writer.flush()?;
 
-let mut reader = AnalysisFormat::open_reader("analysis.varve")?;
+let mut reader = AnalysisFormat::open_reader("analysis.stratava")?;
 let value = reader.cell(key)?;
 let thumbnail_prefix = reader.read_thumbnail_aux(0, 4)?;
 ```

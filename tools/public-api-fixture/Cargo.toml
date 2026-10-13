@@ -21,8 +21,8 @@ publish = false
 # value (docs/api-reference.md: "Compression requires the `compression-zstd`
 # feature ... `ChunkedBytes` additionally requires `integrity`"). Every other
 # type covered here is available with default features.
-varve = { path = "../../crates/varve", features = ["compression-zstd", "integrity"] }
+stratava = { path = "../../crates/stratava", features = ["compression-zstd", "integrity"] }
 
-# Detach from the repository workspace: this crate must resolve `varve` the way
+# Detach from the repository workspace: this crate must resolve `stratava` the way
 # an external consumer does.
 [workspace]

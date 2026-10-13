@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a retained redb-backed Varve load binary with the native-index binary.
+"""Compare a retained redb-backed Stratava load binary with the native-index binary.
 Uses actual allocated files, identical I/O contracts, counterbalanced order,
 full payload/CRC + point checks, resource counters and ownership-checked deletion.
 """
@@ -37,7 +37,7 @@ def main():
     data.mkdir(parents=True, exist_ok=True)
     if any(data.iterdir()):
         raise SystemExit('data directory must be empty')
-    marker = data / '.varve-load-owner'
+    marker = data / '.stratava-load-owner'
     marker.write_text(str(output))
     total = args.gib * GIB
     epoch = 256 * 1024**2
@@ -77,7 +77,7 @@ def main():
                     if phase=='write':
                         case['files']=[dict(name=p.name,logical_bytes=p.stat().st_size,allocated_bytes=p.stat().st_blocks*512)
                                        for p in sorted(directory.iterdir()) if p.is_file()]
-                        native=next(f for f in case['files'] if f['name']=='data.varve')
+                        native=next(f for f in case['files'] if f['name']=='data.stratava')
                         if native['allocated_bytes'] < total * .99: raise RuntimeError('file is not fully allocated')
                 if directory.parent!=data or directory.is_symlink() or marker.read_text()!=str(output):
                     raise RuntimeError('cleanup ownership mismatch')

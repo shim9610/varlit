@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""redb is retained as an oracle; it must never enter Varve's runtime graph."""
+"""Keep redb and Crossbeam out of Stratava's runtime dependency graph."""
 import json
 from pathlib import Path
 import subprocess
@@ -17,11 +17,12 @@ while pending:
     if package in seen:
         continue
     seen.add(package)
-    if packages[package]["name"] == "redb":
-        raise SystemExit("redb entered the production dependency graph")
+    name = packages[package]["name"]
+    if name == "redb" or name == "crossbeam" or name.startswith("crossbeam-"):
+        raise SystemExit(f"{name} entered the production dependency graph")
     for dep in nodes[package]["deps"]:
         if any(kind["kind"] != "dev" for kind in dep["dep_kinds"]):
             pending.append(dep["pkg"])
-if (ROOT / "crates/varve-core/src/redb").exists():
+if (ROOT / "crates/stratava-core/src/redb").exists():
     raise SystemExit("embedded redb runtime sources remain")
-print("Runtime dependency graph excludes redb; oracle dev-dependencies are permitted.")
+print("Runtime dependency graph excludes redb and Crossbeam; dev-dependencies are permitted.")

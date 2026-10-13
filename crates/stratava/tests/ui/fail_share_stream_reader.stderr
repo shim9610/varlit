@@ -1,0 +1,196 @@
+error[E0277]: `std::cell::Cell<()>` cannot be shared between threads safely
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+6 | |         let _ = reader.events();
+7 | |     });
+  | |_____^ `std::cell::Cell<()>` cannot be shared between threads safely
+  |
+  = help: within `StratavaStreamReader`, the trait `Sync` is not implemented for `std::cell::Cell<()>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `PhantomData<std::cell::Cell<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `StratavaStreamReader`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | pub struct StratavaStreamReader {
+  |            ^^^^^^^^^^^^^^^^^^^^
+  = note: required for `Arc<StratavaStreamReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+
+error[E0277]: `RefCell<stratava_core::disk_index::tree::Cache>` cannot be shared between threads safely
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+6 | |         let _ = reader.events();
+7 | |     });
+  | |_____^ `RefCell<stratava_core::disk_index::tree::Cache>` cannot be shared between threads safely
+  |
+  = help: within `StratavaStreamReader`, the trait `Sync` is not implemented for `RefCell<stratava_core::disk_index::tree::Cache>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `stratava_core::disk_index::tree::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/tree.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::storage::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/storage.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::SnapshotPin`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | struct SnapshotPin {
+  |        ^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::disk_index::SnapshotPin>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `stratava_core::disk_index::DiskIndexSnapshot`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | pub struct DiskIndexSnapshot {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `stratava_core::stream::StreamReaderState`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | struct StreamReaderState {
+  |        ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::stream::StreamReaderState>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `StratavaStreamReader`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | pub struct StratavaStreamReader {
+  |            ^^^^^^^^^^^^^^^^^^^^
+  = note: required for `Arc<StratavaStreamReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+
+error[E0277]: `RefCell<Option<stratava_core::disk_index::slots::Directory>>` cannot be shared between threads safely
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+6 | |         let _ = reader.events();
+7 | |     });
+  | |_____^ `RefCell<Option<stratava_core::disk_index::slots::Directory>>` cannot be shared between threads safely
+  |
+  = help: within `StratavaStreamReader`, the trait `Sync` is not implemented for `RefCell<Option<stratava_core::disk_index::slots::Directory>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `stratava_core::disk_index::slots::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/slots.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::storage::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/storage.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::SnapshotPin`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | struct SnapshotPin {
+  |        ^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::disk_index::SnapshotPin>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `stratava_core::disk_index::DiskIndexSnapshot`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | pub struct DiskIndexSnapshot {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `stratava_core::stream::StreamReaderState`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | struct StreamReaderState {
+  |        ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::stream::StreamReaderState>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `StratavaStreamReader`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | pub struct StratavaStreamReader {
+  |            ^^^^^^^^^^^^^^^^^^^^
+  = note: required for `Arc<StratavaStreamReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+
+error[E0277]: `RefCell<stratava_core::disk_index::slots::Cache>` cannot be shared between threads safely
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+6 | |         let _ = reader.events();
+7 | |     });
+  | |_____^ `RefCell<stratava_core::disk_index::slots::Cache>` cannot be shared between threads safely
+  |
+  = help: within `StratavaStreamReader`, the trait `Sync` is not implemented for `RefCell<stratava_core::disk_index::slots::Cache>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `stratava_core::disk_index::slots::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/slots.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::storage::Reader`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index/storage.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `stratava_core::disk_index::SnapshotPin`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | struct SnapshotPin {
+  |        ^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::disk_index::SnapshotPin>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `stratava_core::disk_index::DiskIndexSnapshot`
+ --> $WORKSPACE/crates/stratava-core/src/disk_index.rs
+  |
+  | pub struct DiskIndexSnapshot {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `stratava_core::stream::StreamReaderState`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | struct StreamReaderState {
+  |        ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<stratava_core::stream::StreamReaderState>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `StratavaStreamReader`
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  | pub struct StratavaStreamReader {
+  |            ^^^^^^^^^^^^^^^^^^^^
+  = note: required for `Arc<StratavaStreamReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_stream_reader.rs:5:24
+  |
+5 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs

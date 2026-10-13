@@ -98,7 +98,7 @@ foreach ($name in $targets) {
         "-timeout=10",
         "-max_len=1048576",
         "-rss_limit_mb=1024",
-        "-dict=fuzz\dictionaries\varve.dict"
+        "-dict=fuzz\dictionaries\stratava.dict"
     )
     cargo +nightly fuzz run $name --fuzz-dir fuzz --target-dir target\fuzz-asan --jobs $Jobs -- `
         @fuzzerArgs

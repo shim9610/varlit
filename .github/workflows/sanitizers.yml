@@ -127,7 +127,7 @@ jobs:
           exit 1
       # Three env choices, each with a measured reason:
       #
-      #   * `VARVE_SKIP_UI_SNAPSHOTS=1` — trybuild runs its fixtures by
+      #   * `STRATAVA_SKIP_UI_SNAPSHOTS=1` — trybuild runs its fixtures by
       #     spawning nested cargo builds, and the children inherit
       #     `RUSTFLAGS=-Zsanitizer=address` without the `-Zbuild-std` that
       #     makes it linkable: every fixture fails on build machinery, not on
@@ -151,15 +151,15 @@ jobs:
           RUSTFLAGS: -Zsanitizer=address
           ASAN_OPTIONS: detect_leaks=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/lsan-suppressions.txt
-          VARVE_SKIP_UI_SNAPSHOTS: "1"
+          STRATAVA_SKIP_UI_SNAPSHOTS: "1"
         run: |
           cargo test -Zbuild-std --target x86_64-unknown-linux-gnu \
-            -p varve -p varve-core --all-features --tests
+            -p stratava -p stratava-core --all-features --tests
 
   miri:
     # Same public-repository guard as above.
     if: github.repository == 'shim9610/varve'
-    name: miri (varve-core portable unit tests)
+    name: miri (stratava-core portable unit tests)
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -195,16 +195,15 @@ jobs:
       #     unsupported fcntl syscall (72) on 2026-10-07. Ordinary CI and ASan
       #     still run this comparison; native index tests remain in Miri.
       #
-      # Crossbeam is pinned to the upstream source fixing epoch/skiplist borrow
-      # violations (PRs #871/#1297) and range reclamation (#1217). Keep native
-      # tests and the default alias checks enabled to verify those fixes here.
+      # Crossbeam has been removed. Keep native tests and the default alias
+      # checks enabled for the owner-local caches and page directories.
       #
       # `--skip` matches substrings; these names are long enough to be unique.
       - name: unit tests under Miri
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
-          cargo miri test -p varve-core --no-default-features --lib -- \
+          cargo miri test -p stratava-core --no-default-features --lib -- \
             --skip randomized_pages_match_redb_across_splits_and_old_roots \
             --skip cleanup_does_not_delete_a_file_interposed_before_the_unlink \
             --skip cleanup_leaves_a_swapped_pathname_alone \

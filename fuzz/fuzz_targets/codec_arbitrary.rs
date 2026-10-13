@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use libfuzzer_sys::fuzz_target;
-use varve::{Endian, decode_from_slice};
-use varve_fuzz::{FuzzPoint, FuzzRecord};
+use stratava::{Endian, decode_from_slice};
+use stratava_fuzz::{FuzzPoint, FuzzRecord};
 
 fuzz_target!(|data: &[u8]| {
     let Some((&selector, payload)) = data.split_first() else {

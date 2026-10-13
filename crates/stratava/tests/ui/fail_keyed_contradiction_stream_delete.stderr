@@ -1,0 +1,26 @@
+error[E0080]: evaluation panicked: this type implements StratavaKeyedBlock but declares StratavaBlock::IS_KEYED = false; keyed blocks must declare IS_KEYED = true
+ --> $RUST/core/src/panic.rs
+  |
+  = note: evaluation of `stratava_core::traits::KeyedBlockContract::<ContradictoryKeyed>::OK` failed here
+  |
+ ::: $WORKSPACE/crates/stratava-core/src/traits.rs
+  |
+  |       pub const OK: () = assert!(
+  |  ________________________-
+  | |         T::IS_KEYED,
+  | |         "this type implements StratavaKeyedBlock but declares StratavaBlock::IS_KEYED = false; \
+  | |          keyed blocks must declare IS_KEYED = true"
+  | |     );
+  | |_____- in this macro invocation
+
+note: erroneous constant encountered
+ --> $WORKSPACE/crates/stratava-core/src/stream.rs
+  |
+  |         let () = KeyedBlockContract::<T>::OK;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn StratavaStreamWriter::delete_with_prev_key_info::<ContradictoryKeyed>`
+  --> tests/ui/fail_keyed_contradiction_stream_delete.rs:43:5
+   |
+43 |     writer.delete_with_prev_key_info::<ContradictoryKeyed>(&0u64, None)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

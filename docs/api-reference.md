@@ -1,4 +1,4 @@
-# Varve API Reference
+# Stratava API Reference
 
 This is a practical public API map for application authors. It is not a
 rustdoc replacement; it explains which API to reach for and what it means.
@@ -8,7 +8,7 @@ rustdoc replacement; it explains which API to reach for and what it means.
 For a format declared as:
 
 ```rust
-varve_format! {
+stratava_format! {
     pub format AppFormat {
         magic: b"APP";
         version: 1;
@@ -26,11 +26,11 @@ the macro generates:
 | --- | --- |
 | `AppFormat` | zero-sized namespace for the format |
 | `AppFormat::spec()` | returns the static `FormatSpec` |
-| `AppFormat::create(path)` | create/truncate and return raw `VarveFile` |
+| `AppFormat::create(path)` | create/truncate and return raw `StratavaFile` |
 | `AppFormat::create_writer(path)` | create/truncate and return typed writer |
-| `AppFormat::open(path)` | open read-write raw `VarveFile` |
+| `AppFormat::open(path)` | open read-write raw `StratavaFile` |
 | `AppFormat::open_writer(path)` | open read-write typed writer |
-| `AppFormat::open_readonly(path)` | open raw read-only `VarveFile` |
+| `AppFormat::open_readonly(path)` | open raw read-only `StratavaFile` |
 | `AppFormat::open_reader(path)` | open typed snapshot reader |
 | `AppFormat::open_reader_with_limits(path, limits)` | open with limits tightened below the declaration |
 | `AppFormat::open_reader_with_resource_limits(path, limits)` | open with runtime policy that may raise or lower optional defaults |
@@ -46,12 +46,12 @@ the macro generates:
 
 `AppFormat::create` and `create_writer` create-or-truncate the path. For callers
 that must prove they created and own the file (diagnostic scaffolding, self-test
-scaffolding) and must never destroy caller data, `VarveFile::create_new(spec, path)`
-and `VarveWriter::create_new(spec, path)` open with `create_new`: they never
+scaffolding) and must never destroy caller data, `StratavaFile::create_new(spec, path)`
+and `StratavaWriter::create_new(spec, path)` open with `create_new`: they never
 truncate or reuse an existing path and fail with an `AlreadyExists` I/O error if
 one exists. Matrix formats have the same pair —
-`VarveFile::create_new_with_dims(spec, path, dims)` and
-`VarveWriter::create_new_with_dims` — which keep the one exclusively created,
+`StratavaFile::create_new_with_dims(spec, path, dims)` and
+`StratavaWriter::create_new_with_dims` — which keep the one exclusively created,
 lock-bound handle from claim through matrix initialization, with no pathname
 re-open window in between.
 
@@ -277,7 +277,7 @@ What only verification produces:
 | `AtOpen` | Verify while opening. **`DEFAULT`.** A damaged matrix announces itself at open and a writer is refused before it can mutate a damaged category. |
 | `OnDemand` | Do not verify while opening; verify when asked, with `verify_matrix_metadata()`. Open reads the persisted page index only and does not query the allocation map. |
 
-`verify_matrix_metadata()` on a reader, writer, or `VarveFile` runs the same pass
+`verify_matrix_metadata()` on a reader, writer, or `StratavaFile` runs the same pass
 on demand and returns the same report. It **reports; it does not quarantine**: the
 fail-closed gate is derived once, at open, from the findings the layout is
 assembled with, so a caller who needs a damaged category failed closed reopens
@@ -286,77 +286,37 @@ at fault-in is the only verification that happens — which is why there is no
 `Never` variant: turning verification off removes the verdict, never the check on
 bytes a read actually answers from.
 
-`max_keyed_tail_bytes` (declared as `keyed_tail` in a `limits { ... }` block)
-bounds the resident keyed-tail cache: the per-block-id map that lets a keyed
-append resolve its predecessor in O(1) instead of rescanning the resident
-index. It is charged before the memory is taken, so the map's initial build and
-its later growth are both refused with
-`Error::LimitExceeded { resource: "keyed tail bytes", .. }` rather than merely
-attempted.
+`max_keyed_tail_bytes` (`limits { keyed_tail: ... }`) now bounds the nominal
+in-memory batch of each writer's keyed-tail cache. At the boundary the writer
+spills entries to its own temporary paged index and continues. Spilling does
+not sync or publish the data file and adds no shared cache or writer lock.
+Both generated and generic keyed writers use this path. One encoded key plus
+fixed tree-page scratch is the minimum work unit; map allocator overhead and
+temporary serialization are additional to the nominal charge. The default
+working batch is capped at 2 MiB per block even when the declared ceiling is
+larger. Scratch I/O failures are returned before append. Temporary files are
+removed when their owning handle is dropped.
 
-Both halves matter, and the build is the larger one. The map is built from file
-content by `VarveFile::key_tail_offsets`, at generated-writer construction and
-at first resident keyed use, so a file with `N` distinct keys would otherwise
-force an `N`-entry resident map whatever the ceiling said, with the ceiling only
-refusing further growth within the session. The build is therefore charged as it
-proceeds. Its charge is the structural **peak**, which is larger than the map it
-produces: the build keeps a transient per-key ordering entry alive while the
-returned map is reserved, and the resident cache additionally transcodes into a
-canonical-payload map while the returned map is still alive. Opening a file
-consequently charges more than the steady-state map costs. This is deliberate
-and conservative - the charge models what is allocated, not what survives - but
-it means a ceiling sized from the steady-state map alone can refuse an open.
-
-The charged value is inline storage plus the key payload bytes the map owns.
-Both routes charge the same way: the generated keyed writers no longer keep a
-`HashMap<T::Key, u64>` of their own and instead maintain the same byte-keyed
-resident cache the generic keyed API uses, so heap owned by a `String` key is
-charged on every path. It is checked per keyed block id, not
-summed across block ids, and it excludes `HashMap` control bytes and
-load-factor slack. `STANDARD` leaves it at `u64::MAX`.
-
-Two consequences of "per block id" are worth stating outright, because they
-decide which API a format should use (P-01). A generated writer primes one such
-map per keyed block type at construction, and each priming pass walks the
-resident record index, so construction costs `Theta(M*N)` for `M` keyed block
-types and `N` resident index entries. And because the ceiling binds each map
-separately, the aggregate a single writer can retain is about `M` times
-`max_keyed_tail_bytes` rather than that value once. Both are the documented
-behaviour of the resident path, not limit violations — but they are the wrong
-shape for a high-cardinality format. Declare `key_index = disk` on the keyed
-blocks and use the generated disk-indexed writer/reader instead: that path
-keeps key state in the redb sidecar, does no per-construction index walk, and
-is the one the petabyte-scale contract covers. The generated rustdoc for each
-typed writer now says the same thing on the type itself.
-
-The allocation budget these limits drive is nominal accounting, not a hard peak
-RSS guarantee. It counts logical/nominal bytes and does not fully account for
-container bucket/node overhead, the extra `8 × N` for sequence-uniqueness
-tracking, mmap index/map duplication, or auxiliary maps built during keyed
-materialization. Checked arithmetic and fallible reservation still bound each
-individual claim; a true peak-RSS ceiling belongs to an external
-process/cgroup/job policy.
-
-For omitted or explicit `preset: varve_native`, `effective_layout()` returns a
-synthetic plan containing the native `VarveFileHeader` and repeated
-`VarveRecord` segment. `VARVE3` formats expose the native `VarveRecordFooter`
-there too. This keeps the native preset visible through the same physical
-layout vocabulary used by custom layouts while preserving existing native file
-bytes.
+`key_tail_offsets` explicitly returns an owned `HashMap`; that operation still
+refuses a result exceeding its materialization budget. Writer construction
+builds the spillable directory directly instead of calling this owned-map API.
+Priming each keyed block still walks the input directory (or its block chains
+for a directoryless handle). Use stream/indexed writers for bounded ingest
+without the resident input directory or the per-block priming scans.
 
 ## Reader And Writer Handles
 
 | Type | Role |
 | --- | --- |
-| `VarveReader` | read-only snapshot wrapper |
-| `VarveWriter` | write-capable wrapper |
-| `VarveFile` | lower-level read/write type used by both wrappers |
+| `StratavaReader` | read-only snapshot wrapper |
+| `StratavaWriter` | write-capable wrapper |
+| `StratavaFile` | lower-level read/write type used by both wrappers |
 
 **This is the resident family, and it is not the petabyte-scale path.** Opening
 one of these handles scans the file and builds a **resident record directory**
 that lives for the life of the handle: `Theta(records + decoded bytes)` plus an
 `O(N log N)` per-open sequence-uniqueness sort over `N` records (which degrades
-to `Theta(N)` for a file a Varve writer produced; the `N log N` bound is the
+to `Theta(N)` for a file a Stratava writer produced; the `N log N` bound is the
 guarantee for reordered or hostile input). Budget **16 bytes of resident
 directory per record** — the record's offset and its committed bit, the two
 facts that are not in the record itself. Everything else in a
@@ -386,7 +346,7 @@ do not.**
   session must end
   with `flush` or `commit`** — a data record at the end of the file leaves open
   no chain to start from, and it silently scans instead. See [Known Limitations
-  §2.1](known-limitations.md#21-varvefile-scans-the-whole-file-at-open-and-holds-a-record-index)
+  §2.1](known-limitations.md#21-stratavafile-scans-the-whole-file-at-open-and-holds-a-record-index)
   for the full table, the other costs, and every fallback.
 - `IndexPolicy::open_digest_on_flush` avoids it **completely**, by not building
   an index at all. See [An open that reads no
@@ -414,7 +374,7 @@ do not.**
   open cost. `docs/spec.md` describes a checkpoint-seeded open as a design
   target; it is not implemented.
 - The `scan_on_open` flag is **not** a behaviour switch — it is folded into the
-  schema manifest and hash bytes and is consulted nowhere else in `varve-core`, so
+  schema manifest and hash bytes and is consulted nowhere else in `stratava-core`, so
   clearing it does not produce a non-scanning open.
 
 `ReadLimits::STANDARD` leaves `max_records`, `max_index_bytes` and
@@ -424,10 +384,10 @@ resident index size; use `ReadLimits::UNTRUSTED` for input you did not produce.
 see [Known Limitations](known-limitations.md).
 
 The petabyte-scale path is [Scalable Stream And Indexed
-Handles](#scalable-stream-and-indexed-handles) below, available by default. `VarveReader` is a snapshot as of its own open: records
+Handles](#scalable-stream-and-indexed-handles) below, available by default. `StratavaReader` is a snapshot as of its own open: records
 another handle appends afterwards are not visible until it advances with
 `follow()` or is reopened. See
-[Known Limitations §2.1](known-limitations.md#21-varvefile-scans-the-whole-file-at-open-and-holds-a-record-index).
+[Known Limitations §2.1](known-limitations.md#21-stratavafile-scans-the-whole-file-at-open-and-holds-a-record-index).
 
 ### Reads that fill a buffer you own
 
@@ -479,7 +439,7 @@ it.
 
 ```rust
 let mut index = Vec::new();
-let file = VarveFile::open_readonly_with_scratch(spec, path, &mut index)?;
+let file = StratavaFile::open_readonly_with_scratch(spec, path, &mut index)?;
 let points = file.with_directory(&index)?.blocks::<Point>()?;
 ```
 
@@ -549,7 +509,7 @@ scan's index, entry for entry.
 
 ### Marking a record dead
 
-Available on `VarveFile` and `VarveWriter` when the format declares
+Available on `StratavaFile` and `StratavaWriter` when the format declares
 `liveness: footer_flags`. See the format-author guide for what the option costs.
 
 | Call | Takes | What it does |
@@ -619,7 +579,7 @@ The option requires `block_offset_chain` and composes with both
 questions. It is off by default and a file written without it is byte-identical
 to one written before it existed.
 
-Common `VarveWriter` APIs:
+Common `StratavaWriter` APIs:
 
 | API | Meaning |
 | --- | --- |
@@ -682,7 +642,7 @@ generation checks, so a call that is wrong in two ways reports
 
 `unsafe replace_fixed_in_place_exclusive` additionally requires, for a keyed
 block on a `keyed_offset_chain` format, that the replacement keep the record's
-key. Nothing can check that at a `T: VarveBlock` signature and there is no new
+key. Nothing can check that at a `T: StratavaBlock` signature and there is no new
 generation in which the physical chain could be rebuilt, so it is part of the
 unsafe contract. What the method does guarantee unconditionally is that the
 affected block's resident keyed-tail map is dropped *before* the first byte is
@@ -694,7 +654,7 @@ write fails half-way or the contract is violated.
 | `sync()` | request durable persistence |
 
 Keyed appends on a `keyed_offset_chain` format must go through a maintaining
-path. The generic `push` / `push_info` (on both `VarveWriter` and `VarveFile`)
+path. The generic `push` / `push_info` (on both `StratavaWriter` and `StratavaFile`)
 cannot see `T::Key`, so it would write `prev_same_key_offset = None` and
 truncate the chain; it therefore refuses a keyed block on such a format with
 `Error::KeyedChainRequiresKeyedApi { block_id }`. The refusal is unconditional —
@@ -716,7 +676,7 @@ the slot stride while preserving the exact-size `MatrixSizeMismatch` error.
 With `checkpoint_on_flush`, the flush-time checkpoint decision is O(1) writer
 state, not an index scan, so flush-per-record workloads stay linear.
 
-Common `VarveReader` APIs:
+Common `StratavaReader` APIs:
 
 | API | Meaning |
 | --- | --- |
@@ -729,13 +689,13 @@ Common `VarveReader` APIs:
 
 ### An editable region in the header
 
-Every other way varve records a fact is append-only, which is exactly wrong for
+Every other way stratava records a fact is append-only, which is exactly wrong for
 a fact that changes: a watermark, a processing state, a pointer into an external
 system. `HeaderSlots` reserves a **fixed** run of bytes in the file header that
 a caller rewrites in place for the life of the file.
 
 ```rust
-varve_format! {
+stratava_format! {
     pub struct AppFormat {
         magic: b"MYFORMAT";
         version: 1;
@@ -750,7 +710,7 @@ varve_format! {
     }
 }
 
-let mut file = AppFormat::create("f.varve")?;
+let mut file = AppFormat::create("f.stratava")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
 assert_eq!(file.read_header_block::<Watermark>()?, Some(watermark));
 ```
@@ -836,7 +796,7 @@ region would move.
 
 ## Scalable Stream And Indexed Handles
 
-The default `varve_format!` expansion generates a stream/indexed handle
+The default `stratava_format!` expansion generates a stream/indexed handle
 family for files whose open/append memory and I/O cost must be independent of
 total file bytes, record count, and key cardinality. Generated indexed handles
 require at least one block declaring `key_index = disk`; this is a schema
@@ -946,10 +906,10 @@ primary-generation witness. Replacing a primary in place with another
 equal-length primary of the same format is refused at open with
 `DiskIndexError::PrimaryGenerationMismatch` on both the reader and the writer;
 `rebuild_disk_index` is the recovery. A primary bootstrapped from a resident
-`VarveFile` carries no nonce and is protected only by the weaker
+`StratavaFile` carries no nonce and is protected only by the weaker
 content-window witness over its leading bytes.
 
-Manual `VarveBlock` implementations must state
+Manual `StratavaBlock` implementations must state
 `IS_KEYED` explicitly. This is a compile-time chain-safety requirement; macro
 generated blocks already provide the exact value.
 
@@ -995,7 +955,7 @@ temp separately; `classify_replace_publication_error(raw_os_error)` exposes
 the underlying classification (1175 = replaced file intact, 1176/1177 =
 indeterminate, everything else = pre-publication).
 
-`varve::Error` is `#[non_exhaustive]`. Downstream exhaustive matches must keep a
+`stratava::Error` is `#[non_exhaustive]`. Downstream exhaustive matches must keep a
 wildcard arm so new diagnostics can be added without another enum-shape break.
 
 ## Collections
@@ -1017,15 +977,15 @@ snapshot, even if the pathname is later replaced.
 
 | Trait | Implemented by |
 | --- | --- |
-| `VarveBlock` | all stored block types |
-| `VarveKeyedBlock` | blocks with a stable key |
-| `VarveMerge` | keyed blocks with user-defined ops |
-| `VarveMatrixBlock` | matrix cell blocks |
-| `VarveEncode` / `VarveDecode` | field and block payload codecs |
-| `VarveMigration<From, To>` | explicit semantic migration |
+| `StratavaBlock` | all stored block types |
+| `StratavaKeyedBlock` | blocks with a stable key |
+| `StratavaMerge` | keyed blocks with user-defined ops |
+| `StratavaMatrixBlock` | matrix cell blocks |
+| `StratavaEncode` / `StratavaDecode` | field and block payload codecs |
+| `StratavaMigration<From, To>` | explicit semantic migration |
 
-Most users get these implementations from `varve_format!` or
-`#[derive(VarveBlock)]`. Implement codecs manually only for domain-specific
+Most users get these implementations from `stratava_format!` or
+`#[derive(StratavaBlock)]`. Implement codecs manually only for domain-specific
 value types.
 
 Canonical booleans are encoded only as `0` or `1`; other bytes are rejected.
@@ -1033,14 +993,14 @@ Decoded `BTreeMap` and `HashMap` values reject duplicate keys instead of silentl
 keeping one value. `HashMap` encoding requires `Ord` for deterministic key order
 but no longer requires `Clone`.
 
-`VarveBlock` requires a `const SCHEMA_FINGERPRINT: u64` with no default.
-`#[derive(VarveBlock)]` computes it deterministically (FNV-1a 64 over the
+`StratavaBlock` requires a `const SCHEMA_FINGERPRINT: u64` with no default.
+`#[derive(StratavaBlock)]` computes it deterministically (FNV-1a 64 over the
 canonical schema: id, version, kind, endian, keyedness, ordered field
 name/type identities, and each field's resolved codec `SCHEMA_ID`).
 
 Typed registration validates against the format, not against whichever type
 arrived first. When the `FormatSpec` declares an identity for the block id — as
-every `varve_format!`-generated spec does — that immutable
+every `stratava_format!`-generated spec does — that immutable
 `(endian, keyedness, fingerprint)` triple is the authority, and a `T` that
 disagrees is rejected with `Error::BlockSchemaFingerprintMismatch`,
 `Error::BlockKeyednessMismatch`, or `Error::EndianMismatch` before anything is
@@ -1059,18 +1019,18 @@ Every typed block contract is validated directly against the spec's immutable
 `&'static` identity table. There is no first-use registration or process-global
 cache. Generated formats supply the table automatically. Manual formats attach
 it with `.with_block_identities(&[MyBlock::IDENTITY, OtherBlock::IDENTITY])`;
-import `VarveBlock` to use these associated constants. Missing entries return
+import `StratavaBlock` to use these associated constants. Missing entries return
 `Error::InvalidFormatSpec` before the codec runs. Raw record access does not
 require a typed identity. A manual implementation mirroring a generated block
 must reuse its schema fingerprint.
 
 Keyedness is an invariant, not a free-form flag. A type that implements
-`VarveKeyedBlock` must declare `VarveBlock::IS_KEYED = true`; every public
+`StratavaKeyedBlock` must declare `StratavaBlock::IS_KEYED = true`; every public
 keyed generic entry point — keyed collections, stream and indexed
-lookup/push/delete, merge and compact, low-level `VarveFile`/reader/writer
+lookup/push/delete, merge and compact, low-level `StratavaFile`/reader/writer
 deletes, `keyed_blocks`, `key_tail_offsets`, disk-index descriptors, and the
 self-test keyed case — evaluates `KeyedBlockContract::<T>::OK`, turning an
-`impl VarveKeyedBlock` with `IS_KEYED = false` into a post-monomorphization
+`impl StratavaKeyedBlock` with `IS_KEYED = false` into a post-monomorphization
 compile error. First-seen registration remains the runtime backstop and also
 rejects a keyedness disagreement for the same block id
 (`Error::BlockKeyednessMismatch`). Manual
@@ -1078,7 +1038,7 @@ implementations must state `IS_KEYED` explicitly (no chain-unsafe default).
 
 ## Matrix API
 
-Matrix API exists on `VarveFile`, `VarveReader`, `VarveWriter`, and generated
+Matrix API exists on `StratavaFile`, `StratavaReader`, `StratavaWriter`, and generated
 typed wrappers.
 
 **Matrix reads take `&self`.** `read_matrix_cell`, `matrix_cell_payload`,
@@ -1086,7 +1046,7 @@ typed wrappers.
 handle shared, on all three handle types. They read through positional I/O
 (`pread` / `seek_read`) over immutable state, so no cursor moves: several
 threads may read through **one** handle concurrently, and
-`VarveReader`, `VarveFile` and `VarveWriter` are `Sync` and `Send` by derivation
+`StratavaReader`, `StratavaFile` and `StratavaWriter` are `Sync` and `Send` by derivation
 — there is no `unsafe impl` for any of them. Existing callers holding a
 `let mut reader` keep compiling. Writes are unaffected and still take
 `&mut self`. `copy_matrix_cell_bytes_from` also takes its *source* handle by
@@ -1097,7 +1057,7 @@ claim from the type signature and is measured rather than argued. On Windows,
 `ReadFile` against a synchronous handle serialises on the kernel file object, so
 `&self` alone would give the *right* to share a handle and none of the
 throughput: four threads through one handle measured 0.27x of a single thread
-(91,137 vs 343,285 cell reads/s, `IntegrityPolicy::Crc32`). Varve therefore
+(91,137 vs 343,285 cell reads/s, `IntegrityPolicy::Crc32`). Stratava therefore
 hands each reading thread its own file object, derived from the open handle with
 `ReOpenFile` — no path, so no re-resolution — the first time that thread reads
 that file. After it, the same measurement is 568,397 reads/s on four threads
@@ -1114,19 +1074,19 @@ its own run of the same comparison — 327,037 reads/s on one thread against
 shared desktop differs between runs.
 
 **What the suite gates is a counted invariant, not a wall-clock ratio.**
-`crates/varve/tests/matrix_concurrent_reads.rs` does not assert scaling in wall
+`crates/stratava/tests/matrix_concurrent_reads.rs` does not assert scaling in wall
 clock. It measures the 1-vs-N ratio and prints it on every run, decides nothing
 by it, and keeps the strict form of it `#[ignore]`d. Split by what a green run
 establishes:
 
 | Contract | Status | Where |
 | --- | --- | --- |
-| Matrix reads issued while a commit-map page-store lock was held is **zero**, and reads issued at all is nonzero. Single-threaded, decided by control flow rather than by the clock, so platform- and load-independent. A fifth test issues a read under the lock deliberately and requires the counter to reach 1, so the zeros are not vacuous; two more require the demand fault-in and the whole-map aggregate to read through the private-handle pool their backing already holds | gate, every run, **every feature configuration** (these counters are `cfg(test)`) | `varve-core`'s `matrix::page_store_lock_audit_tests`, five tests |
+| Matrix reads issued while a commit-map page-store lock was held is **zero**, and reads issued at all is nonzero. Single-threaded, decided by control flow rather than by the clock, so platform- and load-independent. A fifth test issues a read under the lock deliberately and requires the counter to reach 1, so the zeros are not vacuous; two more require the demand fault-in and the whole-map aggregate to read through the private-handle pool their backing already holds | gate, every run, **every feature configuration** (these counters are `cfg(test)`) | `stratava-core`'s `matrix::page_store_lock_audit_tests`, five tests |
 | The same lock invariant through the public read path: N threads on one handle, a one-page demand cache against four live commit-map pages, preceded by a single-threaded warm-up that establishes that fault-in reads happened at all | gate, on runs with `scalable-fault-injection` (the public counters are behind it) | `no_read_is_issued_while_a_bitmap_page_store_lock_is_held` |
-| The five matrix read entry points compile against `&self` on `VarveReader`, `VarveFile` and `VarveWriter`, and all three are `Send + Sync` | gate, every run | `every_matrix_read_entry_point_takes_a_shared_borrow`, `the_reader_handle_is_sync_and_send` |
+| The five matrix read entry points compile against `&self` on `StratavaReader`, `StratavaFile` and `StratavaWriter`, and all three are `Send + Sync` | gate, every run | `every_matrix_read_entry_point_takes_a_shared_borrow`, `the_reader_handle_is_sync_and_send` |
 | Four threads sharing one handle each read the right cell value, under `IntegrityPolicy::None` and, where the feature is on, `Crc32` | gate, every run | `threads_sharing_one_handle_read_every_cell_correctly` |
 | 1 thread against N threads through one handle, total reads held fixed at 24,000 | **measured, printed, not a gate** — the line it prints is labelled `MEASUREMENT ONLY` | `report_the_scaling_of_one_shared_handle` |
-| The same comparison asserted at `ratio <= 1.0` | **`#[ignore]`d manual benchmark**, run deliberately on an idle host: `cargo test -p varve --test matrix_concurrent_reads -- --ignored --nocapture` | `shared_handle_scaling_beats_one_thread_on_an_idle_host` |
+| The same comparison asserted at `ratio <= 1.0` | **`#[ignore]`d manual benchmark**, run deliberately on an idle host: `cargo test -p stratava --test matrix_concurrent_reads -- --ignored --nocapture` | `shared_handle_scaling_beats_one_thread_on_an_idle_host` |
 
 One wall-clock ratio is still asserted on every run, and it is in another file:
 `matrix_lazy_residency.rs`'s
@@ -1192,7 +1152,7 @@ cells as *uncommitted* and erase the previous commit view using evidence that
 was never read. The refusal is unconditional: `with_matrix_fatal_forensics`
 relaxes *reading* fatal state, not a destructive republication, which is the
 same rule the interrupted-rebuild poison already followed. Repair or regenerate
-the validity evidence first. Varve deliberately offers no implicit way to
+the validity evidence first. Stratava deliberately offers no implicit way to
 discard unverifiable visibility.
 
 The hook of `write_matrix_cell_durable` runs **after** the cell is committed
@@ -1213,7 +1173,7 @@ committed.
 That family statement describes the value the call *returns* (F-06). Both
 variants box their event and their source, so building either one allocates
 after the cell is authoritative. Those are shape-sized allocations — fixed by
-the type, never by a file length or caller count — and Varve allocates
+the type, never by a file length or caller count — and Stratava allocates
 shape-sized memory infallibly, so an allocator refusal terminates the process
 instead of returning a different outcome. No caller observes a wrong outcome;
 the cell is committed on disk, and reopening the file shows it. The crate-wide
@@ -1228,7 +1188,7 @@ variable-field codec with a stable non-zero `SCHEMA_ID`.
 
 Classification is decided **entirely by the resolved type, never by the source
 spelling**. The generated `SLOT_STRIDE` folds each element's
-`VarveEncode::WIRE_TYPE` (not `size_of`), and a wire type with no fixed width
+`StratavaEncode::WIRE_TYPE` (not `size_of`), and a wire type with no fixed width
 fails const evaluation with `matrix fields must have a width fixed by their
 type; this codec does not`. Two consequences, both intended:
 
@@ -1236,7 +1196,7 @@ type; this codec does not`. Two consequences, both intended:
   `window: [Word; 4]` are ordinary 4-byte and 16-byte slots, because the alias
   resolves before `WIRE_TYPE` is read;
 - a user type merely *named* `u32` or `PackedBitmap` is **not** admitted. It has
-  no `VarveEncode` impl (or one without a fixed width), so it fails at the same
+  no `StratavaEncode` impl (or one without a fixed width), so it fails at the same
   const check or at the trait bound.
 
 The macro's own syntactic check is deliberately permissive: it rejects only
@@ -1282,19 +1242,19 @@ sets `FormatSpec::matrix_fatal_forensics`; it does not repair or mutate the file
 
 ## Physical Layout API
 
-Use this when the file bytes are not the Varve-native container. The first
+Use this when the file bytes are not the Stratava-native container. The first
 supported shape is an optional declared file header followed by an append stream
 of declared segments with lead-in fields, caller metadata bytes, contiguous raw
 bytes, optional footer fields, and finalized/backpatched offsets.
 
-Physical layout declarations are field groups, not logical `VarveBlock`
-payload structs. `VarveBlock` remains the native append-log payload unit;
+Physical layout declarations are field groups, not logical `StratavaBlock`
+payload structs. `StratavaBlock` remains the native append-log payload unit;
 `file_header`, segment `lead_in`, and `footer` describe bytes that sit around
 metadata and raw regions.
 
 | API | Meaning |
 | --- | --- |
-| `preset: varve_native` | explicit native container preset; also the default |
+| `preset: stratava_native` | explicit native container preset; also the default |
 | `preset: none` | custom layout owns byte zero |
 | `layout { file_header ... segment ... }` | declare file header, segment lead-in, metadata region, raw region, optional footer |
 | `Format::create_layout_writer(path)` | create a generated `FormatLayoutWriter` for format-first layout declarations |
@@ -1354,7 +1314,7 @@ the first bytes can be `TDSm`.
 Example:
 
 ```rust
-varve_format! {
+stratava_format! {
     pub format FramedFormat {
         magic: b"FRAM";
         version: 1;
@@ -1425,7 +1385,7 @@ discriminator; immediately following literal numeric fields extend the dispatch
 key. Generated segment-specific `index` parameters are per segment kind, while
 the low-level range methods continue to use the global physical stream index.
 
-`crates/varve/examples/tdms_physical/common.rs` is a thin façade over the TDMS
+`crates/stratava/examples/tdms_physical/common.rs` is a thin façade over the TDMS
 example modules: `common/adapter.rs` contains the physical layout and
 reader/writer adapter, `common/example_data.rs` contains fixture/scenario data,
 and `common/verify.rs` contains self-verification. The combined
@@ -1439,15 +1399,15 @@ properties, and an adapter-owned `.vtidx` sidecar. The npTDMS harness verifies
 exact channel values for signed/unsigned integer widths, single/double floats,
 single/double floats with unit type ids, booleans, strings, timestamps, and
 complex single/double floats. The reverse harness writes the scalar/channel
-types that npTDMS can author correctly, parses them with the Varve-based
-adapter, appends a segment with Varve, then verifies the result with both
-npTDMS and the same adapter code. These examples are not a Varve-provided TDMS
+types that npTDMS can author correctly, parses them with the Stratava-based
+adapter, appends a segment with Stratava, then verifies the result with both
+npTDMS and the same adapter code. These examples are not a Stratava-provided TDMS
 reader/writer feature.
 
-`crates/varve/examples/bmp_physical.rs` is the non-TDMS external-format smoke
+`crates/stratava/examples/bmp_physical.rs` is the non-TDMS external-format smoke
 example. `scripts/verify_bmp_with_pillow.py` writes a 24-bit BMP through
-Varve's generated layout writer and verifies it with Pillow, then writes a BMP
-with Pillow and verifies the physical header and pixel payload through Varve's
+Stratava's generated layout writer and verifies it with Pillow, then writes a BMP
+with Pillow and verifies the physical header and pixel payload through Stratava's
 layout reader. The BMP example builds row-level chunk-index entries so padded
 physical rows are represented as logical pixel chunks.
 
@@ -1487,7 +1447,7 @@ DataFrame/HDF export, or other domain semantics. It sits above the physical
 layout layer and supplies reusable mechanics only — tagged-value codecs, chunk
 index builders, segment reducers and adapter self-checks — while the adapter
 author supplies the domain meaning as ordinary Rust types. TDMS is one
-instantiation of those pieces, not a Varve feature.
+instantiation of those pieces, not a Stratava feature.
 
 ## Mmap And Zero-Copy
 
@@ -1496,10 +1456,21 @@ Feature-gated APIs:
 | Feature | API | Meaning |
 | --- | --- | --- |
 | `mmap` | `unsafe mmap_payloads()` | mmap append-log payload windows |
+| `mmap` | `unsafe StratavaFile::mmap_payload_window(entry)` | independently map one stored record payload |
 | `mmap` | `unsafe mmap_matrix()` | mmap matrix slot windows |
+| `mmap` | `unsafe mmap_matrix_cell::<T>(key)` | independently map one committed cell, patching only its COW pages |
 | `mmap` | `MmapMatrix::cell_numeric::<T, N>(key)` | endian-aware numeric scalar read |
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
+
+For bounded mapping workloads, choose an individual window. `MmapPayloadWindow`
+owns that mapping; `as_bytes()` borrows its bytes and `offset()` reports the
+payload's logical file offset. The record route validates the supplied entry
+against its captured snapshot and exposes stored bytes, including compression.
+The matrix route checks cell visibility and optional CRC from the held generation.
+`MmapLen` bounds that cell's bytes; `MaterializedBytes` bounds intersecting COW
+pages, charged at 4096 bytes each. COW patches are copied before the window is
+returned, so modified matrix cells do not promise zero-copy construction.
 
 Creating any file-backed mapping is unsafe. For the mapping's entire lifetime,
 the caller must prevent mutation, truncation, replacement, and backing-object
@@ -1525,7 +1496,7 @@ safe window APIs stay memory-safe through these enforced invariants:
 6. Raw zero-copy access additionally validates registration, block kind,
    version, endian, exact size, and alignment before creating a typed reference.
 
-This is a conditional safety proof, not a claim that Varve can police arbitrary
+This is a conditional safety proof, not a claim that Stratava can police arbitrary
 external processes. If a caller cannot control every writer, it must use owned
 reads such as `blocks::<T>()`, `read_payload`, or matrix typed reads instead of
 mmap.
@@ -1569,19 +1540,19 @@ delta shards win.
 
 `merge_keyed_files`, `compact_keyed_files`, and `compact_keyed_file` are
 resident operations and are deliberately **not** PB-scale. Each opens its
-inputs as whole `VarveFile` values and retains one map entry per distinct key
+inputs as whole `StratavaFile` values and retains one map entry per distinct key
 ever seen, tombstoned keys included:
 
 - time: `Theta(records + decoded bytes) + O(N log N) + O(K-live log K-live)`,
   where the `O(N log N)` term is the per-input open's sequence-uniqueness sort
   over that input's `N` records. It degrades to `Theta(N)` for the ordinary case
-  of a file whose sequences ascend with offset — which is what a Varve writer
+  of a file whose sequences ascend with offset — which is what a Stratava writer
   produces — but the sort is the guaranteed bound for a reordered or hostile
   input;
 - memory: `O(K-ever + largest resident input index + 8N uniqueness temporary for
   that input + retained live values)`
 
-Nothing spills to disk, so `K-ever` must fit in memory. Varve exports no
+Nothing spills to disk, so `K-ever` must fit in memory. Stratava exports no
 bounded-memory external merge or compact; the scalable stream and indexed
 writers cover bounded *ingest*, not bounded merge/compact.
 
@@ -1628,7 +1599,7 @@ rather than size it.
 
 | API | Meaning |
 | --- | --- |
-| `VarveMigration<From, To>` | user-defined semantic conversion |
+| `StratavaMigration<From, To>` | user-defined semantic conversion |
 | `blocks_migrated::<From, To, M>()` | read source-version blocks and convert |
 | `copy_matrix_cell_bytes_from::<From, To>()` | copy compatible matrix slot payload bytes |
 
@@ -1658,7 +1629,7 @@ Report domains:
 | `FeatureGate` | Cargo features |
 | `FileData` | actual bytes, corruption, wrong spec for file |
 | `Environment` | filesystem, locks, concurrent processes |
-| `LibraryInvariant` | possible Varve bug after simple codecs are ruled out |
+| `LibraryInvariant` | possible Stratava bug after simple codecs are ruled out |
 
 The self-test is non-destructive: it claims the target with exclusive create
 (one exclusively created, lock-bound handle held through matrix
@@ -1713,7 +1684,7 @@ minor-version policy as the rest of the library.
 | `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed and synced the cell, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
 | `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` put the commit bit in the file and the durability request after it failed. Not a rollback: the cell is committed and readable after a clean exit, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |
 | `CommittedButDurabilityUnproven { sequence, source }` | `commit_durable` appended the transaction's commit marker and the `flush`/`sync_all` after it failed. Not a rollback: the transaction is committed and `sequence` names the marker. Retry `sync`, not the transaction — re-running it appends a second marker |
-| `WriterLockMarkerNotDedicated { path, reason }` | the `<target>.lock` marker path is a symlink/reparse point, a multi-link object, or not a regular file, so Varve refused to truncate and rewrite it. Remove or un-alias the marker path |
+| `WriterLockMarkerNotDedicated { path, reason }` | the `<target>.lock` marker path is a symlink/reparse point, a multi-link object, or not a regular file, so Stratava refused to truncate and rewrite it. Remove or un-alias the marker path |
 | `PublishedButRebindFailed { sequence, source, parent_sync }` | replacement published but the writer could not rebind and was poisoned. `parent_sync: Some(_)` additionally means the parent-directory sync for the published pathname failed in the same publication, so the rename is not yet proved durable against power loss |
 | `ReplacePublicationIndeterminate` | Windows `ReplaceFileW` 1176/1177 with unresolvable pathname state; temp preserved, writer poisoned, do not blindly retry |
 | `WriterLockHeld` | another writer or stale lock exists |

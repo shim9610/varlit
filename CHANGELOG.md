@@ -1,10 +1,39 @@
 # Changelog
 
-All notable repository releases are documented here. Varve follows semantic
+All notable repository releases are documented here. Stratava (formerly Varve) follows semantic
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## Unreleased
+## Unreleased — 0.12.0
+
+- Rename the project and packages to `stratava`, `stratava-core` and
+  `stratava-macros`. Public Rust identifiers use `Stratava*`, `stratava_format!`,
+  `#[stratava(...)]`, `encode_stratava` and `decode_stratava`. The test runner,
+  tool arguments and environment variables use the new name too. This is a
+  breaking Rust API change; see the migration notes.
+- Preserve versioned wire identifiers, schema-hash domains and file-lock metadata
+  across the rename. Existing repository URLs and historical release tags keep
+  their original names.
+
+- Remove the remaining Crossbeam runtime dependency. The matrix writer owns its
+  pending page directory and lends it to bitmap reads, including cache misses.
+  Remove shared working-map atomics and the map-clear reclamation workaround.
+  Reader/writer thread-move support, public API signatures, file formats and
+  explicit publication boundaries are unchanged.
+
+- Spill custom-layout position directories and writer keyed-tail caches to
+  temporary storage when their working buffers fill. Keep owned-result and
+  explicit scan/count limits separate from those cache budgets.
+- Spill matrix dirty-page directories without publishing or syncing. Walk
+  compaction pages and follow's changed metadata ranges incrementally.
+- Add `StratavaFile::mmap_payload_window` and `MmapPayloadWindow` for independent
+  per-record mappings, including handles without a resident directory.
+- Add `mmap_matrix_cell` for a committed cell window with generation-consistent
+  bitmap/CRC checks and COW patches restricted to the requested pages.
+- Validate diagnostic payloads against their live size, without a copied index
+  or cumulative charges for already released payloads.
+- Run default/all-feature native tests on Linux, Windows and macOS; retain logs
+  from an exact-test small-budget I/O gate on each platform.
 
 ## 0.11.0 - 2026-10-08
 

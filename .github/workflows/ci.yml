@@ -13,6 +13,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
   # CI-03: every third-party ACTION and every installed cargo TOOL is pinned to
   # an immutable identity. Action refs are commit ids (a tag can be moved; a
@@ -23,7 +26,7 @@ env:
   # This is deliberately NOT a claim that a CI run is reproducible. Two inputs
   # are rolling by design and are not pinned here:
   #
-  #   * the runner images `ubuntu-latest` and `windows-latest`, which GitHub
+  #   * the runner images `ubuntu-latest`, `windows-latest` and `macos-latest`, which GitHub
   #     rebuilds continuously (system libraries, linkers, preinstalled tools);
   #   * the `stable` toolchain requested by every job except `msrv`, which
   #     advances every six weeks.
@@ -75,7 +78,7 @@ jobs:
   # `--all-features` catches a conflict between any two — the gap is a defect
   # that needs a specific pair or triple of features and is invisible under
   # both, which no job here claims to cover. `cargo clippy` uses the workspace
-  # rustc wrapper, so `-p varve` also lints `varve-core` and `varve-macros`
+  # rustc wrapper, so `-p stratava` also lints `stratava-core` and `stratava-macros`
   # under the exact feature set the umbrella crate enables.
   feature-matrix:
     # CI runs on the public repository only. `varve-dev` is private, so runner
@@ -91,27 +94,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         features:
-          - { name: no-default, flags: "-p varve --no-default-features" }
-          - { name: default, flags: "-p varve" }
+          - { name: no-default, flags: "-p stratava --no-default-features" }
+          - { name: default, flags: "-p stratava" }
           - {
               name: integrity,
-              flags: "-p varve --no-default-features --features integrity",
+              flags: "-p stratava --no-default-features --features integrity",
             }
           - {
               name: mmap,
-              flags: "-p varve --no-default-features --features mmap",
+              flags: "-p stratava --no-default-features --features mmap",
             }
           - {
               name: zero-copy,
-              flags: "-p varve --no-default-features --features zero-copy",
+              flags: "-p stratava --no-default-features --features zero-copy",
             }
           - {
               name: compression-zstd,
-              flags: "-p varve --no-default-features --features compression-zstd",
+              flags: "-p stratava --no-default-features --features compression-zstd",
             }
           - {
               name: scalable-fault-injection,
-              flags: "-p varve --no-default-features --features scalable-fault-injection",
+              flags: "-p stratava --no-default-features --features scalable-fault-injection",
             }
           - { name: all-features, flags: "--workspace --all-features" }
     steps:
@@ -126,11 +129,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets ${{ matrix.features.flags }} -- -D warnings
 
-  # Full test runs on both platforms stay limited to the default and all-feature
+  # Full native test runs on all three platforms stay limited to the default and all-feature
   # sets; the feature matrix above type-checks and lints every other
   # combination, and `feature-tests` below runs the configurations that have
   # behaviour no other job can reach. Tests go through the hygiene runner
-  # (`tools/varve-test-runner`) so leaked temp artifacts fail CI.
+  # (`tools/stratava-test-runner`) so leaked temp artifacts fail CI.
   test:
     # CI runs on the public repository only. `varve-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
@@ -140,10 +143,11 @@ jobs:
     if: github.repository == 'shim9610/varve'
     name: test (${{ matrix.features.name }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         features:
           - { name: default, flags: "--workspace" }
           - { name: all-features, flags: "--workspace --all-features" }
@@ -163,8 +167,38 @@ jobs:
           # while they passed on the pinned floor. This job exists to catch a break
           # on a newer compiler, not a reworded diagnostic, so it skips them; the
           # pinned `msrv` job below runs the same suite with them enabled.
-          VARVE_SKIP_UI_SNAPSHOTS: 1
-        run: cargo run --locked -p varve-test-runner -- test --locked ${{ matrix.features.flags }}
+          STRATAVA_SKIP_UI_SNAPSHOTS: 1
+        run: cargo run --locked -p stratava-test-runner -- test --locked ${{ matrix.features.flags }}
+
+  # Execute on the native OS: a cross-check cannot exercise tempfile lifetime,
+  # positional reads, file replacement, mmap or an independently opened reader.
+  platform-io:
+    if: github.repository == 'shim9610/varve'
+    name: bounded I/O (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: platform-io
+      - name: Small-budget I/O, independent readers and generation replacement
+        run: python scripts/check_platform_io.py --output target/platform-io
+      - name: Preserve native logs and platform identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-io-${{ matrix.os }}
+          path: target/platform-io/
+          if-no-files-found: error
+          retention-days: 14
 
   # CI-01: the two configurations below own tests that run in NO other job.
   # `compression.rs` gates behaviour on `compression-zstd` *without* `integrity`
@@ -192,11 +226,11 @@ jobs:
         features:
           - {
               name: compression-without-integrity,
-              flags: "-p varve --no-default-features --features compression-zstd --test compression",
+              flags: "-p stratava --no-default-features --features compression-zstd --test compression",
             }
           - {
               name: integrity-without-compression,
-              flags: "-p varve --no-default-features --features integrity --test compression",
+              flags: "-p stratava --no-default-features --features integrity --test compression",
             }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,8 +248,8 @@ jobs:
           # while they passed on the pinned floor. This job exists to catch a break
           # on a newer compiler, not a reworded diagnostic, so it skips them; the
           # pinned `msrv` job below runs the same suite with them enabled.
-          VARVE_SKIP_UI_SNAPSHOTS: 1
-        run: cargo run --locked -p varve-test-runner -- test --locked ${{ matrix.features.flags }}
+          STRATAVA_SKIP_UI_SNAPSHOTS: 1
+        run: cargo run --locked -p stratava-test-runner -- test --locked ${{ matrix.features.flags }}
 
   # CI-02: the packages declare `rust-version = 1.95`. Every other job installs
   # moving stable, so once stable advances past the floor nothing proves the
@@ -257,14 +291,14 @@ jobs:
       - name: cargo check
         run: cargo check --locked --workspace --all-targets --all-features
       - name: cargo test
-        run: cargo run --locked -p varve-test-runner -- test --locked --workspace --all-features
+        run: cargo run --locked -p stratava-test-runner -- test --locked --workspace --all-features
 
-  # API2-05 regression guard: a downstream crate that renames the varve
-  # dependency (`vv = { package = "varve", … }`) must compile and run with no
+  # API2-05 regression guard: a downstream crate that renames the stratava
+  # dependency (`vv = { package = "stratava", … }`) must compile and run with no
   # `extern crate` workaround. trybuild cannot express a renamed dependency
   # (it reuses the host crate's dependency graph), so this is a standalone
   # fixture crate outside the workspace; unit tests on the token-rewrite
-  # helper demonstrably missed the `IDENT: ::varve::…` expansion shape that
+  # helper demonstrably missed the `IDENT: ::stratava::…` expansion shape that
   # only a real downstream build exercises.
   renamed-dependency:
     # CI runs on the public repository only. `varve-dev` is private, so runner
@@ -296,7 +330,7 @@ jobs:
   # macro began rejecting documented public API. No in-workspace test noticed,
   # because none of them derived a block over the public surface the way a
   # consumer does. This crate is outside the workspace for the same reason
-  # `rename-fixture` is: it must resolve `varve` through its own manifest.
+  # `rename-fixture` is: it must resolve `stratava` through its own manifest.
   public-api:
     # CI runs on the public repository only. `varve-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
@@ -396,7 +430,7 @@ jobs:
 
   # F-09 negative policy fixture. `deny.toml` enables `allow-wildcard-paths`,
   # which is a CATEGORY allowance, not an allowance for the single
-  # `varve-macros` dev edge that motivated it. A passing `cargo deny check`
+  # `stratava-macros` dev edge that motivated it. A passing `cargo deny check`
   # proves the accepted shape is accepted; it proves nothing about what is
   # still refused, so the two shapes the comment in `deny.toml` claims are
   # DENIED are asserted here by introducing each one and requiring the gate to
@@ -419,8 +453,8 @@ jobs:
       - name: Introduce a registry wildcard in a published crate
         run: |
           set -euo pipefail
-          sed -i 's|^proptest\.workspace = true$|proptest = "*"|' crates/varve/Cargo.toml
-          grep -q 'proptest = "\*"' crates/varve/Cargo.toml
+          sed -i 's|^proptest\.workspace = true$|proptest = "*"|' crates/stratava/Cargo.toml
+          grep -q 'proptest = "\*"' crates/stratava/Cargo.toml
       - id: registry-wildcard
         continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -433,9 +467,9 @@ jobs:
       - name: Restore, then introduce a non-dev path wildcard in a published crate
         run: |
           set -euo pipefail
-          git checkout -- crates/varve/Cargo.toml
-          sed -i 's|^varve-core = { path = "\.\./varve-core", version = "[^"]*" }$|varve-core = { path = "../varve-core" }|' crates/varve/Cargo.toml
-          grep -q '^varve-core = { path = "\.\./varve-core" }$' crates/varve/Cargo.toml
+          git checkout -- crates/stratava/Cargo.toml
+          sed -i 's|^stratava-core = { path = "\.\./stratava-core", version = "[^"]*" }$|stratava-core = { path = "../stratava-core" }|' crates/stratava/Cargo.toml
+          grep -q '^stratava-core = { path = "\.\./stratava-core" }$' crates/stratava/Cargo.toml
       - id: path-wildcard
         continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -495,9 +529,26 @@ jobs:
       - name: Fuzz lockfile was not rewritten
         run: git diff --exit-code -- fuzz/Cargo.lock
 
-  # Distribution is by Git/source while fixed Crossbeam sources are pinned.
-  # Keep source notices and a real downstream consumer covered. crates.io
-  # archive publication is not supported by the direct Git dependencies.
+  # Verify archives before the first registry release. Cargo stages sibling
+  # packages in a local registry, so the facade is verified before publication.
+  package-archives:
+    if: github.repository == 'shim9610/varve'
+    name: verified package archives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: package-archives
+      - name: Build and verify all publishable archives
+        run: cargo package --locked --workspace --exclude stratava-test-runner
+      - name: Inspect package names, licenses and public contents
+        run: python3 scripts/check_package_archives.py
+
+  # Keep source notices and an independent Git consumer covered too.
   source-contents:
     if: github.repository == 'shim9610/varve'
     name: source contents
@@ -508,12 +559,13 @@ jobs:
         run: |
           set -euo pipefail
           git ls-files --error-unmatch README.md LICENSE-MIT LICENSE-APACHE
-          for package in varve varve-core varve-macros; do
+          for package in stratava stratava-core stratava-macros; do
             git ls-files --error-unmatch "crates/${package}/LICENSE-MIT" "crates/${package}/LICENSE-APACHE"
           done
 
   git-consumer:
     if: github.repository == 'shim9610/varve'
+    # Preserve the existing status-check name used by branch protection.
     name: Git consumer + pinned dependency sources
     runs-on: ubuntu-latest
     steps:
@@ -546,28 +598,28 @@ jobs:
         with:
           toolchain: stable
       - name: Unpack tracked files only
-        run: git archive --format=tar --prefix=varve-archive/ HEAD | tar -x -C "$RUNNER_TEMP"
+        run: git archive --format=tar --prefix=stratava-archive/ HEAD | tar -x -C "$RUNNER_TEMP"
       - name: cargo metadata
-        working-directory: ${{ runner.temp }}/varve-archive
+        working-directory: ${{ runner.temp }}/stratava-archive
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
       - name: cargo check
-        working-directory: ${{ runner.temp }}/varve-archive
+        working-directory: ${{ runner.temp }}/stratava-archive
         run: cargo check --workspace --all-targets --all-features --locked
       # The fuzz workspace is not a root workspace member, so the two steps
       # above never touch it. Its tracked-file completeness and lockfile
       # freshness need the same clean-archive treatment (REL-01).
       - name: cargo metadata (fuzz workspace)
-        working-directory: ${{ runner.temp }}/varve-archive/fuzz
+        working-directory: ${{ runner.temp }}/stratava-archive/fuzz
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: cargo check (fuzz workspace)
-        working-directory: ${{ runner.temp }}/varve-archive/fuzz
+        working-directory: ${{ runner.temp }}/stratava-archive/fuzz
         run: cargo check --locked --all-targets
       # The two out-of-workspace fixtures are tracked files too, and neither of
       # the checks above resolves them. A fixture whose sources or lockfile were
       # never committed must fail here, not in its own job on the next run.
       - name: cargo metadata (rename fixture)
-        working-directory: ${{ runner.temp }}/varve-archive/tools/rename-fixture
+        working-directory: ${{ runner.temp }}/stratava-archive/tools/rename-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: cargo metadata (public-api fixture)
-        working-directory: ${{ runner.temp }}/varve-archive/tools/public-api-fixture
+        working-directory: ${{ runner.temp }}/stratava-archive/tools/public-api-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null

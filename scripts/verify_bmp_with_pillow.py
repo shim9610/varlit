@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check Varve's custom physical layout API against Pillow BMP I/O."""
+"""Cross-check Stratava's custom physical layout API against Pillow BMP I/O."""
 
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ PIXELS_TOP_DOWN = [
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--varve-output",
+        "--stratava-output",
         type=Path,
         default=None,
-        help="Varve-authored BMP path; defaults to a temporary file.",
+        help="Stratava-authored BMP path; defaults to a temporary file.",
     )
     parser.add_argument(
         "--pillow-output",
@@ -48,11 +48,11 @@ def main() -> int:
         return 2
 
     tempdir = Path(tempfile.gettempdir())
-    varve_output = (
-        args.varve_output or tempdir / "varve-pillow-compat.bmp"
+    stratava_output = (
+        args.stratava_output or tempdir / "stratava-pillow-compat.bmp"
     ).resolve()
     pillow_output = (
-        args.pillow_output or tempdir / "pillow-varve-compat.bmp"
+        args.pillow_output or tempdir / "pillow-stratava-compat.bmp"
     ).resolve()
 
     subprocess.run(
@@ -60,16 +60,16 @@ def main() -> int:
             "cargo",
             "run",
             "-p",
-            "varve",
+            "stratava",
             "--example",
             "bmp_physical",
             "--",
             "write",
-            str(varve_output),
+            str(stratava_output),
         ],
         check=True,
     )
-    with Image.open(varve_output) as image:
+    with Image.open(stratava_output) as image:
         image = image.convert("RGB")
         assert image.size == (WIDTH, HEIGHT)
         flattened = (
@@ -87,7 +87,7 @@ def main() -> int:
             "cargo",
             "run",
             "-p",
-            "varve",
+            "stratava",
             "--example",
             "bmp_physical",
             "--",
@@ -97,8 +97,8 @@ def main() -> int:
         check=True,
     )
 
-    print(f"Pillow verified Varve BMP {varve_output}")
-    print(f"Varve verified Pillow BMP {pillow_output}")
+    print(f"Pillow verified Stratava BMP {stratava_output}")
+    print(f"Stratava verified Pillow BMP {pillow_output}")
     return 0
 
 

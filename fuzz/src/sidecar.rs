@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use varve::{BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, StreamOptions};
+use stratava::{BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, StreamOptions};
 
 use crate::{DiskItem, FuzzSidecarFormat, SidecarEvent, StreamItem};
 
@@ -24,13 +24,13 @@ pub fn run_arbitrary(data: &[u8]) {
     };
     let raw = &data[..data.len().min(MAX_BYTES)];
 
-    let stream_path = root.path().join("arbitrary-stream.varve");
+    let stream_path = root.path().join("arbitrary-stream.stratava");
     let stream_model = create_stream_fixture(&stream_path, 0, true);
     if fs::write(companion_path(&stream_path, ".vks"), raw).is_ok() {
         exercise_stream(&stream_path, &stream_model, true);
     }
 
-    let indexed_path = root.path().join("arbitrary-indexed.varve");
+    let indexed_path = root.path().join("arbitrary-indexed.stratava");
     let indexed_model = create_indexed_fixture(&indexed_path, 0, true);
     if fs::write(companion_path(&indexed_path, ".vki"), raw).is_ok() {
         exercise_indexed(&indexed_path, &indexed_model, true);
@@ -46,13 +46,13 @@ pub fn run_mutation(data: &[u8]) {
     let synced = control & 1 == 0;
     let mutations = data.get(2..).unwrap_or_default();
 
-    let stream_path = root.path().join("mutation-stream.varve");
+    let stream_path = root.path().join("mutation-stream.stratava");
     let stream_model = create_stream_fixture(&stream_path, seed, synced);
     if mutate_companion(&companion_path(&stream_path, ".vks"), control, mutations) {
         exercise_stream(&stream_path, &stream_model, synced);
     }
 
-    let indexed_path = root.path().join("mutation-indexed.varve");
+    let indexed_path = root.path().join("mutation-indexed.stratava");
     let indexed_model = create_indexed_fixture(&indexed_path, seed, synced);
     if mutate_companion(&companion_path(&indexed_path, ".vki"), control, mutations) {
         exercise_indexed(&indexed_path, &indexed_model, synced);
@@ -73,8 +73,8 @@ pub fn run_state_machine(data: &[u8]) {
         })
         .collect();
 
-    run_stream_machine(&root.path().join("machine-stream.varve"), &operations);
-    run_indexed_machine(&root.path().join("machine-indexed.varve"), &operations);
+    run_stream_machine(&root.path().join("machine-stream.stratava"), &operations);
+    run_indexed_machine(&root.path().join("machine-indexed.stratava"), &operations);
 }
 
 fn create_stream_fixture(path: &Path, seed: u8, synced: bool) -> Model {

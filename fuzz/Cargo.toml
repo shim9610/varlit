@@ -1,5 +1,5 @@
 [package]
-name = "varve-fuzz"
+name = "stratava-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -13,9 +13,9 @@ redb = { version = "4.3.0", path = "../vendor/redb" }
 libfuzzer-sys = "0.4"
 tempfile = "3"
 
-[dependencies.varve]
-path = "../crates/varve"
-version = "0.11.0"
+[dependencies.stratava]
+path = "../crates/stratava"
+version = "0.12.0"
 features = ["integrity", "mmap", "zero-copy", "compression-zstd"]
 
 # Use independent workspace for fuzzers

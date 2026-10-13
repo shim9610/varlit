@@ -53,7 +53,7 @@ def classify(returncode, output, expected, required_marker=None, timed_out=False
     summaries = SUMMARY.findall(output)
     if len(summaries) != 1 or tuple(map(int, summaries[0])) != (expected, 0):
         return "failed", f"expected exactly {expected} passing tests (empty/filtered suites fail)"
-    if "Varve test artifact cleanup: verified empty" not in output:
+    if "Stratava test artifact cleanup: verified empty" not in output:
         return "failed", "test-runner cleanup was not verified"
     if required_marker and required_marker not in output:
         return "failed", f"missing execution evidence: {required_marker}"
@@ -94,8 +94,8 @@ def run_command(command, environment, log, timeout):
 
 
 def test_command(target, name=None, ignored=False, core=False):
-    command = ["cargo", "run", "--locked", "-p", "varve-test-runner", "--",
-               "test", "--locked", "-p", "varve-core" if core else "varve", "--all-features"]
+    command = ["cargo", "run", "--locked", "-p", "stratava-test-runner", "--",
+               "test", "--locked", "-p", "stratava-core" if core else "stratava", "--all-features"]
     command += ["--lib"] if core else ["--test", target]
     if name:
         command.append(name)
@@ -129,10 +129,10 @@ def campaign(profile, seeds, epochs, kill_cycles, require_pib):
     add("fault-matrix", test_command("scalable_crash_faults", "enabled::scalable_crash_fault_matrix"))
     for seed in seeds:
         add(f"history-{seed}", test_command("scalable_qualification", "model_history_stress", True),
-            env={"VARVE_QUAL_SEED": str(seed), "VARVE_QUAL_EPOCHS": str(epochs)},
+            env={"STRATAVA_QUAL_SEED": str(seed), "STRATAVA_QUAL_EPOCHS": str(epochs)},
             marker=f"QUAL_HISTORY seed={seed} epochs={epochs}")
     add("external-kill", test_command("scalable_qualification", "external_kill_stress", True),
-        env={"VARVE_QUAL_KILL_CYCLES": str(kill_cycles)}, marker=f"QUAL_KILL epoch={kill_cycles}")
+        env={"STRATAVA_QUAL_KILL_CYCLES": str(kill_cycles)}, marker=f"QUAL_KILL epoch={kill_cycles}")
     if profile == "qualification":
         add("memory-growth", test_command("high_cardinality", "cardinality_growth_respects_memory_budget", True),
             marker='QUAL_MEMORY {"keys":1000000,')
@@ -140,7 +140,7 @@ def campaign(profile, seeds, epochs, kill_cycles, require_pib):
         marker="sparse offset smoke passed:")
     if require_pib:
         add("sparse-pib", test_command(None, "pib_probe::real_file_positional_io_at_one_pib", True, True),
-            env={"VARVE_REQUIRE_PIB_SPARSE": "1"}, marker="PiB sparse probe passed:")
+            env={"STRATAVA_REQUIRE_PIB_SPARSE": "1"}, marker="PiB sparse probe passed:")
     return stages
 
 
@@ -186,7 +186,7 @@ def main():
         "disk_free_bytes": shutil.disk_usage(output).free,
         "build_environment": {k: v for k, v in environment.items() if k in (
             "RUSTFLAGS", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_JOBS", "CARGO_TARGET_DIR",
-            "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG", "CARGO_INCREMENTAL", "VARVE_PIB_TEST_DIR")},
+            "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG", "CARGO_INCREMENTAL", "STRATAVA_PIB_TEST_DIR")},
         "seeds": seeds, "epochs": epochs, "kill_cycles": cycles, "stage_timeout_seconds": args.timeout,
         "not_covered": ["cross-platform results from other hosts", "power loss / torn storage writes",
                         "long sanitizer and fuzz campaigns", "released sidecar fixture compatibility",
