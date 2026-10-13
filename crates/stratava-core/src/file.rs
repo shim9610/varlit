@@ -1217,429 +1217,20 @@ mod record_file {
 
 use record_file::RecordFile;
 
-/// Mechanical enforcement for **shape A** on the resident record index: the
-/// mirror install that follows the authoritative append cannot be reached
-/// without its reservation.
-///
-/// `StratavaFile::index` is the in-memory mirror of the records on disk. The
-/// append core reserves one slot for it, writes the record, and then pushes the
-/// entry — the reservation is roughly eighty lines above the push, and until
-/// round 12 the only thing keeping them in that order was a source comment.
-/// That is the exact configuration round 12's F-03 was in `matrix.rs`: a
-/// correct ordering, described in prose, in a function nobody was going to
-/// re-derive. An edit that moved the charge or the `try_reserve` below the
-/// write would leave an `AllocationFailed` with the record on disk, absent from
-/// the index, on a writer that is not poisoned.
-///
-/// [`ReservedIndexSlot`] removes the choice. It has a private field and lives
-/// in its own module, so it can only come from [`ResidentIndex::reserve`],
-/// which does the limit checks and the `try_reserve`; and
-/// [`ResidentIndex::install`] takes it **by value** and returns `()`, so
-/// the push is infallible, allocation-free, and unreachable without the
-/// reservation having already succeeded. Cost on the hot path: none — the
-/// token is zero-sized and the two functions hold exactly the code that was
-/// inline before.
-///
-/// # Why the mirror itself lives here too
-///
-/// Re-verification of the first cut showed that the token bound less than it
-/// claimed, because the mirror was still an ordinary `Vec` field of
-/// `StratavaFile`. Both of these compiled inside `file.rs`:
-///
-/// ```text
-/// let mut mirror = core::mem::take(&mut self.index);   // grow around the token
-/// mirror.insert(0, entry);
-/// self.index = mirror;
-/// ```
-///
-/// and, worse for invariant 3,
-///
-/// ```text
-/// self.file.append_record_at_end(..)?;                 // authoritative write
-/// let slot = ReservedIndexSlot::reserve(&mut self.index, charge)?;  // fallible, AFTER it
-/// slot.install(&mut self.index, entry);
-/// ```
-///
-/// The token proved that a reservation *existed*, not that it *preceded* the
-/// write, and it did not stop a second route to the `Vec`. Two changes close
-/// both, and neither is a rule a later function can fail to repeat:
-///
-/// * the `Vec` is a private field of [`ResidentIndex`], declared in this
-///   module. Outside it the field cannot be named, so `mem::take`, `insert`,
-///   `push`, `append` and `extend` are unreachable; the only growth in the
-///   crate is [`ResidentIndex::install`], and the only way to call it is to
-///   hold the token.
-/// * the append itself demands the token: [`RecordFile::append_record_at_end`]
-///   takes `&ReservedIndexSlot`. A caller that has not already charged the
-///   limit and reserved the slot has nothing to write *with*, so the fallible
-///   mirror half cannot be moved below the authoritative write — that ordering
-///   is now a signature, not a comment.
-///
-/// What is deliberately *not* forbidden: reading the mirror
-/// ([`ResidentIndex::iter`], [`ResidentIndex::entry_at`]), restamping the
-/// sequence and checksum of an entry already in it
-/// ([`ResidentIndex::restamp`], used by the in-place replacement path),
-/// shrinking it
-/// ([`ResidentIndex::truncate`], the append rollback), and replacing a whole
-/// generation ([`ResidentIndex::adopt_generation`], the rewrite paths, which
-/// build their `Vec` with `try_reserve_exact` before the new file exists).
-/// **Correction, round 16.** The three above cannot add an entry the disk does
-/// not have; `adopt_generation` can. It adopts whatever `Vec` it is handed, and
-/// re-verification compiled and ran
-/// `ResidentIndex::adopt_generation(vec![RecordIndexEntry { committed: true, .. }])`
-/// to a mirror of length one for a record no disk holds. What holds it today is
-/// its eight call sites — open, and the rewrite paths that build the `Vec` from
-/// a generation they have just published — not a check. The cheap checked
-/// replacement (take the backing `&File` and run each entry through
-/// `RecordIndexEntry::validate_payload_extent`) was measured and rejected: a
-/// zero-length entry against a zero-length file passes it. Refusing that needs a
-/// header read per entry, i.e. O(records) I/O added to open for index policies
-/// that do not scan. Checklist open item 29.
-pub(crate) mod resident_index {
-    use super::{FormatSpec, RecordIndexEntry, Result, SnapshotFile, fault_record_entry};
-
-    /// Proof that the resident record index has spare capacity for one entry.
-    ///
-    /// Zero-sized, so demanding it costs nothing at run time; produced only by
-    /// `ResidentIndex::reserve`, so demanding it costs a fallible reservation
-    /// at compile time.
-    #[derive(Debug)]
-    #[must_use = "a reserved index slot is the proof that the mirror can accept \
-                  the entry; drop it only if the append is abandoned"]
-    pub struct ReservedIndexSlot(());
-
-    /// Bytes the directory occupies for `count` records.
-    ///
-    /// Only used to report a failed reservation honestly, so it saturates: a
-    /// number this large has already failed the allocation it describes. The
-    /// `IndexBytes` limit is stated in `RecordIndexEntry`s and charged through
-    /// `super::index_bytes_for_count`, which is a different and larger figure —
-    /// deliberately, because that is what the checkpoint and rewrite paths
-    /// still materialize.
-    fn slot_bytes_for_count(count: usize) -> u64 {
-        u64::try_from(count)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::try_from(size_of::<IndexSlot>()).unwrap_or(u64::MAX))
-    }
-
-    /// One record's directory entry: where it starts, and the writer's view of
-    /// whether it is committed.
-    ///
-    /// Sixteen bytes against the ninety-six a `RecordIndexEntry` occupies,
-    /// because these are the only two facts about a record that are *not* in
-    /// the record. Everything else — block id, version, flags, sequence,
-    /// payload extent, checksum, footer chain — is in the header and footer
-    /// this offset names, so keeping a copy in memory is keeping a second copy
-    /// of the file.
-    #[derive(Clone, Copy, Debug)]
-    struct IndexSlot {
-        record_offset: u64,
-        /// The record's block id, kept so that a directory walk looking for one
-        /// block can skip the rest **without faulting them**.
-        ///
-        /// Everything else about an entry is rebuilt from the record header,
-        /// which is one positional read each — so a walk that filters after
-        /// faulting pays for every record in the file to keep a handful. This
-        /// is the one field worth the exception, and it is free: `u64` forces
-        /// eight-byte alignment, so the `bool` already sat in seven bytes of
-        /// padding and the `u32` takes four of them. `SLOT_IS_STILL_SIXTEEN`
-        /// below is the assertion that keeps that true.
-        block_id: u32,
-        committed: bool,
-    }
-
-    /// Adding `block_id` to the slot must not grow the resident index.
-    ///
-    /// The index is one slot per record for the life of the handle, so a byte
-    /// here is a byte times every record in the file — the reason the slot
-    /// holds an offset and a bit rather than the entry in the first place.
-    const SLOT_IS_STILL_SIXTEEN: () = assert!(size_of::<IndexSlot>() == 16);
-
-    /// What an entry is rebuilt from.
-    ///
-    /// The snapshot has to be the *current* one, not the one open produced: a
-    /// writer's snapshot grows with every append, and reading a record past
-    /// the stored logical length is refused by `SnapshotFile` rather than
-    /// served. [`ResidentIndex::rebind`] is what keeps it current, and the
-    /// append path calls it on the same line that moves the writer's own.
-    #[derive(Clone, Debug)]
-    struct IndexSource {
-        snapshot: SnapshotFile,
-        spec: FormatSpec,
-    }
-
-    /// The record directory, and the file its entries come from.
-    ///
-    /// **Not a mirror any more.** It holds one 16-byte slot per record and
-    /// rebuilds the entry from the record's own bytes when asked. The `Vec` is
-    /// unnameable outside this module; see the module documentation for what
-    /// that forbids and what it deliberately allows.
-    #[derive(Debug)]
-    pub struct ResidentIndex {
-        slots: Vec<IndexSlot>,
-        source: IndexSource,
-        /// Whether this handle keeps a directory at all.
-        ///
-        /// `false` only for `open_readonly_without_directory`, where `slots` is
-        /// empty by construction and the caller holds the directory. It is a
-        /// flag rather than "slots is empty" because those two must not be
-        /// confused: an empty file also has no slots, and answering a read of a
-        /// directory-less handle the way an empty file is answered is exactly
-        /// the confusion `Error::NoResidentDirectory` exists to prevent.
-        retained: bool,
-    }
-
-    impl ResidentIndex {
-        /// Adopts the records of a freshly built generation.
-        ///
-        /// Used at open time (the index scanned, chained or checkpointed from
-        /// the file) and by the rewrite replacement paths (the index of the
-        /// temporary generation that has just become the file). Both hand over
-        /// entries that already describe records on disk, so this cannot
-        /// introduce an entry the disk does not have.
-        ///
-        /// Fallible because the directory is reserved exactly once, before the
-        /// first slot is taken.
-        pub(crate) fn adopt_generation(
-            entries: &[RecordIndexEntry],
-            snapshot: SnapshotFile,
-            spec: FormatSpec,
-        ) -> Result<Self> {
-            let mut slots = Vec::new();
-            slots
-                .try_reserve_exact(entries.len())
-                .map_err(|_| super::Error::AllocationFailed {
-                    resource: "record index",
-                    requested: slot_bytes_for_count(entries.len()),
-                })?;
-            slots.extend(entries.iter().map(|entry| IndexSlot {
-                record_offset: entry.record_offset,
-                block_id: entry.block_id,
-                committed: entry.committed,
-            }));
-            Ok(Self {
-                slots,
-                source: IndexSource { snapshot, spec },
-                retained: true,
-            })
-        }
-
-        /// A handle that keeps no directory: the caller holds it.
-        ///
-        /// The entries are still needed to build one — the caller was handed
-        /// them — so this takes none. What it produces answers `len() == 0`,
-        /// and [`Self::is_retained`] is what tells a read that this means
-        /// "somebody else has it" rather than "the file is empty".
-        pub(crate) fn none_retained(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
-            Self {
-                slots: Vec::new(),
-                source: IndexSource { snapshot, spec },
-                retained: false,
-            }
-        }
-
-        pub(crate) fn is_retained(&self) -> bool {
-            self.retained
-        }
-
-        /// An empty directory, for a file that has just been created.
-        pub(crate) fn empty(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
-            Self {
-                slots: Vec::new(),
-                source: IndexSource { snapshot, spec },
-                retained: true,
-            }
-        }
-
-        /// Points the directory at the file as it now is.
-        ///
-        /// Called wherever the owning handle rebinds its own snapshot: after
-        /// every append (the file grew, and the record just installed is only
-        /// readable once the snapshot reaches past it) and after a generation
-        /// republication (a different file entirely). Costs one `Arc` refcount
-        /// bump and a `u64` copy — no allocation and no syscall, which is what
-        /// lets it sit on the append hot path.
-        pub(crate) fn rebind(&mut self, snapshot: SnapshotFile) {
-            self.source.snapshot = snapshot;
-        }
-
-        /// Rebuilds the entry a slot names, from the record itself.
-        fn fault(&self, slot: IndexSlot) -> Result<RecordIndexEntry> {
-            fault_record_entry(
-                &self.source.snapshot,
-                self.source.spec,
-                slot.record_offset,
-                slot.committed,
-            )
-        }
-
-        /// Performs every fallible part of growing the mirror by one entry.
-        ///
-        /// `charge` is the caller's already-computed limit check; it runs here
-        /// so that the charge and the reservation cannot be separated either.
-        pub(crate) fn reserve(
-            &mut self,
-            charge: impl FnOnce() -> Result<u64>,
-        ) -> Result<ReservedIndexSlot> {
-            let index_bytes = charge()?;
-            self.slots
-                .try_reserve(1)
-                .map_err(|_| super::Error::AllocationFailed {
-                    resource: "record index",
-                    requested: index_bytes,
-                })?;
-            Ok(ReservedIndexSlot(()))
-        }
-
-        /// Reserves room for a whole run before any of it is installed.
-        ///
-        /// The append path grows by one and uses [`Self::reserve`], where a
-        /// refusal has nothing to undo. `follow` installs a run, and failing
-        /// partway through one would leave the directory describing records
-        /// the handle's snapshot does not reach — and a second `follow` would
-        /// then re-frame the same bytes and install them again, because the
-        /// snapshot it resumes from never moved. So every fallible step there
-        /// has to happen before the first `install`. `Vec::try_reserve` does
-        /// nothing when the capacity is already sufficient, which is exactly
-        /// what makes the per-entry `reserve` calls after this one unable to
-        /// fail.
-        pub(crate) fn reserve_run(&mut self, additional: usize, index_bytes: u64) -> Result<()> {
-            self.slots
-                .try_reserve(additional)
-                .map_err(|_| super::Error::AllocationFailed {
-                    resource: "record index",
-                    requested: index_bytes,
-                })
-        }
-
-        /// Installs the record into capacity that is already reserved.
-        ///
-        /// Infallible and allocation-free by construction: this is the only
-        /// growth of the record directory in the crate. Everything the entry
-        /// carries except its offset and its committed bit is dropped here —
-        /// it is already on disk, at that offset.
-        pub(crate) fn install(&mut self, slot: ReservedIndexSlot, entry: &RecordIndexEntry) {
-            let ReservedIndexSlot(()) = slot;
-            // Evaluated for its assertion, at the one place a slot is grown.
-            let () = SLOT_IS_STILL_SIXTEEN;
-            self.slots.push(IndexSlot {
-                record_offset: entry.record_offset,
-                block_id: entry.block_id,
-                committed: entry.committed,
-            });
-        }
-
-        /// The block id at `position` without rebuilding the entry.
-        ///
-        /// The point of the field: a caller looking for one block can decide
-        /// to skip a record for the cost of a `Vec` index, where faulting to
-        /// find out costs a positional read of that record's header.
-        pub(crate) fn block_id_at(&self, position: usize) -> Option<u32> {
-            self.slots.get(position).map(|slot| slot.block_id)
-        }
-
-        /// Drops the tail beyond `len`, for the append rollback. Shrinking can
-        /// only make the directory describe fewer records than the disk holds,
-        /// which is the direction rollback restores.
-        pub(crate) fn truncate(&mut self, len: usize) {
-            self.slots.truncate(len);
-        }
-    }
-
-    impl ResidentIndex {
-        /// Entries in order, each one fallible.
-        ///
-        /// A method and not a `Deref` to `[RecordIndexEntry]`. The slice
-        /// contract said "every entry, contiguous, borrowed at once", which is
-        /// the one shape a demand-filled index cannot produce — and it was
-        /// implicit, so nothing had to ask for it deliberately. Every caller
-        /// that genuinely needs the whole array now says so by name.
-        ///
-        /// Owned and `Result`, not `&RecordIndexEntry`: an entry a store
-        /// produces on demand is not borrowed from anything, and producing it
-        /// reads a file. `RecordIndexEntry` is scalars only, so the owned item
-        /// is a memcpy and not an allocation.
-        /// Double-ended and exact-size because a store keyed by position is
-        /// both whatever it does to produce an entry: the reverse searches
-        /// (newest commit marker, newest checkpoint) and the segment encoder's
-        /// payload sizing both need it, and neither is a reason to keep the
-        /// entries themselves resident.
-        pub(crate) fn iter(
-            &self,
-        ) -> impl DoubleEndedIterator<Item = Result<RecordIndexEntry>> + ExactSizeIterator + '_
-        {
-            self.slots.iter().map(|slot| self.fault(*slot))
-        }
-
-        pub(crate) fn len(&self) -> usize {
-            self.slots.len()
-        }
-
-        /// Only the unit tests below ask this now — `needs_open_digest` used to,
-        /// and stopped because an empty resident index is not the same question
-        /// as an empty file (a format whose every block is non-resident has one
-        /// forever). Gated rather than deleted: the tests do want it, and the
-        /// gate's `clippy -p stratava` lints this crate's lib target without its
-        /// tests, so ungated it reads as dead code there.
-        #[cfg(test)]
-        pub(crate) fn is_empty(&self) -> bool {
-            self.slots.is_empty()
-        }
-
-        /// The entry at `position`, or `UnexpectedEof` if there is none.
-        ///
-        /// Positions reaching this come from `ReplacementTarget::resolve`, which
-        /// found them by walking this same index, so the miss arm is
-        /// unreachable today — but a demand-filled store can fail to produce an
-        /// entry for reasons a slice index cannot, and a panicking `[i]` leaves
-        /// nowhere to put that.
-        ///
-        /// Returns the entry by value for the same reason [`Self::iter`] does.
-        pub(crate) fn entry_at(&self, position: usize) -> crate::Result<RecordIndexEntry> {
-            let slot = *self
-                .slots
-                .get(position)
-                .ok_or(crate::Error::UnexpectedEof)?;
-            self.fault(slot)
-        }
-
-        /// Whether any entry carries `block_id`, searching forwards.
-        ///
-        /// Forwards on purpose, and not [`Self::last_entry_of_block`] with an
-        /// `is_some`: its one caller asks about the embedded manifest, which a
-        /// file writes once and early, so a forward search stops within the
-        /// first few entries while a backward one would walk the whole index
-        /// back to it. It runs on every commit.
-        pub(crate) fn contains_block(&self, block_id: u32) -> Result<bool> {
-            for entry in self.iter() {
-                if entry?.block_id == block_id {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-
-        /// The newest entry carrying `block_id`, searching backwards.
-        ///
-        /// A named reverse search rather than `iter().rev().find(..)` at the
-        /// call sites, because the `?` on each produced entry has to live
-        /// somewhere and a `find` closure is not that somewhere.
-        pub(crate) fn last_entry_of_block(
-            &self,
-            block_id: u32,
-        ) -> Result<Option<RecordIndexEntry>> {
-            for entry in self.iter().rev() {
-                let entry = entry?;
-                if entry.block_id == block_id {
-                    return Ok(Some(entry));
-                }
-            }
-            Ok(None)
-        }
-    }
-}
+/// Owner-local record directory with a bounded buffer and private spill file.
+/// Reservation performs allocation and spill I/O before the authoritative
+/// append. The append requires its token; installation afterwards is infallible.
+/// Follow stages validated rows and rolls back the logical directory length on
+/// a scratch error. Positional reads keep independent snapshots independent.
+#[path = "native_directory.rs"]
+pub(crate) mod resident_index;
 
 use resident_index::{ReservedIndexSlot, ResidentIndex};
+#[path = "native_scan.rs"]
+mod native_scan;
+use native_scan::{BufferedScan, ScanBuffer};
+#[path = "external_merge.rs"]
+mod external_merge;
 
 /// Which route [`StratavaFile::open_readonly_lazy`] actually took.
 ///
@@ -5807,8 +5398,7 @@ impl StratavaFile {
     /// instead; see [`open_readonly_with_scratch`](Self::open_readonly_with_scratch)
     /// for what that buffer is and why the caller owns it.
     pub fn open<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
-        let mut scratch = Vec::new();
-        Self::open_with_scratch(spec, path, &mut scratch)
+        Self::open_with_lock_policy(spec, path, WriterLockBreakPolicy::Refuse)
     }
 
     /// Opens a read-write handle, scanning into the caller's buffer.
@@ -5835,15 +5425,15 @@ impl StratavaFile {
     }
 
     fn open_locked(spec: FormatSpec, path: PathBuf, lock: &mut WriterLock) -> Result<Self> {
-        let mut scratch = Vec::new();
+        let mut scratch = BufferedScan::new(spec);
         Self::open_locked_with_scratch(spec, path, lock, &mut scratch)
     }
 
-    fn open_locked_with_scratch(
+    fn open_locked_with_scratch<B: ScanBuffer>(
         spec: FormatSpec,
         path: PathBuf,
         lock: &mut WriterLock,
-        scratch: &mut Vec<RecordIndexEntry>,
+        scratch: &mut B,
     ) -> Result<Self> {
         let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
         lock.bind_native(&file, &path)?;
@@ -5880,7 +5470,7 @@ impl StratavaFile {
             index,
             previous_writer_crashed,
         )?;
-        let derived = derive_index_state(infallible_entries(index), false)?;
+        let derived = derive_index_state(index.entries(), false)?;
         let checkpoint_cadence = derived.checkpoint_cadence;
         let segment_cursor = derived.segment_cursor;
         let snapshot = SnapshotFile::from_file_with_len(
@@ -5909,7 +5499,7 @@ impl StratavaFile {
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
-            last_resident_block_id: index.last().map(|entry| entry.block_id),
+            last_resident_block_id: index.last_entry()?.map(|entry| entry.block_id),
             keyed_tails: KeyedTails::new_empty(),
             pending_pathname_parent_sync: false,
             opened_after_crash: false,
@@ -5940,13 +5530,12 @@ impl StratavaFile {
 
     /// Opens a read-only handle.
     ///
-    /// **This allocates the scan's entry buffer.**
-    /// [`open_readonly_with_scratch`](Self::open_readonly_with_scratch) takes
-    /// the caller's instead — the shape to use when opening many files, since
-    /// one buffer then serves all of them.
+    /// Uses bounded scan/directory buffers and private temporary spill files.
+    /// [`open_readonly_with_scratch`](Self::open_readonly_with_scratch) instead
+    /// fills a reusable caller-owned entry array, which retains its result-size limit.
     pub fn open_readonly<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
-        let mut scratch = Vec::new();
-        Self::open_readonly_with_scratch(spec, path, &mut scratch)
+        let mut scratch = BufferedScan::new(spec);
+        Self::open_readonly_inner(spec, path, &mut scratch, DirectoryRetention::Keep)
     }
 
     /// Opens a read-only handle, scanning into the caller's buffer.
@@ -5972,10 +5561,10 @@ impl StratavaFile {
         Self::open_readonly_inner(spec, path, scratch, DirectoryRetention::Keep)
     }
 
-    fn open_readonly_inner<P: AsRef<Path>>(
+    fn open_readonly_inner<P: AsRef<Path>, B: ScanBuffer>(
         spec: FormatSpec,
         path: P,
-        scratch: &mut Vec<RecordIndexEntry>,
+        scratch: &mut B,
         retention: DirectoryRetention,
     ) -> Result<Self> {
         let spec = spec.resolve_entrypoint();
@@ -6014,7 +5603,7 @@ impl StratavaFile {
         // must not be visible here either. Both facts belong to the scan.
         let logical_len = scanned.physical_end(append_start);
         let index = &*scratch;
-        let derived = derive_index_state(infallible_entries(index), false)?;
+        let derived = derive_index_state(index.entries(), false)?;
         let checkpoint_cadence = derived.checkpoint_cadence;
         let segment_cursor = derived.segment_cursor;
         let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, logical_len)?;
@@ -6047,7 +5636,7 @@ impl StratavaFile {
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
-            last_resident_block_id: index.last().map(|entry| entry.block_id),
+            last_resident_block_id: index.last_entry()?.map(|entry| entry.block_id),
             keyed_tails: KeyedTails::new_empty(),
             pending_pathname_parent_sync: false,
             opened_after_crash: false,
@@ -6137,7 +5726,7 @@ impl StratavaFile {
                 // buffer is transient — the handle keeps no directory either
                 // way — but it is `N` entries while it lives, which is the cost
                 // of the fallback and is why the report exists.
-                let mut scratch = Vec::new();
+                let mut scratch = BufferedScan::new(spec);
                 let file =
                     Self::open_readonly_inner(spec, path, &mut scratch, DirectoryRetention::None)?;
                 Ok((file, LazyOpenSource::FullScan))
@@ -6223,7 +5812,7 @@ impl StratavaFile {
                 Err(error @ Error::MissingResourceLimit { .. })
                 | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. }) => Err(error),
                 Err(_) => {
-                    let mut scratch = Vec::new();
+                    let mut scratch = BufferedScan::new(spec);
                     let file =
                         Self::open_locked_with_scratch(spec, path.clone(), lock, &mut scratch)?;
                     Ok((file, LazyOpenSource::FullScan))
@@ -6413,15 +6002,15 @@ impl StratavaFile {
         path: PathBuf,
         lock: &mut WriterLock,
     ) -> Result<(Self, RecoveryReport)> {
-        let mut scratch = Vec::new();
+        let mut scratch = BufferedScan::new(spec);
         Self::open_recover_locked_with_scratch(spec, path, lock, &mut scratch)
     }
 
-    fn open_recover_locked_with_scratch(
+    fn open_recover_locked_with_scratch<B: ScanBuffer>(
         spec: FormatSpec,
         path: PathBuf,
         lock: &mut WriterLock,
-        scratch: &mut Vec<RecordIndexEntry>,
+        scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
         let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
         lock.bind_native(&file, &path)?;
@@ -6446,10 +6035,10 @@ impl StratavaFile {
         // commit point, so there is no tail. See the digest's frame check.
         truncate_uncommitted_tail_if_needed(spec, &mut file, append_start, index, false)?;
         let recovered_len = file.metadata()?.len();
-        let derived = derive_index_state(infallible_entries(index), false)?;
+        let derived = derive_index_state(index.entries(), false)?;
         let checkpoint_cadence = derived.checkpoint_cadence;
         let segment_cursor = derived.segment_cursor;
-        let records_preserved = index.len();
+        let records_preserved = index.record_count();
         let snapshot = SnapshotFile::from_file_with_len(
             file.try_clone()?,
             matrix_pages
@@ -6477,7 +6066,7 @@ impl StratavaFile {
                 record_buffer: Vec::new(),
                 immediate_state: Default::default(),
                 appended_since_digest: false,
-                last_resident_block_id: index.last().map(|entry| entry.block_id),
+                last_resident_block_id: index.last_entry()?.map(|entry| entry.block_id),
                 keyed_tails: KeyedTails::new_empty(),
                 pending_pathname_parent_sync: false,
                 opened_after_crash: false,
@@ -9037,7 +8626,7 @@ impl StratavaFile {
             }
             return Ok(0);
         }
-        let mut framed = Vec::new();
+        let mut framed = BufferedScan::new(self.spec);
         let scanned = scan_records_range_at_len(
             self.spec,
             &mut file,
@@ -9068,10 +8657,14 @@ impl StratavaFile {
         // everything this handle already holds, so its lowest sequence must
         // too. This is the check that the run really is this object's
         // continuation rather than bytes that came from somewhere else.
-        if let (SequenceState::Available(next), Some(lowest)) = (
-            self.sequence_state,
-            framed.iter().map(|entry| entry.sequence).min(),
-        ) && lowest < next
+        let mut lowest = None::<u64>;
+        for entry in framed.entries() {
+            let sequence = entry?.sequence;
+            lowest = Some(lowest.map_or(sequence, |old| old.min(sequence)));
+        }
+        let last_entry = framed.last_entry()?;
+        if let (SequenceState::Available(next), Some(lowest)) = (self.sequence_state, lowest)
+            && lowest < next
         {
             return Err(Error::InvalidCanonicalEncoding(
                 "followed records repeat a sequence this handle already holds",
@@ -9079,72 +8672,27 @@ impl StratavaFile {
         }
         let snapshot = self.snapshot.with_len(logical_len)?;
         if self.index.is_retained() {
-            // Charged against the *handle's* total, and charged before a single
-            // entry is installed.
-            //
-            // The scan charges `Records` and `IndexBytes` per entry into the
-            // buffer it is filling, and that buffer is a fresh one here — so
-            // charging only there bounds one run rather than the handle, and a
-            // handle following a growing file walks past a ceiling that a fresh
-            // open of the same file refuses. Measured with `records: 30`: a
-            // handle at 21 entries followed four times to 65 while every fresh
-            // open answered `LimitExceeded { resource: "record count" }`.
-            //
-            // Up front rather than inside the loop because the loop mutates
-            // `self`: refusing on the tenth entry left nine installed and the
-            // snapshot un-advanced, which is an index describing records the
-            // snapshot does not reach — and, worse, a second `follow` would
-            // then re-frame the same bytes from the same unmoved `from` and
-            // install them a second time.
-            //
-            // Which is why *every* fallible step of the run is here rather than
-            // only the ceilings. The loop below has no failure to leave a
-            // half-installed run behind, and that is a property of its shape
-            // rather than of how unlikely each call is to fail:
-            //
-            //   - the two ceilings, charged once for the whole run;
-            //   - the run's index capacity, in one `try_reserve`, which makes
-            //     each per-entry `reserve` a no-op that cannot allocate;
-            //   - each entry's physical end, so the loop can use the saturating
-            //     `physical_end` and carry no `?` at all.
-            //
-            // `ScanBytes` is deliberately *not* charged — that exemption is the
-            // point of the zero prefix charge above and is documented on
-            // `scan_records_range`. These two bound the handle's resident
-            // footprint, which is a different claim.
-            let holding = self.index.len().saturating_add(framed.len());
-            let held = u64::try_from(holding).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "record count",
-            })?;
-            self.spec.read_limits.check(ReadLimitKey::Records, held)?;
-            let index_bytes = index_bytes_for_count(holding)?;
+            let first = self.index.len();
+            let holding = first.checked_add(framed.record_count()).ok_or(
+                Error::ResourceArithmeticOverflow {
+                    resource: "record count",
+                },
+            )?;
             self.spec
                 .read_limits
-                .check(ReadLimitKey::IndexBytes, index_bytes)?;
-            self.index.reserve_run(framed.len(), index_bytes)?;
-            for entry in &framed {
-                // Never fails: the scan advances its own walk by exactly this
-                // value on every entry it frames, so each one already succeeded
-                // once. Proving it *here* is what lets the loop below use the
-                // saturating form.
-                entry.checked_physical_end()?;
+                .check(ReadLimitKey::Records, holding as u64)?;
+            let mut checkpoint = self.checkpoint_cadence;
+            let mut segment = self.segment_cursor;
+            for (at, entry) in framed.entries().enumerate() {
+                let entry = entry?;
+                checkpoint.note_appended(first + at, entry.block_id);
+                segment.note_appended(first + at, entry.block_id, entry.checked_physical_end()?);
             }
-            for entry in &framed {
-                let length = self.index.len();
-                // Also never fails, for the two reasons above: the capacity is
-                // already reserved, and `index_bytes_for_count` is monotonic
-                // and already succeeded at `holding`, which is at least
-                // `length + 1`.
-                let slot = self
-                    .index
-                    .reserve(|| index_bytes_for_count(length.saturating_add(1)))?;
-                self.index.install(slot, entry);
-                let position = self.index.len() - 1;
-                self.checkpoint_cadence
-                    .note_appended(position, entry.block_id);
-                self.segment_cursor
-                    .note_appended(position, entry.block_id, entry.physical_end());
-            }
+            // Fallible staging ends here. On scratch I/O failure extend rolls
+            // back its logical length, preserving the complete old snapshot.
+            self.index.extend(framed.entries())?;
+            self.checkpoint_cadence = checkpoint;
+            self.segment_cursor = segment;
         }
         self.snapshot = snapshot;
         // The entries just installed describe records past the end the old
@@ -9157,7 +8705,7 @@ impl StratavaFile {
             self.block_tails.note_appended(block_id, record_offset);
         }
         self.sequence_state = scanned.sequence_state();
-        if let Some(entry) = framed.last() {
+        if let Some(entry) = last_entry {
             self.last_resident_block_id = Some(entry.block_id);
         }
         // A record just adopted may be the newest of its key.
@@ -13254,12 +12802,7 @@ impl StratavaFile {
         // checkpoints and segments are stratava's own bookkeeping and every open
         // path expects to find them.
         let resident = block_id >= RESERVED_BLOCK_ID_START || spec.block_is_resident(block_id);
-        let index_slot = self.index.reserve(|| {
-            let index_bytes = index_bytes_for_count(record_count)?;
-            spec.read_limits
-                .check(ReadLimitKey::IndexBytes, index_bytes)?;
-            Ok(index_bytes)
-        })?;
+        let index_slot = self.index.reserve(|| index_bytes_for_count(record_count))?;
 
         let sequence = self.sequence_state.available()?;
         let snapshot = AppendSnapshot {
@@ -13797,7 +13340,7 @@ impl StratavaFile {
     /// Costs one scan of the tail — not of the file — plus four bytes per
     /// record and one appended record.
     fn recover_marked_tail(&mut self, from: u64) -> Result<usize> {
-        // Walked directly rather than through `scan_records_range`, and that is
+        // Walked directly rather than through `scan_records_range_at_len`, and that is
         // not a shortcut. Under a marker policy the scan applies
         // `committed_prefix_len` to whatever it framed and **clears the list**
         // when no marker is in range — which is exactly this range, by
@@ -17053,42 +16596,13 @@ fn decompress_with_algorithm(
     unreachable!("compression algorithm availability returned Ok without a backend")
 }
 
-/// Pre-flight cost estimate for the resident keyed merge/compact family
-/// (PERF2-03).
+/// Record counts and a hypothetical fully resident merge size.
 ///
-/// # This is an estimate, not an upper bound (PERF4-04)
-///
-/// Every field is derived from record *counts* only: producing it decodes
-/// nothing and retains no value, so a caller can size or refuse a merge before
-/// paying for it. That cheapness is exactly why it cannot be a bound. Only
-/// [`Self::input_records`], [`Self::key_bearing_records`] and
-/// [`Self::max_distinct_keys`] are true upper bounds - they are counts. Every
-/// *byte* field counts **inline structural storage only**:
-/// `count * size_of::<...>()` for the container's own elements.
-///
-/// [`Self::peak_resident_structural_bytes`] therefore **excludes**, and the
-/// real peak exceeds it by:
-///
-/// - the heap owned by individual `Key` and `T` values. A `String` key or a
-///   `Vec` field is one pointer-sized triple in the map's entry array and an
-///   arbitrary allocation outside it, which the count model cannot see. For
-///   heap-owning types the shortfall is unbounded;
-/// - `HashMap` load-factor slack, control bytes and power-of-two bucket
-///   rounding: the map allocates strictly more than
-///   `entries * size_of::<entry>()`;
-/// - per-record decode scratch held while a value is being applied;
-/// - allocator metadata and fragmentation.
-///
-/// It was previously published as an upper bound. It never was one, and a
-/// sizing contract that understates by an unbounded amount is worse than one
-/// that says plainly what it counts - so the method was renamed rather than
-/// left to read as a guarantee. Callers that need a hard ceiling must bound
-/// the operation instead of sizing it, with
-/// [`merge_keyed_files_with_key_limit`], which refuses at a typed boundary.
-///
-/// The structural peak is the merge state plus the output vector - reserved
-/// while the map and its values are still alive - plus the largest input's
-/// resident index and the transient that input's open holds alongside it.
+/// Merge/compact now use temporary disk indexes. The count fields still size
+/// logical work and bound distinct keys. The byte fields retain the historical
+/// `count * size_of` model for an equivalent fully resident implementation;
+/// they do **not** estimate the external implementation's RAM or scratch disk.
+/// They exclude heap-owned payloads and allocator overhead.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyedMergeEstimate {
@@ -17126,15 +16640,8 @@ pub struct KeyedMergeEstimate {
 }
 
 impl KeyedMergeEstimate {
-    /// Structural bytes resident at the merge's peak. **Not an upper bound** -
-    /// see the type-level documentation for exactly what it omits.
-    ///
-    /// The merge state lives for the whole operation while one input at a time
-    /// is opened, and the output vector is reserved before the state is
-    /// dropped, so this sums [`Self::max_state_bytes`],
-    /// [`Self::max_output_values_bytes`], [`Self::largest_input_index_bytes`]
-    /// and [`Self::largest_input_open_transient_bytes`]. Saturates instead of
-    /// overflowing: a saturated estimate is still a refusal signal.
+    /// Sum of the hypothetical fully resident implementation's structural
+    /// terms. This is neither current merge memory usage nor an upper bound.
     #[must_use]
     pub fn peak_resident_structural_bytes(&self) -> u64 {
         self.max_state_bytes
@@ -17144,17 +16651,9 @@ impl KeyedMergeEstimate {
     }
 }
 
-/// Estimates the resident cost of merging `base` with `deltas` for block `T`.
-///
-/// Opens each input read-only in turn and counts index entries; nothing is
-/// decoded and no value is retained, so the peak cost of the estimate itself
-/// is one input's resident index. Use it to decide whether
-/// [`merge_keyed_files`] fits in available memory, or pass the result's
-/// `max_distinct_keys` to [`merge_keyed_files_with_key_limit`].
-///
-/// The byte fields of the result are structural estimates and not upper
-/// bounds; read [`KeyedMergeEstimate`] before treating any of them as a
-/// ceiling.
+/// Counts merge inputs without decoding values. Directory buffers are bounded;
+/// large inputs use temporary storage. Byte fields describe a hypothetical
+/// fully resident implementation; see [`KeyedMergeEstimate`].
 pub fn estimate_keyed_merge<T, P>(
     spec: FormatSpec,
     base: P,
@@ -17177,9 +16676,7 @@ where
     let keys = usize::try_from(estimate.max_distinct_keys).unwrap_or(usize::MAX);
     estimate.max_state_bytes =
         allocation_bytes::<(T::Key, (MergeOrder, Option<T>))>(keys, "merge state")?;
-    // PERF4-04: `collect_merged_keyed_values` reserves the output vector while
-    // the state map and every surviving value are still alive, so the two
-    // allocations overlap and both belong in the structural peak.
+    // Historical fully resident model, retained independently of execution.
     estimate.max_output_values_bytes = allocation_bytes::<(MergeOrder, T)>(keys, "merged values")?;
     Ok(estimate)
 }
@@ -17228,29 +16725,17 @@ where
 
 /// Merges `base` with `deltas` into `output`, keeping the last write per key.
 ///
-/// # Scale contract
+/// Inputs are processed in shard, sequence and physical-ordinal order. Per-key
+/// state, values and output ordering use private temporary files. Index buffers
+/// are capped by `max_index_bytes` (at most 2 MiB per buffer); per-operation
+/// decoding uses `max_materialized_bytes`. One record/key and fixed tree-page
+/// workspace remain minimum working storage. No total-key-sized RAM map is kept.
 ///
-/// This is a **resident** operation and is deliberately not PB-scale. It opens
-/// each input as a whole [`StratavaFile`] and accumulates one map entry per
-/// distinct key ever seen - including keys whose latest record is a tombstone -
-/// plus the live values that survive to the output:
-///
-/// - time: `Theta(records + decoded bytes) + O(N log N) + O(K-live log K-live)`,
-///   where the `O(N log N)` term is the per-input open's sequence-uniqueness
-///   sort over that input's `N` records. It degrades to `Theta(N)` for the
-///   ordinary case of a file whose sequences ascend with offset, but the sort
-///   is the guaranteed bound (PERF3-05);
-/// - memory: `O(K-ever + largest resident input index + 8N uniqueness
-///   temporary for that input + retained live values)`, where `K-ever` is the
-///   number of distinct keys across all inputs.
-///
-/// Nothing here spills to disk, so `K-ever` must fit in memory. Stratava exports
-/// no bounded-memory external merge/compact; the scalable stream and indexed
-/// writers cover bounded *ingest*, not bounded merge. Callers whose key
-/// cardinality is not known to be resident-sized should size the operation
-/// first with [`estimate_keyed_merge`] or bound it with
-/// [`merge_keyed_files_with_key_limit`], which fails with a typed limit error
-/// instead of exhausting memory.
+/// Scratch disk grows with history and must have free space. Output replacement
+/// happens only after the complete result has been written and synced. Spilling
+/// does not publish intermediate output. Custom key equality/hash semantics are
+/// preserved, including hash collisions. Individual oversized records still
+/// fail their decode/encode limits. Explicit key-count guards remain available.
 pub fn merge_keyed_files<T, P>(spec: FormatSpec, base: P, deltas: &[P], output: P) -> Result<()>
 where
     T: StratavaMerge,
@@ -17263,7 +16748,7 @@ where
 /// [`merge_keyed_files`] with an explicit ceiling on distinct retained keys.
 ///
 /// The collector checks `max_distinct_keys` before it admits each new key, so
-/// an input whose cardinality exceeds the caller's memory budget fails with
+/// an input whose cardinality exceeds the declared work limit fails with
 /// [`Error::LimitExceeded`] (`resource = "merge distinct keys"`) at the
 /// boundary instead of being discovered by the allocator. The ceiling counts
 /// tombstoned keys, matching what the state actually retains.
@@ -17281,23 +16766,14 @@ where
 {
     let spec = spec.ordinary_read();
     spec.validate()?;
-    let final_values = collect_merged_keyed_values::<T, P>(spec, base, deltas, max_distinct_keys)?;
-    write_keyed_values_atomically(
-        spec,
-        output.as_ref(),
-        final_values.into_iter().map(|(_, value)| value),
-    )
+    let merged =
+        external_merge::ExternalMerge::<T>::collect(spec, base, deltas, max_distinct_keys)?;
+    write_keyed_values_atomically(spec, output.as_ref(), |out| merged.write(out))
 }
 
 /// Compacts `base` plus `deltas` into `output`, dropping superseded records.
-///
-/// # Scale contract
-///
-/// Identical to [`merge_keyed_files`]: resident, `O(K-ever + largest resident
-/// input index + 8N uniqueness temporary for that input + retained live
-/// values)` memory, not PB-scale. See that
-/// function for the full bound, [`estimate_keyed_merge`] for a pre-flight
-/// estimate, and [`compact_keyed_files_with_key_limit`] for a typed guard.
+/// Uses the bounded buffers and temporary files described by [`merge_keyed_files`].
+/// [`compact_keyed_files_with_key_limit`] additionally bounds distinct keys.
 pub fn compact_keyed_files<T, P>(spec: FormatSpec, base: P, deltas: &[P], output: P) -> Result<()>
 where
     T: StratavaMerge,
@@ -17324,69 +16800,16 @@ where
 {
     let spec = spec.ordinary_read();
     spec.validate()?;
-    let final_values = collect_merged_keyed_values::<T, P>(spec, base, deltas, max_distinct_keys)?;
-    write_keyed_values_atomically(
-        spec,
-        output.as_ref(),
-        final_values.into_iter().map(|(_, value)| value),
-    )
+    let merged =
+        external_merge::ExternalMerge::<T>::collect(spec, base, deltas, max_distinct_keys)?;
+    write_keyed_values_atomically(spec, output.as_ref(), |out| merged.write(out))
 }
 
-fn collect_merged_keyed_values<T, P>(
+fn write_keyed_values_atomically(
     spec: FormatSpec,
-    base: P,
-    deltas: &[P],
-    max_distinct_keys: u64,
-) -> Result<Vec<(MergeOrder, T)>>
-where
-    T: StratavaMerge,
-    T::Key: Eq + Hash,
-    P: AsRef<Path>,
-{
-    crate::collections::ensure_registered_block::<T>(spec)?;
-    let mut state: HashMap<T::Key, (MergeOrder, Option<T>)> = HashMap::new();
-    let mut budget = MaterializationBudget::new(spec);
-    apply_merge_file::<T, _>(
-        spec,
-        base,
-        MergeShard { ordinal: 0 },
-        &mut state,
-        &mut budget,
-        max_distinct_keys,
-    )?;
-    for (index, delta) in deltas.iter().enumerate() {
-        apply_merge_file::<T, _>(
-            spec,
-            delta,
-            MergeShard { ordinal: index + 1 },
-            &mut state,
-            &mut budget,
-            max_distinct_keys,
-        )?;
-    }
-
-    let requested = allocation_bytes::<(MergeOrder, T)>(state.len(), "merged values")?;
-    let mut final_values = Vec::new();
-    final_values
-        .try_reserve_exact(state.len())
-        .map_err(|_| Error::AllocationFailed {
-            resource: "merged values",
-            requested,
-        })?;
-    final_values.extend(
-        state
-            .into_values()
-            .filter_map(|(order, value)| value.map(|value| (order, value))),
-    );
-    final_values.sort_by_key(|(order, _)| *order);
-    Ok(final_values)
-}
-
-fn write_keyed_values_atomically<T, I>(spec: FormatSpec, output: &Path, values: I) -> Result<()>
-where
-    T: StratavaBlock,
-    I: IntoIterator<Item = T>,
-{
+    output: &Path,
+    populate: impl FnOnce(&mut StratavaFile) -> Result<()>,
+) -> Result<()> {
     let _lock = WriterLock::acquire(output)?;
     // STO4-P2: the permission copy below is fallible and used to sit between
     // the temp's creation and the first scope that cleaned it up, so its `?`
@@ -17403,14 +16826,7 @@ where
 
     let result = (|| {
         let mut out = StratavaFile::create(spec, &temp_path)?;
-        for value in values {
-            // API2-05: `values` comes from a per-key map, so the merged
-            // generation holds exactly one record per surviving key and an
-            // absent keyed predecessor is the correct link. Stating it
-            // explicitly keeps this off the generic push, which refuses keyed
-            // blocks precisely because it cannot know that.
-            out.push_with_prev_key_info(&value, None)?;
-        }
+        populate(&mut out)?;
         out.flush()?;
         out.sync()
     })();
@@ -17494,31 +16910,6 @@ fn preserve_temp_on_indeterminate(temp_path: &Path, error: Error) -> Error {
         let _ = remove_file(temp_path);
     }
     error
-}
-
-fn apply_merge_file<T, P>(
-    spec: FormatSpec,
-    path: P,
-    shard: MergeShard,
-    state: &mut HashMap<T::Key, (MergeOrder, Option<T>)>,
-    budget: &mut MaterializationBudget,
-    max_distinct_keys: u64,
-) -> Result<()>
-where
-    T: StratavaMerge,
-    T::Key: Eq + Hash,
-    P: AsRef<Path>,
-{
-    let file = StratavaFile::open_readonly(spec, path)?;
-    apply_merge_entries::<T, _>(
-        spec,
-        &file.snapshot,
-        &file.index,
-        shard,
-        state,
-        budget,
-        max_distinct_keys,
-    )
 }
 
 /// Refuses a key the merge state has not seen once the caller's `K-ever`
@@ -19193,100 +18584,23 @@ fn segment_chain_open_is_allowed(spec: FormatSpec, intent: ScanIntent) -> bool {
             != IntegrityVerification::AtOpen
 }
 
-fn load_generation_index(
+fn load_generation_index<B: ScanBuffer>(
     spec: FormatSpec,
     file: &mut File,
     header_len: u64,
     intent: ScanIntent,
-    out: &mut Vec<RecordIndexEntry>,
+    out: &mut B,
     pages: Option<&crate::matrix_generation::MatrixFile>,
 ) -> Result<ScannedIndex> {
-    match pages {
-        Some(pages) => {
-            let end = pages.head().native_eof;
-            if segment_chain_open_is_allowed(spec, intent) {
-                match walk_segment_chain(spec, file, header_len, out, end) {
-                    Ok(scanned) => return Ok(scanned),
-                    Err(error @ Error::MissingResourceLimit { .. })
-                    | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. }) => {
-                        return Err(error);
-                    }
-                    Err(_) => out.clear(),
-                }
-            }
-            scan_records_range_at_len(spec, file, header_len, header_len, None, intent, out, end)
-        }
-        None => load_index(spec, file, header_len, intent, out),
-    }
-}
-
-fn load_index(
-    spec: FormatSpec,
-    file: &mut File,
-    header_len: u64,
-    intent: ScanIntent,
-    out: &mut Vec<RecordIndexEntry>,
-) -> Result<ScannedIndex> {
-    out.clear();
+    let end = pages.map_or(file.metadata()?.len(), |p| p.head().native_eof);
+    out.reset();
     if segment_chain_open_is_allowed(spec, intent)
-        && let Some(scanned) = load_index_from_segments(spec, file, header_len, out)?
+        && let Some(scanned) = out.segments(spec, file, header_len, end)?
     {
         return Ok(scanned);
     }
-    // The chain walk may have filled `out` before deciding this file's chain
-    // does not describe it. The scan below starts from nothing.
-    out.clear();
-    // Sequence uniqueness is validated exactly once, inside
-    // `scan_records_range`, on the complete scanned entry list *before* any
-    // commit-boundary truncation; a truncated prefix of a duplicate-free list
-    // is still duplicate-free, so revalidating here would only repeat the
-    // N-element copy+sort on every open (PERF2-07).
-    scan_records_range(spec, file, header_len, header_len, None, intent, out)
-}
-
-/// Rebuilds the resident index from the internal segment chain, or reports
-/// that this file's chain does not describe it.
-///
-/// `Ok(None)` is the ordinary answer for a file the chain cannot account for:
-/// one written before segments were enabled, one whose writer appended past
-/// its last commit point, one truncated mid-record, one whose chain is stale.
-/// Every one of those is answered by the full scan, which is what open did
-/// before and is never an error.
-///
-/// **A resource refusal is one of them, and the first version of this got that
-/// backwards.** It propagated `LimitExceeded` and its siblings, reasoning that
-/// quietly doing more work is how a ceiling gets bypassed. Falling back
-/// bypasses nothing: the scan builds the identical index through the same
-/// `reserve_scanned_entry` and charges `Records`, `IndexBytes`, `ScanBytes` and
-/// `RecordPayloadLen` itself, so it either opens inside the limits or refuses
-/// honestly. Propagating cost two real failures. A writer never charges
-/// `Segments`, so past `max_segments` commit points it built a file its own
-/// reader refused while a scan read it perfectly — 65,537 flushes under
-/// `ReadLimits::UNTRUSTED`. And `read_segment_tip_offset` returns an
-/// *unconfirmed* offset, so the framing read charges `RecordPayloadLen` against
-/// whatever `payload_len` happens to sit there: four single-bit flips in the
-/// eight trailer bytes at `file_len - 40` turned a scannable file into a hard
-/// `LimitExceeded`.
-///
-/// Only a *spec-level* refusal still propagates: `MissingResourceLimit` and
-/// `TrustedUnboundedRequiresExplicitApi` are statements about the caller's
-/// configuration, not about these bytes, and the scan answers them the same
-/// way.
-fn load_index_from_segments(
-    spec: FormatSpec,
-    file: &mut File,
-    append_start: u64,
-    out: &mut Vec<RecordIndexEntry>,
-) -> Result<Option<ScannedIndex>> {
-    match walk_segment_chain(spec, file, append_start, out, file.metadata()?.len()) {
-        Ok(scanned) => Ok(Some(scanned)),
-        // Only a *spec-level* refusal propagates: the format declared no
-        // ceiling, or demanded the explicit unbounded API. Those describe the
-        // caller's configuration and are the same answer the scan would give.
-        Err(error @ Error::MissingResourceLimit { .. })
-        | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. }) => Err(error),
-        Err(_) => Ok(None),
-    }
+    out.reset();
+    scan_records_range_at_len(spec, file, header_len, header_len, None, intent, out, end)
 }
 
 /// Finds the newest segment record from the end of the file.
@@ -19788,6 +19102,13 @@ fn walk_segment_chain(
                 resource: "segment count",
             })?;
         spec.read_limits.check(ReadLimitKey::Segments, count)?;
+        // Link staging also consumes the scan buffer. Otherwise a long chain
+        // could grow without bound before the entry-array limit triggers the
+        // ordinary open's streaming fallback.
+        let link_count =
+            usize::try_from(count).map_err(|_| Error::LengthOverflow { value: count })?;
+        spec.read_limits
+            .check(ReadLimitKey::IndexBytes, index_bytes_for_count(link_count)?)?;
         links.try_reserve(1).map_err(|_| Error::AllocationFailed {
             resource: "segment chain",
             requested: count,
@@ -20052,20 +19373,21 @@ fn committed_prefix_len(entries: &[RecordIndexEntry]) -> Option<usize> {
 /// mark. The caller must then mark and re-commit it: a file that ends past its
 /// last marker is one the *next* marker would retroactively commit, and that is
 /// the whole reason this cannot simply skip the truncate and stop.
-fn truncate_uncommitted_tail_if_needed(
+fn truncate_uncommitted_tail_if_needed<B: ScanBuffer>(
     spec: FormatSpec,
     file: &mut File,
     header_len: u64,
-    entries: &[RecordIndexEntry],
+    entries: &B,
     previous_writer_crashed: bool,
 ) -> Result<Option<u64>> {
     if !spec.commit_policy.is_transaction_marker() {
         return Ok(None);
     }
-    let committed_end = match committed_prefix_len(entries) {
-        Some(len) => entries[len - 1].checked_physical_end()?,
-        None => header_len,
-    };
+    let committed_end = entries
+        .last_entry()?
+        .map(|entry| entry.checked_physical_end())
+        .transpose()?
+        .unwrap_or(header_len);
     if file.metadata()?.len() <= committed_end {
         return Ok(None);
     }
@@ -20175,6 +19497,13 @@ const INDEX_CHECKPOINT_PREFIX_LEN: u64 = 4 + 2 + 8 + 8;
 /// `count` sits at bytes 14..22, so the ceilings are decided by 22 bytes. The
 /// errors raised are the same ones from the same fields.
 fn check_index_checkpoint_limits(spec: FormatSpec, prefix: &[u8]) -> Result<()> {
+    check_index_checkpoint_limits_for(spec, prefix, true)
+}
+fn check_index_checkpoint_limits_for(
+    spec: FormatSpec,
+    prefix: &[u8],
+    materialize: bool,
+) -> Result<()> {
     let prefix_len = INDEX_CHECKPOINT_PREFIX_LEN as usize;
     if prefix.len() < prefix_len || &prefix[..4] != INDEX_CHECKPOINT_MAGIC {
         // Not a checkpoint this build understands. `decode_index_checkpoint`
@@ -20191,6 +19520,9 @@ fn check_index_checkpoint_limits(spec: FormatSpec, prefix: &[u8]) -> Result<()> 
     count.copy_from_slice(&prefix[14..22]);
     let count = u64::from_le_bytes(count);
     spec.read_limits.check(ReadLimitKey::Records, count)?;
+    if !materialize {
+        return Ok(());
+    }
     let count_usize = usize::try_from(count).map_err(|_| Error::LengthOverflow { value: count })?;
     spec.read_limits.check(
         ReadLimitKey::IndexBytes,
@@ -20387,41 +19719,20 @@ fn record_headers_match(left: &RecordIndexEntry, right: &RecordIndexEntry) -> bo
 /// other half of resuming: a read-only handle's snapshot ends at a commit
 /// point, so the tail past it stands or falls on a marker of its own exactly
 /// as it would in a scan of the whole file.
-fn scan_records_range(
-    spec: FormatSpec,
-    file: &mut File,
-    from: u64,
-    prefix_charge: u64,
-    resume_commit_end: Option<u64>,
-    intent: ScanIntent,
-    entries: &mut Vec<RecordIndexEntry>,
-) -> Result<ScannedIndex> {
-    let file_len = file.metadata()?.len();
-    scan_records_range_at_len(
-        spec,
-        file,
-        from,
-        prefix_charge,
-        resume_commit_end,
-        intent,
-        entries,
-        file_len,
-    )
-}
 #[allow(clippy::too_many_arguments)]
-fn scan_records_range_at_len(
+fn scan_records_range_at_len<B: ScanBuffer>(
     spec: FormatSpec,
     file: &mut File,
     from: u64,
     prefix_charge: u64,
     resume_commit_end: Option<u64>,
     intent: ScanIntent,
-    entries: &mut Vec<RecordIndexEntry>,
+    entries: &mut B,
     file_len: u64,
 ) -> Result<ScannedIndex> {
     let header_len = from;
     let mut offset = header_len;
-    entries.clear();
+    entries.reset();
     let mut scanned = ScannedIndex {
         sequence_high_water: None,
         sequence_high_water_at_commit: None,
@@ -20516,7 +19827,7 @@ fn scan_records_range_at_len(
         scanned.note(&entry, offset);
         let resident = record_is_resident(spec, entry.block_id);
         if resident {
-            reserve_scanned_entry(spec, entries)?;
+            entries.reserve_entry(spec)?;
         }
         if entry.block_id == INDEX_BLOCK_ID
             && (1..=INDEX_CHECKPOINT_VERSION).contains(&entry.block_version)
@@ -20526,32 +19837,16 @@ fn scan_records_range_at_len(
                 file_len,
                 INDEX_CHECKPOINT_PREFIX_LEN,
             )?;
-            check_index_checkpoint_limits(spec, &prefix)?;
+            entries.checkpoint_limits(spec, &prefix)?;
         }
         if entry.block_id == COMMIT_BLOCK_ID {
             latest_commit_end = Some(offset);
         }
         if resident {
-            entries.push(entry);
+            entries.push_entry(entry)?;
         }
     }
-    // Single sequence-uniqueness witness for the whole load path: `load_index`
-    // relies on this check and must not repeat it (PERF2-07). It runs on the
-    // full scanned list, so the commit-boundary truncation below can only
-    // shrink an already-validated set.
-    validate_unique_sequences(entries)?;
-    if spec.commit_policy.is_transaction_marker() {
-        let Some(committed) = committed_prefix_len(entries) else {
-            entries.clear();
-            scanned.commit_boundary_applied(&[])?;
-            return Ok(scanned);
-        };
-        entries.truncate(committed);
-        for entry in entries.iter_mut() {
-            entry.committed = true;
-        }
-        scanned.commit_boundary_applied(entries)?;
-    }
+    entries.finish(spec, &mut scanned)?;
     Ok(scanned)
 }
 

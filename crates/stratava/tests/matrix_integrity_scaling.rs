@@ -686,10 +686,7 @@ fn page_index_residency_returns_to_baseline_across_page_churn() -> stratava::Res
             "round {round} retained page-index entries for pages that are now empty"
         );
     }
-    assert!(
-        peaks[0] > 0,
-        "publishing eight distinct pages tracked no index entry at all"
-    );
+    assert_eq!(peaks[0], 0, "paged mirrors must not retain per-entry RAM");
     assert!(
         peaks.iter().all(|peak| *peak == peaks[0]),
         "page-index residency grew with historical churn: {peaks:?}"
@@ -762,10 +759,13 @@ fn category_clear_refunds_payload_and_page_index_residency_every_cycle() -> stra
             "round {round} committed cells without making a page resident \
              ({payload_peak} vs {payload_baseline})"
         );
-        assert!(
-            index_peak > index_baseline,
-            "round {round} published eight pages without tracking an index entry"
-        );
+        assert_eq!(index_peak, index_baseline, "paged mirror grew in RAM");
+        for ordinal in PAGE_ORDINALS {
+            assert_eq!(
+                writer.read_matrix_cell::<ScalingCell>(key(ordinal))?.value,
+                6
+            );
+        }
 
         assert_eq!(
             writer.clear_matrix_category(ScalingCell::CATEGORY)?,
@@ -2161,16 +2161,10 @@ fn open_reads_follow_live_pages_but_residency_does_not() -> stratava::Result<()>
         "an open materialised bitmap payload ({one_resident} -> {four_resident}); residency is \
          demand-filled and materialises none"
     );
-    // The term that remains, and must stay proportional to live state rather than
-    // to the file.
-    assert!(
-        four_index > one_index,
-        "the page-index mirror stopped tracking live pages ({one_index} -> {four_index}); it \
-         is what makes an unpublished page answerable without I/O"
-    );
-    assert!(
-        four_index <= 4 * one_index,
-        "the page-index mirror grew faster than the live set ({one_index} -> {four_index})"
+    assert_eq!(
+        (one_index, four_index),
+        (0, 0),
+        "paged mirrors retain no per-entry RAM"
     );
     Ok(())
 }

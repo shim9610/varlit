@@ -194,13 +194,9 @@ impl MatrixMetadataResidency {
     ///   resident ceiling is visibly a working-set bound rather than a
     ///   disguised whole-file load. It does not move when the file does: the
     ///   same 2 MiB bounds a 4 KiB matrix and a 4 TiB one.
-    /// * Large enough not to thrash. `ReadLimits::STANDARD` admits at most
-    ///   `max_matrix_cells` = 16,000,000 cells, whose commit map is
-    ///   16,000,000 / 8 = 1,953,125 bytes — 477 pages. 512 pages therefore
-    ///   holds the *entire* commit map of the largest matrix `STANDARD` will
-    ///   open, so no ordinary workload evicts a page it is about to need, and
-    ///   a matrix wide enough to evict is one whose owner raised
-    ///   `max_matrix_cells` deliberately.
+    ///
+    /// The cache covers the active pages, independently of declared matrix
+    /// dimensions. Wider matrices fault pages in and evict by recency.
     pub const DEFAULT_CACHE_BYTES: u64 = match ReadLimits::STANDARD.max_matrix_bitmap_bytes {
         ReadLimit::Finite(ceiling) => ceiling / 32,
         _ => 2 * 1024 * 1024,
@@ -238,22 +234,6 @@ const _: () = assert!(
     ),
     "MatrixMetadataResidency::DEFAULT must name a real policy"
 );
-
-/// The "large enough not to thrash" half of [`MatrixMetadataResidency::DEFAULT_CACHE_BYTES`],
-/// enforced rather than asserted in prose: raising `max_matrix_cells` or lowering
-/// `max_matrix_bitmap_bytes` in `STANDARD` breaks the build instead of silently
-/// turning the default cache into a thrashing one.
-const _: () = {
-    let cells = match ReadLimits::STANDARD.max_matrix_cells {
-        ReadLimit::Finite(cells) => cells,
-        _ => 0,
-    };
-    assert!(
-        MatrixMetadataResidency::DEFAULT_CACHE_BYTES * 8 >= cells,
-        "the default matrix metadata cache no longer holds the commit map of the \
-         largest matrix ReadLimits::STANDARD admits"
-    );
-};
 
 /// **When** a matrix's persisted commit metadata is authenticated as a whole.
 ///
@@ -559,12 +539,12 @@ impl ReadLimits {
         max_logical_payload_len: ReadLimit::Finite(256 * 1024 * 1024),
         max_materialized_bytes: ReadLimit::Finite(1024 * 1024 * 1024),
         max_segments: ReadLimit::Finite(u64::MAX),
-        max_matrix_dimension: ReadLimit::Finite(16_000_000),
-        max_matrix_cells: ReadLimit::Finite(16_000_000),
+        max_matrix_dimension: ReadLimit::Finite(u64::MAX),
+        max_matrix_cells: ReadLimit::Finite(u64::MAX),
         max_matrix_bitmap_bytes: ReadLimit::Finite(64 * 1024 * 1024),
-        max_matrix_crc_bytes: ReadLimit::Finite(128 * 1024 * 1024),
+        max_matrix_crc_bytes: ReadLimit::Finite(u64::MAX),
         max_matrix_metadata_bytes: ReadLimit::Finite(256 * 1024 * 1024),
-        max_matrix_slot_region_len: ReadLimit::Finite(8 * 1024 * 1024 * 1024),
+        max_matrix_slot_region_len: ReadLimit::Finite(u64::MAX),
         max_sidecar_len: ReadLimit::Finite(256 * 1024 * 1024),
         max_mmap_len: ReadLimit::Finite(8 * 1024 * 1024 * 1024),
         max_file_header_extension_len: ReadLimit::Finite(

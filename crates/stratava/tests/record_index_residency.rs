@@ -1,43 +1,9 @@
-//! An open handle must not keep a copy of every record's index entry.
-//!
-//! What a record's index entry holds — block id, version, flags, sequence,
-//! payload extent, checksum, footer chain — is already in the record's header
-//! and footer. Keeping it in memory is keeping a second copy of the file, and
-//! it is the copy that decides whether a TB-scale file opens: it tracks record
-//! count with no ceiling.
-//!
-//! The handle now keeps a **directory** instead: one 16-byte slot per record
-//! (its offset, and the writer's committed bit — the two facts that are *not*
-//! in the record), and it rebuilds the entry from the record's own bytes when
-//! something asks for it.
-//!
-//! The discriminator is the **slope across two record counts**, not a single
-//! number. A single measurement cannot separate "the entries are gone" from
-//! "the fixture got smaller"; two counts give the per-record cost directly, and
-//! that is the number the change is about.
-//!
-//! **Retained fell; peak rose.** Both are measured here, and the second is the
-//! part that is not finished. Open still materialises the scanned entries into
-//! a `Vec` and the directory adopts them from it, so while the adoption runs
-//! both are alive. Measured 2026-08-05 on Linux/ext4, 2,000 -> 20,000 records:
-//!
-//! | | before the store swap | after |
-//! | --- | --- | --- |
-//! | retained by the open handle | 213,108 -> 3,407,988 B (177.5 B/record) | 32,116 -> 320,116 B (**16.00 B/record**) |
-//! | peak during `open_readonly` | 213,192 -> 3,408,072 B (177.5 B/record) | 245,192 -> 3,728,072 B (193.5 B/record) |
-//!
-//! The retained figure is exact: 20,000 slots x 16 bytes = 320,000. The `177.5`
-//! before it is `size_of::<RecordIndexEntry>()` (104) inflated by the scan
-//! `Vec`'s doubling — 32,768 x 104 = 3,407,872 — which is also why peak and
-//! retained used to be the same number. Peak now is 3,407,872 + 320,000 to the
-//! byte: the scan's `Vec` plus the directory built from it.
-//!
-//! So this proves the *handle* no longer holds the entries. It does not prove
-//! open never materialises them, because open still does; making the scan emit
-//! slots directly is the remaining work, and the peak assertion below is a
-//! non-regression ceiling rather than a claim of improvement.
-//!
-//! Deliberately its own test binary: a process gets one `#[global_allocator]`.
+//! Ordinary native opens use bounded 16-byte directory rows and 77-byte scan
+//! staging rows, spilling independently when their working buffers fill.
+//! Measure retained and peak memory at two record counts. Small directories
+//! still scale within the chosen cache, while spilled opens must remain flat.
+//! Caller-owned scratch arrays retain their explicit owned-result semantics.
+//! Its own binary provides a thread-attributed counting allocator.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -163,6 +129,65 @@ fn open_cost(path: &Path) -> stratava::Result<(isize, isize)> {
 
 fn path_in(directory: &tempfile::TempDir, name: &str) -> PathBuf {
     directory.path().join(name)
+}
+
+#[test]
+fn spilled_open_peak_and_retained_memory_do_not_scale_with_record_count() -> stratava::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let spec = IndexResidencyFormat::spec()
+        .with_resource_limits(stratava::ReadLimits::STANDARD.with_max_index_bytes(4096));
+    let mut costs = Vec::new();
+    for count in [2_000, 20_000] {
+        let path = directory.path().join(format!("spill-{count}"));
+        build(&path, count)?;
+        drop(spec.open_readonly(&path)?);
+        let baseline = begin_window();
+        let reader = spec.open_readonly(&path)?;
+        let retained = LIVE_BYTES.with(Cell::get) - baseline;
+        let peak = PEAK_BYTES.with(Cell::get) - baseline;
+        costs.push((retained, peak));
+        assert_eq!(reader.scan().count(), count as usize);
+        assert!(retained < 16 * 1024, "retained {retained}");
+        assert!(peak < 64 * 1024, "peak {peak}");
+    }
+    eprintln!("paged open (retained, peak): {costs:?}");
+    assert!(costs[1].0 <= costs[0].0 + 4096);
+    assert!(costs[1].1 <= costs[0].1 + 8192);
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn segment_link_staging_obeys_the_buffer_before_falling_back() -> stratava::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("many-segment-links");
+    let spec = IndexResidencyFormat::spec()
+        .with_integrity_policy(stratava::IntegrityPolicy::Crc32)
+        .with_index_policy(
+            stratava::IndexPolicy::new(true, false, true, false).with_segment_on_flush(true),
+        );
+    {
+        let mut writer = spec.create(&path)?;
+        for value in 0..1000 {
+            writer.push(&Sample { value })?;
+            writer.flush()?;
+        }
+    }
+    let spec = spec.with_resource_limits(stratava::ReadLimits::STANDARD.with_max_index_bytes(4096));
+    drop(spec.open_readonly(&path)?);
+    let baseline = begin_window();
+    let reader = spec.open_readonly(&path)?;
+    let peak = PEAK_BYTES.with(Cell::get) - baseline;
+    assert!(peak < 64 * 1024, "segment links escaped the buffer: {peak}");
+    let mut count = 0;
+    for entry in reader.scan() {
+        let entry = entry?;
+        if entry.block_id == Sample::ID {
+            count += 1;
+        }
+    }
+    assert_eq!(count, 1000);
+    Ok(())
 }
 
 #[test]

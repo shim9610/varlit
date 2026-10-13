@@ -1022,14 +1022,19 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> stratav
 
     // Calibration: the allocator hook is wired and saw the merge.
     assert!(
-        peak > (KEYS * NAME_BYTES as u64) / 2,
-        "the counting allocator must observe the retained values: {peak}"
+        peak >= NAME_BYTES as u64,
+        "the counting allocator must observe at least one decoded value: {peak}"
     );
     assert!(
         peak > estimate.peak_resident_structural_bytes(),
         "the structural estimate is not an allocated upper bound for \
          heap-owning values: measured peak {peak} must exceed estimate {}",
         estimate.peak_resident_structural_bytes()
+    );
+
+    assert!(
+        peak < (KEYS * NAME_BYTES as u64) / 2,
+        "external merge retained the full value set: {peak}"
     );
 
     // The merge itself is unaffected by the accounting change.

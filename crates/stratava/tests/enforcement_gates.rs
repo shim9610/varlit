@@ -1017,6 +1017,7 @@ fn no_guard_consults_a_bare_boolean_field() {
 #[test]
 fn the_resident_record_index_cannot_be_grown_or_outrun() {
     let source = crate_source("file.rs");
+    let directory = crate_source("native_directory.rs");
     assert!(
         source.contains("    index: ResidentIndex,"),
         "`StratavaFile::index` must stay a `ResidentIndex`; a bare `Vec` field puts `push`, \
@@ -1024,35 +1025,35 @@ fn the_resident_record_index_cannot_be_grown_or_outrun() {
          lines, and the reservation token then binds nothing"
     );
     assert!(
-        source.contains("    pub struct ResidentIndex {\n        slots: Vec<IndexSlot>,"),
-        "the directory's `Vec` must stay the first private field of `ResidentIndex`"
+        directory.contains("pub struct ResidentIndex {\n    slots: SpillRows<16>,"),
+        "the bounded directory rows must stay private to ResidentIndex"
     );
     assert!(
-        source.contains("        retained: bool,\n    }"),
+        directory.contains("    retained: bool,\n}"),
         "`ResidentIndex` must keep the `retained` flag as its last field: \"no directory\" \
          and \"empty file\" are different answers and must not collapse into `slots.is_empty()`"
     );
     assert!(
-        !source.contains("impl DerefMut for ResidentIndex")
-            && !source.contains("fn slots_mut")
-            && !source.contains("fn entries_mut")
-            && !source.contains("-> &mut Vec<IndexSlot>")
-            && !source.contains("-> &mut Vec<RecordIndexEntry>"),
+        !directory.contains("impl DerefMut for ResidentIndex")
+            && !directory.contains("fn slots_mut")
+            && !directory.contains("fn entries_mut")
+            && !directory.contains("-> &mut SpillRows<16>")
+            && !directory.contains("-> &mut Vec<RecordIndexEntry>"),
         "`ResidentIndex` must not lend out its `Vec`: a `&mut Vec` is every growth operation \
          at once"
     );
     assert!(
-        !source.contains("Default)]\n    pub struct ResidentIndex"),
+        !directory.contains("Default)]\npub struct ResidentIndex"),
         "`ResidentIndex` must not be `Default`: `core::mem::take` on the field is the bypass \
          that re-verification compiled"
     );
     assert!(
-        source.contains("pub struct ReservedIndexSlot(());"),
+        directory.contains("pub struct ReservedIndexSlot(());"),
         "the reservation token's field must stay private, which is what \
          tests/ui/fail_fabricated_index_reservation.rs asserts"
     );
     assert_eq!(
-        source.matches("self.slots.push(").count(),
+        directory.matches("self.slots.push_reserved(").count(),
         1,
         "there must be exactly one growth of the record directory in the crate, and it must be \
          `ResidentIndex::install`, which consumes the token"

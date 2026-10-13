@@ -16,12 +16,12 @@ use crate::{
 /// deciding rule is what the loop keeps:
 ///
 /// - **Cumulative where the results are retained.** `all_metadata`,
-///   `blocks_migrated`, `materialized_keyed_blocks` and the merge/compact and
+///   `blocks_migrated`, `materialized_keyed_blocks` and
 ///   manifest decodes each build a `Vec`/`HashMap` of decoded values whose live
 ///   size really is the sum, so the sum is the thing to bound.
 /// - **Per record where each value is yielded and dropped.** `BlockVec::get`,
 ///   `KeyedBlockVec::get`, `StratavaFile::read_block_at` and
-///   `StreamingBlocks::next` have always worked this way: peak residency is one
+///   `StreamingBlocks::next` and external merge/compact use this rule: peak residency is one
 ///   payload, and charging the sum refuses a healthy file for reading too much
 ///   of it *over time* rather than at once.
 ///

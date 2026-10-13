@@ -1,133 +1,9 @@
 # Known Limitations
 
-The unreleased Stratava 0.12.0 removes Crossbeam from runtime dependencies. The matrix
-writer owns its pending page directory and lends it to internal bitmap reads.
-Distribution remains by Git/source. Archive verification is restored for all
-three Stratava packages, including package names, licenses and private-file
-exclusion. Registry publication remains a separate release step. CI also checks
-an independent Git consumer and rejects redb/Crossbeam runtime dependencies.
-The existing `v0.11.0` tag still uses the pinned Crossbeam sources; see the README
-installation notes.
-
-The full sanitizer run before 0.11.0 passed ASan/leak detection and fuzz smoke.
-The 0.11.0 ownership refactor passed targeted ASan/leak and Miri checks. Full
-Miri stopped in `atomic_replace_invokes_parent_directory_sync` because its
-interpreter does not support directory `fsync`; it did not complete the suite.
-Native index/matrix Miri regression checks passed separately. The 2026-10-12
-scheduled run on 0.11.0 also passed ASan/leak detection and fuzz smoke; Miri
-failed, and that run's failure has not yet been classified here. These results
-predate the unreleased Crossbeam removal. The matrix map-clear workaround is no
-longer needed by the current writer-owned directory.
-
-Status as of 0.11.0. Historical numbers measured 2026-07-22, re-measured 2026-07-25, and
-re-measured again on 2026-07-26 against the residency/verification split described
-below; every entry was checked against the code in this repository. Where an earlier
-document and the code disagreed, the code won and the document was corrected.
-
-**Corrections made for 0.5.0**, listed first because a reader of the 0.4.0 version
-of this file — or of an earlier 0.5.0 draft of it — was told several things that are
-no longer true:
-
-- **Matrix commit metadata is now demand-filled by default, and §1.2 and §1.3 used
-  to say the opposite.** `MatrixMetadataResidency::EagerVerified` was **removed**
-  and `DEFAULT` is `Lazy { DEFAULT_CACHE_BYTES }`. An undeclared open therefore
-  retains **no** commit-map payload (measured 0 bytes at 1 and at 64 live pages,
-  where it was 4,096 and 262,144), residency afterwards tracks the working set
-  exactly with LRU eviction at the declared bound, and
-  `max_matrix_bitmap_bytes` bounds a **cache** rather than admitting a whole live
-  set. The failure §1.3 used to describe — a matrix whose committed state exceeds
-  that ceiling **cannot be opened at all** — is fixed, and both directions of the
-  cure are pinned by tests so the section cannot silently go stale again.
-- **§1.4 no longer describes a defect, because the defect was fixed rather than
-  re-explained.** The 0.5.0 draft of this file said `Lazy` was "opt-in rather than
-  the default", called that a known defect, and stated that what blocked the flip
-  was a lazy open contributing no commit-map findings to `MatrixRecoveryReport`.
-  Both statements are now false. Residency and *verification* were one option and
-  are now two: `MatrixMetadataVerification` decides whether pages are
-  authenticated at open, defaults to `AtOpen`, and produces the whole report
-  independently of how much stays in memory. Nothing blocks the residency default;
-  it is `Lazy`.
-- **§1.1's subject changed from residency to I/O.** Open still is not `O(1)`, but
-  the reason is now that opening a matrix *verifies* it. The old ~131 KB / 32-page
-  figure for a 1-live-page matrix is superseded by **69,800 bytes over 17 pages**
-  under the verifying default and **32 bytes over 0 pages** with verification
-  declared off. Do not size resident metadata from either figure: the verification
-  pass retains one reusable 4,096-byte buffer and nothing else.
-- **The residual is stated where the improvement is claimed.** Open still reads the
-  persisted page index in full — 8 bytes per live page — and mirrors it resident at
-  ~96 bytes per live page, so open remains `O(live pages)` and that mirror is now
-  the only term that can refuse an open on `max_matrix_bitmap_bytes` (§1.2, §1.3).
-- **§1.6 described a bug that is now fixed.** Through 0.4.0,
-  `*_with_resource_limits` silently discarded a spec-declared
-  `matrix_metadata_residency`. It composes correctly as of 0.5.0, and
-  `matrix_metadata_verification` composes identically. The section is retitled
-  around what remains a limitation — there is still no `stratava_format!` DSL key for
-  either policy — and the fixed behaviour is recorded there as history. **Any
-  workaround written against the old §1.6 is now unnecessary.**
-- **§1.4 gained the per-bitmap correction:** `cache_bytes` bounds each bitmap, not
-  each reader, so a format with `n` demand-loaded maps bounds itself at
-  `n * cache_bytes`. 0.4.0's rustdoc claimed otherwise. Behaviour unchanged since
-  0.4.0; only the claim was wrong. It is carried in §1.2 now.
-- **Matrix readers now capture a confirmed generation.** This supersedes the
-  first-touch behavior described in the 0.5.0 historical notes; see §4.2.
-
-
-The 2026-07-25 corrections below are kept as the record of the previous pass. Two
-of them have themselves been superseded by the split above: residency is no longer
-"refunded when a mutation clears a page's last bit" as the *only* release path
-(read-driven LRU eviction is the primary one now, and the mutation refund coexists
-with it), and the "open reads every candidate page but retains only pages holding a
-set bit" correction now understates the change — an open retains nothing at all.
-
-Corrections made on 2026-07-25, listed because a reader who saw the earlier
-version was told six things that were wrong: open **reads** every candidate page
-but retains only pages holding a set bit (§1.1), residency *is* refunded when a
-mutation clears a page's last bit (§1.2), the page-index term is 96 bytes per live
-page rather than 48 (§1.3), `IndexPolicy::CheckpointOnFlush` does **not** let
-an open start from a checkpoint (§2.1 — that was the only mitigation previously
-offered for resident open cost, and it does not exist), the `max_matrix_crc_bytes`
-resource string is `"matrix checksum bytes"` rather than `"matrix CRC bytes"`
-(§1.5), and `matrix_cell_status` was **not** relaxed to `&self` by this release —
-it was already `&self` in 0.3.0, so three matrix read entry points changed
-receiver, not four (§4.1). Five things were missing
-entirely and are now §1.5 (the default 16,000,000-cell ceiling), §1.6 (a residency
-policy silently discarded by `*_with_resource_limits`), §1.7 (hole-punch
-dependence), §2.4 (uncommitted-tail truncation) and §6.7/§6.8 (no old artifact is
-tested; platform support).
-
-Also corrected on 2026-07-25, because the citations in this file changed shape:
-the project's internal working documents — the adversarial review reports, the
-contributor invariant checklist, the architecture, performance, requirements and
-design notes, the fuzz/fault-injection and test-hygiene records, the
-channel-selective-access design study, and the routing/draft/validation artifacts
-of the hardening rounds — have been moved out of `docs/` and are not published, so
-this file no longer cites them. Every such citation was replaced by the substance
-it was citing: the platform cost model in §1.7 is now stated in place rather than
-pointed at, §5.1 states what the channel-access study establishes instead of
-naming its files, and §6.4 carries the fuzz evidence dates and target counts
-directly. **No limitation, measured number or caveat was removed in that
-pass; only the pointers changed.** Where an entry below still says "open item
-N", that is the internal checklist's tracking number, kept so that this file and
-the changelog refer to the same item by the same number — the item's substance is
-stated here in full, and nothing in this document depends on being able to read
-that checklist.
-
-This file is organised by what a **user** runs into, not by internal structure.
-Each entry states what it is, who it affects, the workaround if one exists, and
-whether it is planned work.
-
-Companion documents:
-
-- [API Changes](api-changes.md) — what to edit when upgrading, and what happens
-  to files written by an older version.
-- [Changelog](../CHANGELOG.md) — the release entry.
-
-The consciously accepted *internal* items — the ones a downstream crate cannot
-express, previously listed in a separate contributor checklist — are carried in
-§9 of this file; the ones a user can actually reach are in §1-§8 with everything
-else.
-
----
+This describes the unreleased 0.12.0 implementation. Historical measurements
+below identify their original platform and are not new performance claims.
+Private spill files bound retained directories; they do not remove initial
+scans, temporary disk requirements, per-record workspace or filesystem limits.
 
 ## 1. Matrix: opening a matrix is not O(1), because opening it verifies it
 
@@ -246,99 +122,33 @@ not published" guarantee behind an I/O, since that guarantee rests on the index
 being complete in memory. It is a different structure, not a tuning change
 (open item 30).
 
-### 1.2 What residency still costs: the page-index mirror, and a per-bitmap cache bound
+<a id="12-what-residency-still-costs-the-page-index-mirror-and-a-per-bitmap-cache-bound"></a>
 
-> **This section used to say the opposite.** Through 0.5.0-dev residency was fixed
-> at open by the live page count, reading released nothing, and
-> `max_matrix_bitmap_bytes` could not cap a cache. That was the `EagerVerified`
-> policy, which was removed — see
-> [API Changes §A.3](api-changes.md#a3-matrixmetadataresidencyeagerverified-is-removed-and-default-is-now-lazy).
+### 1.2 Bitmap directories use private temporary storage
 
-**What it is.** Commit-map payload residency now tracks the working set exactly:
-zero after open, one 4096-byte page per distinct commit-map page addressed,
-evicted least-recently-used at the declared bound. Measured at 16 live pages:
-`after_open = 0`, after touching 1 page `4,096`, after touching 4 pages `16,384`;
-and at 64 live pages under the derived 2 MiB default, `262,144` — 12.5% of the
-bound, so nothing was evicted.
+Open still enumerates the persisted page index, but its slot-to-page and
+page-to-first-slot mirrors use an owner-local temporary COW tree. Only fixed
+roots and a recent-lookup hint are retained; there is no whole live-set RAM map.
+Follow stages changed slots in a private root and changed-page lists in bounded
+spill buffers. Adoption is infallible after preparation; corruption or scratch
+I/O failure preserves the previously held generation. No reader/writer mutex
+or process-wide cache is involved.
 
-Three costs remain, and they are the honest content of this section:
+This adds scratch-file I/O and disk usage. Open is still proportional to index
+entries, and aggregate queries still visit relevant pages. The scratch tree has
+fixed page/framing workspace even with a zero cache setting. This release has
+not established large-scale throughput for these new scratch paths.
 
-1. **The persisted page-index mirror is `O(live pages)` and is not evictable.**
-   Roughly **96 bytes per live commit-map page** with checksums on: 48 in the
-   commit map's index and 48 in the CRC-validity map's
-   (`PAGE_INDEX_SLOT_RESIDENT_BYTES` 16 + `PAGE_INDEX_MAP_RESIDENT_BYTES` 32).
-   Measured `matrix_resident_page_index_bytes()`: **96 bytes at 1 live page**,
-   **384 at 4**, **1,536 at 16**. This is what makes "this page was never
-   published" answerable without I/O, so it cannot be dropped without changing
-   what a read may conclude from an absent page (§1.4, consequence 2).
-2. **`cache_bytes` is a per-bitmap bound, not a per-reader one.** Each commit
-   category and each block validity map owns a cache of its own, so a format with
-   `n` demand-loaded maps bounds itself at `n * cache_bytes`. The bound is still
-   independent of the file's size. 0.4.0's rustdoc claimed "at most `cache_bytes`
-   ... for the session", which was wrong; 0.5.0 corrected the wording rather than
-   the behaviour. Whether the bound should instead be shared across a reader's
-   bitmaps is open.
-3. **Eviction is read-driven now, but a mutation still refunds eagerly.** When a
-   mutation clears a page's last set bit that page is released and its bytes are
-   refunded (`release_resident_bitmap` / `settle_page_delta`; PERF-02, asserted
-   over four set/clear cycles in
-   `crates/stratava/tests/matrix_integrity_scaling.rs`). The two mechanisms coexist
-   and neither can be turned off.
+<a id="13-max_matrix_bitmap_bytes-bounds-a-cache-and-the-residual-admission-limit-is-the-index-mirror"></a>
 
-**Who it affects.** Anyone whose live page count is large relative to their
-process memory budget — one million live pages is ~96 MB of index mirror before
-any payload — and anyone sizing `max_matrix_bitmap_bytes` from the payload alone.
+### 1.3 Bitmap limits control the working set
 
-**Planned.** The index mirror is open item 30; see §1.1's "Planned".
-
-### 1.3 `max_matrix_bitmap_bytes` bounds a cache, and the residual admission limit is the index mirror
-
-> **This section used to describe an unopenable matrix.** Under the removed
-> `EagerVerified` policy the ceiling was an admission limit on a matrix's whole
-> live set, so a matrix whose committed state exceeded the configured ceiling
-> **could not be opened at all**. That is fixed: the ceiling bounds the demand
-> cache, and a live set wider than it opens and is served.
-> `matrix_lazy_residency.rs::a_live_set_over_the_bitmap_ceiling_opens_under_the_derived_default_cache`
-> and `matrix_integrity_scaling.rs::measured_resident_bitmap_bytes_against_the_ceiling`
-> assert the cure, so this section cannot silently go stale in either direction.
-
-**What it is.** `max_matrix_bitmap_bytes` binds in three places, and only the
-third can still refuse an open:
-
-1. **The derived default cache** is `MatrixMetadataResidency::DEFAULT_CACHE_BYTES`
-   (2 MiB) **clamped down** to this ceiling, with a one-page floor
-   (`ReadLimits::default_matrix_metadata_cache_bytes`). A tightened ceiling
-   therefore means a smaller cache, never a failed open.
-2. **A declared `cache_bytes` above the ceiling is refused**, because a cache
-   larger than a declared memory ceiling would be a way to raise it. The asymmetry
-   with (1) is deliberate: a caller's own contradiction is theirs to resolve, and a
-   default is never the reason an open fails.
-3. **The page-index mirror is charged against it as the index is enumerated.**
-   That is the one term an open still makes resident, so a ceiling below
-   `~96 bytes * live_pages` refuses the open with
-   `Error::LimitExceeded { resource: "matrix bitmap bytes", .. }`. At the 64 MiB
-   `STANDARD` default that is roughly 700,000 live pages; a caller who tightens
-   the ceiling to bound the *cache* should keep the mirror in mind.
-
-**Arithmetic you can apply to your own matrix**, for one category, with
-`IntegrityPolicy::Crc32`:
-
-```text
-cells_per_page = 32,768
-live_pages     = number of distinct 32,768-cell windows containing >= 1 committed cell
-resident_bytes ~=   96 * live_pages          # page-index mirror, in *two* bitmaps
-                + min(cache_bytes, 4,096 * pages_actually_touched)
-```
-
-With checksums off there is no validity bitmap, so the mirror term halves to about
-48 bytes per live page.
-
-**Who it affects.** Anyone with a very large live page count under a tightened
-ceiling. The failure mode this section used to carry — a scattered matrix with a
-few thousand committed cells becoming unopenable — is gone.
-
-**Planned.** No change to the admission semantics of the mirror. Removing it means
-making the page index searchable on disk (open item 30, §1.1).
+`max_matrix_bitmap_bytes` still limits admitted writer bitmap pages and clamps
+reader caches. A reader can open and follow when the complete persisted index
+exceeds that limit. A single writer operation still needs its working page(s);
+zero or undersized budgets may reject that operation. Cache bounds are per
+bitmap, so schema bitmap count also affects total memory. Allocator overhead and
+fixed tree/framing scratch are additional; these are not whole-process RSS caps.
 
 ### 1.4 `Lazy` is the default; verification is what still happens at open
 
@@ -398,7 +208,7 @@ every page an aggregate count reads.
 **What the default does not fix.** Open still reads the **persisted page index in
 full**. That is 8 bytes per live page — 512x smaller than a page — but still
 `O(live pages)`, not `O(1)`. At one million live pages that is 8 MB read and
-~96 MB of resident mirror (§1.2) before a single cell is addressed.
+temporary-index construction (§1.2) before a single cell is addressed.
 
 **Three consequences of demand residency that are part of the declaration, not
 defects:**
@@ -414,68 +224,20 @@ defects:**
 3. **Cache residency does not decide visibility.** Every fault reads the captured
    generation, including after eviction; `follow()` explicitly adopts a new one.
 
-### 1.5 The default limits cap a matrix at 16,000,000 cells — create fails above it
+<a id="15-the-default-limits-cap-a-matrix-at-16000000-cells--create-fails-above-it"></a>
 
-**What it is.** This is the first thing a multi-GB-matrix workload hits, and it
-hits it at *create*, before any of the open-cost discussion above applies.
+### 1.5 Default matrix admission is separate from memory budgets
 
-`ReadLimits::STANDARD` — the profile an ordinary `create`/`open` resolves to when
-a format declares no `limits { }` block — sets:
+`ReadLimits::STANDARD` no longer imposes the former 16,000,000 dimension/cell,
+128 MiB checksum-extent or 8 GiB slot-region caps. Their default is `u64::MAX`;
+checked shape products, offsets, format representability and filesystem limits
+still apply. Explicit `with_max_matrix_cells`, dimension, checksum or region
+limits remain admission policies. Descriptor-memory, bitmap-cache, generation
+cache and pending-buffer limits remain finite.
 
-| Limit | Default | Resource string in the error |
-| --- | --- | --- |
-| `max_matrix_cells` | **16,000,000** | `"matrix cells"` |
-| `max_matrix_dimension` | **16,000,000** | `"matrix dimension"` |
-| `max_matrix_slot_region_len` | 8 GiB | `"matrix slot region length"` |
-| `max_matrix_bitmap_bytes` | 64 MiB | `"matrix bitmap bytes"` (§1.3) |
-| `max_matrix_crc_bytes` | 128 MiB | `"matrix checksum bytes"` |
-| `max_matrix_metadata_bytes` | 256 MiB | `"matrix metadata bytes"` |
-
-A 4096 x 4096 matrix (16,777,216 cells) is therefore **refused by default** with
-`Error::LimitExceeded { resource: "matrix cells", .. }`.
-
-**The cell count is checked twice: per matrix block, and as a running aggregate
-across every matrix block in the format.** A format with four 5,000,000-cell
-matrix blocks fails on the aggregate even though no single block exceeds the
-ceiling. Splitting one large matrix into several smaller ones does not evade the
-limit.
-
-`max_matrix_slot_region_len` is the second ceiling, and it aggregates the same
-way: it binds on the **sum** of `cells * slot_stride` over every matrix block.
-At the 8 GiB default a single 16,000,000-cell block is capped at a 536-byte slot
-stride, and two such blocks at 268 bytes each.
-
-**Who it affects.** Everyone declaring a matrix larger than about 4000 x 4000,
-which is most of the workloads a preallocated matrix is attractive for. The
-limits are runtime policy rather than a wire-format ceiling, so the file itself
-imposes nothing.
-
-**Workaround.** Raise them explicitly. They are not a safety property of the
-format — `UNTRUSTED` inherits the same matrix values — so raising them for data
-you produced is the intended use:
-
-```rust
-// per handle
-let limits = ReadLimits::STANDARD
-    .with_max_matrix_cells(4_000_000_000)
-    .with_max_matrix_dimension(2_000_000);
-let writer = AppFormat::create_writer_with_resource_limits(path, limits)?;
-```
-
-or as a format default in the declaration:
-
-```text
-limits {
-    matrix_cells: 4_000_000_000;
-    matrix_dimension: 2_000_000;
-}
-```
-
-See §1.6 for how a spec-declared residency policy composes with the
-`*_with_resource_limits` form.
-
-**Planned.** No change. A default that admits an unbounded declared extent is not
-wanted; the defaults are documented here instead.
+A large declared extent is economical only where the filesystem supports sparse
+allocation. Sparse-file tests are not evidence of physical multi-gigabyte I/O
+throughput. Growing dimensions still require an explicit chunk declaration.
 
 ### 1.6 The matrix residency and verification policies have no `stratava_format!` DSL key
 
@@ -638,10 +400,8 @@ Three things still bound it, and only the second is likely to stop you:
 - The table above is **ext4, with holes**. On a filesystem that does not give
   you them, `set_len` allocates the whole declared extent — see the precondition
   in §1.1. That turns row four from 40 KB into 105 GB.
-- `max_matrix_cells` defaults to **16,000,000**, checked per block *and*
-  aggregated across blocks (§1.5). Every row above the second needs an explicit
-  raise; the table was produced with the ceilings lifted. This is the gate you
-  will actually hit, and it refuses at create rather than costing anything.
+- Explicit dimension/cell/file caps are checked before creation. The old default
+  16,000,000-cell gate is removed in 0.12.0 (§1.5).
 - The allocation-map term in §1.1 and the scatter arithmetic in §1.3 both
   respond to a larger declared extent.
 
@@ -659,286 +419,27 @@ rather than always on.
 
 ---
 
-## 2. Resident APIs: open scans the file, and merge/compact is not petabyte-scale
+## 2. Native APIs: bounded memory does not remove scan and scratch I/O
 
-### 2.1 `StratavaFile` scans the whole file at open and holds a record index
+<a id="21-stratavafile-scans-the-whole-file-at-open-and-holds-a-record-index"></a>
 
-**What it is.** The resident family — `StratavaFile`, `StratavaReader`, `StratavaWriter`,
-the generated typed readers and writers, and the keyed collections — builds a
-**resident record index at open**. Cost is `Theta(records + decoded bytes)` plus
-an `O(N log N)` per-open sequence-uniqueness sort over `N` records. (For a file a
-Stratava writer produced, the sort degrades to `Theta(N)`; `O(N log N)` is the
-guaranteed bound for a reordered or hostile input.) The whole index stays in
-memory for the life of the handle.
+### 2.1 Native open can still scan the input
 
-**One policy changes that, and it changes the walk rather than the residency.**
-`IndexPolicy::segment_on_flush` makes each commit point append an internal
-*segment* record covering the records that commit point added, chained to the
-previous segment through the record footer's `prev_same_block_offset`. Open
-confirms a record footer at the end of the file and walks that chain backwards,
-so it frames one record per commit point and reads no data record.
+Ordinary `StratavaFile`, reader and writer opens now keep a bounded directory
+buffer and spill excess entries into private temporary storage. Scan/follow
+staging uses the same strategy. `max_index_bytes` controls a buffer (capped at
+2 MiB), not the total number of file records. Fixed row/page scratch is additional.
+Explicit caller-owned directory/collection APIs still enforce their result size.
 
-**Measured**, on one Linux host, `rustc 1.95` release build, 4 KiB payloads, a
-flush every 256 records **and a final flush**, page cache dropped between the
-write and the open:
+This removes whole-directory RAM growth, **not scanning work**. A format without
+usable segment/digest metadata can still frame every record at open. Segment
+chains larger than the scan buffer currently fall back to bounded record framing.
+Reordered sequences use a temporary uniqueness index. Temp-space exhaustion and
+I/O errors can fail open/follow; a failed follow retains the old snapshot.
+Use stream/indexed or declared digest routes when bounded open I/O is required.
 
-| records | file | open, scanning | open, chained | records the open framed |
-| --- | --- | --- | --- | --- |
-| 50,000 | 213 MB | 1,272 ms | **60 ms** | 196 |
-| 100,000 | 426 MB | 2,930 ms | **149 ms** | 391 |
-| 150,000 | 639 MB | 5,005 ms | **172 ms** | 586 |
-| 200,000 | 852 MB | 5,867 ms | **370 ms** | 782 |
-
-The framed-record count is the load-bearing column: it is exactly the number of
-segment records, so the open read no data record at any size. The wall-clock
-ratio is 16x-29x here, but this host's scan timings vary by about 2x run to
-run — read it as an order of magnitude, not a factor. Nothing above was measured
-on Windows, and nothing above was measured beyond 200,000 records.
-
-What it does **not** change is the residency below: the index it produces is the
-same one a scan produces, so the 16-byte directory slot per record is still what
-a handle holds for the blocks that are in it. What it costs instead is **disk** —
-a segment carries an index entry per record it covers, so the file grows with
-the record count. Measured on a 31 MB, 50,000-record file with a commit point
-every 500 records: **+3.67 MB**.
-
-**`BlockResidencyDescriptor` is the mechanism that reduces that**, per block. A
-block declared `resident: false` is written, sequenced, chained and recovered
-exactly as before and is not mirrored in memory, so `16 * records` counts only
-the blocks you kept. It requires `block_offset_chain`, and it gives up
-`blocks::<T>()` (a typed `Error::BlockNotResident`, not an empty collection),
-replacement, and whole-generation rewrite for the whole format. Reach the block
-through `StratavaFile::block_chain(block_id)`, which walks its records newest-first
-by positional reads, and `read_block_at::<T>(offset)`, which decodes one. Both
-take `&self` and materialise one entry at a time, so the walk costs the working
-set rather than the record count.
-
-It is opt-in, off by default, and a file written with it off is byte-identical
-to one written before the option existed. Enabling it costs:
-
-- a segment record per commit point, holding 73 bytes per record it covers —
-  measure this against your flush cadence, since a flush per record roughly
-  triples the bytes written;
-- `block_offset_chain`, which the chain *is*, so every record carries a 32-byte
-  footer;
-- a `crc32` integrity policy. A scan reads each record's own header, so damage
-  is local; a segment payload describes many records, so without a checksum on
-  it damage would misindex records whose own bytes are intact;
-- `checkpoint_on_flush`, which it supersedes — declaring both is refused with
-  `Error::InvalidFormatSpec`. The chain answers the same question incrementally,
-  is the thing open actually reads, and has no entry ceiling;
-- in-place fixed replacement (`replace_fixed`,
-  `replace_fixed_in_place_exclusive`), which is refused with
-  `Error::InvalidFormatSpec`. It restamps a record a segment already describes.
-  What that refuses is the route, not the capability: `replace_block` publishes
-  a whole new generation and re-encodes every segment payload against the new
-  offsets, so it still works — and since a segment format also declares
-  `block_offset_chain`, that is the route `replace` picks anyway.
-
-The chain is derived, so anything it cannot account for falls back to the full
-scan and produces the identical index — never an error. That covers a file
-written before the option was enabled, a writer that appended past its last
-commit point, a truncated or corrupt tail, and a broken chain link. Two opens
-never take it at all: `open_recover`, whose contract is to verify every record
-and truncate on the mismatch, and any open under
-`IntegrityVerification::AtOpen`, which asks for the same verification.
-
-> **The last write before you stop must be a commit point, or you get none of
-> this.** Open starts the chain from the record at the end of the file. A writer
-> that pushes records and then drops without a final `flush` (or `commit`)
-> leaves a *data* record there, so there is no chain to start from and the open
-> scans the whole file. This is the fallback working as designed, and that is
-> exactly what makes it dangerous: it is silent, it costs the entire benefit,
-> and it needs only a loop whose record count is not a multiple of the flush
-> interval. In the table above, the same 50,000-record file opens in 60 ms with
-> a final flush and 1,272 ms without one — the measurement that produced this
-> warning was a benchmark of ours that omitted it and appeared to show the
-> feature doing nothing. End a writing session with `flush`, and check that a
-> loop like `if i % 256 == 255 { flush() }` is followed by one.
-
-**A second policy changes the walk, and this one does not build an index at
-all.** `IndexPolicy::open_digest_on_flush` makes each commit point append an
-internal *open digest* record carrying the only three facts an open needs that
-live in no single record: where the committed file ends, what sequence the next
-append takes, and where each block's newest record sits. `open_readonly_lazy`
-reads it and frames **one record**.
-
-Measured, 50,000 records / 31 MB, same host:
-
-| open | read syscalls | bytes read | file overhead |
-| --- | --- | --- | --- |
-| `open_readonly` (scan) | 100,316 | 3,207,102 | — |
-| `open_readonly` (segment chain) | 516 | 7,332,522 | +3.67 MB |
-| `open_readonly_lazy` (digest) | **20** | **516** | **+12.8 KB** |
-
-The last column is the difference between the two tail records, and it is the
-whole reason both exist. A segment writes an entry per record it covers, so its
-overhead tracks the record count; a digest writes 12 bytes per *distinct block
-id*, so it is constant. Measured directly: the same format at 200 and at 2,000
-records carries a digest of exactly the same 128 bytes. What a segment buys for
-its size is an open that *builds the index*, which a digest deliberately does
-not.
-
-The handle a digest open returns keeps **no directory**, because none was built.
-`blocks`, `scan` and `keyed_blocks` return `Error::NoResidentDirectory` and are
-answered through `with_directory`; `block_chain`, `block_tail_offset`,
-`read_block_at` and every entry-taking `_into` read need no directory and work
-directly. The index the caller actually wants is built with `record_map`, which
-walks forward only as far as the question — measured, finding the first record
-of a block in that same 50,000-record file: **13 read syscalls**.
-
-Like the chain, the digest is derived: anything it cannot account for falls back
-to the full scan and produces the identical answer. Unlike the chain, the
-fallback is *reportable* — `open_readonly_lazy_with_report` returns
-`LazyOpenSource::{Digest, FullScan}`, because four orders of magnitude is not
-something a caller should have to infer from a stopwatch.
-
-It requires `block_offset_chain` and composes with `segment_on_flush` and
-`checkpoint_on_flush` alike; the three answer different questions.
-
-It also refuses in-place fixed replacement (`replace_fixed`,
-`replace_fixed_in_place_exclusive`) with `Error::InvalidFormatSpec`, for a
-reason worth stating because it is not the segment's. A segment is refused
-because the replacement restamps a record it already describes by offset. The
-digest is refused because of the *sequence* it records: an in-place replacement
-takes a fresh sequence and rewrites no derived record, so the digest's mark is
-left one below the file's true maximum — and a lazy open trusts that mark
-instead of recounting, seeding its writer onto a number some record already
-used. The next scanning open then refuses the file with
-`InvalidCanonicalEncoding("duplicate native record sequence")`, so the failure
-is a file that stops opening rather than a stale index. As with the segment,
-what is refused is the route and not the capability: a digest format also
-declares `block_offset_chain`, so `replace` picks `replace_block`, which
-republishes and rebuilds the digest.
-
-`index: header_tails`, which answers the same three facts from the file header,
-is not refused. Its region has a defined cold state — framed, checksummed,
-claiming nothing — so an in-place replacement resets it rather than being turned
-away. A digest has no such state: it is a record, trusted or absent. The cost of
-the reset is one scanning open, after which the next commit warms the region
-again.
-
-**Otherwise every open scans the whole record region.** This correction matters
-because the previous version of this document offered a mitigation that does not
-exist:
-
-- `IndexPolicy::CheckpointOnFlush` does **not** seed an open from a checkpoint.
-  Every open path calls `load_index`, which calls `scan_records_range` for any
-  format without the segment chain, and that walks from `header_len` to the end
-  of the file unconditionally. A checkpoint met during that walk is *validated*
-  (`inspect_index_checkpoint`) and its decoded entries are discarded. There is no public checkpoint-seeded open. What the policy actually
-  bounds is the writer side: it spaces full index checkpoints geometrically, which
-  bounds cumulative checkpoint **bytes written**, not open cost.
-  `docs/spec.md` describes the checkpoint-seeded open as a design target; it is
-  not implemented.
-- The `scan_on_open` flag is **not a behaviour switch** either: it is folded into
-  the schema manifest and hash bytes and is consulted nowhere else in
-  `stratava-core`. Clearing it does not produce a non-scanning open.
-
-**How much RAM an open takes, so you can answer this before running it.** An
-open handle keeps a **record directory**: one 16-byte slot per record — the
-record's offset and its committed bit, the two facts that are not in the record
-itself. Everything else an index entry carries is rebuilt from the record's own
-header and footer when a read asks for it.
-
-```text
-resident_directory_bytes ~= 16 * records
-```
-
-So 10,000,000 records is about 160 MB, and 400,000,000 records about 6.4 GB.
-
-This used to be `104 * records` — a full `Vec<RecordIndexEntry>` — which is
-where the figures in older copies of this document come from. Measured across
-2,000 → 20,000 records: **177.5 bytes per record retained before, 16.00 after.**
-
-**Three ways to pay for it, and you choose:**
-
-| | who holds the directory | per-record cost to the handle |
-| --- | --- | --- |
-| `open_readonly` / `open` | stratava | 16 B |
-| `open_readonly_without_directory(spec, path, &mut index)` | you, in full | **0** |
-| `open_readonly_lazy` + `record_map` (needs `open_digest_on_flush`) | you, only the part you walked | **0** |
-| `StratavaStreamReader` | nobody — sequential walk only | 0 |
-
-The middle row is not a reduction in capability. `blocks`, `scan`,
-`keyed_blocks`, `metadata`, `verify_all` and the rest all still work — through
-`file.with_directory(&index)?`, where `index` is the `Vec<RecordIndexEntry>` that
-same call handed you. Calling one of them on the handle itself returns
-`Error::NoResidentDirectory { operation }`, naming both the read and the way to
-answer it; it does **not** answer as an empty file would, which would be
-indistinguishable from the truth for a caller who forgot.
-
-Measured: opening a 20,000-record file allocates **320,218 bytes with a
-directory and 218 without** — the 320,000-byte slot array is not built, not
-built-and-freed.
-
-**A directory belongs to the generation it was built from.** `with_directory`
-reads at the offsets it is handed, and until it was made fallible nothing bound
-those offsets to a *file*. The replacement paths publish by renaming a new file
-over the pathname, so this sequence — build a directory, let a `replace_*` run,
-`reopen_readonly`, read through the directory you already had — pointed the
-reads at byte ranges where the records had moved. Measured on an
-`integrity: none` format: eight `Reading` values came back with no error at all,
-one of them a slice of the replacement's text reinterpreted as a `u64` and seven
-of them zero.
-
-`with_directory` now returns `Result` and re-frames the directory's first and
-last entries against the file, refusing with
-`Error::DirectoryDoesNotDescribeThisFile` when the record header at an offset is
-not the record the entry claims. Two record headers, once per `with_directory`
-rather than per read.
-
-Be exact about what that is: a **disagreement detector, not an authenticator**.
-A directory wrong only in the middle passes, and a caller who fabricates
-entries that frame correctly is not stopped. A supplied directory is still a
-trusted input — the check converts the common accident into a typed refusal.
-A subset or a prefix of a directory is legitimate and is accepted; so is an
-empty one, which makes no claim to disagree with.
-
-**The peak of a single open is a separate figure and is larger.** The scan still
-materialises one `RecordIndexEntry` per record before the directory is taken
-from it, so an open transiently reaches about `170 * records` live. Pass your own
-buffer — `open_readonly_with_scratch`, or `open_readonly_without_directory`,
-which take one — and that allocation happens once for any number of files rather
-than once per open: measured 29,824,680 bytes over eight opens against
-**5,969,576** through one buffer.
-
-That peak is a property of the *scan*, so the third row above is the only one
-that avoids it rather than amortising it: `open_readonly_lazy` from a digest
-never builds the array, because it never frames a record.
-
-`ReadLimits::STANDARD` leaves `max_records`, `max_index_bytes` and
-`max_scan_bytes` at `u64::MAX`, so the **default profile places no ceiling on
-resident index size**. `ReadLimits::UNTRUSTED` makes them finite (16,000,000
-records, 1 GiB index, 16 GiB scan, 65,536 segments, 256 MiB keyed tail) and is
-the right default for attacker-supplied input.
-
-**`max_file_len` is no longer enforced anywhere, and no longer has to be
-declared.** A ceiling on how large a *file* may be bounded nothing the reader
-allocates: what it allocates is bounded by `max_records`, `max_index_bytes`,
-`max_scan_bytes`, `max_record_payload_len` and `max_logical_payload_len`, each
-of which has a check that consults it. All twenty-two enforcement sites were
-removed and `file_len` came off both required-declaration lists. The field and
-the DSL's `limits { file_len: .. }` remain so that existing format definitions
-keep parsing; the value is inert. A format that relied on it to refuse a large
-file must state one of the limits above instead.
-
-**This is not the petabyte-scale path.** The petabyte-scale path is the
-default **stream/indexed** family: `StratavaStreamWriter`,
-`StratavaStreamReader`, `StratavaIndexedWriter`, `StratavaIndexedReader`, and their
-`.vks`/`.vki` sidecars. Those open in `O(1)` from a clean sidecar and never
-bootstrap, repair, rebuild, verify, truncate or scan on a normal open.
-
-**Who it affects.** Anyone pointing `StratavaFile` at a file whose record count does
-not fit comfortably in RAM alongside the application, and anyone opening a large
-file in a latency-sensitive path.
-
-**Workaround.** Use the scalable family (§3) — and read §3 first: it is behind a
-`dev` feature flag, has never shipped, and its four modules are the least audited
-code in the tree. There is no third option. Keeping the handle open is the other
-half of the answer, since the scan is per open, not per read.
-
-**Planned.** The resident family is intentionally resident. No change planned.
+Replacement/rewrite paths can still build owned staging arrays and enforce their
+operation limits. These paths are not claimed to have fully external staging.
 
 ### 2.2 A keyed writer's construction cost scales with block types times index size
 
@@ -958,44 +459,28 @@ Construction still walks the input directory once per keyed block type. The
 resident input directory and those scans remain costs of this API; use the
 stream/indexed APIs to avoid them.
 
-### 2.3 Keyed merge and compact are resident-only and explicitly not petabyte-scale
+<a id="23-keyed-merge-and-compact-are-resident-only-and-explicitly-not-petabyte-scale"></a>
 
-**What it is.** `merge_keyed_files`, `compact_keyed_files` and
-`compact_keyed_file` are resident-only. Memory is
-`O(K-ever + largest resident input index + 8N uniqueness temporary + retained live values)`,
-where **`K-ever` counts every distinct key ever seen, tombstoned keys included**.
-Nothing spills to disk.
+### 2.3 External merge needs scratch disk and per-record workspace
 
-**Stratava exports no bounded-memory external merge or compact.** The scalable
-family covers ingest and point lookup only; it does not cover merge or compact.
+Merge and compact retain bounded index buffers and one operation's decoded
+values. Per-key state, encoded value history and final ordering live in private
+unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+fixed tree-page scratch and one key/record are additional minimum working space.
+`max_materialized_bytes` applies to the current operation, not every value ever
+seen. An explicitly requested owned `HashMap` still has a cumulative result limit.
 
-**Who it affects.** Anyone compacting a file with high key cardinality, and
-especially anyone compacting a file with a long tombstone history — the deleted
-keys are still charged.
+Scratch disk usage grows with input history; disk exhaustion can fail the run.
+The output path is replaced only after the complete result is written and synced.
+Shard/sequence/physical ordering, tombstones, ops, and custom key equality are
+preserved. `*_with_key_limit` remains an optional work/cardinality guard, counting
+tombstoned keys too. This is bounded-memory execution, not a claim of measured
+petabyte throughput.
 
-**Workaround.**
-
-- Size the run in advance with `estimate_keyed_merge` (itself
-  `O(largest input index)`).
-- Bound it with `merge_keyed_files_with_key_limit`,
-  `compact_keyed_files_with_key_limit` or `compact_keyed_file_with_key_limit`,
-  which fail with a typed limit error at a chosen key ceiling and publish no
-  output.
-
-`KeyedMergeEstimate::peak_resident_structural_bytes()` is a **structural
-estimate, not an upper bound**. It excludes heap owned by `Key` and `T` values,
-`HashMap` load-factor slack and control bytes, decode scratch, and allocator
-metadata.
-
-It is named that way because the earlier spelling, `peak_resident_bytes()`,
-documented an "upper bound" contract that was false by an arbitrarily large
-margin for any heap-owning key or value type. **Both the type and the earlier
-name were introduced and renamed inside the 0.4.0 development cycle — no released
-version ever exposed `peak_resident_bytes()`,** so there is nothing to migrate.
-The history is recorded so the rationale for the longer name is not lost.
-
-**Planned.** An external, bounded-memory merge is not implemented and is not
-scheduled.
+`estimate_keyed_merge` still reports record counts and a hypothetical fully
+resident structural size. Its byte fields and `peak_resident_structural_bytes()`
+are **not current external-merge RAM or scratch-disk estimates**. They exclude
+payload heap allocations and allocator overhead.
 
 ### 2.4 Under a transaction-marker commit policy, reopening for write discards the uncommitted tail
 

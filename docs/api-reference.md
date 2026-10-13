@@ -312,17 +312,12 @@ without the resident input directory or the per-block priming scans.
 | `StratavaWriter` | write-capable wrapper |
 | `StratavaFile` | lower-level read/write type used by both wrappers |
 
-**This is the resident family, and it is not the petabyte-scale path.** Opening
-one of these handles scans the file and builds a **resident record directory**
-that lives for the life of the handle: `Theta(records + decoded bytes)` plus an
-`O(N log N)` per-open sequence-uniqueness sort over `N` records (which degrades
-to `Theta(N)` for a file a Stratava writer produced; the `N log N` bound is the
-guarantee for reordered or hostile input). Budget **16 bytes of resident
-directory per record** — the record's offset and its committed bit, the two
-facts that are not in the record itself. Everything else in a
-`RecordIndexEntry` is rebuilt from the record's own header and footer when a
-read asks for it. Measured across 2,000 → 20,000 records: 16.00 bytes per
-record retained.
+Native handles may scan records at open, but directory and scan buffers are
+bounded by `max_index_bytes`, capped at 2 MiB each. Excess rows use private
+temporary files. A directory row is 16 bytes on scratch storage; full entries
+are reconstructed from record headers/footers on demand. Fixed row/page workspace
+is additional. Open I/O still scales with records when no usable fast metadata
+route applies. Reordered sequences use a temporary uniqueness index.
 
 Two other ways to pay for that directory, both of which cost the handle
 nothing: hold it yourself (`open_readonly_without_directory`, below), or build
@@ -339,8 +334,9 @@ do not.**
   one Linux host with a commit point every 256 records: an 852 MB, 200,000-record
   file opens in 370 ms chained against 5,867 ms scanning, framing 782 records
   instead of 200,782. What it removes is the open-time walk, not the directory:
-  the index it produces is the same one a scan produces, so the
-  16-bytes-per-record figure above is unchanged. Its cost is on disk — a segment
+  the directory it produces has the same bounded-buffer/spill policy as a scan.
+  A chain whose decoded staging exceeds the current buffer falls back to bounded
+  record framing; the historical timings above do not cover that fallback. Its cost is on disk — a segment
   carries an index entry per record it covers, so the file grows with the
   record count (measured: +3.67 MB on a 31 MB, 50,000-record file). **A writing
   session must end
@@ -1536,64 +1532,26 @@ per-chunk CRC creation/verification.
 Conflict order is shard order, then local sequence, then record ordinal. Later
 delta shards win.
 
-### Resident scale contract
+### Merge working storage
 
-`merge_keyed_files`, `compact_keyed_files`, and `compact_keyed_file` are
-resident operations and are deliberately **not** PB-scale. Each opens its
-inputs as whole `StratavaFile` values and retains one map entry per distinct key
-ever seen, tombstoned keys included:
+Merge and compact retain bounded index buffers and one operation's decoded
+values. Per-key state, encoded value history and final ordering live in private
+unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+fixed tree-page scratch and one key/record are additional minimum working space.
+`max_materialized_bytes` applies to the current operation, not every value ever
+seen. An explicitly requested owned `HashMap` still has a cumulative result limit.
 
-- time: `Theta(records + decoded bytes) + O(N log N) + O(K-live log K-live)`,
-  where the `O(N log N)` term is the per-input open's sequence-uniqueness sort
-  over that input's `N` records. It degrades to `Theta(N)` for the ordinary case
-  of a file whose sequences ascend with offset — which is what a Stratava writer
-  produces — but the sort is the guaranteed bound for a reordered or hostile
-  input;
-- memory: `O(K-ever + largest resident input index + 8N uniqueness temporary for
-  that input + retained live values)`
+Scratch disk usage grows with input history; disk exhaustion can fail the run.
+The output path is replaced only after the complete result is written and synced.
+Shard/sequence/physical ordering, tombstones, ops, and custom key equality are
+preserved. `*_with_key_limit` remains an optional work/cardinality guard, counting
+tombstoned keys too. This is bounded-memory execution, not a claim of measured
+petabyte throughput.
 
-Nothing spills to disk, so `K-ever` must fit in memory. Stratava exports no
-bounded-memory external merge or compact; the scalable stream and indexed
-writers cover bounded *ingest*, not bounded merge/compact.
-
-Callers whose key cardinality is not known to be resident-sized should either
-size the run first with `estimate_keyed_merge` — or bound it with a
-`*_with_key_limit` entry point, which fails with
-`Error::LimitExceeded { resource: "merge distinct keys", .. }` at the key
-boundary and publishes no output. `estimate_keyed_merge` itself opens each
-input as a resident file, so it costs `O(largest input index)`; it reports that
-number but is not bounded below it. It decodes no value.
-
-`KeyedMergeEstimate` reports:
-
-| Field | Kind |
-| --- | --- |
-| `input_records` | exact count |
-| `key_bearing_records` | exact count |
-| `max_distinct_keys` | exact **upper bound** on `K-ever` |
-| `largest_input_index_bytes` | structural byte estimate |
-| `largest_input_open_transient_bytes` | structural byte estimate (the `8N` uniqueness temporary) |
-| `max_state_bytes` | structural byte estimate |
-| `max_output_values_bytes` | structural byte estimate |
-
-Only the three count fields are bounds. The byte fields are **structural
-estimates**: each is `count * size_of::<...>()` over inline storage.
-
-`KeyedMergeEstimate::peak_resident_structural_bytes()` is the sizing entry
-point. It is a **structural estimate, not an upper bound**: it sums the merge
-state, the output vector reserved while that state is still alive, the largest
-input's resident index, and the `8N` uniqueness transient that input's open can
-hold alongside it, counting `count * size_of::<...>()` inline storage only. It
-excludes the heap owned by individual `Key` and `T` values (unbounded for
-heap-owning types such as `String` or `Vec` fields), `HashMap` load-factor slack
-and control bytes, per-record decode scratch, and allocator metadata. Callers
-who need a hard ceiling must bound the run with a `*_with_key_limit` entry point
-rather than size it.
-
-> Renamed in 0.4.0. The method was `peak_resident_bytes()` and was documented as
-> a true upper bound. That was false for any heap-owning `Key` or `T`, by an
-> arbitrarily large margin. The rename is deliberate rather than a deprecating
-> alias, so that no caller keeps reading the old value as a guarantee.
+`estimate_keyed_merge` still reports record counts and a hypothetical fully
+resident structural size. Its byte fields and `peak_resident_structural_bytes()`
+are **not current external-merge RAM or scratch-disk estimates**. They exclude
+payload heap allocations and allocator overhead.
 
 ## Migration API
 

@@ -519,20 +519,17 @@ fn resident_bitmap_budget_is_charged_as_pages_are_materialized() -> stratava::Re
     drop(writer);
     drop(spec.open_readonly(roomy.path())?);
 
-    // One byte less than the page-index mirror the reopen builds refuses the
-    // reopen. Since 0.5.0 the mirror is the whole of what an open makes resident
-    // — no payload page is materialised — so this is the admission limit acting
-    // on the term that is still there, and it is the term that scales with live
-    // pages.
-    let error = match matrix_spec(
+    // A smaller working budget does not reject a larger persisted directory.
+    let reader = matrix_spec(
         high_limits().with_max_matrix_bitmap_bytes(TEST_REOPEN_BITMAP_BYTES - 1),
         stratava::IntegrityPolicy::Crc32,
     )
-    .open_readonly(roomy.path())
-    {
-        Ok(_) => panic!("reopen unexpectedly fit an under-sized resident budget"),
-        Err(error) => error,
-    };
-    expect_limit(error, "matrix bitmap bytes", TEST_REOPEN_BITMAP_BYTES - 1);
+    .open_readonly(roomy.path())?;
+    assert_eq!(
+        reader
+            .read_matrix_cell::<LimitedCell>(MatrixKey::new(0, 0))?
+            .value,
+        1
+    );
     Ok(())
 }

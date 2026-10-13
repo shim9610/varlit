@@ -2,6 +2,7 @@
 //! Nothing visible changes until all I/O, integrity checks and reservations pass.
 use super::*;
 use crate::matrix_generation::{MatrixFile, View};
+use crate::spill_rows::SpillRows;
 
 pub(super) struct Changes<'a> {
     old: &'a View,
@@ -11,12 +12,17 @@ pub(super) struct Changes<'a> {
 impl Changes<'_> {
     /// The directory diff is sorted. Seek directly to each metadata region;
     /// payload-only changes do not cause payload reads during follow.
-    fn units(&self, base: u64, len: u64, unit: u64) -> Result<Vec<u64>> {
+    fn units(&self, base: u64, len: u64, unit: u64) -> Result<SpillRows<8>> {
         let end = base.checked_add(len).ok_or(Error::InvalidMatrixLayout)?;
+        let limit = match self.limits.resolve().max_matrix_bitmap_bytes {
+            crate::ReadLimit::Finite(n) => n.min(4096) as usize,
+            _ => 4096,
+        };
+        let mut result = SpillRows::new(limit);
         if len == 0 {
-            return Ok(Vec::new());
+            return Ok(result);
         }
-        let mut result = Vec::new();
+        let mut last = None;
         let mut old = [0; 4096];
         let mut next = [0; 4096];
         self.old.for_each_changed_page(
@@ -33,15 +39,9 @@ impl Changes<'_> {
                 for i in 0..n {
                     if old[i] != next[i] {
                         let index = (start + i as u64 - base) / unit;
-                        if result.last() != Some(&index) {
-                            // A damaged digest extent must not turn a bounded root
-                            // diff into an unbounded temporary list of bitmap pages.
-                            self.limits.check(
-                                ReadLimitKey::MatrixBitmapBytes,
-                                (result.len() as u64 + 1).saturating_mul(8),
-                            )?;
-                            try_reserve_vec(&mut result, 1, "matrix follow delta")?;
-                            result.push(index);
+                        if last != Some(index) {
+                            result.push(index.to_le_bytes())?;
+                            last = Some(index);
                         }
                     }
                 }
@@ -51,7 +51,7 @@ impl Changes<'_> {
         Ok(result)
     }
     fn unchanged(&self, base: u64, len: u64) -> Result<()> {
-        if !self.units(base, len, 4096)?.is_empty() {
+        if self.units(base, len, 4096)?.len() != 0 {
             return Err(Error::InvalidMatrixLayout);
         }
         Ok(())
@@ -61,17 +61,27 @@ impl Changes<'_> {
 /// O(changed slots + changed bitmap pages), never a clone of a live index.
 /// Private fields prevent callers from manufacturing completeness evidence.
 pub(super) struct BitmapDelta {
-    count: usize,
-    slots: Vec<(usize, u64)>,
-    mappings: HashMap<u64, Option<u64>>,
+    directory: BitmapDirectory,
+    // Only pages currently in the bounded cache need removal at installation.
     invalidate: Vec<u64>,
+}
+fn row(rows: &SpillRows<8>, at: usize) -> Result<u64> {
+    Ok(u64::from_le_bytes(
+        rows.get(at)?.ok_or(Error::InvalidMatrixLayout)?,
+    ))
+}
+fn mark(set: &mut BitmapDirectory, page: u64) -> Result<()> {
+    if !set.contains(page)? {
+        set.push(page)?;
+    }
+    Ok(())
 }
 impl BitmapDelta {
     pub(super) fn prepare(
         bits: &mut SparseBitmap,
         index: u64,
         changes: &Changes<'_>,
-        budget: &mut ResidentBitmapBudget,
+        _budget: &mut ResidentBitmapBudget,
         verify: bool,
     ) -> Result<Self> {
         let capacity = bits.page_count.min(PAGE_INDEX_MAX_ENTRIES);
@@ -84,26 +94,11 @@ impl BitmapDelta {
             page_index_header_count(u64::from_le_bytes(header), capacity)
                 .ok_or(Error::MatrixFatalCorruption)?
         };
-        let count = usize::try_from(count).map_err(|_| Error::InvalidMatrixLayout)?;
-        // Check the minimum retained footprint before staging new entries.
-        let slot_bytes = (count as u64)
-            .checked_mul(PAGE_INDEX_SLOT_RESIDENT_BYTES)
-            .ok_or(Error::InvalidMatrixLayout)?;
-        budget
-            .limits
-            .check(ReadLimitKey::MatrixBitmapBytes, slot_bytes)?;
-        let changed = changes.units(index + 8, count as u64 * 8, 8)?;
-        let mut slots = Vec::new();
-        let mut mappings = HashMap::new();
-        let mut affected = |page: u64| -> Result<()> {
-            if !mappings.contains_key(&page) {
-                try_reserve_map(&mut mappings, 1, "matrix follow delta")?;
-                mappings.insert(page, None);
-            }
-            Ok(())
-        };
-        for slot in changed {
-            let at = usize::try_from(slot).map_err(|_| Error::InvalidMatrixLayout)?;
+        let changed = changes.units(index + 8, count * 8, 8)?;
+        let mut directory = bits.directory.clone();
+        let mut affected = BitmapDirectory::default();
+        let mut changed_slots = SpillRows::<8>::new(4096);
+        let mut update = |slot: u64| -> Result<()> {
             changes
                 .next
                 .read_exact_at(index + 8 + slot * 8, &mut header)?;
@@ -112,158 +107,101 @@ impl BitmapDelta {
             if raw == 0 || raw > bits.page_count {
                 return Err(Error::MatrixFatalCorruption);
             }
-            if let Some(&old) = bits.index_slots.get(at) {
-                affected(old)?;
+            if let Some(old) = bits.directory.slot(slot)? {
+                mark(&mut affected, old)?;
             }
-            affected(raw - 1)?;
-            try_reserve_vec(&mut slots, 1, "matrix follow delta")?;
-            slots.push((at, raw - 1));
+            mark(&mut affected, raw - 1)?;
+            directory.set_slot(slot, raw - 1)?;
+            changed_slots.push(slot.to_le_bytes())?;
+            Ok(())
+        };
+        for at in 0..changed.len() {
+            update(row(&changed, at)?)?;
         }
-        for &page in bits.index_slots.get(count..).unwrap_or(&[]) {
-            affected(page)?;
+        // Header growth can expose bytes that were already present unchanged.
+        for slot in bits.directory.len()..count {
+            update(slot)?;
         }
-        // Every newly occupied slot must have been in a changed physical page.
-        // Previously unused bytes can legitimately contain an old index entry;
-        // a header-only growth must therefore read those entries as well.
-        let changed_slot_count = slots.len();
-        for at in bits.index_slots.len()..count {
-            if slots[..changed_slot_count]
-                .binary_search_by_key(&at, |s| s.0)
-                .is_ok()
-            {
-                continue;
-            }
-            changes
-                .next
-                .read_exact_at(index + 8 + at as u64 * 8, &mut header)?;
-            count_open_bitmap_bytes_read(8);
-            let raw = u64::from_le_bytes(header);
-            if raw == 0 || raw > bits.page_count {
-                return Err(Error::MatrixFatalCorruption);
-            }
-            affected(raw - 1)?;
-            try_reserve_vec(&mut slots, 1, "matrix follow delta")?;
-            slots.push((at, raw - 1));
-            // Appended slots can precede a changed slot already collected.
-            // Sort once below; use the changed-prefix lookup above instead.
-        }
-        slots.sort_unstable_by_key(|s| s.0);
-        for (&page, first) in &mut mappings {
-            if let Some(&at) = bits.indexed_pages.get(&page)
-                && (at as usize) < count
-                && slots
-                    .binary_search_by_key(&(at as usize), |s| s.0)
-                    .map_or(true, |i| slots[i].1 == page)
-            {
-                *first = Some(at);
-            }
-        }
-        for &(at, page) in &slots {
-            let first = mappings.get_mut(&page).unwrap();
-            *first = Some(first.map_or(at as u64, |old| old.min(at as u64)));
-        }
-        // Duplicate slots are accepted by crash recovery. If the first copy
-        // moved, find the surviving copy within this bitmap, not the layout.
-        if bits.index_slots.len() != bits.indexed_pages.len() && !mappings.is_empty() {
-            for (at, &old) in bits.index_slots.iter().take(count).enumerate() {
-                let page = slots
-                    .binary_search_by_key(&at, |s| s.0)
-                    .map_or(old, |i| slots[i].1);
-                if let Some(first) = mappings.get_mut(&page) {
-                    *first = Some(first.map_or(at as u64, |v| v.min(at as u64)));
-                }
-            }
-        }
-        let mut distinct = bits.indexed_pages.len();
-        for (&page, first) in &mappings {
-            distinct -= usize::from(bits.indexed_pages.contains_key(&page));
-            distinct += usize::from(first.is_some());
-        }
-        let bytes = slot_bytes
-            .checked_add(
-                (distinct as u64)
-                    .checked_mul(PAGE_INDEX_MAP_RESIDENT_BYTES)
+        for slot in count..bits.directory.len() {
+            mark(
+                &mut affected,
+                bits.directory
+                    .slot(slot)?
                     .ok_or(Error::InvalidMatrixLayout)?,
-            )
-            .ok_or(Error::InvalidMatrixLayout)?;
-        budget.release_index(bits.resident_index_bytes());
-        budget.charge_index(bytes)?;
-        let extra = count.saturating_sub(bits.index_slots.len());
-        try_reserve_vec(
-            &mut bits.index_slots,
-            extra,
-            ReadLimitKey::MatrixBitmapBytes.resource(),
-        )?;
-        let additions = mappings
-            .iter()
-            .filter(|(p, at)| at.is_some() && !bits.indexed_pages.contains_key(p))
-            .count();
-        try_reserve_map(
-            &mut bits.indexed_pages,
-            additions,
-            ReadLimitKey::MatrixBitmapBytes.resource(),
-        )?;
-        let mut invalidate = Vec::new();
-        if let Some(backing) = &bits.backing {
-            invalidate = changes.units(backing.base_offset, bits.byte_len, BITMAP_PAGE_BYTES)?;
-            if let Some(digest) = backing.digest_base {
-                let digest_pages =
-                    changes.units(digest, bits.page_count * PAGE_DIGEST_LEN, PAGE_DIGEST_LEN)?;
-                try_reserve_vec(&mut invalidate, digest_pages.len(), "matrix follow delta")?;
-                invalidate.extend(digest_pages);
-            }
-            try_reserve_vec(&mut invalidate, mappings.len(), "matrix follow delta")?;
-            invalidate.extend(mappings.keys().copied());
-            invalidate.sort_unstable();
-            invalidate.dedup();
-            if verify && let Some(digest) = backing.digest_base {
-                let mut bytes = [0; 4096];
-                for &page in &invalidate {
-                    let len = bits.page_len(page)? as usize;
-                    changes.next.read_exact_at(
-                        backing.base_offset + page * BITMAP_PAGE_BYTES,
-                        &mut bytes[..len],
-                    )?;
-                    changes
-                        .next
-                        .read_exact_at(page_digest_offset(digest, page)?, &mut header)?;
-                    let stored = u32::from_le_bytes(header[..4].try_into().unwrap());
-                    let state = u32::from_le_bytes(header[4..].try_into().unwrap());
-                    if !page_bytes_are_authentic(&bytes[..len], stored, state)? {
-                        return Err(Error::MatrixFatalCorruption);
-                    }
-                    count_open_bitmap_bytes_read(len as u64 + 8);
-                    count_open_bitmap_pages_visited(1);
+            )?;
+        }
+        directory.truncate(count);
+        affected.visit_pages(|page, _| {
+            let first = match bits.directory.first(page)? {
+                Some(at) if at < count && directory.slot(at)? == Some(page) => Some(at),
+                _ => None,
+            };
+            directory.set_first(page, first)
+        })?;
+        for at in 0..changed_slots.len() {
+            let slot = row(&changed_slots, at)?;
+            let page = directory.slot(slot)?.ok_or(Error::InvalidMatrixLayout)?;
+            let first = directory.first(page)?.map_or(slot, |old| old.min(slot));
+            directory.set_first(page, Some(first))?;
+        }
+        // Only crash-recovery duplicates require a bitmap-local survivor scan.
+        if bits.directory.len() != bits.directory.distinct() && affected.len() != 0 {
+            for slot in 0..count {
+                let page = directory.slot(slot)?.ok_or(Error::InvalidMatrixLayout)?;
+                if affected.contains(page)? {
+                    let first = directory.first(page)?.map_or(slot, |old| old.min(slot));
+                    directory.set_first(page, Some(first))?;
                 }
+            }
+        }
+        if let Some(backing) = &bits.backing {
+            let pages = changes.units(backing.base_offset, bits.byte_len, BITMAP_PAGE_BYTES)?;
+            for at in 0..pages.len() {
+                mark(&mut affected, row(&pages, at)?)?;
+            }
+            if let Some(digest) = backing.digest_base {
+                let pages =
+                    changes.units(digest, bits.page_count * PAGE_DIGEST_LEN, PAGE_DIGEST_LEN)?;
+                for at in 0..pages.len() {
+                    mark(&mut affected, row(&pages, at)?)?;
+                }
+                if verify {
+                    let mut bytes = [0; 4096];
+                    affected.visit_pages(|page, _| {
+                        let len = bits.page_len(page)? as usize;
+                        changes.next.read_exact_at(
+                            backing.base_offset + page * BITMAP_PAGE_BYTES,
+                            &mut bytes[..len],
+                        )?;
+                        changes
+                            .next
+                            .read_exact_at(page_digest_offset(digest, page)?, &mut header)?;
+                        let stored = u32::from_le_bytes(header[..4].try_into().unwrap());
+                        let state = u32::from_le_bytes(header[4..].try_into().unwrap());
+                        if !page_bytes_are_authentic(&bytes[..len], stored, state)? {
+                            return Err(Error::MatrixFatalCorruption);
+                        }
+                        count_open_bitmap_bytes_read(len as u64 + 8);
+                        count_open_bitmap_pages_visited(1);
+                        Ok(())
+                    })?;
+                }
+            }
+        }
+        let mut invalidate = Vec::new();
+        for &page in bits.store().pages.keys() {
+            if affected.contains(page)? {
+                try_reserve_vec(&mut invalidate, 1, "matrix follow cache invalidation")?;
+                invalidate.push(page);
             }
         }
         Ok(Self {
-            count,
-            slots,
-            mappings,
+            directory,
             invalidate,
         })
     }
     pub(super) fn apply(self, bits: &mut SparseBitmap) {
-        for (at, page) in self.slots {
-            if at < bits.index_slots.len() {
-                bits.index_slots[at] = page;
-            } else {
-                debug_assert_eq!(at, bits.index_slots.len());
-                bits.index_slots.push(page);
-            }
-        }
-        bits.index_slots.truncate(self.count);
-        for (page, at) in self.mappings {
-            match at {
-                Some(at) => {
-                    bits.indexed_pages.insert(page, at);
-                }
-                None => {
-                    bits.indexed_pages.remove(&page);
-                }
-            }
-        }
+        bits.directory = self.directory;
         let store = bits.store_mut();
         for page in self.invalidate {
             store.lru_unlink(page);
@@ -419,16 +357,31 @@ mod tests {
         };
         let delta = BitmapDelta::prepare(&mut bits, 0, &changes, &mut budget, false).unwrap();
         assert_eq!(
-            bits.index_slots, old_slots,
+            (0..bits.directory.len())
+                .map(|at| bits.directory.slot(at).unwrap().unwrap())
+                .collect::<Vec<_>>(),
+            old_slots,
             "preparation must not change the visible mirror"
         );
         delta.apply(&mut bits);
-        assert_eq!(bits.index_slots, new_slots);
+        assert_eq!(
+            (0..bits.directory.len())
+                .map(|at| bits.directory.slot(at).unwrap().unwrap())
+                .collect::<Vec<_>>(),
+            new_slots
+        );
         let mut expected = HashMap::new();
         for (at, &page) in new_slots.iter().enumerate() {
             expected.entry(page).or_insert(at as u64);
         }
-        assert_eq!(bits.indexed_pages, expected);
+        let mut actual = HashMap::new();
+        bits.directory
+            .visit_pages(|page, at| {
+                actual.insert(page, at);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(actual, expected);
         assert_eq!(budget.index, bits.resident_index_bytes());
     }
 

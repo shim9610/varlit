@@ -3442,6 +3442,23 @@ pub(crate) struct ScratchIndex {
     root: tree::Root,
     reader: tree::Reader,
     cache_bytes: usize,
+    end: u64,
+}
+impl Clone for ScratchIndex {
+    fn clone(&self) -> Self {
+        Self {
+            file: self.file.clone(),
+            root: self.root,
+            cache_bytes: self.cache_bytes,
+            end: self.end,
+            reader: tree::Reader::new(
+                self.file.clone(),
+                self.end,
+                u32::MAX as usize,
+                self.cache_bytes,
+            ),
+        }
+    }
 }
 impl std::fmt::Debug for ScratchIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -3465,6 +3482,7 @@ impl ScratchIndex {
             root: tree::Root::default(),
             reader,
             cache_bytes,
+            end: tree::PAGE as u64,
         })
     }
     pub(crate) fn get(&self, key: &[u8]) -> crate::Result<Option<[u8; 52]>> {
@@ -3472,12 +3490,32 @@ impl ScratchIndex {
             .get(self.root, key)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))
     }
+    pub(crate) fn visit(
+        &self,
+        mut visitor: impl FnMut(Vec<u8>, [u8; 52]) -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        let mut failure = None;
+        let result = self.reader.visit(self.root, &mut |key, value| {
+            if let Err(error) = visitor(key, value) {
+                failure = Some(error);
+                return Err(DiskIndexError::Io(std::io::Error::other(
+                    "scratch visitor failed",
+                )));
+            }
+            Ok(())
+        });
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        result.map_err(|error| crate::Error::Io(std::io::Error::other(error)))
+    }
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
         let root = tree::apply(&self.file, &self.reader, self.root, values)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        self.end = self.file.metadata()?.len();
         self.reader = tree::Reader::new(
             self.file.clone(),
-            self.file.metadata()?.len(),
+            self.end,
             u32::MAX as usize,
             self.cache_bytes,
         );

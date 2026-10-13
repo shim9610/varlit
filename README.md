@@ -36,19 +36,18 @@ is covered in **[API Changes](docs/api-changes.md)**.
   `segment_on_flush` makes the open walk one record per commit point, and
   `open_digest_on_flush` plus `open_readonly_lazy` makes it frame one record and
   build no directory at all, leaving the caller to build only the part it needs
-  with `record_map`. Measured on a 50,000-record file: **100,316 read syscalls
-  at open, 516, and 20.**
+  with `record_map`. Segment chains that outgrow the current staging buffer fall
+  back to bounded record framing; a small memory budget can increase open I/O.
 - Bounded-memory ingest and indexed point lookup through `StratavaStreamReader`,
   `StratavaStreamWriter`, `StratavaIndexedReader` and `StratavaIndexedWriter`. These are
   part of the default public API since 0.10.0, including with
   `--no-default-features`. Choose these constructors explicitly for large logs;
-  `create_writer` and `open_reader` keep their existing resident behavior.
+  `create_writer` and `open_reader` now spill large directories, but can still scan input at open.
   See [Scalable I/O](docs/scalable-io.md) for costs and supported operations.
-- Preallocated matrix storage with **fixed dimensions**, a live page count whose
-  page-index mirror (~96 bytes per live page) fits the process memory budget — the
-  commit-map payload itself is demand-cached and bounded, so it does not have to —
-  at most 16,000,000 cells unless you raise `max_matrix_cells` explicitly, on a
-  sparse-capable filesystem.
+- Matrix storage with fixed dimensions or one explicitly growing chunk axis,
+  bounded payload caches and private paged metadata directories. Standard limits
+  no longer impose a 16M-cell cap; sparse filesystem behavior still matters.
+- External keyed merge/compact with bounded buffers and temporary disk storage.
 - Reading a file with hostile-input ceilings applied (`ReadLimits::UNTRUSTED`).
   The typed refusals and bounded allocations are real and tested: no production
   read path uses an unknown length as a framing primitive. Lengths, counts and
@@ -70,10 +69,6 @@ is covered in **[API Changes](docs/api-changes.md)**.
   filesystem with different extent and allocation behaviour. Targets other than
   those two remain compile-verified only, and additionally lose the allocation
   map and hole punching by construction.
-- **Matrices larger than 16,000,000 cells out of the box.** That is the default
-  `max_matrix_cells`, checked per matrix block **and** as a running aggregate
-  across all of them, so a 4096 x 4096 matrix fails at *create* with
-  `LimitExceeded { resource: "matrix cells" }` until the ceiling is raised.
 - **Matrices on a filesystem that cannot represent holes.** Sparseness is
   requested best-effort and failure is ignored. On a non-sparse volume the
   declared extent is really allocated, create cost and open cost become
@@ -96,16 +91,11 @@ is covered in **[API Changes](docs/api-changes.md)**.
   the [Capability Boundary](#capability-boundary) below for the exact trade.
   Residency is no longer part of this problem: an open retains **no** commit-map
   payload. What no declaration removes is the persisted page index, read in full
-  at open — 8 bytes read and ~96 bytes resident per live page — so open is
-  `O(live pages)` and never `O(1)`. At a million live pages that is 8 MB read and
-  ~96 MB resident before a cell is addressed.
-- **Matrices whose live page count is large against a tightened
-  `max_matrix_bitmap_bytes`.** That ceiling now bounds the demand cache, so a
-  matrix whose live set is wider than it **opens and is served**. What can still
-  refuse an open is the page-index mirror above: it is charged against the same
-  ceiling and is not evictable.
-- **Petabyte-scale merge or compact.** Keyed merge and compact are resident-only.
-  Stratava exports no bounded-memory external merge or compact.
+  at open and mirrored in a private temporary index, so open remains
+  `O(live pages)`. Bounded RAM does not remove the index-building I/O.
+- **Measured petabyte-scale merge throughput.** Merge/compact now spill state
+  and values to private temporary files, but require scratch disk and one
+  operation's decode workspace. Large-scale throughput has not been established.
 - **Channel-selective reads.** Reading a subset of channels without paying full
   block I/O has been designed but not implemented: there is no `channel_view`
   type, no DSL key, and no generated method anywhere in the workspace. Nothing
@@ -146,15 +136,14 @@ Stratava has two API families with different scale contracts. Pick deliberately.
 
 | Family | Entry points | State | Suited to |
 | --- | --- | --- | --- |
-| Resident | `StratavaFile`, generated typed readers/writers, keyed collections, `merge_keyed_files`, `compact_keyed_file(s)` | index and merge state live in memory, sized by record and key counts | files that fit comfortably in RAM alongside the application |
+| Native | `StratavaFile`, generated typed readers/writers | bounded directory buffers with private spill files; explicit owned collections still scale with their results | typed records, scan/chain access and matrices |
+| External merge/compact | `merge_keyed_files`, `compact_keyed_file(s)` | bounded buffers, temporary per-key/value state | merging histories with available scratch disk |
 | Stream/indexed (default API) | `StratavaStreamWriter`, `StratavaIndexedWriter`, their readers, and `.vks`/`.vki` sidecars | bounded resident state, sized by declared blocks and bounded buffers | high-rate append and point lookup over data far larger than RAM |
 
-The scalable family covers bounded ingest and lookup only. **Keyed merge and
-compact are resident-only and explicitly not petabyte-scale**: they retain one
-map entry per distinct key ever seen, tombstoned keys included, and nothing
-spills to disk. Use `estimate_keyed_merge` to size a run in advance, or the
-`*_with_key_limit` variants to fail with a typed limit error at a chosen key
-ceiling instead of exhausting memory.
+The stream/indexed family supplies bounded ingest and lookup. External merge and
+compact spill state and values to temporary files. Use `*_with_key_limit` for an
+explicit cardinality/work ceiling; `estimate_keyed_merge` reports counts and a
+hypothetical fully resident size, not the current external implementation's peak.
 
 Matrix (preallocated) storage is a third mode. Its integrity metadata is paged
 and sparse, so create-time metadata I/O and per-mutation integrity cost are
@@ -166,12 +155,10 @@ the declared extent is genuinely allocated and both the create-time and the
 open-time cost become proportional to the declared cell count instead. Nothing
 reports this; the symptom is slowness.
 
-By default a matrix is capped at **16,000,000 cells and 16,000,000 per dimension**
-(`ReadLimits::STANDARD`), checked per matrix block and as a running aggregate
-across every matrix block in the format. Larger matrices need
-`with_max_matrix_cells` / `with_max_matrix_dimension` or a `limits { }`
-declaration, or create fails with
-`LimitExceeded { resource: "matrix cells" }`.
+Standard admission no longer caps matrix dimensions/cells at 16 million or the
+slot region at 8 GiB. Checked format/offset arithmetic and filesystem limits
+remain, and callers may set explicit admission caps. Memory budgets continue to
+limit caches and working buffers; larger directories spill into temporary files.
 
 **Open-time reads are bounded by the candidate *page* count, not by the working
 set, so open is not `O(1)` — but residency is.** An undeclared open resolves to
@@ -187,8 +174,8 @@ commit-map page addressed, evicted LRU at the declared bound — so
 normally. Declaring `MatrixMetadataVerification::OnDemand` takes the same opens
 down to 32 and 1,040 bytes and 0 pages; what you give up is the matrix announcing
 commit-map damage at open, the whole-category quarantine, and the strict-recovery
-writer gate. What remains unavoidable is the persisted page index: 8 bytes read and
-~96 bytes resident per live page.
+writer gate. The persisted page index is still enumerated and mirrored in a
+private temporary tree; this bounds RAM but adds scratch I/O.
 
 **What `OnDemand` actually costs you, since it is the one knob here worth
 understanding.** The commit-map half of `MatrixRecoveryReport` is produced by the

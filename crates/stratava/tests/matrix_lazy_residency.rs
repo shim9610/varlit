@@ -1379,6 +1379,16 @@ fn concurrent_lazy_readers_are_not_serialised_behind_the_page_store() -> stratav
 /// with it — it reported `768 -> 0` against the unfixed code and would have
 /// passed a test built on it. Reopening loads the mirror from the persisted
 /// array, so its size is the number of entries actually on disk.
+fn persisted_commit_index_count(path: &Path) -> stratava::Result<u64> {
+    use std::io::Read;
+    let offset = header_u64(path, 13);
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = [0; 8];
+    file.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes) & ((1u64 << 48) - 1))
+}
+
 #[test]
 fn an_emptied_commit_page_releases_its_persisted_index_entry() -> stratava::Result<()> {
     const PAGES: u64 = 8;
@@ -1390,11 +1400,8 @@ fn an_emptied_commit_page_releases_its_persisted_index_entry() -> stratava::Resu
 
     // What the fixture's live pages cost on disk, read back from the file.
     drop(lazy_spec(PAGES * PAGE_BYTES).open_readonly(&path)?);
-    let filled = MatrixRecoveryReport::matrix_resident_page_index_bytes();
-    assert_ne!(
-        filled, 0,
-        "the fixture persisted no page-index entries, so this measures nothing"
-    );
+    let filled = persisted_commit_index_count(&path)?;
+    assert_eq!(filled, PAGES, "fixture must persist every live page");
 
     let mut writer = lazy_spec(PAGES * PAGE_BYTES).open_writer(&path)?;
     // Touch every live page first, so each is faulted in as a *cached* page —
@@ -1420,7 +1427,7 @@ fn an_emptied_commit_page_releases_its_persisted_index_entry() -> stratava::Resu
     drop(writer);
 
     drop(lazy_spec(PAGES * PAGE_BYTES).open_readonly(&path)?);
-    let emptied = MatrixRecoveryReport::matrix_resident_page_index_bytes();
+    let emptied = persisted_commit_index_count(&path)?;
     println!("(page index) persisted bytes: filled={filled} after clearing={emptied}");
     assert_eq!(
         emptied, 0,

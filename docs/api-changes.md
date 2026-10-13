@@ -15,8 +15,8 @@ and the [Changelog](../CHANGELOG.md).
   limit. Scratch I/O failure is still an error, before the data append.
 - Matrix dirty-page directories spill without sync or generation publication.
   Compaction enumerates pages incrementally; follow traverses changed subtrees
-  only in the metadata ranges it needs. Bitmap mirrors and staged bitmap deltas
-  still have separate resident limits.
+  only in the metadata ranges it needs. Bitmap index mirrors use private paged
+  roots; staged bitmap deltas spill without changing the held generation.
 - With `mmap`, `StratavaFile::mmap_payload_window` maps one record's stored payload
   without requiring a resident directory or a whole-file mapping budget. The
   returned `MmapPayloadWindow` owns the mapping. External immutability remains
@@ -29,9 +29,20 @@ and the [Changelog](../CHANGELOG.md).
   incrementally. Previously released payloads no longer count against that
   budget. An individually oversized payload still fails validation.
 
-These changes do not remove the resident native-open directory, resident keyed
-merge/compact, or matrix bitmap-index mirror requirements. Their bounded-memory
-replacements are separate work; increasing their limits is not a substitute.
+- Ordinary native opens/follows now use bounded scan and directory buffers with
+  private spill storage. Explicit caller-owned arrays keep their result limits.
+- Keyed merge/compact now use external temporary indexes and encoded values;
+  materialization budgets apply per operation. Custom key equality, tombstones,
+  ops and output publication semantics remain unchanged. Estimate byte fields
+  describe a hypothetical resident implementation, not current merge RAM.
+- Standard matrix dimension/cell, CRC-extent and slot-region limits now default
+  to `u64::MAX`. Checked arithmetic, explicit user admission caps and finite
+  working-memory limits remain. Shapes still declare at most one growing axis.
+
+Public method signatures and persisted formats are unchanged by these budget
+changes. Scratch disk availability is now part of ordinary large-directory
+open/follow and merge execution. Native open can still scan records; replacement
+staging and explicitly owned results can still be proportional to their output.
 
 ## L. 0.11.0 → 0.12.0: Stratava rename
 

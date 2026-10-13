@@ -872,6 +872,93 @@ fn keyed_materialization_merge_and_compact_share_one_cumulative_budget() -> stra
 }
 
 #[test]
+fn external_merge_spills_and_preserves_shard_ops_deletes_and_atomic_output() -> stratava::Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let base = dir.path().join("base");
+    let delta = dir.path().join("delta");
+    let output = dir.path().join("output");
+    let compact = dir.path().join("compact");
+    let mut expected = std::collections::HashMap::new();
+    {
+        let mut file = TestFormat::create(&base)?;
+        for id in 0..300 {
+            let value = User {
+                user_id: id,
+                region: 1,
+                name: format!("base-{id}"),
+            };
+            file.push(&value)?;
+            expected.insert((id, 1), value);
+        }
+        file.flush()?;
+    }
+    {
+        let mut file = TestFormat::create(&delta)?;
+        for id in (0..300).rev() {
+            if id % 3 == 0 {
+                file.delete::<User>(&(id, 1))?;
+                expected.remove(&(id, 1));
+            } else if id % 3 == 1 {
+                let name = format!("op-{id}");
+                file.push_op::<User>(
+                    &(id, 1),
+                    &UserOp {
+                        rename_to: name.clone(),
+                    },
+                )?;
+                expected.get_mut(&(id, 1)).unwrap().name = name;
+            } else {
+                let value = User {
+                    user_id: id,
+                    region: 1,
+                    name: format!("put-{id}"),
+                };
+                file.push(&value)?;
+                expected.insert((id, 1), value);
+            }
+        }
+        file.flush()?;
+    }
+    let limited = TestFormat::spec().with_resource_limits(
+        ReadLimits::STANDARD
+            .with_max_index_bytes(160)
+            .with_max_materialized_bytes(512),
+    );
+    // An owned map genuinely exceeds the result budget; external output does not.
+    assert!(
+        limited
+            .open_readonly(&base)?
+            .materialized_keyed_blocks::<User>()
+            .is_err()
+    );
+    merge_keyed_files::<User, _>(limited, &base, &[&delta], &output)?;
+    compact_keyed_files::<User, _>(limited, &base, &[&delta], &compact)?;
+    for path in [&output, &compact] {
+        assert_eq!(
+            TestFormat::open_readonly(path)?.materialized_keyed_blocks::<User>()?,
+            expected
+        );
+    }
+    let before = std::fs::read(&output)?;
+    assert!(matches!(
+        stratava::merge_keyed_files_with_key_limit::<User, _>(
+            limited,
+            &base,
+            &[&delta],
+            &output,
+            299
+        ),
+        Err(stratava::Error::LimitExceeded {
+            resource: "merge distinct keys",
+            ..
+        })
+    ));
+    assert_eq!(std::fs::read(&output)?, before);
+    Ok(())
+}
+
+#[test]
 fn merge_and_materialized_reject_block_version_mismatch() -> stratava::Result<()> {
     let base = temp_path("base_v2_payload");
     let output = temp_path("merged_v2_payload");

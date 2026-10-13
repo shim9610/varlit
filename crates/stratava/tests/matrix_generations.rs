@@ -547,8 +547,7 @@ fn follow_verifies_only_changed_pages_and_rebuilds_only_after_compaction() -> st
 }
 
 #[test]
-fn refused_delta_keeps_old_generation_and_can_retry_after_a_smaller_publication()
--> stratava::Result<()> {
+fn tiny_bitmap_budget_follows_growing_and_shrinking_indexes() -> stratava::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("delta-limit.stratava");
     let spec = Generations::spec().with_integrity_policy(stratava::IntegrityPolicy::None);
@@ -572,19 +571,13 @@ fn refused_delta_keeps_old_generation_and_can_retry_after_a_smaller_publication(
     writer.write_matrix_cell(second, &Cell { value: 3 })?;
     writer.commit_matrix_cell::<Cell>(second)?;
     writer.sync()?;
-    for _ in 0..2 {
-        assert!(matches!(
-            reader.follow(),
-            Err(stratava::Error::LimitExceeded { .. })
-        ));
-        assert_eq!(reader.matrix_generation(), generation);
-        assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 1);
-        assert_eq!(
-            reader.matrix_cell_status::<Cell>(second)?,
-            MatrixCellStatus::NotCommitted
-        );
-    }
-    // The reader's refusal does not affect or wait for the writer.
+    reader.follow()?;
+    assert_ne!(reader.matrix_generation(), generation);
+    assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 2);
+    assert_eq!(reader.read_matrix_cell::<Cell>(second)?.value, 3);
+    // Small metadata budgets do not turn file growth into an open/follow refusal.
+    let reopened = spec.open_reader_with_resource_limits(&path, limits)?;
+    assert_eq!(reopened.read_matrix_cell::<Cell>(second)?.value, 3);
     writer.clear_matrix_cell::<Cell>(second)?;
     writer.sync()?;
     reader.follow()?;
@@ -593,6 +586,90 @@ fn refused_delta_keeps_old_generation_and_can_retry_after_a_smaller_publication(
         reader.matrix_cell_status::<Cell>(second)?,
         MatrixCellStatus::NotCommitted
     );
+    Ok(())
+}
+
+#[test]
+fn default_matrix_admission_is_independent_of_the_working_set() -> stratava::Result<()> {
+    let policies = [
+        stratava::IntegrityPolicy::None,
+        #[cfg(feature = "integrity")]
+        stratava::IntegrityPolicy::Crc32,
+    ];
+    for integrity in policies {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("wide-sparse.stratava");
+        // Beyond the former 16M-cell and 8GiB slot-region defaults. Only two
+        // cells and their metadata are written; this is not a physical load test.
+        let rows = 1_100_000_000;
+        let limits = stratava::ReadLimits::STANDARD
+            .with_max_matrix_bitmap_bytes(64 * 1024)
+            .with_matrix_metadata_residency(stratava::MatrixMetadataResidency::Lazy {
+                cache_bytes: 4096,
+            });
+        let spec = Generations::spec()
+            .with_integrity_policy(integrity)
+            .with_resource_limits(limits);
+        let mut writer = spec.create_writer_with_dims(
+            &path,
+            stratava::MatrixDimensions::from_pairs([("scan", rows), ("ch", 1)]),
+        )?;
+        let first = stratava::MatrixKey::new(0, 0);
+        let last = stratava::MatrixKey::new(rows - 1, 0);
+        writer.write_matrix_cell(first, &Cell { value: 1 })?;
+        writer.commit_matrix_cell::<Cell>(first)?;
+        writer.sync()?;
+        let mut reader = spec.open_reader(&path)?;
+        writer.write_matrix_cell(last, &Cell { value: 2 })?;
+        writer.commit_matrix_cell::<Cell>(last)?;
+        assert_eq!(
+            reader.matrix_cell_status::<Cell>(last)?,
+            MatrixCellStatus::NotCommitted
+        );
+        writer.sync()?;
+        reader.follow()?;
+        assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 1);
+        assert_eq!(reader.read_matrix_cell::<Cell>(last)?.value, 2);
+        let reopened = spec.open_reader(&path)?;
+        assert_eq!(reopened.read_matrix_cell::<Cell>(last)?.value, 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn follow_spills_many_changed_bitmap_slots_without_publishing_dirty_state() -> stratava::Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("many-deltas.stratava");
+    let spec = Generations::spec().with_integrity_policy(stratava::IntegrityPolicy::None);
+    const PAGES: u64 = 96;
+    let mut writer = spec.create_writer_with_dims(
+        &path,
+        stratava::MatrixDimensions::from_pairs([("scan", PAGES * 32768), ("ch", 1)]),
+    )?;
+    writer.sync()?;
+    let limits = stratava::ReadLimits::STANDARD
+        .with_max_matrix_bitmap_bytes(16)
+        .with_matrix_metadata_residency(stratava::MatrixMetadataResidency::Lazy { cache_bytes: 0 });
+    let mut reader = spec.open_reader_with_resource_limits(&path, limits)?;
+    for page in 0..PAGES {
+        let key = stratava::MatrixKey::new(page * 32768, 0);
+        writer.write_matrix_cell(key, &Cell { value: page + 1 })?;
+        writer.commit_matrix_cell::<Cell>(key)?;
+    }
+    reader.follow()?;
+    assert_eq!(
+        reader.matrix_cell_status::<Cell>(stratava::MatrixKey::new(0, 0))?,
+        MatrixCellStatus::NotCommitted
+    );
+    writer.sync()?;
+    reader.follow()?;
+    let cold = spec.open_reader_with_resource_limits(&path, limits)?;
+    for page in 0..PAGES {
+        let key = stratava::MatrixKey::new(page * 32768, 0);
+        assert_eq!(reader.read_matrix_cell::<Cell>(key)?.value, page + 1);
+        assert_eq!(cold.read_matrix_cell::<Cell>(key)?.value, page + 1);
+    }
     Ok(())
 }
 

@@ -26,6 +26,14 @@ increment the minor version.
   explicit scan/count limits separate from those cache budgets.
 - Spill matrix dirty-page directories without publishing or syncing. Walk
   compaction pages and follow's changed metadata ranges incrementally.
+- Page ordinary native record directories and scan/follow staging through private
+  temporary files. Preserve explicit owned-result limits and atomic reader adoption.
+- Use external temporary indexes for keyed merge/compact, preserving key equality,
+  shard/sequence ordering, tombstones, ops and atomic output replacement.
+- Page matrix bitmap index mirrors and stage follow deltas on disk. Small bitmap
+  budgets no longer reject open/follow merely because more pages were published.
+- Remove the standard matrix dimension/cell, CRC-extent and slot-region size caps;
+  checked address arithmetic, working-memory budgets and explicit user caps remain.
 - Add `StratavaFile::mmap_payload_window` and `MmapPayloadWindow` for independent
   per-record mappings, including handles without a resident directory.
 - Add `mmap_matrix_cell` for a committed cell window with generation-consistent

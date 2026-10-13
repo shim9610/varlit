@@ -15,6 +15,18 @@ from qualify_scalable import capture, classify, run_command, test_command
 # Exact names and pass counts ensure a renamed or feature-disabled test cannot
 # silently turn this platform gate into a successful zero-test run.
 CASES = [
+    ("native-directory-spill", "native_budgeted_directory",
+     "tiny_directory_budget_covers_append_dirty_open_follow_and_reopen"),
+    ("native-directory-memory", "record_index_residency",
+     "spilled_open_peak_and_retained_memory_do_not_scale_with_record_count"),
+    ("segment-link-buffer", "record_index_residency",
+     "segment_link_staging_obeys_the_buffer_before_falling_back"),
+    ("external-merge", "roundtrip",
+     "external_merge_spills_and_preserves_shard_ops_deletes_and_atomic_output"),
+    ("matrix-directory-follow", "matrix_generations",
+     "tiny_bitmap_budget_follows_growing_and_shrinking_indexes"),
+    ("large-logical-matrix", "matrix_generations",
+     "default_matrix_admission_is_independent_of_the_working_set"),
     ("temp-directory", None,
      "spill_rows::tests::reads_between_spills_do_not_move_the_append_position"),
     ("private-matrix-spill", None,

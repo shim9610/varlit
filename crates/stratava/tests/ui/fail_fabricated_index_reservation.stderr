@@ -5,7 +5,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
    |                                      ^^^^^^^^^^^^^^^^^
    |
 note: constructor is not visible here due to private fields
-  --> $WORKSPACE/crates/stratava-core/src/file.rs
+  --> $WORKSPACE/crates/stratava-core/src/native_directory.rs
    |
-   |     pub struct ReservedIndexSlot(());
-   |                                  ^^ private field
+   | pub struct ReservedIndexSlot(());
+   |                              ^^ private field

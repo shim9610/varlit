@@ -102,76 +102,26 @@ records and unrelated block ids are not copied.
 Merge and compact outputs are published through same-directory temp files,
 flush/sync, and atomic replacement.
 
-## Merge And Compact Are Resident, Not PB-Scale
+## Merge And Compact Working Storage
 
-`merge_keyed_files`, `compact_keyed_file`, and `compact_keyed_files` open their
-inputs as whole `StratavaFile` values and hold one map entry per distinct key ever
-seen - including keys whose latest record is a tombstone - plus the live values
-that reach the output:
+Merge and compact retain bounded index buffers and one operation's decoded
+values. Per-key state, encoded value history and final ordering live in private
+unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+fixed tree-page scratch and one key/record are additional minimum working space.
+`max_materialized_bytes` applies to the current operation, not every value ever
+seen. An explicitly requested owned `HashMap` still has a cumulative result limit.
 
-- time: `Theta(records + decoded bytes) + O(N log N) + O(K-live log K-live)`,
-  where the `O(N log N)` term is the per-input open's sequence-uniqueness sort
-  over that input's `N` records; it degrades to `Theta(N)` for a file a Stratava
-  writer produced
-- memory: `O(K-ever + largest resident input index + retained live values)`
+Scratch disk usage grows with input history; disk exhaustion can fail the run.
+The output path is replaced only after the complete result is written and synced.
+Shard/sequence/physical ordering, tombstones, ops, and custom key equality are
+preserved. `*_with_key_limit` remains an optional work/cardinality guard, counting
+tombstoned keys too. This is bounded-memory execution, not a claim of measured
+petabyte throughput.
 
-Nothing spills to disk, so `K-ever` must fit in memory. Stratava exports no
-bounded-memory external merge or compact; the scalable stream and indexed
-writers bound *ingest*, not merge/compact. Do not call this family on a file
-whose key cardinality you cannot afford to hold resident.
-
-Size the run first:
-
-```rust
-use stratava::estimate_keyed_merge;
-
-let estimate = estimate_keyed_merge::<User, _>(
-    AppFormat::spec(),
-    "base.stratava",
-    &["delta-1.stratava"],
-)?;
-// estimate.max_distinct_keys is an upper bound on K-ever;
-// estimate.peak_resident_structural_bytes() sums the four terms resident at the
-// peak: the merge state, the reserved output vector, the largest input's
-// resident index, and the transient that input's open holds beside it. Every
-// byte field is a structural estimate, not a bound on the map.
-```
-
-`estimate_keyed_merge` decodes no values, but it does open each input as a
-resident file, so it costs `O(largest input index)` itself. It reports that
-number as `largest_input_index_bytes`; it is not a way to size an input you
-cannot already afford to open. Pass an empty delta slice to size a single-input
-`compact_keyed_file`.
-
-Or bound the run and fail typed instead of exhausting memory:
-
-```rust
-use stratava::{
-    compact_keyed_file_with_key_limit, compact_keyed_files_with_key_limit,
-    merge_keyed_files_with_key_limit,
-};
-
-merge_keyed_files_with_key_limit::<User, _>(
-    AppFormat::spec(),
-    "base.stratava",
-    &["delta-1.stratava"],
-    "merged.stratava",
-    1_000_000,
-)?;
-
-compact_keyed_file_with_key_limit::<User, _>(
-    AppFormat::spec(),
-    "users.stratava",
-    "users.compact.stratava",
-    1_000_000,
-)?;
-```
-
-The ceiling is checked before each new key is admitted, so exceeding it yields
-`Error::LimitExceeded { resource: "merge distinct keys", .. }` at the key
-boundary. A refused run publishes no output file. The ceiling counts tombstoned
-keys, matching what the state actually retains. The unbounded entry points
-delegate with `u64::MAX`, so their behaviour is unchanged.
+`estimate_keyed_merge` still reports record counts and a hypothetical fully
+resident structural size. Its byte fields and `peak_resident_structural_bytes()`
+are **not current external-merge RAM or scratch-disk estimates**. They exclude
+payload heap allocations and allocator overhead.
 
 ## Direct Replacement
 
