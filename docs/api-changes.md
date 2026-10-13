@@ -1,5 +1,19 @@
 # API Changes — 0.3.0 through 0.12.0
 
+## Unreleased 0.12.0: contiguous matrix reads
+
+`read_matrix_run_into`, `read_matrix_run_bytes_into` and `read_matrix_row_into`
+add shared-borrow bulk reads on file, reader and writer handles. Generated
+format-first readers expose `<block>_run_into`, `<block>_run_bytes_into` and
+`<block>_row_into`. Existing APIs and VMAT v5 bytes remain unchanged.
+
+The second dimension in `dims = [first, second]` is contiguous. Choose the
+schema order for the primary scan direction; the other direction is strided.
+Growing storage still grows its first dimension. Runs batch checks and payload
+reads, cross chunk boundaries, and reuse bounded scratch. All requested cells
+must be committed. On error the caller must discard the partially filled output.
+See [the matrix API](api-reference.md) for buffer and integrity costs.
+
 Migration document. Companion to [Known Limitations](known-limitations.md)
 and the [Changelog](../CHANGELOG.md).
 

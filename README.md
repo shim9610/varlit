@@ -145,6 +145,12 @@ compact spill state and values to temporary files. Use `*_with_key_limit` for an
 explicit cardinality/work ceiling; `estimate_keyed_merge` reports counts and a
 hypothetical fully resident size, not the current external implementation's peak.
 
+Matrix runs can read consecutive cells into caller-owned buffers with
+`read_matrix_run_into`, `read_matrix_run_bytes_into`, or `read_matrix_row_into`.
+They batch metadata and payload reads across growing chunks. The second axis in
+`dims = [first, second]` is contiguous: choose the declaration order for row or
+column scans. See [matrix APIs](docs/api-reference.md) for memory and hole handling.
+
 Matrix (preallocated) storage is a third mode. Its integrity metadata is paged
 and sparse, so create-time metadata I/O and per-mutation integrity cost are
 bounded by the cells actually used rather than by the declared cell count —

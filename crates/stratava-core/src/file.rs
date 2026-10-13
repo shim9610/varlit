@@ -1,3 +1,6 @@
+#[path = "matrix_bulk.rs"]
+mod matrix_bulk;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -4209,6 +4212,33 @@ impl StratavaReader {
         self.file.read_matrix_cell(key)
     }
 
+    /// See [`StratavaFile::read_matrix_run_into`].
+    pub fn read_matrix_run_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_run_into(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_run_bytes_into`].
+    pub fn read_matrix_run_bytes_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_run_bytes_into::<T>(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_row_into`].
+    pub fn read_matrix_row_into<T: StratavaMatrixBlock>(
+        &self,
+        row: u64,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_row_into(row, out)
+    }
+
     pub fn matrix_cell_payload<T: StratavaMatrixBlock>(&self, key: MatrixKey) -> Result<Vec<u8>> {
         self.file.matrix_cell_payload::<T>(key)
     }
@@ -4963,6 +4993,33 @@ impl StratavaWriter {
 
     pub fn read_matrix_cell<T: StratavaMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
         self.file.read_matrix_cell(key)
+    }
+
+    /// See [`StratavaFile::read_matrix_run_into`].
+    pub fn read_matrix_run_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_run_into(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_run_bytes_into`].
+    pub fn read_matrix_run_bytes_into<T: StratavaMatrixBlock>(
+        &self,
+        start: MatrixKey,
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_run_bytes_into::<T>(start, out)
+    }
+
+    /// See [`StratavaFile::read_matrix_row_into`].
+    pub fn read_matrix_row_into<T: StratavaMatrixBlock>(
+        &self,
+        row: u64,
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_row_into(row, out)
     }
 
     pub fn matrix_cell_payload<T: StratavaMatrixBlock>(&self, key: MatrixKey) -> Result<Vec<u8>> {
@@ -10911,11 +10968,11 @@ impl StratavaFile {
     /// *uncompressed* cell bytes and stored plain, so a corrupted sub-block
     /// decodes to something whose checksum does not match, and the caller sees
     /// the mismatch rather than the bytes.
-    fn read_compressed_chunk_cell(
+    fn read_compressed_chunk_sub_block(
         &self,
         location: ChunkBlockLocation,
         ordinal: u64,
-    ) -> Result<(Vec<u8>, Option<u32>)> {
+    ) -> Result<Vec<u8>> {
         let cell_crc = location.cell_crc;
         let width = compressed_cell_width(location.stride, cell_crc);
         let per = cells_per_sub_block(width);
@@ -10965,6 +11022,11 @@ impl StratavaFile {
             .read_limits
             .check(ReadLimitKey::MaterializedBytes, raw_len)?;
 
+        // Writers store raw bytes when compression would not shrink them.
+        // Refuse an oversized extent before allocating attacker-controlled bytes.
+        if stored_len > raw_len {
+            return Err(Error::InvalidMatrixChunk);
+        }
         let mut stored = try_zeroed_vec(stored_len, "matrix chunk sub-block")?;
         self.snapshot.read_exact_at(data_at, &mut stored)?;
         note_chunk_bytes_read(stored_len);
@@ -10989,6 +11051,18 @@ impl StratavaFile {
             decoded
         };
 
+        Ok(raw)
+    }
+
+    fn read_compressed_chunk_cell(
+        &self,
+        location: ChunkBlockLocation,
+        ordinal: u64,
+    ) -> Result<(Vec<u8>, Option<u32>)> {
+        let cell_crc = location.cell_crc;
+        let width = compressed_cell_width(location.stride, cell_crc);
+        let per = cells_per_sub_block(width);
+        let raw = self.read_compressed_chunk_sub_block(location, ordinal)?;
         let at = usize::try_from(
             (ordinal % per)
                 .checked_mul(width)

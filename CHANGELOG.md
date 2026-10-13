@@ -6,6 +6,13 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Add shared-borrow matrix run and row reads into caller-owned typed or encoded
+  buffers. Batch payload, commit and checksum reads across fixed regions and
+  growing chunks; compressed sub-blocks are decoded per batch. The second
+  declared dimension is the contiguous axis, so declaration order selects
+  row- or column-oriented storage. Missing cells fail closed; snapshots and the
+  VMAT v5 format are unchanged.
+
 - Store directly addressed bitmap page-to-slot metadata in VMAT v5 alongside
   the counted forward list. OnDemand opens read headers without reconstructing
   a directory; cache misses read original metadata. `with_matrix_directory_cache_bytes`

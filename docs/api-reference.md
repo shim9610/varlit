@@ -1139,6 +1139,9 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `write_matrix_cell::<T>(key, &value)` | encode and write a slot, clearing commit first |
 | `commit_matrix_cell::<T>(key)` | mark a written cell visible |
 | `read_matrix_cell::<T>(key)` | read committed cell or return `MatrixNotCommitted` |
+| `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
+| `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
+| `read_matrix_row_into::<T>(first_axis, out)` | read one complete storage row; slice length equals dimension 1 |
 | `matrix_cell_status::<T>(key)` | committed/not committed status |
 | `clear_matrix_cell::<T>(key)` | clear one cell commit bit |
 | `clear_matrix_category(category)` | clear a whole commit category |
@@ -1150,6 +1153,48 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `verify_matrix_metadata()` | run the commit-metadata verification pass now; returns the same report |
 | `rebuild_matrix_commit_from_crc::<T>()` | rebuild commit map from slot CRC evidence; refuses when the CRC-validity evidence is incomplete |
 | `write_matrix_cell_durable` | write/commit with ordered durability barrier, then a post-commit hook |
+
+Matrix run reads take `&self` on `StratavaFile`, `StratavaReader` and
+`StratavaWriter`. Format-first readers also expose `cell_run_into`,
+`cell_run_bytes_into`, and `cell_row_into` for a block named `Cell`, including
+through the generated read trait.
+
+**Select the contiguous direction in the schema.** `dims = [row, col]` stores
+adjacent columns together; a run advances through those columns and then to the
+next row. `dims = [col, row]` stores adjacent rows together within each column.
+Declare the commit keyspace in the same order. Generated keys retain the named
+fields; low-level `MatrixKey::new(first, second)` follows declaration order.
+The growing dimension must remain the first axis for every matrix block.
+A row-oriented file does not also provide contiguous physical column access;
+use individual reads for its strided direction, or choose the other schema order.
+
+For example, with a row-oriented block and 128 columns:
+
+```ignore
+let mut row = vec![Cell { value: 0 }; 128];
+reader.read_matrix_row_into::<Cell>(42, &mut row)?;
+// Several rows, or a partial row followed by later rows, use a run:
+let mut cells = vec![Cell { value: 0 }; 4096];
+reader.read_matrix_run_into::<Cell>(MatrixKey::new(42, 16), &mut cells)?;
+```
+
+A run crosses row and growing-chunk boundaries internally. Plain runs read
+contiguous payload batches, bitmap spans and checksum spans, rather than calling
+`read_matrix_cell` once per cell. One batch is at most 1,024 cells and 64 KiB of
+payload, except that a wider cell requires one slot-sized buffer. Compressed
+chunks decode their bounded sub-blocks; they do not decode the entire chunk.
+The supplied output is charged to `MaterializedBytes`; typed reads also charge
+one payload buffer and cumulative decoder allocations. Compressed reads reserve
+sub-block workspace too. Fixed metadata scratch is additional. To process a
+large matrix under a small budget, reuse a small output slice across runs.
+
+Every requested cell must be committed. Holes return `MatrixNotCommitted`,
+checksum damage is refused, and readers use their existing captured generation.
+A failed call may have changed an output prefix: discard that result. Empty
+runs validate the registered type and read no cells. Encoded output uses the
+file/type endianness, not a cast to native structs. These APIs add no implicit
+sync, reader sharing or locks, and do not alter the file format. They read one
+matrix block at a time; cross-block joins remain application work over batches.
 
 `rebuild_matrix_commit_from_crc::<T>()` now refuses, with
 `Error::MatrixFatalCorruption`, when the block's CRC-validity page index could

@@ -41,8 +41,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use stratava::{
-    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, StratavaBlock, StratavaDecode, StratavaEncode,
-    decode_from_slice, encode_to_vec, stratava_format,
+    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, StratavaBlock, StratavaDecode,
+    StratavaEncode, decode_from_slice, encode_to_vec, stratava_format,
 };
 
 /// Compile-time proof that a codec declares a usable identity.
@@ -473,6 +473,16 @@ fn check_format_roundtrip(dir: &std::path::Path) {
         .expect("read variable blocks");
     assert_eq!(records, vec![record]);
     assert_eq!(reader.cell(key).expect("read matrix cell"), cell);
+    let mut run = vec![cell.clone()];
+    reader
+        .cell_run_into(key, &mut run)
+        .expect("read matrix run");
+    assert_eq!(run[0], cell);
+    let mut encoded = vec![0; <Cell as stratava::StratavaMatrixBlock>::SLOT_STRIDE as usize];
+    reader
+        .cell_run_bytes_into(key, &mut encoded)
+        .expect("read encoded matrix run");
+
     println!("  file ok: fixed + variable + matrix blocks round-tripped");
 }
 
@@ -490,10 +500,14 @@ fn check_scalable_roundtrip(dir: &std::path::Path) {
     let path = dir.join("scalable.stratava");
     let options = stratava::DiskIndexOptions::default();
     let mut writer = ScalableFixture::create_indexed_writer(&path, options).unwrap();
-    writer.push_scalable_item(&ScalableItem { key: 7, value: 1 }).unwrap();
+    writer
+        .push_scalable_item(&ScalableItem { key: 7, value: 1 })
+        .unwrap();
     writer.immediate().unwrap();
     let mut reader = ScalableFixture::open_indexed_reader(&path, options).unwrap();
-    writer.push_scalable_item(&ScalableItem { key: 7, value: 2 }).unwrap();
+    writer
+        .push_scalable_item(&ScalableItem { key: 7, value: 2 })
+        .unwrap();
     let dirty = ScalableFixture::open_indexed_reader(&path, options).unwrap();
     assert_eq!(dirty.get_scalable_item(&7).unwrap().unwrap().value, 1);
     assert!(reader.release_snapshot());
@@ -508,7 +522,10 @@ fn main() {
     check_every_public_codec();
     check_derived_blocks();
 
-    let dir = std::env::temp_dir().join(format!("stratava-public-api-fixture-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "stratava-public-api-fixture-{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("create fixture temp dir");
     let result = std::panic::catch_unwind(|| {
         check_format_roundtrip(&dir);

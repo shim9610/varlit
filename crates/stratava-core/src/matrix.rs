@@ -2623,6 +2623,35 @@ impl SparseBitmap {
         }
     }
 
+    /// Validate a run while faulting each bitmap page only once, even with a zero cache.
+    fn first_unset(&self, first: u64, count: u64, read: BitmapRead<'_>) -> Result<Option<u64>> {
+        let end = first
+            .checked_add(count)
+            .filter(|end| *end <= self.bit_count)
+            .ok_or(Error::InvalidMatrixLayout)?;
+        let mut at = first;
+        while at < end {
+            let page = at / (BITMAP_PAGE_BYTES * 8);
+            let stop =
+                end.min(at.saturating_add(BITMAP_PAGE_BYTES * 8 - at % (BITMAP_PAGE_BYTES * 8)));
+            let store = self.faulted_store(page, read)?;
+            let Some(held) = store.pages.get(&page) else {
+                return Ok(Some(at));
+            };
+            while at < stop {
+                let take = (8 - at % 8).min(stop - at);
+                let mask = (((1u16 << take) - 1) << (at % 8)) as u8;
+                let byte = held.bytes[(at / 8 % BITMAP_PAGE_BYTES) as usize];
+                let missing = !byte & mask;
+                if missing != 0 {
+                    return Ok(Some(at / 8 * 8 + u64::from(missing.trailing_zeros())));
+                }
+                at += take;
+            }
+        }
+        Ok(None)
+    }
+
     fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool> {
         if ordinal >= self.bit_count {
             return Err(Error::InvalidMatrixLayout);
@@ -3538,6 +3567,20 @@ pub(crate) mod crc_valid_evidence {
                 Ok(())
             } else {
                 Err(absent())
+            }
+        }
+
+        /// Fail-closed range check: no validity bits escape as recovery evidence.
+        pub(super) fn require_meaningful_range(
+            &self,
+            first: u64,
+            count: u64,
+            absent: impl FnOnce(u64) -> Result<Error>,
+            read: BitmapRead<'_>,
+        ) -> Result<()> {
+            match self.bits.first_unset(first, count, read)? {
+                Some(ordinal) => Err(absent(ordinal)?),
+                None => Ok(()),
             }
         }
 
@@ -4754,6 +4797,76 @@ pub(crate) fn read_cell<T: StratavaMatrixBlock>(
                 resource: "materialized bytes",
             })?;
     Decoder::decode_from_slice_limited(&payload, T::ENDIAN.unwrap_or(spec.endian), decode_limit)
+}
+
+/// A bounded contiguous run. The caller splits larger runs and chunk boundaries.
+pub(crate) fn read_run_payload<T: StratavaMatrixBlock>(
+    spec: FormatSpec,
+    layout: &MatrixLayout,
+    reader: MatrixRegionReader<'_>,
+    key: MatrixKey,
+    out: &mut [u8],
+) -> Result<()> {
+    let category = ensure_matrix_block::<T>(spec)?;
+    let allowed = ensure_commit_publishable(layout, category)?;
+    let block_index = layout.block_index(&allowed, T::ID)?;
+    let block = &layout.blocks[block_index];
+    let first = layout.ordinal_for_block(block_index, key)?;
+    let stride = usize::try_from(block.slot_stride).map_err(|_| Error::InvalidMatrixLayout)?;
+    if stride == 0 || !out.len().is_multiple_of(stride) {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    let count = (out.len() / stride) as u64;
+    if count > 1024
+        || first
+            .checked_add(count)
+            .is_none_or(|end| end > block.cell_count)
+    {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    let commit = &layout.commits[layout.commit_index(&allowed, category)?];
+    if commit
+        .bits
+        .first_unset(first, count, reader.bitmap_read())?
+        .is_some()
+    {
+        return Err(Error::MatrixNotCommitted);
+    }
+    reader.read_exact_at(layout.slot_offset(block_index, first)?, out)?;
+    if let Some(base) = block.crc_offset {
+        let mut crcs = [0u8; 4096];
+        reader.read_exact_at(
+            indexed_crc_offset(base, first)?,
+            &mut crcs[..count as usize * 4],
+        )?;
+        if block.crc_valid_offset.is_some() {
+            block.crc_valid_bits.require_meaningful_range(
+                first,
+                count,
+                |ordinal| {
+                    let at = (ordinal - first) as usize * stride;
+                    Ok(Error::MatrixChecksumMismatch {
+                        offset: block.slot_region_offset + ordinal * block.slot_stride,
+                        expected: 0,
+                        actual: crc32_bytes(&out[at..at + stride])?,
+                    })
+                },
+                reader.bitmap_read(),
+            )?;
+        }
+        for (i, payload) in out.chunks_exact(stride).enumerate() {
+            let expected = u32::from_le_bytes(crcs[i * 4..i * 4 + 4].try_into().expect("checksum"));
+            let actual = crc32_bytes(payload)?;
+            if expected != actual {
+                return Err(Error::MatrixChecksumMismatch {
+                    offset: layout.slot_offset(block_index, first + i as u64)?,
+                    expected,
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn cell_status<T: StratavaMatrixBlock>(
