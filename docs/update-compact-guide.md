@@ -105,8 +105,10 @@ flush/sync, and atomic replacement.
 ## Merge And Compact Working Storage
 
 Merge and compact retain bounded index buffers and one operation's decoded
-values. Per-key state, encoded value history and final ordering live in private
-unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+values. Per-key state, encoded value history and final ordering stay in bounded
+RAM buffers until full, then spill independently to private unnamed files.
+Explicit finite `max_index_bytes` is honored; the unbounded default uses 2 MiB
+per buffer. These are per-buffer capacities, not a process-wide RAM limit;
 fixed tree-page scratch and one key/record are additional minimum working space.
 `max_materialized_bytes` applies to the current operation, not every value ever
 seen. An explicitly requested owned `HashMap` still has a cumulative result limit.

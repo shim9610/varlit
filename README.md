@@ -91,8 +91,8 @@ is covered in **[API Changes](docs/api-changes.md)**.
   the [Capability Boundary](#capability-boundary) below for the exact trade.
   Residency is no longer part of this problem: an open retains **no** commit-map
   payload. What no declaration removes is the persisted page index, read in full
-  at open and mirrored in a private temporary index, so open remains
-  `O(live pages)`. Bounded RAM does not remove the index-building I/O.
+  at open and mirrored in a bounded owner-local directory, so open remains
+  `O(live pages)`. The directory uses temporary storage only beyond its budget.
 - **Measured petabyte-scale merge throughput.** Merge/compact now spill state
   and values to private temporary files, but require scratch disk and one
   operation's decode workspace. Large-scale throughput has not been established.
@@ -175,7 +175,10 @@ normally. Declaring `MatrixMetadataVerification::OnDemand` takes the same opens
 down to 32 and 1,040 bytes and 0 pages; what you give up is the matrix announcing
 commit-map damage at open, the whole-category quarantine, and the strict-recovery
 writer gate. The persisted page index is still enumerated and mirrored in a
-private temporary tree; this bounds RAM but adds scratch I/O.
+bounded owner-local directory. Small directories stay in RAM; larger ones
+spill, adding scratch I/O. `with_matrix_directory_cache_bytes(bytes)` controls
+this separate working budget (1 MiB per bitmap by default, clamped to the bitmap
+ceiling). Zero selects immediate spill. User publication points are unchanged.
 
 **What `OnDemand` actually costs you, since it is the one knob here worth
 understanding.** The commit-map half of `MatrixRecoveryReport` is produced by the

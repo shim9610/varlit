@@ -1008,11 +1008,13 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> stratav
         "the open transient is one u64 per record of the largest input"
     );
 
-    // The measured property: with heap-owning values the real peak exceeds the
-    // structural estimate, so it must never be published as a bound.
+    // Force spill with an explicit working budget. A generous budget is now
+    // allowed to retain encoded values in RAM, so it cannot prove spill bounds.
     let (result, peak) = peak_allocations::measure(|| {
         stratava::merge_keyed_files::<ResidentMergeUser, _>(
-            ResidentEstimateFormat::spec(),
+            ResidentEstimateFormat::spec().with_resource_limits(
+                stratava::ReadLimits::STANDARD.with_max_index_bytes(64 * 1024),
+            ),
             base.as_path(),
             &[delta.as_path()],
             merged.as_path(),

@@ -52,8 +52,19 @@ fn macro_compile_contracts() {
     tests.pass("tests/ui/pass_policies.rs");
     tests.pass("tests/ui/pass_format_dsl.rs");
     tests.pass("tests/ui/pass_matrix_aux.rs");
-    tests.compile_fail("tests/ui/fail_share_matrix_reader.rs");
-    tests.compile_fail("tests/ui/fail_share_generated_matrix_reader.rs");
+    // Fault injection re-exports ResidentIndex through enforcement_probe, so
+    // rustc names that path in the same !Sync diagnostic. Keep both feature
+    // configurations checked; the wrappers include the identical source.
+    #[cfg(not(feature = "scalable-fault-injection"))]
+    {
+        tests.compile_fail("tests/ui/fail_share_matrix_reader.rs");
+        tests.compile_fail("tests/ui/fail_share_generated_matrix_reader.rs");
+    }
+    #[cfg(feature = "scalable-fault-injection")]
+    {
+        tests.compile_fail("tests/ui/fail_share_matrix_reader_fault.rs");
+        tests.compile_fail("tests/ui/fail_share_generated_matrix_reader_fault.rs");
+    }
     tests.pass("tests/ui/pass_layout.rs");
     tests.compile_fail("tests/ui/fail_share_generated_layout_reader.rs");
     tests.pass("tests/ui/pass_macro_hygiene.rs");

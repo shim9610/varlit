@@ -95,8 +95,9 @@ impl BitmapDelta {
                 .ok_or(Error::MatrixFatalCorruption)?
         };
         let changed = changes.units(index + 8, count * 8, 8)?;
+        bits.directory.prepare_stage()?;
         let mut directory = bits.directory.clone();
-        let mut affected = BitmapDirectory::default();
+        let mut affected = BitmapDirectory::with_limit(changes.limits.matrix_directory_budget());
         let mut changed_slots = SpillRows::<8>::new(4096);
         let mut update = |slot: u64| -> Result<()> {
             changes
@@ -189,12 +190,14 @@ impl BitmapDelta {
             }
         }
         let mut invalidate = Vec::new();
-        for &page in bits.store().pages.keys() {
-            if affected.contains(page)? {
+        let store = bits.store();
+        affected.visit_pages(|page, _| {
+            if store.pages.contains_key(&page) {
                 try_reserve_vec(&mut invalidate, 1, "matrix follow cache invalidation")?;
                 invalidate.push(page);
             }
-        }
+            Ok(())
+        })?;
         Ok(Self {
             directory,
             invalidate,

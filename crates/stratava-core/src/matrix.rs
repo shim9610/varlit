@@ -1606,12 +1606,10 @@ impl MatrixRecoveryReport {
         scaling_counters::get(&scaling_counters::CREATE_METADATA_BYTES_WRITTEN)
     }
 
-    /// Modelled resident bytes held by persisted page-index tracking on this
-    /// thread (F-03).
-    ///
-    /// This is the second term of the `ReadLimitKey::MatrixBitmapBytes` charge.
-    /// It follows the *live* page set, so set/clear churn returns it to its
-    /// starting value instead of growing with historically touched pages.
+    /// Mandatory non-cache residency charged for page-index tracking (F-03).
+    /// The spillable representation has no mandatory per-entry charge. This
+    /// excludes the optional `matrix_directory_cache_bytes` working cache,
+    /// COW staging and fixed tree-page workspace; it is not total heap usage.
     pub fn matrix_resident_page_index_bytes() -> u64 {
         scaling_counters::get(&scaling_counters::PAGE_INDEX_BYTES_RESIDENT)
     }
@@ -2549,11 +2547,13 @@ impl SparseBitmap {
         Ok(self.directory.len())
     }
 
-    fn note_indexed_page(&mut self, page: u64, _budget: &mut ResidentBitmapBudget) -> Result<()> {
+    fn note_indexed_page(&mut self, page: u64, budget: &mut ResidentBitmapBudget) -> Result<()> {
         let slot = self.index_len()?;
         if slot >= self.page_count || slot >= PAGE_INDEX_MAX_ENTRIES || page >= self.page_count {
             return Err(Error::InvalidMatrixLayout);
         }
+        self.directory
+            .set_limit(budget.limits.matrix_directory_budget())?;
         self.directory.push(page)
     }
 
@@ -3013,8 +3013,9 @@ impl SparseBitmap {
 
     /// Modelled resident cost of this bitmap's page-index tracking (F-03).
     fn resident_index_bytes(&self) -> u64 {
-        // Only fixed-size roots and one recent lookup are retained. Tree pages
-        // are temporary operation buffers, never a resident per-entry mirror.
+        // No mandatory per-entry residency. The optional directory cache is
+        // bounded separately by matrix_directory_cache_bytes, like payload
+        // and generation caches, and is not an admission charge on the file.
         0
     }
 }
@@ -6140,6 +6141,8 @@ mod page_index {
         page: u64,
         budget: &mut ResidentBitmapBudget,
     ) -> Result<Option<PreparedAppend>> {
+        bits.directory
+            .set_limit(budget.limits.matrix_directory_budget())?;
         if bits.directory.contains(page)? {
             return Ok(None);
         }
@@ -6162,8 +6165,8 @@ mod page_index {
         let count = slot.checked_add(1).ok_or(Error::InvalidMatrixLayout)?;
         let header = page_index_header_value(count)?.to_le_bytes();
 
-        let _ = budget;
         injected_mirror_reservation_failure(8)?;
+        bits.directory.prepare_stage()?;
         let mut directory = compaction
             .as_ref()
             .map_or_else(|| bits.directory.clone(), |p| p.directory.clone());
@@ -6185,7 +6188,7 @@ mod page_index {
     /// vectors, the offset arithmetic and the entry encoding — so the rewrite
     /// itself is a single write of already-encoded bytes.
     fn prepare_compaction(base: u64, bits: &SparseBitmap) -> Result<PreparedCompaction> {
-        let mut directory = BitmapDirectory::default();
+        let mut directory = bits.directory.empty_like();
         let mut encoded = crate::spill_rows::SpillRows::<8>::new(4096);
         bits.directory.visit_pages(|page, _| {
             if page >= bits.page_count {
@@ -6267,9 +6270,10 @@ mod page_index {
     /// at open and nothing else).
     pub(super) fn prepare_release(
         base: u64,
-        bits: &SparseBitmap,
+        bits: &mut SparseBitmap,
         page: u64,
     ) -> Option<PreparedRelease> {
+        bits.directory.prepare_stage().ok()?;
         let slot = bits.directory.first(page).ok()??;
         let last = bits.index_len().ok()?.checked_sub(1)?;
         let moved = bits.directory.slot(last).ok()??;
@@ -6358,8 +6362,10 @@ mod page_index {
         }
         let entry_offset = page_index_entry_offset(base, slot)?;
         let entry = entry_bytes(page)?;
-        let _ = budget;
+        bits.directory
+            .set_limit(budget.limits.matrix_directory_budget())?;
         injected_mirror_reservation_failure(8)?;
+        bits.directory.prepare_stage()?;
         let mut directory = bits.directory.clone();
         directory.push(page)?;
         Ok(PreparedRepublish {
@@ -6665,7 +6671,7 @@ fn write_commit_map_pages(
         digest_offset,
         index_offset,
     } = regions;
-    let mut pages = BitmapDirectory::default();
+    let mut pages = BitmapDirectory::with_limit(budget.limits.matrix_directory_budget());
     previous.directory.visit_pages(|page, _| pages.push(page))?;
     for &page in bits.store_mut().pages.keys() {
         if !pages.contains(page)? {

@@ -39,8 +39,11 @@ and the [Changelog](../CHANGELOG.md).
   to `u64::MAX`. Checked arithmetic, explicit user admission caps and finite
   working-memory limits remain. Shapes still declare at most one growing axis.
 
-Public method signatures and persisted formats are unchanged by these budget
-changes. Scratch disk availability is now part of ordinary large-directory
+Existing method signatures and persisted formats are unchanged by these budget
+changes. `ReadLimits::with_matrix_directory_cache_bytes(bytes)` adds control of
+the per-bitmap directory working budget (1 MiB by default, clamped to the bitmap
+ceiling). Small directories and merge scratch remain in RAM until their buffers
+fill. Explicit finite native/merge index budgets are no longer capped at 2 MiB. Scratch disk availability is now part of ordinary large-directory
 open/follow and merge execution. Native open can still scan records; replacement
 staging and explicitly owned results can still be proportional to their output.
 

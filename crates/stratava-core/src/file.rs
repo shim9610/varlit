@@ -16726,10 +16726,12 @@ where
 /// Merges `base` with `deltas` into `output`, keeping the last write per key.
 ///
 /// Inputs are processed in shard, sequence and physical-ordinal order. Per-key
-/// state, values and output ordering use private temporary files. Index buffers
-/// are capped by `max_index_bytes` (at most 2 MiB per buffer); per-operation
+/// state, values and output ordering stay in bounded RAM buffers and spill to
+/// private files only when full. Explicit finite `max_index_bytes` is honored;
+/// the unbounded default uses 2 MiB per buffer. Per-operation
 /// decoding uses `max_materialized_bytes`. One record/key and fixed tree-page
-/// workspace remain minimum working storage. No total-key-sized RAM map is kept.
+/// workspace remain minimum working storage. Buffers are capped independently;
+/// they do not grow without bound with the total key count.
 ///
 /// Scratch disk grows with history and must have free space. Output replacement
 /// happens only after the complete result has been written and synced. Spilling

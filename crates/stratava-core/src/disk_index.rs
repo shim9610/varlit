@@ -3468,6 +3468,12 @@ impl std::fmt::Debug for ScratchIndex {
     }
 }
 impl ScratchIndex {
+    pub(crate) fn set_cache_bytes(&mut self, bytes: usize) {
+        if self.cache_bytes != bytes {
+            self.cache_bytes = bytes;
+            self.reader = tree::Reader::new(self.file.clone(), self.end, u32::MAX as usize, bytes);
+        }
+    }
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
         let file = std::sync::Arc::new(tempfile::tempfile()?);
         file.set_len(tree::PAGE as u64)?;

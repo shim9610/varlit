@@ -427,8 +427,10 @@ rather than always on.
 
 Ordinary `StratavaFile`, reader and writer opens now keep a bounded directory
 buffer and spill excess entries into private temporary storage. Scan/follow
-staging uses the same strategy. `max_index_bytes` controls a buffer (capped at
-2 MiB), not the total number of file records. Fixed row/page scratch is additional.
+staging uses the same strategy. An explicit finite `max_index_bytes` sets each
+buffer capacity; the unbounded default uses 2 MiB. This is not a file record-count
+limit. Spilled rows use a private read window of at most 64 KiB, also clamped to
+the buffer capacity. Fixed row/page scratch is additional.
 Explicit caller-owned directory/collection APIs still enforce their result size.
 
 This removes whole-directory RAM growth, **not scanning work**. A format without
@@ -464,8 +466,10 @@ stream/indexed APIs to avoid them.
 ### 2.3 External merge needs scratch disk and per-record workspace
 
 Merge and compact retain bounded index buffers and one operation's decoded
-values. Per-key state, encoded value history and final ordering live in private
-unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+values. Per-key state, encoded value history and final ordering stay in bounded
+RAM buffers until full, then spill independently to private unnamed files.
+Explicit finite `max_index_bytes` is honored; the unbounded default uses 2 MiB
+per buffer. These are per-buffer capacities, not a process-wide RAM limit;
 fixed tree-page scratch and one key/record are additional minimum working space.
 `max_materialized_bytes` applies to the current operation, not every value ever
 seen. An explicitly requested owned `HashMap` still has a cumulative result limit.

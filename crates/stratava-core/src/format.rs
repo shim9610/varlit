@@ -497,6 +497,10 @@ pub struct ReadLimits {
     /// Missing resolves to 2 MiB; zero disables it. This is separate from the
     /// bitmap cache and excludes fixed page buffers and map bookkeeping.
     pub matrix_generation_cache_bytes: ReadLimit,
+    /// Per-bitmap owner-local directory working budget. Missing defaults to
+    /// 1 MiB, clamped to the bitmap ceiling. Zero selects immediate spill.
+    /// Separate from bitmap payload and generation caches; not a file limit.
+    pub matrix_directory_cache_bytes: ReadLimit,
     /// Declared matrix commit-metadata verification policy.
     ///
     /// [`MatrixMetadataVerification::Missing`] unless somebody declared one,
@@ -557,6 +561,7 @@ impl ReadLimits {
         // clamped to whatever `max_matrix_bitmap_bytes` ends up being.
         matrix_metadata_residency: MatrixMetadataResidency::Missing,
         matrix_generation_cache_bytes: ReadLimit::Missing,
+        matrix_directory_cache_bytes: ReadLimit::Missing,
         // `Missing` for the same reason: a preset that declared a verification
         // policy would be indistinguishable from a caller who declared one, and
         // would win over a format's declaration through `overlay`.
@@ -606,6 +611,7 @@ impl ReadLimits {
             // policy, exactly as they declare no ceilings.
             matrix_metadata_residency: MatrixMetadataResidency::Missing,
             matrix_generation_cache_bytes: ReadLimit::Missing,
+            matrix_directory_cache_bytes: ReadLimit::Missing,
             matrix_metadata_verification: MatrixMetadataVerification::Missing,
             integrity_verification: IntegrityVerification::Missing,
             trusted_api: false,
@@ -623,6 +629,26 @@ impl ReadLimits {
         let bytes = match self.matrix_generation_cache_bytes {
             ReadLimit::Finite(n) => n,
             _ => 2 * 1024 * 1024,
+        };
+        usize::try_from(bytes).unwrap_or(usize::MAX)
+    }
+
+    /// Sets each matrix page-directory working budget. Small directories stay
+    /// in RAM; excess state spills to a private file. The default is 1 MiB.
+    /// COW staging and fixed page workspace are additional. No sync is implied.
+    pub const fn with_matrix_directory_cache_bytes(mut self, bytes: u64) -> Self {
+        self.matrix_directory_cache_bytes = ReadLimit::Finite(bytes);
+        self
+    }
+
+    pub(crate) fn matrix_directory_budget(self) -> usize {
+        let bytes = match self.matrix_directory_cache_bytes {
+            ReadLimit::Finite(n) => n,
+            _ => 1024 * 1024,
+        };
+        let bytes = match self.resolve().max_matrix_bitmap_bytes {
+            ReadLimit::Finite(n) => bytes.min(n),
+            _ => bytes,
         };
         usize::try_from(bytes).unwrap_or(usize::MAX)
     }
@@ -840,6 +866,9 @@ impl ReadLimits {
             matrix_generation_cache_bytes: self
                 .matrix_generation_cache_bytes
                 .tighten(runtime.matrix_generation_cache_bytes),
+            matrix_directory_cache_bytes: self
+                .matrix_directory_cache_bytes
+                .tighten(runtime.matrix_directory_cache_bytes),
             // Not a limit: a residency policy is a declaration, not a ceiling,
             // so there is nothing to meet. The format's declaration stands; a
             // runtime one is taken only where the format made none.
@@ -902,6 +931,9 @@ impl ReadLimits {
             matrix_generation_cache_bytes: self
                 .matrix_generation_cache_bytes
                 .overlay(runtime.matrix_generation_cache_bytes),
+            matrix_directory_cache_bytes: self
+                .matrix_directory_cache_bytes
+                .overlay(runtime.matrix_directory_cache_bytes),
             // Composes like every ceiling above it: a runtime `ReadLimits` that
             // never called `with_matrix_metadata_residency` carries `Missing`
             // and leaves a format-declared policy alone. Taking the runtime

@@ -1,4 +1,66 @@
 use stratava::{MatrixCellStatus, stratava_format};
+
+#[test]
+fn directory_budgets_preserve_snapshots_follow_and_compaction() -> stratava::Result<()> {
+    for cache in [0, 4096, 1024 * 1024] {
+        for integrity in [
+            stratava::IntegrityPolicy::None,
+            #[cfg(feature = "integrity")]
+            stratava::IntegrityPolicy::Crc32,
+        ] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("directory-budget.stratava");
+            let spec = Generations::spec()
+                .with_integrity_policy(integrity)
+                .with_resource_limits(
+                    stratava::ReadLimits::STANDARD.with_matrix_directory_cache_bytes(cache),
+                );
+            let mut writer = spec.create_writer_with_dims(
+                &path,
+                stratava::MatrixDimensions::from_pairs([("scan", 96 * 32768), ("ch", 1)]),
+            )?;
+            for i in 0..96 {
+                let key = stratava::MatrixKey::new(i * 32768, 0);
+                writer.write_matrix_cell(key, &Cell { value: i })?;
+                writer.commit_matrix_cell::<Cell>(key)?;
+            }
+            writer.sync()?;
+            let held = spec.open_reader(&path)?;
+            let mut reader = spec.open_reader(&path)?;
+            for i in 0..96 {
+                let key = stratava::MatrixKey::new(i * 32768, 0);
+                writer.write_matrix_cell(key, &Cell { value: i + 100 })?;
+                writer.commit_matrix_cell::<Cell>(key)?;
+            }
+            reader.follow()?;
+            assert_eq!(
+                reader
+                    .read_matrix_cell::<Cell>(stratava::MatrixKey::new(0, 0))?
+                    .value,
+                0
+            );
+            writer.sync()?;
+            reader.follow()?;
+            writer.compact_matrix()?;
+            reader.follow()?;
+            let cold = spec.open_reader(&path)?;
+            for i in 0..96 {
+                let key = stratava::MatrixKey::new(i * 32768, 0);
+                assert_eq!(held.read_matrix_cell::<Cell>(key)?.value, i);
+                assert_eq!(reader.read_matrix_cell::<Cell>(key)?.value, i + 100);
+                assert_eq!(cold.read_matrix_cell::<Cell>(key)?.value, i + 100);
+            }
+            writer.clear_matrix_category("data")?;
+            writer.sync()?;
+            reader.follow()?;
+            assert_eq!(
+                reader.matrix_cell_status::<Cell>(stratava::MatrixKey::new(0, 0))?,
+                MatrixCellStatus::NotCommitted
+            );
+        }
+    }
+    Ok(())
+}
 stratava_format! {
     pub format Generations {
         magic: b"MGEN";

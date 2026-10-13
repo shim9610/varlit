@@ -313,7 +313,8 @@ without the resident input directory or the per-block priming scans.
 | `StratavaFile` | lower-level read/write type used by both wrappers |
 
 Native handles may scan records at open, but directory and scan buffers are
-bounded by `max_index_bytes`, capped at 2 MiB each. Excess rows use private
+bounded by an explicit finite `max_index_bytes`; the unbounded default uses
+2 MiB per buffer. Excess rows use private
 temporary files. A directory row is 16 bytes on scratch storage; full entries
 are reconstructed from record headers/footers on demand. Fixed row/page workspace
 is additional. Open I/O still scales with records when no usable fast metadata
@@ -1116,6 +1117,16 @@ a later generation explicitly. Old readers never delay publication or compaction
 
 The generation page cache defaults to 2 MiB and is configured at open with
 `ReadLimits::with_matrix_generation_cache_bytes(bytes)` (zero disables it).
+
+The owner-local page-index mirror has a separate working budget:
+`ReadLimits::with_matrix_directory_cache_bytes(bytes)`. It defaults to 1 MiB
+per bitmap, clamped to `max_matrix_bitmap_bytes`. Small directories stay in RAM;
+excess entries spill to a private COW index with a bounded page cache and edit
+buffer. Zero selects immediate spill. COW staging and fixed page workspace are
+additional; this is not a total-reader budget. Compaction/follow temporary sets
+use the same allowance. No file admission limit or automatic sync is introduced.
+The legacy `matrix_resident_page_index_bytes` diagnostic counts mandatory
+non-cache residency, not this optional bounded cache.
 It is separate from the per-bitmap residency budget. `matrix_generation()` exposes
 the captured generation and `matrix_generation_path()` names the required `.vmg`
 companion. `compact_matrix()` on a synced writer reclaims obsolete matrix pages
@@ -1535,8 +1546,10 @@ delta shards win.
 ### Merge working storage
 
 Merge and compact retain bounded index buffers and one operation's decoded
-values. Per-key state, encoded value history and final ordering live in private
-unnamed temporary files. The index buffer cap is `min(max_index_bytes, 2 MiB)`;
+values. Per-key state, encoded value history and final ordering stay in bounded
+RAM buffers until full, then spill independently to private unnamed files.
+Explicit finite `max_index_bytes` is honored; the unbounded default uses 2 MiB
+per buffer. These are per-buffer capacities, not a process-wide RAM limit;
 fixed tree-page scratch and one key/record are additional minimum working space.
 `max_materialized_bytes` applies to the current operation, not every value ever
 seen. An explicitly requested owned `HashMap` still has a cumulative result limit.

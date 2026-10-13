@@ -1,13 +1,13 @@
-//! External keyed merge. Input order is unchanged; only the retained per-key
-//! state and final output ordering move to disposable owner-local files.
+//! Budgeted keyed merge. State, encoded bytes and ordering stay in bounded
+//! owner-local buffers; overflow moves them to disposable private files.
 use super::*;
 use crate::disk_index::ScratchIndex;
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
 struct BufferedIndex {
-    disk: ScratchIndex,
-    pending: BTreeMap<Vec<u8>, [u8; 52]>,
+    disk: Option<ScratchIndex>,
+    pending: HashMap<Vec<u8>, [u8; 52]>,
     bytes: usize,
     limit: usize,
 }
@@ -15,38 +15,140 @@ struct BufferedIndex {
 impl BufferedIndex {
     fn new(limit: usize) -> Result<Self> {
         Ok(Self {
-            disk: ScratchIndex::new(limit / 2)?,
-            pending: BTreeMap::new(),
+            disk: None,
+            pending: HashMap::new(),
             bytes: 0,
             limit: limit.max(128) / 2,
         })
     }
     fn get(&self, key: &[u8]) -> Result<Option<[u8; 52]>> {
-        self.pending
-            .get(key)
-            .copied()
-            .map_or_else(|| self.disk.get(key), |v| Ok(Some(v)))
+        self.pending.get(key).copied().map_or_else(
+            || self.disk.as_ref().map_or(Ok(None), |disk| disk.get(key)),
+            |v| Ok(Some(v)),
+        )
     }
     fn flush(&mut self) -> Result<()> {
         if !self.pending.is_empty() {
-            self.disk.apply(&self.pending)?;
+            if self.disk.is_none() {
+                self.disk = Some(ScratchIndex::new(self.limit)?);
+            }
+            let sorted = self
+                .pending
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect::<BTreeMap<_, _>>();
+            self.disk.as_mut().unwrap().apply(&sorted)?;
             self.pending.clear();
             self.bytes = 0;
         }
         Ok(())
+    }
+    fn finish(&mut self) -> Result<()> {
+        if self.disk.is_some() {
+            self.flush()?;
+        }
+        Ok(())
+    }
+    fn visit(&self, mut visitor: impl FnMut(Vec<u8>, [u8; 52]) -> Result<()>) -> Result<()> {
+        if let Some(disk) = &self.disk {
+            debug_assert!(self.pending.is_empty());
+            disk.visit(visitor)
+        } else {
+            let mut sorted: Vec<_> = self.pending.iter().collect();
+            sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            for (key, value) in sorted {
+                visitor(key.clone(), *value)?;
+            }
+            Ok(())
+        }
     }
     fn put(&mut self, key: Vec<u8>, value: [u8; 52]) -> Result<()> {
         if let Some(old) = self.pending.get_mut(&key) {
             *old = value;
             return Ok(());
         }
-        let bytes = key.len().saturating_add(96);
+        let bytes = key.len().saturating_add(192);
         if self.bytes.saturating_add(bytes) > self.limit {
             self.flush()?;
         }
         self.bytes = self.bytes.saturating_add(bytes);
         self.pending.insert(key, value);
         Ok(())
+    }
+}
+
+/// Append/read scratch stays in RAM until its declared buffer fills. Moving
+/// to a private file preserves offsets, so hash chains and value references
+/// need no rewrite. Each buffer is separately bounded; no publication occurs.
+struct SpillBytes {
+    memory: std::io::Cursor<Vec<u8>>,
+    disk: Option<File>,
+    limit: usize,
+}
+impl SpillBytes {
+    fn new(limit: usize) -> Self {
+        Self {
+            memory: std::io::Cursor::new(Vec::new()),
+            disk: None,
+            limit,
+        }
+    }
+}
+impl Read for SpillBytes {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        match &mut self.disk {
+            Some(file) => file.read(bytes),
+            None => self.memory.read(bytes),
+        }
+    }
+}
+impl Seek for SpillBytes {
+    fn seek(&mut self, at: SeekFrom) -> std::io::Result<u64> {
+        match &mut self.disk {
+            Some(file) => file.seek(at),
+            None => self.memory.seek(at),
+        }
+    }
+}
+impl Write for SpillBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.disk.is_none() {
+            let end = self
+                .memory
+                .position()
+                .checked_add(bytes.len() as u64)
+                .ok_or(std::io::ErrorKind::InvalidInput)?;
+            if end > self.limit as u64 {
+                let mut file = tempfile::tempfile()?;
+                file.write_all(self.memory.get_ref())?;
+                file.seek(SeekFrom::Start(self.memory.position()))?;
+                self.disk = Some(file);
+                self.memory = std::io::Cursor::new(Vec::new());
+            } else if end as usize > self.memory.get_ref().capacity() {
+                let target = self
+                    .memory
+                    .get_ref()
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(end as usize)
+                    .min(self.limit);
+                let additional = target - self.memory.get_ref().len();
+                self.memory
+                    .get_mut()
+                    .try_reserve_exact(additional)
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+        match &mut self.disk {
+            Some(file) => file.write(bytes),
+            None => self.memory.write(bytes),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match &mut self.disk {
+            Some(file) => file.flush(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -62,9 +164,10 @@ fn word(meta: &[u8; 52], at: usize) -> u64 {
 }
 fn store_value<T: StratavaBlock>(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut SpillBytes,
     order: MergeOrder,
     value: Option<T>,
+    payload: &mut Vec<u8>,
 ) -> Result<[u8; 52]> {
     let mut meta = [0; 52];
     meta[..24].copy_from_slice(&order_bytes(order));
@@ -78,14 +181,15 @@ fn store_value<T: StratavaBlock>(
                     .require(ReadLimitKey::LogicalPayloadLen)?
                     .unwrap_or(u64::MAX),
             );
-        let payload = encode_to_vec_limited(
+        crate::codec::encode_into_limited(
             &value,
             T::ENDIAN.unwrap_or(spec.endian),
             bound,
             "materialized bytes",
+            payload,
         )?;
         let offset = file.seek(SeekFrom::End(0))?;
-        file.write_all(&payload)?;
+        file.write_all(payload)?;
         meta[24..32].copy_from_slice(&offset.to_le_bytes());
         meta[32..40].copy_from_slice(&(payload.len() as u64).to_le_bytes());
         meta[40] = 1;
@@ -94,13 +198,23 @@ fn store_value<T: StratavaBlock>(
 }
 fn load_value<T: StratavaBlock>(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut SpillBytes,
     meta: &[u8; 52],
     budget: &mut MaterializationBudget,
 ) -> Result<T> {
     let len = word(meta, 32);
     budget.consume(len)?;
     let len = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
+    if file.disk.is_none() {
+        let offset = usize::try_from(word(meta, 24)).map_err(|_| Error::UnexpectedEof)?;
+        let end = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
+        let payload = file
+            .memory
+            .get_ref()
+            .get(offset..end)
+            .ok_or(Error::UnexpectedEof)?;
+        return budget.decode(payload, T::ENDIAN.unwrap_or(spec.endian));
+    }
     let mut payload = Vec::new();
     payload
         .try_reserve_exact(len)
@@ -125,7 +239,7 @@ fn state_key(kind: u8, number: u64) -> Vec<u8> {
 fn locate_key<K: crate::StratavaKey>(
     spec: FormatSpec,
     state: &BufferedIndex,
-    keys: &mut File,
+    keys: &mut SpillBytes,
     hash: u64,
     key: &K,
     budget: MaterializationBudget,
@@ -140,16 +254,28 @@ fn locate_key<K: crate::StratavaKey>(
         let mut probe_budget = budget;
         probe_budget.consume(len)?;
         let size = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(size)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "merge key",
-                requested: len,
-            })?;
-        bytes.resize(size, 0);
-        keys.read_exact(&mut bytes)?;
-        let old: K = probe_budget.decode(&bytes, spec.endian)?;
+        let old: K = if keys.disk.is_none() {
+            let start =
+                usize::try_from(keys.memory.position()).map_err(|_| Error::UnexpectedEof)?;
+            let end = start.checked_add(size).ok_or(Error::UnexpectedEof)?;
+            let bytes = keys
+                .memory
+                .get_ref()
+                .get(start..end)
+                .ok_or(Error::UnexpectedEof)?;
+            probe_budget.decode(bytes, spec.endian)?
+        } else {
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(size)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "merge key",
+                    requested: len,
+                })?;
+            bytes.resize(size, 0);
+            keys.read_exact(&mut bytes)?;
+            probe_budget.decode(&bytes, spec.endian)?
+        };
         if old == *key {
             return Ok(Some(offset));
         }
@@ -159,7 +285,7 @@ fn locate_key<K: crate::StratavaKey>(
 }
 fn insert_key(
     state: &mut BufferedIndex,
-    keys: &mut File,
+    keys: &mut SpillBytes,
     hash: u64,
     encoded: &[u8],
 ) -> Result<u64> {
@@ -177,8 +303,8 @@ fn insert_key(
 
 pub(super) struct ExternalMerge<T> {
     spec: FormatSpec,
-    values: File,
-    ordered: ScratchIndex,
+    values: SpillBytes,
+    ordered: BufferedIndex,
     _type: std::marker::PhantomData<T>,
 }
 impl<T: StratavaMerge> ExternalMerge<T>
@@ -194,10 +320,12 @@ where
         crate::collections::ensure_registered_block::<T>(spec)?;
         let limit = resident_index::buffer_bytes(spec);
         let mut state = BufferedIndex::new(limit)?;
-        let mut values = tempfile::tempfile()?;
-        let mut keys = tempfile::tempfile()?;
+        let mut values = SpillBytes::new(limit);
+        let mut keys = SpillBytes::new(limit);
         let hasher = std::collections::hash_map::RandomState::new();
         let mut distinct = 0u64;
+        let mut encoded = Vec::new();
+        let mut encoded_value = Vec::new();
         for (shard, path) in std::iter::once(base.as_ref())
             .chain(deltas.iter().map(AsRef::as_ref))
             .enumerate()
@@ -246,11 +374,12 @@ where
                     };
                     (key, None, Some(op))
                 };
-                let encoded = encode_to_vec_limited(
+                crate::codec::encode_into_limited(
                     &key,
                     spec.endian,
                     *budget.remaining_policy(),
                     "materialized bytes",
+                    &mut encoded,
                 )?;
                 budget.consume(encoded.len() as u64)?;
                 let hash = hasher.hash_one(&key);
@@ -285,7 +414,7 @@ where
                     }
                     distinct += 1;
                 }
-                let meta = store_value(spec, &mut values, order, value)?;
+                let meta = store_value(spec, &mut values, order, value, &mut encoded_value)?;
                 let at = match found {
                     Some(at) => at,
                     None => insert_key(&mut state, &mut keys, hash, &encoded)?,
@@ -293,19 +422,19 @@ where
                 state.put(state_key(1, at), meta)?;
             }
         }
-        state.flush()?;
+        state.finish()?;
         let mut ordered = BufferedIndex::new(limit)?;
-        state.disk.visit(|key, meta| {
+        state.visit(|key, meta| {
             if key.first() == Some(&1) && meta[40] != 0 {
                 ordered.put(meta[..24].to_vec(), meta)?;
             }
             Ok(())
         })?;
-        ordered.flush()?;
+        ordered.finish()?;
         Ok(Self {
             spec,
             values,
-            ordered: ordered.disk,
+            ordered,
             _type: std::marker::PhantomData,
         })
     }
@@ -324,6 +453,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scratch_buffers_stay_in_memory_until_full_and_keep_offsets_on_spill() -> Result<()> {
+        let mut bytes = SpillBytes::new(64);
+        bytes.write_all(&[3; 30])?;
+        bytes.write_all(&[7; 30])?;
+        assert!(bytes.disk.is_none());
+        bytes.seek(SeekFrom::Start(25))?;
+        let mut check = [0; 10];
+        bytes.read_exact(&mut check)?;
+        assert_eq!(check, [3, 3, 3, 3, 3, 7, 7, 7, 7, 7]);
+        bytes.seek(SeekFrom::End(0))?;
+        bytes.write_all(&[9; 16])?;
+        assert!(bytes.disk.is_some());
+        bytes.seek(SeekFrom::Start(55))?;
+        bytes.read_exact(&mut check)?;
+        assert_eq!(check, [7, 7, 7, 7, 7, 9, 9, 9, 9, 9]);
+        let mut index = BufferedIndex::new(4096)?;
+        index.put(vec![1], [1; 52])?;
+        index.finish()?;
+        assert!(index.disk.is_none());
+        for i in 2..100 {
+            index.put(vec![i], [i; 52])?;
+        }
+        index.finish()?;
+        assert!(index.disk.is_some());
+        for i in 1..100 {
+            assert_eq!(index.get(&[i])?, Some([i; 52]));
+        }
+        Ok(())
+    }
     #[derive(Clone, Debug)]
     struct Key(u64);
     impl PartialEq for Key {
@@ -364,7 +523,7 @@ mod tests {
         )
         .with_read_limits(crate::ReadLimits::STANDARD);
         let mut state = BufferedIndex::new(128)?;
-        let mut keys = tempfile::tempfile()?;
+        let mut keys = SpillBytes::new(0);
         let first = insert_key(&mut state, &mut keys, 0, &3u64.to_le_bytes())?;
         let second = insert_key(&mut state, &mut keys, 0, &7u64.to_le_bytes())?;
         state.flush()?;

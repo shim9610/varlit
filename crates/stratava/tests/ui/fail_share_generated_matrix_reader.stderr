@@ -76,6 +76,50 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
   --> $RUST/std/src/thread/functions.rs
 
+error[E0277]: `RefCell<(usize, Vec<u8>)>` cannot be shared between threads safely
+  --> tests/ui/fail_share_generated_matrix_reader.rs:45:24
+   |
+45 |     std::thread::spawn(move || reader.thumbnail_aux_len());
+   |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<(usize, Vec<u8>)>` cannot be shared between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `MatrixAuxFormatReader`, the trait `Sync` is not implemented for `RefCell<(usize, Vec<u8>)>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `stratava_core::spill_rows::SpillRows<16>`
+  --> $WORKSPACE/crates/stratava-core/src/spill_rows.rs
+   |
+   | pub(crate) struct SpillRows<const N: usize> {
+   |                   ^^^^^^^^^
+note: required because it appears within the type `stratava_core::file::resident_index::ResidentIndex`
+  --> $WORKSPACE/crates/stratava-core/src/native_directory.rs
+   |
+   | pub struct ResidentIndex {
+   |            ^^^^^^^^^^^^^
+note: required because it appears within the type `StratavaFile`
+  --> $WORKSPACE/crates/stratava-core/src/file.rs
+   |
+   | pub struct StratavaFile {
+   |            ^^^^^^^^^^^^
+note: required because it appears within the type `StratavaReader`
+  --> $WORKSPACE/crates/stratava-core/src/file.rs
+   |
+   | pub struct StratavaReader {
+   |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `MatrixAuxFormatReader`
+  --> tests/ui/fail_share_generated_matrix_reader.rs:4:16
+   |
+ 4 |     pub format MatrixAuxFormat {
+   |                ^^^^^^^^^^^^^^^
+   = note: required for `Arc<MatrixAuxFormatReader>` to implement `Send`
+note: required because it's used within this closure
+  --> tests/ui/fail_share_generated_matrix_reader.rs:45:24
+   |
+45 |     std::thread::spawn(move || reader.thumbnail_aux_len());
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+
 error[E0277]: `RefCell<stratava_core::matrix_generation::Cache>` cannot be shared between threads safely
   --> tests/ui/fail_share_generated_matrix_reader.rs:45:24
    |

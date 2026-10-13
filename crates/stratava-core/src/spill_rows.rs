@@ -1,5 +1,6 @@
 //! Reader-local fixed-width temporary directories. The memory budget controls
 //! buffering, never the number of rows that can be addressed.
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 
@@ -9,6 +10,7 @@ pub(crate) struct SpillRows<const N: usize> {
     spilled: usize,
     buffer: Vec<u8>,
     capacity: usize,
+    read_cache: RefCell<(usize, Vec<u8>)>,
 }
 impl<const N: usize> SpillRows<N> {
     pub(crate) fn new(bytes: usize) -> Self {
@@ -18,6 +20,7 @@ impl<const N: usize> SpillRows<N> {
             spilled: 0,
             buffer: Vec::new(),
             capacity: bytes.max(N) / N * N,
+            read_cache: RefCell::new((0, Vec::new())),
         }
     }
     pub(crate) fn reserve_rows_hint(&mut self, count: usize) -> io::Result<()> {
@@ -77,6 +80,7 @@ impl<const N: usize> SpillRows<N> {
         if len >= self.len() {
             return;
         }
+        self.read_cache.get_mut().1.clear();
         if len < self.spilled {
             self.spilled = len;
             self.buffer.clear();
@@ -93,21 +97,47 @@ impl<const N: usize> SpillRows<N> {
             let at = (index - self.spilled) * N;
             row.copy_from_slice(&self.buffer[at..at + N]);
         } else {
-            let mut at = (index as u64)
+            let mut cache = self.read_cache.borrow_mut();
+            if index >= cache.0 && index - cache.0 < cache.1.len() / N {
+                let at = (index - cache.0) * N;
+                row.copy_from_slice(&cache.1[at..at + N]);
+                return Ok(Some(row));
+            }
+            let rows = (self.capacity.min(64 * 1024) / N).max(1);
+            let start = index / rows * rows;
+            let bytes = (self.spilled - start).min(rows) * N;
+            cache.1.clear();
+            cache.1.try_reserve_exact(bytes).map_err(io::Error::other)?;
+            cache.1.resize(bytes, 0);
+            let mut at = (start as u64)
                 .checked_mul(N as u64)
                 .ok_or(io::ErrorKind::InvalidInput)?;
-            let mut remaining = row.as_mut_slice();
-            while !remaining.is_empty() {
-                let n = match crate::snapshot::read_at(self.file.as_ref().unwrap(), remaining, at) {
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    r => r?,
-                };
-                if n == 0 {
-                    return Err(io::ErrorKind::UnexpectedEof.into());
+            let result = (|| {
+                let mut remaining = cache.1.as_mut_slice();
+                while !remaining.is_empty() {
+                    let n = match crate::snapshot::read_at(
+                        self.file.as_ref().unwrap(),
+                        remaining,
+                        at,
+                    ) {
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        r => r?,
+                    };
+                    if n == 0 {
+                        return Err(io::ErrorKind::UnexpectedEof.into());
+                    }
+                    at += n as u64;
+                    remaining = &mut remaining[n..];
                 }
-                at += n as u64;
-                remaining = &mut remaining[n..];
+                Ok(())
+            })();
+            if let Err(error) = result {
+                cache.1.clear();
+                return Err(error);
             }
+            cache.0 = start;
+            let at = (index - start) * N;
+            row.copy_from_slice(&cache.1[at..at + N]);
         }
         Ok(Some(row))
     }
@@ -122,6 +152,7 @@ mod tests {
         for i in 0..10u64 {
             rows.push(i.to_le_bytes()).unwrap();
         }
+        assert_eq!(rows.get(2).unwrap(), Some(2u64.to_le_bytes()));
         rows.truncate(3);
         for i in 3..12u64 {
             rows.push((i + 100).to_le_bytes()).unwrap();

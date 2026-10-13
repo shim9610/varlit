@@ -6,6 +6,12 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Keep small matrix directories and merge scratch in bounded RAM, spilling only
+  after the working budget fills. Add `with_matrix_directory_cache_bytes` and
+  batch private tree edits. Follow invalidates cache entries from changed pages.
+- Honor explicit finite native/merge index budgets and batch spilled row reads
+  through a bounded private read window. Publication and sync points are unchanged.
+
 - Rename the project and packages to `stratava`, `stratava-core` and
   `stratava-macros`. Public Rust identifiers use `Stratava*`, `stratava_format!`,
   `#[stratava(...)]`, `encode_stratava` and `decode_stratava`. The test runner,

@@ -8,7 +8,9 @@ use crate::spill_rows::SpillRows;
 
 pub(super) fn buffer_bytes(spec: FormatSpec) -> usize {
     match spec.read_limits.resolve().max_index_bytes {
-        ReadLimit::Finite(bytes) => bytes.min(2 * 1024 * 1024) as usize,
+        ReadLimit::Finite(bytes) if bytes != u64::MAX => {
+            usize::try_from(bytes).unwrap_or(usize::MAX)
+        }
         _ => 2 * 1024 * 1024,
     }
 }
