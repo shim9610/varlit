@@ -253,3 +253,26 @@ sustained throughput, long-duration reliability, every filesystem's semantics,
 or power-loss durability. Default and all-feature workspace tests also run on
 all three operating systems; the feature-specific Clippy matrix runs on Linux
 and Windows. The pinned MSRV job retains the compiler diagnostic snapshot tests.
+
+
+## Experimental matrix reuse
+
+With `experimental-matrix-reuse` enabled, run its bounded model, reader/writer,
+space-growth and cross-process regressions:
+
+```sh
+cargo test -p stratava --features experimental-matrix-reuse,scalable-fault-injection --test experimental_matrix_reuse
+```
+
+An explicitly requested longer local load check uses 4,096-row chunks, eight
+independent readers, repeated publications and a fixed primary-size assertion:
+
+```sh
+STRATAVA_REUSE_SOAK_SECONDS=60 cargo test --release -p stratava --features experimental-matrix-reuse --test experimental_matrix_reuse reuse_load_campaign -- --ignored --nocapture
+```
+
+Set `STRATAVA_REUSE_SOAK_ROOT` to an existing directory on the filesystem to
+measure. The test creates and removes its own temporary child directory. An unset
+root uses the OS temporary directory, which may be memory-backed. This test is
+not a power-loss simulator or a qualification claim; see the
+[experimental contract](experimental-matrix-reuse.md).

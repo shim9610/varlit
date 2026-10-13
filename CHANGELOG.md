@@ -6,6 +6,13 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Add the default-off `experimental-matrix-reuse` feature and experimental
+  `MatrixOptions::reuse` runtime opt-in. Reuse two slots per logical chunk,
+  publish at explicit sync boundaries, and retry owned reads across generation
+  changes. Include bounded reader-local caches, crash recovery, and typed
+  publication-failure results. The separate experimental format supports
+  uncompressed matrix-only schemas; ordinary readers keep their snapshot contract.
+
 - Add typed and encoded matrix column-segment reads along the noncontiguous
   dimension, with generated reader methods. Batch bitmap checks and chunk
   lookups, bound payload/CRC coalescing, and reuse compressed sub-blocks while

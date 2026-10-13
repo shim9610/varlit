@@ -16,6 +16,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+experimental-matrix-reuse = ["stratava/experimental-matrix-reuse"]
+
 [dependencies]
 # `compression-zstd` + `integrity` are required to CONSTRUCT a `ChunkedBytes`
 # value (docs/api-reference.md: "Compression requires the `compression-zstd`

@@ -21629,7 +21629,7 @@ fn path_resolves_to_object(path: &Path, identity: &[u8]) -> bool {
 }
 
 #[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     #[cfg(test)]
     record_parent_directory_sync();
     #[cfg(test)]
@@ -21652,7 +21652,7 @@ fn sync_parent_directory(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn sync_parent_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -21878,7 +21878,7 @@ fn open_lock_marker_without_following(path: &Path) -> Result<File> {
 }
 
 #[cfg(unix)]
-fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
+pub(crate) fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = file.metadata()?;
@@ -21898,7 +21898,7 @@ fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
+pub(crate) fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -21941,7 +21941,7 @@ fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn verify_dedicated_lock_marker(path: &Path, _file: &File) -> Result<()> {
+pub(crate) fn verify_dedicated_lock_marker(path: &Path, _file: &File) -> Result<()> {
     Err(Error::WriterLockMarkerNotDedicated {
         path: path.display().to_string(),
         reason: "this platform cannot prove the marker is a dedicated regular file",

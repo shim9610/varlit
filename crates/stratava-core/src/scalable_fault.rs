@@ -40,6 +40,24 @@ pub const REQUIRED_POINTS: &[&str] = &[
     "replace.parent_sync",
 ];
 
+/// Additional points exercised by the opt-in matrix reuse crash tests.
+pub const MATRIX_REUSE_POINTS: &[&str] = &[
+    "matrix_reuse.intent_durable",
+    "matrix_reuse.payload_written",
+    "matrix_reuse.slot_written",
+    "matrix_reuse.retirement_prefix",
+    "matrix_reuse.retirement_written",
+    "matrix_reuse.data_durable",
+    "matrix_reuse.head_prefix",
+    "matrix_reuse.head_written",
+    "matrix_reuse.head_durable",
+    "matrix_reuse.reset",
+    "matrix_reuse.read_copied",
+];
+fn known_point(point: &str) -> bool {
+    REQUIRED_POINTS.contains(&point) || MATRIX_REUSE_POINTS.contains(&point)
+}
+
 static ARMED: AtomicBool = AtomicBool::new(false);
 static REGISTRY: OnceLock<Mutex<Option<Registry>>> = OnceLock::new();
 
@@ -165,7 +183,7 @@ pub fn fault_point(point: &'static str) {
     if !ARMED.load(Ordering::Acquire) {
         return;
     }
-    if !REQUIRED_POINTS.contains(&point) {
+    if !known_point(point) {
         panic!("unregistered scalable fault point {point:?}");
     }
 
@@ -229,7 +247,7 @@ fn parse_mode(value: &str) -> Result<Mode, ArmError> {
     let Some((point, occurrence)) = selection.rsplit_once(':') else {
         return Err(ArmError::InvalidConfiguration(value.to_owned()));
     };
-    if !REQUIRED_POINTS.contains(&point) {
+    if !known_point(point) {
         return Err(ArmError::UnknownPoint(point.to_owned()));
     }
     let occurrence = occurrence

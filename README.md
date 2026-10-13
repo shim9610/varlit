@@ -297,6 +297,7 @@ stratava = { path = "../stratava/crates/stratava",
 | --- | --- |
 | `integrity` | record and matrix cell/commit-map checksum verification |
 | `compression-zstd` | the zstd codec for compressed blocks |
+| `experimental-matrix-reuse` | **experimental**, default-off chunk reuse with automatic-follow owned reads; see [the guide](docs/experimental-matrix-reuse.md) |
 | `mmap` | memory-mapped reads |
 | `zero-copy` | borrowed reads that avoid a copy out of the page cache — also enables `mmap` |
 | `scalable-fault-injection` | test-only fault injection; not for production builds |

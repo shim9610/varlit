@@ -27,6 +27,7 @@ def main():
             'edition = "2024"\npublish = false\n\n[dependencies]\n'
             f'stratava = {{ git = {json.dumps(repository.as_uri())}, '
             f'rev = "{revision}", features = ["compression-zstd", "integrity"] }}\n'
+            '\n[features]\nexperimental-matrix-reuse = ["stratava/experimental-matrix-reuse"]\n'
             '\n[workspace]\n', encoding="utf-8"
         )
         # There is deliberately no root [patch] in this independent project.
@@ -39,6 +40,10 @@ def main():
                 raise SystemExit(f"{name} entered the downstream runtime graph")
         print("Git consumer has no redb or Crossbeam runtime dependency", flush=True)
         subprocess.run(["cargo", "run", "--locked"], cwd=consumer, check=True)
+        subprocess.run(
+            ["cargo", "run", "--locked", "--features", "experimental-matrix-reuse"],
+            cwd=consumer, check=True,
+        )
 
 
 if __name__ == "__main__":

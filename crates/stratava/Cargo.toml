@@ -26,6 +26,7 @@ integrity = ["stratava-core/integrity"]
 mmap = ["stratava-core/mmap"]
 zero-copy = ["mmap", "stratava-core/zero-copy"]
 compression-zstd = ["stratava-core/compression-zstd"]
+experimental-matrix-reuse = ["stratava-core/experimental-matrix-reuse"]
 scalable-fault-injection = [
     "stratava-core/scalable-fault-injection",
 ]

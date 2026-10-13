@@ -14,6 +14,8 @@ mod file;
 mod format;
 mod immediate;
 
+#[cfg(feature = "experimental-matrix-reuse")]
+pub mod experimental_matrix;
 mod indexed;
 mod layout;
 mod matrix;

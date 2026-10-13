@@ -32,6 +32,7 @@ mmap = ["dep:memmap2"]
 zero-copy = ["mmap", "dep:zerocopy"]
 compression-zstd = ["dep:zstd"]
 scalable-fault-injection = []
+experimental-matrix-reuse = []
 
 [dependencies]
 crc32fast.workspace = true

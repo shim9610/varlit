@@ -116,6 +116,10 @@ jobs:
               name: scalable-fault-injection,
               flags: "-p stratava --no-default-features --features scalable-fault-injection",
             }
+          - {
+              name: experimental-matrix-reuse,
+              flags: "-p stratava --no-default-features --features experimental-matrix-reuse",
+            }
           - { name: all-features, flags: "--workspace --all-features" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -206,7 +210,9 @@ jobs:
   # neither feature and the all-features job has both, so those assertions were
   # compiled out of every test run and only ever type-checked by Clippy.
   #
-  # Deliberately scoped: single OS, and only `--test compression`, which is the
+  # Deliberately scoped: single OS and targeted binaries. Reuse also runs alone
+  # to verify that its production path does not require fault hooks. The
+  # compression binary is the
   # only test binary in the workspace that contains `not(feature = ...)` cases
   # (`compression.rs`). Adding the full feature matrix — or the whole package
   # suite under each singleton — would multiply CI time for combinations the two
@@ -231,6 +237,10 @@ jobs:
           - {
               name: integrity-without-compression,
               flags: "-p stratava --no-default-features --features integrity --test compression",
+            }
+          - {
+              name: experimental-matrix-reuse-only,
+              flags: "-p stratava --no-default-features --features experimental-matrix-reuse --test experimental_matrix_reuse",
             }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

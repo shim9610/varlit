@@ -482,10 +482,14 @@ fn check_format_roundtrip(dir: &std::path::Path) {
     reader
         .cell_run_bytes_into(key, &mut encoded)
         .expect("read encoded matrix run");
-    reader.cell_column_into(key, &mut run).expect("read matrix column segment");
+    reader
+        .cell_column_into(key, &mut run)
+        .expect("read matrix column segment");
     assert_eq!(run[0], cell);
     let mut column_encoded = vec![0; encoded.len()];
-    reader.cell_column_bytes_into(key, &mut column_encoded).expect("read encoded matrix column");
+    reader
+        .cell_column_bytes_into(key, &mut column_encoded)
+        .expect("read encoded matrix column");
     assert_eq!(encoded, column_encoded);
 
     println!("  file ok: fixed + variable + matrix blocks round-tripped");
@@ -535,6 +539,8 @@ fn main() {
     let result = std::panic::catch_unwind(|| {
         check_format_roundtrip(&dir);
         check_scalable_roundtrip(&dir);
+        #[cfg(feature = "experimental-matrix-reuse")]
+        experimental_reuse_fixture::check(&dir);
     });
     let cleanup = std::fs::remove_dir_all(&dir);
     if let Err(panic) = result {
@@ -543,4 +549,42 @@ fn main() {
     cleanup.expect("fixture temp dir cleanup");
 
     println!("public-api fixture OK");
+}
+
+#[cfg(feature = "experimental-matrix-reuse")]
+mod experimental_reuse_fixture {
+    use stratava::experimental_matrix::{MatrixOptions, MatrixReader, MatrixWriter};
+    use stratava::{MatrixDimensions, MatrixKey, stratava_format};
+    stratava_format! {
+        pub format Reuse {
+            magic:b"PUBREUS1";version:1;endian:little;
+            dims {row:u32,col:u32,}
+            commit:cell_bitmap {keyspace=[row,col];categories=[data];};
+            blocks {matrix Cell(id=1,dims=[row,col],category=data){value:u64,}}
+        }
+    }
+    pub fn check(dir: &std::path::Path) {
+        let spec = Reuse::spec().with_growing_matrix_dimension("row", 4096);
+        let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
+        for reuse in [false, true] {
+            let path = dir.join(format!("reuse-{reuse}"));
+            let options = MatrixOptions {
+                reuse,
+                ..MatrixOptions::default()
+            };
+            let mut w = MatrixWriter::create(spec, &path, dims.clone(), options).unwrap();
+            w.put(MatrixKey::new(5000, 0), &Cell { value: 7 }).unwrap();
+            w.sync().unwrap();
+            let r = w.reader().unwrap();
+            let mut out = [Cell { value: 0 }];
+            r.read_run_into(MatrixKey::new(5000, 0), &mut out).unwrap();
+            assert_eq!(out[0].value, 7);
+            drop(w);
+            let mut w = MatrixWriter::open(spec, &path, dims.clone(), options).unwrap();
+            w.delete::<Cell>(MatrixKey::new(5000, 0)).unwrap();
+            w.sync().unwrap();
+            let r = MatrixReader::open(spec, &path, dims.clone(), options).unwrap();
+            assert!(r.get::<Cell>(MatrixKey::new(5000, 0)).is_err());
+        }
+    }
 }
