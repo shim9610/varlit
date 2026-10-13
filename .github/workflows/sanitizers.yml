@@ -60,17 +60,28 @@ jobs:
       # here, so a target added to `fuzz/Cargo.toml` is in this job the same
       # week — a hardcoded list is how a new target silently never runs.
       # On a crash, libFuzzer prints the input (as a Debug value for arbitrary
-      # targets) and writes it under fuzz/artifacts/; the log is the artifact
-      # for a smoke job.
+      # targets) and writes it under fuzz/artifacts/. Preserve the actual input
+      # and corpus so a failed oracle can be replayed locally.
       - name: build and run every target briefly
         working-directory: fuzz
         run: |
+          cargo run --locked --example generate_matrix_reuse_corpus
           cargo fuzz build
           for target in $(cargo fuzz list); do
             echo "::group::${target}"
             cargo fuzz run "$target" -- -max_total_time=90 -rss_limit_mb=4096
             echo "::endgroup::"
           done
+
+      - name: retain fuzz reproductions
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-reproductions
+          path: |
+            fuzz/artifacts/
+            fuzz/corpus/
+          retention-days: 14
 
   asan:
     # Same public-repository guard as above.

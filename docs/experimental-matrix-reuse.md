@@ -177,3 +177,47 @@ A sync failure poisons that handle; drop it and reopen before writing again.
 before replaying application operations. Before-publication errors do not claim
 success or durability. External mutation/truncation of managed files is not a
 supported editing operation.
+
+## Targeted validation
+
+The shared model in `crates/stratava/tests/support/matrix_reuse_model.rs` runs
+both in ordinary regression tests and in two coverage-guided libFuzzer targets:
+
+- `matrix_reuse_state_machine` compares pending and confirmed values against an
+  independent in-memory model after writes, deletes, syncs, dirty drops and
+  reopen operations. It checks both blocks, point reads and contiguous ranges.
+- `matrix_reuse_publication` cuts publication at named I/O boundaries, reuses
+  slots during a partially copied read, and corrupts current page checksums or
+  undo entries. The oracle checks exact visible generations, rejects mixed or
+  silently stale successful reads, and requires invalid undo entries to be
+  rejected before recovery modifies the primary.
+
+Inputs vary 4–64 KiB pages, logical chunk geometry, one-to-three-page writer
+caches and disabled/small/window-sized reader caches. Cells span small pages;
+the fixtures cross row and chunk boundaries. Each state-machine input runs at
+most 64 operations on 12 cells in each of two blocks. These are small targeted
+correctness cases, not throughput or endurance measurements.
+
+Run the regression cases with the workspace runner:
+
+```sh
+cargo run -p stratava-test-runner -- test -p stratava \
+  --features experimental-matrix-reuse,scalable-fault-injection \
+  --test matrix_reuse_model
+```
+
+For coverage-guided mutation (nightly Rust and cargo-fuzz required):
+
+```sh
+cd fuzz
+cargo +nightly run --locked --example generate_matrix_reuse_corpus
+cargo +nightly fuzz run matrix_reuse_state_machine -- \
+  -max_total_time=300 -max_len=196 -rss_limit_mb=4096
+cargo +nightly fuzz run matrix_reuse_publication -- \
+  -max_total_time=300 -max_len=196 -rss_limit_mb=4096
+```
+
+The sanitizer workflow generates these seeds and includes both targets in its
+weekly/manual smoke run; failures retain reproductions and corpora as artifacts.
+A passing finite run does not prove crash consistency on every filesystem or
+replace process-kill, concurrent-process and real-platform qualification.

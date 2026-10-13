@@ -1480,6 +1480,11 @@ impl ReuseReader {
             } else {
                 out[..take].fill(0);
             }
+            // Test-only cut inside the copy, after releasing the private cache borrow.
+            // This allows a publisher to reuse both slots before the range completes.
+            drop(cache);
+            #[cfg(feature = "scalable-fault-injection")]
+            fault("matrix_reuse.page_copied")?;
             at += take as u64;
             out = &mut out[take..];
         }

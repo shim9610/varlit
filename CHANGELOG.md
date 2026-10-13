@@ -16,6 +16,9 @@ increment the minor version.
   independent bitmap/data updates, bounded writer spill and coalesced range reads.
   Logical chunks may exceed working memory budgets; unchanged pages are reused.
   Older experimental STREUSE1 files are refused; no automatic migration.
+  Add shared model regression/fuzz targets for dirty batches, publication cuts,
+  partial-copy slot reuse, current-page corruption and invalid recovery journals.
+  Seed the sanitizer smoke run and retain failing inputs as CI artifacts.
 
 - Add typed and encoded matrix column-segment reads along the noncontiguous
   dimension, with generated reader methods. Batch bitmap checks and chunk

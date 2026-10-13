@@ -400,7 +400,7 @@ mod fault_tests {
     fn process_abort_matrix_recovers_and_never_resurrects_discarded_chunks() {
         for (point, occurrence) in stratava::scalable_fault::MATRIX_REUSE_POINTS
             .iter()
-            .filter(|p| !p.ends_with("read_copied"))
+            .filter(|p| !p.ends_with("read_copied") && !p.ends_with("page_copied"))
             .flat_map(|point| {
                 let hits = if point.ends_with("payload_written")
                     || point.ends_with("slot_written")

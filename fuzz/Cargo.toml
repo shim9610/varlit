@@ -16,7 +16,7 @@ tempfile = "3"
 [dependencies.stratava]
 path = "../crates/stratava"
 version = "0.12.0"
-features = ["integrity", "mmap", "zero-copy", "compression-zstd"]
+features = ["integrity", "mmap", "zero-copy", "compression-zstd", "experimental-matrix-reuse", "scalable-fault-injection"]
 
 # Use independent workspace for fuzzers
 [workspace]
@@ -96,6 +96,20 @@ bench = false
 [[bin]]
 name = "matrix_state_machine"
 path = "fuzz_targets/matrix_state_machine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "matrix_reuse_state_machine"
+path = "fuzz_targets/matrix_reuse_state_machine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "matrix_reuse_publication"
+path = "fuzz_targets/matrix_reuse_publication.rs"
 test = false
 doc = false
 bench = false

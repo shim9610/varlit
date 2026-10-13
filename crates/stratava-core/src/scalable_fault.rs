@@ -53,6 +53,7 @@ pub const MATRIX_REUSE_POINTS: &[&str] = &[
     "matrix_reuse.head_durable",
     "matrix_reuse.reset",
     "matrix_reuse.read_copied",
+    "matrix_reuse.page_copied",
 ];
 fn known_point(point: &str) -> bool {
     REQUIRED_POINTS.contains(&point) || MATRIX_REUSE_POINTS.contains(&point)
