@@ -1,10 +1,12 @@
-# Experimental matrix chunk reuse
+# Experimental matrix page reuse
 
 Enable the Cargo feature `experimental-matrix-reuse`, then select
 `experimental_matrix::MatrixOptions { reuse: true, ..Default::default() }` when
 creating a file with `experimental_matrix::MatrixWriter`. Both switches are
 opt-in. This is an **experimental API and file format**, not a replacement for
 the ordinary matrix API. Its format may change before stabilization.
+The current `STREUSE2` format uses pages and refuses older `STREUSE1` chunk files;
+there is no automatic migration.
 
 ```rust,no_run
 use stratava::{stratava_format, MatrixDimensions, MatrixKey};
@@ -59,8 +61,10 @@ A read that races publication discards its copied bytes and retries. Exhausting
 writer can repeatedly outrun a reader. **The writer never waits for readers.**
 The module exposes owned/typed reads, not mmap/borrowed views or pinned historical
 snapshots. On any range-read error, discard its output (decoding can leave a
-completed prefix). Reads copy and checksum chunks; this initial implementation
-is not a zero-copy or sparse-page-update optimization.
+completed prefix). Reads copy and checksum the requested pages; this is not
+a zero-copy API. Adjacent page pairs are read in bounded windows to avoid a
+syscall per cell/page. Both physical slots are fetched in these windows, which
+can increase sequential read traffic versus a single contiguous chunk.
 
 `put` writes and marks a cell present; `delete` clears its presence bit. Both
 remain private to the writer until `sync`. One sync publishes the whole batch,
@@ -70,33 +74,50 @@ no implicit flush/publication on drop in this experimental mode.
 
 ## Space and I/O
 
-Each logical chunk has two physical slots. The current confirmed slot remains
-intact while the next value is staged; sync replaces the inactive slot and
-publishes a new head. Repeated updates to an existing set of chunks stop growing
-the primary after both slots have been allocated. The bound is approximately
+Chunks remain logical row groups. Within each chunk, each block's presence
+bitmap and cell data occupy separately page-aligned regions. Cells may span page
+boundaries. Each logical page has two directly addressed physical slots; their
+small checksummed headers identify which version belongs to the confirmed
+generation. There is no growing pointer table or chain of diffs to replay.
+
+Only modified pages are staged and published. Rewriting an already-present cell
+does not dirty its bitmap; deleting it changes only the bitmap page. Byte-identical
+writes do not dirty data pages. Sync replaces inactive slots and publishes a new
+head. An unchanged page keeps its existing slot across generations.
+
+Repeated updates to an existing set of pages stop growing the primary after
+both slots have been allocated. The logical file-size bound is
 
 ```
-12 KiB + 2 × (highest allocated chunk index + 1)
-             × (64-byte slot header + chunk payload + presence bitmaps)
+12 KiB + 2 × (highest allocated page index + 1) × (64 + page_bytes)
 ```
 
-Sparse holes count toward logical file length but need not occupy disk blocks.
-Growing into new chunks increases this bound. Deleting a chunk's cells does not
-move its slots to another chunk or shrink the file. This initial allocator
-reuses each chunk's own slots; it is not a general extent free list.
+Page alignment can leave holes, especially for small blocks. Sparse holes count
+toward logical file length but need not occupy disk blocks. Growth into new pages
+increases the bound. Deleting cells does not move their slots to other pages or
+shrink the file; reuse is local to each page, not an arbitrary extent free list.
 
-The `.reuse-work` and `.reuse-journal` companions hold pending chunk contents
-and bounded-size journal entries (one per dirty chunk). They grow with the
-current batch, then return to one 4 KiB header each after sync/recovery. Keep both
-beside the primary. Renaming/moving a primary or opening it through a hard-link
-alias is unsupported; the stored pathname binding is checked on open.
+The `.reuse-work` and `.reuse-journal` companions hold pending pages and journal
+entries (one 96-byte entry per dirty page). They grow with the current batch,
+then return to one 4 KiB header each after sync/recovery. Keep both beside the
+primary. Renaming/moving a primary or using a hard-link alias is unsupported;
+the stored pathname binding is checked on open.
 
-Reuse saves accumulated history space, **not the whole-chunk write cost**.
-Dirty chunks are staged and then copied into reusable slots, so this prototype
-can issue more writes than the ordinary append-only chunk implementation. It
-also performs journal and publication durability barriers at sync. Choose a
-chunk size in bytes, not only rows: 4,096 rows of 64-byte cells are 256 KiB at one
-column and 160 MiB at 640 columns.
+For a batch that stages each dirty page once, payload writes total twice the
+modified page bytes: once to the work file and once to the primary. In addition,
+each dirty page writes 288 bytes of headers/journal, and each nonempty sync writes
+12 KiB of publication/intent/cleanup metadata and issues four durability barriers.
+Thus a one-page overwrite with 4 KiB pages requests **20,768 bytes** of file writes,
+including metadata. This is application I/O, not physical device write traffic.
+A cell crossing two pages, a new presence bit, or changes in multiple blocks can
+dirty more pages. Working-cache eviction and revisiting a dirty page can stage
+it again before sync. Adjacent cached dirty pages are coalesced for staging;
+primary slot/retirement writes remain per page.
+
+Small overwrites benefit most. Full-matrix replacement still writes all changed
+pages and adds per-page metadata/syscalls. Sequential reads may transfer both
+slots and checksum many small pages. Page reuse is not a promise that every
+workload is faster than the whole-chunk or ordinary native paths.
 
 ## Working-set controls and supported schemas
 
@@ -106,17 +127,25 @@ column and 160 MiB at 640 columns.
 |---|---:|---|
 | `reuse` | false | Select experimental format explicitly |
 | `rows_per_chunk` | 4,096 | First-axis entries per chunk in experimental storage |
-| `max_chunk_bytes` | 16 MiB | Maximum one-chunk working buffer |
-| `cache_bytes` | 2 MiB | Reader-local chunk retention; zero disables retention |
+| `page_bytes` | 4 KiB | Power of two from 4 KiB through 64 KiB; stored geometry |
+| `max_chunk_bytes` | 16 MiB | Writer page-cache budget; legacy field name, not a logical chunk limit |
+| `cache_bytes` | 2 MiB | Reader-local window budget; zero disables retention |
 | `read_retries` | 8 | Bounded attempts per owned read (1–1,024) |
 
-These bounds are independent of total file length. Open checks fixed metadata
-and the declared geometry; it does not rebuild an all-chunk directory. Reader
-scratch can hold one chunk even when retention is disabled. Materialization
-limits also charge output, decode allocations and possible overlapping chunk
-buffers. A chunk exceeding the working-buffer budget is refused; configure fewer
-rows per chunk or a larger explicit budget. This prototype does not stream a
-single oversized chunk through a smaller writer buffer.
+These bounds are independent of total file length or logical chunk size. Open
+reads fixed metadata and geometry without rebuilding a page directory. Logical
+chunks larger than memory budgets are supported: only relevant pages are loaded.
+Writer pages use a private bounded cache; evicted dirty pages spill to the work
+file. Cache capacity adapts to the materialization limit. The writer also needs
+bounded stage/publication scratch and a cell encoding buffer; the cache budget
+is not an exact total-RSS cap. A single oversized cell can still exceed limits.
+
+Reader scratch holds at least one physical page pair even with retention off.
+Bulk read windows and writer stage runs are capped at 256 KiB (or smaller
+configured budgets). A window larger than `cache_bytes` is discarded after the
+read. Materialization limits also charge result bytes and decode allocations.
+`page_bytes` and `rows_per_chunk` must match on reopen; cache budgets and retry
+limits can be changed independently for each handle.
 
 Supported: uncompressed matrix-only schemas, a common first axis, a distinct
 cell-bitmap category per block, fixed or growing first-axis capacity, and schema

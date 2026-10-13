@@ -96,7 +96,7 @@
 //! | `compression-zstd` | zstd compression of variable-block payloads and of [`ChunkedBytes`] | stable |
 //! | `mmap` | read-only memory-mapped payload and matrix windows | stable, `unsafe` entry points |
 //! | `zero-copy` | raw typed views over mapped bytes; implies `mmap` | stable, `unsafe` entry points |
-//! | `experimental-matrix-reuse` | opt-in chunk slot reuse and automatic-follow owned matrix reads | **experimental**, disabled by default |
+//! | `experimental-matrix-reuse` | opt-in page slot reuse and automatic-follow owned matrix reads | **experimental**, disabled by default |
 //! | `scalable-fault-injection` | fault-injection counters and hooks used by the scalable-path tests | **test infrastructure**: not a production feature, and the counters it exposes are `#[doc(hidden)]` |
 //!
 //! Requesting a feature-gated operation without its feature is a typed error

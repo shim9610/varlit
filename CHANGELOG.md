@@ -7,11 +7,15 @@ increment the minor version.
 ## Unreleased — 0.12.0
 
 - Add the default-off `experimental-matrix-reuse` feature and experimental
-  `MatrixOptions::reuse` runtime opt-in. Reuse two slots per logical chunk,
+  `MatrixOptions::reuse` runtime opt-in. Reuse two slots per logical page,
   publish at explicit sync boundaries, and retry owned reads across generation
   changes. Include bounded reader-local caches, crash recovery, and typed
   publication-failure results. The separate experimental format supports
   uncompressed matrix-only schemas; ordinary readers keep their snapshot contract.
+  Page format STREUSE2 replaces the initial chunk prototype: default 4 KiB pages,
+  independent bitmap/data updates, bounded writer spill and coalesced range reads.
+  Logical chunks may exceed working memory budgets; unchanged pages are reused.
+  Older experimental STREUSE1 files are refused; no automatic migration.
 
 - Add typed and encoded matrix column-segment reads along the noncontiguous
   dimension, with generated reader methods. Batch bitmap checks and chunk

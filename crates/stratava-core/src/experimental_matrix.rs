@@ -1,4 +1,4 @@
-//! Experimental, opt-in matrix chunk reuse.
+//! Experimental, opt-in matrix page reuse.
 //!
 //! `MatrixOptions::reuse` defaults to false, selecting ordinary snapshot readers.
 //! With reuse enabled, each read retries against the latest confirmed generation;
@@ -10,6 +10,7 @@ use crate::{
     StratavaReader, StratavaWriter,
 };
 use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,10 +23,29 @@ const PAGE: u64 = 4096;
 const HEADER: u64 = 3 * PAGE;
 const SLOT_HEADER: u64 = 64;
 const JOURNAL_ENTRY: u64 = 96;
-const MAGIC: &[u8; 8] = b"STREUSE1";
-const SLOT_MAGIC: &[u8; 8] = b"STRSLOT1";
-const HEAD_MAGIC: &[u8; 8] = b"STRHEAD1";
-const INTENT_MAGIC: &[u8; 8] = b"STRINTN1";
+const MAGIC: &[u8; 8] = b"STREUSE2";
+const SLOT_MAGIC: &[u8; 8] = b"STRSLOT2";
+const HEAD_MAGIC: &[u8; 8] = b"STRHEAD2";
+const INTENT_MAGIC: &[u8; 8] = b"STRINTN2";
+
+/// Thread-local I/O accounting for contract tests; counts positional calls, not
+/// filesystem/device traffic. Absent from builds without fault instrumentation.
+#[doc(hidden)]
+#[cfg(feature = "scalable-fault-injection")]
+#[derive(Default, Clone, Copy, Debug)]
+pub struct TestIo {
+    pub read_calls: u64,
+    pub read_bytes: u64,
+    pub write_calls: u64,
+    pub write_bytes: u64,
+}
+#[cfg(feature = "scalable-fault-injection")]
+thread_local! {static TEST_IO: Cell<TestIo> = Cell::new(TestIo::default());}
+#[doc(hidden)]
+#[cfg(feature = "scalable-fault-injection")]
+pub fn take_test_io() -> TestIo {
+    TEST_IO.with(|s| s.replace(TestIo::default()))
+}
 
 #[cfg(feature = "scalable-fault-injection")]
 type TestHook = Box<dyn FnMut(&'static str) -> io::Result<()>>;
@@ -59,7 +79,10 @@ pub struct MatrixOptions {
     pub reuse: bool,
     /// First-axis rows per experimental chunk (also used for fixed matrices).
     pub rows_per_chunk: u64,
-    /// Bounds one chunk buffer; independent of total file size.
+    /// Page payload bytes: a power of two from 4 KiB through 64 KiB.
+    pub page_bytes: u64,
+    /// Writer page-cache budget (legacy field name); no limit on logical chunk size.
+    /// Must hold at least one page. Independent of total file size.
     pub max_chunk_bytes: u64,
     /// Reader-local cache capacity; zero disables retention.
     pub cache_bytes: u64,
@@ -71,6 +94,7 @@ impl Default for MatrixOptions {
         Self {
             reuse: false,
             rows_per_chunk: 4096,
+            page_bytes: 4096,
             max_chunk_bytes: 16 * 1024 * 1024,
             cache_bytes: 2 * 1024 * 1024,
             read_retries: 8,
@@ -117,6 +141,9 @@ fn add(a: u64, b: u64) -> Result<u64> {
 fn mul(a: u64, b: u64) -> Result<u64> {
     a.checked_mul(b).ok_or_else(|| invalid("size overflow"))
 }
+fn align(n: u64, unit: u64) -> Result<u64> {
+    mul(n.div_ceil(unit), unit)
+}
 fn alloc(n: u64) -> Result<Vec<u8>> {
     let n = usize::try_from(n).map_err(|_| MatrixReuseError::Limit("address space"))?;
     let mut v = Vec::new();
@@ -146,6 +173,13 @@ fn read_at(f: &File, mut at: u64, mut out: &mut [u8]) -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             r => r?,
         };
+        #[cfg(feature = "scalable-fault-injection")]
+        TEST_IO.with(|s| {
+            let mut v = s.get();
+            v.read_calls += 1;
+            v.read_bytes += n as u64;
+            s.set(v);
+        });
         if n == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
@@ -166,6 +200,13 @@ fn write_at(f: &File, mut at: u64, mut bytes: &[u8]) -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             r => r?,
         };
+        #[cfg(feature = "scalable-fault-injection")]
+        TEST_IO.with(|s| {
+            let mut v = s.get();
+            v.write_calls += 1;
+            v.write_bytes += n as u64;
+            s.set(v);
+        });
         if n == 0 {
             return Err(io::ErrorKind::WriteZero.into());
         }
@@ -219,6 +260,10 @@ struct Geometry {
     options: MatrixOptions,
     blocks: Vec<Block>,
     bytes: u64,
+    chunk_bytes: u64,
+    cache_capacity: u64,
+    material_limit: u64,
+    stage_bytes: u64,
     stride: u64,
     fixed_rows: Option<u64>,
     hash: u64,
@@ -229,7 +274,9 @@ impl Geometry {
         spec.validate()?;
         spec.read_limits.check(ReadLimitKey::FileLen, HEADER)?;
         if options.rows_per_chunk == 0
-            || options.max_chunk_bytes == 0
+            || !options.page_bytes.is_power_of_two()
+            || !(4096..=65536).contains(&options.page_bytes)
+            || options.max_chunk_bytes < options.page_bytes
             || options.read_retries == 0
             || options.read_retries > 1024
         {
@@ -297,9 +344,12 @@ impl Geometry {
             }
             let cells = mul(options.rows_per_chunk, cols)?;
             let bitmap = bytes;
-            bytes = add(bytes, cells.div_ceil(8))?;
+            bytes = align(add(bytes, cells.div_ceil(8))?, options.page_bytes)?;
             let slots = bytes;
-            bytes = add(bytes, mul(cells, descriptor.slot_stride)?)?;
+            bytes = align(
+                add(bytes, mul(cells, descriptor.slot_stride)?)?,
+                options.page_bytes,
+            )?;
             blocks.push(Block {
                 id: descriptor.block_id,
                 cols,
@@ -313,32 +363,41 @@ impl Geometry {
         }
         h = (h ^ fixed_rows.unwrap_or(u64::MAX)).wrapping_mul(0x100000001b3);
         h = (h ^ options.rows_per_chunk).wrapping_mul(0x100000001b3);
-        if bytes > options.max_chunk_bytes {
-            return Err(MatrixReuseError::Limit(
-                "chunk working buffer; configure fewer rows per chunk or a larger budget",
-            ));
-        }
-        spec.read_limits.check(
-            ReadLimitKey::MaterializedBytes,
-            add(
-                mul(bytes, 2)?,
-                add(
-                    spec.matrix_blocks
-                        .iter()
-                        .map(|b| b.slot_stride)
-                        .max()
-                        .unwrap_or(0),
-                    1,
-                )?,
-            )?,
-        )?;
-        usize::try_from(bytes).map_err(|_| MatrixReuseError::Limit("chunk address space"))?;
+        h = (h ^ options.page_bytes).wrapping_mul(0x100000001b3);
+        let chunk_bytes = bytes;
+        let bytes = options.page_bytes;
         let stride = add(SLOT_HEADER, bytes)?;
+        let limit = spec
+            .read_limits
+            .require(ReadLimitKey::MaterializedBytes)?
+            .unwrap_or(u64::MAX);
+        let cell = spec
+            .matrix_blocks
+            .iter()
+            .map(|b| b.slot_stride)
+            .max()
+            .unwrap_or(0);
+        let overhead = add(stride, add(cell, 512)?)?;
+        let stage_budget = (256 * 1024)
+            .min(options.max_chunk_bytes)
+            .min(limit.saturating_sub(overhead) / 2);
+        let stage_bytes = mul((stage_budget / stride).max(1), stride)?;
+        let available = limit.saturating_sub(add(overhead, stage_bytes)?);
+        if available < bytes + 256 {
+            return Err(MatrixReuseError::Limit("minimum page working set"));
+        }
+        let cache_capacity = (options.max_chunk_bytes.min(available) / (bytes + 256)).max(1);
+        usize::try_from(cache_capacity)
+            .map_err(|_| MatrixReuseError::Limit("writer cache address space"))?;
         Ok(Self {
             spec,
             options,
             blocks,
             bytes,
+            chunk_bytes,
+            cache_capacity,
+            material_limit: limit,
+            stage_bytes,
             stride,
             fixed_rows,
             hash: h,
@@ -411,16 +470,19 @@ fn read_slot(file: &File, at: u64, id: u64) -> Result<Option<(u64, u32, u64)>> {
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         r => r?,
     };
+    parse_slot(&b, id)
+}
+fn parse_slot(b: &[u8], id: u64) -> Result<Option<(u64, u32, u64)>> {
     if b.iter().all(|v| *v == 0) {
         return Ok(None);
     }
-    if &b[..8] != SLOT_MAGIC || !valid(&b) || u64_at(&b, 16) != id {
+    if &b[..8] != SLOT_MAGIC || !valid(b) || u64_at(b, 16) != id {
         return Err(invalid("slot header checksum or identity"));
     }
     Ok(Some((
-        u64_at(&b, 8),
+        u64_at(b, 8),
         u32::from_le_bytes(b[24..28].try_into().unwrap()),
-        u64_at(&b, 32),
+        u64_at(b, 32),
     )))
 }
 // Only a torn/absent header uses this slow, bounded-memory path. A durable
@@ -529,24 +591,22 @@ fn selected_with_undo(
     }
     Ok(result.map(|(slot, crc, _)| (slot, crc)))
 }
-fn payload(file: &File, g: &Geometry, h: Head, id: u64) -> Result<Vec<u8>> {
-    payload_with_undo(file, g, h, id, None)
-}
-fn payload_with_undo(
-    file: &File,
-    g: &Geometry,
-    h: Head,
-    id: u64,
-    undo: Option<(&File, [u8; 16])>,
-) -> Result<Vec<u8>> {
+type PageTarget = (u64, [u8; SLOT_HEADER as usize]);
+fn payload(file: &File, g: &Geometry, h: Head, id: u64) -> Result<(Vec<u8>, PageTarget)> {
     let mut bytes = alloc(g.bytes)?;
-    if let Some((slot, crc)) = selected_with_undo(file, g, h, id, undo)? {
-        read_at(file, add(g.at(id, slot)?, SLOT_HEADER)?, &mut bytes)?;
+    let mut original = [0; SLOT_HEADER as usize];
+    let target = if let Some((slot, crc)) = selected(file, g, h, id)? {
+        let at = g.at(id, slot)?;
+        read_at(file, at, &mut original)?;
+        read_at(file, add(at, SLOT_HEADER)?, &mut bytes)?;
         if crc32fast::hash(&bytes) != crc {
-            return Err(invalid("chunk payload checksum"));
+            return Err(invalid("page payload checksum"));
         }
-    }
-    Ok(bytes)
+        1 - slot
+    } else {
+        0
+    };
+    Ok((bytes, (target, original)))
 }
 fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
     let mut b = [0; PAGE as usize];
@@ -556,6 +616,7 @@ fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
     put(&mut b, 32, g.bytes);
     put(&mut b, 40, g.options.rows_per_chunk);
     put(&mut b, 48, path_hash(path));
+    put(&mut b, 56, g.chunk_bytes);
     seal(&mut b);
     b
 }
@@ -599,9 +660,9 @@ enum WriterInner {
     Native(Box<StratavaWriter>),
     Reuse(Box<ReuseWriter>),
 }
-struct OpenChunk {
-    id: u64,
+struct OpenPage {
     bytes: Vec<u8>,
+    target: Option<(u64, [u8; 64])>,
     logged: bool,
     dirty: bool,
 }
@@ -640,7 +701,10 @@ struct ReuseWriter {
     head: Head,
     rows: u64,
     count: u64,
-    open: Option<OpenChunk>,
+    pages: BTreeMap<u64, OpenPage>,
+    eviction: VecDeque<u64>,
+    hot: [Option<(u64, OpenPage)>; 2],
+    hot_last: usize,
     poisoned: bool,
     publishing: Option<u64>,
     notify: Arc<AtomicU64>,
@@ -686,7 +750,10 @@ impl MatrixWriter {
                 head,
                 rows: 0,
                 count: 0,
-                open: None,
+                pages: BTreeMap::new(),
+                eviction: VecDeque::new(),
+                hot: [None, None],
+                hot_last: 0,
                 poisoned: false,
                 publishing: None,
                 notify: Arc::new(AtomicU64::new(0)),
@@ -728,7 +795,10 @@ impl MatrixWriter {
                 head,
                 rows: head.rows,
                 count: 0,
-                open: None,
+                pages: BTreeMap::new(),
+                eviction: VecDeque::new(),
+                hot: [None, None],
+                hot_last: 0,
                 poisoned: false,
                 publishing: None,
                 notify: Arc::new(AtomicU64::new(head.generation)),
@@ -825,25 +895,28 @@ impl ReuseWriter {
             .filter(|next| *next < u64::MAX)
             .ok_or_else(|| invalid("generation exhausted"))
     }
-    fn flush_open(&mut self) -> Result<()> {
-        let Some(c) = self.open.as_ref() else {
-            return Ok(());
-        };
+    fn flush_page(&mut self, id: u64, c: &mut OpenPage) -> Result<()> {
         if !c.dirty {
             return Ok(());
         }
         let generation = self.next()?;
-        let at = self.geometry.stage_at(c.id)?;
+        let at = self.geometry.stage_at(id)?;
+        self.log_page(id, c)?;
+        write_at(&self.stage, add(at, SLOT_HEADER)?, &c.bytes)?;
+        write_at(&self.stage, at, &slot_header(id, generation, &c.bytes))?;
+        c.logged = true;
+        c.dirty = false;
+        Ok(())
+    }
+    fn log_page(&mut self, id: u64, c: &mut OpenPage) -> Result<()> {
         if !c.logged {
-            let target = selected(&self.file, &self.geometry, self.head, c.id)?
-                .map_or(0, |(slot, _)| 1 - slot);
+            let (target, original) = c
+                .target
+                .ok_or_else(|| invalid("unlogged page lacks original header"))?;
             let mut entry = [0; JOURNAL_ENTRY as usize];
-            put(&mut entry, 0, c.id);
+            put(&mut entry, 0, id);
             put(&mut entry, 8, target);
-            let old_at = self.geometry.at(c.id, 1 - target)?;
-            if old_at + SLOT_HEADER <= self.file.metadata()?.len() {
-                read_at(&self.file, old_at, &mut entry[16..80])?;
-            }
+            entry[16..80].copy_from_slice(&original);
             seal(&mut entry);
             write_at(
                 &self.journal,
@@ -852,57 +925,151 @@ impl ReuseWriter {
             )?;
             self.count = add(self.count, 1)?;
         }
-        write_at(&self.stage, add(at, SLOT_HEADER)?, &c.bytes)?;
-        write_at(&self.stage, at, &slot_header(c.id, generation, &c.bytes))?;
-        let c = self.open.as_mut().unwrap();
         c.logged = true;
-        c.dirty = false;
         Ok(())
     }
-    fn load(&mut self, id: u64) -> Result<()> {
+    fn flush_pages(&mut self) -> Result<()> {
+        for hot in &mut self.hot {
+            if let Some((id, page)) = hot.take() {
+                self.pages.insert(id, page);
+            }
+        }
+        if !self.pages.values().any(|c| c.dirty) {
+            return Ok(());
+        }
+        let mut pages = std::mem::take(&mut self.pages);
+        let result = (|| {
+            // Contiguous dirty pages share a stage write. The primary retains
+            // per-page publication/retirement headers for independent reuse.
+            let per_run = self.geometry.stage_bytes / self.geometry.stride;
+            let mut buffer = alloc(mul(per_run, self.geometry.stride)?)?;
+            let mut first = 0;
+            let mut count = 0;
+            for (&id, c) in &mut pages {
+                if !c.dirty {
+                    continue;
+                }
+                if count > 0 && (id != first + count || count == per_run) {
+                    write_at(
+                        &self.stage,
+                        self.geometry.stage_at(first)?,
+                        &buffer[..(count * self.geometry.stride) as usize],
+                    )?;
+                    count = 0;
+                }
+                if count == 0 {
+                    first = id;
+                }
+                // Logging is independent from stage layout and remains one entry
+                // per dirty page even if a page was evicted/reloaded repeatedly.
+                self.log_page(id, c)?;
+                let offset = (count * self.geometry.stride) as usize;
+                buffer[offset..offset + SLOT_HEADER as usize].copy_from_slice(&slot_header(
+                    id,
+                    self.next()?,
+                    &c.bytes,
+                ));
+                buffer[offset + SLOT_HEADER as usize..offset + self.geometry.stride as usize]
+                    .copy_from_slice(&c.bytes);
+                count += 1;
+                c.dirty = false;
+            }
+            if count > 0 {
+                write_at(
+                    &self.stage,
+                    self.geometry.stage_at(first)?,
+                    &buffer[..(count * self.geometry.stride) as usize],
+                )?;
+            }
+            Ok(())
+        })();
+        self.pages = pages;
+        result
+    }
+    fn load(&mut self, id: u64) -> Result<&mut OpenPage> {
         if self.poisoned {
             return Err(MatrixReuseError::Poisoned);
         }
-        if self.open.as_ref().is_some_and(|c| c.id == id) {
-            return Ok(());
+        // A sequential cell stream alternates between its data and bitmap page.
+        // Keep those two owner-local pages directly accessible, avoiding tree
+        // lookups for every cell. Both count toward the same bounded cache.
+        if let Some(index) = self
+            .hot
+            .iter()
+            .position(|p| p.as_ref().is_some_and(|p| p.0 == id))
+        {
+            self.hot_last = index;
+            return Ok(&mut self.hot[index].as_mut().unwrap().1);
         }
-        // Any failure after writing a stage/log can leave a partial intent entry.
-        // Poison before that I/O, and clear only after the complete transition.
-        self.poisoned = true;
-        self.flush_open()?;
-        let at = self.geometry.stage_at(id)?;
-        let (bytes, logged) = if let Some((generation, crc, _)) = read_slot(&self.stage, at, id)? {
-            if generation != self.next()? {
-                return Err(invalid("staging generation"));
-            }
-            let mut bytes = alloc(self.geometry.bytes)?;
-            read_at(&self.stage, add(at, SLOT_HEADER)?, &mut bytes)?;
-            if crc32fast::hash(&bytes) != crc {
-                return Err(invalid("staging checksum"));
-            }
-            (bytes, true)
+        let index = self
+            .hot
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(1 - self.hot_last);
+        if let Some((old_id, page)) = self.hot[index].take() {
+            self.pages.insert(old_id, page);
+        }
+        let page = if let Some(page) = self.pages.remove(&id) {
+            page
         } else {
-            (payload(&self.file, &self.geometry, self.head, id)?, false)
+            self.poisoned = true;
+            let count = self.pages.len() + self.hot.iter().filter(|p| p.is_some()).count();
+            if count as u64 >= self.geometry.cache_capacity {
+                let old_id = self.eviction.pop_front().unwrap();
+                let mut old = if let Some(page) = self.pages.remove(&old_id) {
+                    page
+                } else {
+                    let old_index = self
+                        .hot
+                        .iter()
+                        .position(|p| p.as_ref().is_some_and(|p| p.0 == old_id))
+                        .unwrap();
+                    self.hot[old_index].take().unwrap().1
+                };
+                self.flush_page(old_id, &mut old)?;
+            }
+            let at = self.geometry.stage_at(id)?;
+            let (bytes, logged, target) =
+                if let Some((generation, crc, _)) = read_slot(&self.stage, at, id)? {
+                    if generation != self.next()? {
+                        return Err(invalid("staging generation"));
+                    }
+                    let mut bytes = alloc(self.geometry.bytes)?;
+                    read_at(&self.stage, add(at, SLOT_HEADER)?, &mut bytes)?;
+                    if crc32fast::hash(&bytes) != crc {
+                        return Err(invalid("staging checksum"));
+                    }
+                    (bytes, true, None)
+                } else {
+                    let (bytes, target) = payload(&self.file, &self.geometry, self.head, id)?;
+                    (bytes, false, Some(target))
+                };
+            self.eviction.push_back(id);
+            self.poisoned = false;
+            OpenPage {
+                bytes,
+                target,
+                logged,
+                dirty: false,
+            }
         };
-        self.open = Some(OpenChunk {
-            id,
-            bytes,
-            logged,
-            dirty: false,
-        });
-        self.poisoned = false;
-        Ok(())
+        self.hot[index] = Some((id, page));
+        self.hot_last = index;
+        Ok(&mut self.hot[index].as_mut().unwrap().1)
     }
     fn put<T: StratavaMatrixBlock>(&mut self, key: MatrixKey, value: &T) -> Result<()> {
         if self.poisoned {
             return Err(MatrixReuseError::Poisoned);
         }
         let b = self.geometry.block::<T>()?.clone();
-        let (id, cell) = self.geometry.locate(&b, key)?;
+        let (chunk, cell) = self.geometry.locate(&b, key)?;
         let row_end = add(key.scan, 1)?;
+        let base = mul(chunk, self.geometry.chunk_bytes)?;
+        let start = add(base, add(b.slots, mul(cell, b.stride)?)?)?;
+        let last = add(start, b.stride - 1)? / self.geometry.bytes;
         self.geometry.spec.read_limits.check(
             ReadLimitKey::FileLen,
-            add(self.geometry.at(id, 1)?, self.geometry.stride)?,
+            add(self.geometry.at(last, 1)?, self.geometry.stride)?,
         )?;
         let encoded = crate::codec::encode_to_vec_limited(
             value,
@@ -913,12 +1080,28 @@ impl ReuseWriter {
         if encoded.len() as u64 != b.stride {
             return Err(invalid("cell encoding length"));
         }
-        self.load(id)?;
-        let c = self.open.as_mut().unwrap();
-        let at = add(b.slots, mul(cell, b.stride)?)? as usize;
-        c.bytes[at..at + encoded.len()].copy_from_slice(&encoded);
-        c.bytes[(b.bitmap + cell / 8) as usize] |= 1 << (cell % 8);
-        c.dirty = true;
+        let mut offset = start;
+        let mut rest = encoded.as_slice();
+        while !rest.is_empty() {
+            let page_bytes = self.geometry.bytes;
+            let local = (offset % page_bytes) as usize;
+            let take = rest.len().min(page_bytes as usize - local);
+            let page = self.load(offset / page_bytes)?;
+            if page.bytes[local..local + take] != rest[..take] {
+                page.bytes[local..local + take].copy_from_slice(&rest[..take]);
+                page.dirty = true;
+            }
+            offset += take as u64;
+            rest = &rest[take..];
+        }
+        let bitmap = add(base, add(b.bitmap, cell / 8)?)?;
+        let local = (bitmap % self.geometry.bytes) as usize;
+        let page = self.load(bitmap / self.geometry.bytes)?;
+        let bit = 1 << (cell % 8);
+        if page.bytes[local] & bit == 0 {
+            page.bytes[local] |= bit;
+            page.dirty = true;
+        }
         self.rows = self.rows.max(row_end);
         Ok(())
     }
@@ -927,14 +1110,21 @@ impl ReuseWriter {
             return Err(MatrixReuseError::Poisoned);
         }
         let b = self.geometry.block::<T>()?.clone();
-        let (id, cell) = self.geometry.locate(&b, key)?;
+        let (chunk, cell) = self.geometry.locate(&b, key)?;
         if key.scan >= self.rows {
             return Err(MatrixReuseError::Missing);
         }
-        self.load(id)?;
-        let c = self.open.as_mut().unwrap();
-        c.bytes[(b.bitmap + cell / 8) as usize] &= !(1 << (cell % 8));
-        c.dirty = true;
+        let at = add(
+            mul(chunk, self.geometry.chunk_bytes)?,
+            add(b.bitmap, cell / 8)?,
+        )?;
+        let local = (at % self.geometry.bytes) as usize;
+        let page = self.load(at / self.geometry.bytes)?;
+        let bit = 1 << (cell % 8);
+        if page.bytes[local] & bit != 0 {
+            page.bytes[local] &= !bit;
+            page.dirty = true;
+        }
         Ok(())
     }
     fn entry(&self, i: u64) -> Result<(u64, u64, [u8; 64])> {
@@ -959,7 +1149,7 @@ impl ReuseWriter {
         self.journal.set_len(PAGE)?;
         self.stage.set_len(PAGE)?;
         self.count = 0;
-        if let Some(c) = self.open.as_mut() {
+        for c in self.pages.values_mut() {
             c.logged = false;
             c.dirty = false;
         }
@@ -1017,7 +1207,7 @@ impl ReuseWriter {
         self.reset()
     }
     fn publish(&mut self) -> Result<()> {
-        self.flush_open()?;
+        self.flush_pages()?;
         if self.count == 0 {
             return Ok(());
         }
@@ -1035,22 +1225,30 @@ impl ReuseWriter {
         let mut buffer = alloc(self.geometry.bytes)?;
         for i in 0..self.count {
             let (id, slot, old) = self.entry(i)?;
-            let stage_at = self.geometry.stage_at(id)?;
-            let (generation, crc, _) = read_slot(&self.stage, stage_at, id)?
-                .ok_or_else(|| invalid("staging slot missing"))?;
-            if generation != next {
-                return Err(invalid("staging generation"));
-            }
-            read_at(&self.stage, add(stage_at, SLOT_HEADER)?, &mut buffer)?;
-            if crc32fast::hash(&buffer) != crc {
-                return Err(invalid("staging checksum"));
+            if let Some(page) = self.pages.get(&id) {
+                buffer.copy_from_slice(&page.bytes);
+            } else {
+                let stage_at = self.geometry.stage_at(id)?;
+                let (generation, crc, _) = read_slot(&self.stage, stage_at, id)?
+                    .ok_or_else(|| invalid("staging slot missing"))?;
+                if generation != next {
+                    return Err(invalid("staging generation"));
+                }
+                read_at(&self.stage, add(stage_at, SLOT_HEADER)?, &mut buffer)?;
+                if crc32fast::hash(&buffer) != crc {
+                    return Err(invalid("staging checksum"));
+                }
             }
             let at = self.geometry.at(id, slot)?;
             // Current confirmed payload remains in the other slot. Old readers
             // that still refer to this one must fail the generation recheck.
             write_at(&self.file, add(at, SLOT_HEADER)?, &buffer)?;
             fault("matrix_reuse.payload_written")?;
-            write_at(&self.file, at, &slot_header(id, next, &buffer))?;
+            let new_header = slot_header(id, next, &buffer);
+            write_at(&self.file, at, &new_header)?;
+            if let Some(page) = self.pages.get_mut(&id) {
+                page.target = Some((1 - slot, new_header));
+            }
             fault("matrix_reuse.slot_written")?;
             // A retirement fence prevents a lost/zeroed newest header from
             // silently reviving the previous value. Its exact old bytes are
@@ -1114,11 +1312,12 @@ struct ReuseReader {
     geometry: Geometry,
     nonce: [u8; 16],
     notify: Option<Arc<AtomicU64>>,
-    cache: RefCell<Option<CachedChunk>>,
+    cache: RefCell<Option<CachedPages>>,
 }
-struct CachedChunk {
+struct CachedPages {
     generation: u64,
-    id: u64,
+    first: u64,
+    count: u64,
     bytes: Vec<u8>,
 }
 impl MatrixReader {
@@ -1205,6 +1404,87 @@ impl MatrixReader {
     }
 }
 impl ReuseReader {
+    fn window_bytes(&self) -> u64 {
+        let pair = self.geometry.stride * 2;
+        // No retention still uses one pair as scratch. Bulk reads coalesce up
+        // to 256 KiB, independent of logical chunk/file size.
+        let limit = self.geometry.material_limit;
+        self.geometry
+            .options
+            .cache_bytes
+            .min(limit / 4)
+            .clamp(pair, (256 * 1024).max(pair))
+    }
+    fn copy_bytes(&self, h: Head, mut at: u64, mut out: &mut [u8]) -> Result<()> {
+        let g = &self.geometry;
+        while !out.is_empty() {
+            let id = at / g.bytes;
+            let local = (at % g.bytes) as usize;
+            let take = out.len().min(g.bytes as usize - local);
+            let mut cache = self.cache.borrow_mut();
+            if !cache.as_ref().is_some_and(|c| {
+                c.generation == h.generation && c.first <= id && id - c.first < c.count
+            }) {
+                *cache = None;
+                let wanted = (local as u64 + out.len() as u64).div_ceil(g.bytes);
+                let count = wanted.min(self.window_bytes() / (2 * g.stride)).max(1);
+                let mut bytes = alloc(mul(count, mul(2, g.stride)?)?)?;
+                // The last inactive payload may not exist yet. Read up to the
+                // captured confirmed extent, leaving never-allocated slots zero.
+                let start = g.at(id, 0)?;
+                let read = h.end.saturating_sub(start).min(bytes.len() as u64) as usize;
+                if read > 0 {
+                    read_at(&self.file, start, &mut bytes[..read])?;
+                }
+                *cache = Some(CachedPages {
+                    generation: h.generation,
+                    first: id,
+                    count,
+                    bytes,
+                });
+            }
+            let c = cache.as_ref().unwrap();
+            let base = ((id - c.first) * 2 * g.stride) as usize;
+            let mut result = None;
+            let mut retired = false;
+            for slot in 0..2 {
+                let offset = base + slot as usize * g.stride as usize;
+                let header = &c.bytes[offset..offset + SLOT_HEADER as usize];
+                let parsed = parse_slot(header, id);
+                let entry = match parsed {
+                    Ok(Some(v)) => Some(v),
+                    other => match original_slot(&self.journal, self.nonce, h, id, slot)? {
+                        Some(v) => v,
+                        None => other?,
+                    },
+                };
+                if let Some((generation, crc, until)) = entry {
+                    retired |= until <= h.generation;
+                    if generation > 0
+                        && generation <= h.generation
+                        && h.generation < until
+                        && result.is_none_or(|(_, _, old)| generation > old)
+                    {
+                        result = Some((offset + SLOT_HEADER as usize, crc, generation));
+                    }
+                }
+            }
+            if let Some((offset, crc, _)) = result {
+                let bytes = &c.bytes[offset..offset + g.bytes as usize];
+                if crc32fast::hash(bytes) != crc {
+                    return Err(invalid("page payload checksum"));
+                }
+                out[..take].copy_from_slice(&bytes[local..local + take]);
+            } else if retired {
+                return Err(invalid("confirmed page missing; predecessor is retired"));
+            } else {
+                out[..take].fill(0);
+            }
+            at += take as u64;
+            out = &mut out[take..];
+        }
+        Ok(())
+    }
     fn decode_budget(&self, used: u64) -> Result<u64> {
         let limit = self
             .geometry
@@ -1212,8 +1492,11 @@ impl ReuseReader {
             .read_limits
             .require(ReadLimitKey::MaterializedBytes)?
             .unwrap_or(u64::MAX);
-        // A retry/output buffer and at most two chunk buffers during replacement.
-        let used = add(used, mul(self.geometry.bytes, 2)?)?;
+        // A bounded read window, one scratch bitmap page and an undo payload.
+        let used = add(
+            used,
+            add(self.window_bytes(), mul(self.geometry.bytes, 2)?)?,
+        )?;
         limit
             .checked_sub(used)
             .ok_or(MatrixReuseError::Limit("reader working memory"))
@@ -1249,38 +1532,36 @@ impl ReuseReader {
                     let id = ordinal / cells;
                     let local = ordinal % cells;
                     let take = (end - ordinal).min(cells - local);
-                    let mut cache = self.cache.borrow_mut();
-                    if !cache
-                        .as_ref()
-                        .is_some_and(|c| c.generation == before.generation && c.id == id)
-                    {
-                        let bytes = payload_with_undo(
-                            &self.file,
-                            &self.geometry,
-                            before,
-                            id,
-                            Some((&self.journal, self.nonce)),
-                        )?;
-                        *cache = Some(CachedChunk {
-                            generation: before.generation,
-                            id,
-                            bytes,
-                        });
-                    }
-                    let chunk = &cache.as_ref().unwrap().bytes;
-                    for cell in local..local + take {
-                        if chunk[(b.bitmap + cell / 8) as usize] & (1 << (cell % 8)) == 0 {
-                            return Err(MatrixReuseError::Missing);
+                    let base = mul(id, self.geometry.chunk_bytes)?;
+                    // Presence is paged independently, so value-only overwrites never
+                    // rewrite the bitmap. Check at most one bitmap page at a time.
+                    let mut cell = local;
+                    while cell < local + take {
+                        let bit_at = add(base, add(b.bitmap, cell / 8)?)?;
+                        let bit_len = ((local + take).div_ceil(8) - cell / 8)
+                            .min(self.geometry.bytes - bit_at % self.geometry.bytes);
+                        let mut bits = alloc(bit_len)?;
+                        self.copy_bytes(before, bit_at, &mut bits)?;
+                        let stop = (local + take).min((cell / 8 + bit_len) * 8);
+                        for (i, byte) in bits.iter().enumerate() {
+                            let lo = if i == 0 { cell % 8 } else { 0 };
+                            let hi = if i + 1 == bits.len() {
+                                (stop - 1) % 8 + 1
+                            } else {
+                                8
+                            };
+                            let mask = ((1u16 << hi) - (1u16 << lo)) as u8;
+                            if byte & mask != mask {
+                                return Err(MatrixReuseError::Missing);
+                            }
                         }
+                        cell = stop;
                     }
-                    let at = add(b.slots, mul(local, b.stride)?)? as usize;
+                    let at = add(base, add(b.slots, mul(local, b.stride)?)?)?;
                     let len = mul(take, b.stride)? as usize;
-                    out[written..written + len].copy_from_slice(&chunk[at..at + len]);
+                    self.copy_bytes(before, at, &mut out[written..written + len])?;
                     written += len;
                     ordinal += take;
-                    if self.geometry.bytes > self.geometry.options.cache_bytes {
-                        *cache = None;
-                    }
                 }
                 Ok(())
             })();
@@ -1289,9 +1570,18 @@ impl ReuseReader {
             let signal_after = self.notify.as_ref().map(|s| s.load(Ordering::Acquire));
             if before == after && signal == signal_after {
                 match result {
-                    Ok(()) => return Ok(out),
+                    Ok(()) => {
+                        if self.cache.borrow().as_ref().is_some_and(|c| {
+                            c.bytes.len() as u64 > self.geometry.options.cache_bytes
+                        }) {
+                            *self.cache.borrow_mut() = None;
+                        }
+                        return Ok(out);
+                    }
                     Err(MatrixReuseError::Missing) => {
-                        if self.geometry.bytes > self.geometry.options.cache_bytes {
+                        if self.cache.borrow().as_ref().is_some_and(|c| {
+                            c.bytes.len() as u64 > self.geometry.options.cache_bytes
+                        }) {
                             *self.cache.borrow_mut() = None;
                         }
                         return Err(MatrixReuseError::Missing);

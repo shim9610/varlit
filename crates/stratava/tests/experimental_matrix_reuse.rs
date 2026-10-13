@@ -202,9 +202,9 @@ fn payload_corruption_is_not_hidden_by_an_older_slot() {
     fill(&mut w, 12, 1);
     fill(&mut w, 12, 2);
     drop(w);
-    // One chunk: two blocks, 12*(64+8) bytes plus two 2-byte bitmaps.
-    let stride = 64 + 12 * 72 + 4;
-    let at = 3 * 4096 + stride + 64 + 2;
+    // The first value page follows the bitmap page; generation 2 is in slot 1.
+    let stride = 64 + 4096;
+    let at = 3 * 4096 + 3 * stride + 64;
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -398,9 +398,20 @@ mod fault_tests {
     use std::path::PathBuf;
     #[test]
     fn process_abort_matrix_recovers_and_never_resurrects_discarded_chunks() {
-        for point in stratava::scalable_fault::MATRIX_REUSE_POINTS
+        for (point, occurrence) in stratava::scalable_fault::MATRIX_REUSE_POINTS
             .iter()
             .filter(|p| !p.ends_with("read_copied"))
+            .flat_map(|point| {
+                let hits = if point.ends_with("payload_written")
+                    || point.ends_with("slot_written")
+                    || point.contains("retirement")
+                {
+                    3
+                } else {
+                    1
+                };
+                (1..=hits).map(move |hit| (*point, hit))
+            })
         {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("data");
@@ -418,7 +429,7 @@ mod fault_tests {
                 .env("STRATAVA_REUSE_TEST_PATH", &path)
                 .env(
                     stratava::scalable_fault::FAULT_ENV,
-                    format!("abort:{point}:1"),
+                    format!("abort:{point}:{occurrence}"),
                 )
                 .env(
                     stratava::scalable_fault::TRACE_ENV,
@@ -430,8 +441,11 @@ mod fault_tests {
             assert!(
                 std::fs::read_to_string(dir.path().join("trace"))
                     .unwrap()
-                    .contains(point),
-                "missing fault {point}: stdout={} stderr={}",
+                    .lines()
+                    .filter(|line| line.contains(point))
+                    .count()
+                    >= occurrence,
+                "missing fault {point}/{occurrence}: stdout={} stderr={}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
@@ -462,11 +476,11 @@ fn erased_latest_header_and_truncation_do_not_return_old_values() {
         fill(&mut w, 12, 2);
         drop(w);
         let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        let stride = 64 + 12 * 72 + 4;
+        let stride = 64 + 4096;
         if truncate {
-            f.set_len(3 * 4096 + stride + 8).unwrap();
+            f.set_len(3 * 4096 + 3 * stride + 8).unwrap();
         } else {
-            f.seek(SeekFrom::Start(3 * 4096 + stride)).unwrap();
+            f.seek(SeekFrom::Start(3 * 4096 + 3 * stride)).unwrap();
             f.write_all(&[0; 64]).unwrap();
         }
         drop(f);
@@ -622,6 +636,11 @@ fn reuse_load_campaign() {
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap_or(30);
     assert!((1..=3600).contains(&seconds));
+    let rows = std::env::var("STRATAVA_REUSE_SOAK_ROWS")
+        .ok()
+        .map(|s| s.parse::<u64>().unwrap())
+        .unwrap_or(8192);
+    assert!((1..=1_048_576).contains(&rows));
     let dir = match std::env::var_os("STRATAVA_REUSE_SOAK_ROOT") {
         Some(p) => tempfile::tempdir_in(p).unwrap(),
         None => tempfile::tempdir().unwrap(),
@@ -635,7 +654,7 @@ fn reuse_load_campaign() {
     let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
     let mut w = MatrixWriter::create(spec, &path, dims.clone(), options).unwrap();
     let fill = |w: &mut MatrixWriter, epoch: u64| {
-        for row in 0..8192 {
+        for row in 0..rows {
             w.put(
                 MatrixKey::new(row, 0),
                 &Value {
@@ -665,7 +684,7 @@ fn reuse_load_campaign() {
             joins.push(scope.spawn(move || {
                 let mut ok = 0;
                 let mut retry = 0;
-                let mut out = vec![value(0, 0); 8192];
+                let mut out = vec![value(0, 0); rows as usize];
                 while !stop.load(Ordering::Acquire) && start.elapsed().as_secs() < seconds + 10 {
                     match r.read_run_into(MatrixKey::new(0, 0), &mut out) {
                         Ok(()) => {
@@ -699,11 +718,11 @@ fn reuse_load_campaign() {
     drop(w);
     let r = MatrixReader::open(spec, &path, dims, options).unwrap();
     assert_eq!(
-        r.get::<Value>(MatrixKey::new(8191, 0)).unwrap().epoch,
+        r.get::<Value>(MatrixKey::new(rows - 1, 0)).unwrap().epoch,
         publications + 2
     );
     println!(
-        "reuse_load seconds={:.3} publications={publications} successful_ranges={successful} retry_exhaustions={retries} primary_bytes={bound}",
+        "reuse_load rows={rows} seconds={:.3} publications={publications} successful_ranges={successful} retry_exhaustions={retries} primary_bytes={bound}",
         start.elapsed().as_secs_f64()
     );
 }
@@ -761,5 +780,186 @@ fn publication_errors_distinguish_durable_and_indeterminate() {
                 Err(MatrixReuseError::PublicationIndeterminate { generation: 2, .. })
             ));
         }
+    }
+}
+
+#[test]
+fn pages_span_cells_and_tiny_writer_cache_survives_eviction() {
+    stratava_format! {
+        pub format LargeCell {
+            magic: b"REUSEBIG"; version:1; endian:little;
+            dims {row:u32,col:u32,}
+            commit: cell_bitmap {keyspace=[row,col];categories=[data];};
+            blocks { matrix Blob(id=1,dims=[row,col],category=data) { bytes:[u8;5000], } }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for page_bytes in [4096, 8192, 65536] {
+        let options = MatrixOptions {
+            page_bytes,
+            max_chunk_bytes: page_bytes,
+            cache_bytes: 0,
+            rows_per_chunk: 4096,
+            ..opts()
+        };
+        let spec = LargeCell::spec().with_growing_matrix_dimension("row", 4096);
+        let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
+        let path = dir.path().join(page_bytes.to_string());
+        let mut w = MatrixWriter::create(spec, &path, dims.clone(), options).unwrap();
+        for epoch in 1..5 {
+            for row in [0, 4, 1, 4095, 4096, 2] {
+                w.put(
+                    MatrixKey::new(row, 0),
+                    &Blob {
+                        bytes: [epoch; 5000],
+                    },
+                )
+                .unwrap();
+            }
+            w.sync().unwrap();
+            let r = w.reader().unwrap();
+            for row in [0, 1, 2, 4, 4095, 4096] {
+                assert_eq!(
+                    r.get::<Blob>(MatrixKey::new(row, 0)).unwrap().bytes,
+                    [epoch; 5000]
+                );
+            }
+            drop(w);
+            w = MatrixWriter::open(spec, &path, dims.clone(), options).unwrap();
+        }
+    }
+}
+
+#[test]
+fn logical_chunk_larger_than_working_budget_opens_and_updates_locally() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wide");
+    let options = MatrixOptions {
+        rows_per_chunk: 4096,
+        max_chunk_bytes: 8192,
+        cache_bytes: 8192,
+        ..opts()
+    };
+    let spec = ReuseFormat::spec().with_growing_matrix_dimension("row", 4096);
+    let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 640)]);
+    // Logical chunk exceeds 180 MiB; neither writer nor reader materializes it.
+    let mut w = MatrixWriter::create(spec, &path, dims.clone(), options).unwrap();
+    let k = MatrixKey::new(4095, 639);
+    for epoch in 1..5 {
+        w.put(k, &value(0, epoch)).unwrap();
+        w.sync().unwrap();
+        assert_eq!(w.reader().unwrap().get::<Value>(k).unwrap().epoch, epoch);
+    }
+    drop(w);
+    let r = MatrixReader::open(spec, &path, dims, options).unwrap();
+    assert_eq!(r.get::<Value>(k).unwrap().epoch, 4);
+    assert!(matches!(r.get::<Meta>(k), Err(MatrixReuseError::Missing)));
+}
+
+#[test]
+fn old_experimental_format_and_invalid_page_geometry_are_refused() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    for page_bytes in [0, 1, 4095, 12288, 131072] {
+        assert!(
+            MatrixWriter::create(
+                spec(),
+                dir.path().join(page_bytes.to_string()),
+                dims(),
+                MatrixOptions {
+                    page_bytes,
+                    ..opts()
+                }
+            )
+            .is_err()
+        );
+    }
+    let path = dir.path().join("old");
+    let w = MatrixWriter::create(spec(), &path, dims(), opts()).unwrap();
+    drop(w);
+    let mut f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    f.write_all(b"STREUSE1").unwrap();
+    drop(f);
+    assert!(MatrixReader::open(spec(), &path, dims(), opts()).is_err());
+    assert!(MatrixWriter::open(spec(), &path, dims(), opts()).is_err());
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn sparse_updates_write_one_page_and_bulk_reads_coalesce_pages() {
+    use stratava::experimental_matrix::take_test_io;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("data");
+    let options = MatrixOptions {
+        rows_per_chunk: 4096,
+        ..opts()
+    };
+    let spec = ReuseFormat::spec().with_growing_matrix_dimension("row", 4096);
+    let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
+    let mut w = MatrixWriter::create(spec, &path, dims, options).unwrap();
+    for row in 0..8192 {
+        w.put(MatrixKey::new(row, 0), &value(row, 1)).unwrap();
+    }
+    w.sync().unwrap();
+    take_test_io();
+    w.put(MatrixKey::new(73, 0), &value(73, 2)).unwrap();
+    w.sync().unwrap();
+    let io = take_test_io();
+    // Includes journal, page headers, publication head and cleanup, not only payload.
+    assert!(io.write_bytes < 24 * 1024, "{io:?}");
+    let r = w.reader().unwrap();
+    let mut out = vec![value(0, 0); 8192];
+    take_test_io();
+    r.read_run_into(MatrixKey::new(0, 0), &mut out).unwrap();
+    let io = take_test_io();
+    assert!(
+        io.read_calls < 24,
+        "bulk path issued page/cell-at-a-time I/O: {io:?}"
+    );
+    assert_eq!(out[73].epoch, 2);
+    assert_eq!(out[72].epoch, 1);
+    assert_eq!(out[8191].epoch, 1);
+    take_test_io();
+    w.delete::<Value>(MatrixKey::new(73, 0)).unwrap();
+    w.sync().unwrap();
+    let io = take_test_io();
+    assert!(io.write_bytes < 24 * 1024, "bitmap-only delete: {io:?}");
+    assert!(matches!(
+        r.get::<Value>(MatrixKey::new(73, 0)),
+        Err(MatrixReuseError::Missing)
+    ));
+    take_test_io();
+    w.sync().unwrap();
+    assert_eq!(take_test_io().write_bytes, 0);
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn restarting_a_scan_does_not_evict_its_own_active_page() {
+    use stratava::experimental_matrix::take_test_io;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("data");
+    let options = MatrixOptions {
+        rows_per_chunk: 4096,
+        max_chunk_bytes: 16 * 1024,
+        ..opts()
+    };
+    let spec = ReuseFormat::spec().with_growing_matrix_dimension("row", 4096);
+    let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
+    let mut w = MatrixWriter::create(spec, &path, dims, options).unwrap();
+    for epoch in 1..5 {
+        take_test_io();
+        for row in 0..512 {
+            w.put(MatrixKey::new(row, 0), &value(row, epoch)).unwrap();
+        }
+        w.sync().unwrap();
+        let io = take_test_io();
+        // Eight data pages plus bitmap. Writing every cell's page on its own
+        // would exceed 2 MiB; bounded eviction must not produce that amplification.
+        assert!(io.write_bytes < 128 * 1024, "{io:?}");
+        let r = w.reader().unwrap();
+        let mut out = vec![value(0, 0); 512];
+        r.read_run_into(MatrixKey::new(0, 0), &mut out).unwrap();
+        assert!(out.iter().all(|v| v.epoch == epoch));
     }
 }
