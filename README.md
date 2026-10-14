@@ -293,8 +293,10 @@ are included even with `default-features = false`. The removed
 Cargo manifests. Optional capabilities remain opt-in:
 
 ```toml
-varlit = { git = "https://github.com/shim9610/varlit", tag = "v0.11.0",
-          features = ["integrity", "compression-zstd"] }
+[dependencies.varlit]
+git = "https://github.com/shim9610/varlit"
+branch = "main"
+features = ["integrity", "compression-zstd"]
 ```
 
 | Feature | Turns on |
