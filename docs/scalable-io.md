@@ -380,6 +380,14 @@ dirty generation intentionally. Writer open requires explicit recovery. Reader
 open serves the saved confirmed root and EOF without recovering or scanning the
 unfinished suffix.
 
+Both mirrored confirmed companion heads being unreadable is a corruption
+error, including during explicit restore. Working/dirty heads cannot replace
+the confirmed anchor: they may describe an older rollback point. Open/restore
+refuse without truncating the primary or rewriting the damaged companion.
+One valid confirmed copy still serves its snapshot, and already opened readers
+keep their pinned confirmed generation. Preserve damaged files for inspection;
+ordinary dirty-tail recovery does not repair lost confirmed anchors.
+
 Use the explicit generated operations:
 
 | Situation | Operation | Native scan |

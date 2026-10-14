@@ -12,6 +12,16 @@ const MAX_OPERATIONS: usize = 64;
 // The format permits 256 physical records, including its creation nonce.
 const MAX_RECORDS: usize = 255;
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn corrupted_confirmed_heads_do_not_restore_an_older_generation() {
+        // Public sanitizer run 38543670673: both confirmed head checksums are
+        // invalidated while an older dirty/recovery checkpoint stays readable.
+        super::run_mutation(&[32, 13, 32, 13, 16, 16, 16, 16, 16, 16, 245]);
+    }
+}
+
 #[derive(Clone, Default)]
 struct Model {
     records: u64,

@@ -524,6 +524,9 @@ jobs:
       - name: cargo check
         working-directory: fuzz
         run: cargo check --locked --all-targets
+      - name: Deterministic fuzz regressions
+        working-directory: fuzz
+        run: cargo test --locked --lib
       - name: cargo-audit
         run: |
           cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"

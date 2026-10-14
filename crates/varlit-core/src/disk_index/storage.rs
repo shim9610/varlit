@@ -266,6 +266,7 @@ impl Store {
         // Retry only an incomplete publication. Old immutable checkpoints remain readable.
         for _ in 0..8 {
             let mut heads = Vec::with_capacity(5);
+            let mut has_confirmed_head = false;
             for (slot, durable) in
                 CONFIRMED
                     .into_iter()
@@ -277,8 +278,18 @@ impl Store {
                     })
             {
                 if let Some(head) = self.head(slot)? {
+                    has_confirmed_head |= CONFIRMED.contains(&slot);
                     heads.push((head, durable));
                 }
+            }
+            // Working/dirty heads are not substitutes for a confirmed anchor.
+            // Both confirmed copies may be momentarily unreadable during a
+            // concurrent publication, so retry the existing bounded scan. If
+            // they stay invalid, recovery must refuse instead of promoting a
+            // stale dirty checkpoint and truncating acknowledged primary data.
+            if !has_confirmed_head {
+                std::hint::spin_loop();
+                continue;
             }
             heads.sort_unstable_by_key(|(head, _)| std::cmp::Reverse(head.offset));
             for (head, durable) in heads {

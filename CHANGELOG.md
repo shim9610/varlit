@@ -6,6 +6,11 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Refuse stream/indexed recovery when both confirmed companion heads are
+  unreadable. An old dirty checkpoint can no longer replace an acknowledged
+  generation and truncate its primary records. Preserve the damaged files;
+  one valid confirmed copy still serves the confirmed snapshot. Add a retained
+  fuzz regression and clean/dirty stream/indexed file-preservation checks.
 - Qualify the portable Miri gate against `nightly-2026-10-12`, with checked
   exact-test exclusions, recorded interpreter/source identity and retained logs.
   Native directory synchronization stays enabled in product code and remains

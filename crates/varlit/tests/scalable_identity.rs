@@ -608,3 +608,106 @@ fn matching_descriptor_plan_still_builds_and_indexes() -> Result<()> {
     assert_eq!(reader.get::<Item>(&5)?, Some(item(5, "fixed-width-value")));
     Ok(())
 }
+
+#[test]
+fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary() -> Result<()> {
+    for dirty in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("head-damage.varlit");
+        let options = varlit::StreamOptions::default();
+        let mut writer = VarlitStreamWriter::create(stream_spec(), &path, options)?;
+        for key in [10, 11] {
+            writer.push_info(&item(key, "confirmed"))?;
+        }
+        writer.sync()?;
+        let pinned = varlit::VarlitStreamReader::open(stream_spec(), &path, options)?;
+        if dirty {
+            writer.push_info(&item(12, "unconfirmed"))?;
+            writer.flush()?;
+        }
+        drop(writer);
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(".vks");
+        let sidecar = std::path::PathBuf::from(sidecar);
+        let primary_before = fs::read(&path)?;
+        let mut damaged = fs::read(&sidecar)?;
+        // VIX v5 has independently checksummed mirrored confirmed heads.
+        damaged[4096 + 8] ^= 1;
+        fs::write(&sidecar, &damaged)?;
+        assert_eq!(
+            varlit::VarlitStreamReader::open(stream_spec(), &path, options)?.verify_all()?,
+            3
+        );
+        damaged[8192 + 8] ^= 1;
+        fs::write(&sidecar, &damaged)?;
+        assert!(varlit::VarlitStreamReader::open(stream_spec(), &path, options).is_err());
+        assert!(VarlitStreamWriter::open(stream_spec(), &path, options).is_err());
+        assert!(
+            VarlitStreamWriter::restore_checkpoint_and_open(stream_spec(), &path, options).is_err()
+        );
+        assert_eq!(
+            fs::read(&path)?,
+            primary_before,
+            "recovery truncated confirmed records"
+        );
+        assert_eq!(
+            fs::read(&sidecar)?,
+            damaged,
+            "recovery republished a stale checkpoint"
+        );
+        assert_eq!(pinned.verify_all()?, 3);
+    }
+    Ok(())
+}
+
+#[test]
+fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primary() -> Result<()> {
+    for dirty in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("head-damage.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, plan())?;
+        for key in [10, 11] {
+            writer.push_info(&item(key, "confirmed"))?;
+        }
+        writer.sync()?;
+        let pinned = VarlitIndexedReader::open(spec(), &path, options, plan())?;
+        if dirty {
+            writer.push_info(&item(12, "unconfirmed"))?;
+            writer.flush()?;
+        }
+        drop(writer);
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(".vki");
+        let sidecar = std::path::PathBuf::from(sidecar);
+        let primary_before = fs::read(&path)?;
+        let mut damaged = fs::read(&sidecar)?;
+        damaged[4096 + 8] ^= 1;
+        fs::write(&sidecar, &damaged)?;
+        let reader = VarlitIndexedReader::open(spec(), &path, options, plan())?;
+        assert_eq!(reader.get::<Item>(&10)?, Some(item(10, "confirmed")));
+        assert_eq!(reader.get::<Item>(&11)?, Some(item(11, "confirmed")));
+        drop(reader);
+        damaged[8192 + 8] ^= 1;
+        fs::write(&sidecar, &damaged)?;
+        assert!(VarlitIndexedReader::open(spec(), &path, options, plan()).is_err());
+        assert!(VarlitIndexedWriter::open(spec(), &path, options, plan()).is_err());
+        assert!(
+            VarlitIndexedWriter::restore_checkpoint_and_open(spec(), &path, options, plan())
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&path)?,
+            primary_before,
+            "recovery truncated confirmed records"
+        );
+        assert_eq!(
+            fs::read(&sidecar)?,
+            damaged,
+            "recovery republished a stale checkpoint"
+        );
+        assert_eq!(pinned.get::<Item>(&10)?, Some(item(10, "confirmed")));
+        assert_eq!(pinned.get::<Item>(&11)?, Some(item(11, "confirmed")));
+    }
+    Ok(())
+}
