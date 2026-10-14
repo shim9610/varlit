@@ -1,7 +1,6 @@
 # Known Limitations
 
-This describes the 0.12.1 release candidate, based on the released 0.12.0
-implementation. Historical measurements
+This describes Varlit 0.12.1, based on the 0.12.0 implementation. Historical measurements
 below identify their original platform and are not new performance claims.
 Private spill files bound retained directories; they do not remove initial
 scans, temporary disk requirements, per-record workspace or filesystem limits.
@@ -1102,8 +1101,13 @@ The 0.12.0 product tree passed native default/all-feature and bounded-I/O runs
 on all three platforms in
 [CI](https://github.com/shim9610/varlit/actions/runs/38570489047), alongside
 [ASan, portable Miri and bounded fuzz smoke](https://github.com/shim9610/varlit/actions/runs/38570489033).
-These results qualify that recorded source tree. The 0.12.1 candidate must pass
-its own required checks; prior results are not reported as that new commit's run.
+These results qualify that recorded source tree. The 0.12.1 product tree
+(`43308ff`) subsequently passed all 46 jobs in
+[its own CI](https://github.com/shim9610/varlit/actions/runs/38590083518) and all
+three [sanitizer jobs](https://github.com/shim9610/varlit/actions/runs/38590083701).
+Miri exercised 160 portable core tests and six codec-array tests, with 47 documented
+exclusions and three ignored tests; fuzz smoke completed all 13 declared targets.
+These checks do not establish whole-library Miri coverage or a long fuzz campaign.
 
 | Target | Status |
 | --- | --- |

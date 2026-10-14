@@ -24,7 +24,7 @@ keyed lookup. Stream/indexed handles keep primary open/append work independent
 of the complete native directory; choose a digest when native open scans are
 the immediate cost to reduce.
 
-> **Status (0.12.1 release candidate).** Stream/indexed handles, disk-index
+> **Status (0.12.1).** Stream/indexed handles, disk-index
 > plans, finite keys and scan control are part of the default public API, also
 > with `--no-default-features`. Remove `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.

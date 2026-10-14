@@ -233,8 +233,9 @@ confidence in it:**
 | macOS | native default/all-feature and bounded-I/O checks executed. `SEEK_DATA`/`SEEK_HOLE` and `F_PUNCHHOLE` paths are implemented; actual mounted-volume support is reported by storage diagnostics. |
 | Other targets | native allocation-map and hole-punch support may be unavailable. Persisted-index opens remain bounded; clearing can stream zeros. These targets are not qualified by the three-platform CI. |
 
-The executed 0.12.0 product tree is recorded in
-[CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
+The executed 0.12.1 product tree (`43308ff`) is recorded in
+[CI](https://github.com/shim9610/varlit/actions/runs/38590083518) and
+[Sanitizers](https://github.com/shim9610/varlit/actions/runs/38590083701).
 This is behavioral qualification on hosted runners, not a benchmark or a promise
 that every filesystem supports sparse allocation and hole punching.
 
@@ -279,23 +280,21 @@ the assurance those notes record — together with its limits — is summarised 
 
 ## Add It To Your Project
 
-This checkout prepares the **0.12.1 release candidate**. The GitHub 0.12.0
-release is available; the Varlit crates have not yet been published to crates.io.
-After registry publication, the installation is:
+This checkout contains **Varlit 0.12.1**. Install the facade crate from crates.io:
 
 ```toml
 [dependencies]
 varlit = "0.12.1"
 ```
 
-Before registry publication, use the existing repository release:
+For a Git dependency, use the versioned repository release:
 
 ```toml
 [dependencies]
-varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.12.0" }
+varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.12.1" }
 ```
 
-To try this 0.12.1 candidate instead, use a local checkout:
+For local development, use a checkout:
 
 ```toml
 [dependencies]
