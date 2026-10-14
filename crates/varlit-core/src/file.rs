@@ -21789,8 +21789,9 @@ fn replace_open_path_atomically(replacement: &Path, target: &Path) -> Result<Rep
     let name: Vec<u16> = std::path::absolute(target)?
         .as_os_str()
         .encode_wide()
+        .chain(std::iter::once(0))
         .collect();
-    let name_bytes = name.len().checked_mul(2).ok_or_else(|| {
+    let name_bytes = (name.len() - 1).checked_mul(2).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "replacement path too long",
@@ -21802,8 +21803,13 @@ fn replace_open_path_atomically(replacement: &Path, target: &Path) -> Result<Rep
             "replacement path too long",
         )
     })?;
-    let size = (std::mem::offset_of!(FILE_RENAME_INFO, FileName) + name_bytes as usize)
-        .max(std::mem::size_of::<FILE_RENAME_INFO>());
+    // FileNameLength counts only the path, but the Win32 path conversion also
+    // receives a terminated name. Reserve/copy the NUL explicitly instead of
+    // relying on zeroed alignment padding, which disappears for some lengths.
+    let size = (std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+        + name_bytes as usize
+        + std::mem::size_of::<u16>())
+    .max(std::mem::size_of::<FILE_RENAME_INFO>());
     let size = u32::try_from(size).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -24893,6 +24899,37 @@ mod tests {
             Some(ReplaceTestBlock { value: 2 })
         );
         assert_no_rewrite_temps(directory.path())?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_open_generation_rename_handles_every_utf16_alignment() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        // Four adjacent ASCII lengths cover every UTF-16 tail alignment in the
+        // u64-backed FILE_RENAME_INFO allocation, including no padding at all.
+        for suffix_len in 0..4 {
+            let target = directory
+                .path()
+                .join(format!("generation{}", "x".repeat(suffix_len)));
+            std::fs::write(&target, b"old")?;
+            let mut old = File::open(&target)?;
+            let mut temporary = tempfile::NamedTempFile::new_in(directory.path())?;
+            std::io::Write::write_all(temporary.as_file_mut(), b"new")?;
+            temporary.as_file().sync_all()?;
+            let mut new = temporary.as_file().try_clone()?;
+            std::io::Seek::seek(&mut new, std::io::SeekFrom::Start(0))?;
+            let _durability = crate::file::publish_open_temp_path_atomically(
+                temporary.into_temp_path(),
+                &target,
+            )?;
+            assert_eq!(std::fs::read(&target)?, b"new");
+            let mut bytes = [0; 3];
+            std::io::Read::read_exact(&mut old, &mut bytes)?;
+            assert_eq!(&bytes, b"old");
+            std::io::Read::read_exact(&mut new, &mut bytes)?;
+            assert_eq!(&bytes, b"new");
+        }
         Ok(())
     }
 
