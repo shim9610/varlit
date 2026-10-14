@@ -17395,6 +17395,37 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_open_generation_rename_handles_every_utf16_alignment() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        // Four adjacent ASCII lengths cover every UTF-16 tail alignment in the
+        // u64-backed FILE_RENAME_INFO allocation, including no padding at all.
+        for suffix_len in 0..4 {
+            let target = directory
+                .path()
+                .join(format!("generation{}", "x".repeat(suffix_len)));
+            std::fs::write(&target, b"old")?;
+            let mut old = File::open(&target)?;
+            let mut temporary = tempfile::NamedTempFile::new_in(directory.path())?;
+            std::io::Write::write_all(temporary.as_file_mut(), b"new")?;
+            temporary.as_file().sync_all()?;
+            let mut new = temporary.as_file().try_clone()?;
+            std::io::Seek::seek(&mut new, std::io::SeekFrom::Start(0))?;
+            let _durability = crate::file::publish_open_temp_path_atomically(
+                temporary.into_temp_path(),
+                &target,
+            )?;
+            assert_eq!(std::fs::read(&target)?, b"new");
+            let mut bytes = [0; 3];
+            std::io::Read::read_exact(&mut old, &mut bytes)?;
+            assert_eq!(&bytes, b"old");
+            std::io::Read::read_exact(&mut new, &mut bytes)?;
+            assert_eq!(&bytes, b"new");
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_concurrent_replacefilew_keeps_whole_generations_and_old_handle() -> Result<()> {
         use std::sync::{Arc, Barrier};
 

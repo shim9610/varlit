@@ -449,8 +449,9 @@ pub(super) fn replace_open_path_atomically(
     let name: Vec<u16> = std::path::absolute(target)?
         .as_os_str()
         .encode_wide()
+        .chain(std::iter::once(0))
         .collect();
-    let name_bytes = name.len().checked_mul(2).ok_or_else(|| {
+    let name_bytes = (name.len() - 1).checked_mul(2).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "replacement path too long",
@@ -462,8 +463,13 @@ pub(super) fn replace_open_path_atomically(
             "replacement path too long",
         )
     })?;
-    let size = (std::mem::offset_of!(FILE_RENAME_INFO, FileName) + name_bytes as usize)
-        .max(std::mem::size_of::<FILE_RENAME_INFO>());
+    // FileNameLength counts only the path, but the Win32 path conversion also
+    // receives a terminated name. Reserve/copy the NUL explicitly instead of
+    // relying on zeroed alignment padding, which disappears for some lengths.
+    let size = (std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+        + name_bytes as usize
+        + std::mem::size_of::<u16>())
+    .max(std::mem::size_of::<FILE_RENAME_INFO>());
     let size = u32::try_from(size).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
