@@ -1,6 +1,12 @@
-# API Changes — 0.3.0 through 0.12.0
+# API Changes — 0.3.0 through 0.12.1
 
-## Unreleased 0.12.0: opposite-axis matrix ranges
+## 0.12.1 release preparation
+
+0.12.1 changes package/release metadata and documentation and includes reviewed
+dependency lockfile updates. It adds no Rust API or wire-format changes relative
+to 0.12.0. VMAT v5 and experimental STREUSE2 compatibility rules remain unchanged.
+
+## 0.12.0: opposite-axis matrix ranges
 
 Add `read_matrix_column_into` and `read_matrix_column_bytes_into` on file, reader
 and writer handles. Generated readers and their read traits add
@@ -11,7 +17,7 @@ metadata, gather payloads with bounded scratch, and reuse compressed sub-blocks.
 All queries use `&self`; snapshot/follow rules and VMAT v5 bytes are unchanged.
 See [the matrix API](api-reference.md) for physical-order and memory costs.
 
-## Unreleased 0.12.0: fixed byte-array decoding
+## 0.12.0: fixed byte-array decoding
 
 `VarlitDecode::decode_array` is an additive default method. Existing manual
 codecs require no changes: the default preserves element decoding, partial-drop
@@ -20,7 +26,7 @@ arrays in one operation, including through type aliases. Larger arrays retain
 fallible heap staging. Custom codecs with `WireType::U8` keep their own validation.
 Wire bytes, schema identities and existing read signatures are unchanged.
 
-## Unreleased 0.12.0: contiguous matrix reads
+## 0.12.0: contiguous matrix reads
 
 `read_matrix_run_into`, `read_matrix_run_bytes_into` and `read_matrix_row_into`
 add shared-borrow bulk reads on file, reader and writer handles. Generated
@@ -37,7 +43,7 @@ See [the matrix API](api-reference.md) for buffer and integrity costs.
 Migration document. Companion to [Known Limitations](known-limitations.md)
 and the [Changelog](../CHANGELOG.md).
 
-## Resource-budget changes in unreleased 0.12.0
+## Resource-budget changes in 0.12.0
 
 - `LayoutReader` caps its segment-position buffer at the smaller of the index
   budget and 2 MiB, then spills to a private temporary directory. Opening and

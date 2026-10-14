@@ -1,6 +1,7 @@
 # Known Limitations
 
-This describes the unreleased 0.12.0 implementation. Historical measurements
+This describes the 0.12.1 release candidate, based on the released 0.12.0
+implementation. Historical measurements
 below identify their original platform and are not new performance claims.
 Private spill files bound retained directories; they do not remove initial
 scans, temporary disk requirements, per-record workspace or filesystem limits.
@@ -69,7 +70,8 @@ cases below the headline result is *different*, not merely less precise.
 
 - **Windows/Linux/macOS, sparse volume (historical measurements: Windows).** `A` comes from
   `FSCTL_QUERY_ALLOCATED_RANGES` / `SEEK_HOLE`. macOS now uses the native
-  `SEEK_DATA`/`SEEK_HOLE` APIs too; it has not been run on a macOS host. On NTFS the ~128 KiB run
+  `SEEK_DATA`/`SEEK_HOLE` APIs too. Native hosted CI has executed on macOS;
+  this historical byte table remains Windows-specific. On NTFS the ~128 KiB run
   granularity gives tens of candidate pages around a single live page, which is
   where the ~70 KB floor comes from. Linux extent granularity differs, so the
   constant differs; the shape does not.
@@ -316,9 +318,11 @@ read as a clean bill of health:
 only and is not sufficient on its own. Check the counters rather than inferring
 from the target triple.
 
-**Current coverage.** Linux, Windows and macOS have native calls. The current
-change was executed on Linux; macOS and Windows additions are compile-checked
-only. See [storage diagnostics](storage-diagnostics.md) for cached capability
+**Current coverage.** Linux, Windows and macOS have native calls and executed
+default/all-feature and bounded-I/O checks in the
+[0.12.0 CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
+Passing a runner's checks does not establish support on every mounted volume.
+See [storage diagnostics](storage-diagnostics.md) for cached capability
 observations and actual fallback counters.
 
 ### 1.8 Matrix dimensions are fixed at create, unless one is declared growing
@@ -441,7 +445,7 @@ at construction, and each priming pass walks the resident record index.
 Construction is `Theta(M * N)` for `M` keyed block types and `N` index entries.
 
 The writer's per-block tail cache now spills to a private temporary index when
-its nominal byte budget is reached (unreleased 0.12.0). Cardinality no longer
+its nominal byte budget is reached (since 0.12.0). Cardinality no longer
 refuses writer construction or append on that budget alone. The in-memory batch
 is capped at 2 MiB per block; fixed tree scratch, one encoded key and allocator
 overhead are additional. Scratch I/O can fail and is performed before append.
@@ -514,8 +518,8 @@ write open — is the defect this prevents.
 ## 3. Stream/indexed API status
 
 `VarlitStreamWriter`, `VarlitIndexedWriter`, their readers, disk-index plans,
-finite-key storage and scan-control APIs are included in the default 0.10.0
-development build. No feature enables them, and `--no-default-features` keeps
+finite-key storage and scan-control APIs are included in the default build
+since 0.10.0. No feature enables them, and `--no-default-features` keeps
 these APIs available. The former `high-cardinality-dev` flag has been removed.
 Generated stream constructors are available alongside resident constructors;
 indexed constructors are generated for schemas declaring `key_index = disk`.
@@ -535,7 +539,8 @@ their revision-specific results, including findings since fixed.
 - Long scans are cancellable via `ScanCancellationToken`; cancellation returns
   `Error::ScanCancelled { progress }` and publishes no new sidecar.
 - `compact_index()` explicitly reclaims obsolete sidecar storage. Whole-native-log
-  merge/compact still retains resident key maps.
+  merge/compact uses bounded index buffers and private spills; scratch disk and
+  per-record materialization limits still apply (§2.3).
 - `scalable-fault-injection` remains opt-in test infrastructure. redb remains a
   development-only comparison oracle and is absent from runtime dependencies.
 
@@ -818,7 +823,8 @@ failure. Both are fixed, and every gate is green. What replaced them is not a
 shorter list of caveats but a sharper one: the suite now runs on Linux (§6.1),
 and running it there found three defects that every Windows run had passed. The
 distinction that matters throughout this section is **executed** versus
-**measured** — Linux is now the first, and is still not the second.
+**measured**. Hosted correctness checks are not performance measurements; later
+Linux benchmark reports keep their own source, workload and filesystem scope.
 
 ### 6.1 The Unix code paths, and what the first Linux run found
 
@@ -907,8 +913,8 @@ still no automatically scheduled long performance campaign.
   `cargo audit`, `cargo deny`, `cargo metadata`/`check` and a lockfile drift
   check. The fuzzing is in `sanitizers.yml`, below.
 - Earlier reports from 2026-07-11 and 2026-07-18 describe older revisions.
-  Source `d85f3ca` passed all three hosted
-  [sanitizer jobs](https://github.com/shim9610/varlit/actions/runs/38558333461):
+  Source `772f381` passed all three hosted
+  [sanitizer jobs](https://github.com/shim9610/varlit/actions/runs/38570489033):
   ASan, the selected portable Miri surface and every fuzz target's 90-second smoke.
   The associated native CI also passed on Linux, Windows and macOS. Neither result
   establishes exhaustive fuzzing, power-loss coverage or filesystem-wide performance.
@@ -1092,16 +1098,18 @@ it; the matrix and sidecar refusal claims still rest on inspection.**
 
 ### 6.8 Platform support, stated once
 
-The table's Windows/Linux execution evidence concerns earlier public releases.
-Unreleased 0.12.0 has local Linux execution and Windows/macOS compile checks;
-its workflow adds native default/all-feature and bounded-I/O runs on all three.
-The release candidate must complete those runs before they qualify this version.
+The 0.12.0 product tree passed native default/all-feature and bounded-I/O runs
+on all three platforms in
+[CI](https://github.com/shim9610/varlit/actions/runs/38570489047), alongside
+[ASan, portable Miri and bounded fuzz smoke](https://github.com/shim9610/varlit/actions/runs/38570489033).
+These results qualify that recorded source tree. The 0.12.1 candidate must pass
+its own required checks; prior results are not reported as that new commit's run.
 
 | Target | Status |
 | --- | --- |
-| Windows x86_64 MSVC | executed, and the platform every number in this document is from. |
+| Windows x86_64 MSVC | native default/all-feature and bounded-I/O checks executed. Historical Windows/NTFS timings retain their original scope. |
 | Unix (Linux) | **executed**, including `compression-zstd`, in earlier public CI and development local checks. Later Linux benchmarks and campaigns have also been run; use only the source, workload, cache and filesystem scope recorded for each result. The historical Windows tables above do not become Linux measurements. |
-| macOS | native allocation-map and hole-punch paths are implemented; host execution remains unqualified. |
+| macOS | native default/all-feature and bounded-I/O checks executed. Allocation-map and hole-punch capability depends on the mounted filesystem; these checks are not macOS performance measurements. |
 | Other targets | allocation-map and native hole-punch fallbacks remain; persisted-index opens still work. |
 
 ### 6.9 CI reproducibility is bounded

@@ -5,8 +5,10 @@ Varlit path intended for very large append logs. Its normal open and append
 costs do not grow with native file size or record count.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
-APIs remain useful for bounded files. By default they scan the file and retain a
-16-byte directory slot per record at open, and are not the petabyte-scale path.
+APIs can still scan the complete file at open. Their 16-byte directory rows use
+bounded private buffers (2 MiB by default, or the declared finite index budget)
+and spill excess rows to temporary storage. Bounded RAM does not make that scan
+independent of file size.
 
 Opt-in policies narrow that gap without closing it. `segment_on_flush` makes
 open frame one record per commit point instead of one per record;
@@ -15,19 +17,20 @@ record and retain **nothing**, leaving the caller to build only the part of the
 index its question needs with `record_map`. Measured on a 50,000-record file:
 100,316 read syscalls at open by default, 516 chained, 20 from a digest.
 
-What that does *not* give you is this family's other two properties. A resident
-open still has no bounded-memory keyed merge or compact, and a `record_map` walk
-is still a forward walk of the record chain — `O(records before the answer)`,
-not a keyed lookup. Choose this family when key cardinality is the problem;
-choose the digest when open cost is.
+Ordinary keyed merge/compact also spills bounded index buffers, but still needs
+scratch disk and per-record decoding workspace. A `record_map` walk remains a
+forward walk of the record chain — `O(records before the answer)`, rather than a
+keyed lookup. Stream/indexed handles keep primary open/append work independent
+of the complete native directory; choose a digest when native open scans are
+the immediate cost to reduce.
 
-> **Status (unreleased 0.12.0).** Stream/indexed handles, disk-index
+> **Status (0.12.1 release candidate).** Stream/indexed handles, disk-index
 > plans, finite keys and scan control are part of the default public API, also
 > with `--no-default-features`. Remove `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.
 > A release tag does not establish a completed endurance test.
 > Explicit `compact_index()` reclaims obsolete companion pages; whole-native-log
-> keyed merge/compact still uses resident key maps. The historical load and
+> keyed merge/compact uses bounded buffers and private spill files. The historical load and
 > sparse-offset measurements apply to their recorded revisions and filesystems.
 > See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.

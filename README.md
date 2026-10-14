@@ -11,7 +11,7 @@ The main workflow is format-first: declare a file contract with
 For a small, schema-defined keyspace, declare `key_values` or `key_domain`.
 Varlit compiles the permitted value combinations into a two-byte enum, with at
 most 4,096 combinations per block; growing log records remain identified by
-offsets. See [finite schema keys](docs/scalable-io.md#finite-schema-keys).
+offsets. See [finite schema keys](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md#finite-schema-keys).
 
 The workspace contains:
 
@@ -22,8 +22,8 @@ The workspace contains:
 ## What This Is And Is Not Ready For
 
 Read this before adopting. The detail behind every line is in
-**[Known Limitations](docs/known-limitations.md)**; upgrading from 0.4.0 or 0.3.0
-is covered in **[API Changes](docs/api-changes.md)**.
+**[Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md)**; upgrading from 0.4.0 or 0.3.0
+is covered in **[API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md)**.
 
 For contributions, see [CONTRIBUTING](https://github.com/shim9610/varlit/blob/main/CONTRIBUTING.md)
 and the [Code of Conduct](https://github.com/shim9610/varlit/blob/main/CODE_OF_CONDUCT.md).
@@ -48,7 +48,7 @@ Potential security problems follow the
   part of the default public API since 0.10.0, including with
   `--no-default-features`. Choose these constructors explicitly for large logs;
   `create_writer` and `open_reader` now spill large directories, but can still scan input at open.
-  See [Scalable I/O](docs/scalable-io.md) for costs and supported operations.
+  See [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) for costs and supported operations.
 - Matrix storage with fixed dimensions or one explicitly growing chunk axis,
   bounded payload caches and private paged metadata directories. Standard limits
   no longer impose a 16M-cell cap; sparse filesystem behavior still matters.
@@ -68,9 +68,9 @@ Potential security problems follow the
 
 - **Universal performance or filesystem guarantees.** Measurements include
   Windows and Linux workloads; each result applies to its recorded source,
-  hardware, cache state and filesystem. Source `d85f3ca` passed native
+  hardware, cache state and filesystem. Source `772f381` passed native
   Linux, Windows and macOS default/all-feature and bounded-I/O checks in
-  [CI](https://github.com/shim9610/varlit/actions/runs/38558303425).
+  [CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
   Those checks do not establish filesystem-wide performance or power-loss guarantees.
 - **Matrices on a filesystem that cannot represent holes.** Sparseness is
   requested best-effort. `matrix_storage_diagnostics()` and `diagnose_file`
@@ -119,7 +119,7 @@ Potential security problems follow the
   targets that build a sidecar per input manage about 64 executions per second
   where the codec target manages 300,000. The smoke run has found defects;
   passing it does not establish a completed search. See
-  [Known Limitations §6](docs/known-limitations.md#6-not-verified).
+  [Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
 
 ## What Varlit Provides
 
@@ -158,7 +158,7 @@ For a segment in the opposite direction, use `read_matrix_column_into` or
 advance the first, using bounded batches even across growing chunks.
 They batch metadata and payload reads across growing chunks. The second axis in
 `dims = [first, second]` is contiguous: choose the declaration order for row or
-column scans. See [matrix APIs](docs/api-reference.md) for memory and hole handling.
+column scans. See [matrix APIs](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) for memory and hole handling.
 
 Matrix (preallocated) storage is a third mode. Its integrity metadata is paged
 and sparse, so create-time metadata I/O and per-mutation integrity cost are
@@ -170,7 +170,7 @@ the declared extent is genuinely allocated and both the create-time and the
 open-time cost can become proportional to the declared cell count instead.
 `matrix_storage_diagnostics()` and `diagnose_file` report observed storage
 capabilities and environment warnings; unknown observations do not promise
-sparse allocation. See [storage diagnostics](docs/storage-diagnostics.md).
+sparse allocation. See [storage diagnostics](https://github.com/shim9610/varlit/blob/main/docs/storage-diagnostics.md).
 
 Standard admission no longer caps matrix dimensions/cells at 16 million or the
 slot region at 8 GiB. Checked format/offset arithmetic and filesystem limits
@@ -216,7 +216,7 @@ recommendations — but not the quarantine and not the writer gate, which are de
 once, at open. No read answers from unverified bytes under any policy: every page
 faulted in is authenticated against its stored digest first, so this is a choice
 about *when damage is announced*, not about whether bytes are checked. Full table
-in [Known Limitations §1.4](docs/known-limitations.md#14-lazy-is-the-default-verification-is-what-still-happens-at-open).
+in [Known Limitations §1.4](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#14-lazy-is-the-default-verification-is-what-still-happens-at-open).
 
 Matrix dimensions are fixed at create, with one exception: a format may declare
 one of them growing with `with_growing_matrix_dimension(name, rows_per_chunk)`,
@@ -228,13 +228,19 @@ confidence in it:**
 
 | Target | Status |
 | --- | --- |
-| Windows x86_64 MSVC | executed, and the platform every measured number in these documents comes from. |
-| Linux x86_64 | executed. Three defects were found here that every Windows run had passed: advisory locks belong to the open file description and `fork` duplicates it, ext4 hands a just-freed inode straight back to the next create, and extent reporting is precise where NTFS rounds to the allocation run. The allocation map and hole punching exist here too, so the same cost model applies — with **different constants, none of them measured**. |
-| macOS and other targets | no allocation map (matrix open visits only pages the index names) and no hole punch (`clear_category` writes `cells / 8` bytes). Compile paths exist; nothing executed. |
+| Windows x86_64 MSVC | native default/all-feature and bounded-I/O checks executed. Historical NTFS measurements retain their recorded scope. |
+| Linux x86_64 | native default/all-feature and bounded-I/O checks executed. Allocation-map and hole-punch calls are implemented; filesystem behavior and measured constants differ from NTFS. |
+| macOS | native default/all-feature and bounded-I/O checks executed. `SEEK_DATA`/`SEEK_HOLE` and `F_PUNCHHOLE` paths are implemented; actual mounted-volume support is reported by storage diagnostics. |
+| Other targets | native allocation-map and hole-punch support may be unavailable. Persisted-index opens remain bounded; clearing can stream zeros. These targets are not qualified by the three-platform CI. |
+
+The executed 0.12.0 product tree is recorded in
+[CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
+This is behavioral qualification on hosted runners, not a benchmark or a promise
+that every filesystem supports sparse allocation and hole punching.
 
 Full numbers, arithmetic you can apply to your own cell count, and the trade-offs
 of each policy are in
-[Known Limitations §1](docs/known-limitations.md#1-matrix-opening-a-matrix-is-not-o1-because-opening-it-verifies-it).
+[Known Limitations §1](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#1-matrix-opening-a-matrix-is-not-o1-because-opening-it-verifies-it).
 
 Varlit should own the reusable binary-format mechanics. Application-specific
 meaning, domain transforms, and compatibility with an external specification
@@ -244,22 +250,22 @@ remain caller code.
 
 | Document | Use it for |
 | --- | --- |
-| [Quickstart](docs/quickstart.md) | shortest path from format declaration to write/read |
-| [Known Limitations](docs/known-limitations.md) | what a user actually hits: matrix open cost and residency, resident-API scale, unimplemented features, and what is not verified |
-| [How Varlit Works](docs/how-it-works.md) | mental model of the declaration, the generated code, append logs, matrix storage, and durability |
-| [API Reference](docs/api-reference.md) | practical public API map, including the resource-limit surface and the generic adapter toolkit |
-| [Format Author Guide](docs/format-author-guide.md) | policy choices, compression, commit modes, matrix blocks |
-| [Custom Codec Guide](docs/custom-codec-guide.md) | writing `VarlitEncode`/`VarlitDecode` for a field type with its own stable wire meaning |
-| [Update And Compact Guide](docs/update-compact-guide.md) | keyed put/op/tombstone/compact workflows, and when direct replacement is the right tool instead |
-| [Scalable I/O](docs/scalable-io.md) | the default stream/indexed APIs, batching, sidecars, recovery, and exact cost model |
-| [Immediate policy](docs/immediate-policy.md) | block and value declarations, automatic durability conditions, and explicit `immediate()` |
-| [Durability Model](docs/durability-model.md) | flush, sync, transaction-marker, matrix, and replacement ordering |
-| [Recovery Model](docs/recovery-model.md) | matrix corruption classification, findings, and the primitive recovery actions a caller may apply |
-| [Self-Check Guide](docs/self-check-guide.md) | deciding whether a failure is format, caller, data, feature, environment, or library |
-| [API Changes](docs/api-changes.md) | migrating from 0.3.0: new/changed/removed items, behaviour changes at unchanged signatures, and what happens to existing files |
-| [Migration Guide](docs/migration-guide.md) | explicit block-version migration, and the wire changes that have no automatic path |
-| [Format Spec](docs/spec.md) | the implementation contract: wire layout, versions, adapter boundary, and the obligations each surface carries |
-| [Changelog](CHANGELOG.md) | release changes and source-compatibility notes |
+| [Quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md) | shortest path from format declaration to write/read |
+| [Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md) | what a user actually hits: matrix open cost and residency, resident-API scale, unimplemented features, and what is not verified |
+| [How Varlit Works](https://github.com/shim9610/varlit/blob/main/docs/how-it-works.md) | mental model of the declaration, the generated code, append logs, matrix storage, and durability |
+| [API Reference](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) | practical public API map, including the resource-limit surface and the generic adapter toolkit |
+| [Format Author Guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) | policy choices, compression, commit modes, matrix blocks |
+| [Custom Codec Guide](https://github.com/shim9610/varlit/blob/main/docs/custom-codec-guide.md) | writing `VarlitEncode`/`VarlitDecode` for a field type with its own stable wire meaning |
+| [Update And Compact Guide](https://github.com/shim9610/varlit/blob/main/docs/update-compact-guide.md) | keyed put/op/tombstone/compact workflows, and when direct replacement is the right tool instead |
+| [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) | the default stream/indexed APIs, batching, sidecars, recovery, and exact cost model |
+| [Immediate policy](https://github.com/shim9610/varlit/blob/main/docs/immediate-policy.md) | block and value declarations, automatic durability conditions, and explicit `immediate()` |
+| [Durability Model](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) | flush, sync, transaction-marker, matrix, and replacement ordering |
+| [Recovery Model](https://github.com/shim9610/varlit/blob/main/docs/recovery-model.md) | matrix corruption classification, findings, and the primitive recovery actions a caller may apply |
+| [Self-Check Guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md) | deciding whether a failure is format, caller, data, feature, environment, or library |
+| [API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md) | migrating from 0.3.0: new/changed/removed items, behaviour changes at unchanged signatures, and what happens to existing files |
+| [Migration Guide](https://github.com/shim9610/varlit/blob/main/docs/migration-guide.md) | explicit block-version migration, and the wire changes that have no automatic path |
+| [Format Spec](https://github.com/shim9610/varlit/blob/main/docs/spec.md) | the implementation contract: wire layout, versions, adapter boundary, and the obligations each surface carries |
+| [Changelog](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md) | release changes and source-compatibility notes |
 
 That table is the whole published set. The project also keeps internal working
 notes — adversarial review reports, architecture and design studies, a
@@ -269,12 +275,27 @@ not published. Nothing in the documents above depends on reading them: where a
 published document used to cite one, it now states the substance directly, and
 the assurance those notes record — together with its limits — is summarised under
 [Status](#status) below and in
-[Known Limitations §6](docs/known-limitations.md#6-not-verified).
+[Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
 
 ## Add It To Your Project
 
-This checkout contains the unreleased Varlit 0.12.0 packages. Until they are
-published, use a local checkout:
+This checkout prepares the **0.12.1 release candidate**. The GitHub 0.12.0
+release is available; the Varlit crates have not yet been published to crates.io.
+After registry publication, the installation is:
+
+```toml
+[dependencies]
+varlit = "0.12.1"
+```
+
+Before registry publication, use the existing repository release:
+
+```toml
+[dependencies]
+varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.12.0" }
+```
+
+To try this 0.12.1 candidate instead, use a local checkout:
 
 ```toml
 [dependencies]
@@ -287,7 +308,7 @@ tag contains the old `varve` packages and cannot provide `varlit`.
 
 The runtime no longer depends on Crossbeam. The matrix writer owns its pending
 page directory and lends it to bitmap reads. See the
-[0.11.0 → 0.12.0 migration notes](docs/api-changes.md#l-0110--0120-varlit-rename)
+[0.11.0 → 0.12.0 migration notes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#l-0110--0120-varlit-rename)
 for crate imports, derive attributes, codec methods and tool environment names.
 Registry publication remains a separate release step.
 
@@ -306,12 +327,12 @@ features = ["integrity", "compression-zstd"]
 | --- | --- |
 | `integrity` | record and matrix cell/commit-map checksum verification |
 | `compression-zstd` | the zstd codec for compressed blocks |
-| `experimental-matrix-reuse` | **experimental**, default-off page reuse with automatic-follow owned reads; see [the guide](docs/experimental-matrix-reuse.md) |
+| `experimental-matrix-reuse` | **experimental**, default-off page reuse with automatic-follow owned reads; see [the guide](https://github.com/shim9610/varlit/blob/main/docs/experimental-matrix-reuse.md) |
 | `mmap` | memory-mapped reads |
 | `zero-copy` | borrowed reads that avoid a copy out of the page cache — also enables `mmap` |
 | `scalable-fault-injection` | test-only fault injection; not for production builds |
 
-[Format Author Guide](docs/format-author-guide.md) says which declaration
+[Format Author Guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) says which declaration
 choices require which feature, and what each costs.
 
 ## Minimal Shape
@@ -375,7 +396,7 @@ metadata memory and often failing the open on the very admission limit you were
 raising. **If you wrote a workaround for that, it is no longer needed.** There is
 still no `varlit_format!` DSL key for any of the three; declare them on the spec
 with `FormatSpec::with_read_limits` or pass them in a `ReadLimits` value. See
-[Known Limitations §1.6](docs/known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varlit_format-dsl-key)
+[Known Limitations §1.6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varlit_format-dsl-key)
 for the two matrix policies.
 
 ## Examples
@@ -424,7 +445,7 @@ let self_test = AppFormat::self_test("self-check.varlit")
 
 These reports classify failures as format definition, caller usage, feature
 gate, file data, environment, or library invariant issues. See
-[Self-Check Guide](docs/self-check-guide.md).
+[Self-Check Guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md).
 
 ## Status
 
@@ -456,8 +477,8 @@ are regenerable, and the difference is what it costs you:
 | Matrix sidecar written before sidecar v3 | `Error::MatrixSidecarMismatch("sidecar version")` | regenerate; sidecars are resume state, not data |
 | Stream/indexed primaries and disk sidecars written before the generation nonce | typed refusal; `rebuild_disk_index` for the sidecar | regenerate. Hypothetical in practice — this family never shipped |
 
-See [API Changes](docs/api-changes.md#read-this-first-files-written-by-an-older-version),
-[CHANGELOG](CHANGELOG.md) and [Migration Guide](docs/migration-guide.md).
+See [API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#read-this-first-files-written-by-an-older-version),
+[CHANGELOG](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md) and [Migration Guide](https://github.com/shim9610/varlit/blob/main/docs/migration-guide.md).
 
 On the evidence behind that table: **no test in the suite opens a file written by an
 older version.** The append-log claim was checked by hand on 2026-07-25 — files
@@ -465,7 +486,7 @@ written by the real 0.1.0 and 0.3.0 builds opened under 0.4.0 with every field
 intact, and a 0.3.0 computed-hash-pinned file was refused as documented — but that
 was a single manual run over a two-field format, and the matrix and sidecar refusal
 rows rest on source inspection alone. See
-[Known Limitations §6.7](docs/known-limitations.md#67-the-backward-compatibility-table-what-is-now-executed-and-what-still-is-not).
+[Known Limitations §6.7](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#67-the-backward-compatibility-table-what-is-now-executed-and-what-still-is-not).
 The stream/disk-index API is included in default builds.
 Progress/cancellation, process-interruption recovery, and sidecar robustness
 gates are implemented and executed. On 2026-10-01 the explicit qualification
@@ -473,7 +494,7 @@ campaign also passed on Linux x86_64: four 64-epoch model histories, 64 external
 kill/recovery cycles, and the 10k/100k/1m-key heap budgets. Both sparse positional
 probes ran on tmpfs; the workspace overlay accepted 1 TiB but refused 1 PiB with
 `File too large`. These are sparse address-space checks, not petabyte storage or
-endurance measurements. See the [self-check guide](docs/self-check-guide.md#scalable-io-validation)
+endurance measurements. See the [self-check guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md#scalable-io-validation)
 for reproducible commands and the limits of these checks.
 
 Earlier 20 GiB load testing found that opening new indexed readers could
@@ -508,7 +529,7 @@ Read what that buys before relying on it: the fuzz job gives each target **90 se
 not a campaign, and the targets that exercise the sidecar path manage about 64
 executions per second against `codec_arbitrary`'s 300,000. For the full
 assurance picture — including that, and which platform each number came from —
-see [Known Limitations §6](docs/known-limitations.md#6-not-verified).
+see [Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
 
 ## Local Verification
 
@@ -529,7 +550,7 @@ commits cancel obsolete runs. Rust, Python and Actions CodeQL results are upload
 to code scanning. The stable `ci / required` check rejects any missing, failed,
 cancelled or skipped job group; sanitizer checks remain separate.
 
-The 0.12.0 CI configuration (`.github/workflows/ci.yml`) includes native default/all
+The CI configuration (`.github/workflows/ci.yml`) includes native default/all
 tests and bounded-I/O checks on Ubuntu, Windows and macOS. Its other gates include
 `cargo fmt --all -- --check`; a per-feature Clippy matrix with `-D warnings` and `--locked`
 covering no-default-features, default, each optional feature alone
@@ -602,12 +623,12 @@ Python 3.12 or newer (NumPy 2.5):
 
 Varlit is licensed under either of:
 
-- [MIT License](LICENSE-MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](https://github.com/shim9610/varlit/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/shim9610/varlit/blob/main/LICENSE-APACHE)
 
-at your option. See [LICENSE](LICENSE) for the short dual-license notice.
+at your option. See [LICENSE](https://github.com/shim9610/varlit/blob/main/LICENSE) for the short dual-license notice.
 
-See [Scalable I/O](docs/scalable-io.md) for native index storage and
-[validation](docs/self-check-guide.md#scalable-io-validation) for comparison commands. Runtime redb is removed;
+See [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) for native index storage and
+[validation](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md#scalable-io-validation) for comparison commands. Runtime redb is removed;
 reader caches are private, confirmed generations work across processes, and
 `compact_index()` explicitly reclaims old index pages after a caller-requested sync.
