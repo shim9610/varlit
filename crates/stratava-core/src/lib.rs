@@ -62,6 +62,13 @@ pub mod enforcement_probe {
     pub use crate::matrix::crc_valid_evidence::{CompleteCrcValidEvidence, CrcValidEvidence};
     pub use crate::matrix::fatal_access::{FatalAccessAllowed, FatalAccessGate};
     pub use crate::writer_permit::{MutationInFlight, MutationPermit, PoisonFlag};
+
+    /// Checked borrow for compile-fail instance-binding proofs, never a raw flag.
+    pub fn borrow_stream_writer(
+        writer: &mut crate::StratavaStreamWriter,
+    ) -> crate::Result<MutationPermit<'_, crate::StratavaStreamWriter>> {
+        writer.mutation_permit("instance binding probe")
+    }
 }
 
 pub use adapter::{
@@ -135,7 +142,7 @@ pub use layout::{
 pub use matrix::{
     MatrixCellStatus, MatrixCommitEvent, MatrixCorruptionKind, MatrixCorruptionSeverity,
     MatrixDimensionValue, MatrixDimensions, MatrixKey, MatrixRecoveryAction, MatrixRecoveryFinding,
-    MatrixRecoveryReport, MatrixResumeSignal, PackedBitmap,
+    MatrixRecoveryReport, MatrixResumeSignal, MatrixStorageDiagnostics, PackedBitmap,
 };
 pub use merge::{
     MergeAction, SequencedMergeAction, StratavaMerge, compact_keyed_file,

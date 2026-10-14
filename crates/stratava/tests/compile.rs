@@ -168,6 +168,7 @@ fn mechanical_enforcement_contracts() {
     // half of the same fix — that a throwaway `PoisonFlag` cannot mint one at
     // all — is gated by tests/enforcement_gates.rs.
     tests.compile_fail("tests/ui/fail_cross_writer_mutation_permit.rs");
+    tests.compile_fail("tests/ui/fail_replace_permitted_writer.rs");
     // SHAPE A: the post-append mirror install cannot be reached without its
     // reservation.
     tests.compile_fail("tests/ui/fail_fabricated_index_reservation.rs");

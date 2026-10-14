@@ -2,12 +2,12 @@ error[E0308]: mismatched types
   --> tests/ui/fail_cross_writer_mutation_permit.rs:29:29
    |
 29 |     guarded_stream_mutation(some_other_writers_permit());
-   |     ----------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `MutationPermit<StratavaStreamWriter>`, found `MutationPermit<StratavaFile>`
+   |     ----------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `MutationPermit<'_, StratavaStreamWriter>`, found `MutationPermit<'_, StratavaFile>`
    |     |
    |     arguments to this function are incorrect
    |
-   = note: expected struct `stratava_core::enforcement_probe::MutationPermit<StratavaStreamWriter>`
-              found struct `stratava_core::enforcement_probe::MutationPermit<StratavaFile>`
+   = note: expected struct `stratava_core::enforcement_probe::MutationPermit<'_, StratavaStreamWriter>`
+              found struct `stratava_core::enforcement_probe::MutationPermit<'static, StratavaFile>`
 note: function defined here
   --> tests/ui/fail_cross_writer_mutation_permit.rs:22:4
    |

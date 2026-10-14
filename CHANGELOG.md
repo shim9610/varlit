@@ -6,6 +6,17 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Bind mutation permits to a short exclusive borrow of the checked writer;
+  guarded append/replacement operations act on that handle and recheck poison.
+- Prevent one-page experimental writer caches from staging a full data page
+  for every presence-bitmap lookup. Add an I/O-bound regression and paired benchmark.
+- Add `MatrixStorageDiagnostics` and `matrix_storage_diagnostics()` on native
+  file/reader/writer handles. `diagnose_file` reports storage capability warnings;
+  allocation-map inspection and hole punching also use macOS native APIs.
+- Extract file scanning, header codecs, publication, OS locks, protected record
+  access, matrix evidence/page-index modules and macro parsing/emission into
+  private files, preserving their original visibility boundaries.
+
 - Add the default-off `experimental-matrix-reuse` feature and experimental
   `MatrixOptions::reuse` runtime opt-in. Reuse two slots per logical page,
   publish at explicit sync boundaries, and retry owned reads across generation

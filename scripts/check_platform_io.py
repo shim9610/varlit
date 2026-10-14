@@ -15,6 +15,10 @@ from qualify_scalable import capture, classify, run_command, test_command
 # Exact names and pass counts ensure a renamed or feature-disabled test cannot
 # silently turn this platform gate into a successful zero-test run.
 CASES = [
+    ("matrix-storage-observations", "matrix_storage_diagnostics",
+     "observations_survive_reopen_without_changing_reads"),
+    ("matrix-storage-fallback", "matrix_storage_diagnostics",
+     "missing_allocation_map_warns_without_rejecting_the_file"),
     ("native-directory-spill", "native_budgeted_directory",
      "tiny_directory_budget_covers_append_dirty_open_follow_and_reopen"),
     ("native-directory-memory", "record_index_residency",

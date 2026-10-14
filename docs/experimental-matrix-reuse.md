@@ -136,7 +136,11 @@ These bounds are independent of total file length or logical chunk size. Open
 reads fixed metadata and geometry without rebuilding a page directory. Logical
 chunks larger than memory budgets are supported: only relevant pages are loaded.
 Writer pages use a private bounded cache; evicted dirty pages spill to the work
-file. Cache capacity adapts to the materialization limit. The writer also needs
+file. With a one-page cache, a separately charged 512-byte bitmap window
+keeps presence checks from evicting dirty data on every cell. Only a changed
+window is staged; returning to previously evicted windows can still repeat
+bitmap-page writes. Larger caches retain the existing two-page hot path.
+Cache capacity adapts to the materialization limit. The writer also needs
 bounded stage/publication scratch and a cell encoding buffer; the cache budget
 is not an exact total-RSS cap. A single oversized cell can still exceed limits.
 

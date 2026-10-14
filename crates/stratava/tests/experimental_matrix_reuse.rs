@@ -963,3 +963,150 @@ fn restarting_a_scan_does_not_evict_its_own_active_page() {
         assert!(out.iter().all(|v| v.epoch == epoch));
     }
 }
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn one_page_writer_does_not_stage_a_full_data_page_for_each_bitmap_lookup() {
+    use stratava::experimental_matrix::take_test_io;
+    for columns in [1u64, 64] {
+        for budget in [4096, 8192, 8704] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("bounded");
+            let options = MatrixOptions {
+                max_chunk_bytes: budget,
+                rows_per_chunk: 4096,
+                ..opts()
+            };
+            let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", columns)]);
+            let spec = ReuseFormat::spec().with_growing_matrix_dimension("row", 4096);
+            let mut w = MatrixWriter::create(spec, &path, dims.clone(), options).unwrap();
+            let count = 8192u64;
+            let key = |i| MatrixKey::new(i / columns, i % columns);
+            let cell = |i, epoch| Value {
+                epoch,
+                row: i / columns,
+                col: i % columns,
+                pad: [epoch as u8; 40],
+            };
+            let payload = count * 64;
+            for epoch in 1..=3 {
+                take_test_io();
+                for i in 0..count {
+                    w.put(key(i), &cell(i, epoch)).unwrap();
+                }
+                // Repeat identical writes inside the same batch; staged pages
+                // must not be dirtied again by presence checks or a second scan.
+                for i in 0..count {
+                    w.put(key(i), &cell(i, epoch)).unwrap();
+                }
+                w.sync().unwrap();
+                let io = take_test_io();
+                assert!(
+                    io.write_bytes < payload * 3 + 128 * 1024,
+                    "columns={columns} cache={budget}: {io:?}; writes must scale with changed bytes, not cells times page bytes"
+                );
+            }
+            take_test_io();
+            for i in 0..count {
+                w.delete::<Value>(key(i)).unwrap();
+            }
+            w.sync().unwrap();
+            let deletion = take_test_io();
+            assert!(
+                deletion.write_bytes < 64 * 1024,
+                "bitmap-only deletion: {deletion:?}"
+            );
+            let reader = w.reader().unwrap();
+            assert!(matches!(
+                reader.get::<Value>(key(0)),
+                Err(MatrixReuseError::Missing)
+            ));
+            for i in 0..count {
+                w.put(key(i), &cell(i, 4)).unwrap();
+            }
+            assert!(matches!(
+                reader.get::<Value>(key(0)),
+                Err(MatrixReuseError::Missing)
+            ));
+            w.sync().unwrap();
+            drop(w);
+            let r = MatrixReader::open(spec, &path, dims, options).unwrap();
+            let mut out = vec![cell(0, 0); count as usize];
+            r.read_run_into(key(0), &mut out).unwrap();
+            for (i, v) in out.iter().enumerate() {
+                assert_eq!(
+                    (v.epoch, v.row, v.col),
+                    (4, i as u64 / columns, i as u64 % columns)
+                );
+                assert_eq!(v.pad, [4; 40]);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+#[ignore = "paired writer-cache I/O benchmark; run release with --ignored --nocapture"]
+fn one_page_cache_io_benchmark() {
+    use stratava::experimental_matrix::take_test_io;
+    let selected = std::env::var("STRATAVA_CACHE_BENCH_BUDGET")
+        .ok()
+        .map(|s| s.parse::<u64>().unwrap());
+    let epochs = std::env::var("STRATAVA_CACHE_BENCH_EPOCHS")
+        .ok()
+        .map(|s| s.parse::<u64>().unwrap())
+        .unwrap_or(5);
+    assert!((5..=100).contains(&epochs));
+    assert!(selected.is_none_or(|v| [8192, 16 * 1024 * 1024].contains(&v)));
+    for budget in [8192, 16 * 1024 * 1024] {
+        if selected.is_some_and(|v| v != budget) {
+            continue;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bench");
+        let options = MatrixOptions {
+            reuse: true,
+            rows_per_chunk: 4096,
+            max_chunk_bytes: budget,
+            ..MatrixOptions::default()
+        };
+        let spec = ReuseFormat::spec().with_growing_matrix_dimension("row", 4096);
+        let dims = MatrixDimensions::from_pairs([("row", 4096), ("col", 1)]);
+        let mut writer = MatrixWriter::create(spec, &path, dims, options).unwrap();
+        let count = 262_144;
+        for epoch in 0..epochs {
+            take_test_io();
+            let started = std::time::Instant::now();
+            for row in 0..count {
+                writer
+                    .put(
+                        MatrixKey::new(row, 0),
+                        &Value {
+                            epoch,
+                            row,
+                            col: 0,
+                            pad: [epoch as u8; 40],
+                        },
+                    )
+                    .unwrap();
+            }
+            writer.sync().unwrap();
+            let seconds = started.elapsed().as_secs_f64();
+            let io = take_test_io();
+            println!(
+                "cache_io budget={budget} epoch={epoch} payload_bytes={} write_bytes={} write_calls={} seconds={seconds:.6}",
+                count * 64,
+                io.write_bytes,
+                io.write_calls
+            );
+            let reader = writer.reader().unwrap();
+            assert_eq!(
+                reader
+                    .get::<Value>(MatrixKey::new(count - 1, 0))
+                    .unwrap()
+                    .epoch,
+                epoch
+            );
+        }
+    }
+}

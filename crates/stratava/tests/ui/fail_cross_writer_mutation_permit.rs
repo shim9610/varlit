@@ -21,7 +21,7 @@ use stratava_core::{StratavaFile, StratavaStreamWriter};
 
 fn guarded_stream_mutation(_permit: MutationPermit<StratavaStreamWriter>) {}
 
-fn some_other_writers_permit() -> MutationPermit<StratavaFile> {
+fn some_other_writers_permit() -> MutationPermit<'static, StratavaFile> {
     unimplemented!("a permit for a different writer; how it was obtained is irrelevant")
 }
 

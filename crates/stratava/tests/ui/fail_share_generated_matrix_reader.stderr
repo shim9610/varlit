@@ -43,15 +43,15 @@ error[E0277]: `OnceCell<Option<Arc<File>>>` cannot be shared between threads saf
    = help: within `MatrixAuxFormatReader`, the trait `Sync` is not implemented for `OnceCell<Option<Arc<File>>>`
    = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::OnceLock` instead
 note: required because it appears within the type `stratava_core::matrix::region_reader::MatrixReadPool`
-  --> $WORKSPACE/crates/stratava-core/src/matrix.rs
+  --> $WORKSPACE/crates/stratava-core/src/matrix/region_reader.rs
    |
-   |     pub struct MatrixReadPool {
-   |                ^^^^^^^^^^^^^^
+   | pub struct MatrixReadPool {
+   |            ^^^^^^^^^^^^^^
 note: required because it appears within the type `stratava_core::file::record_file::RecordFile`
-  --> $WORKSPACE/crates/stratava-core/src/file.rs
+  --> $WORKSPACE/crates/stratava-core/src/file/record_file.rs
    |
-   |     pub struct RecordFile {
-   |                ^^^^^^^^^^
+   | pub struct RecordFile {
+   |            ^^^^^^^^^^
 note: required because it appears within the type `StratavaFile`
   --> $WORKSPACE/crates/stratava-core/src/file.rs
    |
@@ -143,10 +143,10 @@ note: required because it appears within the type `stratava_core::matrix_generat
 note: required because it appears within the type `Option<stratava_core::matrix_generation::MatrixFile>`
   --> $RUST/core/src/option.rs
 note: required because it appears within the type `stratava_core::file::record_file::RecordFile`
-  --> $WORKSPACE/crates/stratava-core/src/file.rs
+  --> $WORKSPACE/crates/stratava-core/src/file/record_file.rs
    |
-   |     pub struct RecordFile {
-   |                ^^^^^^^^^^
+   | pub struct RecordFile {
+   |            ^^^^^^^^^^
 note: required because it appears within the type `StratavaFile`
   --> $WORKSPACE/crates/stratava-core/src/file.rs
    |

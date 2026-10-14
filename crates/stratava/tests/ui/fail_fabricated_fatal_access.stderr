@@ -5,7 +5,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
    |                                       ^^^^^^^^^^^^^^^^^^
    |
 note: constructor is not visible here due to private fields
-  --> $WORKSPACE/crates/stratava-core/src/matrix.rs
+  --> $WORKSPACE/crates/stratava-core/src/matrix/fatal_access.rs
    |
-   |     pub struct FatalAccessAllowed(());
-   |                                   ^^ private field
+   | pub struct FatalAccessAllowed(());
+   |                               ^^ private field

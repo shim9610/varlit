@@ -23,6 +23,7 @@ const PAGE: u64 = 4096;
 const HEADER: u64 = 3 * PAGE;
 const SLOT_HEADER: u64 = 64;
 const JOURNAL_ENTRY: u64 = 96;
+const BITMAP_WINDOW: usize = 512;
 const MAGIC: &[u8; 8] = b"STREUSE2";
 const SLOT_MAGIC: &[u8; 8] = b"STRSLOT2";
 const HEAD_MAGIC: &[u8; 8] = b"STRHEAD2";
@@ -377,7 +378,8 @@ impl Geometry {
             .map(|b| b.slot_stride)
             .max()
             .unwrap_or(0);
-        let overhead = add(stride, add(cell, 512)?)?;
+        // One transient full page plus a compact bitmap window/control state.
+        let overhead = add(stride, add(cell, 1152)?)?;
         let stage_budget = (256 * 1024)
             .min(options.max_chunk_bytes)
             .min(limit.saturating_sub(overhead) / 2);
@@ -692,6 +694,15 @@ impl Drop for LockedFile {
         let _ = crate::file::unlock_native_guard(&self.0);
     }
 }
+// Only the one-page cache needs this owner-local presence window. It holds
+// 512 useful bitmap bytes, not another cached full page. Materialization limits
+// separately charge the window and the transient full-page read/flush scratch.
+struct BitmapWindow {
+    page: u64,
+    start: usize,
+    bytes: Vec<u8>,
+    dirty: bool,
+}
 struct ReuseWriter {
     file: LockedFile,
     stage: File,
@@ -705,6 +716,7 @@ struct ReuseWriter {
     eviction: VecDeque<u64>,
     hot: [Option<(u64, OpenPage)>; 2],
     hot_last: usize,
+    bitmap_window: Option<BitmapWindow>,
     poisoned: bool,
     publishing: Option<u64>,
     notify: Arc<AtomicU64>,
@@ -754,6 +766,7 @@ impl MatrixWriter {
                 eviction: VecDeque::new(),
                 hot: [None, None],
                 hot_last: 0,
+                bitmap_window: None,
                 poisoned: false,
                 publishing: None,
                 notify: Arc::new(AtomicU64::new(0)),
@@ -799,6 +812,7 @@ impl MatrixWriter {
                 eviction: VecDeque::new(),
                 hot: [None, None],
                 hot_last: 0,
+                bitmap_window: None,
                 poisoned: false,
                 publishing: None,
                 notify: Arc::new(AtomicU64::new(head.generation)),
@@ -929,6 +943,7 @@ impl ReuseWriter {
         Ok(())
     }
     fn flush_pages(&mut self) -> Result<()> {
+        self.flush_bitmap_window()?;
         for hot in &mut self.hot {
             if let Some((id, page)) = hot.take() {
                 self.pages.insert(id, page);
@@ -986,6 +1001,89 @@ impl ReuseWriter {
         self.pages = pages;
         result
     }
+    /// Materialize a page without admitting it to the mutable data cache.
+    fn uncached_page(&self, id: u64) -> Result<OpenPage> {
+        let at = self.geometry.stage_at(id)?;
+        let (bytes, logged, target) =
+            if let Some((generation, crc, _)) = read_slot(&self.stage, at, id)? {
+                if generation != self.next()? {
+                    return Err(invalid("staging generation"));
+                }
+                let mut bytes = alloc(self.geometry.bytes)?;
+                read_at(&self.stage, add(at, SLOT_HEADER)?, &mut bytes)?;
+                if crc32fast::hash(&bytes) != crc {
+                    return Err(invalid("staging checksum"));
+                }
+                (bytes, true, None)
+            } else {
+                let (bytes, target) = payload(&self.file, &self.geometry, self.head, id)?;
+                (bytes, false, Some(target))
+            };
+        Ok(OpenPage {
+            bytes,
+            target,
+            logged,
+            dirty: false,
+        })
+    }
+    fn flush_bitmap_window(&mut self) -> Result<()> {
+        let Some(window) = self.bitmap_window.as_ref() else {
+            return Ok(());
+        };
+        if !window.dirty {
+            return Ok(());
+        }
+        let poisoned = self.poisoned;
+        self.poisoned = true;
+        let id = window.page;
+        let mut page = self.uncached_page(id)?;
+        let window = self.bitmap_window.as_ref().unwrap();
+        page.bytes[window.start..window.start + window.bytes.len()].copy_from_slice(&window.bytes);
+        page.dirty = true;
+        self.flush_page(id, &mut page)?;
+        self.bitmap_window.as_mut().unwrap().dirty = false;
+        self.poisoned = poisoned;
+        Ok(())
+    }
+    fn update_bitmap(&mut self, id: u64, local: usize, bit: u8, present: bool) -> Result<()> {
+        if self.geometry.cache_capacity > 1 {
+            let page = self.load(id)?;
+            let old = page.bytes[local];
+            let new = if present { old | bit } else { old & !bit };
+            page.bytes[local] = new;
+            page.dirty |= old != new;
+            return Ok(());
+        }
+        let start = local / BITMAP_WINDOW * BITMAP_WINDOW;
+        if !self
+            .bitmap_window
+            .as_ref()
+            .is_some_and(|w| w.page == id && w.start == start)
+        {
+            self.flush_bitmap_window()?;
+            let poisoned = self.poisoned;
+            self.poisoned = true;
+            let page = self.uncached_page(id)?;
+            let mut bytes = match self.bitmap_window.take() {
+                Some(w) => w.bytes,
+                None => alloc(BITMAP_WINDOW as u64)?,
+            };
+            bytes.copy_from_slice(&page.bytes[start..start + BITMAP_WINDOW]);
+            self.bitmap_window = Some(BitmapWindow {
+                page: id,
+                start,
+                bytes,
+                dirty: false,
+            });
+            self.poisoned = poisoned;
+        }
+        let window = self.bitmap_window.as_mut().unwrap();
+        let old = window.bytes[local - start];
+        let new = if present { old | bit } else { old & !bit };
+        window.bytes[local - start] = new;
+        window.dirty |= old != new;
+        Ok(())
+    }
     fn load(&mut self, id: u64) -> Result<&mut OpenPage> {
         if self.poisoned {
             return Err(MatrixReuseError::Poisoned);
@@ -1028,30 +1126,10 @@ impl ReuseWriter {
                 };
                 self.flush_page(old_id, &mut old)?;
             }
-            let at = self.geometry.stage_at(id)?;
-            let (bytes, logged, target) =
-                if let Some((generation, crc, _)) = read_slot(&self.stage, at, id)? {
-                    if generation != self.next()? {
-                        return Err(invalid("staging generation"));
-                    }
-                    let mut bytes = alloc(self.geometry.bytes)?;
-                    read_at(&self.stage, add(at, SLOT_HEADER)?, &mut bytes)?;
-                    if crc32fast::hash(&bytes) != crc {
-                        return Err(invalid("staging checksum"));
-                    }
-                    (bytes, true, None)
-                } else {
-                    let (bytes, target) = payload(&self.file, &self.geometry, self.head, id)?;
-                    (bytes, false, Some(target))
-                };
+            let page = self.uncached_page(id)?;
             self.eviction.push_back(id);
             self.poisoned = false;
-            OpenPage {
-                bytes,
-                target,
-                logged,
-                dirty: false,
-            }
+            page
         };
         self.hot[index] = Some((id, page));
         self.hot_last = index;
@@ -1096,12 +1174,7 @@ impl ReuseWriter {
         }
         let bitmap = add(base, add(b.bitmap, cell / 8)?)?;
         let local = (bitmap % self.geometry.bytes) as usize;
-        let page = self.load(bitmap / self.geometry.bytes)?;
-        let bit = 1 << (cell % 8);
-        if page.bytes[local] & bit == 0 {
-            page.bytes[local] |= bit;
-            page.dirty = true;
-        }
+        self.update_bitmap(bitmap / self.geometry.bytes, local, 1 << (cell % 8), true)?;
         self.rows = self.rows.max(row_end);
         Ok(())
     }
@@ -1119,12 +1192,7 @@ impl ReuseWriter {
             add(b.bitmap, cell / 8)?,
         )?;
         let local = (at % self.geometry.bytes) as usize;
-        let page = self.load(at / self.geometry.bytes)?;
-        let bit = 1 << (cell % 8);
-        if page.bytes[local] & bit != 0 {
-            page.bytes[local] &= !bit;
-            page.dirty = true;
-        }
+        self.update_bitmap(at / self.geometry.bytes, local, 1 << (cell % 8), false)?;
         Ok(())
     }
     fn entry(&self, i: u64) -> Result<(u64, u64, [u8; 64])> {
@@ -1149,6 +1217,7 @@ impl ReuseWriter {
         self.journal.set_len(PAGE)?;
         self.stage.set_len(PAGE)?;
         self.count = 0;
+        self.bitmap_window = None;
         for c in self.pages.values_mut() {
             c.logged = false;
             c.dirty = false;

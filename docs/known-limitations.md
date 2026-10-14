@@ -56,7 +56,8 @@ Read those rows in this order:
 3. **The whole of it is verification.** The same opens under
    `MatrixMetadataVerification::OnDemand` read **32 bytes** and **1,040 bytes**
    and visit **0** pages: an 8-byte page-index entry per live page, and no
-   allocation-map query at all. The gap between those two columns is the price of
+   allocation-map enumeration. The current build also makes a bounded capability
+   probe at create/open; that does not enumerate pages. The gap between those two columns is the price of
    detecting commit-map damage at open, and it is a one-line declaration.
 4. **Residency is zero in every row**, at any live-page count, under either
    policy. That column used to read `8,192 * live_pages`.
@@ -66,29 +67,28 @@ Read those rows in this order:
 This matters enough to state before the mitigations, because on two of the three
 cases below the headline result is *different*, not merely less precise.
 
-- **Windows and Linux, sparse volume (measured case).** `A` comes from
-  `FSCTL_QUERY_ALLOCATED_RANGES` / `SEEK_HOLE`. On NTFS the ~128 KiB run
+- **Windows/Linux/macOS, sparse volume (historical measurements: Windows).** `A` comes from
+  `FSCTL_QUERY_ALLOCATED_RANGES` / `SEEK_HOLE`. macOS now uses the native
+  `SEEK_DATA`/`SEEK_HOLE` APIs too; it has not been run on a macOS host. On NTFS the ~128 KiB run
   granularity gives tens of candidate pages around a single live page, which is
   where the ~70 KB floor comes from. Linux extent granularity differs, so the
   constant differs; the shape does not.
 - **Every other target.** `query_allocated_extents` returns `None`
-  (`matrix.rs`, `#[cfg(not(any(windows, target_os = "linux")))]`), so the
+  (`matrix/sparse.rs`, outside Windows/Linux/macOS), so the
   candidate set has **no `A` term at all** and verification visits `L` pages only.
   Open is *cheaper* there than the table above shows. It is also blinder: the `A`
   term is the only thing that detects stray bytes in a page nothing ever
   published. This is untested — see §6.1.
-- **A volume that is not sparse.** Sparseness is requested best-effort. On
-  Windows the file must carry the sparse attribute *before* it is extended, and
-  `mark_file_sparse` **ignores failure** by design ("the matrix is then simply
-  dense, which costs performance and nothing else"). On exFAT/FAT32, some
-  network and virtual volumes, or after a copy by a tool that expands holes, the
-  declared extent is genuinely allocated — the allocation map then reports the
-  **whole** bitmap region as data, every page becomes a candidate, and a verifying
-  open degrades to `Theta(declared cells / 8)` of reads. **On a non-sparse volume,
-  open cost is proportional to the declared cell count, not to live state, and the
-  "independent of file size" result in point 1 does not hold.** There is no error
-  and no warning; the only signal is that open is slow and reads a lot. Memory is
-  unaffected — the pass still retains one page.
+- **A volume that is not sparse.** Windows sparse marking remains best-effort,
+  but failures are now recorded on the creating handle. `matrix_storage_diagnostics()`
+  reports known disabled sparse allocation and actual allocation-map availability;
+  `diagnose_file` adds environment warnings. If an available allocation map reports
+  the entire declared bitmap as allocated, every page may become a verifying-open
+  candidate and reads can cost `Theta(declared cells / 8)`. If the map is unavailable,
+  open instead uses the persisted live-page index; it does not fall back to a full
+  declared-region scan. Dense `set_len` allocation can still consume the full logical
+  extent. See [storage diagnostics](storage-diagnostics.md) for unknown observations
+  and mounted-filesystem qualifications.
 
 The same precondition governs the create-time claim: metadata I/O at create is
 bounded by live state because the unwritten extent is a hole. Where it is not a
@@ -287,21 +287,16 @@ carry neither policy and inherit `MatrixMetadataResidency::DEFAULT` and
 
 ### 1.7 Clearing a category costs `Theta(cells / 8)` unless the platform can punch holes
 
-**What it is.** `clear_category` and a whole-map page-index rebuild remove the
-byte range rather than writing it, which is `O(1)` in the range length — but only
-where the platform supports it. `punch_zero_range_native` is implemented for
-Windows (`FSCTL_SET_ZERO_DATA`) and Linux (`FALLOC_FL_PUNCH_HOLE`) and returns
-`false` on **every other target**. Every failed attempt, and every unsupported
-target, streams `len` zero bytes instead — for a whole-category clear that is
-`Theta(declared cells / 8)` bytes written.
+**What it is.** Whole-range clearing first asks the active matrix adapter to
+remove its pages logically. The COW adapter can handle this through its page
+mapping without writing the entire zero range. For raw ranges, native removal
+uses Windows `FSCTL_SET_ZERO_DATA`, Linux `FALLOC_FL_PUNCH_HOLE`, or macOS
+`F_PUNCHHOLE`. A filesystem can reject any of these. Where neither adapter nor
+native removal succeeds, the safe fallback writes `len` zero bytes; clearing a
+whole declared bitmap then costs `Theta(declared cells / 8)`.
 
-On macOS, and on any Windows/Linux filesystem without sparse support, clearing a
-16,000,000-cell category writes 2 MB where the supported path writes nothing.
-Scale that to the cell counts §1.5 lets you raise the ceiling to and it is the
-difference between an instant operation and a multi-gigabyte write.
-
-**Who it affects.** Anyone calling `clear_category`, or triggering a whole-map
-page-index rebuild, on a non-Windows/Linux target or a non-sparse volume.
+**Who it affects.** Raw-range clears/rebuilds on unsupported targets or mounts.
+Native API availability does not prove the mounted filesystem supports it.
 
 **Workaround.** There is no fallback that avoids the write. There *is* detection:
 the outcome is recorded unconditionally and neither counter is feature-gated. Two
@@ -321,10 +316,10 @@ read as a clean bill of health:
 only and is not sufficient on its own. Check the counters rather than inferring
 from the target triple.
 
-**Planned.** No additional platform is scheduled. The cost model is stated above
-in full — `O(1)` where `punch_zero_range_native` succeeds, `Theta(declared cells
-/ 8)` bytes written everywhere else — because this file is the one organised by
-what a user hits.
+**Current coverage.** Linux, Windows and macOS have native calls. The current
+change was executed on Linux; macOS and Windows additions are compile-checked
+only. See [storage diagnostics](storage-diagnostics.md) for cached capability
+observations and actual fallback counters.
 
 ### 1.8 Matrix dimensions are fixed at create, unless one is declared growing
 
@@ -1097,7 +1092,8 @@ it; the matrix and sidecar refusal claims still rest on inspection.**
 | --- | --- |
 | Windows x86_64 MSVC | executed, and the platform every number in this document is from. |
 | Unix (Linux) | **executed**, including `compression-zstd`, and green: tests, Clippy and fmt run natively on `ubuntu-latest` in CI (§6.1). The first such run found three defects every Windows run had passed. **No Linux throughput, syscall count, residency figure or open cost has been measured** — the numbers above are not Linux numbers, and the only Linux figures on record are the two eager scaling ratios in §6.1. |
-| macOS / other targets | compile paths exist, nothing executed. Two behaviours differ by construction rather than by accident: no allocation map (§1.1) and no hole punch (§1.7). |
+| macOS | native allocation-map and hole-punch paths are implemented; host execution remains unqualified. |
+| Other targets | allocation-map and native hole-punch fallbacks remain; persisted-index opens still work. |
 
 ### 6.9 CI reproducibility is bounded
 

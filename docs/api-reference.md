@@ -1737,3 +1737,11 @@ minor-version policy as the rest of the library.
 | `WriterLockHeld` | another writer or stale lock exists |
 | `WriterLockBreakRefused` | the explicit lock policy did not prove removal was allowed |
 | `ScanCancelled { progress }` | an explicit scalable scan stopped cooperatively at the reported boundary |
+
+## Matrix storage environment
+
+`matrix_storage_diagnostics()` on native file, reader and writer handles returns
+cached observations for sparse allocation and range-removal support. See
+[storage diagnostics](storage-diagnostics.md) for field semantics and actual
+fallback-write counters. `diagnose_file` surfaces unavailable capabilities as
+environment warnings without rejecting the file.

@@ -8,13 +8,11 @@
 // configuration F-05 was found in. This fixture fails to compile, and must keep
 // failing.
 
-use std::marker::PhantomData;
+
 use stratava_core::StratavaStreamWriter;
 use stratava_core::enforcement_probe::MutationPermit;
 
-fn main() {
-    // The field is private to `crate::writer_permit`, so no code anywhere else
-    // — inside the crate or outside it — can build the proof without making
-    // the check.
-    let _forged: MutationPermit<StratavaStreamWriter> = MutationPermit(PhantomData);
+fn cannot_forge(writer: &mut StratavaStreamWriter) {
+    let _forged = MutationPermit { writer, context: "forged" };
 }
+fn main() {}

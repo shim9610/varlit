@@ -9,7 +9,7 @@ use crate::{
     ReadLimits, ResourceLimits, Result, SegmentDescriptor, SegmentRepeat,
     format::ReadLimitKey,
     snapshot::{SnapshotCursor, SnapshotFile},
-    writer_permit::{GuardedWriter, MutationInFlight, MutationPermit, PoisonFlag},
+    writer_permit::{GuardedWriter, MutationPermit, PoisonFlag},
 };
 
 /// Names this writer in [`Error::WriterPoisoned`].
@@ -722,12 +722,14 @@ fn inspect_layout_file_report_inner<P: AsRef<Path>>(
 /// its in-flight window is open. Both are typed by the writer they speak for,
 /// so neither can be produced by some other writer's flag. See
 /// `crate::writer_permit`.
-pub(crate) type LayoutMutationPermit = MutationPermit<LayoutWriter>;
-pub(crate) type LayoutMutationInFlight = MutationInFlight<LayoutWriter>;
+pub(crate) type LayoutMutationPermit<'a> = MutationPermit<'a, LayoutWriter>;
 
 impl GuardedWriter for LayoutWriter {
     fn poison_flag(&self) -> &PoisonFlag {
         &self.poison
+    }
+    fn poison_flag_mut(&mut self) -> &mut PoisonFlag {
+        &mut self.poison
     }
 }
 
@@ -956,7 +958,7 @@ impl LayoutWriter {
         M: FnOnce(&mut dyn Write) -> Result<()>,
         R: FnOnce(&mut dyn Write) -> Result<()>,
     {
-        let permit = self.ensure_not_poisoned()?;
+        self.check_mutation(LAYOUT_WRITER_POISON_CONTEXT)?;
         let descriptor = segment_descriptor(self.spec, segment.name)?;
         self.ensure_segment_can_write(descriptor)?;
         let footer_fields = descriptor.footer.map(|footer| footer.fields).unwrap_or(&[]);
@@ -1009,21 +1011,22 @@ impl LayoutWriter {
         // `begin_mutation` consumes the permit, so the window cannot be opened
         // on a writer that is already refusing, and the body below cannot be
         // entered without the witness that the window is open.
-        let in_flight = self.poison.begin_mutation(permit);
-        let result = (|_open_window: &LayoutMutationInFlight| {
-            self.file.seek(SeekFrom::Start(original_eof))?;
+        let endian = self.spec.endian;
+        let mut in_flight = self.ensure_not_poisoned()?.begin_mutation()?;
+        let result = (|| {
+            in_flight.file.seek(SeekFrom::Start(original_eof))?;
             let segment_start = original_eof;
             let mut patches = Vec::new();
             write_patchable_layout_fields(
-                &mut self.file,
+                &mut in_flight.file,
                 descriptor.lead_in.fields,
                 segment.fields,
-                self.spec.endian,
+                endian,
                 &mut patches,
             )?;
             let metadata_offset = after_lead_in;
             let mut metadata_writer = CountingWriter::new(
-                &mut self.file,
+                &mut in_flight.file,
                 metadata_offset,
                 max_payload_len,
                 max_scan_len,
@@ -1039,8 +1042,12 @@ impl LayoutWriter {
                     resource: "layout file growth",
                 },
             )?;
-            let mut raw_writer =
-                CountingWriter::new(&mut self.file, raw_offset, max_payload_len, max_scan_len);
+            let mut raw_writer = CountingWriter::new(
+                &mut in_flight.file,
+                raw_offset,
+                max_payload_len,
+                max_scan_len,
+            );
             let raw_result = (segment.write_raw)(&mut raw_writer);
             if let Some(error) = raw_writer.take_failure() {
                 return Err(error);
@@ -1059,15 +1066,16 @@ impl LayoutWriter {
                     .ok_or(Error::ResourceArithmeticOverflow {
                         resource: "layout file growth",
                     })?;
-            self.spec
+            in_flight
+                .spec
                 .read_limits
                 .check(ReadLimitKey::ScanBytes, footer_end)?;
             if let Some(footer) = descriptor.footer {
                 write_patchable_layout_fields(
-                    &mut self.file,
+                    &mut in_flight.file,
                     footer.fields,
                     segment.footer_fields,
-                    self.spec.endian,
+                    endian,
                     &mut patches,
                 )?;
             }
@@ -1092,10 +1100,10 @@ impl LayoutWriter {
 
             for patch in patches {
                 let value = finalized_value(patch.field, anchors)?;
-                self.file.seek(SeekFrom::Start(patch.offset))?;
-                write_layout_value(&mut self.file, patch.field, &value, self.spec.endian)?;
+                in_flight.file.seek(SeekFrom::Start(patch.offset))?;
+                write_layout_value(&mut in_flight.file, patch.field, &value, endian)?;
             }
-            self.file.seek(SeekFrom::Start(segment_end))?;
+            in_flight.file.seek(SeekFrom::Start(segment_end))?;
 
             Ok(LayoutSegmentInfo {
                 name: descriptor.name,
@@ -1111,17 +1119,17 @@ impl LayoutWriter {
                 footer_len,
                 segment_end,
             })
-        })(&in_flight);
+        })();
 
         match result {
             Ok(info) => {
-                self.segment_counts[segment_count_index].count = next_segment_count;
-                self.index_bytes = next_index_bytes;
-                self.poison.end_mutation(in_flight);
+                in_flight.segment_counts[segment_count_index].count = next_segment_count;
+                in_flight.index_bytes = next_index_bytes;
+                in_flight.end_mutation();
                 Ok(info)
             }
             Err(error) => {
-                if let Err(source) = self.rollback_segment_write(
+                if let Err(source) = in_flight.rollback_segment_write(
                     original_eof,
                     original_cursor,
                     segment_count_index,
@@ -1132,7 +1140,7 @@ impl LayoutWriter {
                         source,
                     });
                 }
-                self.poison.end_mutation(in_flight);
+                in_flight.end_mutation();
                 Err(error)
             }
         }
@@ -1158,7 +1166,7 @@ impl LayoutWriter {
     /// assign it; the only way to reach [`Self::write_segment_body`] — which
     /// holds every byte this writer puts on disk after creation — is to hold
     /// the [`MutationPermit`] this returns.
-    fn ensure_not_poisoned(&self) -> Result<LayoutMutationPermit> {
+    fn ensure_not_poisoned(&mut self) -> Result<LayoutMutationPermit<'_>> {
         self.writer_permit(LAYOUT_WRITER_POISON_CONTEXT)
     }
 

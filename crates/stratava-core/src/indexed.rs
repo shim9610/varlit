@@ -1,3 +1,4 @@
+use crate::writer_permit::GuardedWriter;
 use std::borrow::Borrow;
 use std::fs;
 use std::path::Path;
@@ -17,9 +18,7 @@ use crate::file::{
 };
 use crate::native_layout::{decode_native_record_footer, read_native_record_header};
 use crate::scalable_extent::UntrustedRecordPointer;
-use crate::stream::{
-    StreamCheckpoint, StreamMutationPermit, StreamTail, primary_generation, primary_identity,
-};
+use crate::stream::{StreamCheckpoint, StreamTail, primary_generation, primary_identity};
 use crate::traits::KeyedBlockContract;
 use crate::{
     AppendInfo, BatchAppendError, BatchAppendInfo, BatchOptions, Error, FormatSpec,
@@ -580,7 +579,7 @@ impl StratavaIndexedWriter {
     {
         // API2-03: compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
-        let _permit = self.ensure_writable::<T>()?;
+        self.ensure_writable::<T>()?;
         let key = value.key();
         let mandatory = T::IMMEDIATE || value.immediate_if();
         self.ensure_batch()?;
@@ -644,10 +643,11 @@ impl StratavaIndexedWriter {
         // The permit is re-taken here rather than carried from the entry
         // guard: `ensure_update_capacity` can commit a sidecar chunk, which is
         // itself a step that can poison this writer.
-        let permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         let appended = self
             .stream
-            .append_prepared_chunk(permit, &bytes, &[(T::ID, info)]);
+            .mutation_permit(INDEXED_WRITER_POISON_CONTEXT)?
+            .append_prepared_chunk(&bytes, &[(T::ID, info)]);
         // Back to the writer on both paths; the buffer is the writer's, not
         // this call's.
         self.record_buffer = bytes;
@@ -664,7 +664,7 @@ impl StratavaIndexedWriter {
     {
         // API2-03: compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
-        let _permit = self.ensure_writable::<T>()?;
+        self.ensure_writable::<T>()?;
         let mandatory = T::IMMEDIATE;
         self.ensure_batch()?;
         let canonical_key =
@@ -711,9 +711,10 @@ impl StratavaIndexedWriter {
         .map_err(index_error)?;
         let tail = record_tail(self.stream.spec(), TOMBSTONE_BLOCK_ID, info);
         self.ensure_update_capacity(&update, tail.is_some())?;
-        let permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         self.stream
-            .append_prepared_chunk(permit, &record.bytes, &[(TOMBSTONE_BLOCK_ID, info)])?;
+            .mutation_permit(INDEXED_WRITER_POISON_CONTEXT)?
+            .append_prepared_chunk(&record.bytes, &[(TOMBSTONE_BLOCK_ID, info)])?;
         self.publish_update(old_eof, info, update, tail, composite)?;
         self.apply_immediate::<T>(info, crate::ImmediateOperation::Delete, mandatory)?;
         Ok(info)
@@ -748,7 +749,7 @@ impl StratavaIndexedWriter {
     }
 
     pub fn push_unindexed_info<T: StratavaBlock>(&mut self, value: &T) -> Result<AppendInfo> {
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
         if self.indexed_blocks.contains(&T::ID) {
             return Err(index_invariant(
@@ -796,7 +797,7 @@ impl StratavaIndexedWriter {
     ) -> Result<AppendInfo> {
         // API2-03: compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
         if self.indexed_blocks.contains(&T::ID) {
             return Err(index_invariant(
@@ -817,12 +818,12 @@ impl StratavaIndexedWriter {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         self.stream.flush()
     }
 
     pub fn sync(&mut self) -> Result<()> {
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         self.commit_pending_batch()?;
         self.stream.sync()?;
         if self.dirty
@@ -849,7 +850,7 @@ impl StratavaIndexedWriter {
     }
 
     pub fn set_immediate_policy(&mut self, policy: crate::ImmediatePolicy) -> Result<()> {
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         self.immediate_state.policy = policy.validate()?;
         Ok(())
     }
@@ -880,7 +881,7 @@ impl StratavaIndexedWriter {
     /// Reclaim old index pages without waiting for readers. Requires a clean
     /// writer: call `sync` first. Does not change the native file or durability policy.
     pub fn compact_index(&mut self) -> Result<crate::IndexCompaction> {
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         if self.dirty {
             return Err(index_error(DiskIndexError::CleanStateRequired));
         }
@@ -916,7 +917,7 @@ impl StratavaIndexedWriter {
         I::Item: Borrow<T>,
     {
         let options = options.validate()?;
-        let _permit = self.ensure_writable::<T>()?;
+        self.ensure_writable::<T>()?;
         self.commit_pending_batch()?;
 
         let max_records = options.max_records.min(INDEX_BATCH_RECORDS);
@@ -1081,7 +1082,7 @@ impl StratavaIndexedWriter {
         I::Item: Borrow<T>,
     {
         let options = options.validate()?;
-        let _permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
         if self.indexed_blocks.contains(&T::ID) {
             return Err(index_invariant(
@@ -1242,9 +1243,10 @@ impl StratavaIndexedWriter {
     ) -> Result<()> {
         // One fresh poison check per published chunk, not one per batch: a
         // chunk earlier in the same batch can have poisoned the writer.
-        let permit = self.ensure_not_poisoned()?;
+        self.ensure_not_poisoned()?;
         self.stream
-            .append_prepared_chunk_summarized(permit, bytes, records, written)?;
+            .mutation_permit(INDEXED_WRITER_POISON_CONTEXT)?
+            .append_prepared_chunk_summarized(bytes, records, written)?;
         self.immediate_state
             .advance(records.len() as u64, bytes.len() as u64);
         Ok(())
@@ -1465,11 +1467,11 @@ impl StratavaIndexedWriter {
         Ok(())
     }
 
-    fn ensure_writable<T: StratavaKeyedBlock>(&self) -> Result<StreamMutationPermit> {
-        let permit = self.ensure_not_poisoned()?;
+    fn ensure_writable<T: StratavaKeyedBlock>(&self) -> Result<()> {
+        self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
         if self.indexed_blocks.contains(&T::ID) {
-            Ok(permit)
+            Ok(())
         } else {
             Err(index_invariant(
                 "block is not declared with key_index = disk",
@@ -1491,8 +1493,8 @@ impl StratavaIndexedWriter {
     /// one now calls `StratavaStreamWriter::poison`. The indexed writer cannot
     /// present itself as healthy after any stream error, and the stream cannot
     /// present itself as healthy after any indexed error.
-    fn ensure_not_poisoned(&self) -> Result<StreamMutationPermit> {
-        self.stream.mutation_permit(INDEXED_WRITER_POISON_CONTEXT)
+    fn ensure_not_poisoned(&self) -> Result<()> {
+        self.stream.check_mutation(INDEXED_WRITER_POISON_CONTEXT)
     }
 }
 

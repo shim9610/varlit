@@ -611,6 +611,34 @@ pub fn diagnose_spec(spec: FormatSpec) -> FormatDiagnostics {
     report
 }
 
+fn append_matrix_storage_diagnostics(
+    report: &mut FormatDiagnostics,
+    storage: crate::MatrixStorageDiagnostics,
+) {
+    if storage.sparse_file == Some(false) {
+        report.push(Diagnostic::warning(DiagnosticDomain::Environment,"matrix.storage.sparse_disabled",
+            "this file is dense or its filesystem does not support sparse allocation")
+            .with_hint("large declared regions may consume their full logical size; use a sparse-capable volume or growing dimensions"));
+    }
+    if storage.sparse_mark_failed {
+        report.push(Diagnostic::warning(
+            DiagnosticDomain::Environment,
+            "matrix.storage.sparse_mark_failed",
+            "the filesystem refused the sparse-file request at creation",
+        ));
+    }
+    if !storage.allocation_map_available {
+        report.push(Diagnostic::warning(DiagnosticDomain::Environment,"matrix.storage.allocation_map_unavailable",
+            "allocation-map inspection is unavailable; persisted page indexes remain authoritative")
+            .with_hint("open still uses the live-page index; out-of-band bytes in unindexed pages may not be discovered"));
+    }
+    if !storage.hole_punch_api_available {
+        report.push(Diagnostic::warning(DiagnosticDomain::Environment,"matrix.storage.hole_punch_unavailable",
+            "this platform has no native range-removal API; clears may stream bitmap zeros")
+            .with_hint("sample MatrixRecoveryReport zero-range counters on the thread performing clear/rebuild"));
+    }
+}
+
 pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnostics {
     let path = path.as_ref();
     let mut report = diagnose_spec(spec);
@@ -658,6 +686,10 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
             return report;
         }
     };
+
+    if let Some(storage) = file.matrix_storage_diagnostics() {
+        append_matrix_storage_diagnostics(&mut report, storage);
+    }
 
     report.push(Diagnostic::info(
         DiagnosticDomain::FileData,
@@ -1525,6 +1557,59 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_capabilities_are_environment_warnings_not_corruption() {
+        let mut report = FormatDiagnostics {
+            subject: "test".into(),
+            computed_schema_hash: 0,
+            items: Vec::new(),
+        };
+        append_matrix_storage_diagnostics(
+            &mut report,
+            crate::MatrixStorageDiagnostics {
+                sparse_file: Some(false),
+                allocation_map_available: false,
+                hole_punch_api_available: false,
+                sparse_mark_failed: true,
+            },
+        );
+        let codes: Vec<_> = report.items.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            vec![
+                "matrix.storage.sparse_disabled",
+                "matrix.storage.sparse_mark_failed",
+                "matrix.storage.allocation_map_unavailable",
+                "matrix.storage.hole_punch_unavailable"
+            ]
+        );
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|d| d.severity == DiagnosticSeverity::Warning
+                    && d.domain == DiagnosticDomain::Environment)
+        );
+        let mut healthy = FormatDiagnostics {
+            subject: "test".into(),
+            computed_schema_hash: 0,
+            items: Vec::new(),
+        };
+        append_matrix_storage_diagnostics(
+            &mut healthy,
+            crate::MatrixStorageDiagnostics {
+                sparse_file: None,
+                allocation_map_available: true,
+                hole_punch_api_available: true,
+                sparse_mark_failed: false,
+            },
+        );
+        assert!(
+            healthy.items.is_empty(),
+            "unknown sparseness must not be reported as disabled"
+        );
+    }
 
     /// F-05. Cleanup must never delete an object it did not verify. This
     /// interposes a hostile pathname swap in the one interval the old code

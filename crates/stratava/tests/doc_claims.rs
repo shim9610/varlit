@@ -25,6 +25,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "support/source_tree.rs"]
+mod source_tree;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -631,8 +634,8 @@ fn the_header_slot_entry_framing_is_published_as_twelve_bytes() {
 
     // Derived, not typed a third time: a field added to the entry header moves
     // this sum, and the assertion below then fails until the prose is revisited.
-    let source = fs::read_to_string(repo_root().join("crates/stratava-core/src/file.rs"))
-        .expect("crates/stratava-core/src/file.rs is readable");
+    let source =
+        source_tree::expanded_source(&repo_root().join("crates/stratava-core/src/file.rs"));
     let marker = "const HEADER_SLOT_ENTRY_HEADER_LEN: usize = ";
     let start = source
         .find(marker)
@@ -894,8 +897,8 @@ fn no_document_says_a_matrix_dimension_cannot_grow() {
 fn no_document_declares_an_ordered_barrier_as_a_format_key() {
     let files = normative_files();
     let key = "durability";
-    let macro_source = fs::read_to_string(repo_root().join("crates/stratava-macros/src/lib.rs"))
-        .expect("crates/stratava-macros/src/lib.rs is readable");
+    let macro_source =
+        source_tree::expanded_source(&repo_root().join("crates/stratava-macros/src/lib.rs"));
     assert!(
         !macro_source.contains(&format!("key == {key:?}")),
         "`{key}` is a stratava_format! key now. This gate forbids documenting a key \

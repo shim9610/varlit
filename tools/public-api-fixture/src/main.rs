@@ -452,6 +452,9 @@ fn check_format_roundtrip(dir: &std::path::Path) {
 
     // Matrix reads take `&self`, so this binding no longer needs `mut`.
     let reader = PublicApiFormat::open_reader(&path).expect("reopen");
+    let native = PublicApiFormat::spec().open_reader(&path).expect("native reader");
+    let storage: Option<stratava::MatrixStorageDiagnostics> = native.matrix_storage_diagnostics();
+    assert!(storage.is_some());
     let samples: Vec<Sample> = reader
         .samples()
         .expect("fixed collection")

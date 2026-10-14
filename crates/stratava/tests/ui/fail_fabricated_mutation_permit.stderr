@@ -1,11 +1,7 @@
-error[E0423]: cannot initialize a tuple struct which contains private fields
-  --> tests/ui/fail_fabricated_mutation_permit.rs:19:57
+error[E0451]: fields `writer` and `context` of struct `stratava_core::enforcement_probe::MutationPermit` are private
+  --> tests/ui/fail_fabricated_mutation_permit.rs:16:36
    |
-19 |     let _forged: MutationPermit<StratavaStreamWriter> = MutationPermit(PhantomData);
-   |                                                         ^^^^^^^^^^^^^^
-   |
-note: constructor is not visible here due to private fields
-  --> $WORKSPACE/crates/stratava-core/src/writer_permit.rs
-   |
-   | pub struct MutationPermit<W: ?Sized>(PhantomData<fn() -> W>);
-   |                                      ^^^^^^^^^^^^^^^^^^^^^^ private field
+16 |     let _forged = MutationPermit { writer, context: "forged" };
+   |                                    ^^^^^^  ^^^^^^^ private field
+   |                                    |
+   |                                    private field

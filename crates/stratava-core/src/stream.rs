@@ -41,7 +41,7 @@ use crate::writer_permit::{GuardedWriter, PoisonFlag};
 /// The witness this writer's mutating entry points demand. Typed by the writer
 /// it speaks for, so a permit taken from some other writer — or, as round 12's
 /// re-verification showed, from a throwaway `PoisonFlag` — is not this type.
-pub(crate) type StreamMutationPermit = MutationPermit<StratavaStreamWriter>;
+pub(crate) type StreamMutationPermit<'a> = MutationPermit<'a, StratavaStreamWriter>;
 
 const INTERNAL_BLOCK_IDS: [u32; 3] = [
     MANIFEST_BLOCK_ID,
@@ -844,6 +844,9 @@ impl GuardedWriter for StratavaStreamWriter {
     fn poison_flag(&self) -> &PoisonFlag {
         &self.poison
     }
+    fn poison_flag_mut(&mut self) -> &mut PoisonFlag {
+        &mut self.poison
+    }
 }
 
 impl StratavaStreamWriter {
@@ -965,15 +968,19 @@ impl StratavaStreamWriter {
                 sequence,
                 offset,
             )?;
-            let permit = writer.ensure_writable()?;
-            writer.append_prepared(permit, CREATION_NONCE_BLOCK_ID, record)?;
+            writer.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+            writer
+                .ensure_writable()?
+                .append_prepared(CREATION_NONCE_BLOCK_ID, record)?;
         }
         if spec.manifest_policy == ManifestPolicy::Embedded {
             let sequence = writer.next_sequence()?;
             let offset = writer.snapshot.len();
             let record = prepare_stream_manifest_record(spec, sequence, offset)?;
-            let permit = writer.ensure_writable()?;
-            writer.append_prepared(permit, MANIFEST_BLOCK_ID, record)?;
+            writer.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+            writer
+                .ensure_writable()?
+                .append_prepared(MANIFEST_BLOCK_ID, record)?;
         }
         Ok(writer)
     }
@@ -1158,7 +1165,7 @@ impl StratavaStreamWriter {
         value: &T,
         previous: Option<u64>,
     ) -> Result<AppendInfo> {
-        let permit = self.ensure_writable()?;
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
         ensure_registered_block::<T>(self.spec)?;
         if self.spec.index_policy.keyed_offset_chain && T::IS_KEYED {
             return Err(Error::StreamingUnsupported);
@@ -1191,7 +1198,8 @@ impl StratavaStreamWriter {
         let result = match prepared {
             Ok(parts) => {
                 let info = parts.info;
-                self.append_prepared_chunk(permit, &buffer, &[(T::ID, info)])
+                self.ensure_writable()?
+                    .append_prepared_chunk(&buffer, &[(T::ID, info)])
                     .map(|()| info)
             }
             Err(err) => Err(err),
@@ -1215,7 +1223,7 @@ impl StratavaStreamWriter {
         // compile-time keyedness contract post-monomorphization; the
         // registration below stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
-        let permit = self.ensure_writable()?;
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
         ensure_registered_block::<T>(self.spec)?;
         if self.spec.index_policy.keyed_offset_chain {
             return Err(Error::StreamingUnsupported);
@@ -1230,7 +1238,9 @@ impl StratavaStreamWriter {
             self.previous_block(TOMBSTONE_BLOCK_ID),
             previous,
         )?;
-        let info = self.append_prepared(permit, TOMBSTONE_BLOCK_ID, record)?;
+        let info = self
+            .ensure_writable()?
+            .append_prepared(TOMBSTONE_BLOCK_ID, record)?;
         if self.state.is_some() {
             self.apply_immediate::<T>(info, crate::ImmediateOperation::Delete, T::IMMEDIATE)?;
         }
@@ -1238,15 +1248,15 @@ impl StratavaStreamWriter {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        let permit = self.ensure_writable()?;
-        self.commit_state_chunk(&permit)?;
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+        self.ensure_writable()?.commit_state_chunk()?;
         self.file.flush()?;
         Ok(())
     }
 
     pub fn sync(&mut self) -> Result<()> {
-        let permit = self.ensure_writable()?;
-        self.commit_state_chunk(&permit)?;
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+        self.ensure_writable()?.commit_state_chunk()?;
         crate::scalable_fault_point("sync.native_sync");
         let sync = self.file.sync_all();
         crate::scalable_fault_point("sync.native_sync");
@@ -1394,8 +1404,12 @@ impl StratavaStreamWriter {
                 // in place — the alternative is knowing the encoded length
                 // before encoding, which is what the per-record `Vec` was
                 // really buying.
-                let permit = self.ensure_writable()?;
-                self.append_prepared_chunk_summarized(permit, &bytes[..before], &records, written)?;
+                self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+                self.ensure_writable()?.append_prepared_chunk_summarized(
+                    &bytes[..before],
+                    &records,
+                    written,
+                )?;
                 records.clear();
                 bytes.copy_within(before.., 0);
                 bytes.truncate(parts.len);
@@ -1426,8 +1440,9 @@ impl StratavaStreamWriter {
             );
             let immediate = mandatory || self.immediate_state.policy.matches(event);
             if immediate || bytes.len() >= options.max_bytes || records.len() >= max_records {
-                let permit = self.ensure_writable()?;
-                self.append_prepared_chunk_summarized(permit, &bytes, &records, written)?;
+                self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+                self.ensure_writable()?
+                    .append_prepared_chunk_summarized(&bytes, &records, written)?;
                 bytes.clear();
                 records.clear();
                 if immediate {
@@ -1438,221 +1453,9 @@ impl StratavaStreamWriter {
             }
         }
         if !records.is_empty() {
-            let permit = self.ensure_writable()?;
-            self.append_prepared_chunk_summarized(permit, &bytes, &records, written)?;
-        }
-        Ok(())
-    }
-
-    /// Publishes a prepared chunk and folds it into `written`.
-    ///
-    /// The summary arithmetic runs *before* the native write and the only step
-    /// after publication is an infallible assignment, so `written` describes
-    /// every record that reached the file on every path out of this call.
-    ///
-    /// `permit` is consumed: this is a mutating entry point reachable from
-    /// another module, so the poison check ran for *this* chunk. See
-    /// [`writer_permit`].
-    pub(crate) fn append_prepared_chunk_summarized(
-        &mut self,
-        permit: StreamMutationPermit,
-        bytes: &[u8],
-        records: &[(u32, AppendInfo)],
-        written: &mut BatchAppendInfo,
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-        let byte_len =
-            u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
-        // `append_prepared_chunk` requires the chunk to begin at the native
-        // EOF and lands it contiguously, so this is the post-write EOF.
-        let end_offset =
-            self.snapshot
-                .len()
-                .checked_add(byte_len)
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "file length",
-                })?;
-        let next = next_batch_summary(written, records, end_offset)?;
-        self.append_prepared_chunk(permit, bytes, records)?;
-        *written = next;
-        Ok(())
-    }
-
-    fn append_prepared(
-        &mut self,
-        permit: StreamMutationPermit,
-        block_id: u32,
-        record: PreparedStreamRecord,
-    ) -> Result<AppendInfo> {
-        let info = record.info;
-        self.append_prepared_chunk(permit, &record.bytes, &[(block_id, info)])?;
-        Ok(info)
-    }
-
-    /// Appends a prepared chunk at the native EOF, which is the authoritative
-    /// commit point for every record it names.
-    ///
-    /// `permit` is consumed rather than borrowed: this method is the mutating
-    /// entry point `indexed.rs` reaches for single-record puts and deletes, and
-    /// F-05 was that it performed the mutation without consulting the stream's
-    /// poison flag at all. The witness cannot be produced without that check.
-    /// See [`writer_permit`].
-    pub(crate) fn append_prepared_chunk(
-        &mut self,
-        permit: StreamMutationPermit,
-        bytes: &[u8],
-        records: &[(u32, AppendInfo)],
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-        let record_delta =
-            u64::try_from(records.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "record count",
-            })?;
-        let next_count = self.record_count.checked_add(record_delta).ok_or(
-            Error::ResourceArithmeticOverflow {
-                resource: "record count",
-            },
-        )?;
-        let eof = self.snapshot.len();
-        if records[0].1.record_offset != eof {
-            return Err(Error::InvalidCanonicalEncoding(
-                "prepared batch does not begin at native eof",
-            ));
-        }
-        let byte_len =
-            u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
-        let new_eof = eof
-            .checked_add(byte_len)
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "file length",
-            })?;
-        self.reserve_state_chunk(&permit, records.len())?;
-        // Not shadowed, and that is a measurement rather than an oversight.
-        // Skipping this seek on the reasoning that the previous write left the
-        // offset at `eof` was wrong on every append of a 200-record run, by
-        // exactly 16 bytes each time: this handle is not the only writer to the
-        // native file, and the other one does not move this handle's offset.
-        // The records landed 16 bytes early and the file came out short.
-        self.file.seek(SeekFrom::Start(eof))?;
-        // Round 12, F-05: an armed fault makes the write fail *and* its
-        // rollback fail, which is the pair that poisons the writer below.
-        // Nothing is written and nothing is truncated, so the file is exactly
-        // what a real rolled-back write leaves behind.
-        let injected_rollback_failure = take_injected_append_rollback_failure();
-        let write = if injected_rollback_failure {
-            Err(std::io::Error::other(
-                "injected native append chunk write failure",
-            ))
-        } else {
-            crate::scalable_fault_point("append.native_chunk_write");
-            let write = self.file.write_all(bytes);
-            crate::scalable_fault_point("append.native_chunk_write");
-            write
-        };
-        if let Err(error) = write {
-            // Nothing was staged for this chunk yet, so the pending sidecar
-            // transaction still matches the rolled-back native EOF.
-            let (truncate_result, seek_result) = if injected_rollback_failure {
-                (
-                    Err(std::io::Error::other(
-                        "injected native append rollback truncate failure",
-                    )),
-                    Err(std::io::Error::other(
-                        "injected native append rollback seek failure",
-                    )),
-                )
-            } else {
-                (self.file.set_len(eof), self.file.seek(SeekFrom::Start(eof)))
-            };
-            if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
-                self.poison.poison();
-                return Err(Error::WriteRollbackFailed {
-                    operation: "append stream record",
-                    source,
-                });
-            }
-            return Err(error.into());
-        }
-        // The write returned `Ok`, which is proof the file reaches `new_eof` —
-        // the fact `with_len`'s `fstat` was issued to learn.
-        self.snapshot = match self
-            .snapshot
-            .with_written_len(WrittenThrough::after_write(new_eof))
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                let truncate_result = self.file.set_len(eof);
-                let seek_result = self.file.seek(SeekFrom::Start(eof));
-                if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
-                    self.poison.poison();
-                    return Err(Error::WriteRollbackFailed {
-                        operation: "append stream record",
-                        source,
-                    });
-                }
-                return Err(error);
-            }
-        };
-        let last_sequence = records.last().expect("non-empty prepared chunk").1.sequence;
-        self.sequence = last_sequence.checked_add(1);
-        self.record_count = next_count;
-        for (block_id, info) in records {
-            set_tail(
-                &mut self.block_tails,
-                *block_id,
-                info.record_offset,
-                info.sequence,
-            );
-        }
-        self.immediate_state
-            .advance(records.len() as u64, bytes.len() as u64);
-        // The records are published in the native file, so any sidecar failure
-        // from here on must poison the writer.
-        if let Err(error) = self.stage_state_records(records, new_eof) {
-            self.poison.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: last_sequence,
-                source: Box::new(error),
-            });
-        }
-        if self
-            .state
-            .as_ref()
-            .is_some_and(|state| state.batch_records >= state.chunk_records)
-        {
-            self.commit_state_chunk(&permit)?;
-        }
-        Ok(())
-    }
-
-    /// Opens the writer's dirty generation and makes sure a pending sidecar
-    /// transaction with room for `incoming` coverage items exists. Runs before
-    /// the native write so setup failures leave the record unpublished.
-    fn reserve_state_chunk(
-        &mut self,
-        permit: &StreamMutationPermit,
-        incoming: usize,
-    ) -> Result<()> {
-        let Some(state) = self.state.as_mut() else {
-            return Ok(());
-        };
-        if !state.dirty {
-            state.store.begin_generation().map_err(state_error)?;
-            state.dirty = true;
-        }
-        if state.store.batch.is_some()
-            && state.batch_records.saturating_add(incoming) > state.chunk_records
-        {
-            self.commit_state_chunk(permit)?;
-        }
-        if let Some(state) = self.state.as_mut()
-            && state.store.batch.is_none()
-        {
-            state.store.begin_write_batch().map_err(state_error)?;
+            self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+            self.ensure_writable()?
+                .append_prepared_chunk_summarized(&bytes, &records, written)?;
         }
         Ok(())
     }
@@ -1690,31 +1493,6 @@ impl StratavaStreamWriter {
             state.batch_last_sequence = Some(info.sequence);
         }
         Ok(())
-    }
-
-    /// Commits the pending sidecar transaction, classifying *every* failure
-    /// against whether natively published records are staged in it.
-    ///
-    /// Invariant 3: once `batch_last_sequence` is `Some`, the records it names
-    /// are already in the native file, so no failure from here may be reported
-    /// as a bare `Err` - a caller entitled to read that as "nothing happened"
-    /// would retry and append the same records twice. The classification lives
-    /// here, around the whole body, rather than at individual steps, so a
-    /// fallible step added to this path later cannot reopen the defect.
-    fn commit_state_chunk(&mut self, permit: &StreamMutationPermit) -> Result<()> {
-        // Borrowed, not consumed: this runs *inside* a mutation whose permit
-        // was already taken, so demanding a fresh one would re-check a flag
-        // this very call may be about to set. Holding it is still what proves
-        // the check happened before the sidecar was touched.
-        let _ = permit;
-        let staged = self
-            .state
-            .as_ref()
-            .and_then(|state| state.batch_last_sequence);
-        match self.commit_state_chunk_inner() {
-            Ok(()) => Ok(()),
-            Err(error) => Err(self.published_sidecar_error(staged, error)),
-        }
     }
 
     /// Wraps `error` as a published outcome when `staged` names records that
@@ -1822,7 +1600,7 @@ impl StratavaStreamWriter {
 
     /// Checks the poison flag and issues the witness every mutating entry
     /// point demands. See [`writer_permit`].
-    fn ensure_writable(&self) -> Result<StreamMutationPermit> {
+    fn ensure_writable(&mut self) -> Result<StreamMutationPermit<'_>> {
         self.writer_permit(STREAM_WRITER_POISON_CONTEXT)
     }
 
@@ -1834,7 +1612,10 @@ impl StratavaStreamWriter {
     /// permit, but names itself in the error so the caller is told which
     /// writer refused. F-05 was exactly the absence of this: the layered
     /// writer kept a *second* flag and the two could disagree.
-    pub(crate) fn mutation_permit(&self, context: &'static str) -> Result<StreamMutationPermit> {
+    pub(crate) fn mutation_permit(
+        &mut self,
+        context: &'static str,
+    ) -> Result<StreamMutationPermit<'_>> {
         self.writer_permit(context)
     }
 
@@ -2376,6 +2157,239 @@ fn opened_file_identity(file: &std::fs::File) -> Result<Vec<u8>> {
     bytes.extend_from_slice(&information.dwVolumeSerialNumber.to_le_bytes());
     bytes.extend_from_slice(&file_index.to_le_bytes());
     Ok(bytes)
+}
+
+impl StreamMutationPermit<'_> {
+    /// Publishes a prepared chunk and folds it into `written`.
+    ///
+    /// The summary arithmetic runs *before* the native write and the only step
+    /// after publication is an infallible assignment, so `written` describes
+    /// every record that reached the file on every path out of this call.
+    ///
+    /// `permit` is consumed: this is a mutating entry point reachable from
+    /// another module, so the poison check ran for *this* chunk. See
+    /// [`writer_permit`].
+    pub(crate) fn append_prepared_chunk_summarized(
+        &mut self,
+        bytes: &[u8],
+        records: &[(u32, AppendInfo)],
+        written: &mut BatchAppendInfo,
+    ) -> Result<()> {
+        self.check()?;
+        if records.is_empty() {
+            return Ok(());
+        }
+        let byte_len =
+            u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
+        // `append_prepared_chunk` requires the chunk to begin at the native
+        // EOF and lands it contiguously, so this is the post-write EOF.
+        let end_offset =
+            self.snapshot
+                .len()
+                .checked_add(byte_len)
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "file length",
+                })?;
+        let next = next_batch_summary(written, records, end_offset)?;
+        self.append_prepared_chunk(bytes, records)?;
+        *written = next;
+        Ok(())
+    }
+    fn append_prepared(
+        &mut self,
+        block_id: u32,
+        record: PreparedStreamRecord,
+    ) -> Result<AppendInfo> {
+        self.check()?;
+        let info = record.info;
+        self.append_prepared_chunk(&record.bytes, &[(block_id, info)])?;
+        Ok(info)
+    }
+    /// Appends a prepared chunk at the native EOF, which is the authoritative
+    /// commit point for every record it names.
+    ///
+    /// `permit` is consumed rather than borrowed: this method is the mutating
+    /// entry point `indexed.rs` reaches for single-record puts and deletes, and
+    /// F-05 was that it performed the mutation without consulting the stream's
+    /// poison flag at all. The witness cannot be produced without that check.
+    /// See [`writer_permit`].
+    pub(crate) fn append_prepared_chunk(
+        &mut self,
+        bytes: &[u8],
+        records: &[(u32, AppendInfo)],
+    ) -> Result<()> {
+        self.check()?;
+        if records.is_empty() {
+            return Ok(());
+        }
+        let record_delta =
+            u64::try_from(records.len()).map_err(|_| Error::ResourceArithmeticOverflow {
+                resource: "record count",
+            })?;
+        let next_count = self.record_count.checked_add(record_delta).ok_or(
+            Error::ResourceArithmeticOverflow {
+                resource: "record count",
+            },
+        )?;
+        let eof = self.snapshot.len();
+        if records[0].1.record_offset != eof {
+            return Err(Error::InvalidCanonicalEncoding(
+                "prepared batch does not begin at native eof",
+            ));
+        }
+        let byte_len =
+            u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
+        let new_eof = eof
+            .checked_add(byte_len)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "file length",
+            })?;
+        self.reserve_state_chunk(records.len())?;
+        // Not shadowed, and that is a measurement rather than an oversight.
+        // Skipping this seek on the reasoning that the previous write left the
+        // offset at `eof` was wrong on every append of a 200-record run, by
+        // exactly 16 bytes each time: this handle is not the only writer to the
+        // native file, and the other one does not move this handle's offset.
+        // The records landed 16 bytes early and the file came out short.
+        self.file.seek(SeekFrom::Start(eof))?;
+        // Round 12, F-05: an armed fault makes the write fail *and* its
+        // rollback fail, which is the pair that poisons the writer below.
+        // Nothing is written and nothing is truncated, so the file is exactly
+        // what a real rolled-back write leaves behind.
+        let injected_rollback_failure = take_injected_append_rollback_failure();
+        let write = if injected_rollback_failure {
+            Err(std::io::Error::other(
+                "injected native append chunk write failure",
+            ))
+        } else {
+            crate::scalable_fault_point("append.native_chunk_write");
+            let write = self.file.write_all(bytes);
+            crate::scalable_fault_point("append.native_chunk_write");
+            write
+        };
+        if let Err(error) = write {
+            // Nothing was staged for this chunk yet, so the pending sidecar
+            // transaction still matches the rolled-back native EOF.
+            let (truncate_result, seek_result) = if injected_rollback_failure {
+                (
+                    Err(std::io::Error::other(
+                        "injected native append rollback truncate failure",
+                    )),
+                    Err(std::io::Error::other(
+                        "injected native append rollback seek failure",
+                    )),
+                )
+            } else {
+                (self.file.set_len(eof), self.file.seek(SeekFrom::Start(eof)))
+            };
+            if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
+                self.poison.poison();
+                return Err(Error::WriteRollbackFailed {
+                    operation: "append stream record",
+                    source,
+                });
+            }
+            return Err(error.into());
+        }
+        // The write returned `Ok`, which is proof the file reaches `new_eof` —
+        // the fact `with_len`'s `fstat` was issued to learn.
+        self.snapshot = match self
+            .snapshot
+            .with_written_len(WrittenThrough::after_write(new_eof))
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let truncate_result = self.file.set_len(eof);
+                let seek_result = self.file.seek(SeekFrom::Start(eof));
+                if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
+                    self.poison.poison();
+                    return Err(Error::WriteRollbackFailed {
+                        operation: "append stream record",
+                        source,
+                    });
+                }
+                return Err(error);
+            }
+        };
+        let last_sequence = records.last().expect("non-empty prepared chunk").1.sequence;
+        self.sequence = last_sequence.checked_add(1);
+        self.record_count = next_count;
+        for (block_id, info) in records {
+            set_tail(
+                &mut self.block_tails,
+                *block_id,
+                info.record_offset,
+                info.sequence,
+            );
+        }
+        self.immediate_state
+            .advance(records.len() as u64, bytes.len() as u64);
+        // The records are published in the native file, so any sidecar failure
+        // from here on must poison the writer.
+        if let Err(error) = self.stage_state_records(records, new_eof) {
+            self.poison.poison();
+            return Err(Error::PublishedButIndexStale {
+                sequence: last_sequence,
+                source: Box::new(error),
+            });
+        }
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| state.batch_records >= state.chunk_records)
+        {
+            self.commit_state_chunk()?;
+        }
+        Ok(())
+    }
+    /// Opens the writer's dirty generation and makes sure a pending sidecar
+    /// transaction with room for `incoming` coverage items exists. Runs before
+    /// the native write so setup failures leave the record unpublished.
+    fn reserve_state_chunk(&mut self, incoming: usize) -> Result<()> {
+        self.check()?;
+        let Some(state) = self.state.as_mut() else {
+            return Ok(());
+        };
+        if !state.dirty {
+            state.store.begin_generation().map_err(state_error)?;
+            state.dirty = true;
+        }
+        if state.store.batch.is_some()
+            && state.batch_records.saturating_add(incoming) > state.chunk_records
+        {
+            self.commit_state_chunk()?;
+        }
+        if let Some(state) = self.state.as_mut()
+            && state.store.batch.is_none()
+        {
+            state.store.begin_write_batch().map_err(state_error)?;
+        }
+        Ok(())
+    }
+    /// Commits the pending sidecar transaction, classifying *every* failure
+    /// against whether natively published records are staged in it.
+    ///
+    /// Invariant 3: once `batch_last_sequence` is `Some`, the records it names
+    /// are already in the native file, so no failure from here may be reported
+    /// as a bare `Err` - a caller entitled to read that as "nothing happened"
+    /// would retry and append the same records twice. The classification lives
+    /// here, around the whole body, rather than at individual steps, so a
+    /// fallible step added to this path later cannot reopen the defect.
+    fn commit_state_chunk(&mut self) -> Result<()> {
+        self.check()?;
+        // Borrowed, not consumed: this runs *inside* a mutation whose permit
+        // was already taken, so demanding a fresh one would re-check a flag
+        // this very call may be about to set. Holding it is still what proves
+        // the check happened before the sidecar was touched.
+        let staged = self
+            .state
+            .as_ref()
+            .and_then(|state| state.batch_last_sequence);
+        match self.commit_state_chunk_inner() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.published_sidecar_error(staged, error)),
+        }
+    }
 }
 
 #[cfg(test)]

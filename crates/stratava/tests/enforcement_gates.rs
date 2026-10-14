@@ -22,19 +22,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "support/source_tree.rs"]
+mod source_tree;
+use source_tree::expanded_source;
+
 fn crate_source(name: &str) -> String {
-    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("stratava-core")
-        .join("src")
-        .join(name);
-    let source = fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    // Normalised so that a gate spanning two lines cannot pass or fail on a
-    // checkout's line-ending convention. `writer_permit.rs` is CRLF in this
-    // tree and the rest of `stratava-core` is LF; a gate that silently stops
-    // matching is worse than no gate.
-    source.replace("\r\n", "\n")
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../stratava-core/src");
+    expanded_source(&root.join(name))
 }
 
 /// The source with every comment line removed.
@@ -277,12 +271,23 @@ fn crate_modules() -> Vec<String> {
         .join("..")
         .join("stratava-core")
         .join("src");
-    let mut modules: Vec<String> = fs::read_dir(&dir)
-        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
-        .map(|entry| entry.expect("directory entry").file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".rs"))
-        .collect();
+    fn collect(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).expect("source directory") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                collect(&path, root, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    let mut modules = Vec::new();
+    collect(&dir, &dir, &mut modules);
     modules.sort();
     assert!(
         modules.len() > 15,
@@ -322,7 +327,7 @@ fn no_writer_keeps_its_own_poison_boolean() {
         "`writer_permit` must remain the one holder of the state"
     );
     assert!(
-        permit.contains("pub struct MutationPermit<W: ?Sized>(PhantomData<fn() -> W>);"),
+        permit.contains("pub struct MutationPermit<'a, W: ?Sized> {\n    writer: &'a mut W,\n    context: &'static str,\n}"),
         "the permit's field must stay private: a public field makes the witness forgeable, \
          which is what tests/ui/fail_fabricated_mutation_permit.rs asserts"
     );
@@ -338,7 +343,7 @@ fn no_writer_keeps_its_own_poison_boolean() {
 ///
 /// The constructor is now **private to `writer_permit`**, so no other module can
 /// mint a permit from any flag, and the only route out of the module is
-/// `GuardedWriter::writer_permit`, which takes `&self` of the writer and reads
+/// `GuardedWriter::writer_permit`, which takes `&mut self` of the writer and reads
 /// that writer's own flag. Restoring any visibility on the constructor is the
 /// single edit that reopens the bypass, and it fails here.
 ///
@@ -351,37 +356,52 @@ fn no_writer_keeps_its_own_poison_boolean() {
 #[test]
 fn a_permit_can_only_be_minted_from_the_writers_own_poison_flag() {
     let permit = crate_source("writer_permit.rs");
-    assert!(
-        permit.contains(
-            "    fn issue<W: ?Sized>(&self, context: &'static str) -> Result<MutationPermit<W>> {"
-        ),
-        "`PoisonFlag::issue` must remain the sole constructor and must keep its exact private \
-         declaration"
-    );
+    assert!(permit.contains("    fn issue<'a, W: GuardedWriter>("));
+    assert!(permit.contains("        writer: &'a mut W,"));
     for visibility in ["pub fn issue", "pub(crate) fn issue", "pub(super) fn issue"] {
         assert!(
             !permit.contains(visibility),
-            "`{visibility}` puts permit minting back in reach of every module in the crate: a \
-             throwaway `PoisonFlag::healthy()` then speaks for a poisoned writer, which is the \
-             bypass that capped round 12's F-05 fix at partial"
+            "the sole permit constructor must be private"
         );
     }
     assert_eq!(
-        crate_code("writer_permit.rs")
-            .matches("MutationPermit(PhantomData)")
+        crate_shipped_code("writer_permit.rs")
+            .matches("Ok(MutationPermit { writer, context })")
             .count(),
-        1,
-        "there must be exactly one place where a permit value comes into existence"
+        1
     );
+    assert!(permit.contains("    pub fn healthy() -> Self {"));
+    assert!(permit.contains("fn writer_permit(&mut self, context: &'static str) -> Result<MutationPermit<'_, Self>> {\n        PoisonFlag::issue(self, context)\n    }"),
+        "only an exclusive borrow of the authoritative writer may mint a handle");
     assert!(
-        permit.contains("    pub fn healthy() -> Self {"),
-        "`PoisonFlag::healthy` must stay a non-`const` fn (round 15). While it was `const` a          `static DECOY: PoisonFlag = PoisonFlag::healthy();` could be declared anywhere in the          crate and returned from a writer's own `poison_flag`, at which point `writer_permit`          reads the decoy and every guarded operation is permitted on a poisoned writer"
+        permit.contains("self.writer.check_mutation(self.context)"),
+        "a later guarded step must recheck poison raised after the handle was issued"
     );
-    assert!(
-        permit.contains("fn writer_permit(&self, context: &'static str) -> Result<MutationPermit<Self>> {\n        self.poison_flag().issue(context)\n    }"),
-        "the only exported route to a permit must read the flag of the writer the permit names; \
-         a free function taking `&PoisonFlag` would restore the laundering"
-    );
+    for (module, owner) in [("file.rs", "File"), ("stream.rs", "Stream")] {
+        let source = crate_shipped_code(module);
+        assert!(source.contains(&format!("impl {owner}MutationPermit<'_> {{")));
+        assert!(
+            !source.contains("permit: &"),
+            "{module}: the operation receiver must be the bound handle, not a second writer"
+        );
+    }
+    for module in ["file.rs", "stream.rs", "layout.rs"] {
+        let source = crate_code(module);
+        assert!(
+            !source.contains("fn check_mutation("),
+            "{module}: no override of the authoritative check"
+        );
+        assert!(
+            !source.contains("fn writer_permit("),
+            "{module}: no alternate permit minting route"
+        );
+        assert!(
+            source.contains("fn poison_flag(&self) -> &PoisonFlag {\n        &self.poison\n    }")
+        );
+        assert!(source.contains(
+            "fn poison_flag_mut(&mut self) -> &mut PoisonFlag {\n        &mut self.poison\n    }"
+        ));
+    }
 
     // Belt and braces: no module may hold a `PoisonFlag` anywhere but in a
     // writer's own field, so a decoy flag does not even come into being.
@@ -833,7 +853,8 @@ fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
         gate.chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
-            .matches("fncomplete(&self,read:BitmapRead<'_>,)")
+            .replace(",)", ")")
+            .matches("fncomplete(&self,read:BitmapRead<'_>)")
             .count(),
         1,
         "`CrcValidEvidence::complete` must remain the only producer of the witness, because it \
@@ -945,7 +966,16 @@ fn no_guard_consults_a_bare_boolean_field() {
             .lines()
             .map(str::trim)
             .filter(|line| line.ends_with(": bool,") && !line.starts_with("//"))
-            .filter_map(|line| line.split(':').next().map(|name| name.trim().to_string()))
+            .filter_map(|line| {
+                line.split(':').next().map(|name| {
+                    // Extraction promotes parent-private helper fields to
+                    // pub(super); that must not remove them from the old sweep.
+                    name.trim()
+                        .strip_prefix("pub(super) ")
+                        .unwrap_or(name.trim())
+                        .to_string()
+                })
+            })
             .filter(|name| !name.is_empty() && !name.contains(' '))
             .collect();
         if fields.is_empty() {
