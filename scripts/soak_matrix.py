@@ -41,7 +41,7 @@ def main():
     report["config"] = {k: str(v) if isinstance(v, Path) else v for k, v in report["config"].items()}
     atomic_json(output / "report.json", report)
     try:
-        result = execute([str(binary), str(data / "matrix.varve"), str(args.seconds),
+        result = execute([str(binary), str(data / "matrix.varlit"), str(args.seconds),
                           str(args.readers), str(args.rows)], output, "matrix", os.environ.copy(),
                          args.seconds + 600, "soak_complete", data)
         report["result"] = result

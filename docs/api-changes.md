@@ -1,5 +1,17 @@
 # API Changes — 0.3.0 through 0.11.0
 
+## Varlit rename
+
+The current Git checkout changes the Varve package and Rust API names to Varlit.
+Use `varlit`, `varlit-core` and `varlit-macros`; import `Varlit*` types and
+`varlit_format!`, write `#[derive(VarlitBlock)]` and `#[varlit(...)]`, and rename
+manual codec methods to `encode_varlit` and `decode_varlit`. The test runner is
+`varlit-test-runner`; tool environment variables use `VARLIT_*`.
+
+The repository URL is `https://github.com/shim9610/varlit`. Old release tags retain their
+original package/API names. The rename preserves versioned file markers, hash
+domains and file-lock metadata. No compatibility aliases are provided.
+
 Migration document. Companion to [Known Limitations](known-limitations.md)
 and the [Changelog](../CHANGELOG.md).
 
@@ -7,8 +19,8 @@ and the [Changelog](../CHANGELOG.md).
 
 Manual schemas used with typed APIs must supply static identities:
 `.with_block_identities(&[MyBlock::IDENTITY, OtherBlock::IDENTITY])`, with
-`VarveBlock` in scope. Missing identities return `Error::InvalidFormatSpec` before
-codec invocation. `varve_format!` already supplies this table. Raw record access
+`VarlitBlock` in scope. Missing identities return `Error::InvalidFormatSpec` before
+codec invocation. `varlit_format!` already supplies this table. Raw record access
 can still use a schema without Rust type identities. Adding identities to an old
 manual schema changes its computed schema hash; declare them before calling
 `with_computed_schema_hash()`.
@@ -48,11 +60,11 @@ part of the default public API, including with `--no-default-features`.
 
 - Remove `high-cardinality-dev` from Cargo dependency feature lists. The flag is
   deleted, not renamed; no replacement feature is needed.
-- `varve_format!` emits stream wrappers when typed APIs are enabled, and indexed
+- `varlit_format!` emits stream wrappers when typed APIs are enabled, and indexed
   wrappers when the format declares `key_index = disk`. `key_index = memory | disk` and generated
-  `VarveDiskKey` implementations no longer depend on a Cargo feature.
-- Every manual `VarveBlock` implementation must declare `const IS_KEYED: bool`.
-  Use `false` for an unkeyed block and `true` with `VarveKeyedBlock`. The previous
+  `VarlitDiskKey` implementations no longer depend on a Cargo feature.
+- Every manual `VarlitBlock` implementation must declare `const IS_KEYED: bool`.
+  Use `false` for an unkeyed block and `true` with `VarlitKeyedBlock`. The previous
   default of `false` in builds without the development flag is removed. Derived
   blocks and inline schema blocks already emit the correct value.
 - Reader ownership is one reader per reading thread. Resident, matrix,
@@ -77,7 +89,7 @@ methods and four added borrowing accessors, all purely additive, plus two
 behaviour fixes that only ever made a correct call fail.
 Section **F** is the 0.9.0 → 0.9.1 migration: one added `ReadLimits`
 field that makes the file-header extension ceiling declarable, and two added
-`VarveFile` methods that make the keyed predecessor chain walkable. Nothing to
+`VarlitFile` methods that make the keyed predecessor chain walkable. Nothing to
 migrate in either — every change is additive, and a format that declares nothing
 new is byte-identical to 0.9.0.
 Section **E** is the 0.8.0 → 0.9.0 migration: one added `FormatSpec`
@@ -108,15 +120,15 @@ only turn a call that used to fail into one that succeeds.
 
 ### G.1 The editable header region is reachable without ending the writer
 
-`write_header_block` and its family lived only on `VarveFile`, and every handle
+`write_header_block` and its family lived only on `VarlitFile`, and every handle
 above it offered `into_inner(self)` and nothing else, so the only route to the
 region consumed the writer that wanted to use it. The family is forwarded now:
 
 | on | added |
 | --- | --- |
 | the generated `<Format>Writer` | `read_header_block`, `write_header_block`, `remove_header_block`, `seal_header_slots`, `header_slots_capacity` / `_used` / `_free_bytes` / `_sealed`, plus `inner()` and `inner_mut()` |
-| `VarveWriter` | the same eight, plus `file()` and `file_mut()` |
-| `VarveReader` | `read_header_block`, the four accessors, and `file()` |
+| `VarlitWriter` | the same eight, plus `file()` and `file_mut()` |
+| `VarlitReader` | `read_header_block`, the four accessors, and `file()` |
 
 ```rust
 let mut writer = MyFormat::create_writer(&path)?;
@@ -132,7 +144,7 @@ reachable the same way, without ending the handle.
 
 ### G.2 A bare filename is a usable pathname
 
-`Path::new("app.varve").parent()` is `Some("")`, not `None`, so the `"."`
+`Path::new("app.varlit").parent()` is `Some("")`, not `None`, so the `"."`
 fallback in every parent-directory sync was dead code. `sync()` and
 `replace_user` returned `PublishedButParentSyncPending { source: Io(NotFound) }`
 for a file created under a bare filename. Eight sites across four modules are
@@ -194,16 +206,16 @@ reader whose spec leaves this at the default refuses, **at open**, a file whose
 region a declaring writer made larger, and there is no `SchemaHashMismatch` to
 explain it. Declare `header_extension` in every copy of the format declaration.
 
-### F.2 `VarveFile::record_entry_at` and `VarveFile::keyed_chain`
+### F.2 `VarlitFile::record_entry_at` and `VarlitFile::keyed_chain`
 
-Purely additive; nothing to migrate. Both are `&self` on `VarveFile`, which is
+Purely additive; nothing to migrate. Both are `&self` on `VarlitFile`, which is
 what `Format::open_readonly` and `Format::open` return.
 
 | added | is |
 | --- | --- |
-| `VarveFile::record_entry_at(&self, u64) -> Result<RecordIndexEntry>` | the entry `read_block_at` frames and discards |
-| `VarveFile::keyed_chain(&self, u64) -> Result<KeyedChain<'_>>` | the walk, newest first |
-| `KeyedChain<'a>` | `Iterator<Item = Result<RecordIndexEntry>>`, re-exported from `varve` |
+| `VarlitFile::record_entry_at(&self, u64) -> Result<RecordIndexEntry>` | the entry `read_block_at` frames and discards |
+| `VarlitFile::keyed_chain(&self, u64) -> Result<KeyedChain<'_>>` | the walk, newest first |
+| `KeyedChain<'a>` | `Iterator<Item = Result<RecordIndexEntry>>`, re-exported from `varlit` |
 
 Before this, the keyed predecessor chain was written but not readable: the
 pointer was public on `RecordIndexEntry` and `AppendInfo`, and nothing public
@@ -254,7 +266,7 @@ byte-identical to 0.8.0 and its `computed_schema_hash()` is unchanged.
 ```
 
 This affects **only** a caller who builds a `FormatSpec` with struct-literal
-syntax. `varve_format!`, `FormatSpecBuilder`, `FormatSpec::new` and every
+syntax. `varlit_format!`, `FormatSpecBuilder`, `FormatSpec::new` and every
 `with_*` method are unchanged and need nothing — which is every documented way
 to build a spec, so most trees will not notice this release.
 
@@ -281,7 +293,7 @@ There is no migration that keeps both: the 0.8.0 behaviour was the option not
 working. To keep reading those files, drop the `.liveness_policy(..)` call, which
 is what the spec effectively had.
 
-Formats declared with `varve_format!` are unaffected — the macro never went
+Formats declared with `varlit_format!` are unaffected — the macro never went
 through the builder.
 
 ### E.3 `effective_layout()` reported a short header for `footer_flags` formats
@@ -292,7 +304,7 @@ file-header length **16 bytes short** for every format declaring
 extension-length term, so the plan described the first record as starting inside
 that block.
 
-No file was ever written wrong, and no varve read path was affected — the reader
+No file was ever written wrong, and no varlit read path was affected — the reader
 derives the boundary from the file's own extension region rather than from the
 plan. What was affected is an **external tool** that reads `effective_layout()`
 to find where the append log begins. If you have one and it works today against
@@ -314,15 +326,15 @@ Formats without `footer_flags` reported the correct length before and after.
 ```
 
 Drop the argument and the import. The signature is now
-`replace<T: VarveReplaceBlock>(&mut self, index: usize, block: &T) -> Result<u64>`
+`replace<T: VarlitReplaceBlock>(&mut self, index: usize, block: &T) -> Result<u64>`
 — two changes beyond the missing parameter, both of which usually need nothing
 from a caller:
 
 - **It returns the published sequence** rather than `()`. Discard it with
   `let _ = ...` if you were relying on `?` in a `()` position.
-- **The bound is `VarveReplaceBlock`,** not `VarveBlock`.
-  `#[derive(VarveBlock)]` and `varve_format!` already emit that impl for every
-  block, so derived blocks need nothing. A hand-written `VarveBlock` impl needs
+- **The bound is `VarlitReplaceBlock`,** not `VarlitBlock`.
+  `#[derive(VarlitBlock)]` and `varlit_format!` already emit that impl for every
+  block, so derived blocks need nothing. A hand-written `VarlitBlock` impl needs
   one added; for an unkeyed block it is
   `fn validate_replacement(_: &Self, _: &Self) -> Result<()> { Ok(()) }`.
 
@@ -359,8 +371,8 @@ let points = file.with_directory(&index).blocks::<Point>()?;
 let points = file.with_directory(&index)?.blocks::<Point>()?;
 ```
 
-`VarveFile::with_directory`, `VarveReader::with_directory` and
-`VarveWriter::with_directory` now return `Result<DirectoryRead<'_, D>>`.
+`VarlitFile::with_directory`, `VarlitReader::with_directory` and
+`VarlitWriter::with_directory` now return `Result<DirectoryRead<'_, D>>`.
 Existing calls need one `?`.
 
 A supplied directory is trusted offsets, and trusting them is the point — it is
@@ -389,7 +401,7 @@ an empty directory are all legitimate and are accepted.
 
 ## C. From 0.6.0 to 0.7.0: a writer open that does not scan, an editable written chunk, and one renamed error
 
-### C.1 `VarveFile::open_lazy` / `VarveWriter::open_lazy` — a writer that does not scan
+### C.1 `VarlitFile::open_lazy` / `VarlitWriter::open_lazy` — a writer that does not scan
 
 New, additive; nothing to migrate. Every other writer open frames every record
 in the file, at any size, because it builds the resident index. `open_lazy`
@@ -400,7 +412,7 @@ Measured on this tree, 200 records: the scanning open frames **202**, the lazy
 open frames **1**. The difference is the file, not the constant: at a billion
 records the lazy open still frames one.
 
-    let mut writer = VarveWriter::open_lazy(spec, path)?;   // no scan
+    let mut writer = VarlitWriter::open_lazy(spec, path)?;   // no scan
     writer.push(&row)?;                                     // appends normally
 
 Two things it does not have, both inherited from the read-only digest open:
@@ -428,7 +440,7 @@ Nothing else in the signature changed — `write_matrix_cell`,
 `write_matrix_cell_payload` and `clear_matrix_cell` take the same arguments and
 return the same type.
 
-The refusal had nothing behind it. A varve file's matrix *region* is rewritten
+The refusal had nothing behind it. A varlit file's matrix *region* is rewritten
 in place on every write; a chunk is an ordinary record, and rewriting one of
 those in place is a route the writer has had since 0.5.0. So a reader-writer
 could edit a written row of a fixed matrix and not a written row of a growing
@@ -570,7 +582,7 @@ pub fn scan(&self) -> impl Iterator<Item = BlockEvent> + '_
 pub fn scan(&self) -> impl Iterator<Item = Result<BlockEvent>> + '_
 ```
 
-On `VarveFile`, `VarveReader` and the generated readers.
+On `VarlitFile`, `VarlitReader` and the generated readers.
 
 ```rust
 // before
@@ -652,9 +664,9 @@ together:
 
 | New | What it is |
 | --- | --- |
-| `VarveFile::record_map(&mut Vec<RecordIndexEntry>)` → `RecordMap<'_>` | an index over your buffer, walked only as far as you ask; implements `RecordDirectory` |
-| `VarveFile::open_readonly_lazy(spec, path)` | an open that frames one record — the digest — and builds no index |
-| `VarveFile::open_readonly_lazy_with_report(..)` → `(Self, LazyOpenSource)` | the same, and which route it took |
+| `VarlitFile::record_map(&mut Vec<RecordIndexEntry>)` → `RecordMap<'_>` | an index over your buffer, walked only as far as you ask; implements `RecordDirectory` |
+| `VarlitFile::open_readonly_lazy(spec, path)` | an open that frames one record — the digest — and builds no index |
+| `VarlitFile::open_readonly_lazy_with_report(..)` → `(Self, LazyOpenSource)` | the same, and which route it took |
 | `IndexPolicy::with_open_digest_on_flush(bool)` | writes the digest the lazy open reads |
 | `OPEN_DIGEST_BLOCK_ID`, `LazyOpenSource` | the internal block id and the report enum |
 
@@ -712,7 +724,7 @@ pub enum MatrixMetadataResidency {
 
 `Missing` is the `ReadLimit::Missing` idiom, not a second convention: it is the
 state an unset field starts in, it never overwrites a policy someone else
-declared, and it resolves to varve's own choice.
+declared, and it resolves to varlit's own choice.
 
 **Two things break.**
 
@@ -815,7 +827,7 @@ entry point — it still works and is still the way to *override* a format's pol
 It is no longer *required* to preserve one. If you avoided
 `*_with_resource_limits` because of this bug, you no longer need to.
 
-**No DSL change.** `varve_format!`'s `limits { }` grammar is
+**No DSL change.** `varlit_format!`'s `limits { }` grammar is
 `key: <integer literal>;` over a fixed key list, so a policy with a variant
 cannot be expressed there and no key was added. Macro-declared formats now emit
 `ReadLimits::missing()`, so they carry `Missing` and pick up whatever `DEFAULT`
@@ -880,7 +892,7 @@ pub enum MatrixMetadataVerification { Missing, AtOpen, OnDemand }  // #[non_exha
 | `ReadLimits::with_matrix_metadata_verification()` | declares it (`const fn`) |
 | `ReadLimits::effective_matrix_metadata_verification()` | resolves `Missing`; **read this, not the field** |
 | `MatrixMetadataVerification::DEFAULT` | `AtOpen` — one constant, one line to change |
-| `VarveReader/VarveWriter/VarveFile::verify_matrix_metadata()` | runs the pass on demand, returns a `MatrixRecoveryReport` |
+| `VarlitReader/VarlitWriter/VarlitFile::verify_matrix_metadata()` | runs the pass on demand, returns a `MatrixRecoveryReport` |
 
 The pass reads every page of every commit map named by the persisted page index
 **unioned with** the platform's allocation map and authenticates each against its
@@ -925,7 +937,7 @@ reader.matrix_resume_signal("analysis")?;         // Err(Error::MatrixCommitQuar
 ```
 
 Same change on `matrix_sidecar_resume_signal`, on all three receivers
-(`VarveReader`, `VarveWriter`, `VarveFile`). An **unaffected** category is
+(`VarlitReader`, `VarlitWriter`, `VarlitFile`). An **unaffected** category is
 unchanged.
 
 The old answer was an artifact, not a verdict. Quarantine used to be two things:
@@ -998,7 +1010,7 @@ typed refusal:
 distinction is not cosmetic:
 
 1. A **matrix native file** and a **file pinned with a computed schema hash** hold
-   your data. They must be recreated and their contents copied by you. Varve has
+   your data. They must be recreated and their contents copied by you. Varlit has
    no migration tool for either.
 2. A **matrix sidecar** and a **disk-index sidecar** are regenerable resume state.
    One named call rebuilds them and nothing is lost.
@@ -1047,7 +1059,7 @@ The algorithm went from an implicit version 1 in 0.3.0, through version 2, to
   different declaration order — and therefore different canonical bytes — hashed
   identically.
 - **v3 (API-04):** the folded block fingerprints resolve each field's codec
-  through `VarveEncode::SCHEMA_ID` instead of the field type's source spelling, so
+  through `VarlitEncode::SCHEMA_ID` instead of the field type's source spelling, so
   two custom nested codecs spelled identically but emitting different bytes no
   longer share a hash.
 
@@ -1101,14 +1113,14 @@ overlapping output-vector term, and it excludes heap owned by `Key`/`T` values,
 metadata. Size with margin; see
 [Known Limitations §2.3](known-limitations.md#23-keyed-merge-and-compact-are-resident-only-and-explicitly-not-petabyte-scale).
 
-### 2.2 `VarveWriter::reserve_keyed_tail_slot` — never shipped
+### 2.2 `VarlitWriter::reserve_keyed_tail_slot` — never shipped
 
 **Added and removed inside the 0.4.0 cycle.** It has zero occurrences anywhere in
 the tree at 0.3.0, so nothing released could have called it. It went when the
 generated keyed writers' private tail maps were deleted (its own rustdoc admitted
 it could not prevent a later `Hash`/`Eq` from running after publication).
 
-(A *private* `VarveFile::reserve_keyed_tail_slot` still exists in the source; it is
+(A *private* `VarlitFile::reserve_keyed_tail_slot` still exists in the source; it is
 not `pub` and is not this item.)
 
 ### 2.3 `DiskIndexError::BatchPoisoned` — never shipped, and never reachable
@@ -1127,18 +1139,18 @@ release.
 
 ## 3. Changed signatures
 
-### 3.1 `VarveBlock` gains two required associated constants — **every manual `impl` stops compiling**
+### 3.1 `VarlitBlock` gains two required associated constants — **every manual `impl` stops compiling**
 
 `const SCHEMA_FINGERPRINT: u64` has no default. `const IS_KEYED: bool` has no
 default under the former `high-cardinality-dev` feature in 0.4.0 (and defaulted
 then to `false` otherwise). Since 0.10.0 it is mandatory in every build; see §H.
 
-Blocks produced by `#[derive(VarveBlock)]` or by `varve_format!` are unaffected —
+Blocks produced by `#[derive(VarlitBlock)]` or by `varlit_format!` are unaffected —
 the macros emit both constants.
 
 ```rust
 // Before (0.3.0) — a hand-written block
-impl VarveBlock for Reading {
+impl VarlitBlock for Reading {
     const ID: u32 = 7;
     const VERSION: u16 = 1;
     const KIND: BlockKind = BlockKind::Fixed;
@@ -1146,7 +1158,7 @@ impl VarveBlock for Reading {
 }
 
 // After (0.4.0)
-impl VarveBlock for Reading {
+impl VarlitBlock for Reading {
     const ID: u32 = 7;
     const VERSION: u16 = 1;
     const KIND: BlockKind = BlockKind::Fixed;
@@ -1165,7 +1177,7 @@ invented value fails at registration with
 `Error::BlockSchemaFingerprintMismatch`.
 
 A new marker, `traits::KeyedBlockContract<T>`, turns
-`impl VarveKeyedBlock` + `IS_KEYED = false` into a compile error at every keyed
+`impl VarlitKeyedBlock` + `IS_KEYED = false` into a compile error at every keyed
 use site.
 
 ### 3.2 `FormatSpec` gains two public fields — exhaustive struct literals break
@@ -1175,7 +1187,7 @@ pub block_identities: &'static [(u32, Option<Endian>, bool, u64)],
 pub matrix_fatal_forensics: bool,
 ```
 
-`FormatSpec::new`, the builder, and the `spec()` generated by `varve_format!` are
+`FormatSpec::new`, the builder, and the `spec()` generated by `varlit_format!` are
 unaffected. Only code constructing `FormatSpec { .. }` as an exhaustive literal
 needs an edit — add the fields, or use the builder.
 
@@ -1206,21 +1218,21 @@ handle types (18 signatures):
 
 | Method | 0.3.0 | 0.4.0 | On |
 | --- | --- | --- | --- |
-| `read_matrix_cell::<T>` | `&mut self` | `&self` | `VarveReader`, `VarveWriter`, `VarveFile` |
-| `matrix_cell_payload::<T>` | `&mut self` | `&self` | `VarveReader`, `VarveWriter`, `VarveFile` |
-| `read_matrix_aux` | `&mut self` | `&self` | `VarveReader`, `VarveWriter`, `VarveFile` |
-| `matrix_cell_status::<T>` | `&self` | `&self` (unchanged) | `VarveReader`, `VarveWriter`, `VarveFile` |
-| `matrix_aux_len` | `&self` | `&self` (unchanged) | `VarveReader`, `VarveWriter`, `VarveFile` |
-| `matrix_resume_signal` | `&self` | `&self` (unchanged) | `VarveReader`, `VarveWriter`, `VarveFile` |
+| `read_matrix_cell::<T>` | `&mut self` | `&self` | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
+| `matrix_cell_payload::<T>` | `&mut self` | `&self` | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
+| `read_matrix_aux` | `&mut self` | `&self` | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
+| `matrix_cell_status::<T>` | `&self` | `&self` (unchanged) | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
+| `matrix_aux_len` | `&self` | `&self` (unchanged) | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
+| `matrix_resume_signal` | `&self` | `&self` (unchanged) | `VarlitReader`, `VarlitWriter`, `VarlitFile` |
 
 **Three methods relaxed, and three were already `&self`.** `matrix_cell_payload`
 and `read_matrix_aux` are listed explicitly because an earlier version of this
 table omitted them, which read as though payload and aux reads still required
 exclusive access. They do not. That same earlier version put `matrix_cell_status`
 in the relaxed group, which was wrong in the other direction: it took `&self` on
-all three handle types in 0.3.0 already (verified against the `varve-core 0.3.0`
+all three handle types in 0.3.0 already (verified against the `varlit-core 0.3.0`
 source package), so it is not a signature change and needs no entry in your
-migration. `crates/varve/tests/matrix_concurrent_reads.rs` pins 15 of the 18
+migration. `crates/varlit/tests/matrix_concurrent_reads.rs` pins 15 of the 18
 signatures ("5 entry points x 3 handle types") by holding two shared borrows of a
 non-`mut` handle; `matrix_resume_signal` is the sixth entry point and was also
 already `&self`.
@@ -1234,8 +1246,8 @@ for the measured scaling and the Windows/Unix difference.
 
 ### 3.5 Smaller signature changes
 
-- `VarveFile::delete` / `VarveWriter::delete` gained a `T::Key: Eq + Hash` bound.
-  It is implied by `VarveKey`, so no practical caller breaks — **but the same call
+- `VarlitFile::delete` / `VarlitWriter::delete` gained a `T::Key: Eq + Hash` bound.
+  It is implied by `VarlitKey`, so no practical caller breaks — **but the same call
   also changed what it writes to disk. See §5.11.**
 - `ReadLimits` gained `max_keyed_tail_bytes` and `matrix_metadata_residency`.
   `ReadLimits` is `#[non_exhaustive]`, so the *type* change is additive — but
@@ -1246,7 +1258,7 @@ for the measured scaling and the Windows/Unix difference.
 
 `PackedBitmap` owns a `Vec<u8>` and therefore has no compile-time slot stride. It
 is still usable as a **variable** field. Inline matrix `SLOT_STRIDE` is now
-generated from `VarveEncode::WIRE_TYPE`, so a user type merely *spelled* `u32`
+generated from `VarlitEncode::WIRE_TYPE`, so a user type merely *spelled* `u32`
 can no longer be laundered through the syntactic pre-filter.
 
 ### 3.7 Materialization budget arithmetic
@@ -1269,13 +1281,13 @@ using variable field ids **above 63**, must add 8 bytes per such distinct id.
 | `FormatSpec::block_identities` / `with_block_identities` | per-block identity table folded into the computed schema hash |
 | `FormatSpec::matrix_fatal_forensics` / `with_matrix_fatal_forensics()` | opt-in to reading matrix data through `Fatal` recovery findings |
 | `traits::KeyedBlockContract<T>` | compile-time keyedness proof |
-| `VarveEncode::SCHEMA_ID` / `VarveDecode::SCHEMA_ID` | structural identity of a codec's bytes |
+| `VarlitEncode::SCHEMA_ID` / `VarlitDecode::SCHEMA_ID` | structural identity of a codec's bytes |
 | `file::{CREATION_NONCE_BLOCK_ID, KeyedMergeEstimate, ReplacePublicationFailure, classify_replace_publication_error, clear_stale_writer_lock, compact_keyed_files_with_key_limit, estimate_keyed_merge, merge_keyed_files_with_key_limit}` | key-limited merge/compact and publication-failure classification |
 | `merge::compact_keyed_file_with_key_limit` | |
 | `Encoder::encode_nested_to_vec` | caps a child encoder at the parent's remaining logical-payload budget |
 | `MatrixSidecarManifest::matrix_creation_nonce` | 16-byte per-create nonce binding a sidecar to one logical matrix creation |
 
-New `varve_format!` DSL keys: `key_index = disk | memory` as a block attribute,
+New `varlit_format!` DSL keys: `key_index = disk | memory` as a block attribute,
 and `keyed_tail` inside `limits { }`. (`disk_index_plan` is a generated
 associated function, not a DSL key.)
 
@@ -1379,7 +1391,7 @@ full — **including** under `with_matrix_fatal_forensics`. Forensic mode relaxe
 ### 5.5 Typed registration rejects contradictory endianness
 
 `Error::EndianMismatch` is raised at typed registration when a
-`VarveBlock::ENDIAN` contradicts the format's declaration for that block id.
+`VarlitBlock::ENDIAN` contradicts the format's declaration for that block id.
 Previously a manual type could request a block written big-endian through a
 little-endian implementation and read byte-swapped values.
 
@@ -1393,7 +1405,7 @@ little-endian implementation and read byte-swapped values.
   file now charges the structural peak of the keyed-tail map build, which is
   larger than the map it produces. A ceiling sized from the steady-state map can
   refuse an open that previously succeeded.
-- **`PackedBitmap::new` / `get` / `set` / `decode_varve`** now return
+- **`PackedBitmap::new` / `get` / `set` / `decode_varlit`** now return
   `Error::InvalidCanonicalEncoding` or `Error::LengthOverflow`, and a non-matrix
   allocation resource, instead of `Error::InvalidMatrixLayout`.
 
@@ -1431,7 +1443,7 @@ It never deletes anything.
 The sibling of §5.2, and it is here for the same reason: **the on-disk chain shape
 changed at an unchanged signature.**
 
-`VarveFile::delete` / `VarveWriter::delete` previously wrote
+`VarlitFile::delete` / `VarlitWriter::delete` previously wrote
 `prev_same_key_offset = None` on the tombstone, truncating the physical chain for
 that key. They now resolve the predecessor and maintain the chain, routing through
 the same maintained keyed path as `push_keyed`.
@@ -1497,10 +1509,10 @@ let limits = ReadLimits::STANDARD
     .with_max_matrix_bitmap_bytes(n);
 ```
 
-There is no `varve_format!` DSL key for residency (`limits { }` takes a fixed
+There is no `varlit_format!` DSL key for residency (`limits { }` takes a fixed
 list of integer keys and nothing else), so this is the only route to
 `Lazy` at an entry point that also takes limits. See
-[Known Limitations §1.6](known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varve_format-dsl-key).
+[Known Limitations §1.6](known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varlit_format-dsl-key).
 
 ---
 
@@ -1510,7 +1522,7 @@ list of integer keys and nothing else), so this is the only route to
 `CrcValidEvidence::new(bits, complete)` were removed. They are listed here only to
 forestall the question.
 
-These types are reachable from outside `varve-core` **only** through the
+These types are reachable from outside `varlit-core` **only** through the
 `#[doc(hidden)]`, `scalable-fault-injection`-gated `enforcement_probe` module,
 whose own rustdoc states "This is not API". No stable public surface changed, and
 no downstream crate can have depended on them. See
@@ -1523,7 +1535,7 @@ no downstream crate can have depended on them. See
 1. Regenerate every matrix file, matrix sidecar and disk-index sidecar. Recreate
    or re-derive anything pinned with a computed schema hash.
    ("Read this first" above, and §1)
-2. Add `IS_KEYED` and `SCHEMA_FINGERPRINT` to every **manual** `impl VarveBlock`.
+2. Add `IS_KEYED` and `SCHEMA_FINGERPRINT` to every **manual** `impl VarlitBlock`.
    (§3.1)
 3. Fix any exhaustive `FormatSpec { .. }` literal. (§3.2)
 4. Add `parent_sync` or `..` to any `PublishedButRebindFailed` destructuring.

@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use varve_fuzz::{FuzzCell, FuzzCellKey, FuzzMatrixFormat, FuzzMatrixFormatDims, write_fuzz_file};
+use varlit_fuzz::{FuzzCell, FuzzCellKey, FuzzMatrixFormat, FuzzMatrixFormatDims, write_fuzz_file};
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 4 {
@@ -12,7 +12,7 @@ fuzz_target!(|data: &[u8]| {
     if data[0] & 1 != 0 {
         use std::io::{Seek, SeekFrom, Write};
         let dir = tempfile::tempdir().expect("fuzz directory");
-        let path = dir.path().join("matrix.varve");
+        let path = dir.path().join("matrix.varlit");
         let mut writer = FuzzMatrixFormat::create_writer_with_dims(
             &path,
             FuzzMatrixFormatDims { row: 2, column: 2 },

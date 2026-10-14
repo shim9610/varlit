@@ -41,7 +41,7 @@ for case in report['cases']:
              peak_rss_bytes=w['peak_rss_bytes'],kernel_read_bytes=w['child_read_bytes'],kernel_write_bytes=w['child_write_bytes'],
              reader_checks=sum(e['latency']['count'] for e in readers),
              verify_seconds=verify['elapsed_seconds'],point_seconds=point['elapsed_seconds'],
-             sidecar_bytes=sidecar['logical_bytes'],native_bytes=next(f['logical_bytes'] for f in case['files'] if f['name']=='data.varve'),
+             sidecar_bytes=sidecar['logical_bytes'],native_bytes=next(f['logical_bytes'] for f in case['files'] if f['name']=='data.varlit'),
              files=case['files'],compact=compact,cleanup_verified=case['cleanup_verified'],delete_seconds=case['delete_seconds'],
              signature=dict(records=verification['records'],markers=verification['markers'],payload_bytes=verification['payload_bytes'],keys_checked=lookups['keys_checked']))
     rows.append(row)

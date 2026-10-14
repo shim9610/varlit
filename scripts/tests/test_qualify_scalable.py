@@ -12,7 +12,7 @@ SPEC = importlib.util.spec_from_file_location("qualify", Path(__file__).resolve(
 qualify = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualify)
 
-PASS = "test result: ok. 1 passed; 0 failed; 0 ignored;\nVarve test artifact cleanup: verified empty\n"
+PASS = "test result: ok. 1 passed; 0 failed; 0 ignored;\nVarlit test artifact cleanup: verified empty\n"
 
 
 class VerdictTests(unittest.TestCase):

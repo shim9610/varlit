@@ -27,14 +27,14 @@ def main():
     expected_crates = {
         "crossbeam-skiplist", "crossbeam-epoch", "crossbeam-utils"
     }
-    with tempfile.TemporaryDirectory(prefix="varve-git-consumer-") as directory:
+    with tempfile.TemporaryDirectory(prefix="varlit-git-consumer-") as directory:
         consumer = Path(directory)
         (consumer / "src").mkdir()
         shutil.copyfile(ROOT / "tools/public-api-fixture/src/main.rs", consumer / "src/main.rs")
         (consumer / "Cargo.toml").write_text(
-            '[package]\nname = "varve-git-consumer"\nversion = "0.0.0"\n'
+            '[package]\nname = "varlit-git-consumer"\nversion = "0.0.0"\n'
             'edition = "2024"\npublish = false\n\n[dependencies]\n'
-            f'varve = {{ git = {json.dumps(repository.as_uri())}, '
+            f'varlit = {{ git = {json.dumps(repository.as_uri())}, '
             f'rev = "{revision}", features = ["compression-zstd", "integrity"] }}\n'
             '\n[workspace]\n', encoding="utf-8"
         )

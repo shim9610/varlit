@@ -1,7 +1,7 @@
-# API2-05 regression fixture: a downstream crate that renames the `varve`
+# API2-05 regression fixture: a downstream crate that renames the `varlit`
 # dependency. Deliberately NOT a workspace member — a real consumer resolves
 # the facade through its own manifest, which is exactly what
-# `proc_macro_crate::crate_name("varve")` inspects at macro-expansion time.
+# `proc_macro_crate::crate_name("varlit")` inspects at macro-expansion time.
 # CI builds and runs this crate (job `renamed-dependency`); trybuild cannot
 # express a renamed dependency because it reuses the host crate's dep graph.
 [package]
@@ -11,10 +11,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# The rename under test. There must be NO `extern crate vv as varve`
+# The rename under test. There must be NO `extern crate vv as varlit`
 # workaround anywhere in this crate.
-vv = { package = "varve", path = "../../crates/varve", default-features = false }
+vv = { package = "varlit", path = "../../crates/varlit", default-features = false }
 
-# Detach from the repository workspace: this crate must resolve `varve` the
+# Detach from the repository workspace: this crate must resolve `varlit` the
 # way an external consumer does.
 [workspace]

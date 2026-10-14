@@ -1,6 +1,18 @@
 # Changelog
 
-All notable repository releases are documented here. Varve follows semantic
+## Unreleased — Varlit rename
+
+- Rename the project, crates and Rust API from Varve to Varlit. Use `varlit`,
+  `varlit-core`, `varlit-macros`, `Varlit*`, `varlit_format!`, `#[varlit(...)]`,
+  `encode_varlit` and `decode_varlit`. Tool names and environment variables use
+  `VARLIT_*`; see the [migration notes](docs/api-changes.md#varlit-rename).
+- Rename the public repository to `shim9610/varlit`; update links and public-only
+  workflow conditions.
+- Keep versioned binary markers, hash domains, lock metadata and historical tags
+  unchanged. This rename does not change the storage format or publish packages
+  to crates.io.
+
+All notable repository releases are documented here. Varlit (formerly Varve) follows semantic
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 

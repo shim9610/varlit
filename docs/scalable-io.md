@@ -1,7 +1,7 @@
 # Scalable Stream And Disk-Index I/O
 
 This guide covers the default stream/indexed public API. It is the
-Varve path intended for very large append logs. Its normal open and append
+Varlit path intended for very large append logs. Its normal open and append
 costs do not grow with native file size or record count.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
@@ -10,7 +10,7 @@ APIs remain useful for bounded files. By default they scan the file and retain a
 
 Opt-in policies narrow that gap without closing it. `segment_on_flush` makes
 open frame one record per commit point instead of one per record;
-`open_digest_on_flush` plus `VarveFile::open_readonly_lazy` makes open frame one
+`open_digest_on_flush` plus `VarlitFile::open_readonly_lazy` makes open frame one
 record and retain **nothing**, leaving the caller to build only the part of the
 index its question needs with `record_map`. Measured on a 50,000-record file:
 100,316 read syscalls at open by default, 516 chained, 20 from a digest.
@@ -40,9 +40,9 @@ not establish power-loss safety or long-duration endurance.
 ## Declare The Policy
 
 ```rust
-use varve::varve_format;
+use varlit::varlit_format;
 
-varve_format! {
+varlit_format! {
     pub format Capture {
         magic: b"CAPT";
         version: 1;
@@ -176,13 +176,13 @@ are appended at a confirmed sync boundary. File growth therefore depends on
 changed chunks and sync frequency, not just the number of enum variants.
 
 Generated non-keyed block methods continue to work in a
-`keyed_offset_chain` format. Generated `VarveBlock` implementations carry an
+`keyed_offset_chain` format. Generated `VarlitBlock` implementations carry an
 `IS_KEYED` type fact so the runtime rejects chain-unsafe low-level batch calls
 without rescanning the file.
 
-Manual `VarveBlock` implementations
+Manual `VarlitBlock` implementations
 must declare `const IS_KEYED: bool`; there is no chain-unsafe default. Set it
-to `true` for every manual `VarveKeyedBlock` implementation and `false`
+to `true` for every manual `VarlitKeyedBlock` implementation and `false`
 otherwise. Omitting it is a compile error.
 
 ## Choose One File Mode
@@ -200,10 +200,10 @@ tails; they do not create key rows.
 ## Indexed Write And Read
 
 ```rust
-use varve::{BatchOptions, DiskIndexOptions};
+use varlit::{BatchOptions, DiskIndexOptions};
 
 let mut writer = Capture::create_indexed_writer(
-    "capture.varve",
+    "capture.varlit",
     DiskIndexOptions::default(),
 )?;
 
@@ -221,7 +221,7 @@ assert_eq!(report.records, 1_000_000);
 writer.sync()?;
 
 let reader = Capture::open_indexed_reader(
-    "capture.varve",
+    "capture.varlit",
     DiskIndexOptions::default(),
 )?;
 
@@ -229,7 +229,7 @@ let frame = reader.get_frame(&FrameKey::from_values((2, 3))?)?;
 let all_runs = reader.runs()?;       // explicit lazy native scan
 let all_events = reader.events()?;  // explicit lazy native scan
 let verified = reader.verify_all()?; // explicit eager full validation
-# Ok::<(), varve::Error>(())
+# Ok::<(), varlit::Error>(())
 ```
 
 `get_frame` performs one B-tree lookup and one bounded positional native
@@ -245,10 +245,10 @@ native scanner; their cost is linear in the selected snapshot.
 For a format/file that does not need disk-key lookup:
 
 ```rust
-use varve::{BatchOptions, StreamOptions};
+use varlit::{BatchOptions, StreamOptions};
 
 let mut writer = Capture::create_stream_writer(
-    "capture-stream.varve",
+    "capture-stream.varlit",
     StreamOptions::default(),
 )?;
 
@@ -259,11 +259,11 @@ let report = writer.push_runs(
 writer.sync()?;
 
 let reader = Capture::open_stream_reader(
-    "capture-stream.varve",
+    "capture-stream.varlit",
     StreamOptions::default(),
 )?;
 let runs = reader.runs()?;
-# Ok::<(), varve::Error>(())
+# Ok::<(), varlit::Error>(())
 ```
 
 The stream writer does not expose `push_frame` for this declaration because
@@ -297,13 +297,13 @@ append limit.
 
 The paged `.vks`/`.vki` backing file is deliberately not rejected by
 `ResourceLimits::max_sidecar_len`: opening it does not materialize its full
-length. That limit still applies to Varve sidecar formats that are read into
+length. That limit still applies to Varlit sidecar formats that are read into
 memory, such as matrix/adapter envelopes. Scalable sidecar safety instead
 comes from bounded native pages and private caches, fixed metadata rows, bounded key rows,
 and checked native extents.
 
 The runtime retains declared block tails and bounded buffers, not one RAM entry
-per record or key. Key cardinality grows `.vki`, not a Varve `HashMap`.
+per record or key. Key cardinality grows `.vki`, not a Varlit `HashMap`.
 
 ## Scalar Append And The Bounded Sidecar Transaction
 
@@ -331,7 +331,7 @@ than linear.
 ## Historical Distinct Keys And Reclaim
 
 `historical_distinct_keys()` is exposed on `DiskIndexStore`, `DiskIndexSnapshot`,
-`VarveIndexedReader`, and `VarveIndexedWriter`. It reports the sidecar capacity
+`VarlitIndexedReader`, and `VarlitIndexedWriter`. It reports the sidecar capacity
 metric: the number of distinct keys the `.vki` has *ever* held (`K-ever`), not
 the current live-key count.
 
@@ -406,8 +406,8 @@ parsing error text.
 ### Primary Generation Binding
 
 A sidecar is bound to one logical *generation* of its primary, not merely to one
-pathname or one OS file object. Every `VarveStreamWriter::create` /
-`VarveIndexedWriter::create` stamps a 128-bit random nonce as the primary's
+pathname or one OS file object. Every `VarlitStreamWriter::create` /
+`VarlitIndexedWriter::create` stamps a 128-bit random nonce as the primary's
 first record, under the reserved internal block id `CREATION_NONCE_BLOCK_ID`.
 The sidecar records a primary-generation witness that folds that nonce together
 with the primary's length and a checksum over its bounded leading window (4 KiB;
@@ -433,7 +433,7 @@ region, the window is exactly what it was.
 The nonce costs one record at create and nothing per append. Reading it is one
 bounded point read of the leading record, performed only at create and open. A
 primary that carries no nonce — a legacy file, or one bootstrapped from a
-resident `VarveFile` — is reported as "no nonce" rather than as an error, which
+resident `VarlitFile` — is reported as "no nonce" rather than as an error, which
 is fail-closed: a primary that *was* created with one recorded a witness that
 folds it in, so answering "none" can only produce a different witness and refuse
 the sidecar.
@@ -473,7 +473,7 @@ and the pending state is a durability warning, not a rollback.
 
 ```rust
 use std::num::NonZeroU64;
-use varve::{
+use varlit::{
     ScanCancellationToken, ScanOptions, ScanProgressOptions, ScanProgressPhase,
 };
 
@@ -496,7 +496,7 @@ let records = reader.verify_all_with_progress(scan, |progress| {
         );
     }
 })?;
-# Ok::<(), varve::Error>(())
+# Ok::<(), varlit::Error>(())
 ```
 
 The default callback cadence is every 16,384 records or 16 MiB, whichever is
@@ -521,13 +521,13 @@ lock. After independently establishing that the recorded process has exited,
 the generated format exposes an O(1) lock-only recovery operation:
 
 ```rust
-use varve::WriterLockBreakPolicy;
+use varlit::WriterLockBreakPolicy;
 
 Capture::clear_stale_writer_lock(
-    "capture.varve",
+    "capture.varlit",
     WriterLockBreakPolicy::BreakIfProcessAbsent,
 )?;
-# Ok::<(), varve::Error>(())
+# Ok::<(), varlit::Error>(())
 ```
 
 This operation does not open or scan the native data file. Every cooperating
@@ -651,8 +651,8 @@ These are regression values for one machine, not cross-platform guarantees.
 Run the probe with:
 
 ```powershell
-cargo test --release -p varve `
-  --test high_cardinality million_unique_keys_keep_varve_resident_maps_empty `
+cargo test --release -p varlit `
+  --test high_cardinality million_unique_keys_keep_varlit_resident_maps_empty `
   -- --ignored --nocapture
 ```
 

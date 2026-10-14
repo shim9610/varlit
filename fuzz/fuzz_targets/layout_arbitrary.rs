@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use varve_fuzz::{FuzzLayoutFormat, write_fuzz_file};
+use varlit_fuzz::{FuzzLayoutFormat, write_fuzz_file};
 
 fuzz_target!(|data: &[u8]| {
     let Some(path) = write_fuzz_file("layout", data) else {

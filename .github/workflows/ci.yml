@@ -48,12 +48,12 @@ env:
 
 jobs:
   fmt:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
@@ -75,15 +75,15 @@ jobs:
   # `--all-features` catches a conflict between any two — the gap is a defect
   # that needs a specific pair or triple of features and is invisible under
   # both, which no job here claims to cover. `cargo clippy` uses the workspace
-  # rustc wrapper, so `-p varve` also lints `varve-core` and `varve-macros`
+  # rustc wrapper, so `-p varlit` also lints `varlit-core` and `varlit-macros`
   # under the exact feature set the umbrella crate enables.
   feature-matrix:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: clippy (${{ matrix.features.name }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -91,27 +91,27 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         features:
-          - { name: no-default, flags: "-p varve --no-default-features" }
-          - { name: default, flags: "-p varve" }
+          - { name: no-default, flags: "-p varlit --no-default-features" }
+          - { name: default, flags: "-p varlit" }
           - {
               name: integrity,
-              flags: "-p varve --no-default-features --features integrity",
+              flags: "-p varlit --no-default-features --features integrity",
             }
           - {
               name: mmap,
-              flags: "-p varve --no-default-features --features mmap",
+              flags: "-p varlit --no-default-features --features mmap",
             }
           - {
               name: zero-copy,
-              flags: "-p varve --no-default-features --features zero-copy",
+              flags: "-p varlit --no-default-features --features zero-copy",
             }
           - {
               name: compression-zstd,
-              flags: "-p varve --no-default-features --features compression-zstd",
+              flags: "-p varlit --no-default-features --features compression-zstd",
             }
           - {
               name: scalable-fault-injection,
-              flags: "-p varve --no-default-features --features scalable-fault-injection",
+              flags: "-p varlit --no-default-features --features scalable-fault-injection",
             }
           - { name: all-features, flags: "--workspace --all-features" }
     steps:
@@ -130,14 +130,14 @@ jobs:
   # sets; the feature matrix above type-checks and lints every other
   # combination, and `feature-tests` below runs the configurations that have
   # behaviour no other job can reach. Tests go through the hygiene runner
-  # (`tools/varve-test-runner`) so leaked temp artifacts fail CI.
+  # (`tools/varlit-test-runner`) so leaked temp artifacts fail CI.
   test:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: test (${{ matrix.features.name }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -163,8 +163,8 @@ jobs:
           # while they passed on the pinned floor. This job exists to catch a break
           # on a newer compiler, not a reworded diagnostic, so it skips them; the
           # pinned `msrv` job below runs the same suite with them enabled.
-          VARVE_SKIP_UI_SNAPSHOTS: 1
-        run: cargo run --locked -p varve-test-runner -- test --locked ${{ matrix.features.flags }}
+          VARLIT_SKIP_UI_SNAPSHOTS: 1
+        run: cargo run --locked -p varlit-test-runner -- test --locked ${{ matrix.features.flags }}
 
   # CI-01: the two configurations below own tests that run in NO other job.
   # `compression.rs` gates behaviour on `compression-zstd` *without* `integrity`
@@ -178,12 +178,12 @@ jobs:
   # suite under each singleton — would multiply CI time for combinations the two
   # jobs above already cover, without reaching any additional assertion.
   feature-tests:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: test (${{ matrix.features.name }}, ubuntu-latest)
     runs-on: ubuntu-latest
     strategy:
@@ -192,11 +192,11 @@ jobs:
         features:
           - {
               name: compression-without-integrity,
-              flags: "-p varve --no-default-features --features compression-zstd --test compression",
+              flags: "-p varlit --no-default-features --features compression-zstd --test compression",
             }
           - {
               name: integrity-without-compression,
-              flags: "-p varve --no-default-features --features integrity --test compression",
+              flags: "-p varlit --no-default-features --features integrity --test compression",
             }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,8 +214,8 @@ jobs:
           # while they passed on the pinned floor. This job exists to catch a break
           # on a newer compiler, not a reworded diagnostic, so it skips them; the
           # pinned `msrv` job below runs the same suite with them enabled.
-          VARVE_SKIP_UI_SNAPSHOTS: 1
-        run: cargo run --locked -p varve-test-runner -- test --locked ${{ matrix.features.flags }}
+          VARLIT_SKIP_UI_SNAPSHOTS: 1
+        run: cargo run --locked -p varlit-test-runner -- test --locked ${{ matrix.features.flags }}
 
   # CI-02: the packages declare `rust-version = 1.95`. Every other job installs
   # moving stable, so once stable advances past the floor nothing proves the
@@ -223,12 +223,12 @@ jobs:
   # and tests against it, which is what makes the manifest claim true rather
   # than aspirational.
   msrv:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     # Literal, not `${{ env.MSRV }}`: the `env` context is not available in
     # `jobs.<id>.name`. The value is asserted against the manifests below.
     name: msrv (1.95.0)
@@ -257,22 +257,22 @@ jobs:
       - name: cargo check
         run: cargo check --locked --workspace --all-targets --all-features
       - name: cargo test
-        run: cargo run --locked -p varve-test-runner -- test --locked --workspace --all-features
+        run: cargo run --locked -p varlit-test-runner -- test --locked --workspace --all-features
 
-  # API2-05 regression guard: a downstream crate that renames the varve
-  # dependency (`vv = { package = "varve", … }`) must compile and run with no
+  # API2-05 regression guard: a downstream crate that renames the varlit
+  # dependency (`vv = { package = "varlit", … }`) must compile and run with no
   # `extern crate` workaround. trybuild cannot express a renamed dependency
   # (it reuses the host crate's dependency graph), so this is a standalone
   # fixture crate outside the workspace; unit tests on the token-rewrite
-  # helper demonstrably missed the `IDENT: ::varve::…` expansion shape that
+  # helper demonstrably missed the `IDENT: ::varlit::…` expansion shape that
   # only a real downstream build exercises.
   renamed-dependency:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: renamed-dependency fixture
     runs-on: ubuntu-latest
     steps:
@@ -296,14 +296,14 @@ jobs:
   # macro began rejecting documented public API. No in-workspace test noticed,
   # because none of them derived a block over the public surface the way a
   # consumer does. This crate is outside the workspace for the same reason
-  # `rename-fixture` is: it must resolve `varve` through its own manifest.
+  # `rename-fixture` is: it must resolve `varlit` through its own manifest.
   public-api:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: public-api fixture
     runs-on: ubuntu-latest
     steps:
@@ -347,12 +347,12 @@ jobs:
   # longer ```ignore — while they were, they compiled in no job at all and were
   # free to drift from the macros they document.
   rustdoc:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: rustdoc (-D warnings)
     runs-on: ubuntu-latest
     env:
@@ -372,12 +372,12 @@ jobs:
 
   # Release gate: audit/deny failures block the merge.
   supply-chain:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: deny + audit
     runs-on: ubuntu-latest
     steps:
@@ -396,7 +396,7 @@ jobs:
 
   # F-09 negative policy fixture. `deny.toml` enables `allow-wildcard-paths`,
   # which is a CATEGORY allowance, not an allowance for the single
-  # `varve-macros` dev edge that motivated it. A passing `cargo deny check`
+  # `varlit-macros` dev edge that motivated it. A passing `cargo deny check`
   # proves the accepted shape is accepted; it proves nothing about what is
   # still refused, so the two shapes the comment in `deny.toml` claims are
   # DENIED are asserted here by introducing each one and requiring the gate to
@@ -406,12 +406,12 @@ jobs:
   # Each mutation runs on a fresh checkout, so nothing is restored and no
   # ordering between the two steps matters.
   dependency-policy-fixture:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: deny negative fixture
     runs-on: ubuntu-latest
     steps:
@@ -419,8 +419,8 @@ jobs:
       - name: Introduce a registry wildcard in a published crate
         run: |
           set -euo pipefail
-          sed -i 's|^proptest\.workspace = true$|proptest = "*"|' crates/varve/Cargo.toml
-          grep -q 'proptest = "\*"' crates/varve/Cargo.toml
+          sed -i 's|^proptest\.workspace = true$|proptest = "*"|' crates/varlit/Cargo.toml
+          grep -q 'proptest = "\*"' crates/varlit/Cargo.toml
       - id: registry-wildcard
         continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -433,9 +433,9 @@ jobs:
       - name: Restore, then introduce a non-dev path wildcard in a published crate
         run: |
           set -euo pipefail
-          git checkout -- crates/varve/Cargo.toml
-          sed -i 's|^varve-core = { path = "\.\./varve-core", version = "[^"]*" }$|varve-core = { path = "../varve-core" }|' crates/varve/Cargo.toml
-          grep -q '^varve-core = { path = "\.\./varve-core" }$' crates/varve/Cargo.toml
+          git checkout -- crates/varlit/Cargo.toml
+          sed -i 's|^varlit-core = { path = "\.\./varlit-core", version = "[^"]*" }$|varlit-core = { path = "../varlit-core" }|' crates/varlit/Cargo.toml
+          grep -q '^varlit-core = { path = "\.\./varlit-core" }$' crates/varlit/Cargo.toml
       - id: path-wildcard
         continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -454,12 +454,12 @@ jobs:
   # (an unlocked cargo-deny metadata resolution is exactly how the staleness
   # was masked locally).
   fuzz-supply-chain:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: fuzz workspace (locked)
     runs-on: ubuntu-latest
     steps:
@@ -499,7 +499,7 @@ jobs:
   # Keep source notices and a real downstream consumer covered. crates.io
   # archive publication is not supported by the direct Git dependencies.
   source-contents:
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: source contents
     runs-on: ubuntu-latest
     steps:
@@ -508,12 +508,12 @@ jobs:
         run: |
           set -euo pipefail
           git ls-files --error-unmatch README.md LICENSE-MIT LICENSE-APACHE
-          for package in varve varve-core varve-macros; do
+          for package in varlit varlit-core varlit-macros; do
             git ls-files --error-unmatch "crates/${package}/LICENSE-MIT" "crates/${package}/LICENSE-APACHE"
           done
 
   git-consumer:
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: Git consumer + pinned dependency sources
     runs-on: ubuntu-latest
     steps:
@@ -532,12 +532,12 @@ jobs:
   # fixture that exists locally but was never committed fails here
   # (REL-01 regression guard).
   clean-archive:
-    # CI runs on the public repository only. `varve-dev` is private, so runner
+    # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
     # workflow file can live in a tree that is pushed to both remotes without
     # ever spending a paid minute. Every job carries it because GitHub has no
     # workflow-level `if`.
-    if: github.repository == 'shim9610/varve'
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: clean source archive
     runs-on: ubuntu-latest
     steps:
@@ -546,28 +546,28 @@ jobs:
         with:
           toolchain: stable
       - name: Unpack tracked files only
-        run: git archive --format=tar --prefix=varve-archive/ HEAD | tar -x -C "$RUNNER_TEMP"
+        run: git archive --format=tar --prefix=varlit-archive/ HEAD | tar -x -C "$RUNNER_TEMP"
       - name: cargo metadata
-        working-directory: ${{ runner.temp }}/varve-archive
+        working-directory: ${{ runner.temp }}/varlit-archive
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
       - name: cargo check
-        working-directory: ${{ runner.temp }}/varve-archive
+        working-directory: ${{ runner.temp }}/varlit-archive
         run: cargo check --workspace --all-targets --all-features --locked
       # The fuzz workspace is not a root workspace member, so the two steps
       # above never touch it. Its tracked-file completeness and lockfile
       # freshness need the same clean-archive treatment (REL-01).
       - name: cargo metadata (fuzz workspace)
-        working-directory: ${{ runner.temp }}/varve-archive/fuzz
+        working-directory: ${{ runner.temp }}/varlit-archive/fuzz
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: cargo check (fuzz workspace)
-        working-directory: ${{ runner.temp }}/varve-archive/fuzz
+        working-directory: ${{ runner.temp }}/varlit-archive/fuzz
         run: cargo check --locked --all-targets
       # The two out-of-workspace fixtures are tracked files too, and neither of
       # the checks above resolves them. A fixture whose sources or lockfile were
       # never committed must fail here, not in its own job on the next run.
       - name: cargo metadata (rename fixture)
-        working-directory: ${{ runner.temp }}/varve-archive/tools/rename-fixture
+        working-directory: ${{ runner.temp }}/varlit-archive/tools/rename-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: cargo metadata (public-api fixture)
-        working-directory: ${{ runner.temp }}/varve-archive/tools/public-api-fixture
+        working-directory: ${{ runner.temp }}/varlit-archive/tools/public-api-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null

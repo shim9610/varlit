@@ -1,5 +1,0 @@
-error: varve field_id must be non-zero
- --> tests/ui/fail_zero_field_id.rs:7:5
-  |
-7 |     value: u32,
-  |     ^^^^^

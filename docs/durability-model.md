@@ -9,7 +9,7 @@ do not change the matrix ordered-barrier or transaction-marker visibility rules.
 
 ## Default Policy
 
-Without an ordered barrier policy, matrix writers follow the existing Varve
+Without an ordered barrier policy, matrix writers follow the existing Varlit
 durability model:
 
 - writes may be buffered
@@ -28,7 +28,7 @@ path generation unchanged, with the single Windows exception of the typed
 indeterminate state described below. An already-open reader remains bound to its retained
 file object and captured logical EOF rather than reopening the pathname.
 If publication succeeds but the writer cannot reopen the published pathname,
-Varve returns `PublishedButRebindFailed` and poisons that writer. This is not a
+Varlit returns `PublishedButRebindFailed` and poisons that writer. This is not a
 publication rollback: callers must reopen and reconcile instead of blindly
 retrying the operation. When the parent-directory sync for that same
 publication also failed, the variant carries both facts — see "Two Durability
@@ -94,7 +94,7 @@ This is a behaviour change: a first `sync` on a created file can now return
 ## Single-Writer Lock On The Native File Object
 
 The authoritative single-writer guard is an OS lock held on the open native
-file *object*, not on a path-derived marker. On Windows Varve takes an exclusive
+file *object*, not on a path-derived marker. On Windows Varlit takes an exclusive
 `LockFileEx` (`LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`) over a
 one-byte range at a reserved offset that never overlaps real data, so ordinary
 readers are unaffected. On Unix it takes an advisory exclusive lock on the same
@@ -122,7 +122,7 @@ stale.
 Atomic replacement renames or `ReplaceFileW`s the validated generation into
 place and then syncs the parent directory. The rename is the publication point:
 once it returns, the pathname already names the new generation. A parent-sync
-error afterward therefore cannot mean "original unchanged". Varve models the two
+error afterward therefore cannot mean "original unchanged". Varlit models the two
 outcomes explicitly rather than letting a late error escape before rebinding:
 
 - On a parent-sync failure after a successful rename, the writer is first
@@ -172,11 +172,11 @@ platform):
   files retain their original names and the temp may be deleted.
 - `ERROR_UNABLE_TO_MOVE_REPLACEMENT` (1176) and
   `ERROR_UNABLE_TO_MOVE_REPLACEMENT_2` (1177) can leave the two files' names,
-  streams, and attributes partially moved. Varve captures the replacement's OS
+  streams, and attributes partially moved. Varlit captures the replacement's OS
   object identity before the call and reconciles on 1176/1177: if the target
   pathname already resolves to the replacement object, the publication is
   treated as complete and proceeds through the normal rebind path. Otherwise
-  Varve returns the typed `Error::ReplacePublicationIndeterminate`: the
+  Varlit returns the typed `Error::ReplacePublicationIndeterminate`: the
   replacement temp file is preserved for reconciliation, and a writer bound to
   the target is poisoned so a blind retry is impossible. Callers must inspect
   the pathname and the preserved temp separately before acting.
@@ -196,8 +196,8 @@ create, stream bootstrap, disk-index rebuild and compaction), which surface the 
 while preserving the already-published sidecar instead of silently discarding
 it.
 
-Exclusive-create constructors (`VarveFile::create_new`,
-`VarveWriter::create_new`, and the matrix `create_new_with_dims` pair) open
+Exclusive-create constructors (`VarlitFile::create_new`,
+`VarlitWriter::create_new`, and the matrix `create_new_with_dims` pair) open
 with `create_new`, never truncating or reusing an existing path; they fail
 with an `AlreadyExists` I/O error instead. All create paths bind the
 single-writer object lock before destructive initialization: open without
@@ -211,13 +211,13 @@ exclusion, including mmap and raw references.
 
 It carries a second requirement that F-02 made explicit: on a
 `keyed_offset_chain` format, the caller must **not change the record's key**.
-The entry point takes `T: VarveBlock`, which exposes no key, so this cannot be
+The entry point takes `T: VarlitBlock`, which exposes no key, so this cannot be
 checked at that signature, and unlike the copy-on-write paths there is no new
 generation in which the chain could be rebuilt — records appended after the
 target already carry `prev_same_key_offset` pointers into it, and rewriting its
 key in place would leave them linking a record that now claims a different key.
 Ordinary keyed replacement enforces the same-key contract through
-`VarveReplaceBlock::validate_replacement`; here it is part of the unsafe
+`VarlitReplaceBlock::validate_replacement`; here it is part of the unsafe
 contract.
 
 What the method guarantees regardless of whether that contract is honoured is
@@ -318,12 +318,12 @@ sees those changes only after explicit generation publication.
 
 The ordered barrier is opt-in per call rather than a format declaration, and is
 intended for workflows that emit live progress only after durable commit.
-`VarveFile::write_matrix_cell_durable(key, value, hook)` runs the sequence with
+`VarlitFile::write_matrix_cell_durable(key, value, hook)` runs the sequence with
 file-handle `sync_data`/`sync_all`;
 `write_matrix_cell_durable_with_barrier(key, value, &mut barrier, hook)`
 substitutes a caller-supplied `MatrixDurabilityBarrier` for the two sync phases.
-There is no `durability:` key in `varve_format!` — the macro refuses one with
-`unsupported varve_format key` — and the hook is a closure argument rather than a
+There is no `durability:` key in `varlit_format!` — the macro refuses one with
+`unsupported varlit_format key` — and the hook is a closure argument rather than a
 declared option.
 
 The durable cell API runs:
@@ -354,7 +354,7 @@ pub struct MatrixCommitEvent {
 }
 ```
 
-Hook behavior is caller-owned. Varve should not interpret progress messages,
+Hook behavior is caller-owned. Varlit should not interpret progress messages,
 network delivery, UI updates, or domain side effects.
 
 If the hook fails after durable commit, the data remains committed. The error is
@@ -390,7 +390,7 @@ their source to keep `Error` small, so constructing either one allocates twice
 allocation at each branch: both children terminated on a 56-byte allocation
 while the reopened file contained the committed values.
 
-Varve has one policy on allocator failure, and it applies to every contract in
+Varlit has one policy on allocator failure, and it applies to every contract in
 this document, not only to the matrix ones:
 
 - **Content-sized allocations** — anything whose size is chosen by file bytes,
@@ -404,7 +404,7 @@ this document, not only to the matrix ones:
   own compile-time shape, such as the two boxes a published-outcome variant
   holds — use ordinary infallible allocation. `Box::new` has no fallible form,
   and the Rust default is to abort the process when the allocator refuses.
-  Varve does not pretend otherwise.
+  Varlit does not pretend otherwise.
 
 The division matters because only a content-sized allocation is one a producer
 of the input can steer, which is why that class carries the ceilings and the

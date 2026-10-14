@@ -1,0 +1,369 @@
+//! Thread ownership, explicit snapshot retention, and cold-open writer admission.
+
+use std::sync::{
+    Barrier,
+    atomic::{AtomicBool, Ordering},
+};
+use varlit::{BatchOptions, DiskIndexError, DiskIndexOptions, Error, StreamOptions, varlit_format};
+
+varlit_format! {
+    pub format Managed {
+        magic: b"MGED";
+        version: 1;
+        schema_hash: computed;
+        index: keyed_offset_chain;
+        blocks { fixed Item(id = 1, key = [key], key_index = disk) { key: u64, value: u64 } }
+    }
+}
+varlit_format! {
+    pub format Feed {
+        magic: b"MGFD";
+        version: 1;
+        schema_hash: computed;
+        index: block_offset_chain;
+        blocks { fixed Sample(id = 1) { value: u64 } }
+    }
+}
+
+#[test]
+fn moving_reader_with_live_local_cursors_keeps_positions_independent() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("positions.varlit");
+    let options = DiskIndexOptions::default();
+    let mut writer = Managed::create_indexed_writer(&path, options)?;
+    writer
+        .push_items(
+            (0..10000).map(|key| Item {
+                key,
+                value: key * 3,
+            }),
+            BatchOptions::default(),
+        )
+        .map_err(|e| e.source)?;
+    writer.immediate()?;
+    let reader = Managed::open_indexed_reader(&path, options)?;
+    let mut cursors = (0..8)
+        .map(|_| reader.items())
+        .collect::<varlit::Result<Vec<_>>>()?;
+    let barrier = Barrier::new(2);
+    std::thread::scope(|scope| -> varlit::Result<()> {
+        let worker = scope.spawn(|| -> varlit::Result<()> {
+            // Move the reader, never a cursor or a shared reader reference.
+            let reader = reader;
+            barrier.wait();
+            for key in 0..10000 {
+                assert_eq!(
+                    reader.get_item(&key)?,
+                    Some(Item {
+                        key,
+                        value: key * 3
+                    })
+                );
+            }
+            reader.verify_all()?;
+            Ok(())
+        });
+        barrier.wait();
+        for key in 0..10000 {
+            for cursor in &mut cursors {
+                assert_eq!(
+                    cursor.next().transpose()?,
+                    Some(Item {
+                        key,
+                        value: key * 3
+                    })
+                );
+            }
+        }
+        for cursor in &mut cursors {
+            assert!(cursor.next().is_none());
+        }
+        worker.join().expect("reader panicked")
+    })
+}
+
+#[test]
+fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("retention.varlit");
+    let options = DiskIndexOptions::default();
+    let mut writer = Managed::create_indexed_writer(&path, options)?;
+    writer.push_item(&Item { key: 1, value: 1 })?;
+    writer.immediate()?;
+    let mut old = Managed::open_indexed_reader(&path, options)?;
+    let mut idle = Managed::open_indexed_reader(&path, options)?;
+    let cursor = idle.items()?;
+    let before = old.snapshot_status()?;
+    for value in 2..=8 {
+        writer.push_item(&Item { key: 1, value })?;
+        writer.immediate()?;
+    }
+    let lag = old.snapshot_status()?;
+    assert_eq!(lag.generation, before.generation);
+    assert_eq!(lag.confirmed_generation - lag.generation, 7);
+    assert_eq!(lag.records_behind, 7);
+    assert!(lag.bytes_behind > 0);
+    assert!(idle.release_snapshot());
+    assert!(!idle.release_snapshot());
+    assert!(!idle.snapshot_status()?.pinned);
+    assert!(
+        matches!(idle.get_item(&1), Err(Error::DiskIndex(error)) if matches!(*error, DiskIndexError::SnapshotReleased))
+    );
+    assert_eq!(
+        cursor.collect::<varlit::Result<Vec<_>>>()?,
+        vec![Item { key: 1, value: 1 }]
+    );
+    writer.push_item(&Item { key: 1, value: 9 })?; // Unconfirmed remains invisible.
+    assert_eq!(idle.follow()?, 7);
+    assert_eq!(idle.get_item(&1)?.unwrap().value, 8);
+    assert!(idle.snapshot_status()?.pinned);
+    assert!(idle.release_snapshot());
+    assert_eq!(idle.follow()?, 0); // Re-pin even without a new generation.
+    assert_eq!(idle.get_item(&1)?.unwrap().value, 8);
+    assert_eq!(old.follow()?, 7);
+    drop(old);
+    drop(idle);
+    writer.immediate()?;
+    Ok(())
+}
+
+#[test]
+fn stream_release_preserves_cursor_and_follow_releases_old_generation() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("stream.varlit");
+    let options = StreamOptions::default();
+    let mut writer = Feed::create_stream_writer(&path, options)?;
+    writer.push_sample(&Sample { value: 1 })?;
+    writer.immediate()?;
+    let mut reader = Feed::open_stream_reader(&path, options)?;
+    let mut cursor = reader.samples()?;
+    assert!(reader.release_snapshot());
+    assert_eq!(cursor.next().transpose()?, Some(Sample { value: 1 }));
+    writer.push_sample(&Sample { value: 2 })?;
+    writer.immediate()?;
+    writer.push_sample(&Sample { value: 3 })?;
+    assert_eq!(reader.snapshot_status()?.records_behind, 1);
+    assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
+    assert_eq!(cursor.next().transpose()?, Some(Sample { value: 2 }));
+    assert!(cursor.next().is_none());
+    assert!(reader.release_snapshot());
+    assert_eq!(reader.follow()?, 0);
+    assert!(reader.snapshot_status()?.pinned);
+    Ok(())
+}
+
+#[test]
+fn cold_reader_retries_never_reject_or_interrupt_the_single_writer() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let options = DiskIndexOptions::default();
+    for trial in 0..32 {
+        let path = dir.path().join(format!("cold-{trial}.varlit"));
+        let mut writer = Managed::create_indexed_writer(&path, options)?;
+        writer.push_item(&Item { key: 1, value: 0 })?;
+        writer.immediate()?;
+        drop(writer);
+        let start = Barrier::new(9);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| -> varlit::Result<()> {
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| -> varlit::Result<()> {
+                        start.wait();
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(10);
+                        loop {
+                            match Managed::open_indexed_reader(&path, options) {
+                                Ok(mut reader) => {
+                                    reader.follow()?;
+                                    assert!(reader.get_item(&1)?.unwrap().value <= 16);
+                                }
+                                Err(Error::IndexBusy) if std::time::Instant::now() < deadline => {
+                                    std::thread::yield_now();
+                                    continue;
+                                }
+                                Err(error) => return Err(error),
+                            }
+                            if done.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                        }
+                    })
+                })
+                .collect();
+            start.wait();
+            let result = (|| -> varlit::Result<()> {
+                // No application retry around writer open, append, or sync.
+                let mut writer = Managed::open_indexed_writer(&path, options)?;
+                for value in 1..=16 {
+                    writer.push_item(&Item { key: 1, value })?;
+                    writer.immediate()?;
+                }
+                Ok(())
+            })();
+            done.store(true, Ordering::Release);
+            for worker in workers {
+                worker.join().expect("reader panicked")?;
+            }
+            result
+        })?;
+    }
+    Ok(())
+}
+
+#[test]
+fn compaction_keeps_old_readers_and_follow_adopts_new_file() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("compact.varlit");
+    let options = DiskIndexOptions::default();
+    let mut writer = Managed::create_indexed_writer(&path, options)?;
+    writer
+        .push_items(
+            (0..200).map(|key| Item { key, value: 1 }),
+            BatchOptions::default(),
+        )
+        .map_err(|e| e.source)?;
+    writer.immediate()?;
+    let mut old = Managed::open_indexed_reader(&path, options)?;
+    let mut cursor = old.items()?;
+    for value in 2..20 {
+        writer
+            .push_items(
+                (0..200).map(|key| Item { key, value }),
+                BatchOptions::default(),
+            )
+            .map_err(|e| e.source)?;
+        writer.immediate()?;
+    }
+    let mut current = Managed::open_indexed_reader(&path, options)?;
+    let report = writer.compact_index()?;
+    assert_eq!(current.follow()?, 0); // Same logical generation, new physical file.
+    drop(current);
+    assert!(report.after_bytes < report.before_bytes);
+    assert_eq!(report.historical_distinct_keys, 200);
+    for key in 0..200 {
+        assert_eq!(old.get_item(&key)?.unwrap().value, 1);
+    }
+    assert_eq!(cursor.next().transpose()?.unwrap().value, 1);
+    writer.push_item(&Item { key: 0, value: 20 })?;
+    assert!(writer.compact_index().is_err()); // Never inserts an implicit sync.
+    old.follow()?;
+    assert_eq!(old.get_item(&0)?.unwrap().value, 19);
+    writer.immediate()?;
+    old.follow()?;
+    assert_eq!(old.get_item(&0)?.unwrap().value, 20);
+    drop(writer);
+    let mut reopened = Managed::open_indexed_writer(&path, options)?;
+    reopened.push_item(&Item { key: 0, value: 21 })?;
+    reopened.immediate()?;
+    old.follow()?;
+    assert_eq!(old.get_item(&0)?.unwrap().value, 21);
+    Ok(())
+}
+
+#[test]
+#[ignore = "cross-process reader subprocess"]
+fn independent_process_reader_child() -> varlit::Result<()> {
+    let path = std::path::PathBuf::from(std::env::var_os("VARLIT_NATIVE_READER_CHILD").unwrap());
+    let options = DiskIndexOptions::default();
+    let mut reader = Managed::open_indexed_reader(&path, options)?;
+    let pinned = Managed::open_indexed_reader(&path, options)?;
+    assert_eq!(reader.get_item(&0)?.unwrap().value, 1);
+    std::fs::write(path.with_extension("ready"), b"ready")?;
+    // Bound a stalled publication, not all 256 durable commits on a busy disk.
+    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last_value = 1;
+    let mut checks = 0;
+    loop {
+        reader.follow()?;
+        let a = reader.get_item(&0)?.unwrap().value;
+        let b = reader.get_item(&1)?.unwrap().value;
+        assert_eq!(a, b, "mixed confirmed generations");
+        assert_eq!(pinned.get_item(&0)?.unwrap().value, 1);
+        if a != last_value {
+            assert!(a > last_value, "confirmed generation moved backwards");
+            last_value = a;
+            deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        }
+        checks += 1;
+        if path.with_extension("done").exists() {
+            reader.follow()?;
+            assert_eq!(reader.get_item(&0)?.unwrap().value, 257);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "writer made no confirmed progress for 20 seconds"
+        );
+        std::thread::yield_now();
+    }
+    assert!(checks > 0);
+    reader.verify_all()?;
+    Ok(())
+}
+
+#[test]
+fn independent_process_reads_dirty_writer_and_follows_compaction() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("process.varlit");
+    let options = DiskIndexOptions::default();
+    let mut writer = Managed::create_indexed_writer(&path, options)?;
+    for key in 0..2 {
+        writer.push_item(&Item { key, value: 1 })?;
+    }
+    writer.immediate()?;
+    writer.push_item(&Item { key: 0, value: 2 })?; // Child opens during Dirty.
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "--ignored",
+            "--exact",
+            "independent_process_reader_child",
+            "--nocapture",
+        ])
+        .env("VARLIT_NATIVE_READER_CHILD", &path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !path.with_extension("ready").exists() {
+        if let Some(status) = child.try_wait()? {
+            panic!("reader exited before open: {status}");
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("reader open blocked");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    writer.push_item(&Item { key: 1, value: 2 })?;
+    writer.immediate()?;
+    for value in 3..=257 {
+        for key in 0..2 {
+            writer.push_item(&Item { key, value })?;
+        }
+        writer.immediate()?;
+        if value % 64 == 0 {
+            writer.compact_index()?;
+        }
+    }
+    std::fs::write(path.with_extension("done"), b"done")?;
+    // Startup, active publication, and final acknowledgement are distinct phases.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let output = child.wait_with_output()?;
+            assert!(
+                status.success(),
+                "child failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("reader did not finish");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    Ok(())
+}

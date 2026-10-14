@@ -1,17 +1,17 @@
-# How Varve Works
+# How Varlit Works
 
-Varve is a format generator plus runtime. You declare a static file contract in
-Rust, and Varve writes/reads bytes according to that contract. The format itself
+Varlit is a format generator plus runtime. You declare a static file contract in
+Rust, and Varlit writes/reads bytes according to that contract. The format itself
 is not dynamic: the static `FormatSpec` in your program remains the authority.
 
 ## The Big Picture
 
 ```mermaid
 flowchart LR
-    A["varve_format! declaration"] --> B["Generated block types"]
+    A["varlit_format! declaration"] --> B["Generated block types"]
     A --> C["Generated FormatSpec"]
     A --> D["Generated reader/writer wrappers"]
-    D --> E["Varve runtime"]
+    D --> E["Varlit runtime"]
     E --> F["Binary file"]
     F --> G["Snapshot reader"]
 ```
@@ -41,7 +41,7 @@ The runtime handles storage mechanics:
 Every file starts with:
 
 - user magic, such as `b"APP"`
-- Varve container marker: `VARVE1`, `VARVE2`, or `VARVE3`
+- Varlit container marker: `VARVE1`, `VARVE2`, or `VARVE3`
 - format version
 - endian byte
 - flags
@@ -53,8 +53,8 @@ can pin the exact declared shape when you choose `schema_hash: computed;`.
 
 ## Custom Physical Layouts
 
-The Varve-native header is the default preset. A format can instead choose
-`preset: none;` and declare its own byte-level layout. In that mode Varve does
+The Varlit-native header is the default preset. A format can instead choose
+`preset: none;` and declare its own byte-level layout. In that mode Varlit does
 not write `VARVE1/2/3`; the declared `file_header`, segment `lead_in`,
 `metadata`, `raw_region`, and optional `footer` own the physical bytes.
 
@@ -86,7 +86,7 @@ separate segment kinds. Once a descriptor is selected, failed footer, offset, or
 bounds validation is treated as corrupt file data rather than a reason to try a
 different descriptor.
 
-When the layout is declared in `varve_format!`, the macro generates a typed
+When the layout is declared in `varlit_format!`, the macro generates a typed
 physical-layout facade over that same engine. Segment caller fields become a
 typed `FormatSegmentLayoutFields` struct, `write_segment_name` lowers them into
 `LayoutFieldValue`s, and generated segment info getters read validated values
@@ -95,18 +95,18 @@ back from `LayoutSegmentInfo`. A declared file header similarly gains a typed
 intentionally remain byte slices so external adapters can own their metadata
 and channel encoding. For large metadata or raw regions, generated
 `write_*_streamed` methods and low-level `write_segment_streamed` let the
-adapter stream bytes while Varve still counts lengths and backpatches offsets.
+adapter stream bytes while Varlit still counts lengths and backpatches offsets.
 
 `inspect_layout_file` is the strict inspection path. For custom physical files
-it delegates to the layout reader; for Varve-native files it performs the normal
+it delegates to the layout reader; for Varlit-native files it performs the normal
 strict native scan and projects each record into the same segment range model.
 Use `inspect_layout_file_report` when an adapter needs a diagnostic view of the
 complete prefix plus the terminal tail status before its own metadata semantics
 run. That split is what lets an external adapter decide whether a failure is a
-Varve physical-layout limitation or caller-owned parsing/model logic. The
-Varve-native file header, record lead-in, and optional footer are also emitted
+Varlit physical-layout limitation or caller-owned parsing/model logic. The
+Varlit-native file header, record lead-in, and optional footer are also emitted
 and parsed through an internal native layout codec that feeds the same effective
-`VarveFileHeader` and `VarveRecord` plan, while the higher-level append-log,
+`VarlitFileHeader` and `VarlitRecord` plan, while the higher-level append-log,
 recovery, compression, and index semantics stay in the native reader/writer.
 
 ## Append-Log Records
@@ -207,7 +207,7 @@ entries. It bounds writer-side checkpoint bytes, not open cost.
 ## Fixed Blocks
 
 Fixed blocks use canonical field encoding. They are fixed in the sense that the
-encoded payload shape is expected to stay stable, not because Varve copies Rust
+encoded payload shape is expected to stay stable, not because Varlit copies Rust
 memory layout.
 
 Use fixed blocks for:
@@ -251,7 +251,7 @@ stateful updates, use `push_op`, tombstones, merge, and compact APIs.
 
 ## Commit Policies
 
-Varve supports three append-log commit modes:
+Varlit supports three append-log commit modes:
 
 | Policy | Meaning |
 | --- | --- |
@@ -268,7 +268,7 @@ id and, for keyed generated writers, previous records with the same key.
 `push_*` writes through the current file handle but does not imply per-record
 `fsync`.
 
-- `flush()` pushes buffered Varve records and writes configured checkpoint,
+- `flush()` pushes buffered Varlit records and writes configured checkpoint,
   manifest, or transaction marker records.
 - `sync()` asks the operating system to durably persist the file.
 - `commit()` writes a logical explicit marker but does not imply fsync.
@@ -294,7 +294,7 @@ file does not grow. Off by default and byte-identical when not declared.
 
 ```mermaid
 flowchart TD
-    A["create_writer_with_dims"] --> B["write normal Varve header"]
+    A["create_writer_with_dims"] --> B["write normal Varlit header"]
     B --> B2["write VMNC creation nonce"]
     B2 --> C["write VMAT matrix layout"]
     C --> D["reserve commit maps as a sparse zero extent"]
@@ -304,7 +304,7 @@ flowchart TD
     G --> H["append-log region starts"]
 ```
 
-For a dense `(scan, ch)` matrix, Varve computes direct offsets:
+For a dense `(scan, ch)` matrix, Varlit computes direct offsets:
 
 ```text
 ordinal = scan * ch_count + ch
@@ -323,7 +323,7 @@ flowchart TD
     F --> G["commit_matrix_cell sets commit bit"]
 ```
 
-Readers trust commit maps. If the commit bit is clear, Varve returns
+Readers trust commit maps. If the commit bit is clear, Varlit returns
 `MatrixNotCommitted` even if slot bytes exist.
 
 ## Aux Regions
@@ -350,7 +350,7 @@ same as VMAT-native chunked matrix storage.
 
 ## Integrity And Recovery
 
-With `integrity: crc32`, Varve validates record payload CRCs. In `VARVE3`, the
+With `integrity: crc32`, Varlit validates record payload CRCs. In `VARVE3`, the
 CRC covers payload plus footer. With `integrity: crc32_with_header`, the native
 record header is included too, with the checksum field normalized to zero.
 Matrix CRC additionally covers metadata tables, commit maps, and committed
@@ -381,7 +381,7 @@ flowchart TD
 ```
 
 Self-check answers a practical question: do this format declaration, these
-sample values, the enabled Cargo features, and Varve's generated APIs agree?
+sample values, the enabled Cargo features, and Varlit's generated APIs agree?
 
 If self-check passes but application logic fails, inspect caller-owned policy:
 runtime dimensions, key construction, commit timing, sidecar meaning, migration

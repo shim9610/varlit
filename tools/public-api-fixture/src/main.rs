@@ -3,8 +3,8 @@
 //!
 //! # Why this crate exists
 //!
-//! Round 3 introduced a mandatory non-zero `VarveEncode::SCHEMA_ID` /
-//! `VarveDecode::SCHEMA_ID` contract and made `#[derive(VarveBlock)]` reject
+//! Round 3 introduced a mandatory non-zero `VarlitEncode::SCHEMA_ID` /
+//! `VarlitDecode::SCHEMA_ID` contract and made `#[derive(VarlitBlock)]` reject
 //! any field whose codec identity is zero. The built-in public types
 //! `ChunkedBytes` and `PackedBitmap` were never given an identity, so the
 //! derive macro started rejecting documented public API — and nothing in the
@@ -13,7 +13,7 @@
 //!
 //! This crate is that missing gate. It is deliberately outside the workspace
 //! (its own `[workspace]` table plus a path dependency, exactly like
-//! `tools/rename-fixture`) so it resolves `varve` the way a real consumer does.
+//! `tools/rename-fixture`) so it resolves `varlit` the way a real consumer does.
 //! It must COMPILE and RUN; CI builds it as its own job.
 //!
 //! # What is covered
@@ -36,30 +36,30 @@
 //! Every codec below is exercised three ways: a compile-time identity
 //! assertion, a value round-trip through `encode_to_vec`/`decode_from_slice`,
 //! and — for the block kinds a format can store — a real file round-trip
-//! through a `varve_format!` declaration.
+//! through a `varlit_format!` declaration.
 
 use std::collections::{BTreeMap, HashMap};
 
-use varve::{
-    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, VarveBlock, VarveDecode, VarveEncode,
-    decode_from_slice, encode_to_vec, varve_format,
+use varlit::{
+    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, VarlitBlock, VarlitDecode, VarlitEncode,
+    decode_from_slice, encode_to_vec, varlit_format,
 };
 
 /// Compile-time proof that a codec declares a usable identity.
 ///
-/// This is the exact contract `#[derive(VarveBlock)]` enforces on every field.
+/// This is the exact contract `#[derive(VarlitBlock)]` enforces on every field.
 /// Asserting it as an associated const makes the failure a compile error that
 /// names the type, which is what a downstream user would see.
-struct CodecIdentity<T: VarveEncode + VarveDecode>(std::marker::PhantomData<T>);
+struct CodecIdentity<T: VarlitEncode + VarlitDecode>(std::marker::PhantomData<T>);
 
-impl<T: VarveEncode + VarveDecode> CodecIdentity<T> {
+impl<T: VarlitEncode + VarlitDecode> CodecIdentity<T> {
     const OK: () = {
         assert!(
-            <T as VarveEncode>::SCHEMA_ID != 0,
+            <T as VarlitEncode>::SCHEMA_ID != 0,
             "public codec declares no encode identity; derived fields of this type cannot compile"
         );
         assert!(
-            <T as VarveDecode>::SCHEMA_ID != 0,
+            <T as VarlitDecode>::SCHEMA_ID != 0,
             "public codec declares no decode identity; derived fields of this type cannot compile"
         );
     };
@@ -69,7 +69,7 @@ impl<T: VarveEncode + VarveDecode> CodecIdentity<T> {
 /// compile-time identity assertion for its type.
 fn roundtrip<T>(label: &str, value: T)
 where
-    T: VarveEncode + VarveDecode + PartialEq + std::fmt::Debug,
+    T: VarlitEncode + VarlitDecode + PartialEq + std::fmt::Debug,
 {
     let () = CodecIdentity::<T>::OK;
     for endian in [Endian::Little, Endian::Big] {
@@ -92,8 +92,8 @@ where
 /// Fixed blocks are positional canonical payloads and cannot omit fields, so
 /// every field is required (`docs/spec.md`, "Macro Contract"). Scalars and fixed
 /// arrays are the documented shapes for them.
-#[derive(Clone, Debug, PartialEq, VarveBlock)]
-#[varve(id = 1, version = 1, kind = "fixed")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 1, version = 1, kind = "fixed")]
 struct FixedScalars {
     flag: bool,
     a_u8: u8,
@@ -119,72 +119,72 @@ struct FixedScalars {
 /// catch are `blob: ChunkedBytes` and `mask: PackedBitmap`: both are public,
 /// both are documented, and both stopped compiling here when the identity
 /// contract landed without identities for them.
-#[derive(Clone, Debug, PartialEq, VarveBlock)]
-#[varve(id = 2, version = 1, kind = "variable", key = "id")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 2, version = 1, kind = "variable", key = "id")]
 struct EveryVariableCodec {
-    #[varve(field_id = 1)]
+    #[varlit(field_id = 1)]
     id: u64,
-    #[varve(field_id = 2)]
+    #[varlit(field_id = 2)]
     text: String,
-    #[varve(field_id = 3)]
+    #[varlit(field_id = 3)]
     bytes: Vec<u8>,
-    #[varve(field_id = 4)]
+    #[varlit(field_id = 4)]
     bools: Vec<bool>,
-    #[varve(field_id = 5)]
+    #[varlit(field_id = 5)]
     i8s: Vec<i8>,
-    #[varve(field_id = 6)]
+    #[varlit(field_id = 6)]
     u16s: Vec<u16>,
-    #[varve(field_id = 7)]
+    #[varlit(field_id = 7)]
     i16s: Vec<i16>,
-    #[varve(field_id = 8)]
+    #[varlit(field_id = 8)]
     u32s: Vec<u32>,
-    #[varve(field_id = 9)]
+    #[varlit(field_id = 9)]
     i32s: Vec<i32>,
-    #[varve(field_id = 10)]
+    #[varlit(field_id = 10)]
     u64s: Vec<u64>,
-    #[varve(field_id = 11)]
+    #[varlit(field_id = 11)]
     i64s: Vec<i64>,
-    #[varve(field_id = 12)]
+    #[varlit(field_id = 12)]
     u128s: Vec<u128>,
-    #[varve(field_id = 13)]
+    #[varlit(field_id = 13)]
     i128s: Vec<i128>,
-    #[varve(field_id = 14)]
+    #[varlit(field_id = 14)]
     f32s: Vec<f32>,
-    #[varve(field_id = 15)]
+    #[varlit(field_id = 15)]
     f64s: Vec<f64>,
-    #[varve(field_id = 16)]
+    #[varlit(field_id = 16)]
     strings: Vec<String>,
-    #[varve(field_id = 17)]
+    #[varlit(field_id = 17)]
     fixed_array: [u32; 4],
-    #[varve(field_id = 18)]
+    #[varlit(field_id = 18)]
     nested_array: [[u8; 2]; 3],
-    #[varve(field_id = 19)]
+    #[varlit(field_id = 19)]
     pair: (u32, String),
-    #[varve(field_id = 20)]
+    #[varlit(field_id = 20)]
     triple: (u8, u16, u32),
-    #[varve(field_id = 21)]
+    #[varlit(field_id = 21)]
     quad_tuple: (u8, u16, u32, u64),
-    #[varve(field_id = 22)]
+    #[varlit(field_id = 22)]
     maybe_scalar: Option<u32>,
-    #[varve(field_id = 23)]
+    #[varlit(field_id = 23)]
     maybe_text: Option<String>,
-    #[varve(field_id = 24)]
+    #[varlit(field_id = 24)]
     ordered_map: BTreeMap<u32, String>,
-    #[varve(field_id = 25)]
+    #[varlit(field_id = 25)]
     hash_map: HashMap<u64, u32>,
-    #[varve(field_id = 26)]
+    #[varlit(field_id = 26)]
     blob: ChunkedBytes,
-    #[varve(field_id = 27)]
+    #[varlit(field_id = 27)]
     mask: PackedBitmap,
-    #[varve(field_id = 28)]
+    #[varlit(field_id = 28)]
     unit: (),
 }
 
 // ---------------------------------------------------------------------------
-// The same surface through `varve_format!`, stored in a real file.
+// The same surface through `varlit_format!`, stored in a real file.
 // ---------------------------------------------------------------------------
 
-varve_format! {
+varlit_format! {
     pub format PublicApiFormat {
         magic: b"PAPI";
         version: 1;
@@ -476,7 +476,7 @@ fn check_format_roundtrip(dir: &std::path::Path) {
     println!("  file ok: fixed + variable + matrix blocks round-tripped");
 }
 
-varve_format! {
+varlit_format! {
     pub format ScalableFixture {
         magic: b"SCLF";
         version: 1;
@@ -487,8 +487,8 @@ varve_format! {
 }
 
 fn check_scalable_roundtrip(dir: &std::path::Path) {
-    let path = dir.join("scalable.varve");
-    let options = varve::DiskIndexOptions::default();
+    let path = dir.join("scalable.varlit");
+    let options = varlit::DiskIndexOptions::default();
     let mut writer = ScalableFixture::create_indexed_writer(&path, options).unwrap();
     writer.push_scalable_item(&ScalableItem { key: 7, value: 1 }).unwrap();
     writer.immediate().unwrap();
@@ -508,7 +508,7 @@ fn main() {
     check_every_public_codec();
     check_derived_blocks();
 
-    let dir = std::env::temp_dir().join(format!("varve-public-api-fixture-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("varlit-public-api-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fixture temp dir");
     let result = std::panic::catch_unwind(|| {
         check_format_roundtrip(&dir);

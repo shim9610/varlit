@@ -1,0 +1,5 @@
+error: varlit key must name at least one field
+ --> tests/ui/fail_empty_key.rs:4:45
+  |
+4 | #[varlit(id = 414, kind = "variable", key = "")]
+  |                                             ^^

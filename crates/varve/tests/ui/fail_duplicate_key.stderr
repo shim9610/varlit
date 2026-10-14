@@ -1,5 +1,0 @@
-error: duplicate varve key field
- --> tests/ui/fail_duplicate_key.rs:4:44
-  |
-4 | #[varve(id = 403, kind = "variable", key = "id,id")]
-  |                                            ^^^^^^^

@@ -17,7 +17,7 @@
 # nothing checks it, and it is expected to drift.)
 #
 # Scoped to the test function, deliberately. The leaking allocation's stack runs
-# through `VarveFile::write_record_with_prev_key`, and suppressing *that* — the
+# through `VarlitFile::write_record_with_prev_key`, and suppressing *that* — the
 # obvious frame to reach for — would blind the whole append path, which is the
 # hottest allocating code in the library and exactly where a real leak would
 # matter. Naming the test instead means any new leak anywhere, including one in

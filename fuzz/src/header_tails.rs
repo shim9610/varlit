@@ -30,9 +30,9 @@
 use std::fs;
 use std::path::Path;
 
-use varve::{FormatSpec, LazyOpenSource, VarveBlock, VarveFile, varve_format};
+use varlit::{FormatSpec, LazyOpenSource, VarlitBlock, VarlitFile, varlit_format};
 
-varve_format! {
+varlit_format! {
     pub format FuzzHeaderTailsFormat {
         magic: b"FZHT";
         version: 1;
@@ -102,7 +102,7 @@ fn scanned_shape(
     spec: FormatSpec,
     path: &Path,
 ) -> Option<(Vec<(u32, u64, u64)>, Vec<Option<u64>>)> {
-    let file = VarveFile::open_readonly(spec, path).ok()?;
+    let file = VarlitFile::open_readonly(spec, path).ok()?;
     let entries = file
         .index_entries()
         .iter()
@@ -210,7 +210,7 @@ pub fn run_header_tails(data: &[u8]) {
     let mutations = data.get(2..).unwrap_or_default();
     let spec = FuzzHeaderTailsFormat::spec();
 
-    let path = root.path().join("header-tails.varve");
+    let path = root.path().join("header-tails.varlit");
     if !create_fixture(spec, &path, seed) {
         return;
     }
@@ -264,11 +264,11 @@ fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
         // succeed — the region is checksummed independently of the mid-file
         // damage that stopped the scan — so nothing further is owed beyond not
         // misbehaving, which libFuzzer's sanitizers judge.
-        let _ = VarveFile::open_readonly_lazy_with_report(spec, path);
+        let _ = VarlitFile::open_readonly_lazy_with_report(spec, path);
         return;
     };
 
-    let (file, source) = match VarveFile::open_readonly_lazy_with_report(spec, path) {
+    let (file, source) = match VarlitFile::open_readonly_lazy_with_report(spec, path) {
         Ok(opened) => opened,
         Err(error) => panic!(
             "the lazy open failed where the scan succeeds; its fallback is that scan: {error:?}"
