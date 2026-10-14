@@ -222,6 +222,6 @@ cargo +nightly fuzz run matrix_reuse_publication -- \
 ```
 
 The sanitizer workflow generates these seeds and includes both targets in its
-weekly/manual smoke run; failures retain reproductions and corpora as artifacts.
+PR/manual smoke run; failures retain reproductions and corpora as artifacts.
 A passing finite run does not prove crash consistency on every filesystem or
 replace process-kill, concurrent-process and real-platform qualification.

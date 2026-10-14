@@ -1,0 +1,6 @@
+name: Varlit source and automation
+queries:
+  - uses: security-extended
+paths-ignore:
+  - vendor/**
+  - '**/target/**'

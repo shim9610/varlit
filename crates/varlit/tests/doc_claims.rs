@@ -713,7 +713,7 @@ fn the_header_slot_entry_framing_is_published_as_twelve_bytes() {
 ///    document denying it.
 /// 3. §6.4 of `docs/known-limitations.md` was titled and opened as though no
 ///    fuzz, Miri or ASan run existed, while its own third bullet, `README.md`
-///    and `.github/workflows/sanitizers.yml` all have the three running weekly.
+///    and `.github/workflows/sanitizers.yml` all have the three configured.
 ///    The `fuzz-supply-chain` job in `ci.yml` is a supply-chain job; its name is
 ///    the only fuzzing in it.
 ///
@@ -747,7 +747,7 @@ fn the_superseded_assurance_claims_are_not_still_published() {
         why_walk,
     );
 
-    let why_fuzz = "sanitizers.yml runs fuzz-smoke, asan and miri weekly, \
+    let why_fuzz = "sanitizers.yml runs fuzz-smoke, asan and miri on PRs, \
                     guarded only by the public-repository check. What is true \
                     is the size of the run rather than its absence - 90 seconds \
                     per target is a smoke test, which is what this section's own \
@@ -776,7 +776,7 @@ fn the_superseded_assurance_claims_are_not_still_published() {
         );
     }
 
-    for needle in ["weekly smoke, not a campaign", "sanitizers.yml"] {
+    for needle in ["bounded smoke, not a campaign", "sanitizers.yml"] {
         assert_present(&files, "docs/known-limitations.md", needle, why_fuzz);
     }
 }

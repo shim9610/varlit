@@ -1,15 +1,18 @@
 name: CI
 
-# GitHub-hosted runners are free for public repositories, which this one is, so
-# the automatic triggers are on. `workflow_dispatch` is kept alongside them so a
-# run can also be started by hand from the Actions tab or with
-# `gh workflow run ci.yml`. If this repository is ever made private, minutes are
-# metered against the account and these two triggers are the thing to remove.
+# Automatic checks run on pull requests into main. Manual dispatch remains
+# available for qualification; merging a checked PR does not start a duplicate run.
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,6 +53,32 @@ env:
   MSRV: 1.95.0
 
 jobs:
+  codeql:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, python, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: .github/codeql/config.yml
+          tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.2/codeql-bundle-linux64.tar.gz
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}
+
   fmt:
     # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
@@ -66,14 +95,16 @@ jobs:
           toolchain: stable
           components: rustfmt
       - run: python3 scripts/check_runtime_dependencies.py
+      - name: CI helper regressions
+        run: python3 -m unittest discover -s scripts/tests
       - run: cargo fmt --all -- --check
 
   # Lints a fixed LIST of feature configurations, not every combinatorial
   # subset: no-default, default, each optional feature on its own, and
-  # all-features. The facade exposes 5 optional features (`integrity`, `mmap`,
+  # all-features. The facade exposes 6 optional features (`integrity`, `mmap`,
   # `zero-copy`, `compression-zstd`,
-  # `scalable-fault-injection`), so the full power set is 32 configurations;
-  # this job runs 8 of them on each of two operating systems.
+  # `scalable-fault-injection`, `experimental-matrix-reuse`), so the full power set is 64 configurations;
+  # this job runs 9 of them on each of two operating systems.
   # The singletons catch a feature that does not compile alone, and
   # `--all-features` catches a conflict between any two — the gap is a defect
   # that needs a specific pair or triple of features and is invisible under
@@ -636,3 +667,36 @@ jobs:
       - name: cargo metadata (public-api fixture)
         working-directory: ${{ runner.temp }}/varlit-archive/tools/public-api-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null
+
+  required-gate:
+    # Keep this name stable: main protection requires this aggregate check.
+    if: always() && github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: ci / required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - codeql
+      - fmt
+      - feature-matrix
+      - test
+      - platform-io
+      - feature-tests
+      - msrv
+      - renamed-dependency
+      - public-api
+      - rustdoc
+      - supply-chain
+      - dependency-policy-fixture
+      - fuzz-supply-chain
+      - package-archives
+      - source-contents
+      - git-consumer
+      - clean-archive
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require every configured job to succeed
+        env:
+          VARLIT_CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/check_ci_results.py
