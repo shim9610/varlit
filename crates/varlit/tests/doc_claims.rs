@@ -830,10 +830,10 @@ fn the_renamed_record_scanner_is_not_published_under_its_old_name() {
 /// rustdoc says.
 ///
 /// The behaviour is asserted by `crates/varlit/tests/matrix_chunks.rs` —
-/// `a_write_into_a_written_chunk_edits_it_in_place` measures that the file
-/// length does not change, and `the_growing_dimension_must_be_declared_and_first`
+/// chunk-update checks preserve the original reader while a writer publishes
+/// an immutable replacement chunk, and `the_growing_dimension_must_be_declared_and_first`
 /// pins the declaration refusals. What is asserted here is that the prose says
-/// the feature exists.
+/// the feature exists; the historical test name is not a no-growth guarantee.
 #[test]
 fn no_document_says_a_matrix_dimension_cannot_grow() {
     let files = normative_files();
@@ -843,7 +843,7 @@ fn no_document_says_a_matrix_dimension_cannot_grow() {
                must equal rows_per_chunk - the matrix region is chunk 0 - and \
                rows past it land in ordinary internal records in the append \
                log, one chunk buffered at a time, with a late write into an \
-               already-written chunk rewriting that record where it sits. \
+               already-written chunk publishing a new immutable chunk version. \
                Publish the growth and what it costs, not the absence of it.";
     for claim in [
         format!("cannot represent an {} growing stream", "indefinitely"),

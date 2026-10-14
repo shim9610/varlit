@@ -4,7 +4,9 @@ Varlit migrations are explicit. Normal typed reads reject block version
 mismatches; migration code names both the source and target block types and
 performs semantic conversion in Rust.
 
-## 0.6.0 Pre-1.0 Wire Changes
+<a id="060-pre-10-wire-changes"></a>
+
+## Pre-1.0 Wire Changes Since 0.6.0
 
 The 0.6.0 changes are wire-breaking under the pre-1.0 policy;
 there is no automatic migration path for these surfaces:

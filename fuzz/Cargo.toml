@@ -15,7 +15,7 @@ tempfile = "3"
 
 [dependencies.varlit]
 path = "../crates/varlit"
-version = "0.12.0"
+version = "0.12.1"
 features = ["integrity", "mmap", "zero-copy", "compression-zstd", "experimental-matrix-reuse", "scalable-fault-injection"]
 
 # Use independent workspace for fuzzers

@@ -4,7 +4,18 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## Unreleased — 0.12.0
+## 0.12.1 — release candidate
+
+- Align the workspace, sibling dependencies and consumer lockfiles at 0.12.1
+  for registry publication. No Rust API or wire-format changes from 0.12.0.
+- Include the reviewed Cargo dependency updates across the root, fuzz and
+  standalone fixture lockfiles. The underlying Zstandard 1.5.7 C sources are
+  unchanged; the property-test RNG/dependency stack changes.
+- Correct installation, platform qualification and native-directory/merge
+  memory descriptions. Preserve historical measurement scope and distinguish
+  the 0.12.0 qualification evidence from the final candidate's required checks.
+
+## 0.12.0 - 2026-10-14
 
 - Refuse stream/indexed recovery when both confirmed companion heads are
   unreadable. An old dirty checkpoint can no longer replace an acknowledged
