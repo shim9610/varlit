@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the ignored finite-key representation benchmark with controlled workloads.
 
-Build first: cargo test -p stratava --all-features --release --test
+Build first: cargo test -p varlit --all-features --release --test
 finite_key_benchmark --no-run. Pass the resulting test executable as --binary.
 Each process creates, fully validates and removes its own tempfile directory.
 """
@@ -81,10 +81,10 @@ def main():
                 executable = baseline if representation == "before" else binary
                 name = f"{workload['name']}-{repeat+1}-{representation}"
                 environment = os.environ | {
-                    "STRATAVA_BENCH_MODE": mode, "STRATAVA_BENCH_DATA": str(data),
-                    "STRATAVA_BENCH_KEY_ORDER": workload.get("key_order", "schema"),
-                    "STRATAVA_BENCH_BATCH_RECORDS": str(workload.get("batch_records", 16384)),
-                    **{f"STRATAVA_BENCH_{key.upper()}": str(workload[key])
+                    "VARLIT_BENCH_MODE": mode, "VARLIT_BENCH_DATA": str(data),
+                    "VARLIT_BENCH_KEY_ORDER": workload.get("key_order", "schema"),
+                    "VARLIT_BENCH_BATCH_RECORDS": str(workload.get("batch_records", 16384)),
+                    **{f"VARLIT_BENCH_{key.upper()}": str(workload[key])
                        for key in ("keys", "records", "payload", "sync", "queries")},
                 }
                 log = output / f"{name}.log"

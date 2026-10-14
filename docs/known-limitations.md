@@ -34,7 +34,7 @@ bound memory in either direction.
 that intends to touch one cell and leaves verification on pays for the whole
 candidate set in I/O.
 
-**Measured on this host, 2026-07-26** (`crates/stratava/tests/matrix_lazy_residency.rs`
+**Measured on this host, 2026-07-26** (`crates/varlit/tests/matrix_lazy_residency.rs`
 and `matrix_integrity_scaling.rs`, all tests passing):
 
 | Fixture | Cells | Live pages | Bytes read, `AtOpen` | Pages visited | Bytes read, `OnDemand` | Resident bitmap bytes |
@@ -233,7 +233,7 @@ A large declared extent is economical only where the filesystem supports sparse
 allocation. Sparse-file tests are not evidence of physical multi-gigabyte I/O
 throughput. Growing dimensions still require an explicit chunk declaration.
 
-### 1.6 The matrix residency and verification policies have no `stratava_format!` DSL key
+### 1.6 The matrix residency and verification policies have no `varlit_format!` DSL key
 
 > **The bug this section used to describe was fixed in 0.5.0.** Through 0.4.0,
 > `*_with_resource_limits` **silently discarded** a spec-declared
@@ -260,7 +260,7 @@ never overwrites a declaration.
 policy has no "tighter" direction to meet. What changed in 0.5.0 is that a
 *silence* no longer outranks anything, in either function, for either policy.
 
-**What remains a limitation.** There is **no `stratava_format!` DSL key** for either
+**What remains a limitation.** There is **no `varlit_format!` DSL key** for either
 policy. `limits { }` accepts eighteen integer keys, `file_len` through
 `header_extension`, but not these two, and no key was added: the grammar is
 `key: <integer literal>;` over a fixed key list, which cannot express a variant,
@@ -280,7 +280,7 @@ alone will not destroy a spec-declared policy — but a `ReadLimits` value is st
 the only place a *call site* can name one. Both are reader-side policies, so the
 call site is a legitimate home for them: nothing about the file depends on either.
 
-**Who it affects.** Anyone who wants these declared in the `stratava_format!` macro
+**Who it affects.** Anyone who wants these declared in the `varlit_format!` macro
 rather than in Rust. Macro-declared formats emit `ReadLimits::missing()`, so they
 carry neither policy and inherit `MatrixMetadataResidency::DEFAULT` and
 `MatrixMetadataVerification::DEFAULT` (§1.4).
@@ -357,8 +357,8 @@ dimension cannot model an unbounded stream; a declared growing one can.**
 
 **Workaround.** Use the append-log APIs for unbounded growth:
 
-- Resident: `StratavaFile` / generated typed writers, for data that fits in RAM.
-- Stream/indexed (default API): `StratavaStreamWriter` / `StratavaIndexedWriter`
+- Resident: `VarlitFile` / generated typed writers, for data that fits in RAM.
+- Stream/indexed (default API): `VarlitStreamWriter` / `VarlitIndexedWriter`
   and their readers, for bounded-memory ingest and point lookup over data far
   larger than RAM. See [Scalable I/O](scalable-io.md).
 
@@ -410,11 +410,11 @@ rather than always on.
 
 ## 2. Native APIs: bounded memory does not remove scan and scratch I/O
 
-<a id="21-stratavafile-scans-the-whole-file-at-open-and-holds-a-record-index"></a>
+<a id="21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index"></a>
 
 ### 2.1 Native open can still scan the input
 
-Ordinary `StratavaFile`, reader and writer opens now keep a bounded directory
+Ordinary `VarlitFile`, reader and writer opens now keep a bounded directory
 buffer and spill excess entries into private temporary storage. Scan/follow
 staging uses the same strategy. An explicit finite `max_index_bytes` sets each
 buffer capacity; the unbounded default uses 2 MiB. This is not a file record-count
@@ -511,7 +511,7 @@ write open — is the defect this prevents.
 
 ## 3. Stream/indexed API status
 
-`StratavaStreamWriter`, `StratavaIndexedWriter`, their readers, disk-index plans,
+`VarlitStreamWriter`, `VarlitIndexedWriter`, their readers, disk-index plans,
 finite-key storage and scan-control APIs are included in the default 0.10.0
 development build. No feature enables them, and `--no-default-features` keeps
 these APIs available. The former `high-cardinality-dev` flag has been removed.
@@ -555,13 +555,13 @@ handle types — that is the complete inventory, not a sample:
 | `matrix_aux_len` | `&self` | `&self` (unchanged) |
 | `matrix_resume_signal` | `&self` | `&self` (unchanged) |
 
-Each exists on `StratavaReader`, `StratavaWriter` and `StratavaFile`, so 18 signatures.
-`crates/stratava/tests/matrix_concurrent_reads.rs` pins 15 of them ("5 entry points
+Each exists on `VarlitReader`, `VarlitWriter` and `VarlitFile`, so 18 signatures.
+`crates/varlit/tests/matrix_concurrent_reads.rs` pins 15 of them ("5 entry points
 x 3 handle types") by holding two shared borrows of a non-`mut` handle;
 `matrix_resume_signal` is the sixth and was already `&self`.
 
-**Ownership contract:** matrix and resident record handles (`StratavaReader`,
-`StratavaFile`, `StratavaWriter`, and generated wrappers) are `Send + !Sync`. Move
+**Ownership contract:** matrix and resident record handles (`VarlitReader`,
+`VarlitFile`, `VarlitWriter`, and generated wrappers) are `Send + !Sync`. Move
 ownership to a worker, or open a separate reader for each thread. Sharing one
 reader through `Arc` or a cross-thread reference fails to compile. Local reads
 still take `&self`; changing writer state requires `&mut self`.
@@ -599,13 +599,13 @@ no reader mutex or shared mutable page cache in that protocol.
 
 ### 4.2 Where a reader gets a snapshot rather than live state
 
-Stratava is **single-writer**, enforced by a native object lock on the target file.
+Varlit is **single-writer**, enforced by a native object lock on the target file.
 Within that:
 
 - **Resident record reads are a snapshot as of open, until the handle is asked
   to advance.** The record index is built at open, and records a writer appends
   afterwards are not visible to that handle until it calls
-  [`StratavaFile::follow`]/[`StratavaReader::follow`], which frames the bytes past the
+  [`VarlitFile::follow`]/[`VarlitReader::follow`], which frames the bytes past the
   end it holds and adopts them to the same commit boundary an open would stop
   at. A handle never advances on its own — that is what keeps a `&self` read
   from observing a record mid-write.
@@ -644,7 +644,7 @@ Within that:
   writer after reconciling the failed operation. See
   [space management](scalable-io.md#explicit-sidecar-compaction).
 
-**Who it affects.** Anyone assuming a Stratava handle is a live view of a file
+**Who it affects.** Anyone assuming a Varlit handle is a live view of a file
 another handle is writing. It is not.
 
 **Usage.** Each thread owns a reader (`Send + !Sync`). `follow(&mut self)` adopts
@@ -704,9 +704,9 @@ covers the rest. What each shape of reader actually needs:
 | Streaming loop | yes | `follow()` returning `0` does not say which of its reasons applies — "nothing appended", "appended but not yet committed", or "this generation is finished"; `is_current()` separates the last from the other two, on a path that is idle by definition |
 | Opens, reads, closes | no | **Not affected.** Every open resolves the pathname to the current generation |
 | Long-lived, read-only, no loop | no | **Nothing informs it.** The application decides when freshness matters and calls `is_current()` — a timer, a user action, a filesystem watch |
-| Shared `Arc<StratavaFile>` | owner only | The owner polls and swaps in `reopen_readonly()`; readers hold `&self` throughout |
+| Shared `Arc<VarlitFile>` | owner only | The owner polls and swaps in `reopen_readonly()`; readers hold `&self` throughout |
 
-**Why stratava does not check on every read.** It could, and the check is one
+**Why varlit does not check on every read.** It could, and the check is one
 `open` plus two metadata calls — per read, on a path whose cost is the reason
 positional reads exist. That collides with the standing requirement that reads
 stay cheap and take `&self`, and it would charge every format for a capability
@@ -759,7 +759,7 @@ options, each defaulting to off, in the same shape as the existing `index: [...]
 DSL keys.
 
 **It is a design study, not a feature.** There is no `channel_view` type, no
-DSL key, and no generated method anywhere in `stratava-core` or `stratava-macros`.
+DSL key, and no generated method anywhere in `varlit-core` or `varlit-macros`.
 Nothing that study describes is callable, and the notes are not published.
 
 One conclusion from it is worth carrying here because it is a property of the
@@ -856,9 +856,9 @@ shared-handle ratio, 2.14x and 1.43x, published as the evidence that that ratio
 is dominated by the host rather than as a result; no Linux throughput, syscall
 count, residency figure or open cost has been measured.
 
-`cargo clippy --target x86_64-unknown-linux-gnu -p stratava --no-default-features
+`cargo clippy --target x86_64-unknown-linux-gnu -p varlit --no-default-features
 --lib -- -D warnings` previously failed with `field 'handles' is never read` at
-`crates/stratava-core/src/matrix.rs`, because `MatrixReadPool::reopen` is
+`crates/varlit-core/src/matrix.rs`, because `MatrixReadPool::reopen` is
 `#[cfg(windows)]`-only and the field's other readers are `#[cfg(test)]`. The
 field is an ownership anchor rather than dead weight — it holds the `Arc<File>`s
 whose `Weak`s live in the thread-local cache — so it now carries
@@ -871,7 +871,7 @@ configurations, and is green.
 
 `pib_probe::real_file_positional_io_at_one_pib` is `#[ignore]`d and additionally
 soft-passes: `ProbeError::Unsupported` prints "skipped" and returns success unless
-`STRATAVA_REQUIRE_PIB_SPARSE=1` is set. Its sibling
+`VARLIT_REQUIRE_PIB_SPARSE=1` is set. Its sibling
 `real_file_positional_io_at_one_tib_smoke` is also
 `#[ignore]`d and has no required-mode escape at all — `Unsupported` always passes.
 
@@ -888,10 +888,10 @@ support on every filesystem; deployment filesystems still need qualification.
 
 ### 6.3 Performance and scale probes do not run in any job
 
-- `crates/stratava/tests/perf_smoke.rs` is entirely `#[ignore]`d. The performance
+- `crates/varlit/tests/perf_smoke.rs` is entirely `#[ignore]`d. The performance
   smoke suite runs in no job.
 - The one-million-key allocator stress probe
-  (`crates/stratava/tests/high_cardinality.rs`) is `#[ignore]`d.
+  (`crates/varlit/tests/high_cardinality.rs`) is `#[ignore]`d.
 
 The explicit qualification campaign on 2026-10-01 executed 10k/100k/1m-key
 profiles, with peak additional Rust heap of 6,289,194 / 14,962,766 / 16,170,598
@@ -911,9 +911,9 @@ still no automatically scheduled long performance campaign.
   now 139.
 - **This changed in 0.7.0, and the change is smaller than it sounds.** All three
   now run, weekly, in `.github/workflows/sanitizers.yml`: `fuzz-smoke` builds and
-  runs **every** target for 90 seconds each, `asan` runs the `stratava` and
-  `stratava-core` test suites under AddressSanitizer with `--all-features`, and
-  `miri` runs `stratava-core`'s no-default-feature unit tests. Executed on Linux
+  runs **every** target for 90 seconds each, `asan` runs the `varlit` and
+  `varlit-core` test suites under AddressSanitizer with `--all-features`, and
+  `miri` runs `varlit-core`'s no-default-feature unit tests. Executed on Linux
   before the workflow landed: Miri 28 tests green under strict provenance and
   symbolic alignment checking, ASan 163 tests green with zero reports, and a
   bounded campaign on two targets producing no artifact.
@@ -993,14 +993,14 @@ shrinks.
 | `cargo check --workspace --all-features --all-targets --locked` | clean | clean |
 | Clippy `-D warnings`, 9 configurations (all-features, default, no-default-features, and each of the 6 optional features alone) | clean, 9/9 | clean, 9/9 |
 | `cargo doc`/`rustdoc -D warnings`, 3 crates x {all-features, default} | clean, 6/6 | clean, 6/6 |
-| `stratava-test-runner test --workspace --all-features` | **651 passed, 0 failed, 8 ignored** across 49 binaries; artifact cleanup verified empty | 648 passed |
-| `stratava-test-runner test --workspace` (default features) | **418 passed, 0 failed, 5 ignored** across 48 binaries | 168 passed, **1 failed** |
-| `cargo test -p stratava-core --all-features --lib`, five consecutive runs | 139 passed each time, 0 failed; no flake | same |
+| `varlit-test-runner test --workspace --all-features` | **651 passed, 0 failed, 8 ignored** across 49 binaries; artifact cleanup verified empty | 648 passed |
+| `varlit-test-runner test --workspace` (default features) | **418 passed, 0 failed, 5 ignored** across 48 binaries | 168 passed, **1 failed** |
+| `cargo test -p varlit-core --all-features --lib`, five consecutive runs | 139 passed each time, 0 failed; no flake | same |
 | `rename-fixture` and `public-api-fixture`, built and run | both OK | both OK |
 | `cargo deny check`, root **and** fuzz workspace | `advisories ok, bans ok, licenses ok, sources ok` for both | clean |
 | `cargo audit` (root) | clean, 79 crate dependencies scanned | clean |
 | fuzz workspace `cargo metadata --locked` + `cargo check --locked --all-targets` | clean | clean |
-| `cargo package --locked`, verification enabled | **verified archives for all three crates** (`stratava-core`, `stratava-macros`, `stratava`) | verified |
+| `cargo package --locked`, verification enabled | **verified archives for all three crates** (`varlit-core`, `varlit-macros`, `varlit`) | verified |
 | Clean-tree copy (no `target/`, no VCS, no `mck-*`/`slipway-*`, no fuzz corpus), `cargo metadata` + `cargo check --workspace --all-features` | clean | clean |
 
 **Two notes on this run, both about honesty rather than results.**
@@ -1014,14 +1014,14 @@ because the repository working tree was dirty (this release's own uncommitted
 changes) and `cargo package` refuses a dirty tree without `--allow-dirty`. The
 archives were verified from exactly the release content, but the run that produced
 them was not a run in a committed repository. It should be repeated after the
-release commit. `cargo package -p stratava` alone still cannot verify — `stratava-core`
+release commit. `cargo package -p varlit` alone still cannot verify — `varlit-core`
 is not on crates.io, so the facade's dependency cannot be resolved from the index
 — and `cargo package --workspace`, which unpacks the sibling archives into a
 temporary local registry first, is the form that works.
 
 **The red one, and its fix.** In the run tabulated above, under the **default**
 feature set,
-`crates/stratava/tests/matrix_concurrent_reads.rs::threads_sharing_one_handle_read_every_cell_correctly`
+`crates/varlit/tests/matrix_concurrent_reads.rs::threads_sharing_one_handle_read_every_cell_correctly`
 failed with `Error::IntegrityFeatureDisabled`: the test looped over
 `[IntegrityPolicy::None, IntegrityPolicy::Crc32]` unconditionally, and `Crc32` is
 refused when the `integrity` feature is off. It was a **defect in the test, not in
@@ -1053,7 +1053,7 @@ the derived cache, and §1.3's still-occurring refusal), the 4
 ### 6.7 The backward-compatibility table: what is now executed, and what still is not
 
 **No test in the suite opens an artifact written by an older version.** The
-repository stores none: there is no tracked `.stratava`, `.vks` or `.vki` file
+repository stores none: there is no tracked `.varlit`, `.vks` or `.vki` file
 anywhere and no fixtures directory, so every row of the compatibility table in
 [API Changes](api-changes.md) is *derived from the current source*.
 
@@ -1062,8 +1062,8 @@ genuinely older builds, and all three behaved as documented:
 
 | Claim | How it was checked | Result |
 | --- | --- | --- |
-| A plain native append-log file written by **0.1.0** opens normally | a producer built against the real `stratava-core 0.1.0` source package wrote an 8-record fixed-block file; a 0.4.0 consumer opened it | **opens; all 8 records and every field byte-for-byte correct** |
-| The same, written by **0.3.0** | producer built against the real `stratava 0.3.0` / `stratava-core 0.3.0` / `stratava-macros 0.3.0` source packages | **opens; all 8 records and every field correct** |
+| A plain native append-log file written by **0.1.0** opens normally | a producer built against the real `varlit-core 0.1.0` source package wrote an 8-record fixed-block file; a 0.4.0 consumer opened it | **opens; all 8 records and every field byte-for-byte correct** |
+| The same, written by **0.3.0** | producer built against the real `varlit 0.3.0` / `varlit-core 0.3.0` / `varlit-macros 0.3.0` source packages | **opens; all 8 records and every field correct** |
 | A file pinned with a **computed schema hash** from 0.3.0 is refused | the same declaration compiled under 0.3.0 (hash `0xbaf33c482858b060`) and under 0.4.0 (hash `0x4bf7fa8d7d7e9e4f`) | **refused with `Error::SchemaHashMismatch`**, carrying the 0.4.0 value as the wanted hash and 0.3.0's as the stored one |
 
 That is a **manual, out-of-tree check, not a regression test.** It was run once, on
@@ -1128,7 +1128,7 @@ hash, and five consequences follow that are limitations rather than details:
   a hostile `u32` length field name a 4 GiB allocation before a block is parsed
   — but it means the ceiling has to be declared in every copy of the format
   declaration, and nothing checks that it was. Measured in
-  `crates/stratava/tests/header_extension_limit.rs`: the undeclared ceiling is
+  `crates/varlit/tests/header_extension_limit.rs`: the undeclared ceiling is
   still 64 KiB, an over-budget region without a declaration is refused at
   create, a declared ceiling carries a 256 KiB region through create, write,
   reopen and read, and a reader that declares the default ceiling is refused at
@@ -1162,8 +1162,8 @@ hash, and five consequences follow that are limitations rather than details:
   here.
 
 What has been measured: the seventeen cases in
-`crates/stratava/tests/header_slots.rs`, plus the four in
-`crates/stratava/tests/header_extension_limit.rs` for the capacity ceiling, over all
+`crates/varlit/tests/header_slots.rs`, plus the four in
+`crates/varlit/tests/header_extension_limit.rs` for the capacity ceiling, over all
 three integrity policies —
 reserve at create, survive a reopen, rewrite without growth, removal, refusal on
 overflow, refusal on an undeclared block, refusal of a write after a seal,
@@ -1212,7 +1212,7 @@ max_keyed_tail_bytes`.
 ## 8. `unsafe` API contracts that cannot be checked
 
 **`replace_fixed_in_place_exclusive` cannot verify that a key is unchanged**
-(open item 15). At a `T: StratavaBlock` signature there is no way to check it. The
+(open item 15). At a `T: VarlitBlock` signature there is no way to check it. The
 API does guarantee unconditionally that the block's keyed-tail map is dropped
 before the first byte is written. **If the contract is violated, the physical
 `prev_same_key_offset` chain is unrepairable** — this path publishes no new
@@ -1232,12 +1232,12 @@ These are recorded for completeness and because they are self-reported in the
 source rather than hidden. **A downstream crate cannot express any of them**, so
 they are not user-facing limitations and are listed separately for that reason.
 
-Three enforcement bypasses still compile *inside* `stratava-core`. The catalogues are
-the doc comments on `mod bypass_catalogue` in `crates/stratava-core/src/matrix.rs`
+Three enforcement bypasses still compile *inside* `varlit-core`. The catalogues are
+the doc comments on `mod bypass_catalogue` in `crates/varlit-core/src/matrix.rs`
 ("What still compiles from inside this file") and in
-`crates/stratava-core/src/file.rs`, and the one on
+`crates/varlit-core/src/file.rs`, and the one on
 `a_static_decoy_flag_cannot_be_declared` in
-`crates/stratava-core/src/writer_permit.rs`.
+`crates/varlit-core/src/writer_permit.rs`.
 
 1. **`SparseBitmap` and its prepared values are declared at file scope**
    in `matrix.rs`. `BitmapByteUpdate`, `CommitBitUpdate`, `PreparedByteWrite`

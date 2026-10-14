@@ -1,37 +1,37 @@
 # Update And Compact Guide
 
-Stratava is optimized for append-friendly updates. Prefer put, op, tombstone, and
+Varlit is optimized for append-friendly updates. Prefer put, op, tombstone, and
 compact workflows for keyed data. Use direct replacement only when the caller
 intentionally wants to rewrite existing records.
 
 ## Keyed Updates
 
-A keyed block declares `key = "..."` and implements `StratavaMerge` when it accepts
+A keyed block declares `key = "..."` and implements `VarlitMerge` when it accepts
 ops.
 
 ```rust
-use stratava::{StratavaBlock, StratavaMerge};
+use varlit::{VarlitBlock, VarlitMerge};
 
-#[derive(Clone, Debug, PartialEq, StratavaBlock)]
-#[stratava(id = 101, version = 1, kind = "variable", key = "id")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 101, version = 1, kind = "variable", key = "id")]
 struct User {
-    #[stratava(field_id = 1)]
+    #[varlit(field_id = 1)]
     id: u64,
-    #[stratava(field_id = 2)]
+    #[varlit(field_id = 2)]
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, StratavaBlock)]
-#[stratava(id = 102, version = 1, kind = "variable")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 102, version = 1, kind = "variable")]
 struct RenameUser {
-    #[stratava(field_id = 1)]
+    #[varlit(field_id = 1)]
     name: String,
 }
 
-impl StratavaMerge for User {
+impl VarlitMerge for User {
     type Op = RenameUser;
 
-    fn apply_op(&mut self, op: Self::Op) -> stratava::Result<()> {
+    fn apply_op(&mut self, op: Self::Op) -> varlit::Result<()> {
         self.name = op.name;
         Ok(())
     }
@@ -41,7 +41,7 @@ impl StratavaMerge for User {
 Append updates:
 
 ```rust
-let mut file = AppFormat::open("users.stratava")?;
+let mut file = AppFormat::open("users.varlit")?;
 file.push(&User { id: 1, name: "old".to_string() })?; // put
 file.push_op::<User>(&1, &RenameUser { name: "new".to_string() })?;
 file.delete::<User>(&2)?; // tombstone
@@ -60,13 +60,13 @@ Use base plus ordered delta shards when a workflow naturally writes append-only
 deltas.
 
 ```rust
-use stratava::merge_keyed_files;
+use varlit::merge_keyed_files;
 
 merge_keyed_files::<User, _>(
     AppFormat::spec(),
-    "base.stratava",
-    &["delta-1.stratava", "delta-2.stratava"],
-    "merged.stratava",
+    "base.varlit",
+    &["delta-1.varlit", "delta-2.varlit"],
+    "merged.varlit",
 )?;
 ```
 
@@ -79,19 +79,19 @@ Compact drops tombstones and ops and writes only final keyed values for one
 keyed block type.
 
 ```rust
-use stratava::{compact_keyed_file, compact_keyed_files};
+use varlit::{compact_keyed_file, compact_keyed_files};
 
 compact_keyed_file::<User, _>(
     AppFormat::spec(),
-    "users.stratava",
-    "users.compact.stratava",
+    "users.varlit",
+    "users.compact.varlit",
 )?;
 
 compact_keyed_files::<User, _>(
     AppFormat::spec(),
-    "base.stratava",
-    &["delta-1.stratava", "delta-2.stratava"],
-    "users.final.stratava",
+    "base.varlit",
+    &["delta-1.varlit", "delta-2.varlit"],
+    "users.final.varlit",
 )?;
 ```
 
@@ -129,7 +129,7 @@ payload heap allocations and allocator overhead.
 
 `replace_fixed` is the safe fixed replacement path, and the one
 `replace(index, block)` picks for a fixed block on a format that writes no
-record footer. The canonical payload size must be unchanged. Stratava copies
+record footer. The canonical payload size must be unchanged. Varlit copies
 the current opened generation to a same-directory temporary file, patches the
 record header/payload and checksum, validates the complete new generation,
 syncs it, and atomically publishes it. Readers opened before publication keep
@@ -158,7 +158,7 @@ On a `keyed_offset_chain` format the caller must also keep the record's key
 unchanged (F-02). Records appended after the target already carry
 `prev_same_key_offset` pointers into it, and this path publishes no new
 generation in which the chain could be rebuilt, so a key change silently
-rewires the physical chains. The signature takes `T: StratavaBlock` and cannot
+rewires the physical chains. The signature takes `T: VarlitBlock` and cannot
 check it. What the call does guarantee either way is that the block's resident
 keyed-tail map is dropped before the first byte is written, so no later append
 can resolve a stale predecessor from it.
@@ -206,9 +206,9 @@ Run the ignored smoke tests when update, merge, compact, replacement, recovery,
 or keyed materialization behavior changes:
 
 ```powershell
-cargo test -p stratava --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
 ```
 
 Watch large cases for accidental O(n^2) scans, repeated allocation, slow open

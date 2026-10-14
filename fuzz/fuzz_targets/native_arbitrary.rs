@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use stratava_fuzz::{FuzzNativeFormat, FuzzPoint, FuzzRecord, write_fuzz_file};
+use varlit_fuzz::{FuzzNativeFormat, FuzzPoint, FuzzRecord, write_fuzz_file};
 
 fuzz_target!(|data: &[u8]| {
     let Some(path) = write_fuzz_file("native", data) else {

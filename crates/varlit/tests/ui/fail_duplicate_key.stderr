@@ -1,0 +1,5 @@
+error: duplicate varlit key field
+ --> tests/ui/fail_duplicate_key.rs:4:45
+  |
+4 | #[varlit(id = 403, kind = "variable", key = "id,id")]
+  |                                             ^^^^^^^

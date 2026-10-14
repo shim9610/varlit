@@ -1,0 +1,5 @@
+error: VarlitBlock derive does not support generic parameters yet; declare a concrete block type or implement VarlitBlock manually
+ --> tests/ui/fail_generic_derive.rs:5:20
+  |
+5 | struct GenericBlock<T> {
+  |                    ^^^

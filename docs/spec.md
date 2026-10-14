@@ -1,26 +1,26 @@
-# Stratava 0.3 Implementation Spec
+# Varlit 0.3 Implementation Spec
 
 ## Goal
 
-Implement the first stable core of Stratava: a Rust workspace that can define typed binary block formats with macros, create/read append-friendly files, support lazy typed access, keyed merge semantics, explicit durability, recovery policy, and compile-time schema validation.
+Implement the first stable core of Varlit: a Rust workspace that can define typed binary block formats with macros, create/read append-friendly files, support lazy typed access, keyed merge semantics, explicit durability, recovery policy, and compile-time schema validation.
 
 ## Workspace
 
-- `stratava`: facade crate re-exporting runtime and macros.
-- `stratava-core`: runtime format spec, file reader/writer, codec, collections, merge, and errors.
-- `stratava-macros`: `#[derive(StratavaBlock)]` and `stratava_format!`.
+- `varlit`: facade crate re-exporting runtime and macros.
+- `varlit-core`: runtime format spec, file reader/writer, codec, collections, merge, and errors.
+- `varlit-macros`: `#[derive(VarlitBlock)]` and `varlit_format!`.
 
 ## Wire Contract
 
 - `LayoutSpec` is the physical layout layer. If no layout is declared,
-  `LayoutPreset::StratavaNative` is used and the existing Stratava header/record
+  `LayoutPreset::VarlitNative` is used and the existing Varlit header/record
   bytes remain unchanged.
 - `FormatSpec::effective_layout()` exposes the active physical plan with the
   same file-header, segment, lead-in, raw-region, and footer vocabulary for both
-  native and custom formats. For `LayoutPreset::StratavaNative`, the plan is
+  native and custom formats. For `LayoutPreset::VarlitNative`, the plan is
   synthetic and mirrors the existing native writer/reader byte contract without
   changing native bytes or schema hashes.
-- The Stratava-native file header, record lead-in, and optional record footer are
+- The Varlit-native file header, record lead-in, and optional record footer are
   generated from the same internal native layout field contract used by
   `effective_layout()`. The native append-log semantics remain in the native
   reader/writer; this is a parity extraction, not a semantic rewrite.
@@ -40,7 +40,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   optional footer. The writer backpatches finalized offsets after the segment is
   written, and the reader validates literals, finalized offsets, forward
   progress, footer bounds, and region bounds.
-- File header includes user magic, Stratava container marker, format version, endian, flags byte, and schema hash.
+- File header includes user magic, Varlit container marker, format version, endian, flags byte, and schema hash.
 - Record header includes block id, block version, flags, sequence, payload length, checksum, and reserved bytes.
 - The final record header word is `uncompressed_len_hint` for compressed records and `0` otherwise. `payload length` is always the physical stored byte length.
 - `VARVE1` is used for plain records, `VARVE2` is used for file-header extensions such as file-explicit compression, and `VARVE3` is used when `record_footer`/`transaction_marker` commit policy or block/keyed offset chains are enabled.
@@ -61,7 +61,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 - Matrix support is a separate storage mode from the append-log record region.
 - Files whose static spec contains matrix blocks store a 24-byte `VMNC`
   creation-nonce region and then a `VMAT` layout region immediately after the
-  normal Stratava file header.
+  normal Varlit file header.
 - Matrix offsets are logical offsets. The primary contains the immutable base
   layout; changes are stored in the required `<primary>.<nonce>.vmg` companion
   (`VARVEMG1`). A root maps 4096-byte logical pages through a fixed-radix directory
@@ -157,7 +157,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   `FormatSpec::create_layout_writer_with_header`, and
   `FormatSpec::open_layout_writer`, and `FormatSpec::open_layout_reader` are
   the custom physical-layout entry points. They do not write or expect the
-  Stratava-native container header.
+  Varlit-native container header.
 - Custom layout files use `LayoutWriter::write_segment` with
   `SegmentWrite { fields, footer_fields, metadata, raw }`; incomplete
   backpatch windows are treated as corrupt physical data by strict open in the
@@ -208,11 +208,11 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 - `unsafe replace_fixed_in_place_exclusive` is the explicitly unsafe expert
   path for coordinated callers that exclude all overlapping readers/writers.
 - Keyed deletes use a common internal tombstone record.
-- Keyed ops use user-defined `StratavaMerge::Op`.
+- Keyed ops use user-defined `VarlitMerge::Op`.
 - Merge conflict ordering is shard order, then local sequence, then record ordinal; later delta shards win over base.
 - `keyed_blocks::<T>()` is latest-put indexed access after tombstones.
 - `materialized_keyed_blocks::<T>()` applies same-file puts, ops, and tombstones into current state.
-- `StratavaReader` and `StratavaWriter` are additive handle wrappers for clearer read-only and write-capable workflows. Existing `StratavaFile` APIs remain available.
+- `VarlitReader` and `VarlitWriter` are additive handle wrappers for clearer read-only and write-capable workflows. Existing `VarlitFile` APIs remain available.
 
 ## Codec Contract
 
@@ -222,11 +222,11 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   `K: Ord` but not `Clone`, so equivalent maps produce stable bytes independent
   of insertion or hash iteration order.
 - Decoding `HashMap<K, V>` preserves values but not insertion order.
-- Custom field codecs are supported by implementing `StratavaEncode` and `StratavaDecode` for the field type. The derive macro uses the type's `WIRE_TYPE` in field descriptors and manifests.
+- Custom field codecs are supported by implementing `VarlitEncode` and `VarlitDecode` for the field type. The derive macro uses the type's `WIRE_TYPE` in field descriptors and manifests.
 - Every codec declares `SCHEMA_ID`, the structural identity of its bytes.
   Built-in scalars declare leaf identities and built-in containers fold their
   elements, so an element that declares none propagates outward as "no
-  identity". `#[derive(StratavaBlock)]` folds every field's encode and decode
+  identity". `#[derive(VarlitBlock)]` folds every field's encode and decode
   `SCHEMA_ID` into the block fingerprint and rejects at compile time any field
   whose codec left `SCHEMA_ID` at the default `0`. A hand-written codec used as
   a block field must therefore declare a value that changes whenever its emitted
@@ -240,11 +240,11 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   platforms, and both are usable as ordinary derived variable fields.
 - `PackedBitmap` is **not** a fixed-width matrix field. A matrix slot needs a
   stride known at compile time, and a `Vec`-backed encoding has none. Inline
-  matrix `SLOT_STRIDE` is generated from each element's `StratavaEncode::WIRE_TYPE`
+  matrix `SLOT_STRIDE` is generated from each element's `VarlitEncode::WIRE_TYPE`
   rather than the Rust object size, so a type without a fixed encoded width is
   rejected during const evaluation whatever it is spelled.
 - Enum-like values should use explicit custom codecs; automatic enum representation inference is out of scope.
-- Length and count limits are format-author policy. Stratava's built-in decoders
+- Length and count limits are format-author policy. Varlit's built-in decoders
   avoid large allocation-before-validation patterns where the remaining bytes
   can be checked generically, but domain-specific maximum string, sequence,
   map, chunk, or decompressed sizes should be enforced by the format's custom
@@ -266,13 +266,13 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 
 ## Macro Contract
 
-- `#[derive(StratavaBlock)]` supports fixed and variable structs.
+- `#[derive(VarlitBlock)]` supports fixed and variable structs.
 - Variable fields require non-zero unique field ids.
 - Keyed blocks support single-field and composite keys.
 - Duplicate key fields, missing key fields, duplicate block ids, and reserved block ids fail at compile time where macro input makes that possible.
-- `stratava_format!` supports the legacy registry form `pub struct Format { blocks: [A, B]; }` and the format-first form `pub format Format { blocks { fixed A(...) { ... } } }`.
-- In format-first form, block structs, `StratavaBlock` implementations, typed reader/writer wrappers, and typed read/write traits are generated from the format declaration.
-- `stratava_format!` supports `magic`, `version`, optional `limits`, `endian`, optional `schema_hash`, optional `commit`, optional `integrity`, optional `index`, optional `recovery`, optional `manifest`, and `blocks`.
+- `varlit_format!` supports the legacy registry form `pub struct Format { blocks: [A, B]; }` and the format-first form `pub format Format { blocks { fixed A(...) { ... } } }`.
+- In format-first form, block structs, `VarlitBlock` implementations, typed reader/writer wrappers, and typed read/write traits are generated from the format declaration.
+- `varlit_format!` supports `magic`, `version`, optional `limits`, `endian`, optional `schema_hash`, optional `commit`, optional `integrity`, optional `index`, optional `recovery`, optional `manifest`, and `blocks`.
 - `limits { ... }` is an optional, partial set of operational defaults. Unknown
   and duplicate keys are compile errors. Limits do not affect wire bytes,
   schema hashes, or manifests. Ordinary handles fill missing fields from
@@ -283,10 +283,10 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   covers payload plus native record footer when present. `crc32_with_header`
   additionally covers the native 32-byte record header with the checksum field
   normalized to zero.
-- `stratava_format!` supports `preset: stratava_native|none|custom;`. Omitted preset
-  means `stratava_native` unless a custom layout is declared; with declared layout
+- `varlit_format!` supports `preset: varlit_native|none|custom;`. Omitted preset
+  means `varlit_native` unless a custom layout is declared; with declared layout
   parts, omission means `none` so the declaration owns byte zero.
-- `stratava_format!` supports the first custom layout grammar:
+- `varlit_format!` supports the first custom layout grammar:
   `layout { file_header Header { bytes sig = b"..."; } segment Name repeat
   until_eof { lead_in Name { bytes tag = b"..."; u32 caller_field; i64 offset =
   finalize(target = segment_end, relative_to = after_lead_in); } metadata Name;
@@ -302,8 +302,8 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   segment info getters. The generated wrapper still exposes the low-level
   `SegmentWrite` path, streamed segment writes, tolerant scan reports, and
   whole-region or range metadata/raw readers.
-- Physical layout declarations are not `StratavaBlock` payload declarations:
-  `StratavaBlock` is the logical native append-log record unit, while
+- Physical layout declarations are not `VarlitBlock` payload declarations:
+  `VarlitBlock` is the logical native append-log record unit, while
   `file_header`, `lead_in`, `footer`, `metadata`, and `raw_region` declare the
   surrounding byte-level framing for custom external formats.
 - Custom layouts may declare multiple physical segment descriptors. The scanner
@@ -312,24 +312,24 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   generated reader indexes are per segment kind, while low-level layout reader
   indexes remain physical stream indexes.
 - `schema_hash: computed;` asks the macro to call `with_computed_schema_hash()` after policies are attached.
-- `index` accepts either a single legacy identifier or a list such as `[scan_on_open, checkpoint_on_flush, block_offset_chain, keyed_offset_chain]`. `segment_on_flush` is deliberately **not** one of them: a block is the unit a declaration names, a segment is stratava's internal lookup unit, and its granularity is stratava's decision. Enable it on the `FormatSpec` with `IndexPolicy::with_segment_on_flush`.
+- `index` accepts either a single legacy identifier or a list such as `[scan_on_open, checkpoint_on_flush, block_offset_chain, keyed_offset_chain]`. `segment_on_flush` is deliberately **not** one of them: a block is the unit a declaration names, a segment is varlit's internal lookup unit, and its granularity is varlit's decision. Enable it on the `FormatSpec` with `IndexPolicy::with_segment_on_flush`.
 - `commit` accepts `none`, `record_footer`, or `transaction_marker(on_flush|explicit)`.
 - Generated typed writers expose both `commit()` and `commit_durable()`.
   `commit()` is a logical visibility marker and does not imply fsync.
   `commit_durable()` writes commit-covered metadata/checkpoints, flushes and
   syncs data, writes the marker, then syncs the marker.
-- `stratava_format!` also supports optional `extension` and global `compression`. Compression syntax is `compression: none;` or `compression: variable_blocks(zstd, level = default|fast|best|N, header = record_explicit|file_explicit|format_contract, min_len = N, only_if_smaller = true|false, max_len = N);`.
+- `varlit_format!` also supports optional `extension` and global `compression`. Compression syntax is `compression: none;` or `compression: variable_blocks(zstd, level = default|fast|best|N, header = record_explicit|file_explicit|format_contract, min_len = N, only_if_smaller = true|false, max_len = N);`.
 - Per-block compression overrides are a runtime `FormatSpec::with_block_compression` API in 0.2, not a macro DSL clause.
-- Legacy registry formats expose raw `StratavaReader`/`StratavaWriter` handles. Format-first declarations expose typed `FormatReader`/`FormatWriter` wrappers where methods such as `push_user`, `delete_user`, `users`, `commit`, `commit_durable`, `flush`, and `sync` are generated from block declarations.
-- Duplicate top-level `stratava_format!` keys are compile errors. The derive
+- Legacy registry formats expose raw `VarlitReader`/`VarlitWriter` handles. Format-first declarations expose typed `FormatReader`/`FormatWriter` wrappers where methods such as `push_user`, `delete_user`, `users`, `commit`, `commit_durable`, `flush`, and `sync` are generated from block declarations.
+- Duplicate top-level `varlit_format!` keys are compile errors. The derive
   macro rejects generic block structs in 0.2 with a direct diagnostic; use a
   concrete block type or manual trait implementations.
-- The derive macro emits `StratavaBlock::FIELDS`, including field id, field name, wire type, and required/defaulted presence.
-- `#[stratava(default)]` is variable-block-only. Fixed blocks are positional canonical payloads and cannot omit fields.
+- The derive macro emits `VarlitBlock::FIELDS`, including field id, field name, wire type, and required/defaulted presence.
+- `#[varlit(default)]` is variable-block-only. Fixed blocks are positional canonical payloads and cannot omit fields.
 - `key = "..."` must contain one or more valid Rust identifiers separated by commas. Empty key strings, empty segments, duplicates, and missing fields are compile errors.
 - `FormatSpec::computed_schema_hash()` computes a deterministic schema fingerprint from format version, endian, policies, block descriptors, and field descriptors. It intentionally excludes the pinned header `schema_hash` value.
 - Custom layout descriptors participate in `computed_schema_hash()`. The
-  default `LayoutPreset::StratavaNative` with no custom parts is intentionally not
+  default `LayoutPreset::VarlitNative` with no custom parts is intentionally not
   hashed so existing native format hashes and bytes remain stable.
 - `FormatSpec::schema_debug_dump()` emits a human-readable registered schema view for diagnostics.
 - `FormatSpec::diagnostics()`, `FormatSpec::diagnose_file(path)`, and
@@ -352,11 +352,11 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 - CRC integrity detects payload/footer covered-byte modification when feature-enabled.
 - `crc32_with_header` detects native record header tampering as well.
 - Variable-block compression roundtrips under record-explicit, file-explicit, and format-contract metadata modes.
-- Explicit `preset: stratava_native` produces byte-identical output to the omitted
+- Explicit `preset: varlit_native` produces byte-identical output to the omitted
   preset for the same native format declaration.
-- Omitted or explicit `preset: stratava_native` exposes an effective layout plan
-  containing `StratavaFileHeader`, repeated `StratavaRecord`, and, when applicable,
-  `StratavaRecordFooter`.
+- Omitted or explicit `preset: varlit_native` exposes an effective layout plan
+  containing `VarlitFileHeader`, repeated `VarlitRecord`, and, when applicable,
+  `VarlitRecordFooter`.
 - `inspect_layout_file` works for both native preset files and `preset: none`
   custom physical layouts, including validated file-header fields.
 - A TDMS-style custom layout can write files whose first bytes are `TDSm`, whose
@@ -365,8 +365,8 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   `LayoutSegmentInfo`, and whose mixed raw channel bytes are sliced by
   adapter-owned chunk metadata.
 - The TDMS-style physical writer example is an external adapter proof, not a
-  Stratava-provided TDMS feature. It produces a three-segment scalar type matrix
-  using Stratava's generated layout APIs plus adapter toolkit helpers, then
+  Varlit-provided TDMS feature. It produces a three-segment scalar type matrix
+  using Varlit's generated layout APIs plus adapter toolkit helpers, then
   reopens it with `open_layout_writer` to append another segment. The optional
   Python harness opens that file with `npTDMS` and verifies file properties,
   group/channel lookup, channel properties, changed raw-data-index segments,
@@ -376,12 +376,12 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   with unit type ids, booleans, strings, timestamps, and complex single/double
   floats.
 - The reverse TDMS-style harness generates a two-segment scalar type matrix
-  with Python `npTDMS`, then parses it through a Stratava-based example adapter
+  with Python `npTDMS`, then parses it through a Varlit-based example adapter
   that uses the generated layout reader plus caller-owned TDMS metadata/raw
-  logic. It then appends one segment with Stratava and verifies the result with
-  both npTDMS and Stratava.
-- The boundary between Stratava generic API obligations and external TDMS adapter
-  obligations is fixed as follows. Stratava owns physical-layout declaration and
+  logic. It then appends one segment with Varlit and verifies the result with
+  both npTDMS and Varlit.
+- The boundary between Varlit generic API obligations and external TDMS adapter
+  obligations is fixed as follows. Varlit owns physical-layout declaration and
   validation, segment framing and appends, and the exposure of offsets, lengths,
   field values, metadata and raw byte ranges, and tolerant scan reports. The
   adapter owns TDMS object paths, raw-data-index grammar, property typing,
@@ -389,12 +389,12 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
   and export. If strict layout open succeeds and the adapter can read the
   required ranges, an object-assembly, typing, scaling, timestamp or export
   failure is an adapter issue; if a valid external file cannot be expressed with
-  Stratava layout declarations, or Stratava rejects a file before the adapter can
-  report a documented physical status, that is a Stratava generic API issue.
+  Varlit layout declarations, or Varlit rejects a file before the adapter can
+  report a documented physical status, that is a Varlit generic API issue.
 - The BMP/Pillow harness verifies a non-TDMS custom physical layout in both
-  directions: Stratava writes a 24-bit BMP opened by Pillow, and Pillow writes a
+  directions: Varlit writes a 24-bit BMP opened by Pillow, and Pillow writes a
   BMP whose header fields, row-level chunk index, and pixel payload are decoded
-  by Stratava.
+  by Varlit.
 - A custom physical layout with a declared file header and segment footer writes
   those bytes at the declared offsets, exposes `file_header_len` and validated
   file-header values, and excludes footer bytes from the segment raw-region
@@ -424,7 +424,7 @@ Implement the first stable core of Stratava: a Rust workspace that can define ty
 
 - Every major feature slice must include a lightweight performance check before it is considered integrated.
 - Performance checks may start as ignored tests or benchmark examples, but they must be runnable from the workspace without external services.
-- The dependency-free benchmark example is runnable with `cargo run -p stratava --example perf_bench --release -- 10000`.
+- The dependency-free benchmark example is runnable with `cargo run -p varlit --example perf_bench --release -- 10000`.
 - The baseline dataset should include at least small, medium, and large record counts so regressions are visible before real-world scale.
 - The first benchmark suite should measure wall time, records per second, file size, and approximate allocation-sensitive behavior where practical.
 - Any implementation that changes indexing, scanning, merge, codec, compression, recovery, mmap, or zero-copy behavior must document the expected complexity and include a regression-oriented performance check.
@@ -456,9 +456,9 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
 
 ### Internal Segments
 
-- A **segment** is stratava's internal lookup unit: the records one commit point
+- A **segment** is varlit's internal lookup unit: the records one commit point
   added. It has no declaration surface, and its granularity is not a knob — a
-  block is what a declaration names, a segment is what stratava indexes by.
+  block is what a declaration names, a segment is what varlit indexes by.
 - Enabled by `IndexPolicy::segment_on_flush`, which is off by default. A file
   written with it off is byte-identical to one written before the option
   existed, and `computed_schema_hash()` is unchanged.
@@ -567,7 +567,7 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   - magic bytes `b"VDIG"`,
   - payload version `u16 = 1`,
   - flags `u16` — bit 0 (`0x0001`) says the sequence field carries a mark.
-    Every digest stratava writes sets it, so the word is `1` and never `0`: both
+    Every digest varlit writes sets it, so the word is `1` and never `0`: both
     writing paths always have a mark to report. A digest that sets any other
     bit was written by something that means more by it than this version
     defines, and open answers it with the scan rather than half-understanding
@@ -600,7 +600,7 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
 - A digest record that follows the latest commit marker is inside the committed
   prefix, on the same grounds a segment record is: it describes only records
   that marker already committed. The shapes a writer produces after a marker are
-  `[SEGMENT]`, `[DIGEST]` and `[SEGMENT, DIGEST]`; a longer run is a file stratava
+  `[SEGMENT]`, `[DIGEST]` and `[SEGMENT, DIGEST]`; a longer run is a file varlit
   did not write, and the prefix is cut back to the marker.
 - A commit point whose file already ends in a digest writes no new one, so idle
   flushes do not grow the file.
@@ -610,7 +610,7 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   the checkpoint's geometric threshold, which is a function of index position —
   a digest is a resident record and enlarges the index the checkpoint must
   serialise, exactly as a commit marker does.
-- `StratavaFile::open_readonly_lazy` reads the digest and frames **no other
+- `VarlitFile::open_readonly_lazy` reads the digest and frames **no other
   record**. The handle it returns keeps no record directory, because none was
   built: position-based reads (`blocks`, `scan`, `keyed_blocks`) return
   `Error::NoResidentDirectory`, and the caller supplies a directory with
@@ -646,7 +646,7 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
 - An **editable header region** is a fixed-size run of bytes reserved in the
   file header that a caller can rewrite for the life of the file. It exists for
   metadata a caller wants to revise without republishing: a watermark, a
-  processing state, a pointer into an external system. Every other way stratava
+  processing state, a pointer into an external system. Every other way varlit
   records a fact is append-only, which is exactly wrong for a fact that changes.
 - Enabled by `HeaderSlots`, off by default. A format declaring none writes the
   bytes it wrote before this existed and `computed_schema_hash()` is unchanged;
@@ -759,7 +759,7 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - Manifest payload version is `u16 = 5`.
 - Manifest content includes format version, endian, schema hash, extension, index policy, commit policy, integrity policy, recovery policy, manifest policy, compression policy, registered block descriptors, and registered field descriptors.
 - v2 field descriptors include field id, wire type, required/defaulted presence, and field name. v1 manifests can still be decoded with empty field lists for compatibility.
-- `StratavaFile::schema_manifest()` returns the latest embedded manifest if present.
+- `VarlitFile::schema_manifest()` returns the latest embedded manifest if present.
 - Files without a manifest still open.
 - Static `FormatSpec` remains authoritative for typed access; the manifest is diagnostic/debug data, not dynamic schema loading.
 
@@ -767,10 +767,10 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 
 - Normal typed reads continue to reject block version mismatches.
 - Migration is explicit only.
-- Runtime trait: `StratavaMigration<From, To>` with a user-provided conversion function.
+- Runtime trait: `VarlitMigration<From, To>` with a user-provided conversion function.
 - Runtime API: `file.blocks_migrated::<From, To, M>() -> Result<Vec<To>>`.
 - Migration requires `From::ID == To::ID`, reads records matching `From::VERSION`, decodes `From`, and applies `M`.
-- Macro-generated code does not infer field renames, deletes, or defaults beyond normal `#[stratava(default)]`; semantic conversion stays in user Rust code.
+- Macro-generated code does not infer field renames, deletes, or defaults beyond normal `#[varlit(default)]`; semantic conversion stays in user Rust code.
 
 ### Compact And Replace
 
@@ -816,7 +816,7 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - Atomic rewrite/compact output uses same-directory temp files, flushes and syncs temp contents, then replaces or renames into place.
 - Reader behavior is snapshot-on-open by default: a handle fixes its snapshot
   length at open and reads positionally against it. Since 0.8.0
-  `StratavaFile::follow`/`StratavaReader::follow` is an explicit `&mut self` advance
+  `VarlitFile::follow`/`VarlitReader::follow` is an explicit `&mut self` advance
   that frames only the bytes past the end the handle holds and adopts them to
   the same commit boundary an open would stop at. It never crosses a generation
   — a republished pathname answers `0` forever, and the pair for that is
@@ -832,11 +832,11 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - Mmap and zero-copy are opt-in features only. The `zero-copy` crate feature implies the `mmap` feature because the first raw-read API is mmap-backed.
 - Default typed decode remains owned canonical decoding.
 - Initial mmap scope exposes read-only payload windows from unsafe
-  `StratavaFile::mmap_payloads() -> MmapPayloads`.
+  `VarlitFile::mmap_payloads() -> MmapPayloads`.
 - `MmapPayloads` owns a read-only mmap plus a cloned snapshot index and `FormatSpec`.
 - `MmapPayloads::payload_window(entry)` accepts only entries that exactly match the cloned snapshot index, preventing forged public offsets from exposing arbitrary file bytes.
 - `MmapPayloads::block_payload_window::<T>(index)` returns the typed block ordinal payload bytes or `None` when out of range.
-- Unsafe `StratavaFile::mmap_matrix()` and `StratavaReader::mmap_matrix()` expose
+- Unsafe `VarlitFile::mmap_matrix()` and `VarlitReader::mmap_matrix()` expose
   `MmapMatrix`, a read-only mmap plus a cloned VMAT layout snapshot.
 - Every file-backed mmap constructor requires the caller to prevent mutation,
   truncation, replacement, or backing-object invalidation through every handle,
@@ -849,11 +849,11 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - `MmapMatrix::cell_payload_window::<T>(key)` returns a committed matrix slot
   payload window and verifies the per-cell CRC when matrix integrity is enabled.
 - Initial zero-copy scope is limited to explicit raw fixed blocks whose implementor promises endian, alignment, and layout compatibility.
-- Raw fixed access is exposed only as `unsafe MmapPayloads::raw_fixed::<T>(index)` where `T: StratavaRawFixedBlock`.
-- `StratavaRawFixedBlock` is an unsafe opt-in trait over `StratavaBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout`.
+- Raw fixed access is exposed only as `unsafe MmapPayloads::raw_fixed::<T>(index)` where `T: VarlitRawFixedBlock`.
+- `VarlitRawFixedBlock` is an unsafe opt-in trait over `VarlitBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout`.
 - `raw_fixed` requires fixed block kind, registered id/version/kind, record version match, matching raw endian, exact `size_of::<T>()` payload length, and valid `align_of::<T>()` alignment.
 - Raw matrix access is exposed as `unsafe MmapMatrix::raw_cell::<T>(key)` where
-  `T: StratavaRawMatrixBlock`; it requires matrix block kind, committed status,
+  `T: VarlitRawMatrixBlock`; it requires matrix block kind, committed status,
   matching raw endian, exact `size_of::<T>()` slot length, valid alignment, and
   per-cell CRC verification when enabled.
 - Raw zero-copy calls require the caller to guarantee the mapped bytes are not
@@ -871,30 +871,30 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
   primitive reads/writes, bounded byte windows, cursor position reporting, and
   length-prefixed bytes/string helpers.
 - `TaggedValueCodec` lets adapters map format-specific
-  type ids to user value enums without Stratava owning the meaning of those type
+  type ids to user value enums without Varlit owning the meaning of those type
   ids.
 - `ChunkIndex` and `ChunkIndexBuilder` map physical segment
   raw regions to logical stream chunks. The builder validates bounds against
   `LayoutSegmentInfo`, while the adapter supplies stream keys, value counts,
   stride/interleaving rules, and semantic metadata.
 - `SegmentReducer`, `reduce_segments`, and `reduce_segments_by_ref` run
-  stateful segmented metadata reductions. Stratava
+  stateful segmented metadata reductions. Varlit
   owns iteration and diagnostics; the adapter owns inheritance, replacement,
   same-as-previous, deletion, and version semantics.
-- Sidecar policy helpers support companion index/cache files. Stratava owns
+- Sidecar policy helpers support companion index/cache files. Varlit owns
   path derivation and basic identity diagnostics; the adapter owns sidecar wire
   grammar and rebuild policy.
-- A future declarative `stratava_adapter!` or nested `adapter { ... }` DSL may
+- A future declarative `varlit_adapter!` or nested `adapter { ... }` DSL may
   generate calls to this runtime layer. The
   DSL should generate adapter scaffolding from declarations but keep custom
   semantics in ordinary user Rust implementations.
 - Adapter diagnostics should combine static declaration checks, physical layout
   reports, cursor parse errors, chunk-bound checks, reducer status, and sidecar
-  status so users can decide whether a failure belongs to Stratava mechanics,
+  status so users can decide whether a failure belongs to Varlit mechanics,
   adapter declarations, user domain code, or damaged file bytes.
-- The layer model is fixed: external file bytes, then the Stratava physical layout,
+- The layer model is fixed: external file bytes, then the Varlit physical layout,
   then the adapter toolkit primitives above, then user-defined domain semantics,
-  then the public adapter API. Stratava declares and verifies reusable binary
+  then the public adapter API. Varlit declares and verifies reusable binary
   mechanics; the adapter author defines domain meaning wherever the format
   requires it. TDMS is one branch produced by these generic pieces, not a
-  hardcoded Stratava feature.
+  hardcoded Varlit feature.

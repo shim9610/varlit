@@ -18,16 +18,16 @@ def main():
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repository, text=True
     ).strip()
-    with tempfile.TemporaryDirectory(prefix="stratava-git-consumer-") as directory:
+    with tempfile.TemporaryDirectory(prefix="varlit-git-consumer-") as directory:
         consumer = Path(directory)
         (consumer / "src").mkdir()
         shutil.copyfile(ROOT / "tools/public-api-fixture/src/main.rs", consumer / "src/main.rs")
         (consumer / "Cargo.toml").write_text(
-            '[package]\nname = "stratava-git-consumer"\nversion = "0.0.0"\n'
+            '[package]\nname = "varlit-git-consumer"\nversion = "0.0.0"\n'
             'edition = "2024"\npublish = false\n\n[dependencies]\n'
-            f'stratava = {{ git = {json.dumps(repository.as_uri())}, '
+            f'varlit = {{ git = {json.dumps(repository.as_uri())}, '
             f'rev = "{revision}", features = ["compression-zstd", "integrity"] }}\n'
-            '\n[features]\nexperimental-matrix-reuse = ["stratava/experimental-matrix-reuse"]\n'
+            '\n[features]\nexperimental-matrix-reuse = ["varlit/experimental-matrix-reuse"]\n'
             '\n[workspace]\n', encoding="utf-8"
         )
         # There is deliberately no root [patch] in this independent project.

@@ -1,8 +1,8 @@
 # Format Author Guide
 
-Use Stratava when you want a typed, append-friendly binary format with a stable
+Use Varlit when you want a typed, append-friendly binary format with a stable
 format contract. The primary API is format-first: declare the format, blocks,
-fields, and policies, and `stratava_format!` generates the block structs plus typed
+fields, and policies, and `varlit_format!` generates the block structs plus typed
 reader/writer wrappers.
 
 If you are new to the crate, read this together with:
@@ -14,9 +14,9 @@ If you are new to the crate, read this together with:
 ## Define A Format
 
 ```rust
-use stratava::stratava_format;
+use varlit::varlit_format;
 
-stratava_format! {
+varlit_format! {
     pub format AppFormat {
         magic: b"APPDATA";
         version: 1;
@@ -55,7 +55,7 @@ This generates `Point`, `User`, `AppFormatReader`, `AppFormatWriter`,
 `AppFormatRead`, and `AppFormatWrite`. Required record metadata such as block
 ids, field ids, wire types, payload lengths, commit marker handling, CRC checks
 when enabled, and offset-chain footers are handled by the generated code and
-runtime writer. Application code should not hand-build Stratava record headers or
+runtime writer. Application code should not hand-build Varlit record headers or
 offset chains in normal use.
 
 The `limits` block is optional operational policy, not wire schema. Prefer
@@ -69,14 +69,14 @@ What a reader allocates is bounded by `records`, `index_bytes`, `scan_bytes`,
 `record_payload` and `logical_payload`, each of which has a check that consults
 it. A format that relied on `file_len` to refuse a large file must state one of
 those instead. See [Known Limitations
-§2.1](known-limitations.md#21-stratavafile-scans-the-whole-file-at-open-and-holds-a-record-index).
+§2.1](known-limitations.md#21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index).
 Generated `*_with_resource_limits` methods may raise or lower optional format
 defaults; compatibility `*_with_limits` methods only tighten. Do not use
 trusted-unbounded methods for files supplied by users, networks, or other
 processes.
 
 Choose `fixed` for records whose canonical encoded payload size should stay
-stable. Fixed blocks still use Stratava's canonical field codec, not Rust memory
+stable. Fixed blocks still use Varlit's canonical field codec, not Rust memory
 layout. Choose `variable` for evolvable records. Variable fields are encoded as
 field id, wire type, length, and payload, so unknown field ids with known wire
 types can be skipped.
@@ -91,7 +91,7 @@ regions, and uses commit bitmaps as the only normal read-time validity source.
 The intended authoring shape is:
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub format AnalysisFormat {
         magic: b"ANALYSIS";
         version: 1;
@@ -169,27 +169,27 @@ The older derive-first form remains available when block structs need to live
 outside the format declaration:
 
 ```rust
-use stratava::{StratavaBlock, stratava_format};
+use varlit::{VarlitBlock, varlit_format};
 
-#[derive(Clone, Debug, PartialEq, StratavaBlock)]
-#[stratava(id = 100, version = 1, kind = "fixed")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 100, version = 1, kind = "fixed")]
 struct Point {
     x: u32,
     y: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, StratavaBlock)]
-#[stratava(id = 101, version = 1, kind = "variable", key = "id")]
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 101, version = 1, kind = "variable", key = "id")]
 struct User {
-    #[stratava(field_id = 1)]
+    #[varlit(field_id = 1)]
     id: u64,
-    #[stratava(field_id = 2)]
+    #[varlit(field_id = 2)]
     name: String,
-    #[stratava(field_id = 3, default)]
+    #[varlit(field_id = 3, default)]
     flags: u32,
 }
 
-stratava_format! {
+varlit_format! {
     pub struct AppFormat {
         magic: b"APPDATA";
         version: 1;
@@ -211,7 +211,7 @@ stratava_format! {
 
 ## Register A Format
 
-`stratava_format!` pins the file contract: magic bytes, format version, endian,
+`varlit_format!` pins the file contract: magic bytes, format version, endian,
 optional resource defaults, optional schema hash, optional extension, optional integrity, optional commit
 policy, optional checkpoint/offset-chain index, optional recovery policy,
 optional embedded manifest, optional variable-block compression, and registered
@@ -249,7 +249,7 @@ representative sample values and `AppFormat::diagnose_file(path)` for existing
 files. See `docs/self-check-guide.md`.
 
 Use `AppFormat::inspect_layout_file(path)` when you need to inspect physical
-framing. It validates either the Stratava-native preset or a custom physical layout
+framing. It validates either the Varlit-native preset or a custom physical layout
 and returns file-header length plus segment/raw/footer ranges.
 
 ## Variable Compression
@@ -259,7 +259,7 @@ whose canonical payloads are large enough to benefit. The macro-level syntax
 sets one global variable-block policy:
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub struct CompressedFormat {
         magic: b"APPDATA";
         version: 1;
@@ -296,7 +296,7 @@ compressed block carries its own `VCMP` envelope and no extra file-header
 contract is required:
 
 ```rust
-use stratava::{
+use varlit::{
     BlockCompressionDescriptor, CompressionAlgorithm, CompressionHeaderMode,
     CompressionLevel, VariableCompression,
 };
@@ -338,7 +338,7 @@ logical values.
 
 ## Length Limits And Caller Policy
 
-Stratava defines the wire contract and generated reader/writer shape; it does not
+Varlit defines the wire contract and generated reader/writer shape; it does not
 know every domain's safe maximum string, vector, map, chunk, or decompressed
 payload size. Built-in codecs avoid avoidable allocation-before-validation, but
 format authors should still enforce domain limits in custom codecs, adapters,
@@ -353,7 +353,7 @@ For physical records, use
 bytes, or
 `read_logical_payload_limited(spec, path, physical_limit, logical_limit)` to cap
 both the stored compressed allocation and post-decompression logical allocation
-before either allocation. These are caller policy controls; Stratava does not guess
+before either allocation. These are caller policy controls; Varlit does not guess
 a global domain ceiling.
 
 ## Integrity Policy
@@ -383,7 +383,7 @@ run of bytes in the file header that a caller rewrites in place, for the life of
 the file, without republishing it.
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub struct AppFormat {
         magic: b"MYFORMAT";
         version: 1;
@@ -413,7 +413,7 @@ at once, not against how many times you write them.
 Then:
 
 ```rust
-let mut file = AppFormat::create("f.stratava")?;
+let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
 
 let mark = file.read_header_block::<Watermark>()?;   // takes &self, no I/O
@@ -504,7 +504,7 @@ chained to the previous one through `prev_same_block_offset`, and open follows
 that chain backwards from the end of the file without reading a data record.
 
 It is not a DSL clause, on purpose. A block is the unit your declaration names;
-a segment is stratava's internal lookup unit, and choosing its granularity is not
+a segment is varlit's internal lookup unit, and choosing its granularity is not
 something a format author should have to do. Turn it on where the rest of the
 runtime policy lives:
 
@@ -558,7 +558,7 @@ const SPEC: FormatSpec = MyFormat::SPEC
 ```
 
 ```rust
-let file = StratavaFile::open_readonly_lazy(SPEC, path)?;   // frames one record
+let file = VarlitFile::open_readonly_lazy(SPEC, path)?;   // frames one record
 let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;             // reads nothing yet
 let hit = map.find(|entry| entry.block_id == Note::ID)?; // walks until it finds
@@ -609,7 +609,7 @@ need a cheap resume is the moment that is most likely.
 header**, where nothing appended can move it or bury it:
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub struct MyFormat {
         // ...
         integrity: crc32;
@@ -621,14 +621,14 @@ stratava_format! {
 ```
 
 ```rust
-let (file, source) = StratavaFile::open_readonly_lazy_with_report(SPEC, path)?;
+let (file, source) = VarlitFile::open_readonly_lazy_with_report(SPEC, path)?;
 assert_eq!(source, LazyOpenSource::HeaderTails);
 ```
 
 **What it costs.** A fixed region sized by your declaration and nothing else:
 `8 + 2 x (28 + 12 x (blocks + 10) + 4)` bytes, so **360 bytes for a two-block
 format**, the same at two hundred records and at two billion. The `+ 10` is one
-slot per block id stratava reserves for its own records. The update rides
+slot per block id varlit reserves for its own records. The update rides
 the durability request that already ends a commit, so there is **no extra
 `fsync`**. Measured on the two-block fixture: a scanning open frames every
 record; this one frames **4** — the commit marker plus one per distinct block id
@@ -694,9 +694,9 @@ is dead; declare both to stop a crash from deleting a writer's last work.
 
 ### `liveness: footer_flags`
 
-Without it, a stratava record can stop being the answer in exactly two ways, and
+Without it, a varlit record can stop being the answer in exactly two ways, and
 neither reaches a block with no key. A tombstone names a block id and a **key**,
-never an offset — every delete entry point requires `T: StratavaKeyedBlock`. And a
+never an offset — every delete entry point requires `T: VarlitKeyedBlock`. And a
 `replace_*` publishes a whole new file in which the superseded record simply is
 not there, which is a rewrite, not a mark.
 
@@ -704,7 +704,7 @@ not there, which is a rewrite, not a mark.
 a mutable flag word and **takes it out of the record checksum**:
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub struct Log {
         magic: b"MYLOG001";
         version: 1;
@@ -752,12 +752,12 @@ dropping those would drop the records that say where the commit boundary is.
 
 ### `recovery: mark_tail`
 
-stratava's default answer to a crash is `recovery: strict`: at the next read-write
+varlit's default answer to a crash is `recovery: strict`: at the next read-write
 open, every record past the last commit marker is deleted. (`recovery:
 truncate_tail` deletes the same tail; they differ in what `open_recover` does
 with a half-written record — it truncates one, where `strict` returns
 `Error::CorruptTail`.) It is correct and cheap, and it is also the only
-operation in stratava that destroys data you might have wanted — those records
+operation in varlit that destroys data you might have wanted — those records
 framed, they are structurally complete, and the writer simply never got to say
 so.
 
@@ -780,7 +780,7 @@ lock, so hard links and other path aliases cannot dodge it:
 | free | clear | the last writer released cleanly |
 | free | **set** | the last writer died without releasing |
 
-This is the only durable record stratava keeps of a writer's lifecycle. The signal
+This is the only durable record varlit keeps of a writer's lifecycle. The signal
 it replaces — "does the file end exactly at a commit point" — can only describe
 a suffix, never an interior record, and the next open truncates that suffix away
 before anything can ask.
@@ -843,7 +843,7 @@ offset tables sized by the record count, charged to `max_index_bytes`.
 
 ## Custom Physical Layout
 
-Most formats should use the Stratava-native append log. Use custom physical layout
+Most formats should use the Varlit-native append log. Use custom physical layout
 when you need the file bytes themselves to follow another segmented format, for
 example a TDMS-style lead-in with ToC mask, next segment offset, raw data
 offset, metadata bytes, and contiguous raw channel data.
@@ -853,12 +853,12 @@ literal or caller-filled file header, segment lead-in fields, opaque metadata
 bytes, raw-region bytes, and optional footer fields:
 
 These declarations are physical field groups. They intentionally do not reuse
-`StratavaBlock`: logical blocks describe native append-log payloads, while
+`VarlitBlock`: logical blocks describe native append-log payloads, while
 `file_header`, `lead_in`, and `footer` describe bytes used to frame a custom
 external format.
 
 ```rust
-stratava_format! {
+varlit_format! {
     pub format PhysicalFormat {
         magic: b"PHYS";
         version: 1;
@@ -910,7 +910,7 @@ facade. `PhysicalFormat::create_layout_writer` returns
 `read_data_segment_raw_range`. A declared `file_header` also generates
 `file_header()` on the layout reader. Caller fields become typed Rust struct
 fields; literal and finalized fields are supplied, validated, or backpatched by
-Stratava, then exposed through typed info getters.
+Varlit, then exposed through typed info getters.
 Finalized numeric fields may use the numeric width required by the target
 format. For example, BMP-style headers can use `u32 file_size` relative to
 `segment_start`, while TDMS-style headers can use `u64 next_segment_offset`
@@ -940,9 +940,9 @@ Returned callback errors trigger truncation back to the original EOF and leave
 the writer reusable only when rollback succeeds. A failed rollback poisons the
 writer. Panics are not caught; unwinding through a streaming callback also
 leaves that handle poisoned. Do not retain or reuse it after catching such a
-panic outside Stratava.
+panic outside Varlit.
 
-For concrete compatibility checks, `crates/stratava/examples/tdms_physical/common.rs`
+For concrete compatibility checks, `crates/varlit/examples/tdms_physical/common.rs`
 is a façade over split TDMS example modules. The physical adapter implementation
 lives in `tdms_physical/common/adapter.rs`, fixture/scenario data lives in
 `tdms_physical/common/example_data.rs`, and self-verification lives in
@@ -959,31 +959,31 @@ adapter-authored create+append files with `npTDMS` across signed/unsigned
 integer widths, single/double floats, single/double floats with unit type ids,
 booleans, strings, timestamps, and complex single/double floats. The reverse
 harness creates a two-segment scalar type matrix with `npTDMS`, parses it
-through the same Stratava-based adapter code, appends one segment with Stratava, then
-verifies the appended file with both npTDMS and Stratava. These examples are not a
-Stratava-provided TDMS reader/writer feature:
+through the same Varlit-based adapter code, appends one segment with Varlit, then
+verifies the appended file with both npTDMS and Varlit. These examples are not a
+Varlit-provided TDMS reader/writer feature:
 
 ```powershell
 python -m venv .venv-tdms
 .\.venv-tdms\Scripts\python.exe -m pip install -r scripts\requirements-tdms-harness.txt
 .\.venv-tdms\Scripts\python.exe scripts\verify_tdms_with_nptdms.py
-.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_stratava.py
+.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_varlit.py
 .\.venv-tdms\Scripts\python.exe scripts\verify_bmp_with_pillow.py
 ```
 
 `npTDMS` and Pillow are used only as external verification harness dependencies,
-not as Rust crate dependencies or runtime dependencies of Stratava.
+not as Rust crate dependencies or runtime dependencies of Varlit.
 
 ## Read And Write
 
 ```rust
-let mut writer = AppFormat::create_writer("data.stratava")?;
+let mut writer = AppFormat::create_writer("data.varlit")?;
 writer.push_point(&Point { x: 1, y: 2 })?;
 writer.push_user(&User { id: 7, name: "Ada".to_string(), flags: 0 })?;
 writer.flush()?; // writes buffered bytes and checkpoint/manifest records
 writer.sync()?;  // fsync when the caller needs durable storage
 
-let reader = AppFormat::open_reader("data.stratava")?;
+let reader = AppFormat::open_reader("data.varlit")?;
 let points = reader.points()?;
 let users = reader.users()?;
 ```
@@ -994,7 +994,7 @@ lock handling is explicit through `inspect_writer_lock` and
 `open_with_lock_policy`.
 
 The older `create`, `open`, and `open_readonly` helpers remain available and
-return `StratavaFile` directly. Prefer `create_writer` and `open_reader` in new
+return `VarlitFile` directly. Prefer `create_writer` and `open_reader` in new
 examples when you want API intent to be obvious.
 
 ## Performance Check
@@ -1006,9 +1006,9 @@ adapter toolkit path so cursor, chunk-index, and reducer changes show up in the
 same regression pass:
 
 ```powershell
-cargo test -p stratava --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
 ```
 
 The output is a regression guard, not a product benchmark. Large unexplained

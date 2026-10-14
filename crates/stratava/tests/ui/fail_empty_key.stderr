@@ -1,5 +1,0 @@
-error: stratava key must name at least one field
- --> tests/ui/fail_empty_key.rs:4:47
-  |
-4 | #[stratava(id = 414, kind = "variable", key = "")]
-  |                                               ^^

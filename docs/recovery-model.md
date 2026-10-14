@@ -2,7 +2,7 @@
 
 This document defines the recovery vocabulary and primitive actions for
 preallocated matrix storage. Recovery is structured as detect, classify, plan,
-and apply. Stratava reports facts and safe primitive options; callers choose
+and apply. Varlit reports facts and safe primitive options; callers choose
 domain policy.
 
 ## Regions
@@ -128,7 +128,7 @@ before it touches anything (`Error::MatrixCommitQuarantined`), and
 `rebuild_matrix_commit_from_crc` refuses such a format outright
 (`Error::InvalidFormatSpec`, "a growing matrix's chunks carry no per-cell
 checksum table"), so a growing-matrix quarantine has no primitive that lifts it.
-Both refusals are measured in `crates/stratava/tests/matrix_chunks.rs`, by
+Both refusals are measured in `crates/varlit/tests/matrix_chunks.rs`, by
 `a_quarantined_category_refuses_the_category_clear` and
 `the_entry_points_that_do_not_apply_say_so_by_name`.
 
@@ -214,7 +214,7 @@ it has marked the index, the layout stays fail-closed for the rest of that
 session, since the in-memory index mirror describes the previous generation;
 reopen with forensics and rebuild again.
 
-If no per-entry CRC or equivalent evidence exists, Stratava must not claim that a
+If no per-entry CRC or equivalent evidence exists, Varlit must not claim that a
 rebuilt bit proves the cell is valid. It may offer a weaker `ClearCategory`
 recommendation instead.
 
@@ -246,16 +246,16 @@ pub enum MatrixResumeSignal {
 }
 ```
 
-Stratava determines the signal from:
+Varlit determines the signal from:
 
 - sidecar file presence
 - committed/total progress in relevant commit maps
-- optional Stratava sidecar envelope validation
+- optional Varlit sidecar envelope validation
 
 The current API `matrix_sidecar_resume_signal(category, path)` intentionally
 uses only sidecar presence plus commit progress. The verified path,
 `matrix_verified_sidecar_resume_signal(category, path)`, reads the optional
-Stratava sidecar envelope written by `write_matrix_sidecar` and checks parent
+Varlit sidecar envelope written by `write_matrix_sidecar` and checks parent
 format identity, category, payload length, and payload CRC32 when the
 `integrity` feature is enabled. Parent schema identity uses
 `computed_schema_hash()`, not the pinned file-header `schema_hash`, so manually

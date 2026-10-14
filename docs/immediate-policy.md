@@ -7,7 +7,7 @@ the corresponding clean sidecar root. There are three ways to request one.
 ## Block declarations
 
 ```rust,ignore
-stratava_format! {
+varlit_format! {
     pub format Journal {
         magic: b"JRNL";
         version: 1;
@@ -37,8 +37,8 @@ receives an appended value; it does not run on a deletion, which has only a key.
 Both declarations are OR-combined with any runtime policy; runtime settings
 cannot disable a mandatory block boundary. Unannotated blocks are deferred.
 
-For independently derived blocks, use `#[stratava(durability = "immediate")]`
-and `#[stratava(immediate_if = "final_status")]`. Manual `StratavaBlock` implementations
+For independently derived blocks, use `#[varlit(durability = "immediate")]`
+and `#[varlit(immediate_if = "final_status")]`. Manual `VarlitBlock` implementations
 can override `const IMMEDIATE: bool` and `fn immediate_if(&self) -> bool`.
 These are writer policies, not serialized schema or file-format changes.
 Use pure predicates: a batch can evaluate a condition before its native write.
@@ -77,8 +77,8 @@ value**. A declared Immediate block therefore requests a boundary per record,
 even when passed through a plural/batch API. Use a separate checkpoint block or
 a record/byte condition to select a larger durability interval.
 
-The APIs are available on `StratavaFile`, `StratavaWriter`, `StratavaStreamWriter`,
-`StratavaIndexedWriter`, and their generated native append writer wrappers.
+The APIs are available on `VarlitFile`, `VarlitWriter`, `VarlitStreamWriter`,
+`VarlitIndexedWriter`, and their generated native append writer wrappers.
 Stream/indexed writers are included by default. Conditions govern typed
 user appends and deletions; matrix cells, in-place replacement, metadata and
 merge-op APIs retain their existing contracts. Matrix block declarations reject

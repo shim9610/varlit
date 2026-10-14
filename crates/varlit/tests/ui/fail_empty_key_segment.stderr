@@ -1,0 +1,5 @@
+error: varlit key contains an empty field name
+ --> tests/ui/fail_empty_key_segment.rs:4:45
+  |
+4 | #[varlit(id = 416, kind = "variable", key = "id,")]
+  |                                             ^^^^^

@@ -1,0 +1,51 @@
+[package]
+name = "varlit"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description = "Format-first, append-friendly custom binary formats for Rust"
+documentation = "https://docs.rs/varlit"
+# DOC-01: see the note in `crates/varlit-core/Cargo.toml`. README is pulled in
+# from the repository root; `LICENSE-MIT` and `LICENSE-APACHE` are files in this
+# directory because `include` cannot reference paths outside the package.
+readme = "../../README.md"
+keywords = ["binary", "serialization", "storage", "format", "append"]
+categories = ["encoding", "filesystem", "data-structures"]
+
+# F-06: see the note in `crates/varlit-core/Cargo.toml`. `default = []` means
+# docs.rs would otherwise publish this facade with none of its five optional
+# features, hiding every gated re-export.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+integrity = ["varlit-core/integrity"]
+mmap = ["varlit-core/mmap"]
+zero-copy = ["mmap", "varlit-core/zero-copy"]
+compression-zstd = ["varlit-core/compression-zstd"]
+experimental-matrix-reuse = ["varlit-core/experimental-matrix-reuse"]
+scalable-fault-injection = [
+    "varlit-core/scalable-fault-injection",
+]
+
+[dependencies]
+varlit-core = { path = "../varlit-core", version = "0.12.0" }
+varlit-macros = { path = "../varlit-macros", version = "0.12.0" }
+
+[dev-dependencies]
+redb = { version = "4.3.0", path = "../../vendor/redb" }
+proptest.workspace = true
+tempfile.workspace = true
+trybuild.workspace = true
+zerocopy = { workspace = true, features = ["derive"] }
+
+[[example]]
+name = "scalable_load"
+required-features = ["integrity"]
+
+[[example]]
+name = "matrix_soak"
+required-features = ["integrity"]

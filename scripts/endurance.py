@@ -131,7 +131,7 @@ def main(argv=None):
     required = (args.rows * 4096 * 8 if args.mode == "matrix" else math.ceil(total * 1.025)) + 2 * GIB + seconds * 20000
     free = shutil.disk_usage(data.parent).free
     binary = "matrix_soak" if args.mode == "matrix" else "scalable_load"
-    build = ["cargo", "build", "--locked", "--release", "-p", "stratava",
+    build = ["cargo", "build", "--locked", "--release", "-p", "varlit",
              "--features", "integrity", "--example", binary]
     plan = {"mode": args.mode, "requested_seconds": seconds, "free_bytes": free,
             "required_free_bytes": required, "disk_ready": free >= required,
@@ -195,7 +195,7 @@ def main(argv=None):
             child = json.loads((logs / "report.json").read_text())
             checked_result(code, child, args.mode)
             if args.mode == "io":
-                marker = files / ".stratava-load-owner"
+                marker = files / ".varlit-load-owner"
                 if files.is_symlink() or marker.read_text() != str(logs) or set(files.iterdir()) != {marker}:
                     raise RuntimeError("I/O data cleanup/ownership mismatch")
                 marker.unlink()

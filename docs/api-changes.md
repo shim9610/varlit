@@ -13,7 +13,7 @@ See [the matrix API](api-reference.md) for physical-order and memory costs.
 
 ## Unreleased 0.12.0: fixed byte-array decoding
 
-`StratavaDecode::decode_array` is an additive default method. Existing manual
+`VarlitDecode::decode_array` is an additive default method. Existing manual
 codecs require no changes: the default preserves element decoding, partial-drop
 behavior and resource accounting. The built-in `u8` implementation copies bounded
 arrays in one operation, including through type aliases. Larger arrays retain
@@ -52,11 +52,11 @@ and the [Changelog](../CHANGELOG.md).
   only in the metadata ranges it needs. VMAT v5 adds directly addressed bitmap
   directory metadata; readers fetch original windows and retain bounded caches.
   OnDemand opens and normal follow do not construct temporary index mirrors.
-- With `mmap`, `StratavaFile::mmap_payload_window` maps one record's stored payload
+- With `mmap`, `VarlitFile::mmap_payload_window` maps one record's stored payload
   without requiring a resident directory or a whole-file mapping budget. The
   returned `MmapPayloadWindow` owns the mapping. External immutability remains
   an unsafe caller contract; compressed payloads remain compressed.
-- `StratavaFile::mmap_matrix_cell` and `StratavaReader::mmap_matrix_cell` map one
+- `VarlitFile::mmap_matrix_cell` and `VarlitReader::mmap_matrix_cell` map one
   committed matrix cell. Visibility and optional CRC checks use that reader's
   generation. Only intersecting COW pages are copied into the private mapping;
   unrelated matrix pages do not consume its materialization budget.
@@ -89,26 +89,26 @@ index budgets are honored. Temporary storage is still used by native directories
 merge, writer working-page spill and explicit recovery operations. Native open can
 still scan records; explicitly owned results still scale with their output.
 
-## L. 0.11.0 → 0.12.0: Stratava rename
+## L. 0.11.0 → 0.12.0: Varlit rename
 
-Stratava is the new name of this binary-format library. The old `varve` and
+Varlit is the new name of this binary-format library. The old `varve` and
 `varve-core` registry names belong to an unrelated project. Do not replace a
 Git dependency with a registry dependency using those old names.
 
 | Before | After |
 | --- | --- |
-| `varve`, `varve-core`, `varve-macros` | `stratava`, `stratava-core`, `stratava-macros` |
-| `varve::…`, `varve_core::…` | `stratava::…`, `stratava_core::…` |
-| `VarveBlock`, `VarveReader`, `VarveWriter`, other `Varve*` identifiers | corresponding `Stratava*` identifiers |
-| `varve_format!`, `#[varve(...)]` | `stratava_format!`, `#[stratava(...)]` |
-| `encode_varve`, `decode_varve` | `encode_stratava`, `decode_stratava` |
-| `LayoutPreset::VarveNative`, `varve_native()` | `LayoutPreset::StratavaNative`, `stratava_native()` |
-| DSL `preset: varve_native` | DSL `preset: stratava_native` |
-| `VARVE_*` tool/test environment variables | corresponding `STRATAVA_*` variables |
-| `varve-test-runner` | `stratava-test-runner` |
+| `varve`, `varve-core`, `varve-macros` | `varlit`, `varlit-core`, `varlit-macros` |
+| `varve::…`, `varve_core::…` | `varlit::…`, `varlit_core::…` |
+| `VarveBlock`, `VarveReader`, `VarveWriter`, other `Varve*` identifiers | corresponding `Varlit*` identifiers |
+| `varve_format!`, `#[varve(...)]` | `varlit_format!`, `#[varlit(...)]` |
+| `encode_varve`, `decode_varve` | `encode_varlit`, `decode_varlit` |
+| `LayoutPreset::VarveNative`, `varve_native()` | `LayoutPreset::VarlitNative`, `varlit_native()` |
+| DSL `preset: varve_native` | DSL `preset: varlit_native` |
+| `VARVE_*` tool/test environment variables | corresponding `VARLIT_*` variables |
+| `varve-test-runner` | `varlit-test-runner` |
 
-Dependency aliases remain supported, for example `sv = { package = "stratava",
-path = "…/crates/stratava" }`. Derived code resolves that alias automatically.
+Dependency aliases remain supported, for example `sv = { package = "varlit",
+path = "…/crates/varlit" }`. Derived code resolves that alias automatically.
 Older public names are not retained as aliases. Historical sections below use
 the API names that existed at their release dates.
 
@@ -117,8 +117,9 @@ finite-key codec identities and writer-lock metadata. A name change alone does
 not require rewriting stored files or changing schema declarations' field/block
 names. As before, changing the spelling of a declared field type (including a
 fully qualified crate path) can change its derived fingerprint; compare computed
-schema hashes when migrating such declarations. The repository URL and old Git tags retain `varve`; a Stratava package
-cannot be loaded from the old `v0.11.0` tag.
+schema hashes when migrating such declarations. The repository URL is now
+`https://github.com/shim9610/varlit`; historical Git tags retain their old names
+and package contents. A Varlit package cannot be loaded from the old `v0.11.0` tag.
 
 This release also removes Crossbeam: the matrix writer owns its pending page
 directory and bitmap reads borrow the current view. Reader queries still take

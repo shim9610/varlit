@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[path = "../../crates/stratava/tests/support/matrix_reuse_model.rs"]
+#[path = "../../crates/varlit/tests/support/matrix_reuse_model.rs"]
 mod model;
 fn main() {
     for (name, publication) in [

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable repository releases are documented here. Stratava (formerly Varve) follows semantic
+All notable repository releases are documented here. Varlit (formerly Varve) follows semantic
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
@@ -39,7 +39,7 @@ increment the minor version.
 - Decode bounded fixed byte arrays with one checked copy instead of constructing
   each byte through a generic temporary array. Preserve input validation,
   materialization budgets, custom element codecs and oversized-array heap staging.
-  Existing codecs inherit the additive `StratavaDecode::decode_array` default.
+  Existing codecs inherit the additive `VarlitDecode::decode_array` default.
 
 - Add shared-borrow matrix run and row reads into caller-owned typed or encoded
   buffers. Batch payload, commit and checksum reads across fixed regions and
@@ -59,14 +59,15 @@ increment the minor version.
 - Honor explicit finite native/merge index budgets and batch spilled row reads
   through a bounded private read window. Publication and sync points are unchanged.
 
-- Rename the project and packages to `stratava`, `stratava-core` and
-  `stratava-macros`. Public Rust identifiers use `Stratava*`, `stratava_format!`,
-  `#[stratava(...)]`, `encode_stratava` and `decode_stratava`. The test runner,
+- Rename the project and packages to `varlit`, `varlit-core` and
+  `varlit-macros`. Public Rust identifiers use `Varlit*`, `varlit_format!`,
+  `#[varlit(...)]`, `encode_varlit` and `decode_varlit`. The test runner,
   tool arguments and environment variables use the new name too. This is a
   breaking Rust API change; see the migration notes.
-- Preserve versioned wire identifiers, schema-hash domains and file-lock metadata
-  across the rename. Existing repository URLs and historical release tags keep
-  their original names.
+- Rename the public repository to `shim9610/varlit`, and update documentation
+  links and public-only CI guards.
+- Preserve versioned wire identifiers, schema-hash domains, file-lock metadata
+  and historical release tags across the rename.
 
 - Remove the remaining Crossbeam runtime dependency. The matrix writer owns its
   pending page directory and lends it to bitmap reads, including cache misses.
@@ -87,7 +88,7 @@ increment the minor version.
   pages were published. Matrix directory reads require no temporary mirror.
 - Remove the standard matrix dimension/cell, CRC-extent and slot-region size caps;
   checked address arithmetic, working-memory budgets and explicit user caps remain.
-- Add `StratavaFile::mmap_payload_window` and `MmapPayloadWindow` for independent
+- Add `VarlitFile::mmap_payload_window` and `MmapPayloadWindow` for independent
   per-record mappings, including handles without a resident directory.
 - Add `mmap_matrix_cell` for a committed cell window with generation-consistent
   bitmap/CRC checks and COW patches restricted to the requested pages.

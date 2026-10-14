@@ -1,0 +1,5 @@
+error: unsupported varlit kind "stream"; use "fixed", "variable", or "matrix"
+ --> tests/ui/fail_unsupported_kind.rs:4:20
+  |
+4 | #[varlit(id = 410, kind = "stream")]
+  |                    ^^^^^^^^^^^^^^^

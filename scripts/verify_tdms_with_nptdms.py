@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a Stratava-based TDMS example file against npTDMS."""
+"""Verify a Varlit-based TDMS example file against npTDMS."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def main() -> int:
         )
         return 2
 
-    output = args.output or Path(tempfile.gettempdir()) / "stratava-nptdms-harness.tdms"
+    output = args.output or Path(tempfile.gettempdir()) / "varlit-nptdms-harness.tdms"
     output = output.resolve()
 
     if not args.no_cargo:
@@ -65,7 +65,7 @@ def main() -> int:
                 "cargo",
                 "run",
                 "-p",
-                "stratava",
+                "varlit",
                 "--example",
                 "tdms_physical_adapter",
                 "--",
@@ -75,14 +75,14 @@ def main() -> int:
             check=True,
         )
 
-    assert_stratava_authored_tdms(TdmsFile.read(output, raw_timestamps=True), appended=False)
+    assert_varlit_authored_tdms(TdmsFile.read(output, raw_timestamps=True), appended=False)
 
     subprocess.run(
         [
             "cargo",
             "run",
             "-p",
-            "stratava",
+            "varlit",
             "--example",
             "tdms_physical_adapter",
             "--",
@@ -92,14 +92,14 @@ def main() -> int:
         check=True,
     )
 
-    assert_stratava_authored_tdms(TdmsFile.read(output, raw_timestamps=True), appended=True)
+    assert_varlit_authored_tdms(TdmsFile.read(output, raw_timestamps=True), appended=True)
 
     subprocess.run(
         [
             "cargo",
             "run",
             "-p",
-            "stratava",
+            "varlit",
             "--example",
             "tdms_physical_adapter",
             "--",
@@ -113,7 +113,7 @@ def main() -> int:
             "cargo",
             "run",
             "-p",
-            "stratava",
+            "varlit",
             "--example",
             "tdms_physical_adapter",
             "--",
@@ -127,7 +127,7 @@ def main() -> int:
             "cargo",
             "run",
             "-p",
-            "stratava",
+            "varlit",
             "--example",
             "tdms_physical_adapter",
             "--",
@@ -137,22 +137,22 @@ def main() -> int:
         check=True,
     )
 
-    print(f"npTDMS verified Stratava create+append {output}")
+    print(f"npTDMS verified Varlit create+append {output}")
     return 0
 
 
-def assert_stratava_authored_tdms(tdms, appended: bool) -> None:
-    assert tdms.properties["title"] == "Stratava TDMS adapter proof smoke"
+def assert_varlit_authored_tdms(tdms, appended: bool) -> None:
+    assert tdms.properties["title"] == "Varlit TDMS adapter proof smoke"
 
     group = tdms["Measured Data"]
-    assert group.properties["operator"] == "Stratava"
+    assert group.properties["operator"] == "Varlit"
     assert group.properties["verified"] is True
 
     float64 = group["Float64"]
     assert float64.properties["unit_string"] == "Float64"
     assert math.isclose(float64.properties["wf_increment"], 0.001)
     if appended:
-        assert float64.properties["append_source"] == "stratava-open-layout-writer"
+        assert float64.properties["append_source"] == "varlit-open-layout-writer"
 
     boolean = group["Boolean"]
     assert boolean.properties["adapter_enabled"] is True

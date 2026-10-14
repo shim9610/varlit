@@ -9,10 +9,10 @@ The current `STREUSE2` format uses pages and refuses older `STREUSE1` chunk file
 there is no automatic migration.
 
 ```rust,no_run
-use stratava::{stratava_format, MatrixDimensions, MatrixKey};
-use stratava::experimental_matrix::{MatrixOptions, MatrixWriter};
+use varlit::{varlit_format, MatrixDimensions, MatrixKey};
+use varlit::experimental_matrix::{MatrixOptions, MatrixWriter};
 
-stratava_format! {
+varlit_format! {
     pub format Samples {
         magic: b"REUSEEX1"; version: 1; endian: little;
         dims { row: u32, channel: u32, }
@@ -33,7 +33,7 @@ let reader = writer.reader()?; // independent reader, private cache
 writer.put(MatrixKey::new(0, 0), &Sample { value: 42 })?;
 writer.sync()?; // publish this batch and make it durable
 assert_eq!(reader.get::<Sample>(MatrixKey::new(0, 0))?.value, 42);
-# Ok::<(), stratava::experimental_matrix::MatrixReuseError>(())
+# Ok::<(), varlit::experimental_matrix::MatrixReuseError>(())
 ```
 
 `reuse: false` delegates to ordinary native storage. Such readers retain their
@@ -184,7 +184,7 @@ supported editing operation.
 
 ## Targeted validation
 
-The shared model in `crates/stratava/tests/support/matrix_reuse_model.rs` runs
+The shared model in `crates/varlit/tests/support/matrix_reuse_model.rs` runs
 both in ordinary regression tests and in two coverage-guided libFuzzer targets:
 
 - `matrix_reuse_state_machine` compares pending and confirmed values against an
@@ -205,7 +205,7 @@ correctness cases, not throughput or endurance measurements.
 Run the regression cases with the workspace runner:
 
 ```sh
-cargo run -p stratava-test-runner -- test -p stratava \
+cargo run -p varlit-test-runner -- test -p varlit \
   --features experimental-matrix-reuse,scalable-fault-injection \
   --test matrix_reuse_model
 ```

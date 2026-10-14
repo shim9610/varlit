@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/stratava",
-    "crates/stratava-core",
-    "crates/stratava-macros",
-    "tools/stratava-test-runner",
+    "crates/varlit",
+    "crates/varlit-core",
+    "crates/varlit-macros",
+    "tools/varlit-test-runner",
 ]
 resolver = "3"
 exclude = ["vendor/redb"]
@@ -11,7 +11,7 @@ exclude = ["vendor/redb"]
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shim9610/varve"
+repository = "https://github.com/shim9610/varlit"
 rust-version = "1.95"
 version = "0.12.0"
 

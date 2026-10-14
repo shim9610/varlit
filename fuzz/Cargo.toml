@@ -1,5 +1,5 @@
 [package]
-name = "stratava-fuzz"
+name = "varlit-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -13,8 +13,8 @@ redb = { version = "4.3.0", path = "../vendor/redb" }
 libfuzzer-sys = "0.4"
 tempfile = "3"
 
-[dependencies.stratava]
-path = "../crates/stratava"
+[dependencies.varlit]
+path = "../crates/varlit"
 version = "0.12.0"
 features = ["integrity", "mmap", "zero-copy", "compression-zstd", "experimental-matrix-reuse", "scalable-fault-injection"]
 

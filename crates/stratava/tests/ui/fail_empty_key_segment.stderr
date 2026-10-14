@@ -1,5 +1,0 @@
-error: stratava key contains an empty field name
- --> tests/ui/fail_empty_key_segment.rs:4:47
-  |
-4 | #[stratava(id = 416, kind = "variable", key = "id,")]
-  |                                               ^^^^^

@@ -2,13 +2,13 @@ use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use stratava::stratava_format;
+use varlit::varlit_format;
 
 pub mod digest;
 pub mod header_tails;
 pub mod sidecar;
 
-stratava_format! {
+varlit_format! {
     pub format FuzzNativeFormat {
         magic: b"FZNV";
         version: 1;
@@ -61,7 +61,7 @@ stratava_format! {
     }
 }
 
-stratava_format! {
+varlit_format! {
     pub format FuzzSidecarFormat {
         magic: b"FZSC";
         version: 1;
@@ -108,7 +108,7 @@ stratava_format! {
     }
 }
 
-stratava_format! {
+varlit_format! {
     pub format FuzzLayoutFormat {
         magic: b"FZLY";
         version: 1;
@@ -155,7 +155,7 @@ stratava_format! {
     }
 }
 
-stratava_format! {
+varlit_format! {
     pub format FuzzMatrixFormat {
         magic: b"FZMX";
         version: 1;
@@ -227,7 +227,7 @@ impl Drop for FuzzFile {
 }
 
 pub fn write_fuzz_file(kind: &str, bytes: &[u8]) -> Option<FuzzFile> {
-    let path = std::env::temp_dir().join(format!("stratava-{kind}-fuzz-{}.bin", std::process::id()));
+    let path = std::env::temp_dir().join(format!("varlit-{kind}-fuzz-{}.bin", std::process::id()));
     let mut lock_name = path.as_os_str().to_os_string();
     lock_name.push(".lock");
     let _ = fs::remove_file(PathBuf::from(lock_name));

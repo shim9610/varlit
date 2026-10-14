@@ -1,6 +1,6 @@
 # Matrix storage diagnostics
 
-`StratavaFile`, `StratavaReader` and `StratavaWriter` expose
+`VarlitFile`, `VarlitReader` and `VarlitWriter` expose
 `matrix_storage_diagnostics() -> Option<MatrixStorageDiagnostics>`.
 It returns `None` for non-matrix files. The observations are captured once
 at create/open; querying them takes `&self` and performs no I/O.

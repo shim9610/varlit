@@ -1,5 +1,0 @@
-error: unsupported stratava_format key
-  --> tests/ui/fail_unknown_format_key.rs:32:9
-   |
-32 |         cache: none;
-   |         ^^^^^

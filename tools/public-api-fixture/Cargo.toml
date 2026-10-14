@@ -17,15 +17,15 @@ edition = "2024"
 publish = false
 
 [features]
-experimental-matrix-reuse = ["stratava/experimental-matrix-reuse"]
+experimental-matrix-reuse = ["varlit/experimental-matrix-reuse"]
 
 [dependencies]
 # `compression-zstd` + `integrity` are required to CONSTRUCT a `ChunkedBytes`
 # value (docs/api-reference.md: "Compression requires the `compression-zstd`
 # feature ... `ChunkedBytes` additionally requires `integrity`"). Every other
 # type covered here is available with default features.
-stratava = { path = "../../crates/stratava", features = ["compression-zstd", "integrity"] }
+varlit = { path = "../../crates/varlit", features = ["compression-zstd", "integrity"] }
 
-# Detach from the repository workspace: this crate must resolve `stratava` the way
+# Detach from the repository workspace: this crate must resolve `varlit` the way
 # an external consumer does.
 [workspace]

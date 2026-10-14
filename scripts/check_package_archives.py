@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--directory", type=Path, default=ROOT / "target/package")
     args = parser.parse_args()
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    for name in ("stratava-core", "stratava-macros", "stratava"):
+    for name in ("varlit-core", "varlit-macros", "varlit"):
         stem = f"{name}-{version}"
         with tarfile.open(args.directory / f"{stem}.crate") as archive:
             members = archive.getnames()
@@ -32,7 +32,7 @@ def main():
                 for section in ("dependencies", "build-dependencies"):
                     for dependency, spec in table.get(section, {}).items():
                         actual = spec.get("package", dependency)
-                        if actual in ("varve", "varve-core", "varve-macros", "crossbeam") or actual.startswith("crossbeam-"):
+                        if actual in ("varve", "varve-core", "varve-macros", "stratava", "stratava-core", "stratava-macros", "crossbeam") or actual.startswith("crossbeam-"):
                             raise SystemExit(f"Unexpected runtime dependency in {name}: {actual}")
                         if "git" in spec or "path" in spec:
                             raise SystemExit(f"Non-registry runtime dependency in {name}: {actual}")

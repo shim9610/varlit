@@ -1,7 +1,7 @@
-# Stratava Self-Check Guide
+# Varlit Self-Check Guide
 
 This guide is for application developers who need to decide whether a failure is
-caused by a Stratava library bug, a bad format declaration, a wrong API call, a
+caused by a Varlit library bug, a bad format declaration, a wrong API call, a
 feature flag mismatch, or damaged file bytes.
 
 ## Static Format Diagnostics
@@ -27,7 +27,7 @@ matrix declarations, and required feature gates. Each diagnostic has:
 Use file diagnostics when a real file fails to open or read:
 
 ```rust
-let report = AppFormat::diagnose_file("data.stratava");
+let report = AppFormat::diagnose_file("data.varlit");
 for item in &report.items {
     eprintln!("{:?} {:?} {}: {}", item.severity, item.domain, item.code, item.message);
 }
@@ -39,12 +39,12 @@ reports matrix recovery findings.
 
 ## End-To-End Self Test
 
-Self-tests create a disposable Stratava file, write caller-provided sample values,
+Self-tests create a disposable Varlit file, write caller-provided sample values,
 reopen it read-only, and verify that the generated/runtime APIs roundtrip those
 values:
 
 ```rust
-let report = AppFormat::self_test("self-check.stratava")
+let report = AppFormat::self_test("self-check.varlit")
     .with_block(Point { x: 1, y: 2 })
     .with_keyed_block(User { id: 7, name: "Ada".into(), flags: 0 })
     .cleanup(true)
@@ -56,7 +56,7 @@ assert!(report.passed(), "{report:#?}");
 For matrix formats:
 
 ```rust
-let report = MatrixFormat::self_test("matrix-check.stratava")
+let report = MatrixFormat::self_test("matrix-check.varlit")
     .with_dims(MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]))
     .with_matrix_cell(MatrixKey::new(0, 0), Cell { value: 9 })
     .with_uncommitted_matrix_cell(MatrixKey::new(1, 1), Cell { value: 11 })
@@ -112,7 +112,7 @@ Resource errors are policy results, not automatically library defects:
 | `ResourceArithmeticOverflow` | A claimed range/product cannot be represented safely. | Treat the file as invalid; do not retry with a larger limit. |
 | `AllocationFailed` | A checked reservation failed even though the numeric ceiling allowed it. | Reduce the operation/dataset or available-memory pressure. |
 
-When reporting a suspected Stratava bug, include the selected `ReadLimits`, the
+When reporting a suspected Varlit bug, include the selected `ReadLimits`, the
 failing API, and whether the input was opened through an ordinary or explicitly
 trusted method. This distinguishes a format-policy mistake from an allocation
 or validation ordering defect.
@@ -120,7 +120,7 @@ or validation ordering defect.
 ## External Compatibility Harnesses
 
 When custom physical layout behavior is in question, run the optional Python
-harnesses to compare Stratava output with established readers and writers:
+harnesses to compare Varlit output with established readers and writers:
 
 The harness requirements need Python 3.12 or newer because they use NumPy 2.5.
 
@@ -128,31 +128,31 @@ The harness requirements need Python 3.12 or newer because they use NumPy 2.5.
 python -m venv .venv-tdms
 .\.venv-tdms\Scripts\python.exe -m pip install -r scripts\requirements-tdms-harness.txt
 .\.venv-tdms\Scripts\python.exe scripts\verify_tdms_with_nptdms.py
-.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_stratava.py
+.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_varlit.py
 .\.venv-tdms\Scripts\python.exe scripts\verify_bmp_with_pillow.py
 ```
 
-The TDMS harnesses check Stratava-authored example files against `npTDMS` and
-`npTDMS`-authored scalar type matrix files against a Stratava-based example
+The TDMS harnesses check Varlit-authored example files against `npTDMS` and
+`npTDMS`-authored scalar type matrix files against a Varlit-based example
 adapter. The covered TDMS proof set includes signed/unsigned integer widths,
 single/double floats, booleans, strings, timestamps, complex single/double
 floats, changed raw-data-index segments, `same-as-previous` raw-index reuse,
-mixed objects in one segment, and Stratava append into an npTDMS-authored file.
-The Stratava-authored direction also covers npTDMS-readable
+mixed objects in one segment, and Varlit append into an npTDMS-authored file.
+The Varlit-authored direction also covers npTDMS-readable
 `SingleFloatWithUnit`/`DoubleFloatWithUnit` channel type ids; the reverse
 npTDMS-authored direction omits those two because npTDMS 1.11.0 does not author
 them correctly through its normal `ChannelObject` writer path. The BMP harness
 checks a non-TDMS layout in both directions with Pillow.
 
 For TDMS-style work, remember that the repository contains adapter proofs, not
-a Stratava-provided TDMS reader/writer. Stratava owns the generic physical-layout
+a Varlit-provided TDMS reader/writer. Varlit owns the generic physical-layout
 capabilities — declaring headers, lead-ins, metadata and raw regions and footers,
 validating literal and caller fields, finalized offsets and segment bounds,
 appending complete segments, and exposing offsets, lengths, byte ranges and
 tolerant scan reports. An external TDMS adapter owns TDMS semantics: object
 paths, raw-data-index grammar, property typing, timestamp conversion, waveform
 time tracks, scaling, DAQmx raw scalers, interleaving, and any export. Use that
-split to decide whether a failure belongs to Stratava's generic API or to
+split to decide whether a failure belongs to Varlit's generic API or to
 caller-owned TDMS semantics. A quick rule:
 
 - If strict layout open succeeds, `inspect_layout_file_report` is complete, and
@@ -161,7 +161,7 @@ caller-owned TDMS semantics. A quick rule:
   are caller/adapter issues.
 - If a valid external physical layout cannot be declared, cannot stream or read
   required byte ranges, or cannot report a truncated tail before TDMS semantics
-  run, treat it as a Stratava API limitation.
+  run, treat it as a Varlit API limitation.
 
 ## Domain Meaning
 
@@ -176,7 +176,7 @@ caller-owned TDMS semantics. A quick rule:
   issue.
 - `LibraryInvariant`: a self-test roundtrip mismatch after successful write and
   read. First check custom codecs; if those are simple/correct, minimize and
-  report as a likely Stratava bug.
+  report as a likely Varlit bug.
 
 ## Practical Rule
 
@@ -193,7 +193,7 @@ use Python 3 and the repository's Rust toolchain:
 
 ```sh
 python3 scripts/qualify_scalable.py --profile qualification --epochs 256 --kill-cycles 128 --output /path/to/new-qualification
-cargo build --locked --release -p stratava --features integrity --example scalable_load --example matrix_soak
+cargo build --locked --release -p varlit --features integrity --example scalable_load --example matrix_soak
 python3 scripts/load_scalable.py --suite large --only raw-20g --only indexed-20g --only indexed-r8-20g --read-seconds 30 --output /path/to/new-report --data-root /path/to/new-data
 ```
 
@@ -261,18 +261,18 @@ With `experimental-matrix-reuse` enabled, run its bounded model, reader/writer,
 space-growth, page-boundary, bounded-cache and cross-process regressions:
 
 ```sh
-cargo test -p stratava --features experimental-matrix-reuse,scalable-fault-injection --test experimental_matrix_reuse
+cargo test -p varlit --features experimental-matrix-reuse,scalable-fault-injection --test experimental_matrix_reuse
 ```
 
 An explicitly requested longer local load check uses 4,096-row chunks, eight
 independent readers, 4 KiB page reuse, repeated publications and a fixed primary-size assertion:
 
 ```sh
-STRATAVA_REUSE_SOAK_SECONDS=60 cargo test --release -p stratava --features experimental-matrix-reuse --test experimental_matrix_reuse reuse_load_campaign -- --ignored --nocapture
+VARLIT_REUSE_SOAK_SECONDS=60 cargo test --release -p varlit --features experimental-matrix-reuse --test experimental_matrix_reuse reuse_load_campaign -- --ignored --nocapture
 ```
 
-Set `STRATAVA_REUSE_SOAK_ROOT` to an existing directory on the filesystem to
-measure. Set `STRATAVA_REUSE_SOAK_ROWS` to 1–1,048,576 rows (default 8,192)
+Set `VARLIT_REUSE_SOAK_ROOT` to an existing directory on the filesystem to
+measure. Set `VARLIT_REUSE_SOAK_ROWS` to 1–1,048,576 rows (default 8,192)
 to vary the range size; each reader verifies the complete range. The test creates
 and removes its own temporary child directory. An unset
 root uses the OS temporary directory, which may be memory-backed. This test is

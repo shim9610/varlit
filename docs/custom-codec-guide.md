@@ -7,30 +7,30 @@ meaning.
 
 ## Implement Encode And Decode
 
-Implement `StratavaEncode` and `StratavaDecode` for the field type. Use the provided
+Implement `VarlitEncode` and `VarlitDecode` for the field type. Use the provided
 `Encoder` and `Decoder` methods so bytes stay endian-aware.
 
 ```rust
-use stratava::{Decoder, Encoder, StratavaDecode, StratavaEncode, WireType};
+use varlit::{Decoder, Encoder, VarlitDecode, VarlitEncode, WireType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TimestampMillis(u64);
 
-impl StratavaEncode for TimestampMillis {
+impl VarlitEncode for TimestampMillis {
     const WIRE_TYPE: WireType = WireType::U64;
     const SCHEMA_ID: u64 = 0x54_53_4d_53_00_00_00_01; // "TSMS" v1
 
-    fn encode_stratava(&self, encoder: &mut Encoder) -> stratava::Result<()> {
+    fn encode_varlit(&self, encoder: &mut Encoder) -> varlit::Result<()> {
         encoder.write_u64(self.0);
         Ok(())
     }
 }
 
-impl StratavaDecode for TimestampMillis {
+impl VarlitDecode for TimestampMillis {
     const WIRE_TYPE: WireType = WireType::U64;
-    const SCHEMA_ID: u64 = <TimestampMillis as StratavaEncode>::SCHEMA_ID;
+    const SCHEMA_ID: u64 = <TimestampMillis as VarlitEncode>::SCHEMA_ID;
 
-    fn decode_stratava(decoder: &mut Decoder<'_>) -> stratava::Result<Self> {
+    fn decode_varlit(decoder: &mut Decoder<'_>) -> varlit::Result<Self> {
         Ok(Self(decoder.read_u64()?))
     }
 }
@@ -39,12 +39,12 @@ impl StratavaDecode for TimestampMillis {
 The type can now be used in derived blocks:
 
 ```rust
-#[derive(Clone, Debug, PartialEq, stratava::StratavaBlock)]
-#[stratava(id = 120, version = 1, kind = "variable", key = "id")]
+#[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
+#[varlit(id = 120, version = 1, kind = "variable", key = "id")]
 struct Event {
-    #[stratava(field_id = 1)]
+    #[varlit(field_id = 1)]
     id: u64,
-    #[stratava(field_id = 2)]
+    #[varlit(field_id = 2)]
     created_at: TimestampMillis,
 }
 ```
@@ -54,8 +54,8 @@ If the custom type is part of a key, it must also satisfy the key bounds:
 
 ## Declare A Schema Identity
 
-`SCHEMA_ID` is mandatory in practice: `#[derive(StratavaBlock)]` asserts at compile
-time that every field type's `StratavaEncode` and `StratavaDecode` declare a non-zero
+`SCHEMA_ID` is mandatory in practice: `#[derive(VarlitBlock)]` asserts at compile
+time that every field type's `VarlitEncode` and `VarlitDecode` declare a non-zero
 `SCHEMA_ID`, and a field whose codec leaves the trait default `0` fails to
 compile with a message naming the field. The rule is wire-type agnostic, and
 wrapping the codec in `Option`, `Vec`, an array, a map, or a tuple does not
@@ -107,7 +107,7 @@ those bytes to the materialization budget with
 `Decoder::charge_materialization`, **before** it reserves or allocates them.
 
 This is an obligation on you, not a guarantee the library can enforce.
-`StratavaDecode` is a plain trait: nothing in it can force a custom implementation
+`VarlitDecode` is a plain trait: nothing in it can force a custom implementation
 to call `charge_materialization`, so a custom codec that skips the call
 allocates outside every configured `ReadLimits` ceiling. Custom codecs are
 trusted format-author code — the same trust level as the format declaration
@@ -133,16 +133,16 @@ and the resident cost is what a limit exists to bound.
 ```rust
 use std::mem::size_of;
 
-use stratava::{Decoder, Encoder, Error, StratavaDecode, StratavaEncode, WireType};
+use varlit::{Decoder, Encoder, Error, VarlitDecode, VarlitEncode, WireType};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Samples(Vec<f64>);
 
-impl StratavaEncode for Samples {
+impl VarlitEncode for Samples {
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = 0x53_41_4d_50_00_00_00_01; // "SAMP" v1
 
-    fn encode_stratava(&self, encoder: &mut Encoder) -> stratava::Result<()> {
+    fn encode_varlit(&self, encoder: &mut Encoder) -> varlit::Result<()> {
         encoder.write_u64(self.0.len() as u64);
         for value in &self.0 {
             encoder.write_u64(value.to_bits());
@@ -151,11 +151,11 @@ impl StratavaEncode for Samples {
     }
 }
 
-impl StratavaDecode for Samples {
+impl VarlitDecode for Samples {
     const WIRE_TYPE: WireType = WireType::Bytes;
-    const SCHEMA_ID: u64 = <Samples as StratavaEncode>::SCHEMA_ID;
+    const SCHEMA_ID: u64 = <Samples as VarlitEncode>::SCHEMA_ID;
 
-    fn decode_stratava(decoder: &mut Decoder<'_>) -> stratava::Result<Self> {
+    fn decode_varlit(decoder: &mut Decoder<'_>) -> varlit::Result<Self> {
         // 1. The count is attacker-controlled input, so nothing is sized from
         //    it until it has been validated.
         let count = decoder.read_len()?;
@@ -201,13 +201,13 @@ refusal:
 ```rust
 #[test]
 fn samples_refuse_to_materialize_past_the_budget() {
-    let bytes = stratava::encode_to_vec(&Samples(vec![1.0; 64]), stratava::Endian::Little)
+    let bytes = varlit::encode_to_vec(&Samples(vec![1.0; 64]), varlit::Endian::Little)
         .expect("encode");
 
     // 512 owned bytes are needed; 256 are offered.
     let refused = Decoder::decode_from_slice_limited::<Samples>(
         &bytes,
-        stratava::Endian::Little,
+        varlit::Endian::Little,
         256,
     );
     assert!(
@@ -220,7 +220,7 @@ fn samples_refuse_to_materialize_past_the_budget() {
 
     // The control: the same input inside its budget must still decode, so the
     // test cannot pass because the codec is simply broken.
-    Decoder::decode_from_slice_limited::<Samples>(&bytes, stratava::Endian::Little, 512)
+    Decoder::decode_from_slice_limited::<Samples>(&bytes, varlit::Endian::Little, 512)
         .expect("the value fits its own budget");
 }
 ```
@@ -234,7 +234,7 @@ signal that distinguishes a charged codec from an uncharged one.
 - Make encoding canonical: the same value should produce the same bytes.
 - Declare `SCHEMA_ID` on both impls, and revise it whenever the bytes change.
 - Honor `encoder.endian()` and `decoder.endian()` for multibyte numbers.
-- Return `UnexpectedEof`, `LengthOverflow`, or another `stratava::Error` instead
+- Return `UnexpectedEof`, `LengthOverflow`, or another `varlit::Error` instead
   of panicking on malformed input.
 - Keep decode strict enough that invalid bytes do not silently become valid
   business values.
@@ -254,7 +254,7 @@ Unknown wire type values are malformed data.
 Custom codecs are still owned canonical decoding. Raw zero-copy is a separate
 unsafe opt-in behind the `zero-copy` feature, which implies `mmap`.
 
-Use `StratavaRawFixedBlock` only for fixed blocks where every payload is a valid
+Use `VarlitRawFixedBlock` only for fixed blocks where every payload is a valid
 instance of the Rust type in raw memory layout, with matching endian, exact
 `size_of::<T>()`, and valid alignment. Variable blocks are not zero-copy
 eligible in the first scaffold.
@@ -266,21 +266,21 @@ eligible in the first scaffold.
     Copy,
     Debug,
     PartialEq,
-    stratava::StratavaBlock,
-    stratava::zerocopy::FromBytes,
-    stratava::zerocopy::Immutable,
-    stratava::zerocopy::KnownLayout,
+    varlit::VarlitBlock,
+    varlit::zerocopy::FromBytes,
+    varlit::zerocopy::Immutable,
+    varlit::zerocopy::KnownLayout,
 )]
 #[repr(C)]
-#[stratava(id = 121, version = 1, kind = "fixed")]
+#[varlit(id = 121, version = 1, kind = "fixed")]
 struct RawPoint {
     x: u32,
     y: u32,
 }
 
 #[cfg(feature = "zero-copy")]
-unsafe impl stratava::StratavaRawFixedBlock for RawPoint {
-    const RAW_ENDIAN: stratava::Endian = stratava::Endian::Little;
+unsafe impl varlit::VarlitRawFixedBlock for RawPoint {
+    const RAW_ENDIAN: varlit::Endian = varlit::Endian::Little;
 }
 ```
 
@@ -304,9 +304,9 @@ Run the ignored smoke tests when a codec affects large field payloads, map
 sorting, allocation behavior, mmap payload windows, or zero-copy reads:
 
 ```powershell
-cargo test -p stratava --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap --test perf_smoke -- --ignored --nocapture
-cargo test -p stratava --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap --test perf_smoke -- --ignored --nocapture
+cargo test -p varlit --features mmap,zero-copy --test perf_smoke -- --ignored --nocapture
 ```
 
 Also add focused roundtrip and byte-stability tests for custom codecs whose

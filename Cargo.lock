@@ -406,20 +406,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "stratava"
+name = "varlit"
 version = "0.12.0"
 dependencies = [
  "proptest",
  "redb",
- "stratava-core",
- "stratava-macros",
+ "varlit-core",
+ "varlit-macros",
  "tempfile",
  "trybuild",
  "zerocopy",
 ]
 
 [[package]]
-name = "stratava-core"
+name = "varlit-core"
 version = "0.12.0"
 dependencies = [
  "crc32fast",
@@ -434,18 +434,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "stratava-macros"
+name = "varlit-macros"
 version = "0.12.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "stratava",
+ "varlit",
  "syn 3.0.6",
 ]
 
 [[package]]
-name = "stratava-test-runner"
+name = "varlit-test-runner"
 version = "0.12.0"
 
 [[package]]

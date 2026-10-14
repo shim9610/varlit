@@ -1,5 +1,0 @@
-error[E0599]: no method named `begin_mutation` found for struct `stratava_core::enforcement_probe::PoisonFlag` in the current scope
-  --> tests/ui/fail_unpermitted_mutation_window.rs:14:56
-   |
-14 |     let _window: MutationInFlight<LayoutWriter> = flag.begin_mutation();
-   |                                                        ^^^^^^^^^^^^^^ method not found in `stratava_core::enforcement_probe::PoisonFlag`

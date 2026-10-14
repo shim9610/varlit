@@ -1,15 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-use stratava::{Endian, LayoutFieldValue, LayoutValue, SegmentWrite, encode_to_vec};
-use stratava_fuzz::{
+use varlit::{Endian, LayoutFieldValue, LayoutValue, SegmentWrite, encode_to_vec};
+use varlit_fuzz::{
     FuzzCell, FuzzCellKey, FuzzLayoutFormat, FuzzMatrixFormat, FuzzMatrixFormatDims,
     FuzzNativeFormat, FuzzPoint, FuzzRecord,
 };
 
-fn main() -> stratava::Result<()> {
+fn main() -> varlit::Result<()> {
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
-    let scratch = std::env::temp_dir().join(format!("stratava-fuzz-seeds-{}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("varlit-fuzz-seeds-{}", std::process::id()));
     fs::create_dir_all(&scratch)?;
 
     generate_native(&corpus, &scratch)?;
@@ -21,10 +21,10 @@ fn main() -> stratava::Result<()> {
     Ok(())
 }
 
-fn generate_native(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
+fn generate_native(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     let output = corpus.join("native_arbitrary");
     fs::create_dir_all(&output)?;
-    let path = scratch.join("native.stratava");
+    let path = scratch.join("native.varlit");
     let mut writer = FuzzNativeFormat::create_writer(&path)?;
     writer.push_fuzz_point(&FuzzPoint { x: 7, y: -11 })?;
     writer.push_fuzz_record(&FuzzRecord {
@@ -36,11 +36,11 @@ fn generate_native(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
     writer.flush()?;
     writer.sync()?;
     drop(writer);
-    fs::copy(path, output.join("valid-native.stratava"))?;
+    fs::copy(path, output.join("valid-native.varlit"))?;
     Ok(())
 }
 
-fn generate_codec(corpus: &Path) -> stratava::Result<()> {
+fn generate_codec(corpus: &Path) -> varlit::Result<()> {
     let output = corpus.join("codec_arbitrary");
     fs::create_dir_all(&output)?;
     let point = encode_to_vec(&FuzzPoint { x: 1, y: -2 }, Endian::Little)?;
@@ -62,7 +62,7 @@ fn generate_codec(corpus: &Path) -> stratava::Result<()> {
     Ok(())
 }
 
-fn generate_layout(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
+fn generate_layout(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     let output = corpus.join("layout_arbitrary");
     fs::create_dir_all(&output)?;
     let path = scratch.join("layout.bin");
@@ -85,10 +85,10 @@ fn generate_layout(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
     Ok(())
 }
 
-fn generate_matrix(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
+fn generate_matrix(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     let output = corpus.join("matrix_arbitrary");
     fs::create_dir_all(&output)?;
-    let matrix = scratch.join("matrix.stratava");
+    let matrix = scratch.join("matrix.varlit");
     let sidecar = scratch.join("matrix.sidecar");
     let mut writer = FuzzMatrixFormat::create_writer_with_dims(
         &matrix,
@@ -116,7 +116,7 @@ fn generate_matrix(corpus: &Path, scratch: &Path) -> stratava::Result<()> {
     Ok(())
 }
 
-fn generate_sidecars(corpus: &Path) -> stratava::Result<()> {
+fn generate_sidecars(corpus: &Path) -> varlit::Result<()> {
     let arbitrary = corpus.join("sidecar_arbitrary");
     fs::create_dir_all(&arbitrary)?;
     fs::write(arbitrary.join("empty"), [])?;
@@ -170,7 +170,7 @@ fn generate_sidecars(corpus: &Path) -> stratava::Result<()> {
     Ok(())
 }
 
-fn write_operations(path: &Path, operations: &[[u8; 4]]) -> stratava::Result<()> {
+fn write_operations(path: &Path, operations: &[[u8; 4]]) -> varlit::Result<()> {
     let bytes: Vec<_> = operations.iter().flatten().copied().collect();
     fs::write(path, bytes)?;
     Ok(())
