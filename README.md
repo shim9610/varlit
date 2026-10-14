@@ -1,7 +1,9 @@
 # Varlit
 
-Formerly Varve. The 0.12.0 rename changes the Rust API and package names; existing
-versioned file markers remain unchanged.
+Current release: **[0.12.1](https://github.com/shim9610/varlit/releases/tag/v0.12.1)**.
+
+Formerly Varve. The project was renamed to Varlit in 0.12.0, changing the Rust API
+and package names. Existing versioned file markers remain unchanged.
 
 Varlit is a Rust library for building append-friendly, segment-oriented custom
 binary formats from typed block definitions. It is not one fixed file format.
