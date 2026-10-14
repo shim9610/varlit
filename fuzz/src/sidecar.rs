@@ -16,9 +16,15 @@ const MAX_RECORDS: usize = 255;
 mod tests {
     #[test]
     fn corrupted_confirmed_heads_do_not_restore_an_older_generation() {
-        // Public sanitizer run 38543670673: both confirmed head checksums are
-        // invalidated while an older dirty/recovery checkpoint stays readable.
-        super::run_mutation(&[32, 13, 32, 13, 16, 16, 16, 16, 16, 16, 245]);
+        // Public sanitizer runs 38543670673 and 38546437279: both confirmed
+        // heads are invalidated while an older recovery checkpoint survives.
+        let inputs: &[&[u8]] = &[
+            &[32, 13, 32, 13, 16, 16, 16, 16, 16, 16, 245],
+            &[0, 183, 243, 63, 27, 32, 37, 37, 37, 37, 248, 239, 37],
+        ];
+        for input in inputs {
+            super::run_mutation(input);
+        }
     }
 }
 
