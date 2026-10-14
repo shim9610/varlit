@@ -1412,19 +1412,22 @@ fn directory_is_exclusively_owned(
 /// pathname swap landing in exactly that interval.
 #[cfg(all(test, not(windows)))]
 fn interpose_before_unlink() {
-    let hook = INTERPOSITION.lock().expect("interposition hook").take();
+    let hook = INTERPOSITION.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
     }
 }
 
 #[cfg(all(test, not(windows)))]
-static INTERPOSITION: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
-    std::sync::Mutex::new(None);
+std::thread_local! {
+    // A parallel cleanup must not consume another test's interposition.
+    static INTERPOSITION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(all(test, not(windows)))]
-fn set_interposition(hook: Box<dyn FnOnce() + Send>) {
-    *INTERPOSITION.lock().expect("interposition hook") = Some(hook);
+fn set_interposition(hook: Box<dyn FnOnce()>) {
+    INTERPOSITION.with(|slot| *slot.borrow_mut() = Some(hook));
 }
 
 /// Removes the pathname's writer-lock marker only when this process can
@@ -1557,6 +1560,39 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(windows))]
+    fn unlink_interposition_stays_on_the_calling_test_thread() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let fired = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let local = Arc::clone(&fired);
+        let owner = std::thread::spawn(move || {
+            set_interposition(Box::new(move || local.store(true, Ordering::SeqCst)));
+            ready_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+            interpose_before_unlink();
+        });
+        ready_rx.recv().unwrap();
+        interpose_before_unlink();
+        let consumed_by_another_thread = fired.load(Ordering::SeqCst);
+        continue_tx.send(()).unwrap();
+        owner.join().unwrap();
+        assert!(
+            !consumed_by_another_thread,
+            "another test consumed the hook"
+        );
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "the owning test lost its hook"
+        );
+    }
 
     #[test]
     fn storage_capabilities_are_environment_warnings_not_corruption() {
