@@ -289,8 +289,9 @@ are included even with `default-features = false`. The removed
 Cargo manifests. Optional capabilities remain opt-in:
 
 ```toml
-varlit = { path = "../varlit/crates/varlit",
-          features = ["integrity", "compression-zstd"] }
+[dependencies.varlit]
+path = "../varlit/crates/varlit"
+features = ["integrity", "compression-zstd"]
 ```
 
 | Feature | Turns on |
