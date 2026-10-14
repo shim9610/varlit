@@ -25,6 +25,11 @@ Read this before adopting. The detail behind every line is in
 **[Known Limitations](docs/known-limitations.md)**; upgrading from 0.4.0 or 0.3.0
 is covered in **[API Changes](docs/api-changes.md)**.
 
+For contributions, see [CONTRIBUTING](https://github.com/shim9610/varlit/blob/main/CONTRIBUTING.md)
+and the [Code of Conduct](https://github.com/shim9610/varlit/blob/main/CODE_OF_CONDUCT.md).
+Potential security problems follow the
+[private reporting policy](https://github.com/shim9610/varlit/blob/main/SECURITY.md).
+
 **Ready for:**
 
 - Declaring a custom binary format and getting typed readers and writers for it.
@@ -63,10 +68,10 @@ is covered in **[API Changes](docs/api-changes.md)**.
 
 - **Universal performance or filesystem guarantees.** Measurements include
   Windows and Linux workloads; each result applies to its recorded source,
-  hardware, cache state and filesystem. The unreleased 0.12.0 CI configuration
-  includes native Linux, Windows and macOS tests, but configured jobs are not
-  evidence that this version has completed those runs. macOS allocation-map and
-  hole-punch implementations still require native filesystem qualification.
+  hardware, cache state and filesystem. Source `d85f3ca` passed native
+  Linux, Windows and macOS default/all-feature and bounded-I/O checks in
+  [CI](https://github.com/shim9610/varlit/actions/runs/38558303425).
+  Those checks do not establish filesystem-wide performance or power-loss guarantees.
 - **Matrices on a filesystem that cannot represent holes.** Sparseness is
   requested best-effort. `matrix_storage_diagnostics()` and `diagnose_file`
   expose observed capability failures and warnings. On a non-sparse volume the
@@ -108,12 +113,12 @@ is covered in **[API Changes](docs/api-changes.md)**.
   payloads, bitmaps, CRCs and aux data share one confirmed generation; `sync()`
   publishes it. Matrix storage requires the primary and its `.vmg` companion.
 - **Anything depending on a long fuzz campaign.** Fuzz, Miri and ASan do run
-  now — weekly, in CI — and the Unix code paths are executed rather than merely
+  on PRs and by manual dispatch, and the Unix code paths are executed rather than merely
   compiled, which is a change from every release before 0.7.0. What has *not*
   happened is a campaign: the fuzz job gives each target 90 seconds, and the
   targets that build a sidecar per input manage about 64 executions per second
-  where the codec target manages 300,000. Treat the fuzz line as a smoke test
-  that has never failed, not as a search that has finished; see
+  where the codec target manages 300,000. The smoke run has found defects;
+  passing it does not establish a completed search. See
   [Known Limitations §6](docs/known-limitations.md#6-not-verified).
 
 ## What Varlit Provides
@@ -497,9 +502,9 @@ copy-on-write fixed replacement, canonical decoding, native and matrix structura
 validation, sidecar and lock bounds, and generated API trust boundaries. **That
 review predates 0.4.0 and every hardening round recorded in the changelog.**
 
-Fuzz, Miri and ASan now run weekly (`.github/workflows/sanitizers.yml`), and
-0.7.0 is the first release that can say so. Read what that buys before relying
-on it: the fuzz job gives each target **90 seconds**, which is a smoke test and
+Fuzz, Miri and ASan run on PRs targeting `main` and by manual dispatch
+(`.github/workflows/sanitizers.yml`). These checks were introduced in 0.7.0.
+Read what that buys before relying on it: the fuzz job gives each target **90 seconds**, which is a smoke test and
 not a campaign, and the targets that exercise the sidecar path manage about 64
 executions per second against `codec_arbitrary`'s 300,000. For the full
 assurance picture — including that, and which platform each number came from —
@@ -518,12 +523,18 @@ The runner gives every command a fresh temporary root, preserves that root on
 failure, and requires verified cleanup on success. Cargo build caches remain
 reusable and are not treated as test data.
 
+Automatic CI runs only on PRs targeting `main`; manual dispatch remains available.
+Neither a branch push nor merging a checked PR starts a duplicate run. New PR
+commits cancel obsolete runs. Rust, Python and Actions CodeQL results are uploaded
+to code scanning. The stable `ci / required` check rejects any missing, failed,
+cancelled or skipped job group; sanitizer checks remain separate.
+
 The 0.12.0 CI configuration (`.github/workflows/ci.yml`) includes native default/all
 tests and bounded-I/O checks on Ubuntu, Windows and macOS. Its other gates include
 `cargo fmt --all -- --check`; a per-feature Clippy matrix with `-D warnings` and `--locked`
 covering no-default-features, default, each optional feature alone
 (`integrity`, `mmap`, `zero-copy`, `compression-zstd`,
-`scalable-fault-injection`), and the all-feature workspace union; default and
+`scalable-fault-injection`, `experimental-matrix-reuse`), and the all-feature workspace union; default and
 all-feature test runs through `varlit-test-runner` so a leaked test artifact
 fails the build; test runs for the two singleton feature configurations that own
 `cfg`-exclusive behaviour (compression without integrity, integrity without
@@ -558,7 +569,7 @@ does.
 Every CI action is pinned to a commit id and every installed cargo tool to an
 exact version, so a future run of the workflow evaluates the same *gate code* it
 evaluates today. That is the whole of the claim: the runner images
-(`ubuntu-latest`, `windows-latest`) and the `stable` toolchain every job except
+(`ubuntu-latest`, `windows-latest`, `macos-latest`) and the `stable` toolchain every job except
 `msrv (1.95.0)` requests are rolling by design, because catching a break on a
 newer compiler or image is exactly what they are for. A CI run is therefore
 **not** reproducible, and a red run on an unchanged commit is an expected

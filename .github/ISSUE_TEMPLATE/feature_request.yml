@@ -1,0 +1,23 @@
+name: Feature proposal
+description: Propose an API, format capability or improvement
+title: '[Feature]: '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workload or problem
+      description: Explain the use case and where the existing API falls short
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include an API example or observable result
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and alternatives
+      description: Data size, access pattern, memory budget, durability or platform needs

@@ -825,8 +825,8 @@ distinction that matters throughout this section is **executed** versus
 This section used to say the Unix paths had never been executed. **That stopped
 being true on 2026-07-27, and what the first run found is why the section is
 still here.** The suite is executed on Linux as well as
-Windows: CI runs `ubuntu-latest` and `windows-latest` on every push to `main`,
-on every pull request, and on demand. The three paths this section used to name
+Windows and macOS: CI runs native jobs on PRs targeting `main` and on demand.
+Branch pushes and merges do not duplicate those checks. The three paths this section used to name
 as unexecuted — `diagnostics.rs`'s `openat`/`unlinkat` exclusive-directory
 cleanup, `file.rs`'s `O_NOFOLLOW` lock-marker open, and the matrix
 concurrent-read path without the Windows private-handle pool (§4.1) — all run
@@ -901,18 +901,20 @@ bytes. It passed the 64 MiB peak and 16 MiB growth budgets. These are allocation
 measurements, not RSS. The runner makes the campaign repeatable, but there is
 still no automatically scheduled long performance campaign.
 
-### 6.4 The fuzz, Miri and ASan runs are a weekly smoke, not a campaign
+### 6.4 The fuzz, Miri and ASan runs are a bounded smoke, not a campaign
 
 - `ci.yml`'s `fuzz-supply-chain` job is not fuzzing despite its name: it does
   `cargo audit`, `cargo deny`, `cargo metadata`/`check` and a lockfile drift
   check. The fuzzing is in `sanitizers.yml`, below.
-- The most recent recorded fuzz evidence for this project is dated
-  2026-07-11 (four core targets) and 2026-07-18 (three sidecar targets). Both
-  predate several rounds of change to `matrix.rs`, `file.rs`, `codec.rs` and
-  `format.rs`. The cited ASan run covered 21 library tests; the library suite is
-  now 139.
+- Earlier reports from 2026-07-11 and 2026-07-18 describe older revisions.
+  Source `d85f3ca` passed all three hosted
+  [sanitizer jobs](https://github.com/shim9610/varlit/actions/runs/38558333461):
+  ASan, the selected portable Miri surface and every fuzz target's 90-second smoke.
+  The associated native CI also passed on Linux, Windows and macOS. Neither result
+  establishes exhaustive fuzzing, power-loss coverage or filesystem-wide performance.
 - **This changed in 0.7.0, and the change is smaller than it sounds.** All three
-  now run, weekly, in `.github/workflows/sanitizers.yml`: `fuzz-smoke` builds and
+  now run on PRs targeting `main` and by manual dispatch in
+  `.github/workflows/sanitizers.yml`: `fuzz-smoke` builds and
   runs **every** target for 90 seconds each, `asan` runs the `varlit` and
   `varlit-core` test suites under AddressSanitizer with `--all-features`, and
   `miri` runs `varlit-core`'s no-default-feature unit tests. Executed on Linux

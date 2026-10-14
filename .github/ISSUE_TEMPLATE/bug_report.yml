@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible incorrect result or failure
+title: '[Bug]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a potential security problem, use the private reporting instructions in SECURITY.md.
+        Use synthetic data and redact private paths or credentials from logs.
+  - type: input
+    id: version
+    attributes:
+      label: Varlit version or commit
+      placeholder: Release tag or full commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, filesystem, Rust version, enabled features and relevant resource options
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Code, command and synthetic input needed to reproduce the issue
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Observed behavior and logs
+      description: Include exact errors and whether the file changed
+    validations:
+      required: true

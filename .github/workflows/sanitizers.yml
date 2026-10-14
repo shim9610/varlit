@@ -1,12 +1,12 @@
 name: Sanitizers
 
 # Fuzzing, Miri, and AddressSanitizer live outside `ci.yml` because they answer
-# a different question on a different clock. `ci.yml` gates every push and pull
+# a different question on a different clock. `ci.yml` gates every pull
 # request on "does this change break a contract"; these jobs ask "is there a
 # memory-safety defect nobody has noticed yet" — a property of the whole tree,
-# not of a diff, and one that costs hours rather than minutes. A weekly schedule
-# plus a manual trigger fits that: the answer does not change on every push, and
-# a red run here is investigated, not reverted.
+# not of a diff, and one that costs hours rather than minutes. Run on PRs into
+# main and by explicit dispatch; neither branch pushes nor a schedule duplicate
+# the checked PR. A failure is investigated with its retained evidence.
 #
 # What each tool can actually see — measured on 2026-08-08, not assumed:
 #
@@ -19,15 +19,21 @@ name: Sanitizers
 #     most the remaining 7, plus everything in `matrix`, `codec`, `snapshot`.
 #     In exchange it is the one tool here that reports UB that does not crash.
 #   * The fuzz smoke run exists so a target that stops building, or crashes
-#     within its first minutes, is caught weekly instead of on the next manual
+#     within its first minutes, is caught on a PR instead of on the next manual
 #     campaign. It is not a campaign itself: 90 seconds per target finds smoke,
 #     not deep states.
 
 on:
-  schedule:
-    # Weekly, Monday 03:17 UTC. Scheduled workflows run on the default branch.
-    - cron: '17 3 * * 1'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
