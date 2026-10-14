@@ -509,21 +509,29 @@ fn process_reader_child() {
     let ready = path.with_extension("ready");
     let done = path.with_extension("done");
     std::fs::write(&ready, b"ready").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // Bound stalled publication, not the cumulative cost of 201 durable syncs
+    // while other tests compete for the runner's disk (especially on Windows).
+    let stall_timeout = std::time::Duration::from_secs(30);
+    let mut deadline = std::time::Instant::now() + stall_timeout;
+    let mut last_epoch = 1;
     let mut reads = 0;
+    let mut out = vec![value(0, 0); 96];
     while !done.exists() {
         assert!(
             std::time::Instant::now() < deadline,
-            "writer did not finish"
+            "writer made no observed confirmed progress for 30 seconds (epoch {last_epoch})"
         );
-        let mut out = vec![value(0, 0); 96];
         match r.read_run_into(key(0), &mut out) {
             Ok(()) => {
                 let epoch = out[0].epoch;
-                assert!(
-                    out.iter()
-                        .all(|v| v.epoch == epoch && v.pad == [epoch as u8; 40])
-                );
+                assert!(out.iter().enumerate().all(|(i, v)| v.epoch == epoch
+                    && v.pad == [epoch as u8; 40]
+                    && (v.row, v.col) == (i as u64 / 3, i as u64 % 3)));
+                assert!(epoch >= last_epoch, "confirmed generation moved backwards");
+                if epoch > last_epoch {
+                    last_epoch = epoch;
+                    deadline = std::time::Instant::now() + stall_timeout;
+                }
                 reads += 1;
             }
             Err(MatrixReuseError::Retry { .. }) => {}
@@ -566,9 +574,27 @@ fn separately_opened_process_reader_follows_reused_slots() {
     }
     for epoch in 2..203 {
         fill(&mut w, 96, epoch);
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "reader exited before publication completed (epoch {epoch})"
+        );
     }
     std::fs::write(path.with_extension("done"), b"done").unwrap();
-    assert!(child.0.wait().unwrap().success());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "reader failed after publication: {status}"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reader did not acknowledge completion"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 }
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
