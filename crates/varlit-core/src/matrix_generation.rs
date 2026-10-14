@@ -1423,9 +1423,13 @@ mod tests {
     #[test]
     fn tiny_pending_budget_spills_without_publishing_and_compacts_in_batches() {
         let (_dir, path, base, mut writer) = fixture(256 * PAGE as u64);
+        // Four pages still spill with a two-page pending budget. The native
+        // fixture remains 200 pages; this bounds interpreted setup so a Miri
+        // probe can reach the native publication operation rather than timeout.
+        let pages = if cfg!(miri) { 4 } else { 200u64 };
         writer.max_pending = 2;
         let old = writer.refreshed().unwrap();
-        for page in 0..200u64 {
+        for page in 0..pages {
             writer.seek(SeekFrom::Start(page * PAGE as u64)).unwrap();
             writer.write_all(&[page as u8 + 1]).unwrap();
             assert!(writer.view.working.as_ref().unwrap().pages.len() <= 2);
@@ -1434,7 +1438,7 @@ mod tests {
         // to a fresh process-equivalent handle, even after many spills.
         let fresh = MatrixFile::open(&path, &base, [7; 16], false, 2).unwrap();
         assert_eq!(fresh.head(), old.head());
-        for page in 0..200u64 {
+        for page in 0..pages {
             let mut byte = [0];
             writer
                 .view
@@ -1456,7 +1460,7 @@ mod tests {
         let mut byte = [0];
         confirmed.view.read_exact_at(0, &mut byte).unwrap();
         assert_eq!(byte, [231]);
-        writer.zero(1, 199 * PAGE as u64).unwrap();
+        writer.zero(1, (pages - 1) * PAGE as u64).unwrap();
         writer.publish(writer.view.len).unwrap();
         writer.view.read_exact_at(PAGE as u64, &mut byte).unwrap();
         assert_eq!(byte, [0]);
@@ -1492,17 +1496,20 @@ mod tests {
     #[test]
     fn root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs() {
         let (_dir, _path, _base, mut writer) = fixture(8 * 1024 * 1024);
-        for page in 0..1024 {
+        // Keep two populated radix children and modify the second in Miri.
+        // Native/ASan retain eight children and the original changed page.
+        let (pages, changed) = if cfg!(miri) { (129, 128) } else { (1024, 900) };
+        for page in 0..pages {
             writer.seek(SeekFrom::Start(page * PAGE as u64)).unwrap();
             writer.write_all(&[1]).unwrap();
         }
         writer.publish(writer.view.len).unwrap();
         let old = writer.refreshed().unwrap();
-        writer.seek(SeekFrom::Start(900 * PAGE as u64)).unwrap();
+        writer.seek(SeekFrom::Start(changed * PAGE as u64)).unwrap();
         writer.write_all(&[2]).unwrap();
         writer.publish(writer.view.len).unwrap();
         let next = old.refreshed().unwrap();
-        assert_eq!(old.changed_pages(&next).unwrap(), vec![900]);
+        assert_eq!(old.changed_pages(&next).unwrap(), vec![changed]);
         assert_eq!(old.view.cache.borrow().pages.len(), 2);
         assert_eq!(next.view.cache.borrow().pages.len(), 2);
         assert_eq!(old.head().compaction_epoch, next.head().compaction_epoch);
@@ -1519,13 +1526,20 @@ mod tests {
     }
     #[test]
     fn seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction() {
-        let (_dir, path, base, mut store) = fixture(2 * 1024 * 1024 + 37);
+        // Preserve cross-page 6000-byte edits, old roots, cache-off/cache-on
+        // reads and compaction. Native/ASan keep the original full model.
+        let (len, batches, edits) = if cfg!(miri) {
+            (65536 + 37, 3, 6)
+        } else {
+            (2 * 1024 * 1024 + 37, 25, 60)
+        };
+        let (_dir, path, base, mut store) = fixture(len);
         let mut model = vec![0u8; store.view.len as usize];
         let mut state = 0x923aec76u64;
-        for batch in 0..25 {
+        for batch in 0..batches {
             let old = store.refreshed().unwrap();
             let before = model.clone();
-            for _ in 0..60 {
+            for _ in 0..edits {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let at = (state as usize) % (model.len() - 6000);
                 let bytes = vec![(state >> 32) as u8; 6000];

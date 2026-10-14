@@ -300,37 +300,47 @@ mod tests {
     }
     #[test]
     fn bounded_memory_spills_without_changing_held_snapshots() -> Result<()> {
-        for limit in [0, 256, 4096, 1024 * 1024] {
+        // Miri interprets every checksummed spill-page byte. Scale the budgets
+        // together with the directory while retaining all four storage modes,
+        // held snapshots, swap/truncate and every entry assertion. Native/ASan
+        // retain the original 300-entry fixture.
+        let (prefix, count, limits) = if cfg!(miri) {
+            (8, 20, [0, 8, 64, 1024 * 1024])
+        } else {
+            (80, 300, [0, 256, 4096, 1024 * 1024])
+        };
+        for limit in limits {
             let mut original = BitmapDirectory::with_limit(limit);
-            for page in 0..80 {
+            for page in 0..prefix {
                 original.push(page)?;
             }
             let mut next = original.clone();
-            for page in 80..300 {
+            for page in prefix..count {
                 next.push(page)?;
             }
-            let mut moved = next.swapped(7, 7, 299, 299)?;
+            let last = count - 1;
+            let mut moved = next.swapped(7, 7, last, last)?;
             moved.set_first(7, None)?;
-            moved.truncate(299);
-            assert_eq!(original.len(), 80);
-            assert_eq!(next.len(), 300);
+            moved.truncate(last);
+            assert_eq!(original.len(), prefix);
+            assert_eq!(next.len(), count);
             assert_eq!(original.slot(7)?, Some(7));
             assert_eq!(next.first(7)?, Some(7));
-            assert_eq!(moved.slot(7)?, Some(299));
+            assert_eq!(moved.slot(7)?, Some(last));
             assert_eq!(moved.first(7)?, None);
-            assert_eq!(moved.first(299)?, Some(7));
+            assert_eq!(moved.first(last)?, Some(7));
             let mut pages = BTreeMap::new();
             moved.visit_pages(|page, slot| {
                 pages.insert(page, slot);
                 Ok(())
             })?;
-            assert_eq!(pages.len(), 299);
-            for page in 0..299 {
+            assert_eq!(pages.len() as u64, last);
+            for page in 0..last {
                 if page != 7 {
                     assert_eq!(pages[&page], page);
                 }
             }
-            assert_eq!(pages[&299], 7);
+            assert_eq!(pages[&last], 7);
             assert!(next.resident_bytes() <= limit as u64 + 256);
             if limit == 1024 * 1024 {
                 assert!(next.tree.is_none());

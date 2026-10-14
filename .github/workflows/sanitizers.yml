@@ -177,51 +177,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          toolchain: nightly
+          # Match the interpreter used to qualify this gate. Review the
+          # exclusions again when updating, rather than silently drifting.
+          toolchain: nightly-2026-10-12
           components: miri
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: miri
-      # `-Zmiri-disable-isolation` because these tests do real file I/O through
-      # std, which Miri shims once isolation is off.
-      #
-      # Ten tests are skipped. Eight came from a per-test classification of all 107 on
-      # 2026-08-08 — each name below is a measurement, not a guess:
-      #
-      #   * four `diagnostics` tests abort on the foreign function `openat`:
-      #     they call libc directly to pin down inode-identity semantics, and
-      #     Miri only shims std's file API, not raw libc.
-      #   * four are performance-contract tests that drive thousands of reads
-      #     through a file-backed page cache; each ran past a 300-second cap
-      #     where the other 99 finished, and a 50-minute rerun of the three LRU
-      #     ones saw two PASS at the 35-45 minute mark with the third still
-      #     running when the cap fired — slow, not hung, and clean. They assert
-      #     probe-count bounds — algorithmic cost, no `unsafe` — so skipping
-      #     them costs Miri nothing it could have judged.
-      #   * cleanup_refuses_a_shared_writable_directory opens its parent directory
-      #     through std to enforce pathname cleanup safety. Miri aborted on that
-      #     unsupported directory open on 2026-10-05; ASan and ordinary CI retain it.
-      #   * randomized_pages_match_redb_across_splits_and_old_roots uses redb's
-      #     real file backend as an independent I/O oracle. Miri aborted on its
-      #     unsupported fcntl syscall (72) on 2026-10-07. Ordinary CI and ASan
-      #     still run this comparison; native index tests remain in Miri.
-      #
-      # Crossbeam has been removed. Keep native tests and the default alias
-      # checks enabled for the owner-local caches and page directories.
-      #
-      # `--skip` matches substrings; these names are long enough to be unique.
+      # Exclusions name exact tests and measured reasons in the public manifest.
+      # The runner rejects stale/ambiguous filters and verifies the final test
+      # count. Unknown unsupported calls, UB and all other failures stay fatal.
+      # Directory fsync is native/ASan coverage: never stub production durability
+      # just to make Miri green. Default alias/validity checks remain enabled.
       - name: unit tests under Miri
+        run: python3 scripts/check_miri.py
+      - name: array decoding and partial-drop contracts under Miri
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
-          cargo miri test -p varlit-core --no-default-features --lib -- \
-            --skip randomized_pages_match_redb_across_splits_and_old_roots \
-            --skip cleanup_does_not_delete_a_file_interposed_before_the_unlink \
-            --skip cleanup_leaves_a_swapped_pathname_alone \
-            --skip cleanup_removes_the_verified_object \
-            --skip cleanup_refuses_a_shared_writable_directory \
-            --skip lock_marker_removal_leaves_a_swapped_object_alone \
-            --skip replace_block_finds_predecessors_without_rescanning_the_prefix \
-            --skip a_page_released_by_a_clear_leaves_the_recency_order \
-            --skip a_recency_touch_costs_a_bounded_number_of_probes \
-            --skip a_writer_materialised_page_is_never_evicted
+          set -o pipefail
+          cargo +nightly-2026-10-12 miri test --locked -p varlit \
+            --no-default-features --test codec_array_allocation \
+            2>&1 | tee target/miri-report/codec-array.log
+          grep -Fq 'test result: ok. 6 passed; 0 failed' target/miri-report/codec-array.log
+      - name: retain Miri selection, toolchain and complete logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: miri-report
+          path: target/miri-report/
+          retention-days: 14

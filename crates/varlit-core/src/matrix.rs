@@ -8505,7 +8505,10 @@ mod page_store_lru_tests {
     /// Published pages in the fixture. The default demand cache is 512 pages,
     /// so this is the size at which "constant per touch" and "half the cache
     /// per touch" are two orders of magnitude apart.
-    const PAGES: u64 = 512;
+    // The functional eviction case needs five published pages, not the full
+    // scaling fixture. Keep eight for Miri's memory/alias checks; native/ASan
+    // retain the 512-page performance workload.
+    const PAGES: u64 = if cfg!(miri) { 8 } else { 512 };
 
     /// A lazily backed bitmap over a real file: pages `0..PAGES` published with
     /// one set bit each, page `PAGES` present in the address space but never
@@ -9442,17 +9445,27 @@ mod column_gather_tests {
 
     #[test]
     fn coalesced_windows_preserve_selected_bytes_and_bound_gap_reads() {
+        // 31 rows still cross the 4 KiB gather window for 48-byte items at
+        // step 144 (29 fit), and retain the oversized 4097-byte direct-read
+        // case. Native/ASan retain 73 rows. All item/stride configurations,
+        // byte assertions, I/O bounds and the overflow refusal still run.
+        let cells = if cfg!(miri) { 31 } else { 73 };
         for item in [1usize, 4, 8, 48, 4097] {
             for multiplier in [1u64, 3, 5, 640] {
                 let step = item as u64 * multiplier;
                 let first = 123;
-                let mut out = vec![0; item * 73];
+                let mut out = vec![0; item * cells];
                 let mut read_bytes = 0;
+                let mut read_calls = 0;
                 read_strided_bytes(
                     |at, bytes| {
                         assert!(at >= first);
-                        assert!(at + bytes.len() as u64 <= first + 72 * step + item as u64);
+                        assert!(
+                            at + bytes.len() as u64
+                                <= first + (cells as u64 - 1) * step + item as u64
+                        );
                         read_bytes += bytes.len();
+                        read_calls += 1;
                         for (i, byte) in bytes.iter_mut().enumerate() {
                             *byte = ((at + i as u64) % 251) as u8;
                         }
@@ -9470,6 +9483,12 @@ mod column_gather_tests {
                     }
                 }
                 assert!(read_bytes <= out.len() * 4);
+                if item == 48 && multiplier == 3 {
+                    assert!(
+                        read_calls > 1,
+                        "fixture must cross a gather-window boundary"
+                    );
+                }
             }
         }
         assert!(

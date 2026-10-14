@@ -6,6 +6,23 @@ feature flag mismatch, or damaged file bytes.
 
 ## Static Format Diagnostics
 
+For the repository's portable memory-safety gate, install the qualified Miri
+toolchain and run:
+
+```sh
+rustup toolchain install nightly-2026-10-12 --profile minimal --component miri
+python3 scripts/check_miri.py
+```
+
+The gate records its toolchain, exact selected tests and complete output in
+`target/miri-report/`. Exclusions and reasons are in
+`scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
+Directory `fsync`, native pathname cleanup and the real-file redb oracle require
+native tests and ASan. Miri does not establish filesystem durability or cover
+the mmap/Windows surface. Default alias and validity checks remain enabled.
+CI also runs the six `codec_array_allocation` integration tests under the same
+interpreter, covering partial drops, array framing and the custom-codec path.
+
 Run diagnostics before creating long-lived files:
 
 ```rust

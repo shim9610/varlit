@@ -28,10 +28,10 @@ is covered in **[API Changes](docs/api-changes.md)**.
 **Ready for:**
 
 - Declaring a custom binary format and getting typed readers and writers for it.
-- Append-log files whose record count and distinct-key count fit comfortably in
-  RAM alongside the application. This is the default path. Budget **16 bytes of
-  resident directory per record** — the record's offset and its committed bit;
-  everything else is rebuilt from the record when a read asks. By default open
+- Native append-log files with bounded directory buffers and private spills.
+  Directory entries cost **16 bytes per record** — the record's offset and its
+  committed bit — retained in RAM up to the configured budget and spilled beyond
+  it. Everything else is rebuilt from the record when a read asks. By default open
   scans the whole file to build it, and opt-in policies change that:
   `segment_on_flush` makes the open walk one record per commit point, and
   `open_digest_on_flush` plus `open_readonly_lazy` makes it frame one record and
@@ -61,27 +61,28 @@ is covered in **[API Changes](docs/api-changes.md)**.
 
 **Not ready for:**
 
-- **Measurements from one platform.** The test suite is executed on both Linux
-  and Windows — CI runs `ubuntu-latest` and `windows-latest` on every push to
-  `main`, and both were green — so behaviour is no longer Windows-only. The
-  *numbers* still are: every syscall count, residency figure and open cost in
-  these documents was measured on Windows x86_64, and the constants differ on a
-  filesystem with different extent and allocation behaviour. Targets other than
-  those two remain compile-verified only, and additionally lose the allocation
-  map and hole punching by construction.
+- **Universal performance or filesystem guarantees.** Measurements include
+  Windows and Linux workloads; each result applies to its recorded source,
+  hardware, cache state and filesystem. The unreleased 0.12.0 CI configuration
+  includes native Linux, Windows and macOS tests, but configured jobs are not
+  evidence that this version has completed those runs. macOS allocation-map and
+  hole-punch implementations still require native filesystem qualification.
 - **Matrices on a filesystem that cannot represent holes.** Sparseness is
-  requested best-effort and failure is ignored. On a non-sparse volume the
+  requested best-effort. `matrix_storage_diagnostics()` and `diagnose_file`
+  expose observed capability failures and warnings. On a non-sparse volume the
   declared extent is really allocated, create cost and open cost become
   proportional to the *declared* cell count, and `clear_category` writes
-  `cells / 8` bytes instead of punching a hole. There is no error — only slowness.
+  `cells / 8` bytes when neither the COW adapter nor native hole punching handles
+  the range. Missing capability observations are unknown, not proof of support.
 
 - **Matrices that grow in more than one dimension.** One may be declared
   growing: `with_growing_matrix_dimension(name, rows_per_chunk)` puts rows past
   the declared extent in chunk records in the append log, one chunk buffered at
   a time. It is one dimension — dimension 0 of every matrix block — with its
   declared value at create pinned to `rows_per_chunk`; every other dimension is
-  fixed at create. The chunk rewrite that late writes go through is also not
-  crash-atomic, so under `IntegrityPolicy::None` a torn one is served as values.
+  fixed at create. Edits append immutable chunk versions; confirmed EOF controls
+  their visibility. History can grow the file until explicit compaction, and
+  ordinary readers remain on their confirmed snapshot until `follow()`.
 - **Frequent matrix opens.** Opening a matrix is not `O(1)`, because by default
   opening it *verifies* it. Open is independent of file size but proportional to
   the candidate page set: a matrix with **one live page** still reads about
@@ -158,11 +159,13 @@ Matrix (preallocated) storage is a third mode. Its integrity metadata is paged
 and sparse, so create-time metadata I/O and per-mutation integrity cost are
 bounded by the cells actually used rather than by the declared cell count —
 **provided the filesystem represents the unwritten extent as holes.** That is
-requested best-effort at create and the failure is ignored, so on exFAT/FAT32,
+requested best-effort at create, so on exFAT/FAT32,
 some network and virtual volumes, or after a copy by a tool that expands holes,
 the declared extent is genuinely allocated and both the create-time and the
-open-time cost become proportional to the declared cell count instead. Nothing
-reports this; the symptom is slowness.
+open-time cost can become proportional to the declared cell count instead.
+`matrix_storage_diagnostics()` and `diagnose_file` report observed storage
+capabilities and environment warnings; unknown observations do not promise
+sparse allocation. See [storage diagnostics](docs/storage-diagnostics.md).
 
 Standard admission no longer caps matrix dimensions/cells at 16 million or the
 slot region at 8 GiB. Checked format/offset arithmetic and filesystem limits
@@ -515,8 +518,9 @@ The runner gives every command a fresh temporary root, preserves that root on
 failure, and requires verified cleanup on success. Cargo build caches remain
 reusable and are not treated as test data.
 
-CI (`.github/workflows/ci.yml`) runs on Ubuntu and Windows: `cargo fmt --all
--- --check`; a per-feature Clippy matrix with `-D warnings` and `--locked`
+The 0.12.0 CI configuration (`.github/workflows/ci.yml`) includes native default/all
+tests and bounded-I/O checks on Ubuntu, Windows and macOS. Its other gates include
+`cargo fmt --all -- --check`; a per-feature Clippy matrix with `-D warnings` and `--locked`
 covering no-default-features, default, each optional feature alone
 (`integrity`, `mmap`, `zero-copy`, `compression-zstd`,
 `scalable-fault-injection`), and the all-feature workspace union; default and

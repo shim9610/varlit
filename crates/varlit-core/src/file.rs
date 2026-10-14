@@ -3521,14 +3521,12 @@ impl VarlitReader {
     /// **The file header is not mapped.** The mapping begins at the start of
     /// the append log, so the bytes a commit can rewrite — the
     /// `IndexPolicy::header_tails` region among them — are outside every
-    /// reference this type constructs. The condition above is therefore about
-    /// the *records* — and a `replace_*` is **not** the only thing that rewrites
-    /// one. On a format declaring `with_growing_matrix_dimension`, any
-    /// `flush`, `commit`, `sync` or drop that writes an already-backed chunk
-    /// goes through `rewrite_chunk_record`, which overwrites that record's
-    /// header and payload where they sit — inside this mapping. A writer of
-    /// such a format has to be excluded for the mapping's lifetime like any
-    /// other; "I call no `replace_*`" is not enough.
+    /// reference this type constructs. Current growing chunks append immutable
+    /// record versions rather than rewriting an existing chunk record. This
+    /// does not waive the safety condition: exclusive in-place replacement,
+    /// liveness updates, truncation and external writes can still change the
+    /// mapped backing object. Use owned reads when those operations cannot be
+    /// excluded for the mapping's lifetime.
     pub unsafe fn mmap_payloads(&self) -> Result<MmapPayloads> {
         // SAFETY: The caller accepts the complete file-backed mapping contract.
         unsafe { self.file.mmap_payloads() }

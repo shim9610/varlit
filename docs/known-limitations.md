@@ -344,9 +344,11 @@ append log, each covering `rows_per_chunk` rows of every matrix block. `name`
 must be dimension 0 of every matrix block, and its declared value at create must
 equal `rows_per_chunk` — the matrix region *is* chunk 0 — refused with
 `Error::MatrixSizeMismatch` otherwise. One chunk is buffered at a time, which is
-what bounds memory; a write addressing an already-written chunk writes the open
-one out and reads that one back, and the rewrite lands where the record already
-sits, so the file does not grow. The declaration is folded into the schema hash
+what bounds memory; changing chunks can write the dirty buffer and load the next.
+Current writes append immutable chunk versions instead of overwriting the
+previous record. Confirmed EOF bounds reader visibility; ordinary readers advance
+explicitly with `follow()`. History can grow the file until explicit compaction.
+The declaration is folded into the schema hash
 only when it is made, so a format that declares none is byte-identical to one
 written before the option existed.
 
@@ -1088,10 +1090,15 @@ it; the matrix and sidecar refusal claims still rest on inspection.**
 
 ### 6.8 Platform support, stated once
 
+The table's Windows/Linux execution evidence concerns earlier public releases.
+Unreleased 0.12.0 has local Linux execution and Windows/macOS compile checks;
+its workflow adds native default/all-feature and bounded-I/O runs on all three.
+The release candidate must complete those runs before they qualify this version.
+
 | Target | Status |
 | --- | --- |
 | Windows x86_64 MSVC | executed, and the platform every number in this document is from. |
-| Unix (Linux) | **executed**, including `compression-zstd`, and green: tests, Clippy and fmt run natively on `ubuntu-latest` in CI (§6.1). The first such run found three defects every Windows run had passed. **No Linux throughput, syscall count, residency figure or open cost has been measured** — the numbers above are not Linux numbers, and the only Linux figures on record are the two eager scaling ratios in §6.1. |
+| Unix (Linux) | **executed**, including `compression-zstd`, in earlier public CI and development local checks. Later Linux benchmarks and campaigns have also been run; use only the source, workload, cache and filesystem scope recorded for each result. The historical Windows tables above do not become Linux measurements. |
 | macOS | native allocation-map and hole-punch paths are implemented; host execution remains unqualified. |
 | Other targets | allocation-map and native hole-punch fallbacks remain; persisted-index opens still work. |
 

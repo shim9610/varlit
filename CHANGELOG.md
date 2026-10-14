@@ -6,6 +6,13 @@ increment the minor version.
 
 ## Unreleased — 0.12.0
 
+- Qualify the portable Miri gate against `nightly-2026-10-12`, with checked
+  exact-test exclusions, recorded interpreter/source identity and retained logs.
+  Native directory synchronization stays enabled in product code and remains
+  covered by native tests and ASan; Miri cannot interpret directory `fsync`.
+- Correct stale documentation about matrix storage diagnostics, immutable
+  growing-chunk versions and platform-specific qualification evidence.
+
 - Bind mutation permits to a short exclusive borrow of the checked writer;
   guarded append/replacement operations act on that handle and recheck poison.
 - Prevent one-page experimental writer caches from staging a full data page

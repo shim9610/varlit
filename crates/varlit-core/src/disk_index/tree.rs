@@ -843,7 +843,21 @@ mod tests {
         changes.insert(0u64.to_be_bytes().to_vec(), value(7)); // new global minimum
         let root = apply(&file, &pinned, old, &changes).unwrap();
         let read = reader(&file, 1024 * 1024);
-        for (key, before) in &initial {
+        // Keep the complete height-two tree and update set under Miri, while
+        // querying both sides of every leaf boundary and every changed key.
+        // Native/ASan still query all keys and all interleaved misses.
+        let check_id = |id: usize| {
+            !cfg!(miri)
+                || id < 2
+                || id + 2 >= count
+                || id.is_multiple_of(fanout(0))
+                || (id + 1).is_multiple_of(fanout(0))
+                || id.is_multiple_of(49)
+        };
+        for (id, (key, before)) in initial.iter().enumerate() {
+            if !check_id(id) {
+                continue;
+            }
             assert_eq!(pinned.get(old, key).unwrap(), Some(*before));
             assert_eq!(
                 read.get(root, key).unwrap(),
@@ -851,6 +865,9 @@ mod tests {
             );
         }
         for id in 0..=count as u64 {
+            if !check_id(id as usize) {
+                continue;
+            }
             assert_eq!(read.get(root, &(id * 2 + 1).to_be_bytes()).unwrap(), None);
         }
         assert_eq!(read.get(root, &0u64.to_be_bytes()).unwrap(), Some(value(7)));
@@ -882,8 +899,13 @@ mod tests {
         .unwrap();
         for budget in [1024, 8192, 16384] {
             let read = reader(&file, budget);
+            // Preserve all 500 stored long keys and all cache budgets. Miri
+            // samples the same distributed permutation twice; native/ASan
+            // still check both complete permutations. The sample traverses
+            // more leaf pages than any of these caches can retain.
+            let probes = if cfg!(miri) { 64u64 } else { 500 };
             for _ in 0..2 {
-                for id in (0..500u64).map(|n| n * 137 % 500) {
+                for id in (0..probes).map(|n| n * 137 % 500) {
                     assert_eq!(
                         read.get(root, &id.to_be_bytes().repeat(16)).unwrap(),
                         Some(value(id))
