@@ -235,8 +235,8 @@ impl DirectDirectory {
                 &mut buffer[..n * 8],
             )?;
             count_open_bitmap_bytes_read(n as u64 * 8);
-            for (i, bytes) in buffer[..n * 8].chunks_exact(8).enumerate() {
-                let raw = u64::from_le_bytes(bytes.try_into().unwrap());
+            for (i, bytes) in buffer[..n * 8].as_chunks::<8>().0.iter().enumerate() {
+                let raw = u64::from_le_bytes(*bytes);
                 if raw == 0 || raw > self.capacity {
                     if tolerate_damage {
                         continue;

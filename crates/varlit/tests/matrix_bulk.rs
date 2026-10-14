@@ -81,8 +81,8 @@ fn runs_cross_rows_chunks_and_bitmap_pages_with_no_cache() -> varlit::Result<()>
             }
             let mut bytes = vec![0; out.len() * 8];
             r.read_matrix_run_bytes_into::<Cell>(key(9, width), &mut bytes)?;
-            for (i, b) in bytes.chunks_exact(8).enumerate() {
-                assert_eq!(u64::from_le_bytes(b.try_into().unwrap()), i as u64 + 9);
+            for (i, b) in bytes.as_chunks::<8>().0.iter().enumerate() {
+                assert_eq!(u64::from_le_bytes(*b), i as u64 + 9);
             }
             let mut row = vec![Cell { value: 0 }; width as usize];
             r.read_matrix_row_into(8, &mut row)?;
@@ -343,11 +343,11 @@ fn compressed_runs_cross_subblocks_and_match_encoded_output() -> varlit::Result<
     r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(2, 11), &mut encoded_column)?;
     for (i, (v, b)) in column
         .iter()
-        .zip(encoded_column.chunks_exact(8))
+        .zip(encoded_column.as_chunks::<8>().0.iter())
         .enumerate()
     {
         assert_eq!(v.value, (i as u64 + 2) * 1024 + 11);
-        assert_eq!(v.value, u64::from_le_bytes(b.try_into().unwrap()));
+        assert_eq!(v.value, u64::from_le_bytes(*b));
     }
     let limited = spec
         .with_resource_limits(ReadLimits::STANDARD.with_max_materialized_bytes(1024))
@@ -368,8 +368,8 @@ fn compressed_runs_cross_subblocks_and_match_encoded_output() -> varlit::Result<
     }
     let mut raw = vec![0; out.len() * 8];
     r.read_matrix_run_bytes_into::<Cell>(key(first, 1024), &mut raw)?;
-    for (i, b) in raw.chunks_exact(8).enumerate() {
-        assert_eq!(u64::from_le_bytes(b.try_into().unwrap()), first + i as u64);
+    for (i, b) in raw.as_chunks::<8>().0.iter().enumerate() {
+        assert_eq!(u64::from_le_bytes(*b), first + i as u64);
     }
     Ok(())
 }
@@ -411,8 +411,8 @@ fn sparse_columns_cross_batches_and_chunks_without_requiring_gap_cells() -> varl
                 }
                 let mut raw = vec![0; out.len() * 8];
                 r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(3, 2), &mut raw)?;
-                for (v, b) in out.iter().zip(raw.chunks_exact(8)) {
-                    assert_eq!(v.value, u64::from_le_bytes(b.try_into().unwrap()));
+                for (v, b) in out.iter().zip(raw.as_chunks::<8>().0.iter()) {
+                    assert_eq!(v.value, u64::from_le_bytes(*b));
                 }
                 assert!(matches!(
                     r.read_matrix_column_into(MatrixKey::new(3, 1), &mut out[..2]),
