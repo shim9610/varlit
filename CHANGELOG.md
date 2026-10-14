@@ -4,7 +4,7 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## 0.12.1 — release candidate
+## 0.12.1 - 2026-10-15
 
 - Align the workspace, sibling dependencies and consumer lockfiles at 0.12.1
   for registry publication. No Rust API or wire-format changes from 0.12.0.
