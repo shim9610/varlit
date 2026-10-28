@@ -56,7 +56,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: fuzz-smoke
           workspaces: fuzz
@@ -104,7 +104,7 @@ jobs:
           # which is what lets ASan see into std-owned allocations; it needs
           # the source.
           components: rust-src
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: asan
       # LeakSanitizer matches its suppressions against *symbolized* frames, and
@@ -187,7 +187,7 @@ jobs:
           # exclusions again when updating, rather than silently drifting.
           toolchain: nightly-2026-10-12
           components: miri
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: miri
       # Exclusions name exact tests and measured reasons in the public manifest.
