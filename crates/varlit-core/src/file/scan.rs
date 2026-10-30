@@ -96,8 +96,9 @@ pub(super) struct ScanChecks {
     pub(super) checksum_boundary: Option<u64>,
     /// Whether the stored checksum is recomputed from the payload here.
     ///
-    /// False only on the open path under `IntegrityVerification::OnDemand`,
-    /// where the identical check runs on the read that returns the record.
+    /// False on the open path under `IntegrityVerification::OnDemand` and
+    /// frame-only scans for typed reads/index rebuilds. The read that returns
+    /// or indexes the payload performs the identical check instead.
     pub(super) verify_checksums: bool,
 }
 
@@ -271,6 +272,7 @@ pub(super) fn read_record_entry_at(
 #[derive(Debug)]
 pub(crate) struct NativeStreamScanner {
     pub(super) spec: FormatSpec,
+    verify_checksums: bool,
     pub(super) file: crate::snapshot::SnapshotReader,
     pub(super) snapshot: SnapshotFile,
     pub(super) offset: u64,
@@ -312,6 +314,7 @@ impl NativeStreamScanner {
         STREAM_SCANNER_CONSTRUCTIONS.set(STREAM_SCANNER_CONSTRUCTIONS.get() + 1);
         Ok(Self {
             spec,
+            verify_checksums: true,
             file,
             snapshot,
             offset: header_len,
@@ -319,6 +322,17 @@ impl NativeStreamScanner {
             records: 0,
             previous_sequence: None,
         })
+    }
+
+    /// Keep the format contract intact while deferring payload verification to
+    /// the typed read or index extraction that consumes each selected record.
+    pub(crate) fn from_snapshot_framing_only(
+        spec: FormatSpec,
+        snapshot: SnapshotFile,
+    ) -> Result<Self> {
+        let mut scanner = Self::from_snapshot(spec, snapshot)?;
+        scanner.verify_checksums = false;
+        Ok(scanner)
     }
 
     pub(crate) fn extend_snapshot(&mut self, snapshot: SnapshotFile) {
@@ -340,12 +354,12 @@ impl NativeStreamScanner {
             &mut self.file,
             self.snapshot.len(),
             self.offset,
-            // An explicit scan is a caller asking to walk records; it is not
-            // the open path this policy exists to shorten.
+            // Explicit scans verify payloads unless their caller owns the
+            // checksum-verified read used for typed decode/index extraction.
             ScanChecks {
                 partial_boundary,
                 checksum_boundary: None,
-                verify_checksums: true,
+                verify_checksums: self.verify_checksums,
             },
             &mut self.accounting,
         )? {
@@ -389,8 +403,8 @@ impl NativeStreamScanner {
         &self.snapshot
     }
 
-    pub(crate) const fn spec(&self) -> FormatSpec {
-        self.spec
+    pub(crate) const fn verifies_checksums(&self) -> bool {
+        self.verify_checksums
     }
 }
 

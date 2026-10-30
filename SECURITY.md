@@ -5,7 +5,8 @@
 Reports are accepted for the current `main` branch and the latest repository
 release. Older releases are not actively maintained. Code on `main` can be
 unreleased; use the release notes and known limitations when evaluating it.
-Varlit has not yet been published to crates.io.
+Varlit is published on [crates.io](https://crates.io/crates/varlit). Fixes on
+`main` reach registry users only after a new crate version is published.
 
 ## Reporting a vulnerability
 

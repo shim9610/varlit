@@ -6,6 +6,10 @@ increment the minor version.
 
 ## Unreleased
 
+- Preserve the format contract when skipping the redundant CRC pre-pass in
+  typed streaming reads and disk-index rebuilds. `FormatContract` compression
+  with CRC no longer rejects valid files with a schema-hash mismatch; consumed
+  payloads still receive one checksum-verified read.
 - Verify native record CRCs before returning mmap or raw fixed-block views.
   Whole-file mappings cache successful checks for their immutable lifetime;
   individual payload windows verify at construction.

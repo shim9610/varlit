@@ -1554,12 +1554,10 @@ where
     // in-memory buffer against the real spec. Payloads of records outside the
     // plan are not read at all; `VarlitStreamReader::verify_all` remains the
     // whole-file integrity scan.
-    let scan_spec = spec.with_integrity_policy(crate::IntegrityPolicy::None);
-    let mut scanner = NativeStreamScanner::from_snapshot(scan_spec, snapshot.clone())?;
-    debug_assert_eq!(
-        scanner.spec().integrity_policy,
-        crate::IntegrityPolicy::None,
-        "rebuild requires an integrity-stripped scanner spec",
+    let mut scanner = NativeStreamScanner::from_snapshot_framing_only(spec, snapshot.clone())?;
+    debug_assert!(
+        !scanner.verifies_checksums(),
+        "rebuild requires a frame-only scanner",
     );
     let mut covered = header_eof;
     while let Some(entry) = scanner.next_entry()? {
@@ -2596,8 +2594,8 @@ mod tests {
     }
 
     /// PERF2-03: a CRC rebuild must traverse each indexed payload exactly
-    /// once. The scanner runs with an integrity-stripped spec (frame reads
-    /// only), and `extract_plan_update` owns the single checksum-verified
+    /// once. The scanner reads frames only with the original format contract,
+    /// and `extract_plan_update` owns the single checksum-verified
     /// payload read; payloads of records outside the plan are never
     /// materialized.
     #[cfg(feature = "integrity")]

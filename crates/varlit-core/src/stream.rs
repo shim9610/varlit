@@ -23,8 +23,8 @@ use crate::snapshot::WrittenThrough;
 use crate::traits::KeyedBlockContract;
 use crate::{
     AppendInfo, BlockEvent, BlockKind, CREATION_NONCE_BLOCK_ID, CommitPolicy, Error, FormatSpec,
-    IntegrityPolicy, LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result,
-    ScanOptions, ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
+    LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result, ScanOptions,
+    ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
     VarlitKeyedBlock,
 };
 
@@ -612,10 +612,12 @@ impl VarlitStreamReader {
         // checksum over the one payload read whose buffer feeds the typed
         // decode, and skipped foreign-block payloads are not read at all.
         // `verify_all` remains the whole-file integrity scan.
-        let scan_spec = self.spec.with_integrity_policy(IntegrityPolicy::None);
         Ok(StreamingBlocks {
             payload: Vec::new(),
-            scanner: NativeStreamScanner::from_snapshot(scan_spec, self.snapshot.clone())?,
+            scanner: NativeStreamScanner::from_snapshot_framing_only(
+                self.spec,
+                self.snapshot.clone(),
+            )?,
             spec: self.spec,
             finished: false,
             failed: false,
@@ -694,9 +696,8 @@ impl Iterator for StreamEvents {
 #[derive(Debug)]
 pub struct StreamingBlocks<T> {
     scanner: NativeStreamScanner,
-    /// The reader's real spec. The scanner carries an integrity-stripped copy
-    /// so the frame scan does not checksum payloads; typed decode validates
-    /// each decoded record's checksum against this spec instead.
+    /// The reader's format contract, also preserved by the frame-only scanner.
+    /// Typed decode verifies each consumed record's checksum against this spec.
     spec: FormatSpec,
     finished: bool,
     failed: bool,
@@ -739,10 +740,9 @@ impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
         }
         // The scanner must not checksum payloads: the typed decode below owns
         // the single, checksum-verified payload read.
-        debug_assert_eq!(
-            self.scanner.spec().integrity_policy,
-            IntegrityPolicy::None,
-            "streaming typed scan requires an integrity-stripped scanner spec",
+        debug_assert!(
+            !self.scanner.verifies_checksums(),
+            "streaming typed scan requires a frame-only scanner",
         );
         loop {
             let entry = match self.scanner.next_entry() {
