@@ -170,6 +170,7 @@ pub(crate) struct View {
     height: u8,
     cache: RefCell<Cache>,
     cache_bytes: usize,
+    traversal_nodes: u64,
     working: Option<Box<Working>>,
 }
 impl Clone for View {
@@ -182,6 +183,7 @@ impl Clone for View {
             height: self.height,
             cache: RefCell::default(),
             cache_bytes: self.cache_bytes,
+            traversal_nodes: self.traversal_nodes,
             working: None,
         }
     }
@@ -209,6 +211,21 @@ impl View {
             .as_ref()
             .and_then(|w| w.spilled)
             .unwrap_or((self.head.root, self.head.end))
+    }
+
+    // A valid radix tree visits each physical directory page at most once.
+    // Bound work even when a CRC-valid hostile file aliases entire subtrees,
+    // including empty leaves that never consume an output-entry limit. This
+    // costs one stack counter, not a retained set of visited page addresses.
+    fn traversal_budget(&self) -> u64 {
+        (self.root_end().1.saturating_sub(HEADER) / PAGE as u64).min(self.traversal_nodes)
+    }
+
+    fn charge_node(remaining: &mut u64) -> io::Result<()> {
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| bad("matrix directory traversal budget exceeded"))?;
+        Ok(())
     }
 
     fn node(&self, offset: u64, height: u8) -> io::Result<Arc<[u8; PAGE]>> {
@@ -343,6 +360,7 @@ impl View {
             first,
             last,
             visit,
+            &mut [self.traversal_budget(), next.traversal_budget()],
         )
     }
     #[cfg(test)]
@@ -364,9 +382,16 @@ impl View {
         first: u64,
         last: u64,
         visit: &mut impl FnMut(u64) -> Result<(), E>,
+        remaining: &mut [u64; 2],
     ) -> Result<(), E> {
         if roots.0 == roots.1 {
             return Ok(());
+        }
+        if roots.0 != 0 {
+            Self::charge_node(&mut remaining[0])?;
+        }
+        if roots.1 != 0 {
+            Self::charge_node(&mut remaining[1])?;
         }
         let old = (roots.0 != 0)
             .then(|| self.node(roots.0, height))
@@ -405,6 +430,7 @@ impl View {
                     first,
                     last,
                     visit,
+                    remaining,
                 )?;
             }
         }
@@ -449,9 +475,32 @@ impl View {
         last: u64,
         visit: &mut impl FnMut(u64) -> io::Result<()>,
     ) -> io::Result<()> {
+        self.walk_bounded(
+            offset,
+            height,
+            prefix,
+            first,
+            last,
+            visit,
+            &mut self.traversal_budget(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_bounded(
+        &self,
+        offset: u64,
+        height: u8,
+        prefix: u64,
+        first: u64,
+        last: u64,
+        visit: &mut impl FnMut(u64) -> io::Result<()>,
+        remaining: &mut u64,
+    ) -> io::Result<()> {
         if offset == 0 {
             return Ok(());
         }
+        Self::charge_node(remaining)?;
         let node = self.node(offset, height)?;
         for i in 0..FANOUT {
             let key = prefix | ((i as u64) << (height * 7));
@@ -469,7 +518,7 @@ impl View {
                 }
                 visit(key)?;
             } else {
-                self.walk(child, height - 1, key, first, last, visit)?;
+                self.walk_bounded(child, height - 1, key, first, last, visit, remaining)?;
             }
         }
         Ok(())
@@ -485,34 +534,17 @@ impl View {
         last: u64,
         limit: usize,
     ) -> io::Result<()> {
-        if offset == 0 {
-            return Ok(());
-        }
-        let node = self.node(offset, height)?;
-        for i in 0..FANOUT {
-            let key = prefix | ((i as u64) << (height * 7));
-            let max = key | ((1u64 << (height * 7)) - 1);
-            if max < first || key > last {
-                continue;
+        self.walk(offset, height, prefix, first, last, &mut |key| {
+            if out.len() >= limit {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "matrix allocation map exceeds retained extent limit",
+                ));
             }
-            let child = u64_at(&node[..], 32 + i * 16);
-            if child == 0 {
-                continue;
-            }
-            if height == 0 {
-                if key >= self.len.div_ceil(PAGE as u64) {
-                    return Err(bad("matrix directory key outside region"));
-                }
-                if out.len() >= limit {
-                    return Err(bad("matrix directory enumeration budget exceeded"));
-                }
-                out.try_reserve(1).map_err(io::Error::other)?;
-                out.push(key);
-            } else {
-                self.visit(child, height - 1, key, out, first, last, limit)?;
-            }
-        }
-        Ok(())
+            out.try_reserve(1).map_err(io::Error::other)?;
+            out.push(key);
+            Ok(())
+        })
     }
 }
 
@@ -598,6 +630,7 @@ impl MatrixFile {
                 height,
                 cache: RefCell::default(),
                 cache_bytes: CACHE,
+                traversal_nodes: u64::MAX,
                 working,
             },
             writer,
@@ -685,6 +718,9 @@ impl MatrixFile {
         self.view.cache_bytes = bytes;
         self.view.cache.get_mut().pages.clear();
         self.view.cache.get_mut().order.clear();
+    }
+    pub(crate) fn set_traversal_bytes(&mut self, bytes: u64) {
+        self.view.traversal_nodes = bytes / PAGE as u64;
     }
     pub(crate) fn read_borrow(&self) -> MatrixRead<'_> {
         MatrixRead {
@@ -1056,6 +1092,7 @@ impl MatrixFile {
             height: self.view.height,
             cache: RefCell::default(),
             cache_bytes: self.view.cache_bytes,
+            traversal_nodes: self.view.traversal_nodes,
             working: Some(next_working),
         };
         let mut next = Self {
@@ -1379,6 +1416,160 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aliased_empty_radix_subtrees_cannot_amplify_enumeration_or_follow() {
+        let (_dir, _path, _base, mut store) = fixture(PAGE as u64);
+        let mut child = 0u64;
+        for height in 0..3 {
+            let mut node = [0; PAGE];
+            node[..8].copy_from_slice(NODE_MAGIC);
+            node[8] = height;
+            if height != 0 {
+                for slot in 0..FANOUT {
+                    node[32 + slot * 16..40 + slot * 16].copy_from_slice(&child.to_le_bytes());
+                }
+            }
+            seal(&mut node);
+            child = store.append_page(&node).unwrap();
+        }
+        store.view.height = 3;
+        store.view.len = (1 << 21) * PAGE as u64;
+        store.view.head.root = child;
+        store.view.head.end = child + PAGE as u64;
+        let mut empty = store.view.clone();
+        empty.head.root = 0;
+        for cache in [0, CACHE] {
+            store.set_cache_bytes(cache);
+            let error = store.view.allocated_ranges().unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let mut visits = 0;
+            let error = empty
+                .for_each_changed_page::<io::Error>(&store.view, 0, u64::MAX, &mut |_| {
+                    visits += 1;
+                    Ok(())
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(visits, 0, "empty leaves must still consume traversal work");
+        }
+        // A forged sparse checkpoint end cannot enlarge a declared work budget.
+        store.view.head.end = 1 << 40;
+        store.set_traversal_bytes(3 * PAGE as u64);
+        assert!(store.view.allocated_ranges().is_err());
+    }
+
+    #[test]
+    fn cyclic_directory_links_fail_height_validation_before_repeated_traversal() {
+        let (_dir, _path, _base, mut store) = fixture(129 * PAGE as u64);
+        let mut node = [0; PAGE];
+        node[..8].copy_from_slice(NODE_MAGIC);
+        node[8] = 1;
+        node[32..40].copy_from_slice(&HEADER.to_le_bytes());
+        seal(&mut node);
+        assert_eq!(store.append_page(&node).unwrap(), HEADER);
+        store.view.head.root = HEADER;
+        store.view.head.end = HEADER + PAGE as u64;
+        for cache in [0, CACHE] {
+            store.set_cache_bytes(cache);
+            let error = store.view.entry(0).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error.to_string().contains("height") || error.to_string().contains("directory")
+            );
+            let mut visits = 0;
+            // Give this probe ample work budget so it exercises structural
+            // validation rather than the independent traversal ceiling.
+            let error = store
+                .view
+                .walk_bounded(
+                    HEADER,
+                    1,
+                    0,
+                    0,
+                    u64::MAX,
+                    &mut |_| {
+                        visits += 1;
+                        Ok(())
+                    },
+                    &mut 100,
+                )
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_ne!(
+                error.to_string(),
+                "matrix directory traversal budget exceeded"
+            );
+            assert_eq!(visits, 0);
+        }
+    }
+
+    #[test]
+    fn normal_sparse_roots_allow_spills_shared_generations_and_compaction_with_exact_budgets() {
+        use std::collections::BTreeSet;
+
+        fn nodes(view: &View) -> BTreeSet<u64> {
+            fn collect(view: &View, offset: u64, height: u8, seen: &mut BTreeSet<u64>) {
+                if offset == 0 {
+                    return;
+                }
+                assert!(
+                    seen.insert(offset),
+                    "one root must not alias a directory page"
+                );
+                let node = view.node(offset, height).unwrap();
+                if height != 0 {
+                    for slot in 0..FANOUT {
+                        let child = u64_at(&node[..], 32 + slot * 16);
+                        if child != 0 {
+                            assert!(child < offset, "children are appended before their parent");
+                            collect(view, child, height - 1, seen);
+                        }
+                    }
+                }
+            }
+            let mut seen = BTreeSet::new();
+            collect(view, view.root_end().0, view.height - 1, &mut seen);
+            seen
+        }
+
+        let keys = [0, 128, 128u64.pow(2), 128u64.pow(3), 128u64.pow(4)];
+        let len = (keys[4] + 2) * PAGE as u64;
+        let (_dir, path, base, mut writer) = fixture(len);
+        writer.max_pending = 1;
+        for (index, key) in keys.iter().rev().enumerate() {
+            writer.seek(SeekFrom::Start(key * PAGE as u64)).unwrap();
+            writer.write_all(&[index as u8 + 1]).unwrap();
+            nodes(&writer.view);
+        }
+        writer.publish(len).unwrap();
+        let mut old = writer.refreshed().unwrap();
+        let old_nodes = nodes(&old.view);
+        old.set_traversal_bytes(old_nodes.len() as u64 * PAGE as u64);
+        assert_eq!(old.view.allocated_ranges().unwrap().len(), keys.len());
+
+        writer.seek(SeekFrom::Start(0)).unwrap();
+        writer.write_all(&[99]).unwrap();
+        writer.publish(len).unwrap();
+        let mut next = old.refreshed().unwrap();
+        let next_nodes = nodes(&next.view);
+        assert!(old_nodes.intersection(&next_nodes).next().is_some());
+        next.set_traversal_bytes(next_nodes.len() as u64 * PAGE as u64);
+        assert_eq!(next.view.allocated_ranges().unwrap().len(), keys.len());
+        assert_eq!(old.changed_pages(&next).unwrap(), vec![0]);
+
+        writer.set_traversal_bytes(next_nodes.len() as u64 * PAGE as u64);
+        writer.compact().unwrap();
+        let reopened = MatrixFile::open(&path, &base, [7; 16], false, 1).unwrap();
+        nodes(&reopened.view);
+        assert_eq!(reopened.view.allocated_ranges().unwrap().len(), keys.len());
+        for (view, expected) in [(&old.view, 5), (&next.view, 99), (&reopened.view, 99)] {
+            let mut byte = [0];
+            view.read_exact_at(0, &mut byte).unwrap();
+            assert_eq!(byte, [expected]);
+        }
+    }
+
     fn fixture(len: u64) -> (tempfile::TempDir, PathBuf, File, MatrixFile) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("matrix.varlit");

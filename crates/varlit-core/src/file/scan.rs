@@ -2462,7 +2462,29 @@ impl RecordIndexEntry {
 
         let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
         snapshot.read_exact_at(self.record_offset, &mut header_bytes)?;
-        let mut header_reader = header_bytes.as_slice();
+        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let footer = if let Some(footer_offset) = self.footer_offset {
+            snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+            &footer_bytes[..]
+        } else {
+            &[]
+        };
+        self.verify_record_bytes(spec, &header_bytes, payload, footer)
+    }
+
+    /// The same integrity check for owned reads and immutable mapped slices.
+    /// Framing is borrowed; verification never copies or allocates the payload.
+    pub(super) fn verify_record_bytes(
+        &self,
+        spec: FormatSpec,
+        header_bytes: &[u8],
+        payload: &[u8],
+        footer: &[u8],
+    ) -> Result<()> {
+        if spec.integrity_policy == IntegrityPolicy::None {
+            return Ok(());
+        }
+        let mut header_reader = header_bytes;
         let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
         if !record_header_describes(&actual, self) {
             return Err(Error::ChecksumMismatch {
@@ -2470,11 +2492,8 @@ impl RecordIndexEntry {
             });
         }
 
-        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
-        let footer = if let Some(footer_offset) = self.footer_offset {
-            snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-            let decoded =
-                decode_record_footer(spec, &footer_bytes, footer_offset, self.record_offset)?;
+        if let Some(footer_offset) = self.footer_offset {
+            let decoded = decode_record_footer(spec, footer, footer_offset, self.record_offset)?;
             if decoded.prev_same_block_offset != self.prev_same_block_offset
                 || decoded.prev_same_key_offset != self.prev_same_key_offset
             {
@@ -2482,10 +2501,7 @@ impl RecordIndexEntry {
                     offset: self.record_offset,
                 });
             }
-            &footer_bytes[..]
-        } else {
-            &[]
-        };
+        }
         let header = RecordHeaderFields {
             block_id: self.block_id,
             block_version: self.block_version,

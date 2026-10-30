@@ -181,7 +181,7 @@ struct AllocatedExtents {
 
 impl AllocatedExtents {
     /// Queries the filesystem, restoring the file cursor before returning.
-    fn query(file: &mut impl MatrixIo) -> Option<Self> {
+    fn query_base(file: &mut impl MatrixIo) -> Option<Vec<(u64, u64)>> {
         if allocation_map_forced_unavailable() {
             return None;
         }
@@ -191,7 +191,7 @@ impl AllocatedExtents {
         let cursor = std::io::Seek::stream_position(&mut raw).ok()?;
         let ranges = query_allocated_extents(raw);
         let restored = std::io::Seek::seek(&mut raw, SeekFrom::Start(cursor)).is_ok();
-        let mut ranges = ranges?;
+        let ranges = ranges?;
         if !restored {
             return None;
         }
@@ -207,8 +207,21 @@ impl AllocatedExtents {
         if !ordered {
             return None;
         }
+        Some(ranges)
+    }
+
+    fn query(file: &mut impl MatrixIo) -> Result<Option<Self>> {
+        let Some(mut ranges) = Self::query_base(file) else {
+            return Ok(None);
+        };
         if let Some(view) = file.paged() {
-            ranges.extend(view.allocated_ranges().ok()?);
+            // An unavailable OS allocation map is optional. A malformed COW
+            // directory is not: dropping its error would silently omit pages.
+            match view.allocated_ranges() {
+                Ok(changed) => ranges.extend(changed),
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
             ranges.sort_unstable();
             let mut merged: Vec<(u64, u64)> = Vec::new();
             for (start, end) in ranges {
@@ -220,7 +233,7 @@ impl AllocatedExtents {
             }
             ranges = merged;
         }
-        Some(Self { ranges })
+        Ok(Some(Self { ranges }))
     }
 
     /// True when `[offset, offset + len)` overlaps any allocated range, i.e.
@@ -3557,7 +3570,7 @@ pub(crate) fn read_layout_at_len(
     // would read the answer.
     let verify = spec.read_limits.admit_matrix_metadata_verification();
     let extents = match verify {
-        true => AllocatedExtents::query(file),
+        true => AllocatedExtents::query(file)?,
         false => None,
     };
     record_open_allocation_map(extents.as_ref());
@@ -4596,7 +4609,7 @@ pub(crate) fn verify_matrix_metadata(
     layout: &MatrixLayout,
     file: &mut impl MatrixIo,
 ) -> Result<MatrixRecoveryReport> {
-    let extents = AllocatedExtents::query(file);
+    let extents = AllocatedExtents::query(file)?;
     let mut buffer = PageVerifyBuffer::new()?;
     let mut fresh = HashMap::new();
     try_reserve_map(

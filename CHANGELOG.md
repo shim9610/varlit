@@ -4,6 +4,15 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
+## Unreleased
+
+- Verify native record CRCs before returning mmap or raw fixed-block views.
+  Whole-file mappings cache successful checks for their immutable lifetime;
+  individual payload windows verify at construction.
+- Bound matrix generation directory traversal by both checkpoint size and the
+  declared scan budget, including empty aliased subtrees. Propagate malformed
+  COW allocation-directory errors instead of silently omitting their evidence.
+
 ## 0.12.1 - 2026-10-15
 
 - Align the workspace, sibling dependencies and consumer lockfiles at 0.12.1

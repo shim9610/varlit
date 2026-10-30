@@ -132,6 +132,10 @@
     "reason": "Existing long performance-contract exclusion, measured beyond 300 seconds; native tests and ASan retain it."
   },
   {
+    "test": "matrix_generation::tests::normal_sparse_roots_allow_spills_shared_generations_and_compaction_with_exact_budgets",
+    "reason": "Reproduced with nightly-2026-10-12: companion compaction syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
     "test": "matrix_generation::tests::root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
