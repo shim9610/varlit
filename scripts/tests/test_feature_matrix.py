@@ -50,3 +50,15 @@ class FeatureDiscoveryTests(unittest.TestCase):
         for name in ["a b", "a;exit", "$(id)", "a\nb"]:
             with self.subTest(name=name), self.assertRaises(ValueError):
                 gate.feature_matrix({"varlit": {"features": {name: []}}})
+
+    def test_every_new_feature_pairs_with_every_independent_feature(self):
+        manifests = {
+            "varlit": {"features": {"a": [], "b": [], "c": []}},
+            "varlit-core": {"features": {"new-mode": []}},
+        }
+        pairs = gate.feature_matrix(manifests)["interactions"]
+        expected = {frozenset((a, b)) for a in ["varlit/a", "varlit/b", "varlit/c", "varlit-core/new-mode"]
+                    for b in ["varlit/a", "varlit/b", "varlit/c", "varlit-core/new-mode"] if a != b}
+        self.assertEqual(len(pairs), 6)
+        self.assertEqual({frozenset(row["flags"].split()[-1].split(",")) for row in pairs}, expected)
+        self.assertTrue(all("--workspace --no-default-features" in row["flags"] for row in pairs))

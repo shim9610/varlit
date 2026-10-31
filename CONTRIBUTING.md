@@ -44,6 +44,9 @@ changes need valid links, accurate API examples and agreement with shipped behav
 New APIs, policy variants and Cargo features must join the executable
 [validation contracts](docs/validation-contracts.md). The gate reports missing
 registrations; its legacy inventory is frozen rather than a snapshot to refresh.
+Runtime fixes must also satisfy the documented performance qualification: paired
+release measurements across file sizes, key counts and concurrent workloads,
+with unchanged resource budgets and recorded memory/I/O costs.
 
 ## CI and merging
 

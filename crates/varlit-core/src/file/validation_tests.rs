@@ -255,3 +255,62 @@ fn no_truncated_frame_is_returned_as_a_complete_record() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(feature = "integrity")]
+#[test]
+fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()> {
+    let spec = spec()
+        .with_integrity_policy(IntegrityPolicy::Crc32WithHeader)
+        .with_index_policy(IndexPolicy::KeyedOffsetChain);
+    for key_link in [false, true] {
+        for previous in [128, 129, u64::MAX] {
+            let mut bytes = vec![0; 128];
+            append_frame(
+                spec,
+                &mut bytes,
+                0,
+                b"payload",
+                RecordFooterFields {
+                    prev_same_block_offset: (!key_link).then_some(previous),
+                    prev_same_key_offset: key_link.then_some(previous),
+                    mutable_flags: 0,
+                },
+            )?;
+            let snap = snapshot(&bytes)?;
+            assert!(read_record_entry_positional(spec, &snap, 128).is_err());
+            assert!(!matches!(scan(spec, &bytes, 128), Ok(RecordRead::Entry(_))));
+        }
+    }
+    let mut bytes = vec![0; 128];
+    append_frame(
+        spec,
+        &mut bytes,
+        0,
+        b"payload",
+        RecordFooterFields {
+            prev_same_block_offset: None,
+            prev_same_key_offset: None,
+            mutable_flags: 0,
+        },
+    )?;
+    let snap = snapshot(&bytes)?;
+    let mut correct = BlockChain {
+        spec,
+        snapshot: &snap,
+        block_id: 37,
+        next: Some(128),
+        visited: 0,
+    };
+    assert!(correct.next().unwrap().is_ok());
+    assert!(correct.next().is_none());
+    let mut wrong = BlockChain {
+        spec,
+        snapshot: &snap,
+        block_id: 38,
+        next: Some(128),
+        visited: 0,
+    };
+    assert!(wrong.next().unwrap().is_err());
+    assert!(wrong.next().is_none());
+    Ok(())
+}

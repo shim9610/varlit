@@ -178,6 +178,7 @@ impl Config {
             ManifestPolicy::None,
             BLOCKS,
         )
+        .with_block_identities(&[Record::IDENTITY, StreamRecord::IDENTITY])
         .with_read_limits(ReadLimits::STANDARD.with_max_sidecar_len(4 * 1024 * 1024 * 1024))
     }
     fn plan(&self) -> DiskIndexPlan {

@@ -5,6 +5,9 @@ use super::*;
 use std::fs::{File, OpenOptions};
 use std::sync::Arc;
 
+#[cfg(test)]
+mod failure_tests;
+
 const MAGIC: &[u8; 8] = b"VARVEIX5";
 const HEAD_MAGIC: &[u8; 8] = b"VIXHEAD1";
 const ROOT_MAGIC: &[u8; 8] = b"VIXROOT4";

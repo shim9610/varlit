@@ -292,7 +292,7 @@ def main():
                     result = execute(command, logs, stage_name, environment, args.timeout, markers[phase], data_root)
                     result["cache_advice"] = advice
                     record["stages"].append({"phase": stage_name, **result})
-                    if phase == "write":
+                    if phase == "write" and result["status"] == "passed":
                         record["files"] = [{"path": file.name, "logical_bytes": file.stat().st_size,
                                             "allocated_bytes": file.stat().st_blocks * 512}
                                            for file in directory.iterdir() if file.is_file()]

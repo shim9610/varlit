@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Derive CI feature configurations from workspace manifests, never a fixed list."""
 import json
+from itertools import combinations
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def feature_matrix(manifests):
     singletons = []
+    units = []
     facade = manifests.get("varlit", {}).get("features", {})
     for package, manifest in sorted(manifests.items()):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", package):
@@ -28,6 +30,12 @@ def feature_matrix(manifests):
                 "name": f"{package}-{feature}",
                 "flags": f"-p {package} --no-default-features --features {feature}",
             })
+            units.append((package, feature))
+    interactions = [{
+        "name": "pair-" + "--".join(f"{package}-{feature}" for package, feature in pair),
+        "flags": "--workspace --no-default-features --features "
+                 + ",".join(f"{package}/{feature}" for package, feature in pair),
+    } for pair in combinations(units, 2)]
     return {
         "checks": [
             {"name": "no-default", "flags": "--workspace --no-default-features"},
@@ -36,6 +44,9 @@ def feature_matrix(manifests):
             {"name": "all-features", "flags": "--workspace --all-features"},
         ],
         "singletons": singletons,
+        # Other independent features stay off. Cargo still enables mandatory
+        # feature dependencies (e.g. zero-copy -> mmap); these are not all subsets.
+        "interactions": interactions,
     }
 
 

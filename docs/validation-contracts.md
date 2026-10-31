@@ -65,6 +65,9 @@ enumerate every integer, payload, sequence of operations or feature subset.
 optional dependencies and workspace membership. New features automatically
 join Clippy and native singleton test jobs. Direct facade forwards avoid duplicate
 dependency-feature jobs; a core-only or macro-only feature gets its own job.
+Every pair of those independent feature selections also runs the workspace
+tests on Linux, starting with the other features off. Cargo still enables each
+selection's required dependencies. This does not enumerate all feature subsets.
 Default and all-feature jobs remain, with native platform I/O coverage separately.
 The interface gate also requires valid/invalid contracts for new or changed
 feature declarations. Their callbacks must call an API that exercises the feature
@@ -81,3 +84,44 @@ changes behind an unchanged interface still need ordinary regression review.
 Unsupported `include!` expansion and conditional module paths are rejected until
 their source traversal is implemented.
 Tests and build-time tooling add no library runtime work.
+
+## Storage failures and resource growth
+
+The required `storage-contracts` CI job runs
+`python3 scripts/check_storage_contracts.py`. It checks exact test names, pass
+counts and execution markers so renamed or feature-disabled cases cannot pass
+by running zero tests. The contracts cover:
+
+- Real Linux partial writes and `EFBIG`, followed by rollback, retry and reopen;
+  process resource limits are confined to a child process.
+- Failure/recovery histories with overwrite, delete, reinsert, pinned readers,
+  follow, index compaction and writer reopen, checked against an independent map.
+- CRC-valid inconsistent checkpoint frontiers and record-chain links.
+- Torn publication-head prefixes and missing durable checkpoint bytes. These
+  are explicit storage images, not a claim of physical power-loss qualification.
+- Repeated 1/8/32 MiB decompression and cumulative nested decode budgets, with
+  peak/retained Rust heap checks. The required Linux release run also checks
+  process peak RSS, including native codec allocations, against a fixed 96 MiB
+  ceiling for this workload (32 MiB input, 32 MiB output, 32 MiB overhead).
+- The existing 10k/100k/1m-key allocator growth test, now required in release mode
+  with the same fixed cache and batch budgets at each size.
+
+CI also executes the load example with actual file bytes and eight readers, to
+catch broken benchmark fixtures. Its small smoke run verifies the harness;
+throughput conclusions require the larger paired measurements below.
+
+## Performance qualification when fixing runtime defects
+
+Use the same release workload, machine, feature set, payloads, cache limits and
+batch limits for the parent and patched implementations. Preserve the baseline
+binary before changing runtime code. Alternate before/after runs and report
+variability; a single timing is insufficient.
+
+Include increasing real file sizes and key cardinalities, repeated mutations,
+reopen/recovery/compaction, and a writer with multiple independent readers.
+Record throughput, latency distributions, peak RSS/heap and I/O. Confirm content
+against an independent oracle throughout. Sparse large-offset probes supplement
+these runs but cannot stand in for writing real data. Do not increase resource
+budgets to make a failed check pass, or claim terabyte-scale throughput from a
+smaller run. A runtime fix is not qualified until its relevant before/after
+measurements and resource-growth checks pass.
