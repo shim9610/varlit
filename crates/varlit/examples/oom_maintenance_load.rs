@@ -117,16 +117,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut writer = spec.open(&path)?;
     let held = spec.open_readonly(&path)?;
     let start = Instant::now();
-    let dropped;
-    if mode == "replace" {
+    let dropped = if mode == "replace" {
         item.id = 0;
         item.value = u64::MAX;
         item.bytes.push(8);
         writer.replace_block(0, &item)?;
-        dropped = 0;
+        0
     } else {
-        dropped = writer.defragment()?.records_dropped;
-    }
+        writer.defragment()?.records_dropped
+    };
     let seconds = start.elapsed().as_secs_f64();
     assert_eq!(held.read_block_at::<Item>(first)?.value, 0);
     let expected = if mode == "replace" { u64::MAX } else { 0 };
