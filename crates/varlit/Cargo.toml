@@ -38,6 +38,7 @@ varlit-macros = { path = "../varlit-macros", version = "0.12.1" }
 [dev-dependencies]
 redb = { version = "4.3.0", path = "../../vendor/redb" }
 proptest.workspace = true
+syn = { workspace = true, features = ["visit"] }
 tempfile.workspace = true
 trybuild.workspace = true
 zerocopy = { workspace = true, features = ["derive"] }

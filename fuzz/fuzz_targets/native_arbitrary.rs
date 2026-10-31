@@ -26,7 +26,23 @@ fuzz_target!(|data: &[u8]| {
             // the mapping or any returned window is alive.
             if let Ok(mapped) = unsafe { reader.mmap_payloads() } {
                 for entry in reader.index_entries().iter().take(16) {
-                    let _ = mapped.payload_window(entry);
+                    let mut owned = Vec::new();
+                    let result = reader.read_payload_into(entry, &mut owned);
+                    // The fixture's per-record limit fits its materialisation
+                    // budget. Once mapping succeeds, these stored-byte reads
+                    // must agree on acceptance and bytes, including CRC errors.
+                    // Repeat to exercise the successful-verification cache.
+                    for _ in 0..2 {
+                        let window = mapped.payload_window(entry);
+                        assert_eq!(
+                            result.is_ok(),
+                            window.is_ok(),
+                            "owned={result:?}, mapped={window:?}"
+                        );
+                        if let Ok(window) = window {
+                            assert_eq!(owned, window);
+                        }
+                    }
                 }
             }
         }

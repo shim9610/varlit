@@ -18534,6 +18534,10 @@ impl FileMutationPermit<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "file/validation_tests.rs"]
+mod validation_tests;
+
 #[path = "file/header_codec.rs"]
 mod header_codec;
 use header_codec::*;

@@ -588,6 +588,7 @@ version = "0.12.1"
 dependencies = [
  "proptest",
  "redb",
+ "syn 3.0.9",
  "tempfile",
  "trybuild",
  "varlit-core",
