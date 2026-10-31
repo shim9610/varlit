@@ -58,10 +58,6 @@ jobs:
     name: storage failure and resource contracts
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      # rust-cache restores target/. Reports and owned test data must be fresh,
-      # including on reruns; never restore previous evidence as current output.
-      VARLIT_STORAGE_RUN: ${{ runner.temp }}/varlit-storage-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -70,6 +66,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: storage-contracts
+      - name: Select fresh evidence directory outside the build cache
+        # runner paths are available after job dispatch, not in job-level env.
+        # Include the attempt so a rerun cannot reuse earlier evidence.
+        run: echo "VARLIT_STORAGE_RUN=$RUNNER_TEMP/varlit-storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - name: Execute failure and memory growth contracts
         run: python3 scripts/check_storage_contracts.py --output "$VARLIT_STORAGE_RUN/contracts"
       - name: Build load example
