@@ -149,3 +149,45 @@ fn compressed_crc_rebuild_preserves_format_contract_and_checks_payloads() -> var
     }
     Ok(())
 }
+
+#[test]
+fn embedded_manifest_leaves_capacity_for_creation_and_tombstone_tails() -> varlit::Result<()> {
+    const BLOCKS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
+    for spec in specs() {
+        let spec = spec
+            .with_manifest_policy(varlit::ManifestPolicy::Embedded)
+            .with_index_policy(varlit::IndexPolicy::KeyedOffsetChain)
+            .with_computed_schema_hash();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("manifest-tails.varlit");
+        let options = DiskIndexOptions::default();
+        let plan = DiskIndexPlan::canonical(spec, BLOCKS).unwrap();
+        let value = Item {
+            id: 7,
+            payload: vec![41; 4096],
+        };
+        {
+            let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
+            writer.push_info(&value)?;
+            writer.sync()?;
+            writer.delete_info::<Item>(&value.id)?;
+            writer.sync()?;
+        }
+        let mut reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
+        assert_eq!(reader.get::<Item>(&value.id)?, None);
+        {
+            let mut writer = VarlitIndexedWriter::open(spec, &path, options, plan)?;
+            writer.push_info(&value)?;
+            writer.sync()?;
+            writer.compact_index()?;
+        }
+        reader.follow()?;
+        assert_eq!(reader.get::<Item>(&value.id)?, Some(value.clone()));
+        drop(reader);
+        std::fs::remove_file(disk_index_sidecar_path(&path))?;
+        assert_eq!(rebuild_disk_index(spec, &path, options, plan)?.records, 5);
+        let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
+        assert_eq!(reader.get::<Item>(&value.id)?, Some(value));
+    }
+    Ok(())
+}

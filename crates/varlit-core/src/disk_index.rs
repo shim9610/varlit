@@ -1024,15 +1024,53 @@ pub fn tail_limit_for_spec(spec: FormatSpec) -> DiskIndexResult<u32> {
     if !spec.index_policy.block_offset_chain {
         return Ok(0);
     }
-    let count = spec
-        .blocks
-        .len()
-        .checked_add(2)
-        .ok_or(DiskIndexError::MetadataInvariant(
-            "tail declaration count overflow",
-        ))?;
+    let internal = crate::stream::INTERNAL_BLOCK_IDS
+        .iter()
+        .filter(|&&id| {
+            id != crate::MANIFEST_BLOCK_ID
+                || spec.manifest_policy == crate::ManifestPolicy::Embedded
+        })
+        .count();
+    let count =
+        spec.blocks
+            .len()
+            .checked_add(internal)
+            .ok_or(DiskIndexError::MetadataInvariant(
+                "tail declaration count overflow",
+            ))?;
     u32::try_from(count)
         .map_err(|_| DiskIndexError::MetadataInvariant("tail declaration count exceeds u32"))
+}
+
+/// The exact old bound is accepted only for formats whose corrected bound is
+/// larger. It still bounds tail allocation before any persisted count is used.
+#[derive(Clone, Copy)]
+struct TailLimitPolicy {
+    current: u32,
+    legacy: Option<u32>,
+}
+
+impl TailLimitPolicy {
+    fn for_spec(spec: FormatSpec) -> DiskIndexResult<Self> {
+        let current = tail_limit_for_spec(spec)?;
+        let legacy = spec
+            .blocks
+            .len()
+            .checked_add(2)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n < current);
+        Ok(Self { current, legacy })
+    }
+
+    fn validate(self, metadata: DiskIndexMetadata) -> DiskIndexResult<u32> {
+        if metadata.tail_limit != self.current && Some(metadata.tail_limit) != self.legacy {
+            return Err(DiskIndexError::TailLimitMismatch {
+                expected: self.current,
+                actual: metadata.tail_limit,
+            });
+        }
+        Ok(metadata.tail_limit)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1501,6 +1539,9 @@ pub struct DiskIndexStore {
     tail_cache: Option<TailCache>,
     slots_cache: Option<slots::Working>,
     finite_layout: Vec<(u32, u32)>,
+    /// Corrected capacity for a legacy companion, installed in the next
+    /// ordinary dirty-generation commit without an extra write at open.
+    write_tail_limit: Option<u32>,
     pub(crate) batch: Option<DiskIndexWriteBatch>,
 }
 
@@ -1534,6 +1575,7 @@ impl DiskIndexStore {
             tail_cache: None,
             slots_cache: None,
             finite_layout: Vec::new(),
+            write_tail_limit: None,
             batch: None,
         })
     }
@@ -1725,6 +1767,20 @@ impl DiskIndexStore {
         }
         Ok(state)
     }
+
+    pub(crate) fn validate_clean_writer_for_spec(
+        &mut self,
+        identity: DiskIndexIdentity,
+        mode: DiskIndexMode,
+        physical_native_eof: u64,
+        spec: FormatSpec,
+    ) -> DiskIndexResult<DiskIndexPersistentState> {
+        let policy = TailLimitPolicy::for_spec(spec)?;
+        let actual = policy.validate(self.read_metadata()?)?;
+        let state = self.validate_clean_writer(identity, mode, physical_native_eof, actual)?;
+        self.write_tail_limit = Some(policy.current);
+        Ok(state)
+    }
     /// Copy the current clean tree into a new file generation. Old readers keep
     /// their open file and never delay the writer. Call sync explicitly first.
     pub(crate) fn compact(&mut self) -> DiskIndexResult<IndexCompaction> {
@@ -1841,6 +1897,7 @@ impl DiskIndexStore {
         }
         let state = self.storage.state(&clean, None)?;
         let mut dirty = clean.metadata;
+        dirty.tail_limit = self.write_tail_limit.unwrap_or(dirty.tail_limit);
         dirty.state = DiskIndexState::Dirty;
         dirty.checkpoint = Some(DiskIndexCheckpoint {
             checkpoint_offset: clean.offset,
@@ -1983,6 +2040,7 @@ impl DiskIndexStore {
         }
         self.publish_clean(metadata.working)
     }
+    #[cfg(test)]
     pub fn stage_restore(
         &mut self,
         expected_identity: DiskIndexIdentity,
@@ -1990,10 +2048,43 @@ impl DiskIndexStore {
         physical_native_eof: u64,
         expected_tail_limit: u32,
     ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
+        self.stage_restore_bounded(
+            expected_identity,
+            expected_mode,
+            physical_native_eof,
+            TailLimitPolicy {
+                current: expected_tail_limit,
+                legacy: None,
+            },
+        )
+    }
+
+    pub(crate) fn stage_restore_for_spec(
+        &mut self,
+        expected_identity: DiskIndexIdentity,
+        expected_mode: DiskIndexMode,
+        physical_native_eof: u64,
+        spec: FormatSpec,
+    ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
+        self.stage_restore_bounded(
+            expected_identity,
+            expected_mode,
+            physical_native_eof,
+            TailLimitPolicy::for_spec(spec)?,
+        )
+    }
+
+    fn stage_restore_bounded(
+        &mut self,
+        expected_identity: DiskIndexIdentity,
+        expected_mode: DiskIndexMode,
+        physical_native_eof: u64,
+        policy: TailLimitPolicy,
+    ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
         self.storage.writer()?;
         let dirty = self.storage.current()?;
         validate_identity_mode(dirty.metadata, expected_identity, expected_mode)?;
-        validate_expected_tail_limit(dirty.metadata, expected_tail_limit)?;
+        policy.validate(dirty.metadata)?;
         if dirty.metadata.state != DiskIndexState::Dirty {
             return Err(DiskIndexError::DirtyStateRequired);
         }
@@ -2011,9 +2102,11 @@ impl DiskIndexStore {
         }
         crate::scalable_fault_point("restore.stage");
         let base = self.storage.at(checkpoint.checkpoint_offset)?;
-        let staged = self.storage.state(&base, Some(expected_tail_limit))?;
+        let base_limit = policy.validate(base.metadata)?;
+        let staged = self.storage.state(&base, Some(base_limit))?;
         validate_restored_root(&dirty.metadata, &staged)?;
         crate::scalable_fault_point("restore.stage");
+        self.write_tail_limit = Some(policy.current);
         Ok(DiskIndexRestoreGuard {
             storage: &mut self.storage,
             root: base.root,
@@ -4170,6 +4263,110 @@ mod tests {
                 actual: u32::MAX
             })
         ));
+    }
+
+    #[test]
+    fn legacy_tail_capacity_upgrades_without_a_scan_or_extra_open_write() {
+        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
+        let current_limit = tail_limit_for_spec(spec).unwrap();
+        assert_eq!(current_limit, 4);
+        for legacy_dirty in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("legacy.vki");
+            let options = DiskIndexOptions::default();
+            let mut legacy = metadata(64);
+            legacy.tail_limit = 3;
+            let mut store = DiskIndexStore::create(&path, options, legacy).unwrap();
+            if legacy_dirty {
+                store.begin_generation().unwrap();
+            }
+            drop(store);
+            let mut store = DiskIndexStore::open_writer(&path, options).unwrap();
+            if legacy_dirty {
+                // An interrupted write made entirely by the old version.
+                store
+                    .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
+                    .unwrap()
+                    .commit_after_native_sync(64)
+                    .unwrap();
+            }
+            let before = fs::read(&path).unwrap();
+            store
+                .validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec)
+                .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
+
+            // The first ordinary write upgrades the dirty root. Its rollback
+            // checkpoint still has the old bound, and must remain restorable.
+            assert_eq!(store.begin_generation().unwrap().tail_limit, current_limit);
+            store
+                .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
+                .unwrap()
+                .commit_after_native_sync(64)
+                .unwrap();
+            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
+
+            let mut eof = 64;
+            let batch = store.begin_write_batch().unwrap();
+            for (sequence, id) in [
+                PlanItem::ID,
+                crate::MANIFEST_BLOCK_ID,
+                crate::CREATION_NONCE_BLOCK_ID,
+                crate::TOMBSTONE_BLOCK_ID,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                batch
+                    .advance_coverage_with_tail(
+                        eof,
+                        eof + 64,
+                        sequence as u64,
+                        Some(DiskIndexTail {
+                            block_id: id,
+                            record_offset: eof,
+                            sequence: sequence as u64,
+                        }),
+                    )
+                    .unwrap();
+                eof += 64;
+            }
+            store.commit_batch().unwrap();
+            store.mark_clean(eof).unwrap();
+            drop(store);
+            let mut reopened = DiskIndexStore::open_writer(&path, options).unwrap();
+            let state = reopened
+                .validate_clean_writer_for_spec(identity(), plan().mode(), eof, spec)
+                .unwrap();
+            assert_eq!(state.metadata.tail_limit, current_limit);
+            assert_eq!(state.tails.len(), 4);
+        }
+    }
+
+    #[test]
+    fn legacy_tail_compatibility_refuses_other_bounds() {
+        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
+        for actual in [0, 1, 2, 5, u32::MAX] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut bad = metadata(64);
+            bad.tail_limit = actual;
+            let mut store = DiskIndexStore::create(
+                directory.path().join("bad.vki"),
+                DiskIndexOptions::default(),
+                bad,
+            )
+            .unwrap();
+            assert!(
+                matches!(store.validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec),
+                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
+            );
+            store.begin_generation().unwrap();
+            assert!(
+                matches!(store.stage_restore_for_spec(identity(), plan().mode(), 64, spec),
+                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
+            );
+        }
     }
 
     #[test]

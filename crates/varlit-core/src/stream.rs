@@ -43,7 +43,7 @@ use crate::writer_permit::{GuardedWriter, PoisonFlag};
 /// re-verification showed, from a throwaway `PoisonFlag` — is not this type.
 pub(crate) type StreamMutationPermit<'a> = MutationPermit<'a, VarlitStreamWriter>;
 
-const INTERNAL_BLOCK_IDS: [u32; 3] = [
+pub(crate) const INTERNAL_BLOCK_IDS: [u32; 3] = [
     MANIFEST_BLOCK_ID,
     TOMBSTONE_BLOCK_ID,
     CREATION_NONCE_BLOCK_ID,
@@ -989,15 +989,15 @@ impl VarlitStreamWriter {
         let path = std::fs::canonicalize(path.as_ref())?;
         let (mut writer, store) =
             Self::open_checkpointed(spec, &path, options, |identity, physical_len| {
-                let store =
+                let mut store =
                     DiskIndexStore::open_writer(state_sidecar_path(&path), state_options(options))
                         .map_err(state_error)?;
                 let state = store
-                    .validate_clean_writer(
+                    .validate_clean_writer_for_spec(
                         identity,
                         DiskIndexMode::StateOnly,
                         physical_len,
-                        tail_limit_for_spec(spec).map_err(state_error)?,
+                        spec,
                     )
                     .map_err(state_error)?;
                 Ok((
@@ -1077,12 +1077,7 @@ impl VarlitStreamWriter {
         let identity = primary_identity(spec, &physical_snapshot)?;
         let mut store = DiskIndexStore::open_writer(sidecar, index_options).map_err(state_error)?;
         let guard = store
-            .stage_restore(
-                identity,
-                mode,
-                physical_len,
-                tail_limit_for_spec(spec).map_err(state_error)?,
-            )
+            .stage_restore_for_spec(identity, mode, physical_len, spec)
             .map_err(state_error)?;
         verify_primary_generation(spec, guard.primary_generation(), &physical_snapshot)?;
         let checkpoint = stream_checkpoint_from_frontier(guard.frontier(), guard.tails());

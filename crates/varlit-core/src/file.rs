@@ -13115,7 +13115,7 @@ impl KeyedChain<'_> {
 }
 
 /// Frames one record through the snapshot, without touching the resident index.
-fn read_record_entry_positional(
+pub(crate) fn read_record_entry_positional(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
     record_offset: u64,
@@ -13161,6 +13161,7 @@ fn read_record_entry_positional(
         entry.footer_offset = Some(payload_end);
         entry.prev_same_block_offset = decoded.prev_same_block_offset;
         entry.prev_same_key_offset = decoded.prev_same_key_offset;
+        entry.mutable_flags = decoded.mutable_flags;
     }
     entry.validate_payload_extent(snapshot.len())?;
     Ok(entry)
