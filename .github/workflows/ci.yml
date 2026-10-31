@@ -72,6 +72,8 @@ jobs:
         run: cargo build --locked --release -p varlit --features integrity --example scalable_load
       - name: Execute real-byte load smoke with eight readers
         run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --read-seconds 1 --output target/load-smoke --data-root target/load-smoke-data
+      - name: Verify fixed reader work and snapshot traces
+        run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --reader-checks-per-epoch 32 --read-seconds 1 --output target/load-fixed-smoke --data-root target/load-fixed-smoke-data
       - name: Preserve contract evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -80,6 +82,7 @@ jobs:
           path: |
             target/storage-contracts/
             target/load-smoke/
+            target/load-fixed-smoke/
           if-no-files-found: error
           retention-days: 14
 

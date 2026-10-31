@@ -66,6 +66,7 @@ struct Config {
     pinned_readers: usize,
     crc: bool,
     pause_us: u64,
+    checks_per_epoch: u64,
     seconds: u64,
 }
 
@@ -95,6 +96,7 @@ impl Config {
             pinned_readers: get("--pinned-readers", "1").parse()?,
             crc: get("--crc", "true").parse()?,
             pause_us: get("--reader-pause-us", "0").parse()?,
+            checks_per_epoch: get("--reader-checks-per-epoch", "0").parse()?,
             seconds: get("--seconds", "10").parse()?,
         };
         if !options.is_empty() {
@@ -118,6 +120,11 @@ impl Config {
         }
         if !["raw", "stream", "indexed"].contains(&config.mode.as_str()) {
             return Err("unknown mode".into());
+        }
+        if config.checks_per_epoch > 0
+            && (config.mode != "indexed" || config.readers == 0 || config.pause_us != 0)
+        {
+            return Err("fixed reader work requires indexed mode, readers and no pause".into());
         }
         Ok(config)
     }
@@ -381,6 +388,45 @@ fn indexed_worker(
     Ok(())
 }
 
+// Each command performs exactly one deterministic batch. A missing snapshot
+// keeps the pinned view. Bounded request/reply channels limit in-flight work;
+// disconnection propagates failures without leaving a worker at a barrier.
+fn fixed_indexed_worker(
+    id: usize,
+    mut job: Job,
+    receive: mpsc::Receiver<Option<Job>>,
+    done: mpsc::SyncSender<()>,
+    config: &Config,
+    bank: &Payloads,
+) -> Result<()> {
+    let mut rng = id as u64 + 123;
+    let mut times = Latencies::default();
+    let mut snapshots = 1;
+    let mut batches = 0;
+    let mut trace_hash = 0u64;
+    let started = Instant::now();
+    while let Ok(next) = receive.recv() {
+        if let Some(next) = next {
+            job = next;
+            snapshots += 1;
+        }
+        for _ in 0..config.checks_per_epoch {
+            let key = random(&mut rng) % (config.visible_keys(job.epoch) + 32);
+            times.observe(check_point(&job.reader, config, bank, key, job.epoch)?);
+            trace_hash = trace_hash.wrapping_mul(31).wrapping_add(key);
+            trace_hash = trace_hash.wrapping_mul(31).wrapping_add(job.epoch);
+        }
+        batches += 1;
+        done.send(())?;
+    }
+    println!(
+        "{{\"event\":\"reader\",\"id\":{id},\"snapshots\":{snapshots},\"batches\":{batches},\"trace_hash\":{trace_hash},\"seconds\":{},\"latency\":{}}}",
+        started.elapsed().as_secs_f64(),
+        times.json()
+    );
+    Ok(())
+}
+
 fn stream_worker(
     id: usize,
     reader: VarlitStreamReader,
@@ -558,9 +604,24 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
         let _stop_on_error = StopOnDrop(&stop);
         let mut workers = Vec::new();
         let mut senders = Vec::new();
+        let mut fixed_senders: Vec<(mpsc::SyncSender<Option<Job>>, mpsc::Receiver<()>)> =
+            Vec::new();
         let mut append_latency = Latencies::default();
         let mut sync_latency = Latencies::default();
         for epoch in 0..config.epochs() {
+            let dispatch = Instant::now();
+            for (id, (send, _)) in fixed_senders.iter().enumerate() {
+                let next = if id >= config.pinned_readers && epoch > config.base_epochs() {
+                    Some(Job {
+                        reader: indexed_reader(config)?,
+                        epoch: epoch - 1,
+                    })
+                } else {
+                    None
+                };
+                send.send(next).map_err(|_| "fixed reader worker failed")?;
+            }
+            let dispatch_time = dispatch.elapsed();
             let append = Instant::now();
             let calls = writer.append(config, bank, epoch)?;
             let append_time = append.elapsed();
@@ -572,6 +633,11 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
             writer.sync()?;
             let sync_time = sync.elapsed();
             sync_latency.observe(sync_time);
+            let reader_wait = Instant::now();
+            for (_, done) in &fixed_senders {
+                done.recv()?;
+            }
+            let reader_wait_time = reader_wait.elapsed();
             let handoff = Instant::now();
             if epoch + 1 == config.base_epochs() && config.readers > 0 {
                 if config.mode == "indexed" {
@@ -582,15 +648,22 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
                             reader: indexed_reader(config)?,
                             epoch,
                         };
-                        let (send, receive) = mpsc::sync_channel(1);
-                        let stop = &stop;
-                        workers.push(
-                            scope.spawn(move || {
+                        if config.checks_per_epoch > 0 {
+                            let (send, receive) = mpsc::sync_channel(1);
+                            let (done, completed) = mpsc::sync_channel(1);
+                            workers.push(scope.spawn(move || {
+                                fixed_indexed_worker(id, job, receive, done, config, bank)
+                            }));
+                            fixed_senders.push((send, completed));
+                        } else {
+                            let (send, receive) = mpsc::sync_channel(1);
+                            let stop = &stop;
+                            workers.push(scope.spawn(move || {
                                 indexed_worker(id, job, receive, stop, config, bank)
-                            }),
-                        );
-                        if id >= config.pinned_readers {
-                            senders.push(send);
+                            }));
+                            if id >= config.pinned_readers {
+                                senders.push(send);
+                            }
                         }
                     }
                 } else if config.mode == "stream" {
@@ -627,17 +700,20 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
                 })
                 .sum::<u64>();
             println!(
-                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"sidecar_bytes\":{sidecar},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"write_calls\":{calls},\"deletes\":{deletes}}}",
+                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"sidecar_bytes\":{sidecar},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"reader_dispatch_ns\":{},\"reader_wait_ns\":{},\"write_calls\":{calls},\"deletes\":{deletes}}}",
                 started.elapsed().as_secs_f64(),
                 config.epoch_bytes,
                 append_time.as_nanos(),
                 mutation_time.as_nanos(),
                 sync_time.as_nanos(),
-                handoff.elapsed().as_nanos()
+                handoff.elapsed().as_nanos(),
+                dispatch_time.as_nanos(),
+                reader_wait_time.as_nanos()
             );
         }
         stop.store(true, Ordering::Release);
         drop(senders);
+        drop(fixed_senders);
         for worker in workers {
             worker.join().map_err(|_| "reader thread panicked")??;
         }

@@ -170,7 +170,37 @@ def case_command(binary, case, directory, phase, total, epoch, read_seconds):
               "cache-bytes": case.get("cache", 8 * 1024**2), "readers": case.get("readers", 0),
               "pinned-readers": case.get("pinned", 1),
               "crc": str(case.get("crc", True)).lower(), "reader-pause-us": case.get("pause_us", 0), "seconds": read_seconds}
+    if phase == "write" and case.get("checks_per_epoch"):
+        values["reader-checks-per-epoch"] = case["checks_per_epoch"]
     return [str(binary)] + [arg for key, value in values.items() for arg in ("--" + key, str(value))]
+
+
+def validate_fixed_readers(case, total, epoch_bytes, events):
+    """Reject shortened work or a different key/snapshot trace, even on exit 0."""
+    checks = case["checks_per_epoch"]
+    batches = total // epoch_bytes // 2
+    keys = total // 2 // case.get("record", 65536)
+    workers = case["readers"] + case.get("pinned", 1)
+    rows = [event for event in events if event.get("event") == "reader"]
+    if len(rows) != workers or {row["id"] for row in rows} != set(range(workers)):
+        raise ValueError("fixed-work reader set mismatch")
+    mask = 2**64 - 1
+    for row in rows:
+        pinned = row["id"] < case.get("pinned", 1)
+        if (row.get("batches"), row.get("snapshots"), row.get("latency", {}).get("count")) != (
+                batches, 1 if pinned else batches, batches * checks):
+            raise ValueError("fixed-work reader count/snapshot mismatch")
+        state, trace = row["id"] + 123, 0
+        for batch in range(batches):
+            snapshot_epoch = batches - 1 + (0 if pinned else batch)
+            for _ in range(checks):
+                state = (state + 0x9e3779b97f4a7c15) & mask
+                value = ((state ^ (state >> 30)) * 0xbf58476d1ce4e5b9) & mask
+                value = ((value ^ (value >> 27)) * 0x94d049bb133111eb) & mask
+                key = (value ^ (value >> 31)) % (keys + 32)
+                trace = (((trace * 31 + key) & mask) * 31 + snapshot_epoch) & mask
+        if row.get("trace_hash") != trace:
+            raise ValueError("fixed-work key/snapshot trace mismatch")
 
 
 def cases(suite):
@@ -227,6 +257,8 @@ def main():
     parser.add_argument("--binary", type=Path, default=ROOT / "target/release/examples/scalable_load")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--read-seconds", type=int, default=10)
+    parser.add_argument("--reader-checks-per-epoch", type=int, default=0,
+                        help="fixed reads per reader per mutation epoch; indexed concurrent cases only")
     parser.add_argument("--instrument", choices=["none", "strace", "perf"], default="none")
     args = parser.parse_args()
     if platform.system() != "Linux":
@@ -234,6 +266,13 @@ def main():
     selected = [case for case in cases(args.suite) if not args.only or case["name"] in args.only]
     if not selected or (args.only and set(args.only) != {case["name"] for case in selected}):
         parser.error("unknown or empty case selection")
+    if args.reader_checks_per_epoch < 0:
+        parser.error("reader checks must be nonnegative")
+    if args.reader_checks_per_epoch:
+        if any(case["mode"] != "indexed" or not case.get("readers") or case.get("pause_us", 0)
+               for case in selected):
+            parser.error("fixed reader work requires indexed concurrent cases without pauses")
+        selected = [{**case, "checks_per_epoch": args.reader_checks_per_epoch} for case in selected]
     total = int((args.total_gib if args.total_gib is not None else {"large": 20, "tuned": 20, "sweep": 1, "smoke": 0.25}[args.suite]) * GIB)
     epoch = (args.epoch_mib or (32 if args.suite == "smoke" else 256)) * 1024**2
     if args.repeat < 1 or total < 2 * epoch or total % (2 * epoch) or args.read_seconds < 1:
@@ -269,7 +308,8 @@ def main():
                 name = f"{repeat + 1:02d}-{case['name']}"
                 directory = data_root / name; directory.mkdir()
                 logs = output / name; logs.mkdir()
-                record = {"name": name, "config": case, "stages": [], "status": "running"}
+                record = {"name": name, "config": case, "stages": [], "status": "running",
+                          "write_workload": "fixed-reader-work" if case.get("checks_per_epoch") else "read-until-writer-finishes"}
                 report["cases"].append(record)
                 stages = ["write", "verify"]
                 if case["mode"] == "indexed":
@@ -292,6 +332,8 @@ def main():
                     result = execute(command, logs, stage_name, environment, args.timeout, markers[phase], data_root)
                     result["cache_advice"] = advice
                     record["stages"].append({"phase": stage_name, **result})
+                    if phase == "write" and result["status"] == "passed" and case.get("checks_per_epoch"):
+                        validate_fixed_readers(case, total, epoch, result["events"])
                     if phase == "write" and result["status"] == "passed":
                         record["files"] = [{"path": file.name, "logical_bytes": file.stat().st_size,
                                             "allocated_bytes": file.stat().st_blocks * 512}
