@@ -422,7 +422,7 @@ mod tests {
                     _ => [u64::MAX, 1, 1],
                 };
                 let mut row = [0; 24];
-                for (target, value) in row.chunks_exact_mut(8).zip(values) {
+                for (target, value) in row.as_chunks_mut::<8>().0.iter_mut().zip(values) {
                     target.copy_from_slice(&value.to_le_bytes());
                 }
                 rows.push(row)?;
