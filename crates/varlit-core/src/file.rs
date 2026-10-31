@@ -757,6 +757,9 @@ use resident_index::{ReservedIndexSlot, ResidentIndex};
 #[path = "native_scan.rs"]
 mod native_scan;
 use native_scan::{BufferedScan, ScanBuffer};
+#[path = "native_rewrite.rs"]
+mod native_rewrite;
+use native_rewrite::{IndexPayload, OffsetRemap, RewriteDirectory};
 #[path = "external_merge.rs"]
 mod external_merge;
 
@@ -5974,23 +5977,12 @@ impl VarlitFile {
         self.ensure_generation_rewrite_allowed()?;
 
         let bytes_before = self.file.metadata()?.len();
-        let index_bytes = index_bytes_for_count(self.index.len())?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::IndexBytes, index_bytes)?;
-        let mut new_index: Vec<RecordIndexEntry> = Vec::new();
-        new_index
-            .try_reserve_exact(self.index.len())
-            .map_err(|_| Error::AllocationFailed {
-                resource: "defragment index",
-                requested: index_bytes,
-            })?;
+        let mut new_index = RewriteDirectory::new(self.spec);
         // One entry per record, per chain: a survivor maps its old offset to
         // its new one, and a dropped record inherits whatever its own
         // predecessor in that chain resolved to. Absent means "nothing in this
         // chain survived".
-        let mut block_remap: HashMap<u64, u64> = HashMap::new();
-        let mut key_remap: HashMap<u64, u64> = HashMap::new();
+        let mut remap = OffsetRemap::new(self.spec);
 
         let rewrite_append_start = append_log_start_for_file(self)?;
         let mut segment_start = 0usize;
@@ -6012,44 +6004,37 @@ impl VarlitFile {
                     // whatever this record itself pointed at, in the same
                     // chain — which is already resolved, because predecessors
                     // are written before their successors.
-                    if let Some(previous) = source_entry
+                    let block = source_entry
                         .prev_same_block_offset
-                        .and_then(|offset| block_remap.get(&offset).copied())
-                    {
-                        block_remap.insert(old_offset, previous);
-                    }
-                    if let Some(previous) = source_entry
+                        .map(|offset| remap.get(offset, Chain::Block))
+                        .transpose()?
+                        .flatten();
+                    let key = source_entry
                         .prev_same_key_offset
-                        .and_then(|offset| key_remap.get(&offset).copied())
-                    {
-                        key_remap.insert(old_offset, previous);
-                    }
+                        .map(|offset| remap.get(offset, Chain::Key))
+                        .transpose()?
+                        .flatten();
+                    remap.push(old_offset, block, key)?;
                     dropped += 1;
                     continue;
                 }
                 let mut updated = source_entry.clone();
                 let checkpoint_payload;
                 let payload = if source_entry.block_id == INDEX_BLOCK_ID {
-                    checkpoint_payload = encode_index_checkpoint_payload(
-                        self.spec,
-                        &new_index,
-                        temp_file.stream_position()?,
-                    )?;
-                    RewritePayload::Bytes(&checkpoint_payload)
+                    RewritePayload::Index(IndexPayload {
+                        entries: &new_index,
+                        start: 0,
+                        covered_start: None,
+                        record_offset: temp_file.stream_position()?,
+                    })
                 } else if source_entry.block_id == SEGMENT_BLOCK_ID {
                     let record_offset = temp_file.stream_position()?;
-                    checkpoint_payload = encode_segment_payload(
-                        self.spec,
-                        infallible_entries(&new_index[segment_start..]),
-                        segment_covered_start.unwrap_or(rewrite_append_start),
-                        u64::try_from(segment_start).map_err(|_| {
-                            Error::ResourceArithmeticOverflow {
-                                resource: "segment entry count",
-                            }
-                        })?,
+                    RewritePayload::Index(IndexPayload {
+                        entries: &new_index,
+                        start: segment_start,
+                        covered_start: Some(segment_covered_start.unwrap_or(rewrite_append_start)),
                         record_offset,
-                    )?;
-                    RewritePayload::Bytes(&checkpoint_payload)
+                    })
                 } else if source_entry.block_id == OPEN_DIGEST_BLOCK_ID {
                     let record_offset = temp_file.stream_position()?;
                     checkpoint_payload = rebuilt_open_digest_payload(
@@ -6071,14 +6056,14 @@ impl VarlitFile {
                     &mut temp_file,
                     updated,
                     payload,
-                    ChainRemap::Tables {
-                        block: &block_remap,
-                        key: &key_remap,
-                    },
+                    ChainRemap::Tables(&remap),
                     &new_index,
                 )?;
-                block_remap.insert(old_offset, updated.record_offset);
-                key_remap.insert(old_offset, updated.record_offset);
+                remap.push(
+                    old_offset,
+                    Some(updated.record_offset),
+                    Some(updated.record_offset),
+                )?;
                 if updated.block_id == SEGMENT_BLOCK_ID {
                     segment_covered_start = Some(updated.checked_physical_end()?);
                     segment_start = new_index.len() + 1;
@@ -6088,7 +6073,7 @@ impl VarlitFile {
                         .last()
                         .is_none_or(|last| last.record_offset < updated.record_offset)
                 );
-                new_index.push(updated);
+                new_index.push(updated)?;
             }
             temp_file.flush()?;
             temp_file.sync_all()?;
@@ -6114,11 +6099,7 @@ impl VarlitFile {
         // operation does not have — so they are zero rather than plausible, and
         // the value never leaves this function.
         let info = ReplacementInfo {
-            sequence: new_index
-                .iter()
-                .map(|entry| entry.sequence)
-                .max()
-                .unwrap_or(0),
+            sequence: new_index.maximum_sequence(),
             record_offset: 0,
             old_payload_len: 0,
             new_payload_len: 0,
@@ -6210,17 +6191,7 @@ impl VarlitFile {
 
         self.ensure_generation_rewrite_allowed()?;
         self.validate_source_generation()?;
-        let index_bytes = index_bytes_for_count(self.index.len())?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::IndexBytes, index_bytes)?;
-        let mut new_index = Vec::new();
-        new_index
-            .try_reserve_exact(self.index.len())
-            .map_err(|_| Error::AllocationFailed {
-                resource: "replacement index",
-                requested: index_bytes,
-            })?;
+        let mut new_index = RewriteDirectory::new(self.spec);
 
         let rewrite_append_start = append_log_start_for_file(self)?;
         // Segment coverage in the new generation, tracked exactly as the
@@ -6249,29 +6220,23 @@ impl VarlitFile {
                     updated.uncompressed_len_hint = replacement.uncompressed_len_hint;
                     RewritePayload::Bytes(&replacement.bytes)
                 } else if source_entry.block_id == INDEX_BLOCK_ID {
-                    checkpoint_payload = encode_index_checkpoint_payload(
-                        self.spec,
-                        &new_index,
-                        temp_file.stream_position()?,
-                    )?;
-                    RewritePayload::Bytes(&checkpoint_payload)
+                    RewritePayload::Index(IndexPayload {
+                        entries: &new_index,
+                        start: 0,
+                        covered_start: None,
+                        record_offset: temp_file.stream_position()?,
+                    })
                 } else if source_entry.block_id == SEGMENT_BLOCK_ID {
                     // A segment payload is record offsets, and this rewrite
                     // moves them. Copying the bytes would publish a generation
                     // whose chain describes the file it replaced.
                     let record_offset = temp_file.stream_position()?;
-                    checkpoint_payload = encode_segment_payload(
-                        self.spec,
-                        infallible_entries(&new_index[segment_start..]),
-                        segment_covered_start.unwrap_or(rewrite_append_start),
-                        u64::try_from(segment_start).map_err(|_| {
-                            Error::ResourceArithmeticOverflow {
-                                resource: "segment entry count",
-                            }
-                        })?,
+                    RewritePayload::Index(IndexPayload {
+                        entries: &new_index,
+                        start: segment_start,
+                        covered_start: Some(segment_covered_start.unwrap_or(rewrite_append_start)),
                         record_offset,
-                    )?;
-                    RewritePayload::Bytes(&checkpoint_payload)
+                    })
                 } else if source_entry.block_id == OPEN_DIGEST_BLOCK_ID {
                     // A digest payload is block-tail offsets and its own
                     // start offset, and a rewrite moves both, so copying the
@@ -6312,7 +6277,7 @@ impl VarlitFile {
                     segment_covered_start = Some(updated.checked_physical_end()?);
                     segment_start = new_index.len() + 1;
                 }
-                // What makes `find_rewritten_by_offset`'s binary search legal:
+                // What makes the rewrite directory's binary search legal:
                 // each record is written at `output.stream_position()` and
                 // pushed in that order, so the prefix is strictly increasing in
                 // `record_offset`. Asserted here, where the invariant is made,
@@ -6323,7 +6288,7 @@ impl VarlitFile {
                         .last()
                         .is_none_or(|last| last.record_offset < updated.record_offset)
                 );
-                new_index.push(updated);
+                new_index.push(updated)?;
             }
             temp_file.flush()?;
             temp_file.sync_all()?;
@@ -6596,12 +6561,15 @@ impl VarlitFile {
         let record_offset = entry.record_offset;
         let payload_offset = entry.payload_offset;
 
-        // Every entry, so the count is the length and no counting pass is
-        // needed to learn it.
-        let mut new_index =
-            clone_matching_entries(self.spec, &self.index, self.index.len(), |_| true)?;
-        new_index[target_position].sequence = sequence;
-        new_index[target_position].checksum = checksum;
+        let mut new_index = RewriteDirectory::new(self.spec);
+        for (position, source) in self.index.iter().enumerate() {
+            let mut updated = source?;
+            if position == target_position {
+                updated.sequence = sequence;
+                updated.checksum = checksum;
+            }
+            new_index.push(updated)?;
+        }
 
         // The copy below reproduces the header verbatim, warm region included,
         // and that table would describe a file whose true sequence maximum is
@@ -6842,17 +6810,7 @@ impl VarlitFile {
         self.ensure_generation_rewrite_allowed()?;
         self.validate_source_generation()?;
 
-        let index_bytes = index_bytes_for_count(self.index.len())?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::IndexBytes, index_bytes)?;
-        let mut new_index = Vec::new();
-        new_index
-            .try_reserve_exact(self.index.len())
-            .map_err(|_| Error::AllocationFailed {
-                resource: "rewrite index",
-                requested: index_bytes,
-            })?;
+        let mut new_index = RewriteDirectory::new(self.spec);
 
         let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
         let prepare_result = (|| -> Result<()> {
@@ -6877,12 +6835,12 @@ impl VarlitFile {
                     updated.uncompressed_len_hint = replacement.uncompressed_len_hint;
                     RewritePayload::Bytes(&replacement.bytes)
                 } else if source_entry.block_id == INDEX_BLOCK_ID {
-                    checkpoint_payload = encode_index_checkpoint_payload(
-                        self.spec,
-                        &new_index,
-                        temp_file.stream_position()?,
-                    )?;
-                    RewritePayload::Bytes(&checkpoint_payload)
+                    RewritePayload::Index(IndexPayload {
+                        entries: &new_index,
+                        start: 0,
+                        covered_start: None,
+                        record_offset: temp_file.stream_position()?,
+                    })
                 } else if source_entry.block_id == OPEN_DIGEST_BLOCK_ID {
                     // A digest payload is block-tail offsets and its own
                     // start offset, and a rewrite moves both, so copying the
@@ -6917,7 +6875,7 @@ impl VarlitFile {
                     updated,
                     payload,
                 )?;
-                new_index.push(updated);
+                new_index.push(updated)?;
             }
             temp_file.flush()?;
             temp_file.sync_all()?;
@@ -11719,7 +11677,7 @@ impl VarlitFile {
     fn rebind_published_generation(
         &mut self,
         sequence: u64,
-        new_index: Vec<RecordIndexEntry>,
+        new_index: impl RecordDirectory,
     ) -> Result<u64> {
         let rebind = (|| -> Result<(File, SnapshotFile)> {
             #[cfg(test)]
@@ -11751,7 +11709,11 @@ impl VarlitFile {
                 // The same wholesale replacement: the newest entry is a
                 // different record now, so the append-path shortcut that names
                 // its block id is stale too.
-                self.last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                self.last_resident_block_id = new_index
+                    .record_count()
+                    .checked_sub(1)
+                    .map(|at| new_index.record_at(at).map(|e| e.block_id))
+                    .transpose()?;
                 self.keyed_tails.invalidate_all();
                 // Both callers publish a generation whose mutable header blocks
                 // are cold — `replace_rewrite` because it writes a fresh header
@@ -11782,7 +11744,7 @@ impl VarlitFile {
     fn rebind_replacement_generation(
         &mut self,
         info: ReplacementInfo,
-        new_index: Vec<RecordIndexEntry>,
+        new_index: impl RecordDirectory,
     ) -> Result<ReplacementInfo> {
         let rebind = (|| -> Result<(File, SnapshotFile)> {
             #[cfg(test)]
@@ -11814,7 +11776,11 @@ impl VarlitFile {
                 // The same wholesale replacement: the newest entry is a
                 // different record now, so the append-path shortcut that names
                 // its block id is stale too.
-                self.last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                self.last_resident_block_id = new_index
+                    .record_count()
+                    .checked_sub(1)
+                    .map(|at| new_index.record_at(at).map(|e| e.block_id))
+                    .transpose()?;
                 self.keyed_tails.invalidate_all();
                 // The published file carries a *cold* mutable header block —
                 // the rewrite could not carry the old offsets forward — so the
@@ -12556,10 +12522,10 @@ impl VarlitFile {
                 "block is not declared in header_slots",
             ));
         }
-        let mut found: Option<(u16, Vec<u8>)> = None;
+        let mut found: Option<(u16, &[u8])> = None;
         walk_header_slot_entries(view.entries, view.used, |id, version, payload| {
             if id == T::ID {
-                found = Some((version, payload.to_vec()));
+                found = Some((version, payload));
             }
             Ok(())
         })?;
@@ -12573,9 +12539,8 @@ impl VarlitFile {
                 actual: version,
             });
         }
-        // Bounded by construction: `payload` is a slice of a region whose
-        // length the schema hash pins at at most `MAX_HEADER_SLOTS_LEN`.
-        crate::codec::decode_from_slice::<T>(&payload, T::ENDIAN.unwrap_or(self.spec.endian))
+        MaterializationBudget::new(self.spec)
+            .decode::<T>(payload, T::ENDIAN.unwrap_or(self.spec.endian))
             .map(Some)
     }
 
@@ -12636,9 +12601,9 @@ impl VarlitFile {
             return Ok(());
         }
         let used = view.used;
-        let entries = view.entries.to_vec();
+        let payload = encode_header_slots_payload(self.spec, used, view.entries, true)?;
         self.ensure_write()?
-            .commit_header_slots(extent, used, &entries, true)
+            .commit_header_slots_payload(extent, &payload)
     }
 
     /// The region's decoded view plus where it lives, or `None` when the
@@ -12701,11 +12666,31 @@ impl VarlitFile {
         }
         let sealed = view.is_sealed();
 
-        // Built whole, then measured, then written. The old entries are copied
-        // in order with the target id dropped, so a rewrite of an existing
-        // block reclaims its bytes before the new value asks for them and the
-        // region does not creep.
+        // Measure before allocating/copying; an oversized value cannot make
+        // temporary storage exceed the schema-pinned region capacity.
+        let mut required = payload.map_or(0u64, |p| {
+            p.len() as u64 + HEADER_SLOT_ENTRY_HEADER_LEN as u64
+        });
+        walk_header_slot_entries(view.entries, view.used, |id, _, existing| {
+            if id != block_id {
+                required += existing.len() as u64 + HEADER_SLOT_ENTRY_HEADER_LEN as u64;
+            }
+            Ok(())
+        })?;
+        if required > capacity as u64 {
+            return Err(Error::LimitExceeded {
+                resource: "header slots region",
+                actual: required,
+                limit: capacity as u64,
+            });
+        }
         let mut rebuilt: Vec<u8> = Vec::new();
+        rebuilt
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "header slots region",
+                requested: capacity as u64,
+            })?;
         walk_header_slot_entries(view.entries, view.used, |id, version, existing| {
             if id == block_id {
                 return Ok(());
@@ -13204,7 +13189,7 @@ fn validate_generation_index(
     append_start: u64,
     index: &ResidentIndex,
 ) -> Result<()> {
-    validate_generation_file_inner(spec, file, append_start, index.len(), index.iter(), None)
+    validate_generation_file_inner(spec, file, append_start, index, false)
 }
 
 /// The same walk against entries the caller is still holding — the rewrite
@@ -13214,45 +13199,28 @@ fn validate_generation_file(
     spec: FormatSpec,
     file: &mut File,
     append_start: u64,
-    expected_entries: &[RecordIndexEntry],
+    expected_entries: &dyn RecordDirectory,
 ) -> Result<()> {
-    validate_generation_file_inner(
-        spec,
-        file,
-        append_start,
-        expected_entries.len(),
-        infallible_entries(expected_entries),
-        None,
-    )
+    validate_generation_file_inner(spec, file, append_start, expected_entries, false)
 }
 
 fn validate_replacement_generation_file(
     spec: FormatSpec,
     file: &mut File,
     append_start: u64,
-    expected_entries: &[RecordIndexEntry],
+    expected_entries: &dyn RecordDirectory,
 ) -> Result<()> {
-    validate_generation_file_inner(
-        spec,
-        file,
-        append_start,
-        expected_entries.len(),
-        infallible_entries(expected_entries),
-        Some(expected_entries),
-    )
+    validate_generation_file_inner(spec, file, append_start, expected_entries, true)
 }
 
-/// `strict_prefix` is `Some` for the replacement path, which decodes each
-/// checkpoint in full and compares it against the entries preceding it. The
-/// other caller reads only the checkpoint prefix, which is what decides the two
-/// ceilings, and needs no prefix of its own.
+/// Strict replacement validation compares checkpoint rows incrementally with
+/// the already validated prefix. Other callers screen only the fixed header.
 fn validate_generation_file_inner(
     spec: FormatSpec,
     file: &mut File,
     append_start: u64,
-    expected_count: usize,
-    expected_entries: impl Iterator<Item = Result<RecordIndexEntry>>,
-    strict_prefix: Option<&[RecordIndexEntry]>,
+    expected_entries: &dyn RecordDirectory,
+    strict_prefix: bool,
 ) -> Result<()> {
     let file_len = check_open_file_len(spec, file)?;
     let header_len = read_file_header(spec, file)?;
@@ -13264,25 +13232,11 @@ fn validate_generation_file_inner(
     let mut accounting = ScanAccounting::default();
     accounting.advance(spec, append_start)?;
     let mut offset = append_start;
-    // Sequence uniqueness, folded into this walk instead of a second one over
-    // the same entries. The `8N` temporary is taken up front rather than only
-    // on the out-of-order fallback, because the fallback needs every sequence
-    // including the ones an ascending prefix already passed, and a streaming
-    // check cannot go back for them. `sequence_uniqueness_transient_bytes`
-    // already charges this unconditionally — the resident merge estimate has
-    // always treated the fallback as the published worst case. The sort is
-    // still skipped when the file is ascending, which is the ordinary case.
-    let sequence_bytes = sequence_uniqueness_transient_bytes(expected_count)?;
-    let mut sequences = Vec::new();
-    sequences
-        .try_reserve_exact(expected_count)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "sequence uniqueness index",
-            requested: sequence_bytes,
-        })?;
-    let mut ascending = true;
+    // Increasing runs with disjoint ranges prove uniqueness without scratch.
+    // Overlapping ranges take the bounded external-sort fallback.
+    let mut sequences = native_rewrite::SequenceRanges::default();
     let mut walked = 0usize;
-    for (position, expected) in expected_entries.enumerate() {
+    for (position, expected) in directory_records(expected_entries).enumerate() {
         let expected = expected?;
         let expected = &expected;
         walked += 1;
@@ -13321,56 +13275,39 @@ fn validate_generation_file_inner(
         if actual.block_id == INDEX_BLOCK_ID
             && (1..=INDEX_CHECKPOINT_VERSION).contains(&actual.block_version)
         {
-            // Only the strict path uses the entries; everything else needed
-            // the two ceilings, which the prefix decides.
-            if strict_prefix.is_none() {
+            if strict_prefix {
+                native_rewrite::validate_checkpoint(
+                    spec,
+                    file,
+                    &actual,
+                    expected_entries,
+                    position,
+                    append_start,
+                )?;
+            } else {
                 let prefix = actual.read_payload_prefix_file_with_len(
                     file,
                     file_len,
                     INDEX_CHECKPOINT_PREFIX_LEN,
                 )?;
-                check_index_checkpoint_limits(spec, &prefix)?;
-            }
-            if let Some(prefix) = strict_prefix {
-                let payload = actual.read_payload_file_with_len(file, file_len)?;
-                inspect_index_checkpoint(
-                    spec,
-                    &payload,
-                    append_start,
-                    file_len,
-                    &actual,
-                    position,
-                    prefix.iter().take(position),
-                )?;
-                let checkpoint = decode_index_checkpoint(spec, &payload, file_len)?;
-                validate_index_checkpoint(
-                    append_start,
-                    file_len,
-                    &actual,
-                    &checkpoint,
-                    position,
-                    prefix.iter().take(position),
-                )?;
+                check_index_checkpoint_limits_for(spec, &prefix, false)?;
             }
         }
-        ascending &= sequences.last().is_none_or(|last| *last < actual.sequence);
-        sequences.push(actual.sequence);
+        sequences.note(actual.sequence);
         offset = actual.checked_physical_end()?;
     }
-    debug_assert_eq!(walked, expected_count, "declared entry count did not hold");
+    debug_assert_eq!(
+        walked,
+        expected_entries.record_count(),
+        "declared entry count did not hold"
+    );
     if offset != file_len {
         return Err(Error::CorruptTail { offset });
     }
-    if ascending {
+    if sequences.proves_unique() {
         return Ok(());
     }
-    sequences.sort_unstable();
-    if sequences.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(Error::InvalidCanonicalEncoding(
-            "duplicate native record sequence",
-        ));
-    }
-    Ok(())
+    native_rewrite::validate_sequences(expected_entries, resident_index::buffer_bytes(spec) / 2)
 }
 
 fn physical_record_headers_match(left: &RecordIndexEntry, right: &RecordIndexEntry) -> bool {
@@ -13392,6 +13329,7 @@ fn physical_record_headers_match(left: &RecordIndexEntry, right: &RecordIndexEnt
 enum RewritePayload<'a> {
     Bytes(&'a [u8]),
     Snapshot { offset: u64, len: u64 },
+    Index(IndexPayload<'a>),
 }
 
 fn rewrite_record_streaming(
@@ -13406,6 +13344,7 @@ fn rewrite_record_streaming(
             u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?
         }
         RewritePayload::Snapshot { len, .. } => len,
+        RewritePayload::Index(index) => index.len(spec)?,
     };
     spec.read_limits
         .check(ReadLimitKey::RecordPayloadLen, payload_len)?;
@@ -13418,6 +13357,7 @@ fn rewrite_record_streaming(
             bytes,
         )?,
         RewritePayload::Snapshot { .. } => entry.logical_payload_len_snapshot(spec, snapshot)?,
+        RewritePayload::Index(_) => payload_len,
     };
     spec.read_limits
         .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
@@ -13447,6 +13387,7 @@ fn rewrite_record_streaming(
     write_record_header(output, spec, record_offset, header)?;
     match payload {
         RewritePayload::Bytes(bytes) => output.write_all(bytes)?,
+        RewritePayload::Index(index) => index.write(output)?,
         RewritePayload::Snapshot { offset, len } => {
             snapshot.copy_range_to(offset, len, output)?;
         }
@@ -13511,28 +13452,19 @@ enum Chain {
 /// silent corruption — that guard is the predecessor check, and it is older
 /// than this.
 ///
-/// `Tables` keeps one map per chain because the two diverge: when a record is
-/// dropped, a link that pointed at it must inherit *that record's* resolution
-/// in the same chain, and its block predecessor and key predecessor are
-/// different records. `None` is a real answer — "nothing in that chain
-/// survived" — and clears the field rather than pointing it somewhere
-/// plausible.
+/// `Tables` stores both chain resolutions in one sorted, spillable row per
+/// source record. Dropped records inherit their predecessor in each chain;
+/// zero means that no predecessor in that chain survived.
 enum ChainRemap<'a> {
     Uniform(ReplacementInfo),
-    Tables {
-        block: &'a HashMap<u64, u64>,
-        key: &'a HashMap<u64, u64>,
-    },
+    Tables(&'a OffsetRemap),
 }
 
 impl ChainRemap<'_> {
     fn translate(&self, chain: Chain, old: u64) -> Result<Option<u64>> {
         match self {
             Self::Uniform(info) => info.translate_record_offset(old).map(Some),
-            Self::Tables { block, key } => Ok(match chain {
-                Chain::Block => block.get(&old).copied(),
-                Chain::Key => key.get(&old).copied(),
-            }),
+            Self::Tables(remap) => remap.get(old, chain),
         }
     }
 }
@@ -13544,13 +13476,14 @@ fn rewrite_replacement_record_streaming(
     mut entry: RecordIndexEntry,
     payload: RewritePayload<'_>,
     replacement: ChainRemap<'_>,
-    rewritten_prefix: &[RecordIndexEntry],
+    rewritten_prefix: &RewriteDirectory,
 ) -> Result<RecordIndexEntry> {
     let payload_len = match payload {
         RewritePayload::Bytes(bytes) => {
             u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?
         }
         RewritePayload::Snapshot { len, .. } => len,
+        RewritePayload::Index(index) => index.len(spec)?,
     };
     spec.read_limits
         .check(ReadLimitKey::RecordPayloadLen, payload_len)?;
@@ -13563,6 +13496,7 @@ fn rewrite_replacement_record_streaming(
             bytes,
         )?,
         RewritePayload::Snapshot { .. } => entry.logical_payload_len_snapshot(spec, snapshot)?,
+        RewritePayload::Index(_) => payload_len,
     };
     spec.read_limits
         .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
@@ -13613,6 +13547,7 @@ fn rewrite_replacement_record_streaming(
     write_record_header(output, spec, record_offset, header)?;
     match payload {
         RewritePayload::Bytes(bytes) => output.write_all(bytes)?,
+        RewritePayload::Index(index) => index.write(output)?,
         RewritePayload::Snapshot { offset, len } => snapshot.copy_range_to(offset, len, output)?,
     }
     let encoded_footer = if spec.spec_needs_record_footer() {
@@ -13651,47 +13586,13 @@ fn rewrite_replacement_record_streaming(
     Ok(entry)
 }
 
-/// Finds the already-rewritten record that sits at `offset`.
-///
-/// `rewritten_prefix` is `replace_block`'s `new_index` under construction. Each
-/// entry is written at `output.stream_position()` and pushed in that order, so
-/// the slice is strictly increasing in `record_offset` — the `debug_assert!` at
-/// the `push` states that where the invariant is created, which is O(1), unlike
-/// asserting sortedness here on every lookup.
-///
-/// This used to be `iter().find(..)`, which made `replace_block` quadratic in
-/// the record count for any spec that carries a record footer with a
-/// predecessor offset (`block_offset_chain`, `keyed_offset_chain`,
-/// `segment_on_flush`). A `HashMap<u64, usize>` was the obvious alternative and
-/// is worse here: it adds uncharged bytes per record to a path that already
-/// materialises the whole index, while the sortedness makes an
-/// allocation-free `O(log N)` lookup available for nothing.
-///
-/// Bounded failure mode if that sortedness were ever broken: `binary_search_by`
-/// returns `Ok` only when a comparison answered `Equal`, so the entry it hands
-/// back always satisfies `record_offset == offset` and can never substitute a
-/// different record's predecessor. The worst it can do is miss an entry that is
-/// present, which is the existing `Error::InvalidRecordFooter` refusal.
-fn find_rewritten_by_offset(
-    rewritten_prefix: &[RecordIndexEntry],
-    offset: u64,
-) -> Option<&RecordIndexEntry> {
-    rewritten_prefix
-        .binary_search_by(|candidate| {
-            note_replacement_predecessor_probe();
-            candidate.record_offset.cmp(&offset)
-        })
-        .ok()
-        .map(|position| &rewritten_prefix[position])
-}
-
 fn validate_replacement_predecessors(
     output: &mut File,
     entry: &RecordIndexEntry,
-    rewritten_prefix: &[RecordIndexEntry],
+    rewritten_prefix: &RewriteDirectory,
 ) -> Result<()> {
     if let Some(offset) = entry.prev_same_block_offset {
-        let Some(previous) = find_rewritten_by_offset(rewritten_prefix, offset) else {
+        let Some(previous) = rewritten_prefix.find_offset(offset)? else {
             return Err(Error::InvalidRecordFooter { offset });
         };
         if offset >= entry.record_offset || previous.block_id != entry.block_id {
@@ -13699,11 +13600,11 @@ fn validate_replacement_predecessors(
         }
     }
     if let Some(offset) = entry.prev_same_key_offset {
-        let Some(previous) = find_rewritten_by_offset(rewritten_prefix, offset) else {
+        let Some(previous) = rewritten_prefix.find_offset(offset)? else {
             return Err(Error::InvalidRecordFooter { offset });
         };
         if offset >= entry.record_offset
-            || replacement_chain_block_id(output, previous)?
+            || replacement_chain_block_id(output, &previous)?
                 != replacement_chain_block_id(output, entry)?
         {
             return Err(Error::InvalidRecordFooter { offset });
@@ -14798,51 +14699,6 @@ fn validate_unique_sequences(entries: &[RecordIndexEntry]) -> Result<()> {
     Ok(())
 }
 
-/// Clones the entries a predicate selects, charged and reserved before the
-/// first one is copied.
-///
-/// **`count` is the caller's**, because the caller is what knows whether it can
-/// be had for free. This used to run the predicate over the whole source once
-/// to count and once to copy — and its heaviest caller passes `|_| true`, where
-/// the count is `source.len()` and the first pass was walking the entire index
-/// to learn something it already knew.
-///
-/// A count is still required rather than optional: the `IndexBytes` charge and
-/// the exact reservation must both precede the copy, which is the invariant that
-/// keeps a refused limit from leaving a half-built generation behind.
-fn clone_matching_entries<F>(
-    spec: FormatSpec,
-    source: &ResidentIndex,
-    count: usize,
-    mut matches: F,
-) -> Result<Vec<RecordIndexEntry>>
-where
-    F: FnMut(&RecordIndexEntry) -> bool,
-{
-    let requested = index_bytes_for_count(count)?;
-    spec.read_limits
-        .check(ReadLimitKey::IndexBytes, requested)?;
-    let mut entries = Vec::new();
-    entries
-        .try_reserve_exact(count)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "block index",
-            requested,
-        })?;
-    for entry in source.iter() {
-        let entry = entry?;
-        if matches(&entry) {
-            entries.push(entry);
-        }
-    }
-    debug_assert_eq!(
-        entries.len(),
-        count,
-        "declared count did not match the predicate"
-    );
-    Ok(entries)
-}
-
 /// The three per-handle structures every open and every generation rebind
 /// derives from the resident index.
 struct DerivedIndexState {
@@ -14927,6 +14783,7 @@ fn derive_index_state(
 /// The open paths still hold a plain `Vec` at the point they derive from it —
 /// they built it moments earlier — so their entries cannot fail to be produced.
 /// This says that in one place instead of at each call site.
+#[cfg(test)]
 fn infallible_entries(
     entries: &[RecordIndexEntry],
 ) -> impl DoubleEndedIterator<Item = Result<RecordIndexEntry>> + ExactSizeIterator + '_ {
@@ -18517,6 +18374,15 @@ impl FileMutationPermit<'_> {
     ) -> Result<()> {
         self.check()?;
         let payload = encode_header_slots_payload(self.spec, used, entries, sealed)?;
+        self.commit_header_slots_payload(extent, &payload)
+    }
+
+    fn commit_header_slots_payload(
+        &mut self,
+        extent: MutableHeaderExtent,
+        payload: &[u8],
+    ) -> Result<()> {
+        self.check()?;
         if payload.len() != extent.payload_len {
             // A region this build did not write: its geometry is not the one
             // encoded here, and overwriting it would corrupt whatever it is.
@@ -18525,11 +18391,11 @@ impl FileMutationPermit<'_> {
             ));
         }
         self.file
-            .overwrite_header_region(extent.payload_offset, &payload)?;
+            .overwrite_header_region(extent.payload_offset, payload)?;
         self.file.sync_data()?;
         self.header_extensions
             [extent.payload_in_extensions..extent.payload_in_extensions + extent.payload_len]
-            .copy_from_slice(&payload);
+            .copy_from_slice(payload);
         Ok(())
     }
 }

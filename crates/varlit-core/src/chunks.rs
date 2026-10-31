@@ -27,41 +27,45 @@ impl ChunkedBytes {
         if chunk_len == 0 || chunk_len > u32::MAX as usize {
             return Err(Error::InvalidChunkedBytes);
         }
-        let mut entries = Vec::new();
-        let mut chunks = Vec::new();
-        for chunk in payload.chunks(chunk_len) {
-            let compressed = zstd_compress(chunk, level)?;
-            let stored_len =
-                u32::try_from(compressed.len()).map_err(|_| Error::InvalidChunkedBytes)?;
-            entries.push(ChunkEntry {
-                uncompressed_len: chunk
-                    .len()
-                    .try_into()
-                    .map_err(|_| Error::InvalidChunkedBytes)?,
-                stored_len,
-                crc32: crc32_bytes(chunk)?,
-            });
-            chunks.push(compressed);
-        }
-        let chunk_count = u32::try_from(entries.len()).map_err(|_| Error::InvalidChunkedBytes)?;
+        let count = payload.len().div_ceil(chunk_len);
+        let chunk_count = u32::try_from(count).map_err(|_| Error::InvalidChunkedBytes)?;
+        let prefix_len = count
+            .checked_mul(CHUNK_ENTRY_LEN)
+            .and_then(|n| n.checked_add(CHUNKED_HEADER_LEN))
+            .ok_or(Error::InvalidChunkedBytes)?;
         let mut encoded = Vec::new();
-        encoded.extend_from_slice(CHUNKED_MAGIC);
-        encoded.extend_from_slice(&CHUNKED_VERSION.to_le_bytes());
-        encoded.push(ALGORITHM_ZSTD);
-        encoded.push(0);
-        encoded.extend_from_slice(&(chunk_len as u64).to_le_bytes());
-        encoded.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-        encoded.extend_from_slice(&chunk_count.to_le_bytes());
-        encoded.extend_from_slice(&0u32.to_le_bytes());
-        debug_assert_eq!(encoded.len(), CHUNKED_HEADER_LEN);
-        for entry in &entries {
-            encoded.extend_from_slice(&entry.uncompressed_len.to_le_bytes());
-            encoded.extend_from_slice(&entry.stored_len.to_le_bytes());
-            encoded.extend_from_slice(&entry.crc32.to_le_bytes());
-            encoded.extend_from_slice(&0u32.to_le_bytes());
-        }
-        for chunk in chunks {
-            encoded.extend_from_slice(&chunk);
+        encoded
+            .try_reserve_exact(prefix_len)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "chunked bytes encoding",
+                requested: prefix_len as u64,
+            })?;
+        encoded.resize(prefix_len, 0);
+        encoded[..4].copy_from_slice(CHUNKED_MAGIC);
+        encoded[4..6].copy_from_slice(&CHUNKED_VERSION.to_le_bytes());
+        encoded[6] = ALGORITHM_ZSTD;
+        encoded[8..16].copy_from_slice(&(chunk_len as u64).to_le_bytes());
+        encoded[16..24].copy_from_slice(&(payload.len() as u64).to_le_bytes());
+        encoded[24..28].copy_from_slice(&chunk_count.to_le_bytes());
+        // One reusable compression buffer; never retain one capacity per chunk.
+        if !payload.is_empty() {
+            let mut compressor = crate::compression_buffers::Compressor::new(level)?;
+            for (index, chunk) in payload.chunks(chunk_len).enumerate() {
+                let compressed = compressor.compress(chunk)?;
+                let stored_len =
+                    u32::try_from(compressed.len()).map_err(|_| Error::InvalidChunkedBytes)?;
+                let at = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
+                encoded[at..at + 4].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
+                encoded[at + 4..at + 8].copy_from_slice(&stored_len.to_le_bytes());
+                encoded[at + 8..at + 12].copy_from_slice(&crc32_bytes(chunk)?.to_le_bytes());
+                encoded
+                    .try_reserve(compressed.len())
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "chunked bytes encoding",
+                        requested: (encoded.len() as u64).saturating_add(compressed.len() as u64),
+                    })?;
+                encoded.extend_from_slice(compressed);
+            }
         }
         Self::from_encoded(encoded)
     }
@@ -110,6 +114,9 @@ impl ChunkedBytes {
                 resource: "chunked bytes output",
                 requested: header.uncompressed_len,
             })?;
+        let mut decompressor = (header.chunk_count != 0)
+            .then(crate::compression_buffers::Decompressor::new)
+            .transpose()?;
         for index in 0..header.chunk_count as usize {
             let entry_offset = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
             let entry = parse_entry(&self.encoded, entry_offset)?;
@@ -122,17 +129,34 @@ impl ChunkedBytes {
                 .get(payload_offset..end)
                 .ok_or(Error::InvalidChunkedBytes)?;
             payload_offset = end;
-            let chunk = match header.algorithm {
-                ALGORITHM_ZSTD => zstd_decompress(stored, entry.uncompressed_len as usize)?,
-                _ => return Err(Error::InvalidCompressionHeader),
+            let start = output.len();
+            let end = start
+                .checked_add(entry.uncompressed_len as usize)
+                .filter(|end| *end <= output_len)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            let decoder = decompressor.as_mut().ok_or(Error::InvalidChunkedBytes)?;
+            // Multiple chunks reuse one chunk-sized scratch buffer: zstd
+            // decodes into hot memory, then a bulk copy fills the final Vec.
+            // A single chunk writes directly, avoiding a second full output.
+            let (len, actual) = if header.chunk_count == 1 {
+                let len = decoder.decompress_append(
+                    stored,
+                    &mut output,
+                    entry.uncompressed_len as usize,
+                )?;
+                (len, crc32_bytes(&output[start..end])?)
+            } else {
+                let chunk = decoder.decompress_chunk(stored, entry.uncompressed_len as usize)?;
+                let actual = crc32_bytes(chunk)?;
+                output.extend_from_slice(chunk);
+                (chunk.len(), actual)
             };
-            if chunk.len() != entry.uncompressed_len as usize {
+            if len != entry.uncompressed_len as usize {
                 return Err(Error::DecompressedLengthMismatch {
                     expected: entry.uncompressed_len as u64,
-                    actual: chunk.len() as u64,
+                    actual: len as u64,
                 });
             }
-            let actual = crc32_bytes(&chunk)?;
             if actual != entry.crc32 {
                 return Err(Error::ChunkChecksumMismatch {
                     chunk_index: index as u32,
@@ -140,7 +164,6 @@ impl ChunkedBytes {
                     actual,
                 });
             }
-            output.extend_from_slice(&chunk);
         }
         if output.len() as u64 != header.uncompressed_len {
             return Err(Error::DecompressedLengthMismatch {
@@ -191,7 +214,6 @@ impl VarlitDecode for ChunkedBytes {
 
 #[derive(Clone, Copy)]
 struct ChunkedHeader {
-    algorithm: u8,
     chunk_len: u32,
     uncompressed_len: u64,
     chunk_count: u32,
@@ -271,7 +293,6 @@ fn parse_header(encoded: &[u8]) -> Result<ChunkedHeader> {
         return Err(Error::InvalidChunkedBytes);
     }
     Ok(ChunkedHeader {
-        algorithm,
         chunk_len: chunk_len as u32,
         uncompressed_len: u64::from_le_bytes(encoded[16..24].try_into().expect("slice")),
         chunk_count: u32::from_le_bytes(encoded[24..28].try_into().expect("slice")),
@@ -293,26 +314,6 @@ fn parse_entry(encoded: &[u8], offset: usize) -> Result<ChunkEntry> {
     })
 }
 
-#[cfg(feature = "compression-zstd")]
-fn zstd_compress(payload: &[u8], level: CompressionLevel) -> Result<Vec<u8>> {
-    Ok(zstd::bulk::compress(payload, level.to_zstd_level())?)
-}
-
-#[cfg(not(feature = "compression-zstd"))]
-fn zstd_compress(_payload: &[u8], _level: CompressionLevel) -> Result<Vec<u8>> {
-    Err(Error::CompressionFeatureDisabled)
-}
-
-#[cfg(feature = "compression-zstd")]
-fn zstd_decompress(payload: &[u8], len: usize) -> Result<Vec<u8>> {
-    Ok(zstd::bulk::decompress(payload, len)?)
-}
-
-#[cfg(not(feature = "compression-zstd"))]
-fn zstd_decompress(_payload: &[u8], _len: usize) -> Result<Vec<u8>> {
-    Err(Error::CompressionFeatureDisabled)
-}
-
 #[cfg(feature = "integrity")]
 fn crc32_bytes(bytes: &[u8]) -> Result<u32> {
     Ok(crc32fast::hash(bytes))
@@ -321,4 +322,44 @@ fn crc32_bytes(bytes: &[u8]) -> Result<u32> {
 #[cfg(not(feature = "integrity"))]
 fn crc32_bytes(_bytes: &[u8]) -> Result<u32> {
     Err(Error::IntegrityFeatureDisabled)
+}
+
+#[cfg(all(test, feature = "compression-zstd", feature = "integrity"))]
+mod oom_tests {
+    use super::*;
+    #[test]
+    fn streamed_chunk_encoding_preserves_the_existing_wire_bytes() -> Result<()> {
+        for (length, chunk_len) in [(0usize, 1usize), (129, 1), (1025, 64), (65536, 65536)] {
+            let input: Vec<_> = (0..length).map(|i| (i % 251) as u8).collect();
+            let mut table = Vec::new();
+            let mut payload = Vec::new();
+            for chunk in input.chunks(chunk_len) {
+                let stored = zstd::bulk::compress(chunk, CompressionLevel::Fast.to_zstd_level())?;
+                table.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+                table.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+                table.extend_from_slice(&crc32fast::hash(chunk).to_le_bytes());
+                table.extend_from_slice(&[0; 4]);
+                payload.extend_from_slice(&stored);
+            }
+            let mut expected = b"VCHK".to_vec();
+            expected.extend_from_slice(&[1, 0, 1, 0]);
+            expected.extend_from_slice(&(chunk_len as u64).to_le_bytes());
+            expected.extend_from_slice(&(length as u64).to_le_bytes());
+            expected.extend_from_slice(&(length.div_ceil(chunk_len) as u32).to_le_bytes());
+            expected.extend_from_slice(&[0; 4]);
+            expected.extend_from_slice(&table);
+            expected.extend_from_slice(&payload);
+            let encoded =
+                ChunkedBytes::from_zstd_chunks(&input, chunk_len, CompressionLevel::Fast)?;
+            assert!(
+                encoded.encoded() == expected,
+                "chunk wire mismatch: length={length} chunk={chunk_len}"
+            );
+            assert!(
+                encoded.decode_to_vec()? == input,
+                "chunk roundtrip mismatch"
+            );
+        }
+        Ok(())
+    }
 }

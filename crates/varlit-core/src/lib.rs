@@ -6,6 +6,7 @@ mod adapter;
 mod chunks;
 mod codec;
 mod collections;
+mod compression_buffers;
 mod diagnostics;
 
 mod disk_index;

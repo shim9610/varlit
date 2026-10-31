@@ -16,6 +16,8 @@ CASES = [
     ("checked-chain-links", "varlit-core", None, "file::validation_tests::checksummed_chain_links_must_decrease_and_stay_in_their_block", False, None),
     ("failed-history", "varlit", "stateful_failure_guards", "failed_batches_recover_through_delete_reinsert_follow_and_compaction", False, "stateful failure epochs=24"),
     ("decode-memory", "varlit", "resource_amplification_guards", "decoded_memory_is_bounded_and_released_across_sizes_and_failures", False, "DECODE_RSS peak_kib="),
+    ("oom-recovery", "varlit", "oom_recovery_guards", "allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded", False, "OOM_GUARDS allocation refusal"),
+    ("zstd-context-oom", "varlit", "oom_recovery_guards", "zstd_context_allocation_failures_return_errors", True, "C_CONTEXT_REFUSAL compression and decompression passed"),
     ("cardinality-growth", "varlit", "high_cardinality", "cardinality_growth_respects_memory_budget", True, 'QUAL_MEMORY {"keys":1000000,'),
 ]
 

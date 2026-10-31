@@ -185,7 +185,7 @@ pub struct Encoder {
     output: Vec<u8>,
     max_len: Option<u64>,
     limit_resource: &'static str,
-    overflow: Option<(u64, u64)>,
+    failure: Option<Error>,
 }
 
 impl Encoder {
@@ -195,7 +195,7 @@ impl Encoder {
             output: Vec::new(),
             max_len: None,
             limit_resource: "encoded payload",
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -205,7 +205,7 @@ impl Encoder {
             output: Vec::new(),
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -226,7 +226,7 @@ impl Encoder {
             output,
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -237,15 +237,8 @@ impl Encoder {
     /// writer that needs it for the next record — a failed encode must not cost
     /// the writer its scratch.
     pub(crate) fn into_buffer_and_result(self) -> (Vec<u8>, Result<()>) {
-        match self.overflow {
-            Some((actual, limit)) => (
-                self.output,
-                Err(Error::LimitExceeded {
-                    resource: self.limit_resource,
-                    actual,
-                    limit,
-                }),
-            ),
+        match self.failure {
+            Some(error) => (self.output, Err(error)),
             None => (self.output, Ok(())),
         }
     }
@@ -259,12 +252,8 @@ impl Encoder {
     }
 
     pub(crate) fn try_into_inner(self) -> Result<Vec<u8>> {
-        if let Some((actual, limit)) = self.overflow {
-            return Err(Error::LimitExceeded {
-                resource: self.limit_resource,
-                actual,
-                limit,
-            });
+        if let Some(error) = self.failure {
+            return Err(error);
         }
         Ok(self.output)
     }
@@ -290,14 +279,27 @@ impl Encoder {
             self.output.extend_from_slice(bytes);
             return;
         }
-        if self.overflow.is_some() {
+        if self.failure.is_some() {
             return;
         }
         let actual = (self.output.len() as u64).checked_add(bytes.len() as u64);
         if let Some(limit) = self.max_len
             && actual.is_none_or(|actual| actual > limit)
         {
-            self.overflow = Some((actual.unwrap_or(u64::MAX), limit));
+            self.failure = Some(Error::LimitExceeded {
+                resource: self.limit_resource,
+                actual: actual.unwrap_or(u64::MAX),
+                limit,
+            });
+            return;
+        }
+        if bytes.len() > self.output.capacity() - self.output.len()
+            && self.output.try_reserve(bytes.len()).is_err()
+        {
+            self.failure = Some(Error::AllocationFailed {
+                resource: self.limit_resource,
+                requested: actual.unwrap_or(u64::MAX),
+            });
             return;
         }
         self.output.extend_from_slice(bytes);
@@ -697,9 +699,9 @@ pub fn read_field_header(decoder: &mut Decoder<'_>) -> Result<FieldHeader> {
 }
 
 pub fn encode_to_vec<T: VarlitEncode>(value: &T, endian: Endian) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new(endian);
+    let mut encoder = Encoder::new_limited(endian, u64::MAX, "encoded payload");
     value.encode_varlit(&mut encoder)?;
-    Ok(encoder.into_inner())
+    encoder.try_into_inner()
 }
 
 pub(crate) fn encode_to_vec_limited<T: VarlitEncode>(
@@ -1173,8 +1175,34 @@ where
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-        let mut entries: Vec<(&K, &V)> = self.iter().collect();
-        entries.sort_by_key(|(key, _)| *key);
+        // Refuse impossible output before allocating one reference pair per
+        // entry. Custom Nested/Seq codecs may be zero-width, so only charge
+        // the minimum guaranteed by their declared wire type here.
+        if let Some(limit) = encoder.max_len {
+            let per_entry =
+                minimum_wire_size(K::WIRE_TYPE) as u64 + minimum_wire_size(V::WIRE_TYPE) as u64;
+            let actual = (self.len() as u64)
+                .checked_mul(per_entry)
+                .and_then(|n| n.checked_add(8))
+                .and_then(|n| n.checked_add(encoder.output.len() as u64))
+                .unwrap_or(u64::MAX);
+            if actual > limit {
+                return Err(Error::LimitExceeded {
+                    resource: encoder.limit_resource,
+                    actual,
+                    limit,
+                });
+            }
+        }
+        let mut entries: Vec<(&K, &V)> = Vec::new();
+        entries
+            .try_reserve_exact(self.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "HashMap encoding entries",
+                requested: allocation_request::<(&K, &V)>(self.len()),
+            })?;
+        entries.extend(self.iter());
+        entries.sort_unstable_by_key(|(key, _)| *key);
         encoder.write_u64(entries.len() as u64);
         for (key, value) in entries {
             key.encode_varlit(encoder)?;
@@ -1226,18 +1254,31 @@ where
                     ));
                 }
             }
-            if values.insert(pending_key, pending_value).is_some() {
-                return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-            }
+            insert_hash_map_entry(&mut values, pending_key, pending_value)?;
             pending_key = next_key;
         }
 
         let pending_value = V::decode_varlit(decoder)?;
-        if values.insert(pending_key, pending_value).is_some() {
-            return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-        }
+        insert_hash_map_entry(&mut values, pending_key, pending_value)?;
         Ok(values)
     }
+}
+
+fn insert_hash_map_entry<K: Eq + Hash, V>(
+    values: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+) -> Result<()> {
+    if values.len() == values.capacity() {
+        values.try_reserve(1).map_err(|_| Error::AllocationFailed {
+            resource: "HashMap entries",
+            requested: allocation_request::<(K, V)>(values.len().saturating_add(1)),
+        })?;
+    }
+    if values.insert(key, value).is_some() {
+        return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
+    }
+    Ok(())
 }
 
 macro_rules! vec_seq_codec {

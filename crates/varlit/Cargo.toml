@@ -53,3 +53,7 @@ required-features = ["integrity"]
 [[example]]
 name = "matrix_soak"
 required-features = ["integrity"]
+
+[[example]]
+name = "oom_maintenance_load"
+required-features = ["integrity", "compression-zstd"]

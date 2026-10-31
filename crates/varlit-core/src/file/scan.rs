@@ -1728,35 +1728,41 @@ pub(super) fn push_scanned_entry(
 /// file with `InvalidCanonicalEncoding("duplicate native record sequence")`.
 pub(super) fn rebuilt_open_digest_payload(
     spec: FormatSpec,
-    written: &[RecordIndexEntry],
+    written: &RewriteDirectory,
     own_sequence: u64,
     record_offset: u64,
 ) -> Result<Vec<u8>> {
-    let high_water = written
-        .iter()
-        .map(|entry| entry.sequence)
-        .chain(core::iter::once(own_sequence))
-        .max();
-    encode_digest_payload(
-        spec,
-        high_water,
-        rewritten_block_tails(written).as_slice(),
-        record_offset,
-    )
-}
-
-/// One forward pass into a map and one ordering — the shape
-/// [`BlockTails::from_newest`] exists for, and the same shape the open scan
-/// uses. It runs once per digest record in the source, so a rewrite of a file
-/// with `S` commit points pays `O(S * N)`; that is the order the rewrite's
-/// segment re-encoding already pays, on the path that is already the expensive
-/// one.
-pub(super) fn rewritten_block_tails(entries: &[RecordIndexEntry]) -> BlockTails {
-    let mut newest: HashMap<u32, u64> = HashMap::new();
-    for entry in entries {
+    if let Some(tails) = written.cached_tails() {
+        return encode_digest_payload(
+            spec,
+            Some(written.maximum_sequence().max(own_sequence)),
+            tails,
+            record_offset,
+        );
+    }
+    let mut high_water = own_sequence;
+    let mut newest = HashMap::<u32, u64>::new();
+    for entry in directory_records(written) {
+        let entry = entry?;
+        high_water = high_water.max(entry.sequence);
+        if newest.len() == newest.capacity() && !newest.contains_key(&entry.block_id) {
+            newest.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                resource: "rewrite block tails",
+                requested: (newest.len() as u64 + 1).saturating_mul(32),
+            })?;
+        }
         newest.insert(entry.block_id, entry.record_offset);
     }
-    BlockTails::from_newest(&newest)
+    let mut tails = Vec::new();
+    tails
+        .try_reserve_exact(newest.len())
+        .map_err(|_| Error::AllocationFailed {
+            resource: "rewrite digest tails",
+            requested: (newest.len() as u64).saturating_mul(16),
+        })?;
+    tails.extend(newest);
+    tails.sort_unstable_by_key(|tail| tail.0);
+    encode_digest_payload(spec, Some(high_water), &tails, record_offset)
 }
 
 pub(super) fn record_is_resident(spec: FormatSpec, block_id: u32) -> bool {
@@ -1875,12 +1881,14 @@ pub(super) fn truncate_uncommitted_tail_if_needed<B: ScanBuffer>(
     Ok(None)
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct IndexCheckpoint {
     pub(super) covered_offset: u64,
     pub(super) entries: Vec<RecordIndexEntry>,
 }
 
+#[cfg(test)]
 pub(super) fn decode_index_checkpoint(
     spec: FormatSpec,
     payload: &[u8],
@@ -2007,37 +2015,6 @@ pub(super) fn check_index_checkpoint_limits_for(
     )
 }
 
-pub(super) fn inspect_index_checkpoint<'a>(
-    spec: FormatSpec,
-    payload: &[u8],
-    header_len: u64,
-    file_len: u64,
-    checkpoint_record: &RecordIndexEntry,
-    observed_prefix_len: usize,
-    observed_prefix: impl Iterator<Item = &'a RecordIndexEntry>,
-) -> Result<()> {
-    match decode_index_checkpoint(spec, payload, file_len) {
-        Ok(checkpoint) => {
-            let _ = validate_index_checkpoint(
-                header_len,
-                file_len,
-                checkpoint_record,
-                &checkpoint,
-                observed_prefix_len,
-                observed_prefix,
-            );
-            Ok(())
-        }
-        Err(error @ Error::LimitExceeded { .. })
-        | Err(error @ Error::MissingResourceLimit { .. })
-        | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. })
-        | Err(error @ Error::ResourceArithmeticOverflow { .. })
-        | Err(error @ Error::LengthOverflow { .. })
-        | Err(error @ Error::AllocationFailed { .. }) => Err(error),
-        Err(_) => Ok(()),
-    }
-}
-
 pub(super) fn read_index_entry_payload(
     payload: &[u8],
     checkpoint_version: u16,
@@ -2110,6 +2087,7 @@ pub(super) fn read_index_entry_payload(
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate_index_checkpoint<'a>(
     header_len: u64,
     file_len: u64,

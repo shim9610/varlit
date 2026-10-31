@@ -95,7 +95,7 @@ impl BufferedScan {
             sequences: None,
         }
     }
-    fn encode(entry: &RecordIndexEntry) -> [u8; 77] {
+    pub(super) fn encode(entry: &RecordIndexEntry) -> [u8; 77] {
         let mut row = [0; 77];
         row[..4].copy_from_slice(&entry.block_id.to_le_bytes());
         row[4..6].copy_from_slice(&entry.block_version.to_le_bytes());
