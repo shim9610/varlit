@@ -5951,11 +5951,11 @@ impl VarlitFile {
     ///
     /// # Cost
     ///
-    /// One pass over the file, one rewritten copy, and two offset tables sized
-    /// by the record count — charged to
-    /// [`ReadLimits::max_index_bytes`](crate::ReadLimits) like any other
-    /// per-record memory. It needs the resident directory, so a lazily opened
-    /// handle refuses by name.
+    /// One rewritten generation and private page-compressed metadata. The
+    /// directory and chain remapping share the existing index buffer budget;
+    /// their temporary disk storage scales with record count. Publication
+    /// adopts the completed directory without writing a second copy. It needs
+    /// the resident directory, so a lazily opened handle refuses by name.
     pub fn defragment(&mut self) -> Result<DefragmentReport> {
         let _permit = self.ensure_write()?;
         if self.spec.liveness_policy != LivenessPolicy::FooterFlags {
@@ -11677,7 +11677,7 @@ impl VarlitFile {
     fn rebind_published_generation(
         &mut self,
         sequence: u64,
-        new_index: impl RecordDirectory,
+        new_index: RewriteDirectory,
     ) -> Result<u64> {
         let rebind = (|| -> Result<(File, SnapshotFile)> {
             #[cfg(test)]
@@ -11696,8 +11696,8 @@ impl VarlitFile {
             Ok((file, snapshot)) => {
                 self.file = RecordFile::new(file);
                 self.snapshot = snapshot;
-                self.index =
-                    ResidentIndex::adopt_generation(&new_index, self.snapshot.clone(), self.spec)?;
+                let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation (PERF2-02)
                 // and the O(1) block tails with it (PERF2-05). Record offsets
@@ -11709,11 +11709,7 @@ impl VarlitFile {
                 // The same wholesale replacement: the newest entry is a
                 // different record now, so the append-path shortcut that names
                 // its block id is stale too.
-                self.last_resident_block_id = new_index
-                    .record_count()
-                    .checked_sub(1)
-                    .map(|at| new_index.record_at(at).map(|e| e.block_id))
-                    .transpose()?;
+                self.last_resident_block_id = last_resident_block_id;
                 self.keyed_tails.invalidate_all();
                 // Both callers publish a generation whose mutable header blocks
                 // are cold — `replace_rewrite` because it writes a fresh header
@@ -11744,7 +11740,7 @@ impl VarlitFile {
     fn rebind_replacement_generation(
         &mut self,
         info: ReplacementInfo,
-        new_index: impl RecordDirectory,
+        new_index: RewriteDirectory,
     ) -> Result<ReplacementInfo> {
         let rebind = (|| -> Result<(File, SnapshotFile)> {
             #[cfg(test)]
@@ -11763,8 +11759,8 @@ impl VarlitFile {
             Ok((file, snapshot)) => {
                 self.file = RecordFile::new(file);
                 self.snapshot = snapshot;
-                self.index =
-                    ResidentIndex::adopt_generation(&new_index, self.snapshot.clone(), self.spec)?;
+                let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation (PERF2-02)
                 // and the O(1) block tails with it (PERF2-05). Record offsets
@@ -11776,11 +11772,7 @@ impl VarlitFile {
                 // The same wholesale replacement: the newest entry is a
                 // different record now, so the append-path shortcut that names
                 // its block id is stale too.
-                self.last_resident_block_id = new_index
-                    .record_count()
-                    .checked_sub(1)
-                    .map(|at| new_index.record_at(at).map(|e| e.block_id))
-                    .transpose()?;
+                self.last_resident_block_id = last_resident_block_id;
                 self.keyed_tails.invalidate_all();
                 // The published file carries a *cold* mutable header block —
                 // the rewrite could not carry the old offsets forward — so the

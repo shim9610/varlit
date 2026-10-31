@@ -164,6 +164,31 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
     );
     assert_eq!(small.decode_to_vec()?, bytes);
 
+    // Exercise the large-output paging path without raising the output or
+    // scratch budget, including an early checksum error after reservation.
+    let large = vec![31; 8 * 1024 * 1024];
+    let large_chunks = ChunkedBytes::from_zstd_chunks(&large, 65536, CompressionLevel::Fast)?;
+    let (decoded, peak) = measure(usize::MAX, 1, || large_chunks.decode_to_vec());
+    assert!(decoded? == large, "large output differs");
+    assert!(
+        peak <= large.len() + 65536 + 1024,
+        "large output retained extra memory: {peak}"
+    );
+    let mut invalid_chunks = large_chunks.encoded().to_vec();
+    invalid_chunks[40] ^= 1;
+    let invalid_chunks = ChunkedBytes::from_encoded(invalid_chunks)?;
+    assert!(matches!(
+        invalid_chunks.decode_to_vec(),
+        Err(Error::ChunkChecksumMismatch { .. })
+    ));
+    assert!(
+        large_chunks.decode_to_vec()? == large,
+        "decode after refusal differs"
+    );
+    drop(large_chunks);
+    drop(invalid_chunks);
+    drop(large);
+
     let dir = tempfile::tempdir()?;
     let header_path = dir.path().join("header.varlit");
     let spec = Format::spec()
@@ -264,8 +289,12 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         }
         let mut writer = spec.open(&path)?;
         let held = spec.open_readonly(&path)?;
-        let (refused, _) = measure(8192, 1, || writer.replace_block(0, &Point { value: 99 }));
-        assert!(refused.is_err(), "rewrite scratch refusal must be reported");
+        let (refused, _) = measure(1024, 1, || writer.replace_block(0, &Point { value: 99 }));
+        assert!(
+            matches!(refused, Err(Error::AllocationFailed { .. }))
+                || matches!(refused, Err(Error::Io(ref error)) if error.kind() == std::io::ErrorKind::OutOfMemory),
+            "rewrite scratch refusal must be reported as an allocation error"
+        );
         assert!(held.is_current()?);
         assert_eq!(writer.read_block_at::<Point>(first)?.value, 0);
         assert_eq!(
@@ -284,6 +313,9 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         );
         assert_eq!(held.read_block_at::<Point>(first)?.value, 0);
         assert_eq!(writer.read_block_at::<Point>(first)?.value, 42);
+        let appended = writer.push_info(&Point { value: 777 })?.record_offset;
+        writer.sync()?;
+        assert_eq!(writer.read_block_at::<Point>(appended)?.value, 777);
         let (result, peak) = measure(usize::MAX, 1, || writer.defragment());
         result?;
         assert!(
@@ -296,6 +328,12 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
                 .read_block_at::<Point>(first)?
                 .value,
             42
+        );
+        assert_eq!(
+            spec.open_readonly(&path)?
+                .read_block_at::<Point>(appended)?
+                .value,
+            777
         );
     }
     println!(

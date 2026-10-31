@@ -30,6 +30,7 @@ mod scalable_extent;
 #[doc(hidden)]
 pub mod scalable_fault;
 
+mod packed_rows;
 mod scan_control;
 mod snapshot;
 mod spill_rows;

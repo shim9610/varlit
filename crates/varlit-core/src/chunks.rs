@@ -114,64 +114,144 @@ impl ChunkedBytes {
                 resource: "chunked bytes output",
                 requested: header.uncompressed_len,
             })?;
-        let mut decompressor = (header.chunk_count != 0)
-            .then(crate::compression_buffers::Decompressor::new)
-            .transpose()?;
-        for index in 0..header.chunk_count as usize {
-            let entry_offset = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
-            let entry = parse_entry(&self.encoded, entry_offset)?;
-            let stored_len = entry.stored_len as usize;
-            let end = payload_offset
-                .checked_add(stored_len)
-                .ok_or(Error::InvalidChunkedBytes)?;
-            let stored = self
-                .encoded
-                .get(payload_offset..end)
-                .ok_or(Error::InvalidChunkedBytes)?;
-            payload_offset = end;
-            let start = output.len();
-            let end = start
-                .checked_add(entry.uncompressed_len as usize)
-                .filter(|end| *end <= output_len)
-                .ok_or(Error::InvalidChunkedBytes)?;
-            let decoder = decompressor.as_mut().ok_or(Error::InvalidChunkedBytes)?;
-            // Multiple chunks reuse one chunk-sized scratch buffer: zstd
-            // decodes into hot memory, then a bulk copy fills the final Vec.
-            // A single chunk writes directly, avoiding a second full output.
-            let (len, actual) = if header.chunk_count == 1 {
-                let len = decoder.decompress_append(
-                    stored,
-                    &mut output,
-                    entry.uncompressed_len as usize,
-                )?;
-                (len, crc32_bytes(&output[start..end])?)
-            } else {
-                let chunk = decoder.decompress_chunk(stored, entry.uncompressed_len as usize)?;
-                let actual = crc32_bytes(chunk)?;
-                output.extend_from_slice(chunk);
-                (chunk.len(), actual)
-            };
-            if len != entry.uncompressed_len as usize {
+        with_output_pages(&mut output, |output| {
+            let mut decompressor = (header.chunk_count != 0)
+                .then(crate::compression_buffers::Decompressor::new)
+                .transpose()?;
+            for index in 0..header.chunk_count as usize {
+                let entry_offset = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
+                let entry = parse_entry(&self.encoded, entry_offset)?;
+                let stored_len = entry.stored_len as usize;
+                let end = payload_offset
+                    .checked_add(stored_len)
+                    .ok_or(Error::InvalidChunkedBytes)?;
+                let stored = self
+                    .encoded
+                    .get(payload_offset..end)
+                    .ok_or(Error::InvalidChunkedBytes)?;
+                payload_offset = end;
+                let start = output.len();
+                let end = start
+                    .checked_add(entry.uncompressed_len as usize)
+                    .filter(|end| *end <= output_len)
+                    .ok_or(Error::InvalidChunkedBytes)?;
+                let decoder = decompressor.as_mut().ok_or(Error::InvalidChunkedBytes)?;
+                // Multiple chunks reuse one chunk-sized scratch buffer: zstd
+                // decodes into hot memory, then a bulk copy fills the final Vec.
+                // A single chunk writes directly, avoiding a second full output.
+                let (len, actual) = if header.chunk_count == 1 {
+                    let len = decoder.decompress_append(
+                        stored,
+                        output,
+                        entry.uncompressed_len as usize,
+                    )?;
+                    (len, crc32_bytes(&output[start..end])?)
+                } else {
+                    let chunk =
+                        decoder.decompress_chunk(stored, entry.uncompressed_len as usize)?;
+                    let actual = crc32_bytes(chunk)?;
+                    output.extend_from_slice(chunk);
+                    (chunk.len(), actual)
+                };
+                if len != entry.uncompressed_len as usize {
+                    return Err(Error::DecompressedLengthMismatch {
+                        expected: entry.uncompressed_len as u64,
+                        actual: len as u64,
+                    });
+                }
+                if actual != entry.crc32 {
+                    return Err(Error::ChunkChecksumMismatch {
+                        chunk_index: index as u32,
+                        expected: entry.crc32,
+                        actual,
+                    });
+                }
+            }
+            if output.len() as u64 != header.uncompressed_len {
                 return Err(Error::DecompressedLengthMismatch {
-                    expected: entry.uncompressed_len as u64,
-                    actual: len as u64,
+                    expected: header.uncompressed_len,
+                    actual: output.len() as u64,
                 });
             }
-            if actual != entry.crc32 {
-                return Err(Error::ChunkChecksumMismatch {
-                    chunk_index: index as u32,
-                    expected: entry.crc32,
-                    actual,
-                });
-            }
-        }
-        if output.len() as u64 != header.uncompressed_len {
-            return Err(Error::DecompressedLengthMismatch {
-                expected: header.uncompressed_len,
-                actual: output.len() as u64,
-            });
-        }
+            Ok(())
+        })?;
         Ok(output)
+    }
+}
+
+// Scope page advice to filling an already reserved output. This does not
+// reserve extra memory, keep a cache, alter the allocator, or change limits.
+fn with_output_pages<T>(
+    output: &mut Vec<u8>,
+    fill: impl FnOnce(&mut Vec<u8>) -> Result<T>,
+) -> Result<T> {
+    let pages = OutputPages::new(output);
+    fill(pages.output)
+}
+struct OutputPages<'a> {
+    output: &'a mut Vec<u8>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
+    advised: Option<(usize, usize)>,
+}
+impl<'a> OutputPages<'a> {
+    fn new(output: &'a mut Vec<u8>) -> Self {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
+        let advised = {
+            // Only complete 2 MiB pages wholly inside this allocation qualify.
+            // Small outputs retain their ordinary path. Linux may decline the
+            // hint; all decoding and allocation error semantics stay identical.
+            const PAGE: usize = 2 * 1024 * 1024;
+            let base = output.as_mut_ptr().addr();
+            let range = base
+                .checked_add(PAGE - 1)
+                .zip(base.checked_add(output.capacity()))
+                .map(|(start, end)| (start & !(PAGE - 1), end & !(PAGE - 1)))
+                .filter(|(start, end)| output.capacity() >= 4 * PAGE && end > start);
+            range.and_then(|(start, end)| {
+                // SAFETY: the page-aligned interval lies entirely in the live,
+                // exclusively borrowed Vec allocation. madvise changes kernel
+                // paging policy; it neither reads nor initializes Rust bytes.
+                let result = unsafe {
+                    libc::madvise(
+                        output.as_mut_ptr().with_addr(start).cast(),
+                        end - start,
+                        libc::MADV_HUGEPAGE,
+                    )
+                };
+                (result == 0).then_some((start, end))
+            })
+        };
+        Self {
+            output,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
+            advised,
+        }
+    }
+}
+impl Drop for OutputPages<'_> {
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
+        if let Some((start, end)) = self.advised {
+            let base = self.output.as_mut_ptr().addr();
+            // The decoder reserves once and never grows its allocation. Keep
+            // the hint reset bounded even if a future caller changes that rule.
+            if base <= start
+                && base
+                    .checked_add(self.output.capacity())
+                    .is_some_and(|limit| end <= limit)
+            {
+                // SAFETY: as above, the interval is within the still-live Vec.
+                // Reset on success, decoding errors and panic before the Vec
+                // can be dropped or returned for unrelated reuse.
+                unsafe {
+                    libc::madvise(
+                        self.output.as_mut_ptr().with_addr(start).cast(),
+                        end - start,
+                        libc::MADV_NOHUGEPAGE,
+                    );
+                }
+            }
+        }
     }
 }
 

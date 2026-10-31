@@ -1,6 +1,68 @@
 //! Bounded private rewrite directories. No scratch state is published.
 use super::*;
+use crate::packed_rows::PackedRows;
 use crate::spill_rows::SpillRows;
+
+// Native payload/footer positions are determined by record position and length.
+// Retain their presence and validate that geometry before omitting duplicates.
+pub(super) type RewriteRows = PackedRows<62>;
+
+#[inline]
+fn encode_rewrite_entry(entry: &RecordIndexEntry) -> Result<[u8; 62]> {
+    if entry.record_offset.checked_add(RECORD_HEADER_LEN) != Some(entry.payload_offset)
+        || entry
+            .footer_offset
+            .is_some_and(|at| entry.payload_offset.checked_add(entry.payload_len) != Some(at))
+    {
+        return Err(Error::InvalidRecordFooter {
+            offset: entry.record_offset,
+        });
+    }
+    let full = BufferedScan::encode(entry);
+    let mut row = [0; 62];
+    row[..24].copy_from_slice(&full[..24]);
+    row[24..40].copy_from_slice(&full[32..48]);
+    row[40..61].copy_from_slice(&full[56..77]);
+    row[61] = u8::from(entry.footer_offset.is_some());
+    Ok(row)
+}
+#[inline]
+fn decode_rewrite_entry(row: &[u8; 62]) -> Result<RecordIndexEntry> {
+    let record_offset = u64::from_le_bytes(row[16..24].try_into().unwrap());
+    let payload_offset = record_offset
+        .checked_add(RECORD_HEADER_LEN)
+        .ok_or(Error::UnexpectedEof)?;
+    let payload_len = u64::from_le_bytes(row[24..32].try_into().unwrap());
+    let footer_offset = match row[61] {
+        0 => None,
+        1 => Some(
+            payload_offset
+                .checked_add(payload_len)
+                .ok_or(Error::UnexpectedEof)?,
+        ),
+        _ => {
+            return Err(Error::InvalidRecordFooter {
+                offset: record_offset,
+            });
+        }
+    };
+    Ok(RecordIndexEntry {
+        block_id: u32::from_le_bytes(row[..4].try_into().unwrap()),
+        block_version: u16::from_le_bytes(row[4..6].try_into().unwrap()),
+        flags: u16::from_le_bytes(row[6..8].try_into().unwrap()),
+        sequence: u64::from_le_bytes(row[8..16].try_into().unwrap()),
+        record_offset,
+        payload_offset,
+        payload_len,
+        footer_offset,
+        checksum: u32::from_le_bytes(row[32..36].try_into().unwrap()),
+        uncompressed_len_hint: u32::from_le_bytes(row[36..40].try_into().unwrap()),
+        prev_same_block_offset: nonzero_offset(u64::from_le_bytes(row[40..48].try_into().unwrap())),
+        prev_same_key_offset: nonzero_offset(u64::from_le_bytes(row[48..56].try_into().unwrap())),
+        committed: row[56] != 0,
+        mutable_flags: u32::from_le_bytes(row[57..61].try_into().unwrap()),
+    })
+}
 
 /// Disjoint increasing runs prove uniqueness without retaining sequences.
 /// Replacing one record with a fresh high sequence at an end commonly creates two
@@ -36,7 +98,7 @@ impl SequenceRanges {
 }
 
 pub(super) struct RewriteDirectory {
-    rows: SpillRows<77>,
+    rows: RewriteRows,
     last: Option<RecordIndexEntry>,
     maximum_sequence: u64,
     tails: [(u32, u64); 16],
@@ -45,7 +107,7 @@ pub(super) struct RewriteDirectory {
 impl RewriteDirectory {
     pub(super) fn new(spec: FormatSpec) -> Self {
         Self {
-            rows: SpillRows::new(resident_index::buffer_bytes(spec) / 2),
+            rows: PackedRows::new(resident_index::rewrite_buffer_bytes(spec)),
             last: None,
             maximum_sequence: 0,
             tails: [(0, 0); 16],
@@ -54,6 +116,9 @@ impl RewriteDirectory {
     }
     pub(super) fn len(&self) -> usize {
         self.rows.len()
+    }
+    pub(super) fn into_resident(self, snapshot: SnapshotFile, spec: FormatSpec) -> ResidentIndex {
+        ResidentIndex::from_rewrite_rows(self.rows, snapshot, spec)
     }
     pub(super) fn find_offset(&self, offset: u64) -> Result<Option<RecordIndexEntry>> {
         if let Some(last) = self
@@ -68,11 +133,7 @@ impl RewriteDirectory {
             note_replacement_predecessor_probe();
             u64::from_le_bytes(row[16..24].try_into().unwrap())
         })?;
-        Ok(row.map(|row| {
-            let mut entry = read_index_entry_payload(&row, 3);
-            entry.mutable_flags = u32::from_le_bytes(row[73..77].try_into().unwrap());
-            entry
-        }))
+        row.map(|row| decode_rewrite_entry(&row)).transpose()
     }
     pub(super) fn last(&self) -> Option<&RecordIndexEntry> {
         self.last.as_ref()
@@ -84,7 +145,7 @@ impl RewriteDirectory {
         self.tails.get(..self.tail_count)
     }
     pub(super) fn push(&mut self, entry: RecordIndexEntry) -> Result<()> {
-        self.rows.push(BufferedScan::encode(&entry))?;
+        self.rows.push(encode_rewrite_entry(&entry)?)?;
         self.maximum_sequence = self.maximum_sequence.max(entry.sequence);
         // Most formats have few block types. A fixed cache avoids rereading
         // the entire directory at every digest, without growing with records
@@ -115,20 +176,20 @@ impl RecordDirectory for RewriteDirectory {
             return self.last.clone().ok_or(Error::UnexpectedEof);
         }
         let row = self.rows.get(position)?.ok_or(Error::UnexpectedEof)?;
-        let mut entry = read_index_entry_payload(&row, 3);
-        entry.mutable_flags = u32::from_le_bytes(row[73..77].try_into().unwrap());
-        Ok(entry)
+        decode_rewrite_entry(&row)
     }
 }
 
 pub(super) struct OffsetRemap {
-    rows: SpillRows<24>,
+    rows: PackedRows<24>,
     last: Option<(u64, Option<u64>, Option<u64>)>,
 }
 impl OffsetRemap {
     pub(super) fn new(spec: FormatSpec) -> Self {
         Self {
-            rows: SpillRows::new(resident_index::buffer_bytes(spec) / 2),
+            rows: PackedRows::new(
+                resident_index::buffer_bytes(spec) - resident_index::rewrite_buffer_bytes(spec),
+            ),
             last: None,
         }
     }
@@ -406,6 +467,32 @@ mod tests {
         .with_resource_limits(crate::ReadLimits::STANDARD.with_max_index_bytes(256))
     }
     #[test]
+    fn compact_rows_preserve_fields_and_refuse_inconsistent_geometry() -> Result<()> {
+        let mut entry = read_index_entry_payload(&[0; 73], 3);
+        entry.block_id = 17;
+        entry.block_version = 9;
+        entry.flags = 5;
+        entry.sequence = u64::MAX;
+        entry.record_offset = u64::MAX - RECORD_HEADER_LEN;
+        entry.payload_offset = u64::MAX;
+        entry.checksum = u32::MAX;
+        entry.uncompressed_len_hint = 123;
+        entry.prev_same_block_offset = Some(99);
+        entry.prev_same_key_offset = Some(3);
+        entry.mutable_flags = 7;
+        entry.committed = true;
+        for footer in [None, Some(u64::MAX)] {
+            entry.footer_offset = footer;
+            assert_eq!(decode_rewrite_entry(&encode_rewrite_entry(&entry)?)?, entry);
+        }
+        entry.footer_offset = Some(0);
+        assert!(encode_rewrite_entry(&entry).is_err());
+        entry.footer_offset = None;
+        entry.payload_offset -= 1;
+        assert!(encode_rewrite_entry(&entry).is_err());
+        Ok(())
+    }
+    #[test]
     fn disjoint_sequence_runs_never_admit_a_duplicate() {
         // Exhaust every five-value history over a small alphabet, including
         // gaps, equal neighbours and duplicates separated by run boundaries.
@@ -435,16 +522,20 @@ mod tests {
         let mut directory = RewriteDirectory::new(spec());
         for id in (0..16u32).rev() {
             let mut entry = read_index_entry_payload(&[0; 73], 3);
+            entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
             entry.block_id = id;
             entry.record_offset = 100 + u64::from(id);
+            entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
             entry.sequence = u64::from(id);
             directory.push(entry)?;
         }
         let expected: Vec<_> = (0..16u32).map(|id| (id, 100 + u64::from(id))).collect();
         assert_eq!(directory.cached_tails(), Some(expected.as_slice()));
         let mut entry = read_index_entry_payload(&[0; 73], 3);
+        entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
         entry.block_id = 7;
         entry.record_offset = 999;
+        entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
         entry.sequence = 30;
         directory.push(entry.clone())?;
         assert_eq!(directory.cached_tails().unwrap()[7], (7, 999));
@@ -463,6 +554,7 @@ mod tests {
             let mut directory = RewriteDirectory::new(spec());
             for i in 0..129u64 {
                 let mut entry = read_index_entry_payload(&[0; 73], 3);
+                entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
                 entry.sequence = (i * 73) % 129;
                 if duplicate && i == 128 {
                     entry.sequence = 0;

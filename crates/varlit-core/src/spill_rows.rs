@@ -35,67 +35,6 @@ impl<const N: usize> SpillRows<N> {
     pub(crate) fn len(&self) -> usize {
         self.spilled + self.buffer.len() / N
     }
-    /// Search rows whose extracted keys are strictly increasing. Reuse the
-    /// existing read page before bisecting the disk range; advancing chains
-    /// then read each page once instead of evicting it at every lookup.
-    pub(crate) fn find_sorted(
-        &self,
-        wanted: u64,
-        key: impl Fn(&[u8]) -> u64,
-    ) -> io::Result<Option<[u8; N]>> {
-        fn search<const N: usize>(
-            bytes: &[u8],
-            wanted: u64,
-            key: &impl Fn(&[u8]) -> u64,
-        ) -> Option<[u8; N]> {
-            let (mut left, mut right) = (0, bytes.len() / N);
-            while left < right {
-                let mid = left + (right - left) / 2;
-                let row = &bytes[mid * N..(mid + 1) * N];
-                match key(row).cmp(&wanted) {
-                    std::cmp::Ordering::Less => left = mid + 1,
-                    std::cmp::Ordering::Greater => right = mid,
-                    std::cmp::Ordering::Equal => return Some(row.try_into().unwrap()),
-                }
-            }
-            None
-        }
-        if !self.buffer.is_empty() && wanted >= key(&self.buffer[..N]) {
-            return Ok(search(&self.buffer, wanted, &key));
-        }
-        let (mut left, mut right) = (0, self.spilled);
-        let mut adjacent = true;
-        while left < right {
-            let probe = {
-                let cache = self.read_cache.borrow();
-                let bytes = &cache.1;
-                if !bytes.is_empty() && cache.0 >= left && cache.0 + bytes.len() / N <= right {
-                    if wanted < key(&bytes[..N]) {
-                        right = cache.0;
-                    } else if wanted > key(&bytes[bytes.len() - N..]) {
-                        left = cache.0 + bytes.len() / N;
-                    } else {
-                        return Ok(search(bytes, wanted, &key));
-                    }
-                    if left == right {
-                        return Ok(None);
-                    }
-                    // One adjacent-page probe helps monotone lookups. After
-                    // that, bisect so random lookups remain logarithmic.
-                    if adjacent {
-                        adjacent = false;
-                        if right == cache.0 { right - 1 } else { left }
-                    } else {
-                        left + (right - left) / 2
-                    }
-                } else {
-                    left + (right - left) / 2
-                }
-            };
-            self.get(probe)?;
-        }
-        Ok(None)
-    }
     /// All fallible work precedes the authoritative append. The caller may
     /// subsequently install exactly one row without I/O or allocation.
     pub(crate) fn reserve_one(&mut self) -> io::Result<()> {
@@ -210,33 +149,6 @@ impl<const N: usize> SpillRows<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn sorted_lookup_handles_page_boundaries_missing_keys_and_random_access() {
-        for budget in [8, 40, 1024] {
-            let mut rows = SpillRows::<8>::new(budget);
-            let key = |row: &[u8]| u64::from_le_bytes(row.try_into().unwrap());
-            assert_eq!(rows.find_sorted(0, key).unwrap(), None);
-            for i in 1..=257u64 {
-                rows.push((i * 3).to_le_bytes()).unwrap();
-                if i % 37 == 0 {
-                    for key_value in [3, (i / 2) * 3, i * 3] {
-                        assert_eq!(
-                            rows.find_sorted(key_value, key).unwrap(),
-                            Some(key_value.to_le_bytes())
-                        );
-                    }
-                }
-            }
-            for i in (0..=258u64)
-                .chain((0..=258u64).rev())
-                .chain((0..257u64).map(|i| (i * 73) % 257))
-            {
-                let expected = (1..=257).contains(&i).then_some((i * 3).to_le_bytes());
-                assert_eq!(rows.find_sorted(i * 3, key).unwrap(), expected);
-                assert_eq!(rows.find_sorted(i * 3 + 1, key).unwrap(), None);
-            }
-        }
-    }
     #[test]
     fn rollback_across_a_spill_keeps_the_prefix_and_replaces_the_tail() {
         let mut rows = SpillRows::<8>::new(16);

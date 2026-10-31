@@ -133,11 +133,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     drop(writer);
     let reopened = spec.open_readonly(&path)?;
     assert_eq!(reopened.read_block_at::<Item>(first)?.value, expected);
-    if complex {
-        assert_eq!(dropped, (count - 1) / 7);
-    }
+    let expected_dropped = if complex { (count - 1) / 7 } else { 0 };
+    assert!(
+        dropped == expected_dropped,
+        "unexpected dropped-record count"
+    );
     println!(
-        "{{\"mode\":\"{mode}\",\"records\":{count},\"payload\":{size},\"file_bytes\":{before},\"dropped\":{dropped},\"seconds\":{seconds}}}"
+        "{{\"mode\":\"{mode}\",\"records\":{count},\"payload\":{size},\"file_bytes\":{before},\"dropped\":{expected_dropped},\"seconds\":{seconds}}}"
     );
     Ok(())
 }
