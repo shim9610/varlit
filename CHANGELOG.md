@@ -4,6 +4,29 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
+## Unreleased
+
+- Keep native frame validation in CRC-enabled indexed point reads: matching
+  record/sidecar checksums do not permit unknown record flags. Share the
+  positional frame parser without adding a payload checksum pre-pass.
+- Preserve mutable liveness flags in positional record entries and block/key
+  chain walks, so a record marked dead reports that state consistently.
+- Reserve all declared internal stream tails when an embedded manifest is
+  present. Indexed deletes no longer fail after writing their tombstone due
+  to an undersized companion capacity. Accept the exact legacy capacity and
+  upgrade it in the next ordinary write; clean opens and recovery need no
+  primary scan or separate migration write.
+- Preserve the format contract when skipping the redundant CRC pre-pass in
+  typed streaming reads and disk-index rebuilds. `FormatContract` compression
+  with CRC no longer rejects valid files with a schema-hash mismatch; consumed
+  payloads still receive one checksum-verified read.
+- Verify native record CRCs before returning mmap or raw fixed-block views.
+  Whole-file mappings cache successful checks for their immutable lifetime;
+  individual payload windows verify at construction.
+- Bound matrix generation directory traversal by both checkpoint size and the
+  declared scan budget, including empty aliased subtrees. Propagate malformed
+  COW allocation-directory errors instead of silently omitting their evidence.
+
 ## 0.12.1 - 2026-10-15
 
 - Align the workspace, sibling dependencies and consumer lockfiles at 0.12.1

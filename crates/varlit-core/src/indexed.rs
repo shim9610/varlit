@@ -12,11 +12,10 @@ use crate::disk_index::{
     tail_limit_for_spec,
 };
 use crate::file::{
-    NativeStreamScanner, RECORD_FOOTER_LEN, RECORD_HEADER_LEN, ReplaceDurability, WriterLock,
-    decode_stream_tombstone_key, prepare_stream_tombstone_record, prepare_stream_user_record_into,
-    publish_temp_path_atomically, read_file_header, read_stream_entry_at,
+    NativeStreamScanner, ReplaceDurability, WriterLock, decode_stream_tombstone_key,
+    prepare_stream_tombstone_record, prepare_stream_user_record_into, publish_temp_path_atomically,
+    read_file_header, read_record_entry_positional, read_stream_entry_at,
 };
-use crate::native_layout::{decode_native_record_footer, read_native_record_header};
 use crate::scalable_extent::UntrustedRecordPointer;
 use crate::stream::{StreamCheckpoint, StreamTail, primary_generation, primary_identity};
 use crate::traits::KeyedBlockContract;
@@ -532,15 +531,10 @@ impl VarlitIndexedWriter {
                 state: options,
             },
             |identity, physical_len| {
-                let store = DiskIndexStore::open_writer(sidecar_path(&path), options)
+                let mut store = DiskIndexStore::open_writer(sidecar_path(&path), options)
                     .map_err(index_error)?;
                 let state = store
-                    .validate_clean_writer(
-                        identity,
-                        plan.mode(),
-                        physical_len,
-                        tail_limit_for_spec(spec).map_err(index_error)?,
-                    )
+                    .validate_clean_writer_for_spec(identity, plan.mode(), physical_len, spec)
                     .map_err(index_error)?;
                 Ok((
                     stream_checkpoint_from_state(&state),
@@ -1554,12 +1548,10 @@ where
     // in-memory buffer against the real spec. Payloads of records outside the
     // plan are not read at all; `VarlitStreamReader::verify_all` remains the
     // whole-file integrity scan.
-    let scan_spec = spec.with_integrity_policy(crate::IntegrityPolicy::None);
-    let mut scanner = NativeStreamScanner::from_snapshot(scan_spec, snapshot.clone())?;
-    debug_assert_eq!(
-        scanner.spec().integrity_policy,
-        crate::IntegrityPolicy::None,
-        "rebuild requires an integrity-stripped scanner spec",
+    let mut scanner = NativeStreamScanner::from_snapshot_framing_only(spec, snapshot.clone())?;
+    debug_assert!(
+        !scanner.verifies_checksums(),
+        "rebuild requires a frame-only scanner",
     );
     let mut covered = header_eof;
     while let Some(entry) = scanner.next_entry()? {
@@ -1839,37 +1831,15 @@ fn read_stream_entry_frame(
         spec.spec_needs_record_footer(),
     )?;
     let span = validated.span();
-    let mut header_bytes = [0u8; RECORD_HEADER_LEN as usize];
-    snapshot.read_exact_at(offset, &mut header_bytes)?;
-    let fields = read_native_record_header(&mut header_bytes.as_slice(), offset)?.fields;
-    let mut entry = RecordIndexEntry {
-        block_id: fields.block_id,
-        block_version: fields.block_version,
-        flags: fields.flags,
-        sequence: fields.sequence,
-        record_offset: span.record_offset().get(),
-        payload_offset: span.payload_offset().get(),
-        payload_len: fields.payload_len,
-        checksum: fields.checksum,
-        uncompressed_len_hint: fields.uncompressed_len_hint,
-        footer_offset: None,
-        prev_same_block_offset: None,
-        prev_same_key_offset: None,
-        mutable_flags: 0,
-        committed: true,
-    };
-    if spec.spec_needs_record_footer() {
-        let footer_offset = span.footer_offset().get();
-        let mut footer_bytes = [0u8; RECORD_FOOTER_LEN as usize];
-        snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-        let footer = decode_native_record_footer(&footer_bytes, footer_offset, offset)?;
-        entry.footer_offset = Some(footer_offset);
-        entry.prev_same_block_offset = footer.prev_same_block_offset;
-        entry.prev_same_key_offset = footer.prev_same_key_offset;
-        entry.mutable_flags = footer.mutable_flags;
-    }
+    // Sharing the positional parser preserves flag, compression and footer
+    // policy checks even though payload CRC verification is deferred.
+    let entry = read_record_entry_positional(spec, snapshot, offset)?;
     // The header's own length claim must agree with the extent-validated span.
     if entry.payload_len != span.payload_len().get()
+        || entry.footer_offset
+            != spec
+                .spec_needs_record_footer()
+                .then_some(span.footer_offset().get())
         || entry.checked_physical_end()? != span.end().get()
     {
         return Err(Error::InvalidIndexCheckpoint);
@@ -2596,8 +2566,8 @@ mod tests {
     }
 
     /// PERF2-03: a CRC rebuild must traverse each indexed payload exactly
-    /// once. The scanner runs with an integrity-stripped spec (frame reads
-    /// only), and `extract_plan_update` owns the single checksum-verified
+    /// once. The scanner reads frames only with the original format contract,
+    /// and `extract_plan_update` owns the single checksum-verified
     /// payload read; payloads of records outside the plan are never
     /// materialized.
     #[cfg(feature = "integrity")]
@@ -2711,6 +2681,121 @@ mod tests {
         let record = prepare_stream_tombstone_record::<Item>(spec(), &7u64, 0, 64, None, None)?;
         assert_eq!(record.flags, crate::disk_index::TOMBSTONE_RECORD_FLAGS);
         assert_eq!(record.block_version, 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "integrity")]
+    #[test]
+    fn indexed_candidates_reject_unknown_flags_even_with_matching_checksums() -> Result<()> {
+        use crate::native_layout::{encode_native_record_header, read_native_record_header};
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        const UNKNOWN_FLAG: u16 = 0x0002;
+        for integrity in [
+            IntegrityPolicy::None,
+            IntegrityPolicy::Crc32,
+            IntegrityPolicy::Crc32WithHeader,
+        ] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("unknown-flags.varlit");
+            let spec = spec()
+                .with_index_policy(IndexPolicy::ScanOnOpen)
+                .with_integrity_policy(integrity);
+            let plan = index_plan().validate(spec).map_err(index_error)?;
+            let options = DiskIndexOptions::default();
+            let value = Item {
+                key: 7,
+                value: "payload with an invalid frame".into(),
+            };
+            let info = {
+                let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
+                let info = writer.push_info(&value)?;
+                writer.sync()?;
+                info
+            };
+            let mut file = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+            file.seek(SeekFrom::Start(info.record_offset))?;
+            let mut header = read_native_record_header(&mut file, info.record_offset)?.fields;
+            let mut payload = vec![0; info.payload_len as usize];
+            file.read_exact(&mut payload)?;
+            header.flags = UNKNOWN_FLAG;
+            if integrity == IntegrityPolicy::Crc32WithHeader {
+                header.checksum = 0;
+                let mut hash = crc32fast::Hasher::new();
+                hash.update(&encode_native_record_header(header, info.record_offset, 0)?);
+                hash.update(&payload);
+                header.checksum = hash.finalize();
+            }
+            file.seek(SeekFrom::Start(info.record_offset))?;
+            file.write_all(&encode_native_record_header(header, info.record_offset, 0)?)?;
+            file.sync_all()?;
+            let end = file.metadata()?.len();
+            let snapshot = SnapshotFile::from_file_with_len(file, end)?;
+
+            // Build a companion whose own CRCs, identity and native descriptor
+            // agree with the malformed record. Consistency with an untrusted
+            // companion must not replace validation of the native frame.
+            fs::remove_file(sidecar_path(&path))?;
+            let metadata = DiskIndexMetadata::new_disk(
+                primary_identity(spec, &snapshot)?,
+                plan.digest(),
+                DiskIndexFrontier {
+                    eof: info.record_offset,
+                    record_count: 1,
+                    next_sequence: Some(info.sequence),
+                },
+                0,
+            )
+            .with_primary_generation(primary_generation(
+                spec,
+                &snapshot,
+                info.record_offset,
+            )?);
+            let mut store = DiskIndexStore::create(sidecar_path(&path), options, metadata)
+                .map_err(index_error)?;
+            let update = DiskIndexUpdate::from_key_with_record(
+                Item::ID,
+                &value.key,
+                DiskIndexEntry::Put {
+                    record_offset: info.record_offset,
+                    sequence: info.sequence,
+                },
+                DiskIndexPhysicalRecord {
+                    physical_len: end - info.record_offset,
+                    block_id: Item::ID,
+                    block_version: Item::VERSION,
+                    flags: UNKNOWN_FLAG,
+                    native_crc: (integrity != IntegrityPolicy::None).then_some(header.checksum),
+                },
+                options.max_key_bytes,
+            )
+            .map_err(index_error)?;
+            let batch = store.begin_write_batch().map_err(index_error)?;
+            batch
+                .apply_update(info.record_offset, end, &update)
+                .map_err(index_error)?;
+            batch
+                .set_primary_generation(primary_generation(spec, &snapshot, end)?)
+                .map_err(index_error)?;
+            store.commit_batch().map_err(index_error)?;
+            store.mark_clean(end).map_err(index_error)?;
+            drop(store);
+
+            let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
+            assert!(matches!(
+                reader.verify_all(),
+                Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))
+            ));
+            let result = reader.get::<Item>(&value.key);
+            assert!(
+                matches!(result, Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))),
+                "{integrity:?}: {result:?}"
+            );
+            assert!(matches!(
+                reader.lookup::<Item>(&value.key),
+                Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))
+            ));
+        }
         Ok(())
     }
 

@@ -292,6 +292,81 @@ fn mmap_rejects_entries_outside_snapshot() -> varlit::Result<()> {
     Ok(())
 }
 
+#[cfg(all(feature = "integrity", feature = "zero-copy"))]
+#[test]
+fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    use varlit::{IndexPolicy, IntegrityPolicy, IntegrityVerification};
+
+    for policy in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
+        for footers in [false, true] {
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("integrity.varlit");
+            let spec = MmapFormat::spec()
+                .with_integrity_policy(policy)
+                .with_index_policy(IndexPolicy::ScanOnOpen.with_block_offset_chain(footers))
+                .with_resource_limits(
+                    ReadLimits::UNTRUSTED
+                        .with_integrity_verification(IntegrityVerification::OnDemand),
+                );
+            let value = RawPoint { x: 10, y: 20 };
+            let expected = varlit::encode_to_vec(&value, Endian::Little)?;
+            let mut writer = spec.create(&path)?;
+            writer.push(&value)?;
+            writer.sync()?;
+            drop(writer);
+            let reader = spec.open_readonly(&path)?;
+            let entry = reader.index_entries()[0].clone();
+            // SAFETY: these mappings are dropped before the fixture is edited.
+            let mapped = unsafe { reader.mmap_payloads()? };
+            for _ in 0..3 {
+                assert_eq!(unsafe { mapped.raw_fixed::<RawPoint>(0)? }, Some(&value));
+                assert_eq!(mapped.payload_window(&entry)?, expected);
+            }
+            let window = unsafe { reader.mmap_payload_window(&entry)? };
+            assert_eq!(window.as_bytes(), mapped.payload_window(&entry)?);
+            drop(window);
+            drop(mapped);
+            drop(reader);
+
+            let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+            file.seek(SeekFrom::Start(entry.payload_offset))?;
+            file.write_all(&999u32.to_le_bytes())?;
+            file.sync_all()?;
+            drop(file);
+
+            // The default OnDemand policy deliberately opens the damaged file.
+            // Every path returning its payload must nevertheless reject it.
+            let reader = spec.open_readonly(&path)?;
+            assert!(matches!(
+                reader.blocks::<RawPoint>()?.get(0),
+                Err(Error::ChecksumMismatch { .. })
+            ));
+            // SAFETY: the damaged file remains immutable throughout these maps.
+            let mapped = unsafe { reader.mmap_payloads()? };
+            for _ in 0..2 {
+                assert!(matches!(
+                    mapped.payload_window(&entry),
+                    Err(Error::ChecksumMismatch { .. })
+                ));
+                assert!(matches!(
+                    mapped.block_payload_window::<RawPoint>(0),
+                    Err(Error::ChecksumMismatch { .. })
+                ));
+                assert!(matches!(
+                    unsafe { mapped.raw_fixed::<RawPoint>(0) },
+                    Err(Error::ChecksumMismatch { .. })
+                ));
+                assert!(matches!(
+                    unsafe { reader.mmap_payload_window(&entry) },
+                    Err(Error::ChecksumMismatch { .. })
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn mmap_constructor_enforces_captured_mapping_length_limit() -> varlit::Result<()> {
     let path = temp_path("mapping_limit");

@@ -255,6 +255,16 @@ fn a_marked_record_stays_readable_and_says_it_is_dead() -> varlit::Result<()> {
             index == 2,
             "record {index} liveness",
         );
+        assert_eq!(
+            file.record_entry_at(*offset)?.is_dead(),
+            index == 2,
+            "record {index} positional entry liveness",
+        );
+    }
+
+    for entry in file.block_chain(Reading::ID)? {
+        let entry = entry?;
+        assert_eq!(entry.is_dead(), entry.record_offset == offsets[2]);
     }
 
     // Advisory: the record is still there, still read back, still correct.

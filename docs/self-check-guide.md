@@ -220,6 +220,27 @@ runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.
 
+The default concurrent workload reads continuously until the writer finishes.
+It measures saturation behavior, with variable total read work. For a paired
+performance comparison, add `--reader-checks-per-epoch 16384` to an indexed
+concurrent case on both sides. Each mutation epoch overlaps the writer with an
+exact batch per reader, then waits for both to finish. Pinned readers retain
+the original snapshot; following readers use the previous confirmed epoch.
+The runner checks every reader's count and deterministic key/snapshot trace.
+No sleep or additional cache budget is used. Keep the original saturation
+results as well, and record CPU quota/throttling before attributing a wall-time
+difference to the library. The fixed-work completion time includes the wait
+for readers; per-epoch `reader_wait_ns` reports it separately.
+
+Compare reports with `python3 scripts/compare_load.py --before before/report.json
+--after after/report.json`; repeat each flag for separate alternating runs.
+Each side needs at least three samples. The comparator rejects unequal work,
+snapshot traces, CPU quotas or workload settings. By default it fails a greater
+than 5% increase in median completion time, CPU time or bytes written, or in
+maximum observed process RSS. Decide the tolerance before measuring; do not
+raise it or discard slow samples to obtain a pass. This local gate does not
+replace latency-distribution review or account for every source of host noise.
+
 For continuous testing, first inspect the space requirement without running:
 
 ```sh

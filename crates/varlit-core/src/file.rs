@@ -4569,6 +4569,9 @@ impl VarlitFile {
             matrix_pending_limit(spec),
         )?;
         matrix_pages.set_cache_bytes(spec.read_limits.matrix_generation_cache_budget());
+        matrix_pages.set_traversal_bytes(limit_or_max(
+            spec.read_limits.require(ReadLimitKey::ScanBytes)?,
+        ));
         let snapshot = SnapshotFile::new(file.try_clone()?)?;
         let mut file = Self {
             spec,
@@ -11380,10 +11383,12 @@ impl VarlitFile {
                     .map(&file)?
             })
         };
-        Ok(MmapPayloadWindow {
+        let window = MmapPayloadWindow {
             offset: entry.payload_offset,
             mmap,
-        })
+        };
+        entry.verify_snapshot_record(self.spec, &self.snapshot, window.as_bytes())?;
+        Ok(window)
     }
 
     #[cfg(feature = "mmap")]
@@ -11439,7 +11444,8 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::Records, record_count)?;
-        let mmap_index_bytes = mmap_index_bytes_for_count(self.index.len())?;
+        let verify = self.spec.integrity_policy != IntegrityPolicy::None;
+        let mmap_index_bytes = mmap_index_bytes_for_count(self.index.len(), verify)?;
         self.spec
             .read_limits
             .check(ReadLimitKey::IndexBytes, mmap_index_bytes)?;
@@ -11484,6 +11490,18 @@ impl VarlitFile {
                 requested: mmap_index_bytes,
             })?;
         let mut by_block: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut verified = Vec::new();
+        if verify {
+            verified
+                .try_reserve_exact(self.index.len())
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "mmap integrity cache",
+                    requested: self.index.len() as u64,
+                })?;
+            verified.resize_with(self.index.len(), || {
+                std::sync::atomic::AtomicBool::new(false)
+            });
+        }
         by_block
             .try_reserve(
                 self.index
@@ -11537,6 +11555,7 @@ impl VarlitFile {
             base,
             index,
             by_block,
+            verified,
             mmap,
         })
     }
@@ -13096,7 +13115,7 @@ impl KeyedChain<'_> {
 }
 
 /// Frames one record through the snapshot, without touching the resident index.
-fn read_record_entry_positional(
+pub(crate) fn read_record_entry_positional(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
     record_offset: u64,
@@ -13142,6 +13161,7 @@ fn read_record_entry_positional(
         entry.footer_offset = Some(payload_end);
         entry.prev_same_block_offset = decoded.prev_same_block_offset;
         entry.prev_same_key_offset = decoded.prev_same_key_offset;
+        entry.mutable_flags = decoded.mutable_flags;
     }
     entry.validate_payload_extent(snapshot.len())?;
     Ok(entry)
@@ -14487,6 +14507,9 @@ fn read_matrix_layout_if_needed(
         matrix_pending_limit(spec),
     )?;
     pages.set_cache_bytes(spec.read_limits.matrix_generation_cache_budget());
+    pages.set_traversal_bytes(limit_or_max(
+        spec.read_limits.require(ReadLimitKey::ScanBytes)?,
+    ));
     if pages.head().native_eof > file.metadata()?.len() {
         return Err(Error::InvalidMatrixLayout);
     }
@@ -14701,7 +14724,7 @@ fn allocation_bytes<T>(count: usize, resource: &'static str) -> Result<u64> {
 }
 
 #[cfg(feature = "mmap")]
-fn mmap_index_bytes_for_count(count: usize) -> Result<u64> {
+fn mmap_index_bytes_for_count(count: usize, verify: bool) -> Result<u64> {
     let count = u64::try_from(count).map_err(|_| Error::ResourceArithmeticOverflow {
         resource: "mmap index bytes",
     })?;
@@ -14713,6 +14736,7 @@ fn mmap_index_bytes_for_count(count: usize) -> Result<u64> {
             resource: "mmap index bytes",
         })?
         .checked_add(size_of::<usize>() as u64)
+        .and_then(|bytes| bytes.checked_add(u64::from(verify)))
         .ok_or(Error::ResourceArithmeticOverflow {
             resource: "mmap index bytes",
         })?;
@@ -18509,6 +18533,10 @@ impl FileMutationPermit<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "file/validation_tests.rs"]
+mod validation_tests;
 
 #[path = "file/header_codec.rs"]
 mod header_codec;

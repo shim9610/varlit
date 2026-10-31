@@ -1,5 +1,6 @@
 //! Memory-mapped owned views and bounds checks.
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "mmap")]
 /// A read-only mapping paired with an immutable snapshot of the validated
 /// append-log index.
@@ -33,6 +34,11 @@ pub struct MmapPayloads {
     // of every entry (PERF2-07).
     pub(super) index: Vec<RecordIndexEntry>,
     pub(super) by_block: HashMap<u32, Vec<usize>>,
+    // One byte per record only when integrity is enabled. The mapping is
+    // immutable by contract, so a successful check remains valid. Relaxed
+    // atomics retain Send + Sync without locks or publishing mutable data;
+    // racing first readers may both verify the same immutable bytes.
+    pub(super) verified: Vec<AtomicBool>,
     pub(super) mmap: memmap2::Mmap,
 }
 
@@ -80,7 +86,7 @@ impl MmapPayloads {
         if self.index[position] != *entry {
             return Err(Error::MmapEntryNotInSnapshot);
         }
-        self.payload_window_unchecked(entry)
+        self.payload_window_at(position)
     }
 
     pub fn block_payload_window<T: VarlitBlock>(
@@ -104,7 +110,31 @@ impl MmapPayloads {
                 actual: entry.block_version,
             });
         }
-        Ok(Some(self.payload_window_unchecked(entry)?))
+        Ok(Some(self.payload_window_at(position)?))
+    }
+
+    #[inline]
+    fn payload_window_at(&self, position: usize) -> Result<&[u8]> {
+        let entry = &self.index[position];
+        let payload = self.window(entry.payload_offset, entry.payload_len)?;
+        if let Some(verified) = self.verified.get(position)
+            && !verified.load(Ordering::Relaxed)
+        {
+            self.verify_payload(entry, payload)?;
+            verified.store(true, Ordering::Relaxed);
+        }
+        Ok(payload)
+    }
+
+    // Keep framing decode and CRC scratch off the already-verified read path.
+    #[cold]
+    fn verify_payload(&self, entry: &RecordIndexEntry, payload: &[u8]) -> Result<()> {
+        let header = self.window(entry.record_offset, RECORD_HEADER_LEN)?;
+        let footer = match entry.footer_offset {
+            Some(offset) => self.window(offset, RECORD_FOOTER_LEN)?,
+            None => &[],
+        };
+        entry.verify_record_bytes(self.spec, header, payload, footer)
     }
 
     #[cfg(feature = "zero-copy")]
@@ -155,32 +185,26 @@ impl MmapPayloads {
             })
     }
 
-    pub(super) fn payload_window_unchecked(&self, entry: &RecordIndexEntry) -> Result<&[u8]> {
+    #[inline]
+    fn window(&self, offset: u64, len: u64) -> Result<&[u8]> {
         // File offsets are absolute; the mapping starts at `base`.
-        let start = entry
-            .payload_offset
+        let start = offset
             .checked_sub(self.base)
             .and_then(|offset| usize::try_from(offset).ok())
-            .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
-            })?;
+            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
         let len =
-            usize::try_from(entry.payload_len).map_err(|_| Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
-            })?;
+            usize::try_from(len).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?;
         let end = start
             .checked_add(len)
             .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
+                offset,
+                len: len as u64,
             })?;
         self.mmap
             .get(start..end)
             .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
+                offset,
+                len: len as u64,
             })
     }
 }

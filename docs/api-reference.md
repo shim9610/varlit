@@ -240,6 +240,18 @@ Three consequences are part of the residency declaration:
 * Cache misses and evictions preserve the captured confirmed generation.
   Only `follow(&mut self)` adopts later published pages.
 
+Matrix generation directory walks automatically bound node visits by the number
+of 4096-byte pages that fit after the companion header in the captured checkpoint.
+Opening checks that this checkpoint fits within the companion file. Each walk
+also applies `max_scan_bytes / 4096` as an optional tighter ceiling; callers do
+not need to set it to obtain the checkpoint-derived bound. Empty leaves and
+cached nodes consume this work budget too. Ordinary `follow()` uses separate
+bounds for the old and new roots and continues to skip unchanged subtrees;
+concurrent writer appends do not enlarge an already captured reader's bound.
+Exhaustion returns `Error::Io` with `InvalidData`. This bounds traversal work;
+it does not perform a complete duplicate-reference check at open. A deliberately
+small scan ceiling can also reject a valid traversal.
+
 ### MatrixMetadataVerification
 
 `ReadLimits::matrix_metadata_verification` declares **when** a matrix's commit
@@ -1551,6 +1563,11 @@ owns that mapping; `as_bytes()` borrows its bytes and `offset()` reports the
 payload's logical file offset. The record route validates the supplied entry
 against its captured snapshot and exposes stored bytes, including compression.
 The matrix route checks cell visibility and optional CRC from the held generation.
+Record windows also verify the declared CRC before exposing bytes, including with
+`IntegrityVerification::OnDemand`. Whole-file mappings verify each record on its
+first access and retain a one-byte success flag per record under the index budget;
+repeated reads require no payload hashing or copying. Individual windows verify
+once at construction. CRC detects corruption; it does not authenticate a sender.
 `MmapLen` bounds that cell's bytes; `MaterializedBytes` bounds intersecting COW
 pages, charged at 4096 bytes each. COW patches are copied before the window is
 returned, so modified matrix cells do not promise zero-copy construction.

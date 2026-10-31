@@ -71,6 +71,7 @@ jobs:
       - name: build and run every target briefly
         working-directory: fuzz
         run: |
+          cargo run --locked --example generate_corpus
           cargo run --locked --example generate_matrix_reuse_corpus
           cargo fuzz build
           for target in $(cargo fuzz list); do

@@ -23,8 +23,8 @@ use crate::snapshot::WrittenThrough;
 use crate::traits::KeyedBlockContract;
 use crate::{
     AppendInfo, BlockEvent, BlockKind, CREATION_NONCE_BLOCK_ID, CommitPolicy, Error, FormatSpec,
-    IntegrityPolicy, LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result,
-    ScanOptions, ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
+    LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result, ScanOptions,
+    ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
     VarlitKeyedBlock,
 };
 
@@ -43,7 +43,7 @@ use crate::writer_permit::{GuardedWriter, PoisonFlag};
 /// re-verification showed, from a throwaway `PoisonFlag` — is not this type.
 pub(crate) type StreamMutationPermit<'a> = MutationPermit<'a, VarlitStreamWriter>;
 
-const INTERNAL_BLOCK_IDS: [u32; 3] = [
+pub(crate) const INTERNAL_BLOCK_IDS: [u32; 3] = [
     MANIFEST_BLOCK_ID,
     TOMBSTONE_BLOCK_ID,
     CREATION_NONCE_BLOCK_ID,
@@ -612,10 +612,12 @@ impl VarlitStreamReader {
         // checksum over the one payload read whose buffer feeds the typed
         // decode, and skipped foreign-block payloads are not read at all.
         // `verify_all` remains the whole-file integrity scan.
-        let scan_spec = self.spec.with_integrity_policy(IntegrityPolicy::None);
         Ok(StreamingBlocks {
             payload: Vec::new(),
-            scanner: NativeStreamScanner::from_snapshot(scan_spec, self.snapshot.clone())?,
+            scanner: NativeStreamScanner::from_snapshot_framing_only(
+                self.spec,
+                self.snapshot.clone(),
+            )?,
             spec: self.spec,
             finished: false,
             failed: false,
@@ -694,9 +696,8 @@ impl Iterator for StreamEvents {
 #[derive(Debug)]
 pub struct StreamingBlocks<T> {
     scanner: NativeStreamScanner,
-    /// The reader's real spec. The scanner carries an integrity-stripped copy
-    /// so the frame scan does not checksum payloads; typed decode validates
-    /// each decoded record's checksum against this spec instead.
+    /// The reader's format contract, also preserved by the frame-only scanner.
+    /// Typed decode verifies each consumed record's checksum against this spec.
     spec: FormatSpec,
     finished: bool,
     failed: bool,
@@ -739,10 +740,9 @@ impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
         }
         // The scanner must not checksum payloads: the typed decode below owns
         // the single, checksum-verified payload read.
-        debug_assert_eq!(
-            self.scanner.spec().integrity_policy,
-            IntegrityPolicy::None,
-            "streaming typed scan requires an integrity-stripped scanner spec",
+        debug_assert!(
+            !self.scanner.verifies_checksums(),
+            "streaming typed scan requires a frame-only scanner",
         );
         loop {
             let entry = match self.scanner.next_entry() {
@@ -989,15 +989,15 @@ impl VarlitStreamWriter {
         let path = std::fs::canonicalize(path.as_ref())?;
         let (mut writer, store) =
             Self::open_checkpointed(spec, &path, options, |identity, physical_len| {
-                let store =
+                let mut store =
                     DiskIndexStore::open_writer(state_sidecar_path(&path), state_options(options))
                         .map_err(state_error)?;
                 let state = store
-                    .validate_clean_writer(
+                    .validate_clean_writer_for_spec(
                         identity,
                         DiskIndexMode::StateOnly,
                         physical_len,
-                        tail_limit_for_spec(spec).map_err(state_error)?,
+                        spec,
                     )
                     .map_err(state_error)?;
                 Ok((
@@ -1077,12 +1077,7 @@ impl VarlitStreamWriter {
         let identity = primary_identity(spec, &physical_snapshot)?;
         let mut store = DiskIndexStore::open_writer(sidecar, index_options).map_err(state_error)?;
         let guard = store
-            .stage_restore(
-                identity,
-                mode,
-                physical_len,
-                tail_limit_for_spec(spec).map_err(state_error)?,
-            )
+            .stage_restore_for_spec(identity, mode, physical_len, spec)
             .map_err(state_error)?;
         verify_primary_generation(spec, guard.primary_generation(), &physical_snapshot)?;
         let checkpoint = stream_checkpoint_from_frontier(guard.frontier(), guard.tails());

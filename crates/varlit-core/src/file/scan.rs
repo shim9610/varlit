@@ -96,8 +96,9 @@ pub(super) struct ScanChecks {
     pub(super) checksum_boundary: Option<u64>,
     /// Whether the stored checksum is recomputed from the payload here.
     ///
-    /// False only on the open path under `IntegrityVerification::OnDemand`,
-    /// where the identical check runs on the read that returns the record.
+    /// False on the open path under `IntegrityVerification::OnDemand` and
+    /// frame-only scans for typed reads/index rebuilds. The read that returns
+    /// or indexes the payload performs the identical check instead.
     pub(super) verify_checksums: bool,
 }
 
@@ -271,6 +272,7 @@ pub(super) fn read_record_entry_at(
 #[derive(Debug)]
 pub(crate) struct NativeStreamScanner {
     pub(super) spec: FormatSpec,
+    verify_checksums: bool,
     pub(super) file: crate::snapshot::SnapshotReader,
     pub(super) snapshot: SnapshotFile,
     pub(super) offset: u64,
@@ -312,6 +314,7 @@ impl NativeStreamScanner {
         STREAM_SCANNER_CONSTRUCTIONS.set(STREAM_SCANNER_CONSTRUCTIONS.get() + 1);
         Ok(Self {
             spec,
+            verify_checksums: true,
             file,
             snapshot,
             offset: header_len,
@@ -319,6 +322,17 @@ impl NativeStreamScanner {
             records: 0,
             previous_sequence: None,
         })
+    }
+
+    /// Keep the format contract intact while deferring payload verification to
+    /// the typed read or index extraction that consumes each selected record.
+    pub(crate) fn from_snapshot_framing_only(
+        spec: FormatSpec,
+        snapshot: SnapshotFile,
+    ) -> Result<Self> {
+        let mut scanner = Self::from_snapshot(spec, snapshot)?;
+        scanner.verify_checksums = false;
+        Ok(scanner)
     }
 
     pub(crate) fn extend_snapshot(&mut self, snapshot: SnapshotFile) {
@@ -340,12 +354,12 @@ impl NativeStreamScanner {
             &mut self.file,
             self.snapshot.len(),
             self.offset,
-            // An explicit scan is a caller asking to walk records; it is not
-            // the open path this policy exists to shorten.
+            // Explicit scans verify payloads unless their caller owns the
+            // checksum-verified read used for typed decode/index extraction.
             ScanChecks {
                 partial_boundary,
                 checksum_boundary: None,
-                verify_checksums: true,
+                verify_checksums: self.verify_checksums,
             },
             &mut self.accounting,
         )? {
@@ -389,8 +403,8 @@ impl NativeStreamScanner {
         &self.snapshot
     }
 
-    pub(crate) const fn spec(&self) -> FormatSpec {
-        self.spec
+    pub(crate) const fn verifies_checksums(&self) -> bool {
+        self.verify_checksums
     }
 }
 
@@ -2462,7 +2476,29 @@ impl RecordIndexEntry {
 
         let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
         snapshot.read_exact_at(self.record_offset, &mut header_bytes)?;
-        let mut header_reader = header_bytes.as_slice();
+        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let footer = if let Some(footer_offset) = self.footer_offset {
+            snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+            &footer_bytes[..]
+        } else {
+            &[]
+        };
+        self.verify_record_bytes(spec, &header_bytes, payload, footer)
+    }
+
+    /// The same integrity check for owned reads and immutable mapped slices.
+    /// Framing is borrowed; verification never copies or allocates the payload.
+    pub(super) fn verify_record_bytes(
+        &self,
+        spec: FormatSpec,
+        header_bytes: &[u8],
+        payload: &[u8],
+        footer: &[u8],
+    ) -> Result<()> {
+        if spec.integrity_policy == IntegrityPolicy::None {
+            return Ok(());
+        }
+        let mut header_reader = header_bytes;
         let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
         if !record_header_describes(&actual, self) {
             return Err(Error::ChecksumMismatch {
@@ -2470,11 +2506,8 @@ impl RecordIndexEntry {
             });
         }
 
-        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
-        let footer = if let Some(footer_offset) = self.footer_offset {
-            snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-            let decoded =
-                decode_record_footer(spec, &footer_bytes, footer_offset, self.record_offset)?;
+        if let Some(footer_offset) = self.footer_offset {
+            let decoded = decode_record_footer(spec, footer, footer_offset, self.record_offset)?;
             if decoded.prev_same_block_offset != self.prev_same_block_offset
                 || decoded.prev_same_key_offset != self.prev_same_key_offset
             {
@@ -2482,10 +2515,7 @@ impl RecordIndexEntry {
                     offset: self.record_offset,
                 });
             }
-            &footer_bytes[..]
-        } else {
-            &[]
-        };
+        }
         let header = RecordHeaderFields {
             block_id: self.block_id,
             block_version: self.block_version,
