@@ -144,7 +144,10 @@ fn compressed_crc_rebuild_preserves_format_contract_and_checks_payloads() -> var
         std::fs::remove_file(disk_index_sidecar_path(&path))?;
         corrupt_payload(&path, payload_offset)?;
         let error = rebuild_disk_index(spec, &path, options, plan).unwrap_err();
-        assert!(matches!(error, Error::ChecksumMismatch { .. }), "{error:?}");
+        assert!(
+            matches!(error, Error::ChecksumMismatch { .. }),
+            "corrupt compressed payload must return ChecksumMismatch"
+        );
         assert!(!disk_index_sidecar_path(&path).exists());
     }
     Ok(())

@@ -85,6 +85,22 @@ Unsupported `include!` expansion and conditional module paths are rejected until
 their source traversal is implemented.
 Tests and build-time tooling add no library runtime work.
 
+## Failure diagnostics
+
+Keep decoder results, payload bytes and error objects out of assertion/panic
+messages, including in tests and fuzz targets. A generic `Result<T, Error>` can
+carry decoded fields; formatting the whole value creates a path from those
+fields to logs even when the current fixture is synthetic. CodeQL analyzes
+these paths too.
+
+Assert the exact expected error variant with `matches!`, or compare the success
+status when that is the contract. Report the expected outcome and fixture
+metadata such as the route, policy, flag word, cut position or epoch. Generic
+rejection helpers should not require `T: Debug`. For arbitrary fuzz payloads,
+use `assert!(actual == expected, "payload bytes differ")` so a mismatch still
+fails without dumping the inputs. Do not exclude tests from CodeQL or suppress
+the query to accommodate verbose diagnostics.
+
 ## Storage failures and resource growth
 
 The required `storage-contracts` CI job runs

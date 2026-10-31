@@ -2430,7 +2430,7 @@ mod tests {
 
         match rebuild_disk_index(spec(), &path, options, index_plan()) {
             Err(Error::DiskIndex(error)) if matches!(*error, DiskIndexError::IdentityMismatch) => {}
-            other => panic!("expected a typed identity mismatch, got {other:?}"),
+            _ => panic!("rebuild must reject the replaced primary with IdentityMismatch"),
         }
         assert!(
             interposed.load(std::sync::atomic::Ordering::SeqCst),
@@ -2789,7 +2789,7 @@ mod tests {
             let result = reader.get::<Item>(&value.key);
             assert!(
                 matches!(result, Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))),
-                "{integrity:?}: {result:?}"
+                "indexed get must reject unknown flags with UnknownRecordFlags under {integrity:?}"
             );
             assert!(matches!(
                 reader.lookup::<Item>(&value.key),

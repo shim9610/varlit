@@ -37,10 +37,10 @@ fuzz_target!(|data: &[u8]| {
                         assert_eq!(
                             result.is_ok(),
                             window.is_ok(),
-                            "owned={result:?}, mapped={window:?}"
+                            "owned and mapped payload reads disagree on acceptance"
                         );
                         if let Ok(window) = window {
-                            assert_eq!(owned, window);
+                            assert!(owned == window, "owned and mapped payload bytes differ");
                         }
                     }
                 }

@@ -27,11 +27,8 @@ varlit_format! { pub struct Format {
     magic:b"ROUTES"; version:1; endian:little; schema_hash:computed; blocks:[Blob,Empty];
 } }
 static PLAN: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Blob>()];
-fn rejected<T: std::fmt::Debug>(label: &str, result: varlit::Result<T>, checks: &mut usize) {
-    assert!(
-        result.is_err(),
-        "corruption accepted by {label}: {result:?}"
-    );
+fn rejected<T>(label: &str, result: varlit::Result<T>, checks: &mut usize) {
+    assert!(result.is_err(), "corruption accepted by {label}");
     *checks += 1;
 }
 #[test]

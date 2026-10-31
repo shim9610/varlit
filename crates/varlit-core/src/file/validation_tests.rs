@@ -116,11 +116,11 @@ fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
         if unknown != 0 {
             assert!(
                 matches!(sequential, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
-                "scanner accepted/misclassified flags {flags:#06x}: {sequential:?}"
+                "scanner must reject flags {flags:#06x} with UnknownRecordFlags"
             );
             assert!(
                 matches!(positional, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
-                "positional accepted/misclassified flags {flags:#06x}: {positional:?}"
+                "positional read must reject flags {flags:#06x} with UnknownRecordFlags"
             );
         } else if flags & 1 != 0 {
             // No registered compression contract; even the known compression

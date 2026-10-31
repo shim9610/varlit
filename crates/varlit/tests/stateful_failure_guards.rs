@@ -61,7 +61,7 @@ fn failed_batches_recover_through_delete_reinsert_follow_and_compaction()
         let failed = writer.push_info(&item((epoch + 2) % 32, epoch));
         assert!(
             matches!(failed, Err(Error::WriteRollbackFailed { .. })),
-            "{failed:?}"
+            "epoch {epoch}: injected append and rollback failure must return WriteRollbackFailed"
         );
         assert!(matches!(
             writer.push_info(&item(0, 0)),

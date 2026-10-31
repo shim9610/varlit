@@ -228,7 +228,7 @@ fn kernel_failure_child() -> Result<()> {
                 };
                 assert!(
                     matches!(failed, Err(Error::Io(ref e)) if e.raw_os_error()==Some(libc::EFBIG)),
-                    "{stream}/{footer}/{cut}: {failed:?}"
+                    "stream={stream}, footer={footer}, cut={cut}: kernel short write must return Io(EFBIG)"
                 );
                 assert!(
                     fs::read(&path)? == before,

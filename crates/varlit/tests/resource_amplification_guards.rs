@@ -95,7 +95,7 @@ fn decoded_memory_is_bounded_and_released_across_sizes_and_failures() -> Result<
         });
         assert!(
             matches!(result, Err(Error::LimitExceeded { .. })),
-            "{result:?}"
+            "nested decode must reject an exhausted shared budget with LimitExceeded under {endian:?}"
         );
         assert!(
             peak <= 9 * CHUNK,
