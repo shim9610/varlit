@@ -7,6 +7,9 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 use varlit::*;
+#[allow(dead_code)]
+#[path = "support/validation_cases.rs"]
+mod cases;
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable", key = "id")]
 struct Blob {
@@ -37,21 +40,13 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
     let mut scenarios = 0;
     let mut checks = 0;
     let mut empty_cases = 0;
-    let policies = [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader];
-    let modes = [
-        None,
-        Some(CompressionHeaderMode::RecordExplicit),
-        Some(CompressionHeaderMode::FileExplicit),
-        Some(CompressionHeaderMode::FormatContract),
-    ];
-    for policy in policies {
+    let policies: Vec<_> = cases::checksum_policies().collect();
+    let modes = cases::compression();
+    for &policy in &policies {
         for footers in [false, true] {
-            for mode in modes {
+            for &mode in &modes {
                 for len in [0, 1, 65536] {
-                    for verification in [
-                        IntegrityVerification::OnDemand,
-                        IntegrityVerification::AtOpen,
-                    ] {
+                    for &verification in cases::VERIFICATION {
                         let dir = tempfile::tempdir()?;
                         let path = dir.path().join("routes.varlit");
                         let spec = Format::spec()
@@ -62,12 +57,7 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             .with_resource_limits(
                                 ReadLimits::UNTRUSTED.with_integrity_verification(verification),
                             )
-                            .with_compression_policy(mode.map_or(CompressionPolicy::None, |m| {
-                                CompressionPolicy::VariableBlocks(VariableCompression {
-                                    only_if_smaller: false,
-                                    ..VariableCompression::zstd(m)
-                                })
-                            }))
+                            .with_compression_policy(mode)
                             .with_computed_schema_hash();
                         let plan = DiskIndexPlan::canonical(spec, PLAN)?;
                         let value = Blob {
@@ -181,7 +171,7 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
             }
         }
     }
-    for policy in policies {
+    for &policy in &policies {
         for footers in [false, true] {
             let dir = tempfile::tempdir()?;
             let path = dir.path().join("empty.varlit");

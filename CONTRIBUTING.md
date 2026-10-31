@@ -41,6 +41,10 @@ Run targeted tests while iterating. See the [self-check guide](docs/self-check-g
 for fuzzing, Miri, fault injection and native I/O qualification. Documentation-only
 changes need valid links, accurate API examples and agreement with shipped behavior.
 
+New APIs, policy variants and Cargo features must join the executable
+[validation contracts](docs/validation-contracts.md). The gate reports missing
+registrations; its legacy inventory is frozen rather than a snapshot to refresh.
+
 ## CI and merging
 
 CI and Sanitizers automatically run only for PRs targeting `main`. They also

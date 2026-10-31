@@ -99,18 +99,22 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests
       - run: cargo fmt --all -- --check
 
-  # Lints a fixed LIST of feature configurations, not every combinatorial
-  # subset: no-default, default, each optional feature on its own, and
-  # all-features. The facade exposes 6 optional features (`integrity`, `mmap`,
-  # `zero-copy`, `compression-zstd`,
-  # `scalable-fault-injection`, `experimental-matrix-reuse`), so the full power set is 64 configurations;
-  # this job runs 9 of them on each of two operating systems.
-  # The singletons catch a feature that does not compile alone, and
-  # `--all-features` catches a conflict between any two — the gap is a defect
-  # that needs a specific pair or triple of features and is invisible under
-  # both, which no job here claims to cover. `cargo clippy` uses the workspace
-  # rustc wrapper, so `-p varlit` also lints `varlit-core` and `varlit-macros`
-  # under the exact feature set the umbrella crate enables.
+  # Discover configurations from Cargo metadata. Adding a feature adds both
+  # Clippy and a native singleton test job without editing this workflow.
+  feature-config:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    outputs:
+      checks: ${{ steps.features.outputs.checks }}
+      singletons: ${{ steps.features.outputs.singletons }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - id: features
+        run: python3 scripts/feature_matrix.py
+
   feature-matrix:
     # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
@@ -120,38 +124,12 @@ jobs:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: clippy (${{ matrix.features.name }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: feature-config
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        features:
-          - { name: no-default, flags: "-p varlit --no-default-features" }
-          - { name: default, flags: "-p varlit" }
-          - {
-              name: integrity,
-              flags: "-p varlit --no-default-features --features integrity",
-            }
-          - {
-              name: mmap,
-              flags: "-p varlit --no-default-features --features mmap",
-            }
-          - {
-              name: zero-copy,
-              flags: "-p varlit --no-default-features --features zero-copy",
-            }
-          - {
-              name: compression-zstd,
-              flags: "-p varlit --no-default-features --features compression-zstd",
-            }
-          - {
-              name: scalable-fault-injection,
-              flags: "-p varlit --no-default-features --features scalable-fault-injection",
-            }
-          - {
-              name: experimental-matrix-reuse,
-              flags: "-p varlit --no-default-features --features experimental-matrix-reuse",
-            }
-          - { name: all-features, flags: "--workspace --all-features" }
+        features: ${{ fromJSON(needs.feature-config.outputs.checks) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -164,10 +142,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets ${{ matrix.features.flags }} -- -D warnings
 
-  # Full native test runs on all three platforms stay limited to the default and all-feature
-  # sets; the feature matrix above type-checks and lints every other
-  # combination, and `feature-tests` below runs the configurations that have
-  # behaviour no other job can reach. Tests go through the hygiene runner
+  # Full native test runs on all three platforms use the default and all-feature
+  # sets; the feature matrix above lints each discovered singleton, and
+  # `feature-tests` below executes those singletons on Linux. This does not
+  # enumerate every feature subset. Tests go through the hygiene runner
   # (`tools/varlit-test-runner`) so leaked temp artifacts fail CI.
   test:
     # CI runs on the public repository only. `varlit-dev` is private, so runner
@@ -235,19 +213,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # CI-01: the two configurations below own tests that run in NO other job.
-  # `compression.rs` gates behaviour on `compression-zstd` *without* `integrity`
-  # and on `integrity` *without* `compression-zstd`; the default job has
-  # neither feature and the all-features job has both, so those assertions were
-  # compiled out of every test run and only ever type-checked by Clippy.
-  #
-  # Deliberately scoped: single OS and targeted binaries. Reuse also runs alone
-  # to verify that its production path does not require fault hooks. The
-  # compression binary is the
-  # only test binary in the workspace that contains `not(feature = ...)` cases
-  # (`compression.rs`). Adding the full feature matrix — or the whole package
-  # suite under each singleton — would multiply CI time for combinations the two
-  # jobs above already cover, without reaching any additional assertion.
+  # Execute every discovered singleton, including future features. Default/all
+  # runs cannot reach not(feature = ...) branches. Keep native OS test coverage
+  # above for I/O; singleton qualification runs on Linux to bound CI cost.
   feature-tests:
     # CI runs on the public repository only. `varlit-dev` is private, so runner
     # minutes there are metered against the account; this guard means the
@@ -257,22 +225,12 @@ jobs:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: test (${{ matrix.features.name }}, ubuntu-latest)
     runs-on: ubuntu-latest
+    needs: feature-config
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        features:
-          - {
-              name: compression-without-integrity,
-              flags: "-p varlit --no-default-features --features compression-zstd --test compression",
-            }
-          - {
-              name: integrity-without-compression,
-              flags: "-p varlit --no-default-features --features integrity --test compression",
-            }
-          - {
-              name: experimental-matrix-reuse-only,
-              flags: "-p varlit --no-default-features --features experimental-matrix-reuse --test experimental_matrix_reuse",
-            }
+        features: ${{ fromJSON(needs.feature-config.outputs.singletons) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -677,6 +635,7 @@ jobs:
     needs:
       - codeql
       - fmt
+      - feature-config
       - feature-matrix
       - test
       - platform-io

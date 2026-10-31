@@ -13,11 +13,8 @@
 //! into a written chunk is refused rather than dropped; and a cell read does not
 //! materialise the chunk it lives in.
 
-// The shared fixtures here build their specs with `IntegrityPolicy::Crc32`, so
-// without the `integrity` feature 35 of the 47 cases fail at create with
-// `IntegrityFeatureDisabled`. Gating them individually leaves the shared
-// helpers dead, so the file moves as a unit and runs in the `all-features`
-// CI job.
+// Shared fixtures require integrity. Compression success cases additionally
+// require their backend; the integrity-only job checks the missing-backend error.
 #![cfg(feature = "integrity")]
 
 use std::path::{Path, PathBuf};
@@ -1463,7 +1460,23 @@ fn chunk_compression_requires_a_growing_dimension() {
     ));
 }
 
+#[cfg(not(feature = "compression-zstd"))]
 #[test]
+fn chunk_compression_reports_the_missing_backend() -> varlit::Result<()> {
+    let path = temp_path("missing_compression_backend");
+    let mut writer = compressed_spec().create_writer_with_dims(path.path(), dims())?;
+    let cell = key(ROWS_PER_CHUNK, 0);
+    writer.write_matrix_cell(cell, &Sample { value: 7 })?;
+    writer.commit_matrix_cell::<Sample>(cell)?;
+    assert!(matches!(
+        writer.flush(),
+        Err(Error::CompressionFeatureDisabled)
+    ));
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "compression-zstd")]
 fn compressed_chunks_read_back_every_cell() -> varlit::Result<()> {
     let path = temp_path("compressed_roundtrip");
     let rows = ROWS_PER_CHUNK * 6;
@@ -1500,6 +1513,7 @@ fn compressed_chunks_read_back_every_cell() -> varlit::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "compression-zstd")]
 fn a_partly_filled_chunk_costs_less_when_compressed() -> varlit::Result<()> {
     // The point of the knob. Uncompressed, a chunk 1/4096 filled costs exactly
     // what a full one costs — `an_unfilled_chunk_costs_its_whole_size` pins
@@ -1550,6 +1564,7 @@ fn a_partly_filled_chunk_costs_less_when_compressed() -> varlit::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "compression-zstd")]
 fn a_corrupted_compressed_sub_block_is_refused() -> varlit::Result<()> {
     // The per-cell checksum is computed over the *uncompressed* cell bytes and
     // stored plain, so it still guards a compressed chunk: a damaged sub-block
@@ -1588,7 +1603,7 @@ fn a_corrupted_compressed_sub_block_is_refused() -> varlit::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "scalable-fault-injection")]
+#[cfg(all(feature = "scalable-fault-injection", feature = "compression-zstd"))]
 #[test]
 fn a_compressed_read_costs_one_sub_block_not_the_chunk() -> varlit::Result<()> {
     use varlit::VarlitFile;

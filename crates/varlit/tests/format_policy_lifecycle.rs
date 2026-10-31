@@ -3,6 +3,9 @@
 #![cfg(all(feature = "integrity", feature = "compression-zstd"))]
 
 use varlit::*;
+#[allow(dead_code)]
+#[path = "support/validation_cases.rs"]
+mod cases;
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable", key = "id")]
@@ -87,7 +90,11 @@ fn stream_case(spec: FormatSpec) -> TestResult {
         Err(Error::LimitExceeded { .. })
     ));
     let wrong = spec
-        .with_integrity_policy(IntegrityPolicy::None)
+        .with_integrity_policy(if spec.integrity_policy == IntegrityPolicy::None {
+            IntegrityPolicy::Crc32
+        } else {
+            IntegrityPolicy::None
+        })
         .with_computed_schema_hash();
     assert!(matches!(
         VarlitStreamReader::open(wrong, &path, options),
@@ -155,23 +162,18 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
 #[test]
 fn format_policies_survive_stream_and_index_lifecycles() -> TestResult {
     let mut cases = 0;
-    for integrity in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
-        for endian in [Endian::Little, Endian::Big] {
-            for commit in [CommitPolicy::None, CommitPolicy::RecordFooter] {
-                for mode in [
-                    CompressionHeaderMode::FormatContract,
-                    CompressionHeaderMode::RecordExplicit,
-                    CompressionHeaderMode::FileExplicit,
-                ] {
-                    for manifest in [ManifestPolicy::None, ManifestPolicy::Embedded] {
+    let mut unsupported = 0;
+    for &integrity in cases::INTEGRITY {
+        for &endian in cases::ENDIANS {
+            for commit in cases::commits() {
+                for compression in cases::compression() {
+                    for &manifest in cases::MANIFESTS {
                         let mut spec = Format::spec()
                             .with_integrity_policy(integrity)
                             .with_commit_policy(commit)
                             .with_manifest_policy(manifest)
                             .with_index_policy(IndexPolicy::BlockOffsetChain)
-                            .with_compression_policy(CompressionPolicy::VariableBlocks(
-                                VariableCompression::zstd(mode),
-                            ));
+                            .with_compression_policy(compression);
                         spec.endian = endian;
                         let spec = spec.with_computed_schema_hash();
                         assert_eq!(
@@ -179,8 +181,32 @@ fn format_policies_survive_stream_and_index_lifecycles() -> TestResult {
                             spec.with_resource_limits(runtime(IntegrityVerification::AtOpen))
                                 .computed_schema_hash()
                         );
-                        stream_case(spec).map_err(|e| format!("stream {integrity:?} {endian:?} {commit:?} {mode:?} {manifest:?}: {e}"))?;
-                        indexed_case(spec).map_err(|e| format!("indexed {integrity:?} {endian:?} {commit:?} {mode:?} {manifest:?}: {e}"))?;
+                        if commit.is_transaction_marker() {
+                            // These declarations are valid native formats but
+                            // deliberately unsupported by stream/index APIs.
+                            // Exercise their rejection instead of filtering them out.
+                            let dir = tempfile::tempdir()?;
+                            let path = dir.path().join("unsupported.varlit");
+                            assert!(matches!(
+                                VarlitStreamWriter::create(spec, &path, StreamOptions::default()),
+                                Err(Error::StreamingUnsupported)
+                            ));
+                            const BLOCKS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
+                            let plan = DiskIndexPlan::canonical(spec, BLOCKS)?;
+                            assert!(matches!(
+                                VarlitIndexedWriter::create(
+                                    spec,
+                                    &path,
+                                    DiskIndexOptions::default(),
+                                    plan
+                                ),
+                                Err(Error::StreamingUnsupported)
+                            ));
+                            unsupported += 1;
+                            continue;
+                        }
+                        stream_case(spec).map_err(|e| format!("stream {integrity:?} {endian:?} {commit:?} {compression:?} {manifest:?}: {e}"))?;
+                        indexed_case(spec).map_err(|e| format!("indexed {integrity:?} {endian:?} {commit:?} {compression:?} {manifest:?}: {e}"))?;
                         cases += 1;
                     }
                 }
@@ -188,7 +214,7 @@ fn format_policies_survive_stream_and_index_lifecycles() -> TestResult {
         }
     }
     println!(
-        "format_combinations={cases} lifecycle_runs={} runtime_limits_and_wrong_format_rejections=passed",
+        "format_combinations={cases} lifecycle_runs={} unsupported_combinations={unsupported} runtime_limits_and_wrong_format_rejections=passed",
         cases * 2
     );
     Ok(())
