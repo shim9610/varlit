@@ -185,7 +185,32 @@ pub struct Encoder {
     output: Vec<u8>,
     max_len: Option<u64>,
     limit_resource: &'static str,
-    failure: Option<Error>,
+    failure: Option<EncoderFailure>,
+}
+
+// Retain only the failure facts that encoding can produce. Storing the general
+// Error (which can contain a boxed I/O error) would remove Encoder's public
+// UnwindSafe/RefUnwindSafe auto traits even when that variant is never used.
+#[derive(Debug)]
+enum EncoderFailure {
+    LimitExceeded { actual: u64, limit: u64 },
+    AllocationFailed { requested: u64 },
+}
+
+impl EncoderFailure {
+    fn into_error(self, resource: &'static str) -> Error {
+        match self {
+            Self::LimitExceeded { actual, limit } => Error::LimitExceeded {
+                resource,
+                actual,
+                limit,
+            },
+            Self::AllocationFailed { requested } => Error::AllocationFailed {
+                resource,
+                requested,
+            },
+        }
+    }
 }
 
 impl Encoder {
@@ -238,7 +263,7 @@ impl Encoder {
     /// the writer its scratch.
     pub(crate) fn into_buffer_and_result(self) -> (Vec<u8>, Result<()>) {
         match self.failure {
-            Some(error) => (self.output, Err(error)),
+            Some(error) => (self.output, Err(error.into_error(self.limit_resource))),
             None => (self.output, Ok(())),
         }
     }
@@ -253,7 +278,7 @@ impl Encoder {
 
     pub(crate) fn try_into_inner(self) -> Result<Vec<u8>> {
         if let Some(error) = self.failure {
-            return Err(error);
+            return Err(error.into_error(self.limit_resource));
         }
         Ok(self.output)
     }
@@ -286,8 +311,7 @@ impl Encoder {
         if let Some(limit) = self.max_len
             && actual.is_none_or(|actual| actual > limit)
         {
-            self.failure = Some(Error::LimitExceeded {
-                resource: self.limit_resource,
+            self.failure = Some(EncoderFailure::LimitExceeded {
                 actual: actual.unwrap_or(u64::MAX),
                 limit,
             });
@@ -296,8 +320,7 @@ impl Encoder {
         if bytes.len() > self.output.capacity() - self.output.len()
             && self.output.try_reserve(bytes.len()).is_err()
         {
-            self.failure = Some(Error::AllocationFailed {
-                resource: self.limit_resource,
+            self.failure = Some(EncoderFailure::AllocationFailed {
                 requested: actual.unwrap_or(u64::MAX),
             });
             return;
@@ -1522,6 +1545,26 @@ tuple_codec!(A, B, C, D);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoder_preserves_public_auto_traits_and_catch_unwind_usage() {
+        fn assert_traits<
+            T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
+        >() {
+        }
+        assert_traits::<Encoder>();
+
+        let encoder = Encoder::new(Endian::Little);
+        assert_eq!(
+            std::panic::catch_unwind(|| encoder.endian()).unwrap(),
+            Endian::Little
+        );
+        assert!(
+            std::panic::catch_unwind(move || encoder.into_inner())
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn limited_encoder_stops_before_the_over_limit_allocation() {
