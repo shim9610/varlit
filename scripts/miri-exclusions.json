@@ -108,6 +108,10 @@
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
   {
+    "test": "indexed::tests::rebuild_refuses_truncated_record_instead_of_publishing_a_prefix",
+    "reason": "Reproduced with nightly-2026-10-12: index creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
     "test": "indexed::tests::rebuild_retires_a_sidecar_published_for_a_replaced_primary",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
