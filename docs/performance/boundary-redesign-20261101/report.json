@@ -1,0 +1,2546 @@
+{
+  "title": "Amortized native record-boundary validation",
+  "scope": "Replaces the quadratic boundary rewalk introduced by ed92ba1; no public signature, file format, dependency or production unsafe/lock additions.",
+  "provenance": {
+    "regressed": "ed92ba1e0eb3816d5b2c1590946bab07cd8b9931",
+    "original": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+    "candidate_production_diff_sha256": "e83c0e81a9a734c3ab47b8fad8e9242f4640e6141a947991fa6bb4033d84ef47",
+    "binaries": {
+      "regressed": "c7da578f07a23bd528d8387adfc1b57ae88b1ea76bac4f8216c38c2c21b3b0e9",
+      "original": "45e1df129b3ff19f47bda4e1645fb36b76bde38f0a49bef0925fa95b86b2ad45",
+      "after": "a407b4cac0a255c89dfdb068d8ddc2d5245d1b87d81e112b91dddc38abf3068e"
+    },
+    "separate_targets": true,
+    "harness_sha256": "3e8f9ef8df0afee4e9223ea1f53c4cc9854a4d4c2e1bc211e9a7373ff209ffad",
+    "cargo_lock_sha256": "af0a76a1a86090f01e31b4c8faab11e4d2502371b3a0608034cf706310b5af7a"
+  },
+  "method": {
+    "mutation_workloads": 28,
+    "alternating_pairs_per_workload": 5,
+    "exact_original_fixture_groups": 5,
+    "concurrent_workloads": 2,
+    "concurrent_pairs_per_workload": 5,
+    "builds_or_tests_during_measurement": false,
+    "reproduction": "Archived scripts record exact workspace paths; rebuild the three revisions in isolated targets and adapt paths before rerunning.",
+    "mutation_timer": "Only requested marks or recovery-open; fixture setup, validation and sync excluded. CPU/RSS/write_blocks cover the whole child, including setup.",
+    "memory": "RSS measures process memory, not tmpfs backing or filesystem page cache. Report median per-run peak and maximum across runs; concurrent gate uses maximum. Temporary-file bytes are reported separately; on tmpfs they consume system memory.",
+    "storage": "Ordinary cases use tmpfs; explicit disk cases use workspace disk. Files are real, not sparse.",
+    "concurrency_scope": "Indexed SWMR write phase. Native mutation/recovery workloads are separate single-writer measurements; this does not time concurrent native liveness marks.",
+    "concurrency": "Eight following readers plus one pinned, fixed 16384 checks per reader per mutation epoch; compare reader counts/snapshot counts/trace hashes and unchanged cache/batch budgets.",
+    "baselines": {
+      "regressed": "ed92ba1e0eb3816d5b2c1590946bab07cd8b9931",
+      "original": "317fc981e5cb78eec26f6820c9e010baf2873bcb"
+    },
+    "original_first_lazy": "Same record_mark_load lazy 200000 1 fixture as the earlier 13 microsecond / 88 millisecond result; not substituted with the new multi-block fixture."
+  },
+  "design": [
+    "A private incremental sorted directory stores only boundaries established by the shared native frame decoder. Frontier publication follows a successful fallible row write.",
+    "A successful discovery scan advances strictly and stays inside the captured extent. Reverse/random/repeated/invalid offsets do not restart it. Discovery is O(N) total per handle lineage, later arbitrary membership O(log N) worst case; target validation remains per valid call.",
+    "Validated private directory rows and a constant-sized exact observed arithmetic prefix avoid discovery for known resident/own appended records. Serialized rows and lookup guesses never authorize membership by themselves.",
+    "Recovery streams two linear framing passes, replacing both the input-sized target vector and per-target prefix scans.",
+    "Boundary append buffer plus read cache borrow at most 16 KiB from the existing directory allowance; zero-loan operation spills unbuffered. Temporary disk metadata can add up to 8 bytes per discovered record. This is a storage tradeoff, not free caching.",
+    "The framing scan uses a 4 KiB stack window for adjacent small records, skips large payloads, and shares the existing decoder. Random directory probes use small windows/single rows rather than repeated 64 KiB fills.",
+    "Rewritten native directories use smaller compressed pages within the same budget and carry their observed uniform-prefix proof forward. Irregular point queries prime the estimated page before bounded sorted search; smaller pages trade compression ratio for bounded decode work.",
+    "Proofs belong to the writer handle. Existing frame geometry remains immutable under supported SWMR append/liveness operations; shrink drops the incremental proof. They do not authenticate concurrent external rewrites."
+  ],
+  "validation": {
+    "workspace_passed": 1308,
+    "workspace_failed": 0,
+    "workspace_ignored": 29,
+    "required_contracts": {
+      "source": {
+        "head": "ed92ba1e0eb3816d5b2c1590946bab07cd8b9931",
+        "status": "M crates/varlit-core/src/file.rs\n M crates/varlit-core/src/file/validation_tests.rs\n M crates/varlit-core/src/native_directory.rs\n M crates/varlit-core/src/native_rewrite.rs\n M crates/varlit-core/src/packed_rows.rs\n M crates/varlit-core/src/spill_rows.rs\n M crates/varlit-core/tests/io_failure_recovery.rs\n M crates/varlit/Cargo.toml\n M crates/varlit/tests/oom_recovery_guards.rs\n M crates/varlit/tests/record_liveness.rs\n M crates/varlit/tests/support/source_audit.rs\n M scripts/check_storage_contracts.py\n M scripts/tests/test_storage_contracts.py\n?? crates/varlit/examples/record_mutation_load.rs",
+        "source_sha256": "7b8ae1b7091879cfe815b3c3a35b672d4ab2e0147d6761e791034eb0742a8938"
+      },
+      "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+      "cases": [
+        {
+          "name": "mutation-rewritten-boundaries",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "record_liveness",
+            "rewritten_boundaries_preserve_exact_membership_across_small_pages",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 16.506,
+          "log": "mutation-rewritten-boundaries.log"
+        },
+        {
+          "name": "mutation-uniform-proof",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "file::resident_index::tests::uniform_prefix_never_authorizes_unobserved_or_truncated_offsets",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 18.132,
+          "log": "mutation-uniform-proof.log"
+        },
+        {
+          "name": "mutation-amortized-work",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "record_liveness",
+            "boundary_proof_reuses_reverse_random_repeated_and_failed_requests",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.265,
+          "log": "mutation-amortized-work.log"
+        },
+        {
+          "name": "recovery-linear-work",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "record_liveness",
+            "marked_tail_recovery_frames_linearly_at_two_cardinalities",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.215,
+          "log": "recovery-linear-work.log"
+        },
+        {
+          "name": "native-boundary-proof",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "file::tests::serialized_directory_cannot_authorize_marking_an_embedded_record",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.165,
+          "log": "native-boundary-proof.log"
+        },
+        {
+          "name": "rewrite-source-integrity",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "record_liveness",
+            "defragment_refuses_payload_damage_without_republishing",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.164,
+          "log": "rewrite-source-integrity.log"
+        },
+        {
+          "name": "matrix-mmap-evidence",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "matrix_integrity_scaling",
+            "mmap_reads_require_crc_validity_even_when_the_stored_crc_matches",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 2.13,
+          "log": "matrix-mmap-evidence.log"
+        },
+        {
+          "name": "nonresident-record-budget",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "index_residency",
+            "nonresident_records_still_count_toward_the_explicit_record_limit",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 1.427,
+          "log": "nonresident-record-budget.log"
+        },
+        {
+          "name": "nonresident-follow-sequence",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "index_residency",
+            "follow_refuses_nonresident_sequences_older_than_its_snapshot",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.168,
+          "log": "nonresident-follow-sequence.log"
+        },
+        {
+          "name": "index-cache-shape",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "index_corruption_guards",
+            "aliased_finite_extents_return_errors_through_public_reads",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.873,
+          "log": "index-cache-shape.log"
+        },
+        {
+          "name": "index-traversal",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "disk_index::tree::corruption_guards::duplicated_subtrees_stop_before_repeated_leaf_delivery",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.165,
+          "log": "index-traversal.log"
+        },
+        {
+          "name": "index-oom",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "index_oom_guards",
+            "public_index_reads_return_oom_and_remain_usable_after_each_refusal",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 1.221,
+          "log": "index-oom.log"
+        },
+        {
+          "name": "kernel-short-write",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--test",
+            "io_failure_recovery",
+            "partial_kernel_writes_preserve_retry_and_reopen",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 13.975,
+          "log": "kernel-short-write.log"
+        },
+        {
+          "name": "torn-publication",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "disk_index::storage::failure_tests::torn_publication_heads_never_invent_a_confirmed_generation",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.215,
+          "log": "torn-publication.log"
+        },
+        {
+          "name": "consistent-frontiers",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "disk_index::storage::failure_tests::valid_checksums_do_not_admit_inconsistent_checkpoint_frontiers",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.218,
+          "log": "consistent-frontiers.log"
+        },
+        {
+          "name": "checked-chain-links",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit-core",
+            "--all-features",
+            "--lib",
+            "file::validation_tests::checksummed_chain_links_must_decrease_and_stay_in_their_block",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.165,
+          "log": "checked-chain-links.log"
+        },
+        {
+          "name": "failed-history",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "stateful_failure_guards",
+            "failed_batches_recover_through_delete_reinsert_follow_and_compaction",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.924,
+          "log": "failed-history.log"
+        },
+        {
+          "name": "decode-memory",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "resource_amplification_guards",
+            "decoded_memory_is_bounded_and_released_across_sizes_and_failures",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.723,
+          "log": "decode-memory.log"
+        },
+        {
+          "name": "oom-recovery",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "oom_recovery_guards",
+            "allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 1.724,
+          "log": "oom-recovery.log"
+        },
+        {
+          "name": "zstd-context-oom",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "oom_recovery_guards",
+            "zstd_context_allocation_failures_return_errors",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+            "--ignored"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 0.215,
+          "log": "zstd-context-oom.log"
+        },
+        {
+          "name": "cardinality-growth",
+          "command": [
+            "cargo",
+            "run",
+            "--locked",
+            "-p",
+            "varlit-test-runner",
+            "--",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "varlit",
+            "--all-features",
+            "--test",
+            "high_cardinality",
+            "cardinality_growth_respects_memory_budget",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+            "--ignored"
+          ],
+          "status": "passed",
+          "reason": null,
+          "seconds": 4.137,
+          "log": "cardinality-growth.log"
+        }
+      ]
+    },
+    "python_tests_passed": 33,
+    "clippy_warnings_denied": "passed",
+    "no_default_features": "passed",
+    "fmt_diff_checks": "passed",
+    "cases": [
+      "reverse/random/repeated/interior/out-of-range offsets at zero/tiny/spilled budgets",
+      "malformed zero/overflowing frame lengths with bounded retries and unchanged source",
+      "allocation refusal before proof/cache growth and successful same-handle retry",
+      "kernel partial proof-spill failures at three cuts; same-handle retry and reopen",
+      "MarkTail at two cardinalities with torn final record",
+      "observed uniform prefix membership after divergence/truncation",
+      "own append on a lazy writer without scanning history"
+    ]
+  },
+  "mutation_results": [
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "fixed",
+        "reverse",
+        "1024",
+        "1024"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "fixed",
+        "order": "reverse",
+        "count": 1024,
+        "marks": 1024,
+        "source_bytes": 73958
+      },
+      "seconds": {
+        "before": 0.223628735,
+        "after": 0.000795201,
+        "delta_percent": -99.64441018726863
+      },
+      "cpu": {
+        "before": 0.226315,
+        "after": 0.003389,
+        "delta_percent": -98.50252965998718
+      },
+      "rss_median_kib": {
+        "before": 2088,
+        "after": 2168,
+        "delta_percent": 3.831417624521083
+      },
+      "rss_max_kib": {
+        "before": 2136,
+        "after": 2176,
+        "delta_percent": 1.8726591760299671
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 524800,
+        "after": 2048,
+        "delta_percent": -99.60975609756098
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "variable",
+        "random",
+        "1024",
+        "1024"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "variable",
+        "order": "random",
+        "count": 1024,
+        "marks": 1024,
+        "source_bytes": 228241
+      },
+      "seconds": {
+        "before": 0.219729838,
+        "after": 0.000727923,
+        "delta_percent": -99.66871909312562
+      },
+      "cpu": {
+        "before": 0.222678,
+        "after": 0.003881,
+        "delta_percent": -98.25712463736875
+      },
+      "rss_median_kib": {
+        "before": 2136,
+        "after": 2168,
+        "delta_percent": 1.4981273408239737
+      },
+      "rss_max_kib": {
+        "before": 2204,
+        "after": 2168,
+        "delta_percent": -1.6333938294010864
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 515114,
+        "after": 2048,
+        "delta_percent": -99.60241810550674
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "nonresident",
+        "variable",
+        "reverse",
+        "1024",
+        "1024"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "nonresident",
+        "layout": "variable",
+        "order": "reverse",
+        "count": 1024,
+        "marks": 1024,
+        "source_bytes": 228241
+      },
+      "seconds": {
+        "before": 0.217557654,
+        "after": 0.000792034,
+        "delta_percent": -99.63594293952076
+      },
+      "cpu": {
+        "before": 0.22063,
+        "after": 0.003769,
+        "delta_percent": -98.29171010288718
+      },
+      "rss_median_kib": {
+        "before": 2020,
+        "after": 2040,
+        "delta_percent": 0.990099009900991
+      },
+      "rss_max_kib": {
+        "before": 2040,
+        "after": 2052,
+        "delta_percent": 0.588235294117645
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 524800,
+        "after": 2048,
+        "delta_percent": -99.60975609756098
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "recovery",
+        "fixed",
+        "forward",
+        "1024",
+        "1024"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "recovery",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 1024,
+        "marks": 1024,
+        "source_bytes": 73914
+      },
+      "seconds": {
+        "before": 0.223981007,
+        "after": 0.001737177,
+        "delta_percent": -99.22440879105432
+      },
+      "cpu": {
+        "before": 0.226766,
+        "after": 0.004474,
+        "delta_percent": -98.02704109081608
+      },
+      "rss_median_kib": {
+        "before": 2144,
+        "after": 2168,
+        "delta_percent": 1.1194029850746245
+      },
+      "rss_max_kib": {
+        "before": 2160,
+        "after": 2180,
+        "delta_percent": 0.92592592592593
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 526848,
+        "after": 2048,
+        "delta_percent": -99.61127308066084
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "fixed",
+        "reverse",
+        "4096",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "fixed",
+        "order": "reverse",
+        "count": 4096,
+        "marks": 4096,
+        "source_bytes": 295142
+      },
+      "seconds": {
+        "before": 3.700007287,
+        "after": 0.003101551,
+        "delta_percent": -99.9161744623883
+      },
+      "cpu": {
+        "before": 3.707781,
+        "after": 0.010782,
+        "delta_percent": -99.70920612625179
+      },
+      "rss_median_kib": {
+        "before": 2148,
+        "after": 2104,
+        "delta_percent": -2.0484171322160183
+      },
+      "rss_max_kib": {
+        "before": 2168,
+        "after": 2168,
+        "delta_percent": 0.0
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 8390656,
+        "after": 8192,
+        "delta_percent": -99.90236758603857
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 24576,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "variable",
+        "random",
+        "4096",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "variable",
+        "order": "random",
+        "count": 4096,
+        "marks": 4096,
+        "source_bytes": 913379
+      },
+      "seconds": {
+        "before": 3.609872751,
+        "after": 0.005341584,
+        "delta_percent": -99.8520284683575
+      },
+      "cpu": {
+        "before": 3.618443,
+        "after": 0.015157,
+        "delta_percent": -99.5811181770723
+      },
+      "rss_median_kib": {
+        "before": 2264,
+        "after": 2296,
+        "delta_percent": 1.4134275618374659
+      },
+      "rss_max_kib": {
+        "before": 2288,
+        "after": 2308,
+        "delta_percent": 0.8741258741258751
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 8365807,
+        "after": 8192,
+        "delta_percent": -99.90207758797209
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 24576,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "nonresident",
+        "variable",
+        "reverse",
+        "4096",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "nonresident",
+        "layout": "variable",
+        "order": "reverse",
+        "count": 4096,
+        "marks": 4096,
+        "source_bytes": 913379
+      },
+      "seconds": {
+        "before": 3.741175171,
+        "after": 0.003321153,
+        "delta_percent": -99.91122701161538
+      },
+      "cpu": {
+        "before": 3.750222,
+        "after": 0.012835,
+        "delta_percent": -99.65775359432055
+      },
+      "rss_median_kib": {
+        "before": 1960,
+        "after": 2168,
+        "delta_percent": 10.612244897959178
+      },
+      "rss_max_kib": {
+        "before": 2024,
+        "after": 2176,
+        "delta_percent": 7.509881422924902
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 8390656,
+        "after": 8192,
+        "delta_percent": -99.90236758603857
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 24576,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "regressed",
+      "storage": "tmpfs",
+      "args": [
+        "recovery",
+        "fixed",
+        "forward",
+        "4096",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "recovery",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 4096,
+        "marks": 4096,
+        "source_bytes": 295098
+      },
+      "seconds": {
+        "before": 3.7712936580000003,
+        "after": 0.006726109,
+        "delta_percent": -99.82164982072578
+      },
+      "cpu": {
+        "before": 3.779136,
+        "after": 0.01427,
+        "delta_percent": -99.62240046402141
+      },
+      "rss_median_kib": {
+        "before": 2280,
+        "after": 2412,
+        "delta_percent": 5.789473684210522
+      },
+      "rss_max_kib": {
+        "before": 2344,
+        "after": 2424,
+        "delta_percent": 3.412969283276457
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 8398848,
+        "after": 8192,
+        "delta_percent": -99.9024628139478
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "writer",
+        "fixed",
+        "forward",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.018102999,
+        "after": 0.013043919,
+        "delta_percent": -27.946087827768217
+      },
+      "cpu": {
+        "before": 0.250275,
+        "after": 0.260463,
+        "delta_percent": 4.070722205573851
+      },
+      "rss_median_kib": {
+        "before": 4256,
+        "after": 4280,
+        "delta_percent": 0.5639097744360999
+      },
+      "rss_max_kib": {
+        "before": 4308,
+        "after": 4344,
+        "delta_percent": 0.8356545961002881
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "writer",
+        "fixed",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "fixed",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.017366203,
+        "after": 0.015513191,
+        "delta_percent": -10.670219621410615
+      },
+      "cpu": {
+        "before": 0.249742,
+        "after": 0.253133,
+        "delta_percent": 1.357801250890911
+      },
+      "rss_median_kib": {
+        "before": 4256,
+        "after": 4344,
+        "delta_percent": 2.0676691729323293
+      },
+      "rss_max_kib": {
+        "before": 4308,
+        "after": 4352,
+        "delta_percent": 1.021355617455888
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "reopen",
+        "fixed",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "reopen",
+        "layout": "fixed",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.017166791,
+        "after": 0.016126809,
+        "delta_percent": -6.058103695676154
+      },
+      "cpu": {
+        "before": 0.410511,
+        "after": 0.420117,
+        "delta_percent": 2.340010377310242
+      },
+      "rss_median_kib": {
+        "before": 6372,
+        "after": 6400,
+        "delta_percent": 0.439422473320783
+      },
+      "rss_max_kib": {
+        "before": 6384,
+        "after": 6420,
+        "delta_percent": 0.5639097744360999
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "writer",
+        "variable",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "variable",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 44599997
+      },
+      "seconds": {
+        "before": 0.023868382,
+        "after": 0.026270168,
+        "delta_percent": 10.062625945906166
+      },
+      "cpu": {
+        "before": 0.30864,
+        "after": 0.31231,
+        "delta_percent": 1.1890876101606995
+      },
+      "rss_median_kib": {
+        "before": 4256,
+        "after": 4344,
+        "delta_percent": 2.0676691729323293
+      },
+      "rss_max_kib": {
+        "before": 4304,
+        "after": 4344,
+        "delta_percent": 0.9293680297397744
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "reopen",
+        "variable",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "reopen",
+        "layout": "variable",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 44599997
+      },
+      "seconds": {
+        "before": 0.024438392,
+        "after": 0.026420619,
+        "delta_percent": 8.111118767552306
+      },
+      "cpu": {
+        "before": 0.480386,
+        "after": 0.501243,
+        "delta_percent": 4.341716869350898
+      },
+      "rss_median_kib": {
+        "before": 6376,
+        "after": 6448,
+        "delta_percent": 1.129234629861986
+      },
+      "rss_max_kib": {
+        "before": 6420,
+        "after": 6464,
+        "delta_percent": 0.6853582554517068
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "epochs",
+        "fixed",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "epochs",
+        "layout": "fixed",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14438450
+      },
+      "seconds": {
+        "before": 0.018734411,
+        "after": 0.0230885,
+        "delta_percent": 23.241130986183677
+      },
+      "cpu": {
+        "before": 0.260422,
+        "after": 0.261616,
+        "delta_percent": 0.45848661019423087
+      },
+      "rss_median_kib": {
+        "before": 4304,
+        "after": 4344,
+        "delta_percent": 0.9293680297397744
+      },
+      "rss_max_kib": {
+        "before": 4320,
+        "after": 4352,
+        "delta_percent": 0.7407407407407307
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "segment",
+        "fixed",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "segment",
+        "layout": "fixed",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 29000419
+      },
+      "seconds": {
+        "before": 0.018595052,
+        "after": 0.015977296,
+        "delta_percent": -14.07770196071515
+      },
+      "cpu": {
+        "before": 0.563261,
+        "after": 0.542086,
+        "delta_percent": -3.759358450167871
+      },
+      "rss_median_kib": {
+        "before": 18392,
+        "after": 18552,
+        "delta_percent": 0.8699434536755035
+      },
+      "rss_max_kib": {
+        "before": 18456,
+        "after": 18560,
+        "delta_percent": 0.563502384048542
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "rewrite",
+        "fixed",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "rewrite",
+        "layout": "fixed",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.018825746,
+        "after": 0.016584081,
+        "delta_percent": -11.907443136649142
+      },
+      "cpu": {
+        "before": 1.535582,
+        "after": 1.338561,
+        "delta_percent": -12.830379621537634
+      },
+      "rss_median_kib": {
+        "before": 6224,
+        "after": 6380,
+        "delta_percent": 2.5064267352185032
+      },
+      "rss_max_kib": {
+        "before": 6244,
+        "after": 6392,
+        "delta_percent": 2.370275464445859
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 1251266,
+        "after": 1521946,
+        "delta_percent": 21.63249061350665
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "rewrite",
+        "variable",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "rewrite",
+        "layout": "variable",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 44599997
+      },
+      "seconds": {
+        "before": 0.026220986,
+        "after": 0.057788978,
+        "delta_percent": 120.39208594215332
+      },
+      "cpu": {
+        "before": 1.710434,
+        "after": 1.523055,
+        "delta_percent": -10.955055851321937
+      },
+      "rss_median_kib": {
+        "before": 6316,
+        "after": 6528,
+        "delta_percent": 3.3565547815072927
+      },
+      "rss_max_kib": {
+        "before": 6444,
+        "after": 6528,
+        "delta_percent": 1.3035381750465591
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 20000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 1251316,
+        "after": 1522046,
+        "delta_percent": 21.635622017140356
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "fixed",
+        "single",
+        "200000",
+        "1"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "fixed",
+        "order": "single",
+        "count": 200000,
+        "marks": 1,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 1.4402e-05,
+        "after": 0.038763826,
+        "delta_percent": 269055.8533537009
+      },
+      "cpu": {
+        "before": 0.251153,
+        "after": 0.288388,
+        "delta_percent": 14.825624221092305
+      },
+      "rss_median_kib": {
+        "before": 3936,
+        "after": 4072,
+        "delta_percent": 3.455284552845539
+      },
+      "rss_max_kib": {
+        "before": 3992,
+        "after": 4088,
+        "delta_percent": 2.4048096192384794
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 1,
+        "after": 200001,
+        "delta_percent": 20000000.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 1597440,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "fixed",
+        "reverse",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "fixed",
+        "order": "reverse",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.02063653,
+        "after": 0.064668159,
+        "delta_percent": 213.36740721429427
+      },
+      "cpu": {
+        "before": 0.292537,
+        "after": 0.330402,
+        "delta_percent": 12.943661827392772
+      },
+      "rss_median_kib": {
+        "before": 4168,
+        "after": 4344,
+        "delta_percent": 4.222648752399238
+      },
+      "rss_max_kib": {
+        "before": 4224,
+        "after": 4344,
+        "delta_percent": 2.840909090909083
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 220000,
+        "delta_percent": 1000.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 1597440,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "variable",
+        "random",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "variable",
+        "order": "random",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 44599997
+      },
+      "seconds": {
+        "before": 0.02784611,
+        "after": 0.097722915,
+        "delta_percent": 250.93919761144372
+      },
+      "cpu": {
+        "before": 0.357731,
+        "after": 0.44759,
+        "delta_percent": 25.119153777559113
+      },
+      "rss_median_kib": {
+        "before": 4192,
+        "after": 4280,
+        "delta_percent": 2.0992366412213803
+      },
+      "rss_max_kib": {
+        "before": 4248,
+        "after": 4352,
+        "delta_percent": 2.4482109227871973
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 220000,
+        "delta_percent": 1000.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 1597440,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "lazy",
+        "fixed",
+        "repeat",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "fixed",
+        "order": "repeat",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400230
+      },
+      "seconds": {
+        "before": 0.010924811,
+        "after": 0.047472571,
+        "delta_percent": 334.5390597603931
+      },
+      "cpu": {
+        "before": 0.276724,
+        "after": 0.312429,
+        "delta_percent": 12.902747864297993
+      },
+      "rss_median_kib": {
+        "before": 4164,
+        "after": 4332,
+        "delta_percent": 4.034582132564846
+      },
+      "rss_max_kib": {
+        "before": 4224,
+        "after": 4352,
+        "delta_percent": 3.0303030303030276
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 220000,
+        "delta_percent": 1000.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 1597440,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "nonresident",
+        "variable",
+        "reverse",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "nonresident",
+        "layout": "variable",
+        "order": "reverse",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 44599997
+      },
+      "seconds": {
+        "before": 0.025650474,
+        "after": 0.068391873,
+        "delta_percent": 166.63005525745845
+      },
+      "cpu": {
+        "before": 0.383838,
+        "after": 0.420966,
+        "delta_percent": 9.672830725462301
+      },
+      "rss_median_kib": {
+        "before": 2124,
+        "after": 2168,
+        "delta_percent": 2.0715630885122405
+      },
+      "rss_max_kib": {
+        "before": 2152,
+        "after": 2168,
+        "delta_percent": 0.743494423791824
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 20000,
+        "after": 220000,
+        "delta_percent": 1000.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 1597440,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "recovery",
+        "fixed",
+        "forward",
+        "200000",
+        "20000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "recovery",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 200000,
+        "marks": 20000,
+        "source_bytes": 14400186
+      },
+      "seconds": {
+        "before": 0.363750762,
+        "after": 0.350024828,
+        "delta_percent": -3.7734447412648975
+      },
+      "cpu": {
+        "before": 0.615526,
+        "after": 0.616721,
+        "delta_percent": 0.19414289566970222
+      },
+      "rss_median_kib": {
+        "before": 5748,
+        "after": 4280,
+        "delta_percent": -25.539318023660407
+      },
+      "rss_max_kib": {
+        "before": 5812,
+        "after": 4332,
+        "delta_percent": -25.464556090846525
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 400000,
+        "after": 400000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "writer",
+        "fixed",
+        "forward",
+        "2000000",
+        "200000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 2000000,
+        "marks": 200000,
+        "source_bytes": 144000230
+      },
+      "seconds": {
+        "before": 0.186737256,
+        "after": 0.116991319,
+        "delta_percent": -37.3497707388396
+      },
+      "cpu": {
+        "before": 2.612872,
+        "after": 2.680132,
+        "delta_percent": 2.574178911175129
+      },
+      "rss_median_kib": {
+        "before": 5724,
+        "after": 5688,
+        "delta_percent": -0.6289308176100628
+      },
+      "rss_max_kib": {
+        "before": 5792,
+        "after": 5752,
+        "delta_percent": -0.6906077348066253
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 200000,
+        "after": 200000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 31457280,
+        "after": 31457280,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "tmpfs",
+      "args": [
+        "reopen",
+        "fixed",
+        "forward",
+        "2000000",
+        "200000"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "reopen",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 2000000,
+        "marks": 200000,
+        "source_bytes": 144000230
+      },
+      "seconds": {
+        "before": 0.186233745,
+        "after": 0.127599331,
+        "delta_percent": -31.484312362402424
+      },
+      "cpu": {
+        "before": 4.242601,
+        "after": 4.253755,
+        "delta_percent": 0.2629047605466672
+      },
+      "rss_median_kib": {
+        "before": 7776,
+        "after": 7688,
+        "delta_percent": -1.1316872427983515
+      },
+      "rss_max_kib": {
+        "before": 7852,
+        "after": 7752,
+        "delta_percent": -1.2735608762098782
+      },
+      "write_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      },
+      "frames": {
+        "before": 200000,
+        "after": 200000,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 31457280,
+        "after": 31457280,
+        "delta_percent": 0.0
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "disk",
+      "args": [
+        "writer",
+        "large",
+        "reverse",
+        "65536",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "large",
+        "order": "reverse",
+        "count": 65536,
+        "marks": 4096,
+        "source_bytes": 4300734694
+      },
+      "seconds": {
+        "before": 0.015454433,
+        "after": 0.017640679,
+        "delta_percent": 14.1464005829266
+      },
+      "cpu": {
+        "before": 1.69791,
+        "after": 1.598776,
+        "delta_percent": -5.838589795689996
+      },
+      "rss_median_kib": {
+        "before": 3408,
+        "after": 3448,
+        "delta_percent": 1.1737089201877993
+      },
+      "rss_max_kib": {
+        "before": 3408,
+        "after": 3448,
+        "delta_percent": 1.1737089201877993
+      },
+      "write_bytes": {
+        "before": 4311609344,
+        "after": 4311478272,
+        "delta_percent": -0.003039978568153412
+      },
+      "frames": {
+        "before": 4096,
+        "after": 4096,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 0,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "disk",
+      "args": [
+        "lazy",
+        "large",
+        "reverse",
+        "65536",
+        "4096"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "lazy",
+        "layout": "large",
+        "order": "reverse",
+        "count": 65536,
+        "marks": 4096,
+        "source_bytes": 4300734694
+      },
+      "seconds": {
+        "before": 0.012659724,
+        "after": 0.094135403,
+        "delta_percent": 643.581795306122
+      },
+      "cpu": {
+        "before": 1.632478,
+        "after": 1.696596,
+        "delta_percent": 3.9276486421256473
+      },
+      "rss_median_kib": {
+        "before": 3344,
+        "after": 3320,
+        "delta_percent": -0.7177033492822948
+      },
+      "rss_max_kib": {
+        "before": 3352,
+        "after": 3448,
+        "delta_percent": 2.863961813842475
+      },
+      "write_bytes": {
+        "before": 4317532160,
+        "after": 4318052352,
+        "delta_percent": 0.012048364221106667
+      },
+      "frames": {
+        "before": 4096,
+        "after": 69632,
+        "delta_percent": 1600.0
+      },
+      "temporary_bytes": {
+        "before": 0,
+        "after": 516096,
+        "delta_percent": null
+      }
+    },
+    {
+      "baseline": "original",
+      "storage": "disk",
+      "args": [
+        "writer",
+        "mixed",
+        "random",
+        "131072",
+        "8192"
+      ],
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "mixed",
+        "order": "random",
+        "count": 131072,
+        "marks": 8192,
+        "source_bytes": 4306436326
+      },
+      "seconds": {
+        "before": 0.039019256,
+        "after": 0.043212856,
+        "delta_percent": 10.74751399667897
+      },
+      "cpu": {
+        "before": 1.958188,
+        "after": 1.952838,
+        "delta_percent": -0.27321176516248435
+      },
+      "rss_median_kib": {
+        "before": 4576,
+        "after": 4600,
+        "delta_percent": 0.5244755244755206
+      },
+      "rss_max_kib": {
+        "before": 4576,
+        "after": 4608,
+        "delta_percent": 0.6993006993007089
+      },
+      "write_bytes": {
+        "before": 4331855872,
+        "after": 4332490752,
+        "delta_percent": 0.014656073949814719
+      },
+      "frames": {
+        "before": 8192,
+        "after": 8192,
+        "delta_percent": 0.0
+      },
+      "temporary_bytes": {
+        "before": 2097152,
+        "after": 2097152,
+        "delta_percent": 0.0
+      }
+    }
+  ],
+  "exact_original_first_lazy": {
+    "original": {
+      "seconds": 1.379e-05
+    },
+    "regressed": {
+      "seconds": 0.089972946
+    },
+    "after": {
+      "seconds": 0.035352861
+    }
+  },
+  "concurrent_results": {
+    "1": {
+      "status": "passed",
+      "samples_per_version": 5,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "1073741824",
+          "--epoch-bytes": "16777216",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 1073741824,
+        "epoch": 16777216,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            12013369885672098846
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            11811335965011780335
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            6575331053473991156
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            15949282062931151593
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            6929931957242686864
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            9247543884215279603
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            14275219730953207679
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            3654627253138164260
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            14350256076685368
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 19.66762597297202,
+          "after": 19.815710966009647,
+          "change_percent": 0.7529378138527276,
+          "before_range": [
+            18.69249442499131,
+            21.39335728401784
+          ],
+          "after_range": [
+            19.249453994008945,
+            20.930862181005068
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 75.758217,
+          "after": 76.41284999999999,
+          "change_percent": 0.8641082458421545,
+          "before_range": [
+            71.66406900000001,
+            82.188963
+          ],
+          "after_range": [
+            74.51716,
+            81.041224
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 26271744,
+          "after": 26148864,
+          "change_percent": -0.4677268475210439,
+          "before_range": [
+            26185728,
+            26271744
+          ],
+          "after_range": [
+            26107904,
+            26148864
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 1142329344,
+          "after": 1142321152,
+          "change_percent": -0.0007171311883991116,
+          "before_range": [
+            1142284288,
+            1142362112
+          ],
+          "after_range": [
+            1142272000,
+            1142394880
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    },
+    "4": {
+      "status": "passed",
+      "samples_per_version": 5,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "4294967296",
+          "--epoch-bytes": "67108864",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 4294967296,
+        "epoch": 67108864,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            3208747743188020222
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            15746876979075427631
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            9747968542438937268
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            9243847713027586313
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            4903863259750067952
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            5778843666330398067
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            8200585148807637375
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            1933305620900094980
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            12118611058152487384
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 21.875630827009445,
+          "after": 21.00518300200929,
+          "change_percent": -3.9790753093411624,
+          "before_range": [
+            20.03832705001696,
+            22.488945705001242
+          ],
+          "after_range": [
+            20.525317469000584,
+            21.520131189987296
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 80.59520900000001,
+          "after": 77.7736,
+          "change_percent": -3.500963686315406,
+          "before_range": [
+            73.98635300000001,
+            83.431954
+          ],
+          "after_range": [
+            76.184831,
+            80.103773
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 51298304,
+          "after": 51212288,
+          "change_percent": -0.16767805812839542,
+          "before_range": [
+            51224576,
+            51298304
+          ],
+          "after_range": [
+            51154944,
+            51212288
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 4398395392,
+          "after": 4398379008,
+          "change_percent": -0.00037249948082740403,
+          "before_range": [
+            4398379008,
+            4398497792
+          ],
+          "after_range": [
+            4398379008,
+            4398555136
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    }
+  },
+  "limitations": [
+    "An unproven historical target still requires an initial linear framing scan. This work does not claim microsecond access to an arbitrary unindexed historical offset.",
+    "Original-baseline comparisons include the preceding security-hardening commit; whole-child CPU also includes setup/rewrite, not just the timed marks.",
+    "Point membership adds work for irregular resident layouts. All measured regressions are retained below; this is not a universal zero-overhead or 5% qualification.",
+    "Temporary proof storage is proportional to discovered record count; TMPDIR on tmpfs consumes system memory outside process RSS, so bounded heap buffers do not imply bounded total system memory. Allocation and spill failures return existing errors; this does not promise recovery from OS kills or every library/setup allocation.",
+    "Maximum physical files tested are approximately 4 GiB, not terabytes. Measurements are local five-pair medians, not statistical guarantees for all storage devices.",
+    "std::BTreeMap allocation remains deferred by the owner. No merge, version bump or crate release."
+  ],
+  "superseded_experiments": {
+    "v1": "Rejected random directory lookup page amplification and small-process RSS increase; see retained diagnostic results.",
+    "v9": "Completed single-process suite exposed uneven large-record lookup costs; improved the bounded second lookup estimate. Partial concurrent runs were stopped and superseded, not selected as final samples.",
+    "v6": "Interrupted after irregular and multi-commit random mutation costs were identified; reduced/centered prediction reads afterward. Both measurements and remaining final costs are reported.",
+    "rewrite_probe": "An exploratory same-fixture probe found fixed/variable post-rewrite random marks taking 0.220/2.211 seconds versus 0.019/0.029 seconds originally. The final design carries observed proofs and uses smaller compressed pages; all final costs remain in the results.",
+    "old_security_hardening_report": "Historical only. Its first-lazy numbers did not qualify reverse/random/nonresident/recovery reuse; this report supersedes those mutation claims."
+  }
+}

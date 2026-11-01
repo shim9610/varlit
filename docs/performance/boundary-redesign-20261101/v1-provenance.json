@@ -1,0 +1,11 @@
+{
+  "regressed": "ed92ba1e0eb3816d5b2c1590946bab07cd8b9931",
+  "original": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+  "candidate_production_diff_sha256": "42b4f7b7ae385673aa063332831fed2be3b823b78beff9a169ce27fe458814d5",
+  "binaries": {
+    "regressed": "62d3c916280d9d6261a05f6e201aa4f30e24533c5c2c1473b75d215d8ebd9070",
+    "original": "ba01382497acabf1accdd344a84c1847b6672adafc48084fee7a05ef57d9db3e",
+    "after": "59eb0664882a63928109a63908d5c5aafd222cdfda4fdc3419480c06e4b23e6b"
+  },
+  "separate_targets": true
+}

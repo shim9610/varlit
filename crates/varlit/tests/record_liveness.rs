@@ -76,17 +76,22 @@ fn marking_embedded_record_bytes_refuses_without_writing() -> varlit::Result<()>
     writer.flush()?;
     drop(writer);
     let mut writer = spec.open(&path)?;
-    let before = std::fs::read(&path)?;
-    let fake = before
-        .windows(embedded.len())
-        .position(|bytes| bytes == embedded)
-        .unwrap() as u64;
-    assert!(matches!(
-        writer.mark_record_dead(fake),
-        Err(varlit::Error::InvalidCanonicalEncoding(_))
-    ));
-    assert_eq!(std::fs::read(&path)?, before);
-    writer.verify_all()?;
+    for rewritten in [false, true] {
+        if rewritten {
+            writer.defragment()?;
+        }
+        let before = std::fs::read(&path)?;
+        let fake = before
+            .windows(embedded.len())
+            .position(|bytes| bytes == embedded)
+            .unwrap() as u64;
+        assert!(matches!(
+            writer.mark_record_dead(fake),
+            Err(varlit::Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
+        writer.verify_all()?;
+    }
     Ok(())
 }
 
@@ -872,5 +877,215 @@ fn marking_refuses_a_damaged_internal_identity_without_writing() -> varlit::Resu
         Err(varlit::Error::InvalidCanonicalEncoding(_))
     ));
     assert_eq!(std::fs::read(&path)?, before);
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn boundary_proof_reuses_reverse_random_repeated_and_failed_requests() -> varlit::Result<()> {
+    use varlit::{IndexPolicy, ReadLimits, VarlitFile};
+    // Exercise buffered, spilled, and zero-loan budgets with irregular frames.
+    for budget in [0, 64, 32768] {
+        for lazy in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("boundary-work.varlit");
+            let spec = EmbeddedFormat::spec()
+                .with_index_policy(IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true))
+                .with_block_residency(&[varlit::BlockResidencyDescriptor {
+                    block_id: 11,
+                    resident: false,
+                }])
+                .with_resource_limits(ReadLimits::STANDARD.with_max_index_bytes(budget));
+            let mut writer = spec.create(&path)?;
+            let mut offsets = Vec::new();
+            for n in 0..2048 {
+                offsets.push(
+                    writer
+                        .push_info(&Embedded {
+                            bytes: vec![n as u8; n * 37 % 271],
+                        })?
+                        .record_offset,
+                );
+            }
+            writer.flush()?;
+            drop(writer);
+            let mut writer = if lazy {
+                VarlitFile::open_lazy(spec, &path)?
+            } else {
+                spec.open(&path)?
+            };
+            let held = spec.open_readonly(&path)?;
+            VarlitFile::take_record_entry_faults();
+            writer.mark_record_dead(offsets[2047])?;
+            assert!(VarlitFile::take_record_entry_faults() <= 2050);
+            // Interior offsets and an out-of-range target cannot grow the
+            // frontier or force the already proved prefix to be replayed.
+            for &at in offsets.iter().rev() {
+                assert!(writer.mark_record_dead(at + 1).is_err());
+                writer.mark_record_dead(at)?;
+            }
+            for n in 0..2048 {
+                writer.mark_record_dead(offsets[(n * 977) % 2048])?;
+            }
+            assert!(writer.mark_record_dead(u64::MAX).is_err());
+            let work = VarlitFile::take_record_entry_faults();
+            assert_eq!(
+                work, 4096,
+                "one target frame per valid request, no prefix replay"
+            );
+            // Following append-only growth extends the proof, preserving old
+            // membership. An old reader still observes its own generation.
+            let next = writer
+                .push_info(&Embedded {
+                    bytes: vec![42; 73],
+                })?
+                .record_offset;
+            writer.mark_record_dead(next)?;
+            writer.mark_record_dead(offsets[123])?;
+            assert!(VarlitFile::take_record_entry_faults() < 12);
+            assert!(held.record_is_dead(offsets[123])?);
+            assert_eq!(
+                held.read_block_at::<Embedded>(offsets[123])?.bytes.len(),
+                123 * 37 % 271
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn marked_tail_recovery_frames_linearly_at_two_cardinalities() -> varlit::Result<()> {
+    for count in [256, 4096] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("recovery-work.varlit");
+        let mut writer = Marked::spec().create(&path)?;
+        writer.push(&Reading { value: 99 })?;
+        writer.commit()?;
+        let mut offsets = Vec::new();
+        for value in 0..count {
+            offsets.push(writer.push_info(&Reading { value })?.record_offset);
+        }
+        writer.flush()?;
+        drop(writer);
+        let mut bytes = std::fs::read(&path)?;
+        let at = bytes.windows(4).position(|x| x == b"VLIV").unwrap() + 8;
+        bytes[at + 2..at + 4].copy_from_slice(&1u16.to_le_bytes());
+        let crc = bytes[at..at + 4].iter().fold(2_166_136_261u32, |crc, b| {
+            (crc ^ u32::from(*b)).wrapping_mul(16_777_619)
+        });
+        bytes[at + 4..at + 8].copy_from_slice(&crc.to_le_bytes());
+        // Include a torn final frame to cover truncation before marking.
+        bytes.extend_from_slice(b"partial");
+        std::fs::write(&path, &bytes)?;
+        varlit::VarlitFile::take_record_entry_faults();
+        let recovered = Marked::spec().open(&path)?;
+        let framed = varlit::VarlitFile::take_record_entry_faults();
+        assert!(
+            framed <= 2 * count + 16,
+            "recovery must not rescan a prefix per mark: {framed}"
+        );
+        for offset in offsets {
+            assert!(recovered.record_is_dead(offset)?);
+        }
+        drop(recovered);
+        let reopened = Marked::spec().open_readonly(&path)?;
+        assert_eq!(reopened.blocks::<Reading>()?.len(), count as usize + 1);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn boundary_proof_stops_on_corrupt_lengths_and_reuses_the_valid_prefix() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    for length in [0, 1, u64::MAX, u64::MAX - 64] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("bad-length.varlit");
+        let spec = On::spec().with_index_policy(
+            varlit::IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true),
+        );
+        let mut writer = spec.create(&path)?;
+        let mut offsets = Vec::new();
+        for value in 0..128 {
+            offsets.push(writer.push_info(&Reading { value })?.record_offset);
+        }
+        writer.flush()?;
+        drop(writer);
+        let mut writer = varlit::VarlitFile::open_lazy(spec, &path)?;
+        let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.seek(SeekFrom::Start(offsets[64] + 16))?;
+        raw.write_all(&length.to_le_bytes())?;
+        let before = std::fs::read(&path)?;
+        varlit::VarlitFile::take_record_entry_faults();
+        for _ in 0..16 {
+            assert!(writer.mark_record_dead(offsets[127]).is_err());
+        }
+        assert!(varlit::VarlitFile::take_record_entry_faults() <= 64 + 16);
+        assert_eq!(std::fs::read(&path)?, before);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn a_lazy_writers_own_append_needs_no_historical_boundary_scan() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("own-boundary.varlit");
+    let spec = On::spec()
+        .with_index_policy(varlit::IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true));
+    let mut writer = spec.create(&path)?;
+    for value in 0..4096 {
+        writer.push(&Reading { value })?;
+    }
+    writer.flush()?;
+    drop(writer);
+    let mut writer = varlit::VarlitFile::open_lazy(spec, &path)?;
+    let own = writer.push_info(&Reading { value: 9999 })?;
+    varlit::VarlitFile::take_record_entry_faults();
+    writer.mark_record_dead(own.record_offset)?;
+    assert_eq!(varlit::VarlitFile::take_record_entry_faults(), 1);
+    assert!(writer.record_is_dead(own.record_offset)?);
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn rewritten_boundaries_preserve_exact_membership_across_small_pages() -> varlit::Result<()> {
+    for budget in [0, 4096, 32768] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("rewritten-boundaries.varlit");
+        let spec = EmbeddedFormat::spec()
+            .with_resource_limits(varlit::ReadLimits::STANDARD.with_max_index_bytes(budget));
+        let mut writer = spec.create(&path)?;
+        let mut offsets = Vec::new();
+        for n in 0..2048 {
+            offsets.push(
+                writer
+                    .push_info(&Embedded {
+                        bytes: vec![n as u8; n * 37 % 271],
+                    })?
+                    .record_offset,
+            );
+        }
+        writer.flush()?;
+        writer.defragment()?;
+        let before = std::fs::read(&path)?;
+        for &at in &offsets {
+            assert!(writer.mark_record_dead(at + 1).is_err());
+        }
+        assert_eq!(std::fs::read(&path)?, before);
+        varlit::VarlitFile::take_record_entry_faults();
+        for n in 0..2048 {
+            writer.mark_record_dead(offsets[(n * 977) % 2048])?;
+        }
+        assert_eq!(varlit::VarlitFile::take_record_entry_faults(), 2048);
+        writer.flush()?;
+        drop(writer);
+        let reader = spec.open_readonly(&path)?;
+        for &at in &offsets {
+            assert!(reader.record_is_dead(at)?);
+        }
+    }
     Ok(())
 }

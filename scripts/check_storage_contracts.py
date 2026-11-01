@@ -10,6 +10,10 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("mutation-rewritten-boundaries", "varlit", "record_liveness", "rewritten_boundaries_preserve_exact_membership_across_small_pages", False, None),
+    ("mutation-uniform-proof", "varlit-core", None, "file::resident_index::tests::uniform_prefix_never_authorizes_unobserved_or_truncated_offsets", False, None),
+    ("mutation-amortized-work", "varlit", "record_liveness", "boundary_proof_reuses_reverse_random_repeated_and_failed_requests", False, None),
+    ("recovery-linear-work", "varlit", "record_liveness", "marked_tail_recovery_frames_linearly_at_two_cardinalities", False, None),
     ("native-boundary-proof", "varlit-core", None, "file::tests::serialized_directory_cannot_authorize_marking_an_embedded_record", False, None),
     ("rewrite-source-integrity", "varlit", "record_liveness", "defragment_refuses_payload_damage_without_republishing", False, None),
     ("matrix-mmap-evidence", "varlit", "matrix_integrity_scaling", "mmap_reads_require_crc_validity_even_when_the_stored_crc_matches", False, None),

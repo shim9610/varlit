@@ -2423,5 +2423,6 @@
         "reserved_storage_pages_cannot_supply_nodes_or_long_keys"
       ]
     }
-  ]
+  ],
+  "superseded_mutation_qualification": "../boundary-redesign-20261101/report.json: subsequent reverse/random/nonresident/recovery tests found quadratic prefix rewalks in ed92ba1. The newer report qualifies their replacement and explicitly records remaining first-scan and irregular-lookup costs."
 }

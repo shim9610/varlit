@@ -100,10 +100,51 @@ varlit_format! { struct Format {
     blocks: [Blob, MapBlock, Point];
 } }
 
+varlit_format! { struct MutationFormat {
+    magic: b"VBOUNDOM"; version: 1; endian: little; schema_hash: computed;
+    integrity: crc32; index: block_offset_chain;
+    commit: transaction_marker(on_flush); liveness: footer_flags;
+    blocks: [Point];
+} }
+
 // One test owns the process-wide allocator window. An infallible regression
 // aborts this dedicated test binary; other test executables are unaffected.
 #[test]
 fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> {
+    // Boundary rows and their read cache borrow one fixed budget. Refuse
+    // each large allocation in turn, then retry on the same handle.
+    for nth in [1, 2] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("boundary-oom");
+        let spec = MutationFormat::spec()
+            .with_index_policy(IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true))
+            .with_resource_limits(ReadLimits::STANDARD.with_max_index_bytes(131072));
+        let mut writer = spec.create(&path)?;
+        let mut offsets = Vec::new();
+        for value in 0..10000 {
+            offsets.push(writer.push_info(&Point { value })?.record_offset);
+        }
+        writer.flush()?;
+        drop(writer);
+        let mut writer = VarlitFile::open_lazy(spec, &path)?;
+        let (refused, peak) = measure(8192, nth, || -> Result<()> {
+            writer.mark_record_dead(offsets[9999])?;
+            // An interior request exercises the cache allocation on its way
+            // to rejection, without authorizing a source write.
+            writer.mark_record_dead(offsets[1000] + 1)
+        });
+        assert!(
+            matches!(refused, Err(Error::Io(ref e)) if e.kind() == std::io::ErrorKind::OutOfMemory)
+        );
+        assert!(!writer.record_is_dead(offsets[1000])?);
+        assert!(
+            peak <= 16384,
+            "boundary memory exceeded the transferred budget: {peak}"
+        );
+        writer.mark_record_dead(offsets[9999])?;
+        writer.mark_record_dead(offsets[1000])?;
+        assert!(writer.record_is_dead(offsets[1000])?);
+    }
     let source: HashMap<u64, u64> = (0..3000).map(|n| (n, n)).collect();
     let encoded = encode_to_vec(&source, Endian::Little)?;
     let (result, _) = measure(60000, 1, || {

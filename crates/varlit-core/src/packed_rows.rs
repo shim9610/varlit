@@ -73,12 +73,16 @@ fn take_varint(input: &mut &[u8]) -> io::Result<u64> {
 }
 impl<const N: usize> PackedRows<N> {
     pub(crate) fn new(bytes: usize) -> Self {
+        Self::with_page_rows(bytes, 256)
+    }
+    pub(crate) fn with_page_rows(bytes: usize, maximum_rows: usize) -> Self {
         assert!(N > 0 && N <= 128);
+        assert!((1..=256).contains(&maximum_rows));
         // Tail, encoded write scratch, and decoded/encoded read scratch share
         // the supplied budget. A minimum single-row working set is unavoidable.
         let encoded_row_bound = N.div_ceil(8) * 10 + N.div_ceil(64);
         let working_row_bytes = (READ_PAGES + 1) * (N + encoded_row_bound);
-        let page_rows = (bytes / working_row_bytes).clamp(1, 256);
+        let page_rows = (bytes / working_row_bytes).clamp(1, maximum_rows);
         let remaining = bytes.saturating_sub(page_rows * working_row_bytes);
         let directory_bytes = (remaining / 32).clamp(8, 16 * 1024);
         Self {
@@ -237,10 +241,16 @@ impl<const N: usize> PackedRows<N> {
         let cache = &mut caches.pages[replace];
         {
             cache.rows.clear();
+            // Small pages serve point lookups; do not fill a directory cache
+            // with thousands of unrelated offsets for each random probe.
+            let page = position / self.page_rows;
             let at = u64::from_le_bytes(
-                self.pages
-                    .get(position / self.page_rows)?
-                    .ok_or_else(invalid)?,
+                if self.page_rows <= 16 {
+                    self.pages.get_direct(page)?
+                } else {
+                    self.pages.get(page)?
+                }
+                .ok_or_else(invalid)?,
             );
             let data_at = at
                 .checked_add(4)

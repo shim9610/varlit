@@ -99,6 +99,7 @@ impl SequenceRanges {
 
 pub(super) struct RewriteDirectory {
     rows: RewriteRows,
+    uniform: Option<resident_index::UniformPrefix>,
     last: Option<RecordIndexEntry>,
     maximum_sequence: u64,
     tails: [(u32, u64); 16],
@@ -107,7 +108,10 @@ pub(super) struct RewriteDirectory {
 impl RewriteDirectory {
     pub(super) fn new(spec: FormatSpec) -> Self {
         Self {
-            rows: PackedRows::new(resident_index::rewrite_buffer_bytes(spec)),
+            // Small pages keep arbitrary boundary probes from decoding hundreds
+            // of unrelated rows. All buffers still share the same budget.
+            rows: PackedRows::with_page_rows(resident_index::rewrite_buffer_bytes(spec), 16),
+            uniform: None,
             last: None,
             maximum_sequence: 0,
             tails: [(0, 0); 16],
@@ -118,7 +122,7 @@ impl RewriteDirectory {
         self.rows.len()
     }
     pub(super) fn into_resident(self, snapshot: SnapshotFile, spec: FormatSpec) -> ResidentIndex {
-        ResidentIndex::from_rewrite_rows(self.rows, snapshot, spec)
+        ResidentIndex::from_rewrite_rows(self.rows, self.uniform, snapshot, spec)
     }
     pub(super) fn find_offset(&self, offset: u64) -> Result<Option<RecordIndexEntry>> {
         if let Some(last) = self
@@ -146,6 +150,11 @@ impl RewriteDirectory {
     }
     pub(super) fn push(&mut self, entry: RecordIndexEntry) -> Result<()> {
         self.rows.push(encode_rewrite_entry(&entry)?)?;
+        resident_index::UniformPrefix::observe(
+            &mut self.uniform,
+            self.rows.len() - 1,
+            entry.record_offset,
+        );
         self.maximum_sequence = self.maximum_sequence.max(entry.sequence);
         // Most formats have few block types. A fixed cache avoids rereading
         // the entire directory at every digest, without growing with records

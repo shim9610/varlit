@@ -1,0 +1,13 @@
+{
+  "regressed": "ed92ba1e0eb3816d5b2c1590946bab07cd8b9931",
+  "original": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+  "candidate_production_diff_sha256": "e83c0e81a9a734c3ab47b8fad8e9242f4640e6141a947991fa6bb4033d84ef47",
+  "binaries": {
+    "regressed": "c7da578f07a23bd528d8387adfc1b57ae88b1ea76bac4f8216c38c2c21b3b0e9",
+    "original": "45e1df129b3ff19f47bda4e1645fb36b76bde38f0a49bef0925fa95b86b2ad45",
+    "after": "a407b4cac0a255c89dfdb068d8ddc2d5245d1b87d81e112b91dddc38abf3068e"
+  },
+  "separate_targets": true,
+  "harness_sha256": "3e8f9ef8df0afee4e9223ea1f53c4cc9854a4d4c2e1bc211e9a7373ff209ffad",
+  "cargo_lock_sha256": "af0a76a1a86090f01e31b4c8faab11e4d2502371b3a0608034cf706310b5af7a"
+}

@@ -46,7 +46,7 @@ pub(crate) const RAW_SITES: &[(&str, &str, &str)] = &[
     ("file.rs", "read_record_header", "read_native_record_header"),
     (
         "file.rs",
-        "fault_record_entry_prefixed",
+        "fault_record_entry_with",
         "read_native_record_header",
     ),
     (
@@ -63,6 +63,32 @@ pub(crate) const RAW_SITES: &[(&str, &str, &str)] = &[
 pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
     (
         "file.rs",
+        "fault_record_entry_prefixed",
+        "fault_record_entry_with",
+    ),
+    (
+        "native_directory.rs",
+        "extend_boundary_proof",
+        "fault_record_entry_with",
+    ),
+    (
+        "native_directory.rs",
+        "extend_boundary_proof",
+        "validate_record_entry",
+    ),
+    ("file.rs", "set_record_mutable_flags", "verify_boundary"),
+    (
+        "file.rs",
+        "set_record_mutable_flags",
+        "write_framed_record_flags",
+    ),
+    (
+        "file.rs",
+        "recover_marked_tail",
+        "write_framed_record_flags",
+    ),
+    (
+        "file.rs",
         "fault_record_entry",
         "fault_record_entry_prefixed",
     ),
@@ -73,7 +99,7 @@ pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
     ),
     (
         "file.rs",
-        "set_record_mutable_flags",
+        "write_framed_record_flags",
         "validate_record_entry",
     ),
     (

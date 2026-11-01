@@ -13,6 +13,44 @@ pub(crate) struct SpillRows<const N: usize> {
     read_cache: RefCell<(usize, Vec<u8>)>,
 }
 impl<const N: usize> SpillRows<N> {
+    /// No heap buffering; used when a shared budget cannot spare one row.
+    pub(crate) fn unbuffered() -> Self {
+        Self {
+            capacity: 0,
+            ..Self::new(0)
+        }
+    }
+
+    /// Transfer part of this buffer budget, not additional memory, to a
+    /// secondary directory. Existing rows are durable before releasing RAM.
+    pub(crate) fn lend_boundary_budget(&mut self) -> io::Result<usize> {
+        let loan = (self.capacity / 2).min(16 * 1024);
+        let retained = ((self.capacity - loan) / N * N).max(N);
+        let available = self.capacity - retained;
+        if available == 0 {
+            return Ok(0);
+        }
+        if self.buffer.capacity() > retained && !self.buffer.is_empty() {
+            if self.file.is_none() {
+                self.file = Some(tempfile::tempfile()?);
+            }
+            let offset = (self.spilled as u64)
+                .checked_mul(N as u64)
+                .ok_or(io::ErrorKind::InvalidInput)?;
+            let file = self.file.as_mut().unwrap();
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&self.buffer)?;
+            self.spilled += self.buffer.len() / N;
+        }
+        if self.buffer.capacity() > retained {
+            self.buffer = Vec::new();
+        }
+        if self.read_cache.get_mut().1.capacity() > retained.min(64 * 1024) {
+            self.read_cache.get_mut().1 = Vec::new();
+        }
+        self.capacity = retained;
+        Ok(available)
+    }
     pub(crate) fn new(bytes: usize) -> Self {
         assert!(N != 0);
         Self {
@@ -115,6 +153,19 @@ impl<const N: usize> SpillRows<N> {
         self.buffer.extend_from_slice(&row);
     }
     pub(crate) fn push(&mut self, row: [u8; N]) -> io::Result<()> {
+        if self.capacity == 0 {
+            if self.file.is_none() {
+                self.file = Some(tempfile::tempfile()?);
+            }
+            let offset = (self.spilled as u64)
+                .checked_mul(N as u64)
+                .ok_or(io::ErrorKind::InvalidInput)?;
+            let file = self.file.as_mut().unwrap();
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&row)?;
+            self.spilled += 1;
+            return Ok(());
+        }
         self.reserve_one()?;
         self.push_reserved(row);
         Ok(())
@@ -134,6 +185,12 @@ impl<const N: usize> SpillRows<N> {
         }
     }
     pub(crate) fn get(&self, index: usize) -> io::Result<Option<[u8; N]>> {
+        self.get_window(index, 64 * 1024)
+    }
+    pub(crate) fn get_window(&self, index: usize, bytes: usize) -> io::Result<Option<[u8; N]>> {
+        if self.capacity == 0 {
+            return self.get_direct(index);
+        }
         if index >= self.len() {
             return Ok(None);
         }
@@ -148,8 +205,14 @@ impl<const N: usize> SpillRows<N> {
                 row.copy_from_slice(&cache.1[at..at + N]);
                 return Ok(Some(row));
             }
-            let rows = (self.capacity.min(64 * 1024) / N).max(1);
-            let start = index / rows * rows;
+            let rows = (self.capacity.min(64 * 1024).min(bytes.max(N)) / N).max(1);
+            // Small prediction windows are centered on the estimate so a
+            // nearby target does not miss merely at a page boundary.
+            let start = if bytes < 64 * 1024 {
+                index.saturating_sub(rows / 2)
+            } else {
+                index / rows * rows
+            };
             let bytes = (self.spilled - start).min(rows) * N;
             cache.1.clear();
             cache
@@ -189,11 +252,85 @@ impl<const N: usize> SpillRows<N> {
         }
         Ok(Some(row))
     }
+
+    /// Point probes must not fill a 64 KiB page for every binary-search step.
+    /// This path borrows the append buffer and otherwise reads one stack row.
+    pub(crate) fn get_direct(&self, index: usize) -> io::Result<Option<[u8; N]>> {
+        if index >= self.len() {
+            return Ok(None);
+        }
+        let mut row = [0; N];
+        if index >= self.spilled {
+            let at = (index - self.spilled) * N;
+            row.copy_from_slice(&self.buffer[at..at + N]);
+        } else {
+            let mut at = (index as u64)
+                .checked_mul(N as u64)
+                .ok_or(io::ErrorKind::InvalidInput)?;
+            let mut remaining = row.as_mut_slice();
+            while !remaining.is_empty() {
+                let n = match crate::snapshot::read_at(self.file.as_ref().unwrap(), remaining, at) {
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    r => r?,
+                };
+                if n == 0 {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
+                at += n as u64;
+                remaining = &mut remaining[n..];
+            }
+        }
+        Ok(Some(row))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lending_budget_preserves_rows_and_bounds_both_buffers() -> io::Result<()> {
+        for budget in [0, 16, 64, 4096] {
+            let mut original = SpillRows::<16>::new(budget);
+            let initial = original.capacity;
+            for i in 0u64..200 {
+                let mut row = [0; 16];
+                row[..8].copy_from_slice(&i.to_le_bytes());
+                original.push(row)?;
+            }
+            original.get(0)?;
+            let loan = original.lend_boundary_budget()?;
+            let mut proof = if loan == 0 {
+                SpillRows::<8>::unbuffered()
+            } else {
+                SpillRows::<8>::new(loan / 2)
+            };
+            assert_eq!(original.capacity + 2 * proof.capacity, initial);
+            for i in 0u64..300 {
+                proof.push(i.to_le_bytes())?;
+            }
+            assert!(original.buffer.capacity() + proof.buffer.capacity() <= initial);
+            assert_eq!(proof.read_cache.borrow().1.capacity(), 0);
+            for i in 0..200 {
+                assert_eq!(
+                    u64::from_le_bytes(original.get(i)?.unwrap()[..8].try_into().unwrap()),
+                    i as u64
+                );
+            }
+            for i in (0..300).rev() {
+                assert_eq!(u64::from_le_bytes(proof.get_direct(i)?.unwrap()), i as u64);
+                assert_eq!(
+                    u64::from_le_bytes(proof.get_window(i, 48)?.unwrap()),
+                    i as u64
+                );
+            }
+            proof.truncate(13);
+            proof.push(99u64.to_le_bytes())?;
+            assert_eq!(u64::from_le_bytes(proof.get_direct(13)?.unwrap()), 99);
+            assert!(proof.get_direct(14)?.is_none());
+        }
+        Ok(())
+    }
+
     #[test]
     fn cached_floor_agrees_with_sorted_rows_after_spill_and_truncate() {
         let mut rows = SpillRows::<8>::new(32);

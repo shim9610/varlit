@@ -293,6 +293,58 @@ fn kernel_failure_child() -> Result<()> {
             vec![value]
         );
     }
+    // Refuse an incomplete temporary boundary-directory spill before the
+    // source record is touched, then resume the same proof on the same handle.
+    for cut in [0, 7, 31] {
+        let path = dir.path().join(format!("boundary-spill-{cut}.varlit"));
+        let spec = spec(true)
+            .with_commit_policy(CommitPolicy::TransactionMarker(
+                TransactionMarkerMode::OnFlush,
+            ))
+            .with_liveness_policy(LivenessPolicy::FooterFlags)
+            .with_index_policy(IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true))
+            .with_resource_limits(ReadLimits::STANDARD.with_max_index_bytes(128))
+            .with_computed_schema_hash();
+        let mut writer = VarlitFile::create(spec, &path)?;
+        let mut offsets = Vec::new();
+        for id in 0..32 {
+            offsets.push(
+                writer
+                    .push_info(&Record {
+                        id,
+                        bytes: [13; 8192],
+                    })?
+                    .record_offset,
+            );
+        }
+        writer.flush()?;
+        drop(writer);
+        let (mut writer, source) = VarlitFile::open_lazy_with_report(spec, &path)?;
+        assert_eq!(source, LazyOpenSource::Digest);
+        let before = fs::read(&path)?;
+        #[cfg(feature = "scalable-fault-injection")]
+        VarlitFile::take_record_entry_faults();
+        let failed = {
+            let _limit = FileLimit::set(cut);
+            writer.mark_record_dead(offsets[31])
+        };
+        assert!(matches!(failed, Err(Error::Io(ref e)) if e.raw_os_error() == Some(libc::EFBIG)));
+        #[cfg(feature = "scalable-fault-injection")]
+        assert!(
+            VarlitFile::take_record_entry_faults() < 32,
+            "failure must precede the source mutation"
+        );
+        assert_eq!(fs::read(&path)?, before);
+        for &offset in offsets.iter().rev() {
+            writer.mark_record_dead(offset)?;
+        }
+        drop(writer);
+        let reopened = VarlitFile::open_readonly(spec, &path)?;
+        for offset in offsets {
+            assert!(reopened.record_is_dead(offset)?);
+        }
+    }
+    println!("boundary-spill short-write recovery trials=3");
     println!("mutable-word short-write recovery trials=4");
     assert_eq!(trials, 28);
     println!("kernel short-write recovery trials={trials}");
