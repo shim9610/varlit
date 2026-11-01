@@ -7,6 +7,10 @@ use std::sync::Arc;
 
 #[cfg(test)]
 mod failure_tests;
+#[cfg(test)]
+thread_local! {
+    static RECONCILE_SYNC_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 const MAGIC: &[u8; 8] = b"VARVEIX5";
 const HEAD_MAGIC: &[u8; 8] = b"VIXHEAD1";
@@ -67,12 +71,7 @@ pub(super) struct Checkpoint {
     pub metadata: DiskIndexMetadata,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum Publication {
-    Confirmed,
-    Working,
-    Dirty,
-}
+pub(super) use crate::publication_protocol::CheckpointKind as Publication;
 
 #[derive(Clone, Copy)]
 struct Head {
@@ -321,6 +320,18 @@ impl Store {
     pub fn confirmed(&self) -> DiskIndexResult<Checkpoint> {
         self.latest(true)
     }
+    pub(super) fn reconcile_confirmed_heads(&self) -> DiskIndexResult<()> {
+        let first = self.head(CONFIRMED[0])?.map(|h| (h.offset, h.end));
+        let second = self.head(CONFIRMED[1])?.map(|h| (h.offset, h.end));
+        crate::publication_protocol::resume(first, second, || {
+            #[cfg(test)]
+            if RECONCILE_SYNC_FAILURE.with(|flag| flag.replace(false)) {
+                return Err(std::io::Error::other("injected head reconciliation failure").into());
+            }
+            self.writer()?.sync_data()?;
+            Ok(())
+        })
+    }
     pub fn state(
         &self,
         checkpoint: &Checkpoint,
@@ -402,58 +413,71 @@ impl Store {
         let end = offset
             .checked_add(len as u64)
             .ok_or_else(|| corrupt("checkpoint extent overflow"))?;
-        #[cfg(feature = "scalable-fault-injection")]
-        if crate::scalable_fault::is_armed() {
-            crate::scalable_fault_point("checkpoint.record_prefix");
-            write_at(file, offset, &bytes[..bytes.len() / 2])?;
-            crate::scalable_fault_point("checkpoint.record_prefix");
-        }
-        crate::scalable_fault_point("checkpoint.record_write");
-        write_at(file, offset, &bytes)?;
-        crate::scalable_fault_point("checkpoint.record_write");
-        let durable = !matches!(publication, Publication::Working);
-        if durable {
-            crate::scalable_fault_point("checkpoint.data_sync");
-            file.sync_data()?;
-            crate::scalable_fault_point("checkpoint.data_sync");
-        }
-        let slot = match publication {
-            Publication::Dirty => DIRTY,
-            Publication::Confirmed | Publication::Working => {
-                let slots = if matches!(publication, Publication::Confirmed) {
-                    CONFIRMED
-                } else {
-                    WORKING
-                };
-                let first = self.head(slots[0])?.map_or(0, |h| h.offset);
-                let second = self.head(slots[1])?.map_or(0, |h| h.offset);
-                slots[usize::from(first > second)]
-            }
-        };
         let mut head = [0; 64];
         head[..8].copy_from_slice(HEAD_MAGIC);
         head[8..16].copy_from_slice(&offset.to_le_bytes());
         head[16..24].copy_from_slice(&end.to_le_bytes());
         let checksum = crc32fast::hash(&head[..28]);
         head[28..32].copy_from_slice(&checksum.to_le_bytes());
-        let second = matches!(publication, Publication::Confirmed)
-            .then_some(CONFIRMED[usize::from(slot == CONFIRMED[0])]);
-        for slot in std::iter::once(slot).chain(second) {
-            #[cfg(feature = "scalable-fault-injection")]
-            if crate::scalable_fault::is_armed() {
-                crate::scalable_fault_point("checkpoint.head_prefix");
-                write_at(file, slot, &head[..24])?;
-                crate::scalable_fault_point("checkpoint.head_prefix");
+        let mut slot = 0;
+        use crate::publication_protocol::CheckpointStep;
+        crate::publication_protocol::checkpoint(publication, |step| -> DiskIndexResult<()> {
+            match step {
+                CheckpointStep::Body => {
+                    #[cfg(feature = "scalable-fault-injection")]
+                    if crate::scalable_fault::is_armed() {
+                        crate::scalable_fault_point("checkpoint.record_prefix");
+                        write_at(file, offset, &bytes[..bytes.len() / 2])?;
+                        crate::scalable_fault_point("checkpoint.record_prefix");
+                    }
+                    crate::scalable_fault_point("checkpoint.record_write");
+                    write_at(file, offset, &bytes)?;
+                    crate::scalable_fault_point("checkpoint.record_write");
+                }
+                CheckpointStep::DataSync => {
+                    crate::scalable_fault_point("checkpoint.data_sync");
+                    file.sync_data()?;
+                    crate::scalable_fault_point("checkpoint.data_sync");
+                }
+                CheckpointStep::SelectHead => {
+                    slot = match publication {
+                        Publication::Dirty => DIRTY,
+                        Publication::Confirmed | Publication::Working => {
+                            let slots = if matches!(publication, Publication::Confirmed) {
+                                CONFIRMED
+                            } else {
+                                WORKING
+                            };
+                            let first = self.head(slots[0])?.map_or(0, |h| h.offset);
+                            let second = self.head(slots[1])?.map_or(0, |h| h.offset);
+                            slots[crate::publication_protocol::older_head(first, second)]
+                        }
+                    };
+                }
+                CheckpointStep::Head(second) => {
+                    let slot = if second {
+                        CONFIRMED[usize::from(slot == CONFIRMED[0])]
+                    } else {
+                        slot
+                    };
+                    #[cfg(feature = "scalable-fault-injection")]
+                    if crate::scalable_fault::is_armed() {
+                        crate::scalable_fault_point("checkpoint.head_prefix");
+                        write_at(file, slot, &head[..24])?;
+                        crate::scalable_fault_point("checkpoint.head_prefix");
+                    }
+                    crate::scalable_fault_point("checkpoint.head_write");
+                    write_at(file, slot, &head)?;
+                    crate::scalable_fault_point("checkpoint.head_write");
+                }
+                CheckpointStep::HeadSync => {
+                    crate::scalable_fault_point("checkpoint.head_sync");
+                    file.sync_data()?;
+                    crate::scalable_fault_point("checkpoint.head_sync");
+                }
             }
-            crate::scalable_fault_point("checkpoint.head_write");
-            write_at(file, slot, &head)?;
-            crate::scalable_fault_point("checkpoint.head_write");
-            if durable {
-                crate::scalable_fault_point("checkpoint.head_sync");
-                file.sync_data()?;
-                crate::scalable_fault_point("checkpoint.head_sync");
-            }
-        }
+            Ok(())
+        })?;
         Ok(Checkpoint {
             offset,
             end,

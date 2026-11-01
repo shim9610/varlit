@@ -1813,6 +1813,10 @@ impl DiskIndexStore {
         let policy = TailLimitPolicy::for_spec(spec)?;
         let actual = policy.validate(self.read_metadata()?)?;
         let state = self.validate_clean_writer(identity, mode, physical_native_eof, actual)?;
+        // A previous writer can die after exposing one clean head but before
+        // syncing it. Clean sync is otherwise a no-op for the sidecar. Reconcile
+        // only divergent/torn heads; normal matching copies need no extra fsync.
+        self.storage.reconcile_confirmed_heads()?;
         self.write_tail_limit = Some(policy.current);
         Ok(state)
     }

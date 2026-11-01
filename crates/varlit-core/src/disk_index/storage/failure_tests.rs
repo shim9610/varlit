@@ -155,3 +155,35 @@ fn independently_torn_heads_never_mix_publication_generations() {
     assert_eq!(cases, 8450);
     println!("PUBLICATION_IMAGES independent head prefixes=8450");
 }
+
+#[test]
+fn divergent_clean_heads_require_sync_before_writer_resume() {
+    let (before, mut after, _, new) = images();
+    let slot = CONFIRMED[1] as usize;
+    after[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("uncertain-clean-head");
+    std::fs::write(&path, &after).unwrap();
+    let store = Store::open(&path, DiskIndexOptions::default(), false, true).unwrap();
+    assert_eq!(store.confirmed().unwrap().offset, new.offset);
+    RECONCILE_SYNC_FAILURE.with(|flag| flag.set(true));
+    assert!(store.reconcile_confirmed_heads().is_err());
+    assert!(!RECONCILE_SYNC_FAILURE.with(|flag| flag.get()));
+    store.reconcile_confirmed_heads().unwrap();
+    assert_eq!(store.confirmed().unwrap().offset, new.offset);
+}
+
+#[test]
+fn matching_clean_heads_do_not_add_a_resume_sync() {
+    let (_, after, _, _) = images();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("matching-clean-heads");
+    std::fs::write(&path, after).unwrap();
+    let store = Store::open(&path, DiskIndexOptions::default(), false, true).unwrap();
+    RECONCILE_SYNC_FAILURE.with(|flag| flag.set(true));
+    store.reconcile_confirmed_heads().unwrap();
+    assert!(
+        RECONCILE_SYNC_FAILURE.with(|flag| flag.replace(false)),
+        "normal resume issued an unnecessary sync"
+    );
+}

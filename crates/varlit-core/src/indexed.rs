@@ -186,24 +186,35 @@ impl VarlitIndexedReader {
     /// Dirty working generations expose their saved confirmed root. An error
     /// leaves this handle unchanged. Existing iterators retain their old view.
     pub fn follow(&mut self) -> Result<u64> {
-        let (store, next) = self
-            ._store
-            .followed_handle(&self.index)
-            .map_err(index_error)?;
-        let added = next.record_count() - self.index.record_count();
-        if next.generation() == self.index.generation()
-            && self.index.is_pinned()
-            && self._store.same_file(&store)
-        {
-            return Ok(0);
-        }
-        next.validate_finite_layout(self.plan)
-            .map_err(index_error)?;
-        let native = self.stream.committed_native_snapshot(&next)?;
-        self.stream.adopt_snapshot(native);
-        self.index = next;
-        self._store = store;
-        Ok(added)
+        crate::publication_protocol::follow(
+            self,
+            |current| {
+                let (store, next) = current
+                    ._store
+                    .followed_handle(&current.index)
+                    .map_err(index_error)?;
+                let added = next.record_count() - current.index.record_count();
+                if next.generation() == current.index.generation()
+                    && current.index.is_pinned()
+                    && current._store.same_file(&store)
+                {
+                    return Ok(None);
+                }
+                next.validate_finite_layout(current.plan)
+                    .map_err(index_error)?;
+                let native = current.stream.committed_native_snapshot(&next)?;
+                Ok(Some((store, next, native, added)))
+            },
+            |current, prepared| {
+                let Some((store, next, native, added)) = prepared else {
+                    return 0;
+                };
+                current.stream.adopt_snapshot(native);
+                current.index = next;
+                current._store = store;
+                added
+            },
+        )
     }
 
     /// Refresh and resume this reader's event cursor at its previous offset.
@@ -846,24 +857,31 @@ impl VarlitIndexedWriter {
     }
 
     pub fn sync(&mut self) -> Result<()> {
-        self.ensure_not_poisoned()?;
-        self.commit_pending_batch()?;
-        self.stream.sync()?;
-        if self.dirty
-            && let Err(error) = self
-                .index
-                .publish_clean(checkpoint_frontier(&self.stream.checkpoint()))
-        {
-            // Publication can be visible even when its final sync failed.
-            // The writer must reopen/reconcile before another mutation.
-            self.stream.poison();
-            return Err(index_error(error));
-        }
-        self.batch_records = 0;
-        self.batch_last_sequence = None;
-        self.dirty = false;
-        self.immediate_state.reset();
-        Ok(())
+        use crate::publication_protocol::CommitStep;
+        crate::publication_protocol::commit(|step| {
+            match step {
+                CommitStep::Prepare => {
+                    self.ensure_not_poisoned()?;
+                    self.commit_pending_batch()?;
+                }
+                CommitStep::PrimarySync => self.stream.sync()?,
+                CommitStep::Publish => {
+                    if self.dirty {
+                        self.index
+                            .publish_clean(checkpoint_frontier(&self.stream.checkpoint()))
+                            .map_err(index_error)?;
+                    }
+                }
+                CommitStep::Poison => self.stream.poison(),
+                CommitStep::Finish => {
+                    self.batch_records = 0;
+                    self.batch_last_sequence = None;
+                    self.dirty = false;
+                    self.immediate_state.reset();
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Persist all preceding records, then publish their clean disk-index root.

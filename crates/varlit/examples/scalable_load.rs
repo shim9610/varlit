@@ -54,6 +54,7 @@ static INDEXED: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Record>()];
 #[derive(Clone)]
 struct Config {
     phase: String,
+    open_count: usize,
     mode: String,
     root: PathBuf,
     total: u64,
@@ -84,6 +85,7 @@ impl Config {
             |name: &str, default: &str| options.remove(name).unwrap_or_else(|| default.into());
         let config = Self {
             phase: get("--phase", "write"),
+            open_count: get("--open-count", "1000").parse()?,
             mode: get("--mode", "indexed"),
             root: PathBuf::from(get("--root", "")),
             total: get("--total-bytes", "21474836480").parse()?,
@@ -1049,6 +1051,26 @@ fn run() -> Result<()> {
             println!(
                 "{{\"event\":\"rebuild_complete\",\"records\":{},\"seconds\":{}}}",
                 result.records,
+                started.elapsed().as_secs_f64()
+            );
+            Ok(())
+        }
+        "writer-open" => {
+            if config.open_count == 0 {
+                return Err("positive open count required".into());
+            }
+            let started = Instant::now();
+            for _ in 0..config.open_count {
+                drop(VarlitIndexedWriter::open(
+                    config.spec(),
+                    config.path(),
+                    config.options(),
+                    config.plan(),
+                )?);
+            }
+            println!(
+                "{{\"event\":\"writer_open_complete\",\"opens\":{},\"seconds\":{}}}",
+                config.open_count,
                 started.elapsed().as_secs_f64()
             );
             Ok(())
