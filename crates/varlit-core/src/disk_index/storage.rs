@@ -163,7 +163,8 @@ impl Store {
                     .max_key_bytes
                     .saturating_add(DiskIndexKeyTag::ENCODED_LEN),
                 budget,
-            ),
+            )
+            .with_minimum_offset(FILE_HEADER as u64),
             slots: slots::Reader::new(
                 self.file.clone(),
                 checkpoint.offset,
@@ -227,7 +228,7 @@ impl Store {
         if (tree.offset == 0) != (tree.count == 0)
             || tree.count > metadata.working.record_count
             || (tree.offset != 0
-                && (tree.offset < tree::PAGE as u64
+                && (tree.offset < FILE_HEADER as u64
                     || tree
                         .offset
                         .checked_add(tree::PAGE as u64)

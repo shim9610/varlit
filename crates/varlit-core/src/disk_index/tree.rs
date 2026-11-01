@@ -218,6 +218,7 @@ fn copy_bytes(bytes: &[u8]) -> DiskIndexResult<Vec<u8>> {
 pub(super) struct Reader {
     file: Arc<File>,
     end: u64,
+    minimum_offset: u64,
     max_key: usize,
     budget: usize,
     cache: RefCell<Cache>,
@@ -232,6 +233,7 @@ impl Reader {
         Self {
             file,
             end,
+            minimum_offset: PAGE as u64,
             max_key,
             budget,
             cache: RefCell::new(Cache::default()),
@@ -240,6 +242,10 @@ impl Reader {
             #[cfg(test)]
             key_reads: std::cell::Cell::new(0),
         }
+    }
+    pub(super) fn with_minimum_offset(mut self, minimum_offset: u64) -> Self {
+        self.minimum_offset = minimum_offset;
+        self
     }
     fn node(&self, root: Root) -> DiskIndexResult<Lease<'_, Node>> {
         if let Some(node) = self.cached::<Node>(root.offset) {
@@ -251,7 +257,7 @@ impl Reader {
         self.retain(root.offset, self.read_node(root)?)
     }
     fn read_node(&self, root: Root) -> DiskIndexResult<Node> {
-        if root.offset < PAGE as u64
+        if root.offset < self.minimum_offset
             || root
                 .offset
                 .checked_add(PAGE as u64)
@@ -301,7 +307,7 @@ impl Reader {
                 if key.offset != 0 || key.prefix[key.len..].iter().any(|x| *x != 0) {
                     return Err(corrupt("invalid inline index key"));
                 }
-            } else if key.offset < PAGE as u64
+            } else if key.offset < self.minimum_offset
                 || key
                     .offset
                     .checked_add(key.len as u64 + 4)
@@ -317,7 +323,7 @@ impl Reader {
             } else {
                 let child = entry.child();
                 if child.count == 0
-                    || child.offset < PAGE as u64
+                    || child.offset < self.minimum_offset
                     || child
                         .offset
                         .checked_add(PAGE as u64)
@@ -1011,6 +1017,31 @@ mod tests {
         assert_eq!(cache.bytes, actual);
         assert!(actual <= reader.budget);
         assert_eq!(cache.order.len(), cache.pages.len() + cache.keys.len());
+    }
+
+    #[test]
+    fn reserved_storage_pages_cannot_supply_nodes_or_long_keys() {
+        for (count, key_len) in [(1u64, 8), (1, 128), (200, 8)] {
+            let (_dir, file) = fixture();
+            let updates = (0..count)
+                .map(|id| (id.to_be_bytes().repeat(key_len / 8), value(id)))
+                .collect();
+            let root = apply(&file, &reader(&file, 0), Root::default(), &updates).unwrap();
+            let key = vec![0; key_len];
+            assert!(reader(&file, 0).get(root, &key).unwrap().is_some());
+            let mut protected = reader(&file, 0).with_minimum_offset(24576);
+            assert!(protected.get(root, &key).is_err());
+            if count > 1 || key_len > 16 {
+                // Move only the root into the allowed extent: its child/key
+                // references still target reserved publication storage.
+                let mut bytes = [0; PAGE];
+                read_at(&file, root.offset, &mut bytes).unwrap();
+                let offset = file.metadata().unwrap().len().max(24576);
+                write_at(&file, offset, &bytes).unwrap();
+                protected = reader(&file, 0).with_minimum_offset(24576);
+                assert!(protected.get(Root { offset, ..root }, &key).is_err());
+            }
+        }
     }
 
     #[test]

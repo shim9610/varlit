@@ -1597,16 +1597,32 @@ impl DiskIndexStore {
         })
     }
     pub(crate) fn configure_finite(&mut self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
-        let layout: Vec<_> = plan
-            .descriptors()
-            .iter()
-            .filter(|d| d.finite_key_count != 0)
-            .map(|d| (d.block_id, d.finite_key_count))
-            .collect();
+        let mut layout = Vec::new();
+        let descriptors = plan.descriptors();
+        layout
+            .try_reserve_exact(
+                descriptors
+                    .iter()
+                    .filter(|d| d.finite_key_count != 0)
+                    .count(),
+            )
+            .map_err(|_| {
+                DiskIndexError::Io(std::io::Error::from(std::io::ErrorKind::OutOfMemory))
+            })?;
+        layout.extend(
+            descriptors
+                .iter()
+                .filter(|d| d.finite_key_count != 0)
+                .map(|d| (d.block_id, d.finite_key_count)),
+        );
+        let checkpoint = self.storage.current()?;
+        self.storage
+            .reader(&checkpoint)
+            .slots
+            .validate_layout(plan)?;
         if layout.is_empty() {
             return Ok(());
         }
-        let checkpoint = self.storage.current()?;
         let working = slots::Working::load(
             &self.storage.reader(&checkpoint).slots,
             &layout,
@@ -2613,6 +2629,9 @@ pub struct DiskIndexSnapshot {
 }
 
 impl DiskIndexSnapshot {
+    pub(crate) fn validate_finite_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
+        self.pinned()?.reader.slots.validate_layout(plan)
+    }
     fn pinned(&self) -> DiskIndexResult<&SnapshotPin> {
         self.pin.as_ref().ok_or(DiskIndexError::SnapshotReleased)
     }
@@ -3713,6 +3732,36 @@ mod tests {
 
     fn plan() -> DiskIndexPlan {
         DiskIndexPlan::canonical(spec(), DESCRIPTORS).unwrap()
+    }
+
+    #[test]
+    fn a_finite_directory_cannot_shadow_a_nonfinite_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = DiskIndexStore::create(
+            dir.path().join("index"),
+            DiskIndexOptions::default(),
+            metadata(64),
+        )
+        .unwrap();
+        let checkpoint = store.storage.current().unwrap();
+        let reader = store.storage.reader(&checkpoint);
+        let mut slots =
+            slots::Working::load(&reader.slots, &[(PlanItem::ID, 2)], 1024 * 1024).unwrap();
+        let root = storage::Root {
+            tree: tree::Root::default(),
+            slots: slots
+                .publish(store.storage.writer().unwrap(), true)
+                .unwrap(),
+        };
+        store
+            .storage
+            .publish(metadata(64), &[], root, storage::Publication::Confirmed)
+            .unwrap();
+        let snapshot = store
+            .begin_committed_snapshot(identity(), plan().mode())
+            .unwrap();
+        assert!(snapshot.validate_finite_layout(plan()).is_err());
+        assert!(store.configure_finite(plan()).is_err());
     }
 
     fn metadata(eof: u64) -> DiskIndexMetadata {

@@ -35,6 +35,51 @@ impl<const N: usize> SpillRows<N> {
     pub(crate) fn len(&self) -> usize {
         self.spilled + self.buffer.len() / N
     }
+    /// Search an already resident sorted page before probing the spill file.
+    /// A miss outside its first/last keys makes no statement about other pages.
+    pub(crate) fn cached_floor(&self, wanted: u64, key: impl Fn(&[u8]) -> u64) -> Option<[u8; N]> {
+        fn search<const N: usize>(
+            bytes: &[u8],
+            wanted: u64,
+            key: &impl Fn(&[u8]) -> u64,
+        ) -> Option<[u8; N]> {
+            let count = bytes.len() / N;
+            if count == 0 || wanted < key(&bytes[..N]) || wanted > key(&bytes[(count - 1) * N..]) {
+                return None;
+            }
+            // Fixed-size records are common, with occasional large internal
+            // records between runs. Guess from the first adjacent spacing,
+            // not the entire page span (whose last row can follow a large
+            // checkpoint). Only exact equality proves membership; arbitrary
+            // extents retain the binary search below.
+            let first = key(&bytes[..N]);
+            if count > 1 {
+                let second = key(&bytes[N..2 * N]);
+                if second > first {
+                    let candidate = (wanted - first) / (second - first);
+                    if candidate < count as u64 {
+                        let at = candidate as usize * N;
+                        let row = &bytes[at..at + N];
+                        if key(row) == wanted {
+                            return row.try_into().ok();
+                        }
+                    }
+                }
+            }
+            let (mut low, mut high) = (0, count);
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if key(&bytes[middle * N..(middle + 1) * N]) <= wanted {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            bytes[(low - 1) * N..low * N].try_into().ok()
+        }
+        search(&self.buffer, wanted, &key)
+            .or_else(|| search(&self.read_cache.borrow().1, wanted, &key))
+    }
     /// All fallible work precedes the authoritative append. The caller may
     /// subsequently install exactly one row without I/O or allocation.
     pub(crate) fn reserve_one(&mut self) -> io::Result<()> {
@@ -149,6 +194,54 @@ impl<const N: usize> SpillRows<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_floor_agrees_with_sorted_rows_after_spill_and_truncate() {
+        let mut rows = SpillRows::<8>::new(32);
+        for i in 0..40u64 {
+            rows.push((i * 10).to_le_bytes()).unwrap();
+        }
+        for retained in [40, 23, 4] {
+            rows.truncate(retained);
+            for probe in 0..retained {
+                rows.get(probe).unwrap();
+                for wanted in 0..410u64 {
+                    if let Some(row) = rows.cached_floor(wanted, |bytes| {
+                        u64::from_le_bytes(bytes.try_into().unwrap())
+                    }) {
+                        let actual = u64::from_le_bytes(row);
+                        assert!(actual < retained as u64 * 10);
+                        assert_eq!(actual, wanted / 10 * 10);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cached_floor_handles_irregular_record_extents() {
+        let mut rows = SpillRows::<8>::new(1024);
+        let mut keys = Vec::new();
+        let mut offset = 0u64;
+        for i in 0..100 {
+            offset += 3 + (i * i % 31);
+            keys.push(offset);
+            rows.push(offset.to_le_bytes()).unwrap();
+        }
+        for wanted in 0..=offset + 1 {
+            let found = rows.cached_floor(wanted, |bytes| {
+                u64::from_le_bytes(bytes.try_into().unwrap())
+            });
+            if let Some(row) = found {
+                assert_eq!(
+                    Some(u64::from_le_bytes(row)),
+                    keys.iter().copied().filter(|key| *key <= wanted).max()
+                );
+            } else {
+                assert!(wanted < keys[0] || wanted > offset);
+            }
+        }
+    }
+
     #[test]
     fn rollback_across_a_spill_keeps_the_prefix_and_replaces_the_tail() {
         let mut rows = SpillRows::<8>::new(16);

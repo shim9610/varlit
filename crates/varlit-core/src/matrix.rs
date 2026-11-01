@@ -2071,6 +2071,7 @@ impl SparseBitmap {
             .contains_key(&page))
     }
 
+    #[inline]
     fn byte(&self, index: u64, read: BitmapRead<'_>) -> Result<u8> {
         if index >= self.byte_len {
             return Err(Error::InvalidMatrixLayout);
@@ -2078,6 +2079,37 @@ impl SparseBitmap {
         let page = index / BITMAP_PAGE_BYTES;
         let within =
             usize::try_from(index % BITMAP_PAGE_BYTES).map_err(|_| Error::InvalidMatrixLayout)?;
+        // Reuse the existing verified page directly on a hit. The old path
+        // probed membership in faulted_store and then looked up the same page
+        // again here. Keep recency updates and release the borrow before I/O.
+        {
+            let mut store = self.store();
+            if let Some(held) = store.pages.get(&page) {
+                let byte = held
+                    .bytes
+                    .get(within)
+                    .copied()
+                    .ok_or(Error::InvalidMatrixLayout)?;
+                // When the existing cache budget covers every possible byte
+                // of this bitmap, no cached page can need eviction. Avoid
+                // maintaining an unused recency order on every bit lookup.
+                // Larger bitmaps keep the same bounded LRU policy.
+                if self
+                    .backing
+                    .as_ref()
+                    .is_some_and(|b| b.cache_limit < self.byte_len)
+                {
+                    store.note_used(page);
+                }
+                return Ok(byte);
+            }
+        }
+        self.uncached_byte(page, within, read)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn uncached_byte(&self, page: u64, within: usize, read: BitmapRead<'_>) -> Result<u8> {
         let store = self.faulted_store(page, read)?;
         match store.pages.get(&page) {
             Some(page) => page
@@ -2159,6 +2191,7 @@ impl SparseBitmap {
         Ok(None)
     }
 
+    #[inline]
     fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool> {
         if ordinal >= self.bit_count {
             return Err(Error::InvalidMatrixLayout);
@@ -4393,45 +4426,62 @@ pub(crate) fn write_aux_at_len(
 }
 
 #[cfg(feature = "mmap")]
-pub(crate) fn cell_payload_parts<T: VarlitMatrixBlock>(
+pub(crate) fn cell_payload_parts<'a, T: VarlitMatrixBlock>(
     spec: FormatSpec,
-    layout: &MatrixLayout,
+    layout: &'a MatrixLayout,
     key: MatrixKey,
     read: BitmapRead<'_>,
-) -> Result<(u64, u64, Option<u64>)> {
-    ensure_matrix_block::<T>(spec)?;
-    if cell_status::<T>(spec, layout, key, read)? == MatrixCellStatus::NotCommitted {
-        return Err(Error::MatrixNotCommitted);
-    }
-    // `cell_status` above has already made the fail-closed refusal; taking the
-    // witness here is what lets this path address the block at all.
-    let allowed = layout.ensure_fatal_access_allowed()?;
+) -> Result<(u64, u64, Option<CellCrc<'a>>)> {
+    // Establish the same gates as cell_status once and retain their geometry.
+    // Calling cell_status here repeated type registration and ordinal lookup.
+    let category = ensure_matrix_block::<T>(spec)?;
+    let allowed = ensure_commit_publishable(layout, category)?;
     let block_index = layout.block_index(&allowed, T::ID)?;
     let ordinal = layout.ordinal_for_block(block_index, key)?;
+    let commit_index = layout.commit_index(&allowed, category)?;
+    if !layout.commits[commit_index].bits.get(ordinal, read)? {
+        return Err(Error::MatrixNotCommitted);
+    }
     let offset = layout.slot_offset(block_index, ordinal)?;
     let block = &layout.blocks[block_index];
-    let crc_offset = block
+    let crc = block
         .crc_offset
-        .map(|crc_offset| indexed_crc_offset(crc_offset, ordinal))
+        .map(|base| {
+            Ok::<_, Error>(CellCrc {
+                offset: indexed_crc_offset(base, ordinal)?,
+                block,
+                payload_offset: offset,
+                ordinal,
+            })
+        })
         .transpose()?;
-    Ok((offset, block.slot_stride, crc_offset))
+    Ok((offset, block.slot_stride, crc))
+}
+
+/// The checksum address travels with the evidence required to interpret it.
+/// Both mmap entry points use this verifier rather than checking only the CRC.
+#[cfg(feature = "mmap")]
+pub(crate) struct CellCrc<'a> {
+    pub(crate) offset: u64,
+    block: &'a MatrixBlockLayout,
+    payload_offset: u64,
+    ordinal: u64,
 }
 
 #[cfg(feature = "mmap")]
-pub(crate) fn verify_payload_crc_bytes(
-    payload_offset: u64,
-    payload: &[u8],
-    expected: u32,
-) -> Result<()> {
-    let actual = crc32_bytes(payload)?;
-    if actual != expected {
-        return Err(Error::MatrixChecksumMismatch {
-            offset: payload_offset,
-            expected,
-            actual,
-        });
+impl CellCrc<'_> {
+    pub(crate) fn verify(&self, payload: &[u8], expected: u32, read: BitmapRead<'_>) -> Result<()> {
+        let actual = crc32_bytes(payload)?;
+        require_cell_crc_evidence(self.block, self.ordinal, self.payload_offset, actual, read)?;
+        if actual != expected {
+            return Err(Error::MatrixChecksumMismatch {
+                offset: self.payload_offset,
+                expected,
+                actual,
+            });
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 pub(crate) fn resume_signal(
@@ -5730,20 +5780,13 @@ fn verify_cell_crc(
     // once and reused by both refusals, so the fail-closed path costs no extra
     // checksum pass.
     let actual = crc32_bytes(payload)?;
-    if layout.blocks[block_index].crc_valid_offset.is_some() {
-        let offset = layout.slot_offset(block_index, ordinal)?;
-        layout.blocks[block_index]
-            .crc_valid_bits
-            .require_meaningful(
-                ordinal,
-                || Error::MatrixChecksumMismatch {
-                    offset,
-                    expected: 0,
-                    actual,
-                },
-                reader.bitmap_read(),
-            )?;
-    }
+    require_cell_crc_evidence(
+        &layout.blocks[block_index],
+        ordinal,
+        layout.slot_offset(block_index, ordinal)?,
+        actual,
+        reader.bitmap_read(),
+    )?;
     let expected = read_crc_at(reader, indexed_crc_offset(crc_offset, ordinal)?)?;
     if expected != actual {
         return Err(Error::MatrixChecksumMismatch {
@@ -5751,6 +5794,27 @@ fn verify_cell_crc(
             expected,
             actual,
         });
+    }
+    Ok(())
+}
+
+fn require_cell_crc_evidence(
+    block: &MatrixBlockLayout,
+    ordinal: u64,
+    offset: u64,
+    actual: u32,
+    read: BitmapRead<'_>,
+) -> Result<()> {
+    if block.crc_valid_offset.is_some() {
+        block.crc_valid_bits.require_meaningful(
+            ordinal,
+            || Error::MatrixChecksumMismatch {
+                offset,
+                expected: 0,
+                actual,
+            },
+            read,
+        )?;
     }
     Ok(())
 }
@@ -8281,6 +8345,34 @@ mod page_store_lock_audit_tests {
     /// The first bit of `page`, which `backed_bitmap` leaves set.
     fn first_bit_of(page: u64) -> u64 {
         page * BITMAP_PAGE_BYTES * 8
+    }
+
+    #[test]
+    fn bitmap_reads_preserve_small_cache_eviction_without_bookkeeping_when_all_pages_fit() {
+        for budget in [BITMAP_PAGE_BYTES, PAGES * BITMAP_PAGE_BYTES] {
+            let (_directory, _file, map) = backed_bitmap(budget);
+            for page in 0..PAGES {
+                assert!(map.get(first_bit_of(page), BitmapRead::Stored).unwrap());
+            }
+            reset();
+            scaling_counters::set(&scaling_counters::LRU_TOUCH_STEPS, 0);
+            for _ in 0..10 {
+                for page in [3, 1, 2, 0] {
+                    assert!(map.get(first_bit_of(page), BitmapRead::Stored).unwrap());
+                    assert!(!map.get(first_bit_of(page) + 1, BitmapRead::Stored).unwrap());
+                    assert!(map.store().cached_bytes <= budget);
+                }
+            }
+            if budget == PAGES * BITMAP_PAGE_BYTES {
+                assert_eq!(reads(), 0);
+                assert_eq!(
+                    scaling_counters::get_always(&scaling_counters::LRU_TOUCH_STEPS),
+                    0
+                );
+            } else {
+                assert!(reads() > 0, "small cache must keep evicting and faulting");
+            }
+        }
     }
 
     #[test]

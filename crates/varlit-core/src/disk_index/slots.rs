@@ -232,6 +232,29 @@ impl Reader {
         }
         Ok(())
     }
+    pub(super) fn validate_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
+        // An unpublished/empty table has no rows capable of shadowing a tree.
+        if self.root.offset == 0 {
+            return Ok(());
+        }
+        self.ensure_directory()?;
+        let directory = self.directory.borrow();
+        if directory
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .map(|b| (b.id, b.len as u32))
+            .ne(plan
+                .descriptors()
+                .iter()
+                .filter(|d| d.finite_key_count != 0)
+                .map(|d| (d.block_id, d.finite_key_count)))
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
     fn directory(&self) -> DiskIndexResult<Directory> {
         self.ensure_directory()?;
         self.directory.borrow().as_ref().unwrap().try_clone()

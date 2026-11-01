@@ -32,6 +32,8 @@ pub struct ResidentIndex {
     rewritten_len: usize,
     snapshot: SnapshotFile,
     spec: FormatSpec,
+    frames_verified: bool,
+    verified_boundary: u64,
     retained: bool,
 }
 fn encode(entry: &RecordIndexEntry) -> [u8; 16] {
@@ -56,14 +58,18 @@ impl ResidentIndex {
             snapshot,
             spec,
             retained: true,
+            frames_verified: true,
+            verified_boundary: 0,
         }
     }
     pub(crate) fn adopt_generation<D: RecordDirectory + ?Sized>(
         entries: &D,
         snapshot: SnapshotFile,
         spec: FormatSpec,
+        frames_verified: bool,
     ) -> Result<Self> {
         let mut result = Self::empty(snapshot, spec);
+        result.frames_verified = frames_verified;
         result.slots.reserve_rows_hint(entries.record_count())?;
         for at in 0..entries.record_count() {
             result.slots.push(encode(&entries.record_at(at)?))?;
@@ -78,11 +84,14 @@ impl ResidentIndex {
             snapshot,
             spec,
             retained: true,
+            frames_verified: true,
+            verified_boundary: 0,
         }
     }
     pub(crate) fn none_retained(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
         Self {
             retained: false,
+            frames_verified: false,
             ..Self::empty(snapshot, spec)
         }
     }
@@ -147,6 +156,43 @@ impl ResidentIndex {
             u64::from_le_bytes(row[..8].try_into().unwrap()),
             row[12] != 0,
         )
+    }
+    /// Remember a boundary established by framing the authoritative log.
+    pub(crate) fn remember_boundary(&mut self, offset: u64) {
+        self.verified_boundary = self.verified_boundary.max(offset);
+    }
+    /// Nearest proven boundary. Index rows may supply it only after framing.
+    pub(crate) fn offset_floor(&self, offset: u64) -> Result<Option<u64>> {
+        // Serialized index metadata does not prove native record boundaries.
+        // Only a framing scan or our own append/rewrite can issue that proof.
+        if !self.frames_verified {
+            return Ok(
+                (self.verified_boundary != 0 && self.verified_boundary <= offset)
+                    .then_some(self.verified_boundary),
+            );
+        }
+        if let Some(row) = self.slots.cached_floor(offset, |row| {
+            u64::from_le_bytes(row[..8].try_into().unwrap())
+        }) {
+            return Ok(Some(u64::from_le_bytes(row[..8].try_into().unwrap())));
+        }
+        let (mut low, mut high) = (0, self.len());
+        let mut found = None;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let row = self.row(middle)?.ok_or(Error::UnexpectedEof)?;
+            let at = u64::from_le_bytes(row[..8].try_into().unwrap());
+            if at == offset {
+                return Ok(Some(at));
+            }
+            if at < offset {
+                found = Some(at);
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        Ok(found)
     }
     fn row(&self, position: usize) -> std::io::Result<Option<[u8; 16]>> {
         if position >= self.rewritten_len {

@@ -2228,3 +2228,34 @@ fn on_demand_directory_damage_is_detected_by_access_scrub_and_rebuild() -> varli
     assert_eq!(page_index_state(&path, 2), before);
     Ok(())
 }
+
+#[cfg(feature = "mmap")]
+#[test]
+fn mmap_reads_require_crc_validity_even_when_the_stored_crc_matches() -> varlit::Result<()> {
+    let dir = temp_dir("mmap-validity");
+    let path = dir.path().join("matrix.varlit");
+    fill(&path, SMALL_SCANS, 2)?;
+    // One commit digest, then per-cell checksums, then the validity bitmap.
+    // Leave cell 1 valid so the page remains populated and structurally sound.
+    let validity = header_u64(&path, 10) + 16 + 8 + SMALL_SCANS * CHANNELS * 4;
+    patch_byte(&path, validity, 2);
+    let reader = spec().open_reader(&path)?;
+    assert!(matches!(
+        reader.read_matrix_cell::<ScalingCell>(key(0)),
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    // SAFETY: all fixture mutation precedes the mapping; it stays immutable.
+    let mapped = unsafe { reader.mmap_matrix()? };
+    assert!(matches!(
+        mapped.cell_payload_window::<ScalingCell>(key(0)),
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    assert_eq!(mapped.cell_numeric::<ScalingCell, u32>(key(1))?, 2);
+    assert!(matches!(
+        unsafe { reader.mmap_matrix_cell::<ScalingCell>(key(0)) },
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    let valid = unsafe { reader.mmap_matrix_cell::<ScalingCell>(key(1)) }?;
+    assert_eq!(valid.as_bytes(), &2u32.to_le_bytes());
+    Ok(())
+}

@@ -117,6 +117,24 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         matches!(result, Err(Error::AllocationFailed { .. })),
         "HashMap growth must be fallible"
     );
+    let mut fields = Vec::new();
+    for id in 64..100064u32 {
+        fields.extend_from_slice(&id.to_le_bytes());
+        fields.extend_from_slice(&(WireType::U8 as u16).to_le_bytes());
+        fields.extend_from_slice(&[0; 10]);
+    }
+    let budget = 16 * 1024 * 1024;
+    let (charged, peak) = measure(usize::MAX, 1, || -> Result<u64> {
+        let mut decoder = Decoder::new_limited(&fields, Endian::Little, budget);
+        while decoder.remaining() != 0 {
+            read_field_header(&mut decoder)?;
+        }
+        Ok(budget - decoder.materialization_remaining())
+    });
+    assert!(
+        peak as u64 <= charged?,
+        "field tracking exceeded its charged memory"
+    );
     let bytes = vec![9; 65536];
     let (result, _) = measure(65536, 1, || encode_to_vec(&bytes, Endian::Little));
     assert!(
@@ -131,6 +149,21 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         "compression scratch must be fallible"
     );
     let chunks = ChunkedBytes::from_zstd_chunks(&bytes, bytes.len(), CompressionLevel::Fast)?;
+    // A small embedded frame cannot justify a large outer output declaration.
+    let small_frame = ChunkedBytes::from_zstd_chunks(&[7; 8], 8, CompressionLevel::Fast)?;
+    let mut encoded = small_frame.into_encoded();
+    let claimed = 64 * 1024 * 1024u64;
+    encoded[8..16].copy_from_slice(&claimed.to_le_bytes());
+    encoded[16..24].copy_from_slice(&claimed.to_le_bytes());
+    encoded[32..36].copy_from_slice(&(claimed as u32).to_le_bytes());
+    let oversized = ChunkedBytes::from_encoded(encoded)?;
+    let (refused, peak) = measure(65536, 1, || oversized.decode_to_vec());
+    assert!(matches!(
+        refused,
+        Err(Error::DecompressedLengthMismatch { .. })
+    ));
+    assert!(peak < 65536, "frame mismatch allocated the declared output");
+
     let (result, _) = measure(65536, 1, || chunks.decode_to_vec());
     assert!(
         matches!(result, Err(Error::AllocationFailed { .. })),

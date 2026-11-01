@@ -231,16 +231,20 @@ pub struct MmapMatrix {
 #[cfg(feature = "mmap")]
 impl MmapMatrix {
     pub fn cell_payload_window<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<&[u8]> {
-        let (offset, len, crc_offset) = crate::matrix::cell_payload_parts::<T>(
+        let (offset, len, crc) = crate::matrix::cell_payload_parts::<T>(
             self.spec,
             &self.layout,
             key,
             crate::matrix::BitmapRead::Mapped(&self.mmap),
         )?;
         let payload = self.window(offset, len)?;
-        if let Some(crc_offset) = crc_offset {
-            let expected = self.read_crc(crc_offset)?;
-            crate::matrix::verify_payload_crc_bytes(offset, payload, expected)?;
+        if let Some(crc) = crc {
+            let expected = self.read_crc(crc.offset)?;
+            crc.verify(
+                payload,
+                expected,
+                crate::matrix::BitmapRead::Mapped(&self.mmap),
+            )?;
         }
         Ok(payload)
     }

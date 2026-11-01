@@ -372,12 +372,6 @@ pub struct Decoder<'a> {
     materialization_remaining: u64,
 }
 
-/// Materialization charged per distinct variable field id above the small-id
-/// mask (RES-01). A `HashSet<u32>` bucket costs four payload bytes plus one
-/// control byte at a 7/8 load factor; eight bytes over-approximates that so
-/// the charge can never undercount the reservation it guards.
-const FIELD_ID_SET_ENTRY_BYTES: u64 = 2 * size_of::<u32>() as u64;
-
 impl<'a> Decoder<'a> {
     pub const STANDARD_MATERIALIZATION_LIMIT: u64 = 1024 * 1024 * 1024;
 
@@ -638,6 +632,11 @@ impl<'a> Decoder<'a> {
     }
 
     fn note_field_id(&mut self, field_id: u32) -> Result<()> {
+        if field_id == 0 {
+            return Err(Error::InvalidCanonicalEncoding(
+                "variable field id must be nonzero",
+            ));
+        }
         if field_id < u64::BITS {
             let mask = 1u64 << field_id;
             if self.small_field_ids & mask != 0 {
@@ -659,7 +658,24 @@ impl<'a> Decoder<'a> {
         // ids above the small-id mask is the one decoder-owned set whose
         // growth is driven purely by attacker-chosen field ids, so charge
         // before reserving rather than after.
-        self.charge_materialization(FIELD_ID_SET_ENTRY_BYTES, "variable field ids")?;
+        let count = self.large_field_ids.as_ref().map_or(0, HashSet::len);
+        let bound = |count| {
+            hash_table_reservation_bytes::<u32>(count)
+                .and_then(|bytes| bytes.checked_mul(2))
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })
+        };
+        // Cover both old and new tables during a rehash, including power-of-two
+        // capacity rounding and control bytes. Charge only the bound's growth.
+        let charge = bound(
+            count
+                .checked_add(1)
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })?,
+        )? - bound(count)?;
+        self.charge_materialization(charge, "variable field ids")?;
         let field_ids = self.large_field_ids.get_or_insert_with(HashSet::new);
         let requested = u64::try_from(field_ids.len())
             .unwrap_or(u64::MAX)
@@ -689,6 +705,11 @@ pub fn write_field(
     wire_type: WireType,
     payload: &[u8],
 ) -> Result<()> {
+    if field_id == 0 {
+        return Err(Error::InvalidCanonicalEncoding(
+            "variable field id must be nonzero",
+        ));
+    }
     encoder.write_u32(field_id);
     encoder.write_u16(wire_type as u16);
     encoder.write_u16(0);
@@ -1695,5 +1716,46 @@ mod tests {
             None => {}
             Some(charge) => assert!(charge >= usize::MAX as u64),
         }
+    }
+}
+
+#[cfg(test)]
+mod field_guard_tests {
+    use super::*;
+    #[test]
+    fn zero_field_id_is_refused_by_both_codec_directions() {
+        let mut encoder = Encoder::new(Endian::Little);
+        assert!(matches!(
+            write_field(&mut encoder, 0, WireType::U8, &[1]),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        let mut bytes = [0u8; 17];
+        bytes[4..6].copy_from_slice(&(WireType::U8 as u16).to_le_bytes());
+        bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let mut decoder = Decoder::new(&bytes, Endian::Little);
+        assert!(matches!(
+            read_field_header(&mut decoder),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+    }
+    #[test]
+    fn field_set_budget_covers_growth_and_rehash() {
+        let bytes = [];
+        let mut decoder = Decoder::new_limited(&bytes, Endian::Little, 1 << 20);
+        for id in 64..10064 {
+            decoder.note_field_id(id).unwrap();
+            let count = (id - 63) as usize;
+            let charged = (1 << 20) - decoder.materialization_remaining();
+            assert_eq!(
+                charged,
+                2 * hash_table_reservation_bytes::<u32>(count).unwrap()
+            );
+        }
+        let mut small = Decoder::new_limited(&bytes, Endian::Little, 8);
+        assert!(matches!(
+            small.note_field_id(64),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert!(small.large_field_ids.is_none());
     }
 }

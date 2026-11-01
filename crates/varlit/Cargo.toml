@@ -61,3 +61,15 @@ required-features = ["integrity", "compression-zstd"]
 [[example]]
 name = "index_validation_load"
 required-features = ["integrity"]
+
+[[example]]
+name = "matrix_mmap_load"
+required-features = ["integrity", "mmap"]
+
+[[example]]
+name = "scan_open_load"
+required-features = ["integrity"]
+
+[[example]]
+name = "record_mark_load"
+required-features = ["integrity"]

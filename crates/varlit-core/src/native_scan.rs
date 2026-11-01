@@ -117,8 +117,17 @@ impl BufferedScan {
         row[73..77].copy_from_slice(&entry.mutable_flags.to_le_bytes());
         row
     }
-    fn remember_sequence(index: &mut crate::disk_index::ScratchIndex, sequence: u64) -> Result<()> {
-        let key = sequence.to_be_bytes().to_vec();
+    pub(super) fn remember_sequence(
+        index: &mut crate::disk_index::ScratchIndex,
+        sequence: u64,
+    ) -> Result<()> {
+        let mut key = Vec::new();
+        key.try_reserve_exact(8)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "sequence key",
+                requested: 8,
+            })?;
+        key.extend_from_slice(&sequence.to_be_bytes());
         if index.get(&key)?.is_some() {
             return Err(Error::InvalidCanonicalEncoding(
                 "duplicate native record sequence",

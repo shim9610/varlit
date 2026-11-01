@@ -13,6 +13,8 @@ class StorageSelectionTests(unittest.TestCase):
     def test_failure_and_resource_categories_are_required(self):
         self.assertEqual({row[0] for row in gate.CASES}, {
             "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
+            "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-evidence",
+            "nonresident-record-budget", "nonresident-follow-sequence",
             "checked-chain-links", "failed-history", "decode-memory", "cardinality-growth", "oom-recovery", "zstd-context-oom"})
         for case in gate.CASES:
             command = gate.command(case)

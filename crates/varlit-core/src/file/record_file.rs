@@ -307,21 +307,42 @@ impl RecordFile {
     /// of record bytes by mistake, and the offset it is given is checked
     /// by the caller against a footer it has just framed.
     ///
-    /// Safe against the append cursor for the reason the others are:
-    /// `append_record_at_end` re-seeks `SeekFrom::End(0)` every call and
-    /// every read is positional. A single `write_all` of four bytes, which
-    /// Linux takes under the inode lock; Windows offers no equivalent, and
-    /// unlike the header-tail slot there is no checksum here to catch a
-    /// torn one — a four-byte write is not torn by any storage stack this
-    /// targets, and the flags are advisory even if it were.
+    /// Positional writes leave shared read cursors untouched. Append still
+    /// rechecks EOF independently. Partial writes and interruptions are handled
+    /// before success is returned; the four-byte word remains advisory and
+    /// is not a transactional durability boundary.
     pub(super) fn overwrite_record_mutable_flags(
         &mut self,
         offset: u64,
         bytes: [u8; 4],
     ) -> Result<()> {
-        count_record_file_seek();
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(&bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            self.file.write_all_at(&bytes, offset)?;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            let mut written = 0;
+            while written < bytes.len() {
+                match self
+                    .file
+                    .seek_write(&bytes[written..], offset + written as u64)
+                {
+                    Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+                    Ok(count) => written += count,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            count_record_file_seek();
+            self.file.seek(SeekFrom::Start(offset))?;
+            self.file.write_all(&bytes)?;
+        }
         Ok(())
     }
 

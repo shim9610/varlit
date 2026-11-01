@@ -2567,6 +2567,33 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_partial_record_is_an_error_for_both_cursors() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("confirmed-partial.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        let target = writer.push_info(&TestBlock(42))?.record_offset;
+        writer.sync()?;
+        drop(writer);
+        // Open before mutation: the selected EOF has already been confirmed.
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
+        let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.seek(SeekFrom::Start(target + 16))?;
+        raw.write_all(&9u64.to_le_bytes())?;
+        drop(raw);
+        assert!(
+            reader
+                .events()?
+                .any(|event| matches!(event, Err(Error::CorruptTail { .. })))
+        );
+        assert!(matches!(
+            reader.blocks::<TestBlock>()?.next(),
+            Some(Err(Error::CorruptTail { .. }))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn stream_writer_matches_resident_native_bytes() -> Result<()> {
         #[allow(unused_mut)]
         let mut policies = vec![

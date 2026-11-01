@@ -155,7 +155,7 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
             });
             assert!(
                 allocation_error(&result),
-                "lookup allocation {nth}/{allocations}, long={long}: {result:?}"
+                "lookup did not return an allocation error at {nth}/{allocations}, long={long}"
             );
             let retried = if long {
                 read.get_text(key)?.unwrap().value
@@ -200,5 +200,49 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
     );
     assert_eq!(read.get_number(&4000)?.unwrap().value, 8);
     println!("INDEX_BATCH_REUSE repeated batch and single put share staging");
+    scan_tail_allocation_refusal_returns_an_error()?;
+    Ok(())
+}
+
+varlit_format! {
+    pub struct ScanOom {
+        magic: b"VSCANOM1";
+        version: 1;
+        integrity: crc32;
+        index: block_offset_chain;
+        commit: transaction_marker(on_flush);
+        blocks: [Number];
+    }
+}
+fn scan_tail_allocation_refusal_returns_an_error() -> Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("scan.varlit");
+    let spec = ScanOom::spec();
+    let mut writer = spec.create(&path)?;
+    let mut offsets = Vec::new();
+    for id in 0..512 {
+        offsets.push(writer.push_info(&Number { id, value: id })?.record_offset);
+    }
+    writer.flush()?;
+    drop(writer);
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    for (ordinal, offset) in offsets.into_iter().enumerate() {
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(&(1000 + ordinal as u32).to_le_bytes())?;
+    }
+    drop(file);
+    let (opened, _) = measure(4096, 1, || VarlitFile::open_readonly(spec, &path));
+    assert!(
+        allocation_error(&opened),
+        "scan tail allocation did not return an error"
+    );
+    let limited = spec.with_read_limits(spec.read_limits.with_max_materialized_bytes(770));
+    assert!(matches!(
+        VarlitFile::open_readonly(limited, &path),
+        Err(Error::LimitExceeded { .. })
+    ));
+    let opened = VarlitFile::open_readonly(spec, &path)?;
+    assert!(opened.block_tail_offset(1511).is_some());
     Ok(())
 }
