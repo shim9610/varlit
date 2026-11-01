@@ -10,6 +10,9 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("index-cache-shape", "varlit", "index_corruption_guards", "aliased_finite_extents_return_errors_through_public_reads", False, None),
+    ("index-traversal", "varlit-core", None, "disk_index::tree::corruption_guards::duplicated_subtrees_stop_before_repeated_leaf_delivery", False, None),
+    ("index-oom", "varlit", "index_oom_guards", "public_index_reads_return_oom_and_remain_usable_after_each_refusal", False, "INDEX_OOM every cold lookup allocation refused and retried"),
     ("kernel-short-write", "varlit-core", "io_failure_recovery", "partial_kernel_writes_preserve_retry_and_reopen", False, "kernel short-write recovery trials=28"),
     ("torn-publication", "varlit-core", None, "disk_index::storage::failure_tests::torn_publication_heads_never_invent_a_confirmed_generation", False, "torn head prefixes=130"),
     ("consistent-frontiers", "varlit-core", None, "disk_index::storage::failure_tests::valid_checksums_do_not_admit_inconsistent_checkpoint_frontiers", False, None),

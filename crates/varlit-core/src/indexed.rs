@@ -438,9 +438,11 @@ pub struct VarlitIndexedWriter {
     stream: VarlitStreamWriter,
     index: DiskIndexStore,
     indexed_blocks: Vec<u32>,
-    /// Staging buffer for the single-record put path, reused for the life of
-    /// the writer. Cleared per record and never read across calls.
+    /// Staging shared by single-record puts and keyed batches. Reusing the
+    /// existing allocation avoids overlapping old/new buffers on repeated
+    /// batch growth. Contents are cleared and never read across calls.
     record_buffer: Vec<u8>,
+    last_batch_capacity: usize,
     batch_records: usize,
     batch_last_sequence: Option<u64>,
     dirty: bool,
@@ -555,6 +557,7 @@ impl VarlitIndexedWriter {
         index.configure_finite(plan).map_err(index_error)?;
         Ok(Self {
             record_buffer: Vec::new(),
+            last_batch_capacity: 0,
             stream,
             index,
             indexed_blocks: blocks.iter().map(|block| block.block_id).collect(),
@@ -732,7 +735,21 @@ impl VarlitIndexedWriter {
             end_offset: start,
             ..BatchAppendInfo::default()
         };
-        let result = self.push_indexed_iter_inner::<T, I>(values, options, &mut written);
+        let mut bytes = std::mem::take(&mut self.record_buffer);
+        bytes.clear();
+        let result =
+            self.push_indexed_iter_inner::<T, I>(values, options, &mut written, &mut bytes);
+        bytes.clear();
+        // Admit repeated sizes only. A one-off large batch must not enlarge
+        // retained staging indefinitely. Releasing the initial large buffer
+        // also lets adaptive allocators settle before steady buffer reuse.
+        let capacity = bytes.capacity();
+        if capacity == self.last_batch_capacity {
+            self.record_buffer = bytes;
+        }
+        if capacity != 0 {
+            self.last_batch_capacity = capacity;
+        }
         if let Err(source) = result {
             self.index.batch.take();
             self.stream.poison();
@@ -902,6 +919,7 @@ impl VarlitIndexedWriter {
         values: I,
         options: BatchOptions,
         written: &mut BatchAppendInfo,
+        bytes: &mut Vec<u8>,
     ) -> Result<()>
     where
         T: VarlitKeyedBlock,
@@ -914,7 +932,6 @@ impl VarlitIndexedWriter {
         self.commit_pending_batch()?;
 
         let max_records = options.max_records.min(INDEX_BATCH_RECORDS);
-        let mut bytes = Vec::new();
         let mut records = Vec::new();
         let mut next_sequence = Some(self.stream.next_sequence()?);
         let mut next_offset = self.stream.snapshot().len();
@@ -958,7 +975,7 @@ impl VarlitIndexedWriter {
                 next_offset,
                 previous_block,
                 previous_key,
-                &mut bytes,
+                bytes,
             )?;
             let exceeds_records = records.len() >= max_records;
             let exceeds_bytes = record_start != 0 && bytes.len() > options.max_bytes;
@@ -967,7 +984,7 @@ impl VarlitIndexedWriter {
                 // the next chunk; the flush advances the native eof to exactly
                 // `next_offset`, which is what it was prepared against.
                 self.publish_staged_prefix(
-                    &mut bytes,
+                    bytes,
                     &mut records,
                     &mut record_start,
                     record.len,
@@ -1005,7 +1022,7 @@ impl VarlitIndexedWriter {
             if !fits_index {
                 if !records.is_empty() {
                     self.publish_staged_prefix(
-                        &mut bytes,
+                        bytes,
                         &mut records,
                         &mut record_start,
                         record.len,
@@ -1044,7 +1061,7 @@ impl VarlitIndexedWriter {
                 || records.len() >= max_records
                 || self.batch_records >= INDEX_BATCH_RECORDS
             {
-                self.publish_prepared_chunk(&bytes, &records, written)?;
+                self.publish_prepared_chunk(bytes, &records, written)?;
                 bytes.clear();
                 records.clear();
                 if immediate {
@@ -1057,7 +1074,7 @@ impl VarlitIndexedWriter {
             }
         }
         if !records.is_empty() {
-            self.publish_prepared_chunk(&bytes, &records, written)?;
+            self.publish_prepared_chunk(bytes, &records, written)?;
         }
         self.commit_pending_batch()?;
         Ok(())
@@ -1903,10 +1920,7 @@ fn reserve_records(records: &mut Vec<(u32, AppendInfo)>) -> Result<()> {
 }
 
 fn index_error(error: DiskIndexError) -> Error {
-    match error {
-        DiskIndexError::Busy => Error::IndexBusy,
-        error => Error::DiskIndex(Box::new(error)),
-    }
+    crate::disk_index::index_error(error)
 }
 
 fn index_invariant(reason: &'static str) -> Error {

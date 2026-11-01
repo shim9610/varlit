@@ -526,6 +526,23 @@ impl std::error::Error for DiskIndexError {
     }
 }
 
+// Allocation failures must not allocate again while crossing the public API.
+pub(crate) fn index_error(error: DiskIndexError) -> Error {
+    match error {
+        DiskIndexError::Busy => Error::IndexBusy,
+        DiskIndexError::Io(error) if error.kind() == std::io::ErrorKind::OutOfMemory => {
+            Error::Io(error)
+        }
+        DiskIndexError::Primary(error @ Error::AllocationFailed { .. }) => error,
+        DiskIndexError::Primary(Error::Io(error))
+            if error.kind() == std::io::ErrorKind::OutOfMemory =>
+        {
+            Error::Io(error)
+        }
+        error => Error::DiskIndex(Box::new(error)),
+    }
+}
+
 impl From<std::io::Error> for DiskIndexError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -1393,7 +1410,7 @@ where
     };
     let physical = record_physical_descriptor(spec, entry)?;
     DiskIndexUpdate::from_key_with_record(T::ID, &value.key(), indexed, physical, max_key_bytes)
-        .map_err(|error| Error::DiskIndex(Box::new(error)))
+        .map_err(index_error)
 }
 
 fn extract_descriptor_tombstone<T>(
@@ -1419,7 +1436,7 @@ where
     };
     let physical = record_physical_descriptor(spec, entry)?;
     DiskIndexUpdate::from_key_with_record(T::ID, &key, indexed, physical, max_key_bytes)
-        .map_err(|error| Error::DiskIndex(Box::new(error)))
+        .map_err(index_error)
 }
 
 fn record_physical_descriptor(
@@ -3073,10 +3090,7 @@ fn composite_key(block_id: u32, canonical_key: &[u8], limit: usize) -> DiskIndex
     let mut output = Vec::new();
     output
         .try_reserve_exact(capacity)
-        .map_err(|_| DiskIndexError::KeyTooLong {
-            actual: canonical_key.len(),
-            limit,
-        })?;
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
     output.extend_from_slice(&DiskIndexKeyTag::keyed(block_id).encode());
     output.extend_from_slice(canonical_key);
     Ok(output)
@@ -3585,9 +3599,7 @@ impl ScratchIndex {
         })
     }
     pub(crate) fn get(&self, key: &[u8]) -> crate::Result<Option<[u8; 52]>> {
-        self.reader
-            .get(self.root, key)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))
+        self.reader.get(self.root, key).map_err(index_error)
     }
     pub(crate) fn visit(
         &self,
@@ -3597,20 +3609,17 @@ impl ScratchIndex {
         let result = self.reader.visit(self.root, &mut |key, value| {
             if let Err(error) = visitor(key, value) {
                 failure = Some(error);
-                return Err(DiskIndexError::Io(std::io::Error::other(
-                    "scratch visitor failed",
-                )));
+                return Err(DiskIndexError::Io(std::io::ErrorKind::Other.into()));
             }
             Ok(())
         });
         if let Some(error) = failure {
             return Err(error);
         }
-        result.map_err(|error| crate::Error::Io(std::io::Error::other(error)))
+        result.map_err(index_error)
     }
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
-        let root = tree::apply(&self.file, &self.reader, self.root, values)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        let root = tree::apply(&self.file, &self.reader, self.root, values).map_err(index_error)?;
         self.end = self.file.metadata()?.len();
         self.reader = tree::Reader::new(
             self.file.clone(),

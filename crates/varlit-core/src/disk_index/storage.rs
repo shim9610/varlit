@@ -19,7 +19,7 @@ const DIRTY: u64 = 20480;
 const FILE_HEADER: usize = 24576;
 
 fn corrupt(message: &'static str) -> DiskIndexError {
-    DiskIndexError::Storage(message.into())
+    DiskIndexError::CheckpointMismatch(message)
 }
 
 struct WriterFile(File);
@@ -268,21 +268,18 @@ impl Store {
     fn latest(&self, confirmed_only: bool) -> DiskIndexResult<Checkpoint> {
         // Retry only an incomplete publication. Old immutable checkpoints remain readable.
         for _ in 0..8 {
-            let mut heads = Vec::with_capacity(5);
+            let mut heads = [(Head { offset: 0, end: 0 }, false); 5];
+            let mut head_count = 0;
             let mut has_confirmed_head = false;
-            for (slot, durable) in
-                CONFIRMED
+            for (slot, durable) in CONFIRMED.into_iter().map(|s| (s, true)).chain(
+                [(WORKING[0], false), (WORKING[1], false), (DIRTY, true)]
                     .into_iter()
-                    .map(|s| (s, true))
-                    .chain(if confirmed_only {
-                        vec![]
-                    } else {
-                        vec![(WORKING[0], false), (WORKING[1], false), (DIRTY, true)]
-                    })
-            {
+                    .filter(|_| !confirmed_only),
+            ) {
                 if let Some(head) = self.head(slot)? {
                     has_confirmed_head |= CONFIRMED.contains(&slot);
-                    heads.push((head, durable));
+                    heads[head_count] = (head, durable);
+                    head_count += 1;
                 }
             }
             // Working/dirty heads are not substitutes for a confirmed anchor.
@@ -294,8 +291,9 @@ impl Store {
                 std::hint::spin_loop();
                 continue;
             }
+            let heads = &mut heads[..head_count];
             heads.sort_unstable_by_key(|(head, _)| std::cmp::Reverse(head.offset));
-            for (head, durable) in heads {
+            for &(head, durable) in heads.iter() {
                 match self.at(head.offset) {
                     Ok(checkpoint)
                         if checkpoint.end == head.end
@@ -341,7 +339,7 @@ impl Store {
         let mut tails = Vec::new();
         tails
             .try_reserve_exact(count)
-            .map_err(|_| corrupt("tail allocation failed"))?;
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
         let mut previous = None;
         for i in 0..count {
             let mut row = [0; TAIL_LEN];
@@ -378,7 +376,11 @@ impl Store {
         }
         let file = self.writer()?;
         let len = ROOT_HEADER + tails.len() * TAIL_LEN;
-        let mut bytes = vec![0; len];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(len)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+        bytes.resize(len, 0);
         bytes[..8].copy_from_slice(ROOT_MAGIC);
         bytes[8..16].copy_from_slice(&(len as u64).to_le_bytes());
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
@@ -433,11 +435,9 @@ impl Store {
         head[16..24].copy_from_slice(&end.to_le_bytes());
         let checksum = crc32fast::hash(&head[..28]);
         head[28..32].copy_from_slice(&checksum.to_le_bytes());
-        let mut slots = vec![slot];
-        if matches!(publication, Publication::Confirmed) {
-            slots.push(CONFIRMED[usize::from(slot == CONFIRMED[0])]);
-        }
-        for slot in slots {
+        let second = matches!(publication, Publication::Confirmed)
+            .then_some(CONFIRMED[usize::from(slot == CONFIRMED[0])]);
+        for slot in std::iter::once(slot).chain(second) {
             #[cfg(feature = "scalable-fault-injection")]
             if crate::scalable_fault::is_armed() {
                 crate::scalable_fault_point("checkpoint.head_prefix");

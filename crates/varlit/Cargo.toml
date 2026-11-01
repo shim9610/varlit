@@ -57,3 +57,7 @@ required-features = ["integrity"]
 [[example]]
 name = "oom_maintenance_load"
 required-features = ["integrity", "compression-zstd"]
+
+[[example]]
+name = "index_validation_load"
+required-features = ["integrity"]

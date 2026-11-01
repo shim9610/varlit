@@ -1879,10 +1879,7 @@ pub(crate) fn retire_sidecar_for_replaced_primary(
 }
 
 fn state_error(error: crate::disk_index::DiskIndexError) -> Error {
-    match error {
-        crate::disk_index::DiskIndexError::Busy => Error::IndexBusy,
-        error => Error::DiskIndex(Box::new(error)),
-    }
+    crate::disk_index::index_error(error)
 }
 
 pub(crate) const fn silent_scan_options() -> ScanOptions<'static> {
