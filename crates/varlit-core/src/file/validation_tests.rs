@@ -338,7 +338,7 @@ fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()>
 #[test]
 fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
     let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
-    for length in [0, 8, 64, 65, 256] {
+    for length in [0, 8, 64, 65, 256, 448, 449, 1024] {
         let mut bytes = Vec::new();
         let expected = append_frame(
             spec,
@@ -354,13 +354,13 @@ fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
         for end in 0..bytes.len() {
             let snapshot = snapshot(&bytes[..end])?;
             assert!(
-                fault_record_entry_prefixed::<128>(&snapshot, spec, 0, true).is_err(),
+                fault_record_entry_prefixed::<512>(&snapshot, spec, 0, true).is_err(),
                 "accepted {end} bytes of a {length}-byte payload frame"
             );
         }
         let snapshot = snapshot(&bytes)?;
         assert_eq!(
-            fault_record_entry_prefixed::<128>(&snapshot, spec, 0, true)?,
+            fault_record_entry_prefixed::<512>(&snapshot, spec, 0, true)?,
             expected
         );
     }

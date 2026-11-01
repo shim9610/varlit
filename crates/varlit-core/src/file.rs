@@ -6479,12 +6479,14 @@ impl VarlitFile {
     /// - Whatever framing the record at `record_offset` fails with, if it is
     ///   not a record.
     ///
-    /// Membership is checked in the private offset directory. For a lazy
-    /// handle, a directory loaded from serialized segments, or a non-resident
-    /// record, framing resumes at the nearest proven boundary. The first such
-    /// call can scan a prefix; increasing offsets reuse the proof. Payloads are
-    /// never allocated as a complete buffer by this check; a fixed stack prefix
-    /// can include small payload bytes when combining the header/footer read.
+    /// Membership is checked in the private offset directory. Unproven lazy,
+    /// serialized-directory and non-resident offsets use an incremental boundary
+    /// directory. Each frame is discovered once per snapshot lineage; reverse,
+    /// random and repeated requests reuse exact membership. The first request
+    /// can scan a prefix. Boundary rows borrow the existing index-buffer budget
+    /// and spill eight bytes per discovered record to temporary storage as needed.
+    /// A small stack window amortizes reads of adjacent small records; large
+    /// payloads are skipped. No payload-sized allocation is made.
     ///
     /// # Durability
     ///
@@ -6503,24 +6505,20 @@ impl VarlitFile {
                 "marking a record requires liveness: footer_flags",
             ));
         }
-        let mut boundary = match self.index.offset_floor(record_offset)? {
-            Some(boundary) => boundary,
-            None => append_log_start_for_file(self)?,
-        };
-        while boundary < record_offset {
-            let framed = fault_record_entry(&self.snapshot, self.spec, boundary, false)?;
-            validate_record_entry(self.spec, &framed)?;
-            boundary = framed.checked_physical_end()?;
-        }
-        if boundary != record_offset || record_offset >= self.snapshot.len() {
-            return Err(Error::InvalidCanonicalEncoding(
-                "offset is not a native record boundary",
-            ));
+        if !self.index.has_verified_boundary(record_offset)? {
+            let append_start = append_log_start_for_file(self)?;
+            self.index.verify_boundary(append_start, record_offset)?;
         }
         let entry =
-            fault_record_entry_prefixed::<128>(&self.snapshot, self.spec, record_offset, false)?;
-        validate_record_entry(self.spec, &entry)?;
-        self.index.remember_boundary(record_offset);
+            fault_record_entry_prefixed::<512>(&self.snapshot, self.spec, record_offset, false)?;
+        self.write_framed_record_flags(&entry, set)
+    }
+
+    // The caller must have a boundary witness: directory membership, or the
+    // next frame of a sequential recovery walk anchored at the commit end.
+    // Recheck identity here before every write, including recovery.
+    fn write_framed_record_flags(&mut self, entry: &RecordIndexEntry, set: u32) -> Result<()> {
+        validate_record_entry(self.spec, entry)?;
         if entry.block_id >= RESERVED_BLOCK_ID_START {
             return Err(Error::ReservedBlockId(entry.block_id));
         }
@@ -12317,8 +12315,8 @@ impl VarlitFile {
     /// honest statement: they arrived, they were never committed by their
     /// writer, they are kept, and a defragmenting rewrite may drop them.
     ///
-    /// Costs one scan of the tail — not of the file — plus four bytes per
-    /// record and one appended record.
+    /// Costs two framing passes over the tail, four bytes per user record and
+    /// one appended record. No prefix rescans or record-count-sized target list.
     fn recover_marked_tail(&mut self, from: u64) -> Result<usize> {
         // Walked directly rather than through `scan_records_range_at_len`, and that is
         // not a shortcut. Under a marker policy the scan applies
@@ -12330,7 +12328,6 @@ impl VarlitFile {
         let mut offset = from;
         let mut marked = 0usize;
         let mut framed_end = from;
-        let mut targets = Vec::new();
         let mut highest: Option<u64> = None;
         while offset < end {
             let Ok(entry) = fault_record_entry(&self.snapshot, self.spec, offset, false) else {
@@ -12345,9 +12342,6 @@ impl VarlitFile {
             };
             if next > end || next <= offset {
                 break;
-            }
-            if entry.block_id < RESERVED_BLOCK_ID_START {
-                targets.push(entry.record_offset);
             }
             // The kept tail's sequences are *higher* than anything the handle
             // knows about: its high-water mark came from the committed prefix,
@@ -12382,9 +12376,23 @@ impl VarlitFile {
             let snapshot = self.snapshot.clone();
             self.index.rebind(snapshot);
         }
-        for record_offset in targets {
-            self.set_record_mutable_flags(record_offset, RECORD_MUTABLE_FLAG_DEAD)?;
-            marked += 1;
+        // The first walk established this exact contiguous extent. Reuse its
+        // boundary witness in a second streaming pass, without an input-sized
+        // target vector or one prefix scan per marked record.
+        offset = from;
+        while offset < framed_end {
+            let entry =
+                fault_record_entry_prefixed::<128>(&self.snapshot, self.spec, offset, false)?;
+            let next = entry.checked_physical_end()?;
+            if next <= offset || next > framed_end {
+                return Err(Error::CorruptTail { offset });
+            }
+            validate_record_entry(self.spec, &entry)?;
+            if entry.block_id < RESERVED_BLOCK_ID_START {
+                self.write_framed_record_flags(&entry, RECORD_MUTABLE_FLAG_DEAD)?;
+                marked += 1;
+            }
+            offset = next;
         }
         // `write_commit_marker` directly, not `commit()`. `commit()` reuses the
         // existing marker when nothing has been appended since the last one —
@@ -15074,18 +15082,33 @@ fn fault_record_entry_prefixed<const PREFIX: usize>(
     const {
         assert!(PREFIX >= RECORD_HEADER_LEN as usize);
     }
+    fault_record_entry_with::<PREFIX>(
+        snapshot.len(),
+        spec,
+        record_offset,
+        committed,
+        |at, bytes| snapshot.read_exact_at(at, bytes),
+    )
+}
+
+fn fault_record_entry_with<const PREFIX: usize>(
+    snapshot_len: u64,
+    spec: FormatSpec,
+    record_offset: u64,
+    committed: bool,
+    mut read: impl FnMut(u64, &mut [u8]) -> Result<()>,
+) -> Result<RecordIndexEntry> {
     count_record_entry_fault();
     let mut header_bytes = [0; PREFIX];
     let prefix_len = if PREFIX == RECORD_HEADER_LEN as usize {
         RECORD_HEADER_LEN as usize
     } else {
-        snapshot
-            .len()
+        snapshot_len
             .saturating_sub(record_offset)
             .min(PREFIX as u64)
             .max(RECORD_HEADER_LEN) as usize
     };
-    snapshot.read_exact_at(record_offset, &mut header_bytes[..prefix_len])?;
+    read(record_offset, &mut header_bytes[..prefix_len])?;
     let decoded = read_native_record_header(
         &mut &header_bytes[..RECORD_HEADER_LEN as usize],
         record_offset,
@@ -15136,7 +15159,7 @@ fn fault_record_entry_prefixed<const PREFIX: usize>(
         let bytes = match within_prefix {
             Some((start, end)) => &header_bytes[start..end],
             None => {
-                snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+                read(footer_offset, &mut footer_bytes)?;
                 &footer_bytes[..]
             }
         };

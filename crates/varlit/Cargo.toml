@@ -73,3 +73,7 @@ required-features = ["integrity"]
 [[example]]
 name = "record_mark_load"
 required-features = ["integrity"]
+
+[[example]]
+name = "record_mutation_load"
+required-features = ["integrity", "scalable-fault-injection"]
