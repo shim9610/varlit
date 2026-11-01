@@ -445,7 +445,9 @@ fn field_headers_decode_checked_lengths_while_writers_emit_zero_flags() -> varli
 #[test]
 fn large_field_id_bookkeeping_is_charged_to_the_materialization_budget() {
     const HIGH_FIELD_IDS: u32 = 8;
-    const CHARGE_PER_ID: u64 = 8;
+    // Conservative 32-bucket table, 4-byte IDs + control bytes, padding,
+    // and simultaneous old/new storage during rehash.
+    const SET_CHARGE: u64 = 2 * (32 * 5 + 32 + 32);
 
     let mut encoded = Vec::new();
     append_field(&mut encoded, 1, WireType::U8, 0, 1, &[7]);
@@ -458,14 +460,14 @@ fn large_field_id_bookkeeping_is_charged_to_the_materialization_budget() {
         Decoder::decode_from_slice_limited::<HardenedVariable>(&encoded, Endian::Little, 0),
         Err(Error::LimitExceeded {
             resource: "variable field ids",
-            actual: CHARGE_PER_ID,
+            actual: SET_CHARGE,
             limit: 0,
         })
     ));
 
-    // One byte short of the full set still fails, and it fails on the last
-    // id rather than silently over-allocating.
-    let exact = CHARGE_PER_ID * u64::from(HIGH_FIELD_IDS);
+    // The small set shares one capacity class. A byte below its complete
+    // allocation bound must fail before reserving the table.
+    let exact = SET_CHARGE;
     assert!(matches!(
         Decoder::decode_from_slice_limited::<HardenedVariable>(
             &encoded,
@@ -509,7 +511,7 @@ fn duplicate_large_field_ids_are_rejected_without_extra_charge() {
     assert_invalid_canonical(Decoder::decode_from_slice_limited::<HardenedVariable>(
         &encoded,
         Endian::Little,
-        8,
+        2 * (32 * 5 + 32 + 32),
     ));
 }
 

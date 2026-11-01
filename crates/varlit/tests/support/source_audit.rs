@@ -44,7 +44,11 @@ pub(crate) const RAW_SITES: &[(&str, &str, &str)] = &[
         "read_native_record_header",
     ),
     ("file.rs", "read_record_header", "read_native_record_header"),
-    ("file.rs", "fault_record_entry", "read_native_record_header"),
+    (
+        "file.rs",
+        "fault_record_entry_prefixed",
+        "read_native_record_header",
+    ),
     (
         "file/scan.rs",
         "verify_record_bytes",
@@ -57,6 +61,21 @@ pub(crate) const RAW_SITES: &[(&str, &str, &str)] = &[
     ),
 ];
 pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
+    (
+        "file.rs",
+        "fault_record_entry",
+        "fault_record_entry_prefixed",
+    ),
+    (
+        "file.rs",
+        "set_record_mutable_flags",
+        "fault_record_entry_prefixed",
+    ),
+    (
+        "file.rs",
+        "set_record_mutable_flags",
+        "validate_record_entry",
+    ),
     (
         "file.rs",
         "read_record_entry_positional",

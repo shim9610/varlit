@@ -518,6 +518,9 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
         "self.file.write(",
         "self.file.seek(",
         "self.file.write_vectored(",
+        "self.file.write_all_at(",
+        "self.file.write_at(",
+        "self.file.seek_write(",
     ] {
         assert!(
             !outside.contains(bypass),
@@ -877,7 +880,7 @@ fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
     assert_eq!(
         outside.matches(".require_meaningful(").count(),
         1,
-        "the fail-closed reader has exactly one legitimate caller (`verify_cell_crc`, which \
+        "the fail-closed reader has exactly one legitimate caller (`require_cell_crc_evidence`, which \
          turns an absent bit into a refusal). A second caller must justify itself here rather \
          than appear silently, and `.is_ok()` on its result is the one way its `Result<()>` \
          can be laundered back into a bit"

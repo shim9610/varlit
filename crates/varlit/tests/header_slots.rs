@@ -381,14 +381,14 @@ fn corrupt_region_byte(path: &std::path::Path) {
         .expect("open")
         .read_to_end(&mut bytes)
         .expect("read");
-    let at = bytes
+    let region = bytes
         .windows(4)
         .position(|w| w == b"VHSL")
-        .expect("the region is in the file")
-        // magic + len + version + flags + capacity + used + checksum
-        + 4
-        + 4
-        + 16;
+        .expect("the region is in the file");
+    let used = u32::from_le_bytes(bytes[region + 16..region + 20].try_into().unwrap()) as usize;
+    // Change the trailing u64 value, preserving IDs, lengths, and field framing.
+    // Integrity=None bypasses checksums, not the format's structural rules.
+    let at = region + 24 + used - 1;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .open(path)
@@ -431,7 +431,7 @@ fn integrity_none_ignores_a_corrupted_region() {
     let file = Exempt::open(&path).expect("open");
     // The exemption is the whole point: the checksum is written but never
     // consulted, so a changed byte is a changed value and not an error. It is
-    // still framed, so the walk either finds a block or does not.
+    // still structurally valid, so the changed scalar remains readable.
     let read = file.read_header_block::<Watermark>();
     assert!(
         read.is_ok(),
@@ -677,4 +677,60 @@ fn a_reader_opened_before_a_write_does_not_see_it() {
         Some(watermark("second")),
         "a reader opened after the write sees it",
     );
+}
+
+#[test]
+fn valid_checksum_cannot_authorize_duplicate_or_undeclared_header_entries() -> varlit::Result<()> {
+    for duplicate in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("invalid-membership.varlit");
+        let mut writer = Rolling::create(&path)?;
+        writer.write_header_block(&Watermark {
+            label: "first".into(),
+            at: 42,
+        })?;
+        drop(writer);
+        let mut bytes = std::fs::read(&path)?;
+        let payload = bytes
+            .windows(4)
+            .position(|w| w == b"VHSL")
+            .expect("header slots")
+            + 8;
+        let capacity =
+            u32::from_le_bytes(bytes[payload + 4..payload + 8].try_into().unwrap()) as usize;
+        let used =
+            u32::from_le_bytes(bytes[payload + 8..payload + 12].try_into().unwrap()) as usize;
+        let start = payload + 16;
+        if duplicate {
+            bytes.copy_within(start..start + used, start + used);
+            bytes[payload + 8..payload + 12].copy_from_slice(&(used as u32 * 2).to_le_bytes());
+        } else {
+            bytes[start..start + 4].copy_from_slice(&NotInTheRegion::ID.to_le_bytes());
+        }
+        let checksum = bytes[payload..payload + 12]
+            .iter()
+            .chain(&bytes[start..start + capacity])
+            .fold(2_166_136_261u32, |hash, byte| {
+                (hash ^ u32::from(*byte)).wrapping_mul(16_777_619)
+            });
+        bytes[payload + 12..payload + 16].copy_from_slice(&checksum.to_le_bytes());
+        std::fs::write(&path, &bytes)?;
+        let reader = Rolling::open_readonly(&path)?;
+        assert!(matches!(
+            reader.read_header_block::<Watermark>(),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        drop(reader);
+        let mut writer = Rolling::open(&path)?;
+        let before = std::fs::read(&path)?;
+        assert!(matches!(
+            writer.write_header_block(&Watermark {
+                label: "replacement".into(),
+                at: 43
+            }),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
+    }
+    Ok(())
 }

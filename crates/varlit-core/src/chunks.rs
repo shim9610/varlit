@@ -71,7 +71,7 @@ impl ChunkedBytes {
     }
 
     pub fn from_encoded(encoded: Vec<u8>) -> Result<Self> {
-        validate_chunked_bytes(&encoded)?;
+        validate_chunked_bytes(&encoded, false)?;
         Ok(Self { encoded })
     }
 
@@ -92,13 +92,13 @@ impl ChunkedBytes {
 
     pub fn decode_to_vec_limited(&self, max_uncompressed_len: u64) -> Result<Vec<u8>> {
         let header = parse_header(&self.encoded)?;
-        validate_chunked_bytes(&self.encoded)?;
         if header.uncompressed_len > max_uncompressed_len {
             return Err(Error::DecompressedLengthLimitExceeded {
                 actual: header.uncompressed_len,
                 limit: max_uncompressed_len,
             });
         }
+        let frame_sizes_known = validate_chunked_bytes(&self.encoded, true)?;
         let output_len =
             usize::try_from(header.uncompressed_len).map_err(|_| Error::InvalidChunkedBytes)?;
         let entries_len = (header.chunk_count as usize)
@@ -144,11 +144,15 @@ impl ChunkedBytes {
                         stored,
                         output,
                         entry.uncompressed_len as usize,
+                        frame_sizes_known,
                     )?;
                     (len, crc32_bytes(&output[start..end])?)
                 } else {
-                    let chunk =
-                        decoder.decompress_chunk(stored, entry.uncompressed_len as usize)?;
+                    let chunk = decoder.decompress_chunk(
+                        stored,
+                        entry.uncompressed_len as usize,
+                        frame_sizes_known,
+                    )?;
                     let actual = crc32_bytes(chunk)?;
                     output.extend_from_slice(chunk);
                     (chunk.len(), actual)
@@ -299,7 +303,7 @@ struct ChunkedHeader {
     chunk_count: u32,
 }
 
-fn validate_chunked_bytes(encoded: &[u8]) -> Result<()> {
+fn validate_chunked_bytes(encoded: &[u8], check_frames: bool) -> Result<bool> {
     let header = parse_header(encoded)?;
     let expected_chunk_count = if header.uncompressed_len == 0 {
         0
@@ -318,6 +322,7 @@ fn validate_chunked_bytes(encoded: &[u8]) -> Result<()> {
     if entries_end > encoded.len() {
         return Err(Error::InvalidChunkedBytes);
     }
+    let mut all_sizes_known = check_frames;
     let mut payload_len = 0usize;
     let mut uncompressed_len = 0u64;
     for (index, offset) in (CHUNKED_HEADER_LEN..entries_end)
@@ -336,9 +341,25 @@ fn validate_chunked_bytes(encoded: &[u8]) -> Result<()> {
         if u64::from(entry.uncompressed_len) != expected_uncompressed_len || entry.stored_len == 0 {
             return Err(Error::InvalidChunkedBytes);
         }
+        let prior = payload_len;
         payload_len = payload_len
             .checked_add(entry.stored_len as usize)
             .ok_or(Error::InvalidChunkedBytes)?;
+        if check_frames {
+            let start = entries_end
+                .checked_add(prior)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            let end = entries_end
+                .checked_add(payload_len)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            let stored = encoded.get(start..end).ok_or(Error::InvalidChunkedBytes)?;
+            // Relocate the decoder's existing frame-size check before the
+            // large allocation, then reuse that result in the decoding pass.
+            all_sizes_known &= crate::compression_buffers::validate_frame_output_len(
+                stored,
+                u64::from(entry.uncompressed_len),
+            )?;
+        }
         uncompressed_len = uncompressed_len
             .checked_add(entry.uncompressed_len as u64)
             .ok_or(Error::InvalidChunkedBytes)?;
@@ -349,7 +370,7 @@ fn validate_chunked_bytes(encoded: &[u8]) -> Result<()> {
     if expected_len != encoded.len() || uncompressed_len != header.uncompressed_len {
         return Err(Error::InvalidChunkedBytes);
     }
-    Ok(())
+    Ok(all_sizes_known)
 }
 
 fn parse_header(encoded: &[u8]) -> Result<ChunkedHeader> {

@@ -35,6 +35,80 @@ struct Reading {
     value: u64,
 }
 
+#[derive(Clone, Debug, VarlitBlock)]
+#[varlit(id = 11, version = 1, kind = "variable")]
+struct Embedded {
+    bytes: Vec<u8>,
+}
+
+varlit_format! {
+    struct EmbeddedFormat {
+        magic: b"VRDEADE1";
+        version: 1;
+        endian: little;
+        schema_hash: computed;
+        integrity: crc32;
+        index: block_offset_chain;
+        commit: transaction_marker(on_flush);
+        liveness: footer_flags;
+        blocks: [Embedded];
+    }
+}
+
+#[test]
+fn marking_embedded_record_bytes_refuses_without_writing() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let donor = directory.path().join("donor.varlit");
+    let path = directory.path().join("embedded.varlit");
+    let spec = EmbeddedFormat::spec();
+    let mut writer = spec.create(&donor)?;
+    let record = writer.push_info(&Embedded { bytes: vec![7; 64] })?;
+    writer.flush()?;
+    drop(writer);
+    let donor_bytes = std::fs::read(&donor)?;
+    let embedded = donor_bytes
+        [record.record_offset as usize..record.footer_offset.unwrap() as usize + 32]
+        .to_vec();
+    let mut writer = spec.create(&path)?;
+    writer.push(&Embedded {
+        bytes: embedded.clone(),
+    })?;
+    writer.flush()?;
+    drop(writer);
+    let mut writer = spec.open(&path)?;
+    let before = std::fs::read(&path)?;
+    let fake = before
+        .windows(embedded.len())
+        .position(|bytes| bytes == embedded)
+        .unwrap() as u64;
+    assert!(matches!(
+        writer.mark_record_dead(fake),
+        Err(varlit::Error::InvalidCanonicalEncoding(_))
+    ));
+    assert_eq!(std::fs::read(&path)?, before);
+    writer.verify_all()?;
+    Ok(())
+}
+
+#[test]
+fn lazy_writer_can_mark_a_real_historical_record() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("lazy-mark.varlit");
+    let spec = On::spec()
+        .with_index_policy(varlit::IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true))
+        .with_computed_schema_hash();
+    let mut writer = spec.create(&path)?;
+    let offset = writer.push_info(&Reading { value: 1 })?.record_offset;
+    writer.push(&Reading { value: 2 })?;
+    writer.flush()?;
+    drop(writer);
+    let (mut writer, source) = varlit::VarlitFile::open_lazy_with_report(spec, &path)?;
+    assert_eq!(source, varlit::LazyOpenSource::Digest);
+    writer.mark_record_dead(offset)?;
+    assert!(writer.record_is_dead(offset)?);
+    Ok(())
+}
+
 // A footer-bearing format, because the word lives in the footer.
 varlit_format! {
     pub struct Off {
@@ -324,6 +398,122 @@ fn an_internal_record_cannot_be_marked() -> varlit::Result<()> {
     Ok(())
 }
 
+/// A damaged advisory flag must never turn maintenance into transaction rollback.
+#[test]
+fn defragment_refuses_dead_commit_without_publishing() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("dead-commit.varlit");
+    let mut writer = On::spec().create(&path)?;
+    let offset = writer.push_info(&Reading { value: 42 })?.record_offset;
+    writer.flush()?;
+    writer.sync()?;
+    drop(writer);
+    let reader = On::spec().open_readonly(&path)?;
+    let mut buffer = Vec::new();
+    let mut walk = reader.record_map(&mut buffer)?;
+    let mut marker = None;
+    while let Some(entry) = walk.advance()? {
+        if entry.block_id == varlit::COMMIT_BLOCK_ID {
+            marker = entry.footer_offset;
+        }
+    }
+    let footer_offset = marker.expect("commit footer");
+    drop(reader);
+    let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+    raw.seek(SeekFrom::Start(footer_offset + 28))?;
+    raw.write_all(&1u32.to_le_bytes())?;
+    drop(raw);
+    let mut writer = On::spec().open(&path)?;
+    let before = std::fs::read(&path)?;
+    assert!(matches!(
+        writer.defragment(),
+        Err(varlit::Error::InvalidRecordFooter { .. })
+    ));
+    assert_eq!(std::fs::read(&path)?, before);
+    drop(writer);
+    let reopened = On::spec().open_readonly(&path)?;
+    assert_eq!(
+        reopened.read_block_at::<Reading>(offset)?,
+        Reading { value: 42 }
+    );
+    Ok(())
+}
+
+#[test]
+fn defragment_refuses_payload_damage_without_republishing() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    for integrity in [
+        varlit::IntegrityPolicy::Crc32,
+        varlit::IntegrityPolicy::Crc32WithHeader,
+    ] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("damaged-payload.varlit");
+        let spec = On::spec()
+            .with_integrity_policy(integrity)
+            .with_computed_schema_hash();
+        let mut writer = spec.create(&path)?;
+        let offset = writer.push_info(&Reading { value: 42 })?.record_offset;
+        writer.flush()?;
+        drop(writer);
+        let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.seek(SeekFrom::Start(offset + 32))?;
+        raw.write_all(&43u64.to_le_bytes())?;
+        drop(raw);
+        let mut writer = spec.open(&path)?;
+        let before = std::fs::read(&path)?;
+        assert!(matches!(
+            writer.defragment(),
+            Err(varlit::Error::ChecksumMismatch { .. })
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
+        drop(writer);
+        assert!(matches!(
+            spec.open_readonly(&path)?.verify_all(),
+            Err(varlit::Error::ChecksumMismatch { .. })
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn defragment_preserves_active_readers_on_the_old_generation() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("readers.varlit");
+    let mut writer = On::spec().create(&path)?;
+    let offset = writer.push_info(&Reading { value: 42 })?.record_offset;
+    for value in 0..4096 {
+        writer.push(&Reading { value })?;
+    }
+    writer.flush()?;
+    writer.mark_record_dead(offset)?;
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(5));
+    std::thread::scope(|scope| -> varlit::Result<()> {
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let path = &path;
+                let ready = &ready;
+                scope.spawn(move || -> varlit::Result<()> {
+                    let opened = On::spec().open_readonly(path);
+                    ready.wait();
+                    let reader = opened?;
+                    for _ in 0..10_000 {
+                        assert_eq!(reader.read_block_at::<Reading>(offset)?.value, 42);
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        ready.wait();
+        assert_eq!(writer.defragment()?.records_dropped, 1);
+        for reader in readers {
+            reader.join().expect("reader thread")?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// A clean release clears the dirty bit; an abandoned object leaves it set.
 ///
 /// **What is simulated, and what is not.** A killed process releases the OS
@@ -560,4 +750,127 @@ fn mark_tail_refuses_without_its_prerequisites() {
         no_marker.validate(),
         Err(varlit::Error::InvalidFormatSpec(m)) if m.contains("marker") || m.contains("footer")
     ));
+}
+
+#[test]
+fn lazy_open_honors_explicit_at_open_verification() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("lazy-verify.varlit");
+    let spec = On::spec()
+        .with_index_policy(varlit::IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(true))
+        .with_computed_schema_hash();
+    let mut writer = spec.create(&path)?;
+    let record = writer.push_info(&Reading { value: 1 })?;
+    writer.flush()?;
+    drop(writer);
+    let strict = spec.with_read_limits(
+        spec.read_limits
+            .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
+    );
+    let (reader, source) = varlit::VarlitFile::open_readonly_lazy_with_report(strict, &path)?;
+    assert_eq!(source, varlit::LazyOpenSource::FullScan);
+    drop(reader);
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    file.seek(SeekFrom::Start(record.payload_offset))?;
+    file.write_all(&2u64.to_le_bytes())?;
+    drop(file);
+    assert!(matches!(
+        varlit::VarlitFile::open_readonly_lazy_with_report(strict, &path),
+        Err(varlit::Error::ChecksumMismatch { .. })
+    ));
+    assert!(matches!(
+        varlit::VarlitFile::open_lazy_with_report(strict, &path),
+        Err(varlit::Error::ChecksumMismatch { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn commit_records_require_the_internal_flag_and_supported_version() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    for version_damage in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("commit-identity.varlit");
+        let spec = On::spec();
+        let mut writer = spec.create(&path)?;
+        writer.push(&Reading { value: 1 })?;
+        writer.flush()?;
+        let mut buffer = Vec::new();
+        let mut walk = writer.record_map(&mut buffer)?;
+        let mut marker = None;
+        while let Some(entry) = walk.advance()? {
+            if entry.block_id == varlit::COMMIT_BLOCK_ID {
+                marker = Some(entry.record_offset);
+            }
+        }
+        let marker = marker.expect("commit marker");
+        drop(writer);
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+        file.seek(SeekFrom::Start(marker + if version_damage { 4 } else { 6 }))?;
+        file.write_all(&(if version_damage { 2u16 } else { 0u16 }).to_le_bytes())?;
+        drop(file);
+        assert!(matches!(
+            varlit::VarlitFile::open_readonly(spec, &path),
+            Err(varlit::Error::InvalidCanonicalEncoding(_))
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn marking_between_appends_preserves_records_and_a_live_reader() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("mark-append.varlit");
+    let spec = On::spec();
+    let mut writer = spec.create(&path)?;
+    let first = writer.push_info(&Reading { value: 11 })?;
+    writer.flush()?;
+    let reader = varlit::VarlitFile::open_readonly(spec, &path)?;
+    let original_len = std::fs::metadata(&path)?.len();
+    writer.mark_record_dead(first.record_offset)?;
+    let second = writer.push_info(&Reading { value: 22 })?;
+    assert!(second.record_offset >= original_len);
+    writer.flush()?;
+    assert!(reader.record_is_dead(first.record_offset)?);
+    assert_eq!(
+        reader
+            .blocks::<Reading>()?
+            .iter()
+            .collect::<varlit::Result<Vec<_>>>()?,
+        vec![Reading { value: 11 }]
+    );
+    drop(writer);
+    let reopened = varlit::VarlitFile::open_readonly(spec, &path)?;
+    assert_eq!(
+        reopened
+            .blocks::<Reading>()?
+            .iter()
+            .collect::<varlit::Result<Vec<_>>>()?,
+        vec![Reading { value: 11 }, Reading { value: 22 }]
+    );
+    assert!(reopened.record_is_dead(first.record_offset)?);
+    assert!(!reopened.record_is_dead(second.record_offset)?);
+    Ok(())
+}
+
+#[test]
+fn marking_refuses_a_damaged_internal_identity_without_writing() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("mark-identity.varlit");
+    let mut writer = On::spec().create(&path)?;
+    let entry = writer.push_info(&Reading { value: 11 })?;
+    writer.flush()?;
+    let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+    raw.seek(SeekFrom::Start(entry.record_offset + 6))?;
+    raw.write_all(&0x8000u16.to_le_bytes())?; // Internal flag on a user block.
+    drop(raw);
+    let before = std::fs::read(&path)?;
+    assert!(matches!(
+        writer.mark_record_dead(entry.record_offset),
+        Err(varlit::Error::InvalidCanonicalEncoding(_))
+    ));
+    assert_eq!(std::fs::read(&path)?, before);
+    Ok(())
 }

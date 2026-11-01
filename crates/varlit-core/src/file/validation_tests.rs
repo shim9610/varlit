@@ -122,6 +122,17 @@ fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
                 matches!(positional, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
                 "positional read must reject flags {flags:#06x} with UnknownRecordFlags"
             );
+        } else if flags & 0x8000 != 0 {
+            // This fixture has user block ID 37. A well-known flag still
+            // cannot relabel that ID as an internal control record.
+            assert!(matches!(
+                sequential,
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+            assert!(matches!(
+                positional,
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
         } else if flags & 1 != 0 {
             // No registered compression contract; even the known compression
             // bit is invalid here. Both paths must enforce that rule too.
@@ -203,6 +214,15 @@ fn framing_routes_preserve_every_footer_field() -> Result<()> {
                     );
                     assert_eq!(
                         fault_record_entry(&snapshot, spec, expected.record_offset, true)?,
+                        expected
+                    );
+                    assert_eq!(
+                        fault_record_entry_prefixed::<128>(
+                            &snapshot,
+                            spec,
+                            expected.record_offset,
+                            true
+                        )?,
                         expected
                     );
                     // Commit state belongs to the directory, not the bytes.
@@ -312,5 +332,37 @@ fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()>
     };
     assert!(wrong.next().unwrap().is_err());
     assert!(wrong.next().is_none());
+    Ok(())
+}
+
+#[test]
+fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
+    let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
+    for length in [0, 8, 64, 65, 256] {
+        let mut bytes = Vec::new();
+        let expected = append_frame(
+            spec,
+            &mut bytes,
+            0,
+            &vec![23; length],
+            RecordFooterFields {
+                prev_same_block_offset: None,
+                prev_same_key_offset: None,
+                mutable_flags: 0,
+            },
+        )?;
+        for end in 0..bytes.len() {
+            let snapshot = snapshot(&bytes[..end])?;
+            assert!(
+                fault_record_entry_prefixed::<128>(&snapshot, spec, 0, true).is_err(),
+                "accepted {end} bytes of a {length}-byte payload frame"
+            );
+        }
+        let snapshot = snapshot(&bytes)?;
+        assert_eq!(
+            fault_record_entry_prefixed::<128>(&snapshot, spec, 0, true)?,
+            expected
+        );
+    }
     Ok(())
 }

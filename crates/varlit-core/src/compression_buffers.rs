@@ -121,6 +121,42 @@ fn frame_output_len(mut bytes: &[u8]) -> Option<u64> {
     Some(total)
 }
 
+/// Check embedded frame lengths before reserving a container-wide output.
+/// Frames without a content-size field remain supported by bounded decoding.
+pub(crate) fn validate_frame_output_len(payload: &[u8], expected: u64) -> Result<bool> {
+    #[cfg(feature = "compression-zstd")]
+    {
+        let mut bytes = payload;
+        let mut total = 0u64;
+        let mut known = true;
+        while !bytes.is_empty() {
+            let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
+            if len == 0 {
+                return Err(Error::InvalidChunkedBytes);
+            }
+            match zstd::zstd_safe::get_frame_content_size(bytes)
+                .map_err(|_| Error::InvalidChunkedBytes)?
+            {
+                Some(n) => total = total.checked_add(n).ok_or(Error::InvalidChunkedBytes)?,
+                None => known = false,
+            }
+            bytes = bytes.get(len..).ok_or(Error::InvalidChunkedBytes)?;
+        }
+        if known && total != expected {
+            return Err(Error::DecompressedLengthMismatch {
+                expected,
+                actual: total,
+            });
+        }
+        Ok(known)
+    }
+    #[cfg(not(feature = "compression-zstd"))]
+    {
+        let _ = (payload, expected);
+        Err(Error::CompressionFeatureDisabled)
+    }
+}
+
 pub(crate) struct Decompressor {
     #[cfg(feature = "compression-zstd")]
     context: zstd::zstd_safe::DCtx<'static>,
@@ -140,8 +176,17 @@ impl Decompressor {
         Err(Error::CompressionFeatureDisabled)
     }
     #[cfg(feature = "compression-zstd")]
-    pub(crate) fn decompress_chunk(&mut self, payload: &[u8], expected: usize) -> Result<&[u8]> {
-        let exact = frame_output_len(payload);
+    pub(crate) fn decompress_chunk(
+        &mut self,
+        payload: &[u8],
+        expected: usize,
+        prevalidated_size: bool,
+    ) -> Result<&[u8]> {
+        let exact = if prevalidated_size {
+            Some(expected as u64)
+        } else {
+            frame_output_len(payload)
+        };
         if let Some(actual) = exact
             && actual != expected as u64
         {
@@ -176,7 +221,12 @@ impl Decompressor {
         Ok(&self.buffer)
     }
     #[cfg(not(feature = "compression-zstd"))]
-    pub(crate) fn decompress_chunk(&mut self, _payload: &[u8], _expected: usize) -> Result<&[u8]> {
+    pub(crate) fn decompress_chunk(
+        &mut self,
+        _payload: &[u8],
+        _expected: usize,
+        _prevalidated_size: bool,
+    ) -> Result<&[u8]> {
         Err(Error::CompressionFeatureDisabled)
     }
     #[cfg(feature = "compression-zstd")]
@@ -185,13 +235,18 @@ impl Decompressor {
         payload: &[u8],
         output: &mut Vec<u8>,
         expected: usize,
+        prevalidated_size: bool,
     ) -> Result<usize> {
         let start = output.len();
         let end = start
             .checked_add(expected)
             .filter(|end| *end <= output.capacity())
             .ok_or(Error::InvalidChunkedBytes)?;
-        let written = match frame_output_len(payload) {
+        let written = match if prevalidated_size {
+            Some(expected as u64)
+        } else {
+            frame_output_len(payload)
+        } {
             Some(actual) if actual != expected as u64 => Err(Error::DecompressedLengthMismatch {
                 expected: expected as u64,
                 actual,
@@ -231,6 +286,7 @@ impl Decompressor {
         _payload: &[u8],
         _output: &mut Vec<u8>,
         _expected: usize,
+        _prevalidated_size: bool,
     ) -> Result<usize> {
         Err(Error::CompressionFeatureDisabled)
     }
@@ -251,16 +307,20 @@ mod tests {
         concatenated.extend_from_slice(&known);
         let mut decoder = Decompressor::new()?;
         for (frame, expected) in [(&known, 4096), (&unknown, 4096), (&concatenated, 8192)] {
-            let chunk = decoder.decompress_chunk(frame, expected)?;
+            let chunk = decoder.decompress_chunk(frame, expected, false)?;
             assert_eq!(chunk.len(), expected);
             assert!(
                 chunk.iter().all(|byte| *byte == 23),
                 "invalid scratch decoded bytes"
             );
-            assert!(decoder.decompress_chunk(frame, expected - 1).is_err());
+            assert!(
+                decoder
+                    .decompress_chunk(frame, expected - 1, false)
+                    .is_err()
+            );
             let mut output = Vec::with_capacity(16384);
             output.extend_from_slice(b"prefix");
-            let written = decoder.decompress_append(frame, &mut output, expected)?;
+            let written = decoder.decompress_append(frame, &mut output, expected, false)?;
             assert_eq!(written, expected);
             assert!(output[..6] == *b"prefix", "prefix overwritten");
             assert!(
@@ -272,7 +332,7 @@ mod tests {
             output.extend_from_slice(b"prefix");
             assert!(
                 decoder
-                    .decompress_append(frame, &mut output, expected - 1)
+                    .decompress_append(frame, &mut output, expected - 1, false)
                     .is_err()
             );
             assert!(output[..6] == *b"prefix", "refusal overwrote prefix");

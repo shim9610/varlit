@@ -940,10 +940,14 @@ pub(super) fn uses_format_contract_compression(spec: FormatSpec) -> bool {
     )
 }
 
+#[inline]
 pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
     let unknown_flags = entry.flags & !RECORD_KNOWN_FLAGS;
     if unknown_flags != 0 {
         return Err(Error::UnknownRecordFlags(unknown_flags));
+    }
+    if entry.block_id >= RESERVED_BLOCK_ID_START || entry.flags & RECORD_FLAG_INTERNAL != 0 {
+        validate_internal_record_entry(entry)?;
     }
     if !entry.is_compressed() {
         return Ok(());
@@ -960,6 +964,40 @@ pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) 
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     ensure_compression_algorithm_available(compression.algorithm)
+}
+
+// Control-record versions belong to a cold path. Keeping the version table out
+// of the common user-record validator preserves its small, inlineable shape.
+#[cold]
+#[inline(never)]
+fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
+    let reserved = entry.block_id >= RESERVED_BLOCK_ID_START;
+    if reserved != (entry.flags & RECORD_FLAG_INTERNAL != 0) {
+        return Err(Error::InvalidCanonicalEncoding(
+            "record internal flag disagrees with block id",
+        ));
+    }
+    if reserved {
+        let supported = match entry.block_id {
+            INDEX_BLOCK_ID => (1..=INDEX_CHECKPOINT_VERSION).contains(&entry.block_version),
+            MANIFEST_BLOCK_ID => (1..=MANIFEST_PAYLOAD_VERSION).contains(&entry.block_version),
+            TOMBSTONE_BLOCK_ID
+            | OP_BLOCK_ID
+            | METADATA_BLOCK_ID
+            | COMMIT_BLOCK_ID
+            | CREATION_NONCE_BLOCK_ID
+            | SEGMENT_BLOCK_ID
+            | MATRIX_CHUNK_BLOCK_ID
+            | OPEN_DIGEST_BLOCK_ID => entry.block_version == 1,
+            _ => true, // Preserve unknown internal extensions without interpreting them.
+        };
+        if !supported {
+            return Err(Error::InvalidCanonicalEncoding(
+                "unsupported internal record version",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
@@ -1339,11 +1377,14 @@ pub(super) fn decode_header_slots(spec: FormatSpec, payload: &[u8]) -> Result<He
 /// cannot be walked is corrupt and answering from half of it would be worse
 /// than saying so.
 pub(super) fn walk_header_slot_entries<'a>(
+    spec: &FormatSpec,
     entries: &'a [u8],
     used: usize,
     mut visit: impl FnMut(u32, u16, &'a [u8]) -> Result<()>,
 ) -> Result<()> {
     let mut offset = 0usize;
+    let mut inline_seen = 0u64;
+    let mut extra_seen = Vec::<u64>::new();
     while offset < used {
         let rest = used - offset;
         if rest < HEADER_SLOT_ENTRY_HEADER_LEN {
@@ -1351,6 +1392,50 @@ pub(super) fn walk_header_slot_entries<'a>(
         }
         let head = &entries[offset..offset + HEADER_SLOT_ENTRY_HEADER_LEN];
         let block_id = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+        let ids = spec.header_slots.blocks;
+        // Dense declarations allow a direct candidate, regardless of the order
+        // of stored entries. Verify the candidate against the actual schema;
+        // sparse/unordered declarations retain the general membership search.
+        let position = if let [only] = ids {
+            (*only == block_id).then_some(0)
+        } else {
+            let candidate = ids
+                .first()
+                .map(|first| block_id.wrapping_sub(*first) as usize);
+            candidate
+                .filter(|&at| ids.get(at) == Some(&block_id))
+                .or_else(|| ids.iter().position(|id| *id == block_id))
+        }
+        .ok_or(Error::InvalidCanonicalEncoding(
+            "undeclared header slot block",
+        ))?;
+        let word = if position < 64 {
+            &mut inline_seen
+        } else {
+            if extra_seen.is_empty() {
+                let words = (spec.header_slots.blocks.len() - 64).div_ceil(64);
+                let bytes = (words as u64)
+                    .checked_mul(8)
+                    .ok_or(Error::InvalidCompressionHeader)?;
+                spec.read_limits
+                    .check(ReadLimitKey::MaterializedBytes, bytes)?;
+                extra_seen
+                    .try_reserve_exact(words)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "header slot membership",
+                        requested: bytes,
+                    })?;
+                extra_seen.resize(words, 0);
+            }
+            &mut extra_seen[position / 64 - 1]
+        };
+        let bit = 1u64 << (position % 64);
+        if *word & bit != 0 {
+            return Err(Error::InvalidCanonicalEncoding(
+                "duplicate header slot block",
+            ));
+        }
+        *word |= bit;
         let block_version = u16::from_le_bytes([head[4], head[5]]);
         let reserved = u16::from_le_bytes([head[6], head[7]]);
         if reserved != 0 {

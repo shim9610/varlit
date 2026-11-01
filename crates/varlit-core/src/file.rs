@@ -2463,7 +2463,7 @@ impl BlockTails {
         for entry in index {
             newest.insert(entry.block_id, entry.record_offset);
         }
-        Self::from_newest(&newest)
+        Self::from_newest(&newest).expect("test tail allocation")
     }
 
     /// Orders an already-collected newest-per-block map.
@@ -2483,10 +2483,17 @@ impl BlockTails {
         Self { tails }
     }
 
-    fn from_newest(newest: &HashMap<u32, u64>) -> Self {
-        let mut tails: Vec<(u32, u64)> = newest.iter().map(|(id, offset)| (*id, *offset)).collect();
+    fn from_newest(newest: &HashMap<u32, u64>) -> Result<Self> {
+        let mut tails = Vec::new();
+        tails
+            .try_reserve_exact(newest.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "block tails",
+                requested: (newest.len() as u64).saturating_mul(16),
+            })?;
+        tails.extend(newest.iter().map(|(id, offset)| (*id, *offset)));
         tails.sort_unstable_by_key(|(block_id, _)| *block_id);
-        Self { tails }
+        Ok(Self { tails })
     }
 
     fn tail(&self, block_id: u32) -> Option<u64> {
@@ -4711,7 +4718,8 @@ impl VarlitFile {
         // rather than from the index, because the index is filtered: a
         // non-resident block's records are on disk and not in it.
         let sequence_state = index.sequence_state();
-        let block_tails = index.block_tails();
+        let block_tails = index.block_tails()?;
+        let frames_verified = index.frames_verified;
         let index = &*scratch;
         // The crash verdict has to be read *before* the handle exists, because
         // truncation happens here and would destroy the evidence it decides
@@ -4739,7 +4747,7 @@ impl VarlitFile {
             spec,
             path,
             file: RecordFile::new(file).with_matrix(matrix_pages),
-            index: ResidentIndex::adopt_generation(index, snapshot.clone(), spec)?,
+            index: ResidentIndex::adopt_generation(index, snapshot.clone(), spec, frames_verified)?,
             snapshot,
             mode: OpenMode::ReadWrite,
             header_extensions,
@@ -4843,7 +4851,8 @@ impl VarlitFile {
             matrix_pages.as_ref(),
         )?;
         let sequence_state = scanned.sequence_state();
-        let block_tails = scanned.block_tails();
+        let block_tails = scanned.block_tails()?;
+        let frames_verified = scanned.frames_verified;
         // The snapshot comes from the scan, not from the resident list. The
         // list is filtered — a non-resident block's records are on disk and not
         // in it, exactly as `open_locked`'s comment says — so binding the
@@ -4874,7 +4883,7 @@ impl VarlitFile {
                 // the option is that varlit does not take it.
                 DirectoryRetention::None => ResidentIndex::none_retained(snapshot.clone(), spec),
                 DirectoryRetention::Keep => {
-                    ResidentIndex::adopt_generation(index, snapshot.clone(), spec)?
+                    ResidentIndex::adopt_generation(index, snapshot.clone(), spec, frames_verified)?
                 }
             },
             snapshot,
@@ -5285,7 +5294,8 @@ impl VarlitFile {
             matrix_pages.as_ref(),
         )?;
         let sequence_state = index.sequence_state();
-        let block_tails = index.block_tails();
+        let block_tails = index.block_tails()?;
+        let frames_verified = index.frames_verified;
         let index = &*scratch;
         // No mark here: this route reaches a file that already ended at a
         // commit point, so there is no tail. See the digest's frame check.
@@ -5306,7 +5316,12 @@ impl VarlitFile {
                 spec,
                 path,
                 file: RecordFile::new(file).with_matrix(matrix_pages),
-                index: ResidentIndex::adopt_generation(index, snapshot.clone(), spec)?,
+                index: ResidentIndex::adopt_generation(
+                    index,
+                    snapshot.clone(),
+                    spec,
+                    frames_verified,
+                )?,
                 snapshot,
                 mode: OpenMode::ReadWrite,
                 header_extensions,
@@ -5996,9 +6011,27 @@ impl VarlitFile {
             let replacement_extensions =
                 header_extensions_for_replacement(self.spec, &self.header_extensions)?;
             write_native_file_header(&mut temp_file, self.spec, &replacement_extensions)?;
+            let mut source_end = rewrite_append_start;
             for source_entry in self.index.iter() {
                 let source_entry = source_entry?;
                 let old_offset = source_entry.record_offset;
+                // Prove directory coverage while copying, including records
+                // dropped below. Serialized rows cannot skip bytes or name an
+                // embedded header. This reuses headers already read here.
+                if old_offset != source_end {
+                    return Err(Error::InvalidCanonicalEncoding(
+                        "defragment source directory is not contiguous",
+                    ));
+                }
+                source_end = source_entry.checked_physical_end()?;
+                // Internal records carry commit and navigation state, never
+                // user liveness. Refuse a damaged mark before publishing a
+                // generation that could erase its commit boundary.
+                if source_entry.block_id >= RESERVED_BLOCK_ID_START && source_entry.is_dead() {
+                    return Err(Error::InvalidRecordFooter {
+                        offset: source_entry.footer_offset.unwrap_or(old_offset),
+                    });
+                }
                 if source_entry.is_dead() {
                     // Dropped. A link that pointed here has to reach past it to
                     // whatever this record itself pointed at, in the same
@@ -6074,6 +6107,9 @@ impl VarlitFile {
                         .is_none_or(|last| last.record_offset < updated.record_offset)
                 );
                 new_index.push(updated)?;
+            }
+            if source_end != self.snapshot.len() {
+                return Err(Error::CorruptTail { offset: source_end });
             }
             temp_file.flush()?;
             temp_file.sync_all()?;
@@ -6443,6 +6479,13 @@ impl VarlitFile {
     /// - Whatever framing the record at `record_offset` fails with, if it is
     ///   not a record.
     ///
+    /// Membership is checked in the private offset directory. For a lazy
+    /// handle, a directory loaded from serialized segments, or a non-resident
+    /// record, framing resumes at the nearest proven boundary. The first such
+    /// call can scan a prefix; increasing offsets reuse the proof. Payloads are
+    /// never allocated as a complete buffer by this check; a fixed stack prefix
+    /// can include small payload bytes when combining the header/footer read.
+    ///
     /// # Durability
     ///
     /// Not synced here. The mark rides the next `flush`/`commit`/`sync` like
@@ -6460,7 +6503,24 @@ impl VarlitFile {
                 "marking a record requires liveness: footer_flags",
             ));
         }
-        let entry = fault_record_entry(&self.snapshot, self.spec, record_offset, false)?;
+        let mut boundary = match self.index.offset_floor(record_offset)? {
+            Some(boundary) => boundary,
+            None => append_log_start_for_file(self)?,
+        };
+        while boundary < record_offset {
+            let framed = fault_record_entry(&self.snapshot, self.spec, boundary, false)?;
+            validate_record_entry(self.spec, &framed)?;
+            boundary = framed.checked_physical_end()?;
+        }
+        if boundary != record_offset || record_offset >= self.snapshot.len() {
+            return Err(Error::InvalidCanonicalEncoding(
+                "offset is not a native record boundary",
+            ));
+        }
+        let entry =
+            fault_record_entry_prefixed::<128>(&self.snapshot, self.spec, record_offset, false)?;
+        validate_record_entry(self.spec, &entry)?;
+        self.index.remember_boundary(record_offset);
         if entry.block_id >= RESERVED_BLOCK_ID_START {
             return Err(Error::ReservedBlockId(entry.block_id));
         }
@@ -7867,14 +7927,13 @@ impl VarlitFile {
         // everything this handle already holds, so its lowest sequence must
         // too. This is the check that the run really is this object's
         // continuation rather than bytes that came from somewhere else.
-        let mut lowest = None::<u64>;
-        for entry in framed.entries() {
-            let sequence = entry?.sequence;
-            lowest = Some(lowest.map_or(sequence, |old| old.min(sequence)));
-        }
         let last_entry = framed.last_entry()?;
-        if let (SequenceState::Available(next), Some(lowest)) = (self.sequence_state, lowest)
-            && lowest < next
+        if scanned
+            .minimum_sequence
+            .is_some_and(|lowest| match self.sequence_state {
+                SequenceState::Available(next) => lowest < next,
+                SequenceState::Exhausted => true,
+            })
         {
             return Err(Error::InvalidCanonicalEncoding(
                 "followed records repeat a sequence this handle already holds",
@@ -11537,7 +11596,7 @@ impl VarlitFile {
     ) -> Result<MmapPayloadWindow> {
         let layout = self.matrix.as_ref().ok_or(Error::MatrixLayoutMissing)?;
         let pages = self.file.matrix_pages().ok_or(Error::MatrixLayoutMissing)?;
-        let (offset, len, crc_offset) = crate::matrix::cell_payload_parts::<T>(
+        let (offset, len, cell_crc) = crate::matrix::cell_payload_parts::<T>(
             self.spec,
             layout,
             key,
@@ -11570,15 +11629,15 @@ impl VarlitFile {
             Some(mapping.make_read_only()?)
         };
         let window = MmapPayloadWindow { offset, mmap };
-        if let Some(crc_offset) = crc_offset {
+        if let Some(cell_crc) = cell_crc {
             let mut crc = [0; 4];
             let mut source = pages.read_borrow();
-            source.seek(SeekFrom::Start(crc_offset))?;
+            source.seek(SeekFrom::Start(cell_crc.offset))?;
             source.read_exact(&mut crc)?;
-            crate::matrix::verify_payload_crc_bytes(
-                offset,
+            cell_crc.verify(
                 window.as_bytes(),
                 u32::from_le_bytes(crc),
+                crate::matrix::BitmapRead::new(pages),
             )?;
         }
         Ok(window)
@@ -12515,12 +12574,17 @@ impl VarlitFile {
             ));
         }
         let mut found: Option<(u16, &[u8])> = None;
-        walk_header_slot_entries(view.entries, view.used, |id, version, payload| {
-            if id == T::ID {
-                found = Some((version, payload));
-            }
-            Ok(())
-        })?;
+        walk_header_slot_entries(
+            &self.spec,
+            view.entries,
+            view.used,
+            |id, version, payload| {
+                if id == T::ID {
+                    found = Some((version, payload));
+                }
+                Ok(())
+            },
+        )?;
         let Some((version, payload)) = found else {
             return Ok(None);
         };
@@ -12592,6 +12656,7 @@ impl VarlitFile {
         if view.is_sealed() {
             return Ok(());
         }
+        walk_header_slot_entries(&self.spec, view.entries, view.used, |_, _, _| Ok(()))?;
         let used = view.used;
         let payload = encode_header_slots_payload(self.spec, used, view.entries, true)?;
         self.ensure_write()?
@@ -12663,7 +12728,7 @@ impl VarlitFile {
         let mut required = payload.map_or(0u64, |p| {
             p.len() as u64 + HEADER_SLOT_ENTRY_HEADER_LEN as u64
         });
-        walk_header_slot_entries(view.entries, view.used, |id, _, existing| {
+        walk_header_slot_entries(&self.spec, view.entries, view.used, |id, _, existing| {
             if id != block_id {
                 required += existing.len() as u64 + HEADER_SLOT_ENTRY_HEADER_LEN as u64;
             }
@@ -12683,17 +12748,22 @@ impl VarlitFile {
                 resource: "header slots region",
                 requested: capacity as u64,
             })?;
-        walk_header_slot_entries(view.entries, view.used, |id, version, existing| {
-            if id == block_id {
-                return Ok(());
-            }
-            rebuilt.extend_from_slice(&id.to_le_bytes());
-            rebuilt.extend_from_slice(&version.to_le_bytes());
-            rebuilt.extend_from_slice(&0u16.to_le_bytes());
-            rebuilt.extend_from_slice(&(existing.len() as u32).to_le_bytes());
-            rebuilt.extend_from_slice(existing);
-            Ok(())
-        })?;
+        walk_header_slot_entries(
+            &self.spec,
+            view.entries,
+            view.used,
+            |id, version, existing| {
+                if id == block_id {
+                    return Ok(());
+                }
+                rebuilt.extend_from_slice(&id.to_le_bytes());
+                rebuilt.extend_from_slice(&version.to_le_bytes());
+                rebuilt.extend_from_slice(&0u16.to_le_bytes());
+                rebuilt.extend_from_slice(&(existing.len() as u32).to_le_bytes());
+                rebuilt.extend_from_slice(existing);
+                Ok(())
+            },
+        )?;
         if let Some(payload) = payload {
             let len = u32::try_from(payload.len()).map_err(|_| Error::LimitExceeded {
                 resource: "header slots block",
@@ -13470,6 +13540,7 @@ fn rewrite_replacement_record_streaming(
     replacement: ChainRemap<'_>,
     rewritten_prefix: &RewriteDirectory,
 ) -> Result<RecordIndexEntry> {
+    let source_entry = matches!(payload, RewritePayload::Snapshot { .. }).then(|| entry.clone());
     let payload_len = match payload {
         RewritePayload::Bytes(bytes) => {
             u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?
@@ -13537,10 +13608,24 @@ fn rewrite_replacement_record_streaming(
         uncompressed_len_hint: entry.uncompressed_len_hint,
     };
     write_record_header(output, spec, record_offset, header)?;
+    let mut copied_crc = None;
     match payload {
         RewritePayload::Bytes(bytes) => output.write_all(bytes)?,
         RewritePayload::Index(index) => index.write(output)?,
-        RewritePayload::Snapshot { offset, len } => snapshot.copy_range_to(offset, len, output)?,
+        RewritePayload::Snapshot { offset, len } => {
+            if spec.integrity_policy == IntegrityPolicy::None {
+                snapshot.copy_range_to(offset, len, output)?;
+            } else {
+                copied_crc = Some(copy_verified_snapshot_record(
+                    spec,
+                    snapshot,
+                    output,
+                    source_entry.as_ref().unwrap(),
+                    offset,
+                    len,
+                )?);
+            }
+        }
     }
     let encoded_footer = if spec.spec_needs_record_footer() {
         let footer = encode_record_footer(RecordFooterFields {
@@ -13561,7 +13646,12 @@ fn rewrite_replacement_record_streaming(
     entry.checksum = match spec.integrity_policy {
         IntegrityPolicy::None => 0,
         IntegrityPolicy::Crc32 | IntegrityPolicy::Crc32WithHeader => {
-            checksum_record_file(spec, output, &entry, footer)?
+            if let Some(mut hash) = copied_crc {
+                hash.update(checksummed_footer(spec, footer));
+                hash.finalize()
+            } else {
+                checksum_record_file(spec, output, &entry, footer)?
+            }
         }
     };
     output.seek(SeekFrom::Start(record_offset))?;
@@ -13576,6 +13666,91 @@ fn rewrite_replacement_record_streaming(
     )?;
     output.seek(SeekFrom::Start(record_end))?;
     Ok(entry)
+}
+
+/// Validate the copied source and checksum the replacement in one payload pass.
+/// Snapshot copies keep the header fields intact. Forking the CRC state before
+/// the changed footer avoids a second read or hash of the payload.
+#[cfg(feature = "integrity")]
+fn copy_verified_snapshot_record(
+    spec: FormatSpec,
+    snapshot: &SnapshotFile,
+    output: &mut File,
+    source: &RecordIndexEntry,
+    offset: u64,
+    len: u64,
+) -> Result<crc32fast::Hasher> {
+    if offset != source.payload_offset || len != source.payload_len {
+        return Err(Error::InvalidCanonicalEncoding(
+            "rewrite source payload changed",
+        ));
+    }
+    // Snapshot copies preserve all header fields covered by the CRC. Only
+    // physical offsets (not stored in the header) and footer links change.
+    let mut payload = crc32fast::Hasher::new();
+    if spec.integrity_policy == IntegrityPolicy::Crc32WithHeader {
+        payload.update(&encode_native_record_header(
+            RecordHeaderFields {
+                block_id: source.block_id,
+                block_version: source.block_version,
+                flags: source.flags,
+                sequence: source.sequence,
+                payload_len: source.payload_len,
+                checksum: 0,
+                uncompressed_len_hint: source.uncompressed_len_hint,
+            },
+            source.record_offset,
+            record_footer_len(spec),
+        )?);
+    }
+    let mut remaining = len;
+    let mut at = offset;
+    let mut buffer = [0; STREAM_BUFFER_LEN];
+    while remaining != 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        snapshot.read_exact_at(at, &mut buffer[..count])?;
+        output.write_all(&buffer[..count])?;
+        payload.update(&buffer[..count]);
+        remaining -= count as u64;
+        at = at
+            .checked_add(count as u64)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "rewrite payload offset",
+            })?;
+    }
+    let checksum = |footer: &[u8]| {
+        let mut hash = payload.clone();
+        hash.update(checksummed_footer(spec, footer));
+        hash.finalize()
+    };
+    let source_footer = if spec.spec_needs_record_footer() {
+        Some(encode_record_footer(RecordFooterFields {
+            prev_same_block_offset: source.prev_same_block_offset,
+            prev_same_key_offset: source.prev_same_key_offset,
+            mutable_flags: source.mutable_flags,
+        })?)
+    } else {
+        None
+    };
+    let actual = checksum(source_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]));
+    if actual != source.checksum {
+        return Err(Error::ChecksumMismatch {
+            offset: source.record_offset,
+        });
+    }
+    Ok(payload)
+}
+
+#[cfg(not(feature = "integrity"))]
+fn copy_verified_snapshot_record(
+    _spec: FormatSpec,
+    _snapshot: &SnapshotFile,
+    _output: &mut File,
+    _source: &RecordIndexEntry,
+    _offset: u64,
+    _len: u64,
+) -> Result<crc32fast::Hasher> {
+    Err(Error::IntegrityFeatureDisabled)
 }
 
 fn validate_replacement_predecessors(
@@ -14734,6 +14909,12 @@ fn derive_index_state(
         let entry = entry?;
         touched = touched.saturating_add(1);
         if with_tails {
+            if newest.len() == newest.capacity() && !newest.contains_key(&entry.block_id) {
+                newest.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                    resource: "derived block tails",
+                    requested: (newest.len() as u64 + 1).saturating_mul(32),
+                })?;
+            }
             newest.insert(entry.block_id, entry.record_offset);
         }
         match entry.block_id {
@@ -14761,7 +14942,9 @@ fn derive_index_state(
             },
             None => SegmentCursor::new_empty(),
         },
-        block_tails: with_tails.then(|| BlockTails::from_newest(&newest)),
+        block_tails: with_tails
+            .then(|| BlockTails::from_newest(&newest))
+            .transpose()?,
     };
     if with_tails {
         note_block_tail_index_touches(touched);
@@ -14870,10 +15053,43 @@ pub(crate) fn fault_record_entry(
     record_offset: u64,
     committed: bool,
 ) -> Result<RecordIndexEntry> {
+    fault_record_entry_prefixed::<{ RECORD_HEADER_LEN as usize }>(
+        snapshot,
+        spec,
+        record_offset,
+        committed,
+    )
+}
+
+/// A mutation's small fixed prefix can frame the header and footer with one
+/// positional read. Ordinary directory reads retain their header-only I/O;
+/// large records use the existing separate footer read. No heap buffer or
+/// persistent cache is added, and every prefix stays inside the snapshot.
+fn fault_record_entry_prefixed<const PREFIX: usize>(
+    snapshot: &SnapshotFile,
+    spec: FormatSpec,
+    record_offset: u64,
+    committed: bool,
+) -> Result<RecordIndexEntry> {
+    const {
+        assert!(PREFIX >= RECORD_HEADER_LEN as usize);
+    }
     count_record_entry_fault();
-    let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
-    snapshot.read_exact_at(record_offset, &mut header_bytes)?;
-    let decoded = read_native_record_header(&mut header_bytes.as_slice(), record_offset)?;
+    let mut header_bytes = [0; PREFIX];
+    let prefix_len = if PREFIX == RECORD_HEADER_LEN as usize {
+        RECORD_HEADER_LEN as usize
+    } else {
+        snapshot
+            .len()
+            .saturating_sub(record_offset)
+            .min(PREFIX as u64)
+            .max(RECORD_HEADER_LEN) as usize
+    };
+    snapshot.read_exact_at(record_offset, &mut header_bytes[..prefix_len])?;
+    let decoded = read_native_record_header(
+        &mut &header_bytes[..RECORD_HEADER_LEN as usize],
+        record_offset,
+    )?;
     debug_assert_eq!(decoded.lead_in_len, RECORD_HEADER_LEN);
     let header = decoded.fields;
     let payload_offset =
@@ -14905,8 +15121,26 @@ pub(crate) fn fault_record_entry(
             },
         )?;
         let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
-        snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-        let footer = decode_record_footer(spec, &footer_bytes, footer_offset, record_offset)?;
+        let within_prefix = if PREFIX > RECORD_HEADER_LEN as usize {
+            usize::try_from(footer_offset - record_offset)
+                .ok()
+                .and_then(|start| {
+                    start
+                        .checked_add(RECORD_FOOTER_LEN as usize)
+                        .filter(|&end| end <= prefix_len)
+                        .map(|end| (start, end))
+                })
+        } else {
+            None
+        };
+        let bytes = match within_prefix {
+            Some((start, end)) => &header_bytes[start..end],
+            None => {
+                snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+                &footer_bytes[..]
+            }
+        };
+        let footer = decode_record_footer(spec, bytes, footer_offset, record_offset)?;
         entry.footer_offset = Some(footer_offset);
         entry.prev_same_block_offset = footer.prev_same_block_offset;
         entry.prev_same_key_offset = footer.prev_same_key_offset;
@@ -16460,6 +16694,40 @@ mod tests {
             info.prev_same_block_offset, None,
             "the first surviving record names no predecessor",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialized_directory_cannot_authorize_marking_an_embedded_record() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let spec = test_spec()
+            .with_index_policy(IndexPolicy::BlockOffsetChain)
+            .with_liveness_policy(LivenessPolicy::FooterFlags);
+        let donor_path = directory.path().join("donor");
+        let mut donor = VarlitFile::create(spec, &donor_path)?;
+        let embedded = donor.push_info_for_test(10, b"value")?;
+        let bytes = std::fs::read(&donor_path)?;
+        let bytes = &bytes[embedded.record_offset as usize..];
+        let path = directory.path().join("outer");
+        let mut writer = VarlitFile::create(spec, &path)?;
+        let outer = writer.push_info_for_test(10, bytes)?;
+        let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
+        // Model a serialized segment claiming the embedded header is a record.
+        writer.index =
+            ResidentIndex::adopt_generation(&vec![fake], writer.snapshot.clone(), spec, false)?;
+        let before = std::fs::read(&path)?;
+        assert!(matches!(
+            writer.mark_record_dead(outer.payload_offset),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
+        assert!(matches!(
+            writer.defragment(),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
+        writer.mark_record_dead(outer.record_offset)?;
+        assert!(writer.record_is_dead(outer.record_offset)?);
         Ok(())
     }
 

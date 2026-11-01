@@ -137,6 +137,7 @@ pub struct VarlitIndexedReader {
     index: crate::disk_index::DiskIndexSnapshot,
     _store: DiskIndexStore,
     indexed_blocks: Vec<u32>,
+    plan: DiskIndexPlan,
 }
 
 impl VarlitIndexedReader {
@@ -162,12 +163,22 @@ impl VarlitIndexedReader {
         let index = store
             .begin_committed_snapshot(identity, plan.mode())
             .map_err(index_error)?;
+        index.validate_finite_layout(plan).map_err(index_error)?;
         stream.adopt_snapshot(stream.committed_native_snapshot(&index)?);
+        let mut indexed_blocks = Vec::new();
+        indexed_blocks
+            .try_reserve_exact(blocks.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "indexed block IDs",
+                requested: (blocks.len() as u64).saturating_mul(4),
+            })?;
+        indexed_blocks.extend(blocks.iter().map(|block| block.block_id));
         Ok(Self {
             stream,
             index,
             _store: store,
-            indexed_blocks: blocks.iter().map(|block| block.block_id).collect(),
+            indexed_blocks,
+            plan,
         })
     }
 
@@ -186,6 +197,8 @@ impl VarlitIndexedReader {
         {
             return Ok(0);
         }
+        next.validate_finite_layout(self.plan)
+            .map_err(index_error)?;
         let native = self.stream.committed_native_snapshot(&next)?;
         self.stream.adopt_snapshot(native);
         self.index = next;
@@ -2083,6 +2096,36 @@ mod tests {
         )
         .with_block_identities(&[Item::IDENTITY])
         .with_read_limits(ReadLimits::STANDARD)
+    }
+
+    #[test]
+    fn rebuild_refuses_truncated_record_instead_of_publishing_a_prefix() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("partial-rebuild.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        writer.push_info(&Item {
+            key: 1,
+            value: "first".into(),
+        })?;
+        writer.push_info(&Item {
+            key: 2,
+            value: "second".into(),
+        })?;
+        writer.sync()?;
+        drop(writer);
+        fs::remove_file(sidecar_path(&path))?;
+        let raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.set_len(raw.metadata()?.len() - 1)?;
+        drop(raw);
+        let before = fs::read(&path)?;
+        assert!(matches!(
+            rebuild_disk_index(spec(), &path, options, index_plan()),
+            Err(Error::CorruptTail { .. })
+        ));
+        assert_eq!(fs::read(&path)?, before);
+        assert!(VarlitIndexedReader::open(spec(), &path, options, index_plan()).is_err());
+        Ok(())
     }
 
     #[test]

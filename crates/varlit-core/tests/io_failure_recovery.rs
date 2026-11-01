@@ -253,6 +253,47 @@ fn kernel_failure_child() -> Result<()> {
             }
         }
     }
+    // Exercise the positional mutable-word write too: no write and each
+    // possible short prefix must report the kernel error, then permit retry.
+    for cut in 0..4 {
+        let path = dir.path().join(format!("mutable-{cut}.varlit"));
+        let spec = spec(true)
+            .with_commit_policy(CommitPolicy::TransactionMarker(
+                TransactionMarkerMode::OnFlush,
+            ))
+            .with_liveness_policy(LivenessPolicy::FooterFlags)
+            .with_computed_schema_hash();
+        let mut writer = VarlitFile::create(spec, &path)?;
+        let value = Record {
+            id: 0,
+            bytes: [13; 8192],
+        };
+        let entry = writer.push_info(&value)?;
+        writer.flush()?;
+        let before = fs::read(&path)?;
+        let word = entry.footer_offset.expect("footer") + 28;
+        let failed = {
+            let _limit = FileLimit::set(word + cut);
+            writer.mark_record_dead(entry.record_offset)
+        };
+        assert!(matches!(failed, Err(Error::Io(ref e)) if e.raw_os_error() == Some(libc::EFBIG)));
+        let after = fs::read(&path)?;
+        assert_eq!(&after[..word as usize], &before[..word as usize]);
+        assert_eq!(&after[word as usize + 4..], &before[word as usize + 4..]);
+        writer.mark_record_dead(entry.record_offset)?;
+        writer.flush()?;
+        drop(writer);
+        let reader = VarlitFile::open_readonly(spec, &path)?;
+        assert!(reader.record_is_dead(entry.record_offset)?);
+        assert_eq!(
+            reader
+                .blocks::<Record>()?
+                .iter()
+                .collect::<Result<Vec<_>>>()?,
+            vec![value]
+        );
+    }
+    println!("mutable-word short-write recovery trials=4");
     assert_eq!(trials, 28);
     println!("kernel short-write recovery trials={trials}");
     Ok(())

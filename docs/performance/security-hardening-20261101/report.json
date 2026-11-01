@@ -1,0 +1,2427 @@
+{
+  "baseline_commit": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+  "scope": "Per-unit qualification during this follow-up, not a claim that all measurements used one final executable.",
+  "workloads": 29,
+  "alternating_pairs": 145,
+  "samples": 290,
+  "phase_scope": {
+    "v5": "Header, matrix, chunk decode and index implementations unchanged in v6/v7.",
+    "v6": "Indexed concurrent workload. Subsequent v7 edits affect native framing/mutation and native scan-tail storage; the measured indexed SWMR path is unchanged.",
+    "v7": "Final production diff: native mutations, scans and maintenance, including actual 1 GiB/4 GiB disk rewrites."
+  },
+  "method": {
+    "toolchain": "Rust 1.95.0, release, all features, Linux x86_64",
+    "cpu_quota": "4 CPUs (400000/100000)",
+    "memory_limit_bytes": 17179869184,
+    "builds": "Separate baseline/candidate target directories; identical Cargo.lock and benchmark sources; baseline production files unmodified.",
+    "timing": "No builds or tests run concurrently. Five alternating before/after pairs per workload; all retained.",
+    "single_process": "Pinned to one allowed CPU. Named-operation elapsed median; whole-child CPU median and peak RSS median. peak_rss_max_kib also reports maximum across all runs. A minimal C parent uses wait4, avoiding inherited Python RSS floor. Linux block writes are multiplied by 512.",
+    "concurrent": "Eight following readers plus one pinned reader; 16384 checks per reader per mutation epoch; identical reader counts, snapshots and traces asserted by scripts/compare_load.py. Elapsed/CPU/write medians; maximum RSS across runs; unchanged 5% resource gate.",
+    "concurrent_batch_bytes": 4194304,
+    "units": {
+      "seconds": "seconds",
+      "cpu": "seconds",
+      "rss": "median per-run peak KiB",
+      "peak_rss_max_kib": "maximum per-run peak KiB"
+    },
+    "storage": "Native single-process suite uses /tmp tmpfs. Explicit disk maintenance and concurrent workloads use the workspace overlay filesystem. These are warm local measurements, not cold-storage or terabyte qualification.",
+    "concurrent_cache_bytes": 8388608
+  },
+  "limitations": [
+    "Boundary validation has a real first-mutation cost for lazy/serialized-directory handles without an existing framing proof. At 200000 records, a single lazy tail mark changes from 13.421 microseconds to 88.149822 milliseconds; 20000 ascending lazy marks change from 17.359829 to 98.416463 milliseconds. Ordinary validated opens and subsequent proven boundaries reuse the proof. No input-sized visited set is added.",
+    "A cold single segment mark changes from 5.869 to 6.220 microseconds (+5.98%). Header elapsed medians increase 1.96% to 4.91%. These observations are not zero overhead; no universal 5% pass is claimed.",
+    "No new cache capacity or workload budget. Fixed 128-byte stack read prefix on mutation combines small header/footer reads (up to 96 more bytes than the header-only route).",
+    "std::BTreeMap allocation remains deferred by the owner. The covered allocation-refusal paths do not establish recovery from every allocation, caller codec or OS process kill.",
+    "CRC detects accidental corruption, not authenticity. Unsafe mmap callers must still obey the documented file mutation/truncation contract."
+  ],
+  "superseded_measurements": [
+    "Initial shared-target-directory comparisons accidentally used identical executables and are INVALID; none enter these results.",
+    "Initial matrix, mark and scan regressions were reproduced and fixed before the selected phases. V4 matrix remained about 12% slower; v5 avoids pointless bitmap LRU updates only when the existing cache can hold every page.",
+    "V5 tmpfs 1 GiB rewrite median peak RSS was 4048 -> 5324 KiB. V7 avoids rollback-value storage for formats without transaction markers; the same workload is 4048 -> 4064 KiB. The precise allocator-layout cause of the earlier peak was not established.",
+    "V6 mark/reopen regressions around 10-12% prompted the v7 fixed stack prefix; selected v7 large marks improve elapsed by 2.86-6.36%.",
+    "An obsolete v3 concurrent run was interrupted and is not counted. Earlier measurements against d6bda27 belong to the prior PR head, not this comparison."
+  ],
+  "provenance": {
+    "v5": {
+      "baseline": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+      "production_diff_sha256": "deb62cb1c1f6f43402832db22aeb206ba503b41aa3201a3cc4f029a9ffc3642c",
+      "separate_target_directories": true,
+      "identical_example_sources": true,
+      "identical_lockfile": true,
+      "resource_measurement": "wait4 of the executable launched by a minimal C parent, avoiding Python parent RSS floor",
+      "binaries": {
+        "before-header": {
+          "sha256": "d64224e056568740b4935c74b323015174d56436f7077a7019e84127a1c7498e",
+          "internal_identity_guard": false
+        },
+        "after-header": {
+          "sha256": "a1974de2541fb6644b81fbc150d45eefaf5448938b1b17aa1dd9bb38c64db239",
+          "internal_identity_guard": true
+        },
+        "before-mark": {
+          "sha256": "d38546094b573302c31750c08096f27fc87c84ce48ccba26b757615dabf6028b",
+          "internal_identity_guard": false
+        },
+        "after-mark": {
+          "sha256": "2fa36b48e3f5c14b97a276fae632d7371656d7a499eab2c8cfb3b5d638adda66",
+          "internal_identity_guard": true
+        },
+        "before-scan": {
+          "sha256": "31188de9aff94b8392e81068377a08fbd3acc1f59b83211fe8e7d372cc087e31",
+          "internal_identity_guard": false
+        },
+        "after-scan": {
+          "sha256": "3c745fdb4b39c20d191907df1a6b4cd6f0225908ab3e0180bd6dba909bd09feb",
+          "internal_identity_guard": true
+        },
+        "before-maintenance": {
+          "sha256": "88d26c7896145b27bfd408cfff1b642ba18b3f6f365c9d3e46bca53fc4c9474c",
+          "internal_identity_guard": false
+        },
+        "after-maintenance": {
+          "sha256": "acb830dfe6101f0e0f6eefac5c514ed29217fb1a03d187aa4744546949534af1",
+          "internal_identity_guard": true
+        },
+        "before-matrix": {
+          "sha256": "6ab14df71195c145efd0ce519baa0afc2594c080310833827f83ca58cab642ae",
+          "internal_identity_guard": false
+        },
+        "after-matrix": {
+          "sha256": "190a580c693df02094f34a71acb5e1df1870e0843c1550d90db6614c81cfb2eb",
+          "internal_identity_guard": true
+        },
+        "before-index": {
+          "sha256": "a9760194d3331aced7800b92207108c5a3d810161234abafec6f69b093331d67",
+          "internal_identity_guard": false
+        },
+        "after-index": {
+          "sha256": "dc4501771f37f7cea2c0c7e79bfc671d1f902ca711df03336090929ab537c0ba",
+          "internal_identity_guard": true
+        },
+        "before-scalable": {
+          "sha256": "7a7210efe0b3d986ce6cf4b61f2b4a4b538f8b394e738840790ca4a257909e64",
+          "internal_identity_guard": false
+        },
+        "after-scalable": {
+          "sha256": "9bd18ff78f30363c24c2196b26e44e457b77d387bbc33b834deafa3d19e43383",
+          "internal_identity_guard": true
+        }
+      }
+    },
+    "v6": {
+      "baseline": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+      "production_diff_sha256": "9b9c1d175d91af65764b25c70637d5459993ef58a4d6d3915b1fbc68408cb67a",
+      "separate_target_directories": true,
+      "identical_example_sources": true,
+      "identical_lockfile": true,
+      "resource_measurement": "wait4 of the executable launched by a minimal C parent, avoiding Python parent RSS floor",
+      "binaries": {
+        "before-header": {
+          "sha256": "d64224e056568740b4935c74b323015174d56436f7077a7019e84127a1c7498e",
+          "internal_identity_guard": false
+        },
+        "after-header": {
+          "sha256": "193c490d0b2d13c80c47426987b99f214f64fbb1d17db648e1f5eca2be3da7a9",
+          "internal_identity_guard": true
+        },
+        "before-mark": {
+          "sha256": "d38546094b573302c31750c08096f27fc87c84ce48ccba26b757615dabf6028b",
+          "internal_identity_guard": false
+        },
+        "after-mark": {
+          "sha256": "ce59cfa5be9fbffe66313013fde9320a28fdface6b5fd6625c264da628d6143a",
+          "internal_identity_guard": true
+        },
+        "before-scan": {
+          "sha256": "31188de9aff94b8392e81068377a08fbd3acc1f59b83211fe8e7d372cc087e31",
+          "internal_identity_guard": false
+        },
+        "after-scan": {
+          "sha256": "36ac3b123959723216444b9a87278eb6dec91856c20ca06d2be162fd5ffb7365",
+          "internal_identity_guard": true
+        },
+        "before-maintenance": {
+          "sha256": "88d26c7896145b27bfd408cfff1b642ba18b3f6f365c9d3e46bca53fc4c9474c",
+          "internal_identity_guard": false
+        },
+        "after-maintenance": {
+          "sha256": "7278c425bc2f2c95ef1bdcf5eab9ba23c1c4b064d78841f8fe29024d2a50e755",
+          "internal_identity_guard": true
+        },
+        "before-matrix": {
+          "sha256": "6ab14df71195c145efd0ce519baa0afc2594c080310833827f83ca58cab642ae",
+          "internal_identity_guard": false
+        },
+        "after-matrix": {
+          "sha256": "90de7cd388fb3177629b6f606983269b3c7ce4afa868bee65d691fbc94e6b935",
+          "internal_identity_guard": true
+        },
+        "before-index": {
+          "sha256": "a9760194d3331aced7800b92207108c5a3d810161234abafec6f69b093331d67",
+          "internal_identity_guard": false
+        },
+        "after-index": {
+          "sha256": "40757ed0c772fc76dd384ed78c6d7078c338c0f96af25cdf1d9f0241718cba60",
+          "internal_identity_guard": true
+        },
+        "before-scalable": {
+          "sha256": "7a7210efe0b3d986ce6cf4b61f2b4a4b538f8b394e738840790ca4a257909e64",
+          "internal_identity_guard": false
+        },
+        "after-scalable": {
+          "sha256": "06e6d1bbe4411550a520abdd3d755b7746164ec0ba774f47f61d1ff149bab623",
+          "internal_identity_guard": true
+        }
+      },
+      "only_production_change_since_v5": "SpillRows::cached_floor verified adjacent-stride candidate; only used by mark_record_dead boundary lookup."
+    },
+    "v7": {
+      "baseline": "317fc981e5cb78eec26f6820c9e010baf2873bcb",
+      "production_diff_sha256": "d75dc0181f895d96586e56cb63e6430971771a12c6a09d1d44ef0caa7246acd7",
+      "separate_target_directories": true,
+      "identical_example_sources": true,
+      "identical_lockfile": true,
+      "resource_measurement": "wait4 of the executable launched by a minimal C parent, avoiding Python parent RSS floor",
+      "binaries": {
+        "before-header": {
+          "sha256": "d64224e056568740b4935c74b323015174d56436f7077a7019e84127a1c7498e",
+          "internal_identity_guard": false
+        },
+        "after-header": {
+          "sha256": "d906c70006132ecafe72e770d77e8f96f3076f94fd9c09b85783873c960960b1",
+          "internal_identity_guard": true
+        },
+        "before-mark": {
+          "sha256": "d38546094b573302c31750c08096f27fc87c84ce48ccba26b757615dabf6028b",
+          "internal_identity_guard": false
+        },
+        "after-mark": {
+          "sha256": "245620555c8270e23b44f7c69174c91751e17a12e884fdf06f9e20b1658b621a",
+          "internal_identity_guard": true
+        },
+        "before-scan": {
+          "sha256": "31188de9aff94b8392e81068377a08fbd3acc1f59b83211fe8e7d372cc087e31",
+          "internal_identity_guard": false
+        },
+        "after-scan": {
+          "sha256": "89c60030f37a939b75472c7dee920e434733700f003ca676186ac9ef3093dc96",
+          "internal_identity_guard": true
+        },
+        "before-maintenance": {
+          "sha256": "88d26c7896145b27bfd408cfff1b642ba18b3f6f365c9d3e46bca53fc4c9474c",
+          "internal_identity_guard": false
+        },
+        "after-maintenance": {
+          "sha256": "94ea4ea658f487e3841333b69f92b6f89ca60c306386c1592e685a744a600615",
+          "internal_identity_guard": true
+        },
+        "before-matrix": {
+          "sha256": "6ab14df71195c145efd0ce519baa0afc2594c080310833827f83ca58cab642ae",
+          "internal_identity_guard": false
+        },
+        "after-matrix": {
+          "sha256": "f8c6de288e47fef3823da3e5f097abf5361af58a8cca02eba351212b295e9fda",
+          "internal_identity_guard": true
+        },
+        "before-index": {
+          "sha256": "a9760194d3331aced7800b92207108c5a3d810161234abafec6f69b093331d67",
+          "internal_identity_guard": false
+        },
+        "after-index": {
+          "sha256": "067f044d6dd278bb13b5e542d07d865b07758c26c0eaa4c0854875e4debd064e",
+          "internal_identity_guard": true
+        },
+        "before-scalable": {
+          "sha256": "7a7210efe0b3d986ce6cf4b61f2b4a4b538f8b394e738840790ca4a257909e64",
+          "internal_identity_guard": false
+        },
+        "after-scalable": {
+          "sha256": "3233669cd74aa31008b478f8ed69aa87cf956042138ba3e677fb4410257885c8",
+          "internal_identity_guard": true
+        }
+      }
+    }
+  },
+  "results": [
+    {
+      "case": [
+        "header",
+        "1000000"
+      ],
+      "seconds": {
+        "before": 0.421399485,
+        "head": 0.433299285,
+        "delta_percent": 2.8238762560423902
+      },
+      "cpu": {
+        "before": 0.422187,
+        "head": 0.434233,
+        "delta_percent": 2.8532380201190533
+      },
+      "rss": {
+        "before": 1900,
+        "head": 1912,
+        "delta_percent": 0.6315789473684275
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "header_slot_load",
+      "equal_work": {
+        "reads": 1000000,
+        "total": 7000000
+      },
+      "peak_rss_max_kib": {
+        "before": 1984,
+        "head": 2036
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "1000000"
+      ]
+    },
+    {
+      "case": [
+        "header",
+        "200000",
+        "many"
+      ],
+      "seconds": {
+        "before": 1.045772423,
+        "head": 1.066319211,
+        "delta_percent": 1.964747544313461
+      },
+      "cpu": {
+        "before": 1.047448,
+        "head": 1.067864,
+        "delta_percent": 1.9491182378504668
+      },
+      "rss": {
+        "before": 1900,
+        "head": 1912,
+        "delta_percent": 0.6315789473684275
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "header_slot_load",
+      "equal_work": {
+        "reads": 200000,
+        "slots": 64,
+        "total": 1400000
+      },
+      "peak_rss_max_kib": {
+        "before": 1936,
+        "head": 1976
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "200000",
+        "many"
+      ]
+    },
+    {
+      "case": [
+        "header",
+        "200000",
+        "shuffled"
+      ],
+      "seconds": {
+        "before": 1.036174474,
+        "head": 1.087065778,
+        "delta_percent": 4.9114608858816355
+      },
+      "cpu": {
+        "before": 1.038742,
+        "head": 1.089595,
+        "delta_percent": 4.895633371905639
+      },
+      "rss": {
+        "before": 1896,
+        "head": 1972,
+        "delta_percent": 4.008438818565407
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "header_slot_load",
+      "equal_work": {
+        "reads": 200000,
+        "slots": 64,
+        "total": 1400000
+      },
+      "peak_rss_max_kib": {
+        "before": 1900,
+        "head": 1972
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "200000",
+        "shuffled"
+      ]
+    },
+    {
+      "case": [
+        "matrix",
+        "small",
+        "131072",
+        "4000000",
+        "whole"
+      ],
+      "seconds": {
+        "before": 1.177371607,
+        "head": 0.740164517,
+        "delta_percent": -37.134162859084476
+      },
+      "cpu": {
+        "before": 1.529443,
+        "head": 1.092597,
+        "delta_percent": -28.562424359717888
+      },
+      "rss": {
+        "before": 4348,
+        "head": 4340,
+        "delta_percent": -0.18399264029438367
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "matrix_mmap_load",
+      "equal_work": {
+        "cells": 131072,
+        "reads": 4000000,
+        "stride": 4,
+        "whole": true,
+        "total": 28000000
+      },
+      "peak_rss_max_kib": {
+        "before": 4476,
+        "head": 4388
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "small",
+        "131072",
+        "4000000",
+        "whole"
+      ]
+    },
+    {
+      "case": [
+        "matrix",
+        "large",
+        "16384",
+        "262144",
+        "whole"
+      ],
+      "seconds": {
+        "before": 0.235140049,
+        "head": 0.223368307,
+        "delta_percent": -5.006268413255288
+      },
+      "cpu": {
+        "before": 0.924636,
+        "head": 0.924236,
+        "delta_percent": -0.043260266742817244
+      },
+      "rss": {
+        "before": 70020,
+        "head": 69964,
+        "delta_percent": -0.07997714938589029
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "matrix_mmap_load",
+      "equal_work": {
+        "cells": 16384,
+        "reads": 262144,
+        "stride": 4096,
+        "whole": true,
+        "total": 1835008
+      },
+      "peak_rss_max_kib": {
+        "before": 70088,
+        "head": 70084
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "large",
+        "16384",
+        "262144",
+        "whole"
+      ]
+    },
+    {
+      "case": [
+        "matrix",
+        "small",
+        "131072",
+        "10000",
+        "cell"
+      ],
+      "seconds": {
+        "before": 0.059492042,
+        "head": 0.058530019,
+        "delta_percent": -1.6170616567506624
+      },
+      "cpu": {
+        "before": 0.396453,
+        "head": 0.401411,
+        "delta_percent": 1.2505896033073283
+      },
+      "rss": {
+        "before": 4344,
+        "head": 4340,
+        "delta_percent": -0.09208103130755596
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "matrix_mmap_load",
+      "equal_work": {
+        "cells": 131072,
+        "reads": 10000,
+        "stride": 4,
+        "whole": false,
+        "total": 70000
+      },
+      "peak_rss_max_kib": {
+        "before": 4476,
+        "head": 4472
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "small",
+        "131072",
+        "10000",
+        "cell"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "decode",
+        "134217728",
+        "65536",
+        "chunks-128m.bin"
+      ],
+      "seconds": {
+        "before": 0.683778079,
+        "head": 0.683102372,
+        "delta_percent": -0.0988196347253778
+      },
+      "cpu": {
+        "before": 0.872997,
+        "head": 0.875173,
+        "delta_percent": 0.24925629755885303
+      },
+      "rss": {
+        "before": 265044,
+        "head": 264848,
+        "delta_percent": -0.0739499856627579
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "decode",
+        "records": 134217728,
+        "payload": 65536,
+        "work": 20
+      },
+      "peak_rss_max_kib": {
+        "before": 265072,
+        "head": 264944
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "decode",
+        "134217728",
+        "65536",
+        "chunks-128m.bin"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "decode",
+        "67108864",
+        "4096",
+        "chunks-64m.bin"
+      ],
+      "seconds": {
+        "before": 0.393518468,
+        "head": 0.40514141,
+        "delta_percent": 2.953595052113278
+      },
+      "cpu": {
+        "before": 0.492299,
+        "head": 0.50478,
+        "delta_percent": 2.5352478879705265
+      },
+      "rss": {
+        "before": 137856,
+        "head": 137756,
+        "delta_percent": -0.07253946146703605
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "decode",
+        "records": 67108864,
+        "payload": 4096,
+        "work": 20
+      },
+      "peak_rss_max_kib": {
+        "before": 137912,
+        "head": 137932
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "decode",
+        "67108864",
+        "4096",
+        "chunks-64m.bin"
+      ]
+    },
+    {
+      "case": [
+        "index",
+        "finite",
+        "4096",
+        "2000000",
+        "8388608"
+      ],
+      "seconds": {
+        "before": 0.215636218,
+        "head": 0.219787269,
+        "delta_percent": 1.9250249510497364
+      },
+      "cpu": {
+        "before": 0.219408,
+        "head": 0.223581,
+        "delta_percent": 1.9019361190111717
+      },
+      "rss": {
+        "before": 2484,
+        "head": 2440,
+        "delta_percent": -1.7713365539452464
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "index_validation_load",
+      "equal_work": {
+        "mode": "finite",
+        "records": 2048,
+        "operations": 2000000,
+        "missing": 2000000,
+        "cache": 8388608,
+        "before_bytes": 190828,
+        "after_bytes": 190828
+      },
+      "peak_rss_max_kib": {
+        "before": 2548,
+        "head": 2548
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "finite",
+        "4096",
+        "2000000",
+        "8388608"
+      ]
+    },
+    {
+      "case": [
+        "index",
+        "short",
+        "200000",
+        "500000",
+        "8388608"
+      ],
+      "seconds": {
+        "before": 0.154301064,
+        "head": 0.152257036,
+        "delta_percent": -1.3247011699154432
+      },
+      "cpu": {
+        "before": 0.69016,
+        "head": 0.609998,
+        "delta_percent": -11.614987828909229
+      },
+      "rss": {
+        "before": 24576,
+        "head": 24576,
+        "delta_percent": 0.0
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "index_validation_load",
+      "equal_work": {
+        "mode": "short",
+        "records": 200000,
+        "operations": 500000,
+        "missing": 500000,
+        "cache": 8388608,
+        "before_bytes": 112298988,
+        "after_bytes": 112298988
+      },
+      "peak_rss_max_kib": {
+        "before": 24644,
+        "head": 24640
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "short",
+        "200000",
+        "500000",
+        "8388608"
+      ]
+    },
+    {
+      "case": [
+        "index",
+        "long",
+        "5000",
+        "100000",
+        "1048576"
+      ],
+      "seconds": {
+        "before": 0.814398767,
+        "head": 0.778260929,
+        "delta_percent": -4.437364036431557
+      },
+      "cpu": {
+        "before": 0.839251,
+        "head": 0.80112,
+        "delta_percent": -4.543456010180491
+      },
+      "rss": {
+        "before": 7392,
+        "head": 7476,
+        "delta_percent": 1.1363636363636465
+      },
+      "phase": "v5",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "index_validation_load",
+      "equal_work": {
+        "mode": "long",
+        "records": 5000,
+        "operations": 100000,
+        "missing": 100000,
+        "cache": 1048576,
+        "before_bytes": 1898620,
+        "after_bytes": 1898620
+      },
+      "peak_rss_max_kib": {
+        "before": 7540,
+        "head": 7476
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "long",
+        "5000",
+        "100000",
+        "1048576"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "writer",
+        "200000",
+        "20000"
+      ],
+      "seconds": {
+        "before": 0.017826513,
+        "head": 0.016790098,
+        "delta_percent": -5.813896413729369
+      },
+      "cpu": {
+        "before": 0.256057,
+        "head": 0.261846,
+        "delta_percent": 2.2608247382418956
+      },
+      "rss": {
+        "before": 4172,
+        "head": 4248,
+        "delta_percent": 1.82166826462129
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "writer",
+        "records": 200000,
+        "marks": 20000
+      },
+      "peak_rss_max_kib": {
+        "before": 4244,
+        "head": 4320
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "writer",
+        "200000",
+        "20000"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "reopen",
+        "200000",
+        "20000"
+      ],
+      "seconds": {
+        "before": 0.018017463,
+        "head": 0.015541313,
+        "delta_percent": -13.743055834220396
+      },
+      "cpu": {
+        "before": 0.412581,
+        "head": 0.423395,
+        "delta_percent": 2.6210610764916487
+      },
+      "rss": {
+        "before": 6312,
+        "head": 6324,
+        "delta_percent": 0.19011406844107182
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "reopen",
+        "records": 200000,
+        "marks": 20000
+      },
+      "peak_rss_max_kib": {
+        "before": 6316,
+        "head": 6388
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "reopen",
+        "200000",
+        "20000"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "lazy",
+        "200000",
+        "1"
+      ],
+      "seconds": {
+        "before": 1.3421e-05,
+        "head": 0.088149822,
+        "delta_percent": 656705.1710006705
+      },
+      "cpu": {
+        "before": 0.213506,
+        "head": 0.304907,
+        "delta_percent": 42.80956975447996
+      },
+      "rss": {
+        "before": 3972,
+        "head": 4008,
+        "delta_percent": 0.9063444108761365
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "lazy",
+        "records": 200000,
+        "marks": 1
+      },
+      "peak_rss_max_kib": {
+        "before": 3984,
+        "head": 4108
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "lazy",
+        "200000",
+        "1"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "lazy",
+        "200000",
+        "20000"
+      ],
+      "seconds": {
+        "before": 0.017359829,
+        "head": 0.098416463,
+        "delta_percent": 466.9206937464649
+      },
+      "cpu": {
+        "before": 0.240044,
+        "head": 0.341312,
+        "delta_percent": 42.18726566796087
+      },
+      "rss": {
+        "before": 4108,
+        "head": 4264,
+        "delta_percent": 3.797468354430378
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "lazy",
+        "records": 200000,
+        "marks": 20000
+      },
+      "peak_rss_max_kib": {
+        "before": 4172,
+        "head": 4320
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "lazy",
+        "200000",
+        "20000"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "segment",
+        "200000",
+        "1"
+      ],
+      "seconds": {
+        "before": 5.869e-06,
+        "head": 6.22e-06,
+        "delta_percent": 5.980575907309582
+      },
+      "cpu": {
+        "before": 0.480459,
+        "head": 0.50012,
+        "delta_percent": 4.09212856872283
+      },
+      "rss": {
+        "before": 18264,
+        "head": 18344,
+        "delta_percent": 0.43802014892684316
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "segment",
+        "records": 200000,
+        "marks": 1
+      },
+      "peak_rss_max_kib": {
+        "before": 18320,
+        "head": 18400
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "segment",
+        "200000",
+        "1"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "segment",
+        "200000",
+        "20000"
+      ],
+      "seconds": {
+        "before": 0.018171225,
+        "head": 0.015647233,
+        "delta_percent": -13.890048689617785
+      },
+      "cpu": {
+        "before": 0.523473,
+        "head": 0.537945,
+        "delta_percent": 2.764612501504393
+      },
+      "rss": {
+        "before": 18316,
+        "head": 18464,
+        "delta_percent": 0.8080366892334601
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "segment",
+        "records": 200000,
+        "marks": 20000
+      },
+      "peak_rss_max_kib": {
+        "before": 18444,
+        "head": 18592
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "segment",
+        "200000",
+        "20000"
+      ]
+    },
+    {
+      "case": [
+        "scan",
+        "200000",
+        "false",
+        "5"
+      ],
+      "seconds": {
+        "before": 0.894541486,
+        "head": 0.866463814,
+        "delta_percent": -3.138778071160353
+      },
+      "cpu": {
+        "before": 1.111912,
+        "head": 1.094649,
+        "delta_percent": -1.5525509212959365
+      },
+      "rss": {
+        "before": 9604,
+        "head": 7684,
+        "delta_percent": -19.99167013744273
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "scan_open_load",
+      "equal_work": {
+        "records": 200000,
+        "diverse": false,
+        "repeats": 5
+      },
+      "peak_rss_max_kib": {
+        "before": 9656,
+        "head": 7692
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "200000",
+        "false",
+        "5"
+      ]
+    },
+    {
+      "case": [
+        "scan",
+        "10000",
+        "true",
+        "5"
+      ],
+      "seconds": {
+        "before": 3.598353414,
+        "head": 0.100235657,
+        "delta_percent": -97.21440210375066
+      },
+      "cpu": {
+        "before": 3.624097,
+        "head": 0.12471,
+        "delta_percent": -96.55886693981977
+      },
+      "rss": {
+        "before": 4748,
+        "head": 4668,
+        "delta_percent": -1.6849199663016012
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "scan_open_load",
+      "equal_work": {
+        "records": 10000,
+        "diverse": true,
+        "repeats": 5
+      },
+      "peak_rss_max_kib": {
+        "before": 4844,
+        "head": 4672
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "10000",
+        "true",
+        "5"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "complex",
+        "200000",
+        "32"
+      ],
+      "seconds": {
+        "before": 1.212295758,
+        "head": 1.06590188,
+        "delta_percent": -12.075756021906336
+      },
+      "cpu": {
+        "before": 3.165798,
+        "head": 3.020605,
+        "delta_percent": -4.586300199823235
+      },
+      "rss": {
+        "before": 10608,
+        "head": 10580,
+        "delta_percent": -0.2639517345399689
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "complex",
+        "records": 200000,
+        "payload": 32,
+        "file_bytes": 48206061,
+        "dropped": 28571
+      },
+      "peak_rss_max_kib": {
+        "before": 10612,
+        "head": 10620
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "complex",
+        "200000",
+        "32"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "checkpoint",
+        "200000",
+        "32"
+      ],
+      "seconds": {
+        "before": 1.262507116,
+        "head": 1.229686123,
+        "delta_percent": -2.5996679610002404
+      },
+      "cpu": {
+        "before": 2.424494,
+        "head": 2.409436,
+        "delta_percent": -0.6210780476256228
+      },
+      "rss": {
+        "before": 16792,
+        "head": 16932,
+        "delta_percent": 0.8337303477846669
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "checkpoint",
+        "records": 200000,
+        "payload": 32,
+        "file_bytes": 64262095,
+        "dropped": 28571
+      },
+      "peak_rss_max_kib": {
+        "before": 16860,
+        "head": 16956
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "checkpoint",
+        "200000",
+        "32"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "defrag",
+        "16384",
+        "65536"
+      ],
+      "seconds": {
+        "before": 0.858670593,
+        "head": 0.802913917,
+        "delta_percent": -6.493372016526012
+      },
+      "cpu": {
+        "before": 1.414819,
+        "head": 1.346483,
+        "delta_percent": -4.830017125865571
+      },
+      "rss": {
+        "before": 4048,
+        "head": 4064,
+        "delta_percent": 0.39525691699604515
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "defrag",
+        "records": 16384,
+        "payload": 65536,
+        "file_bytes": 1075970094,
+        "dropped": 0
+      },
+      "peak_rss_max_kib": {
+        "before": 4052,
+        "head": 4064
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "defrag",
+        "16384",
+        "65536"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "writer",
+        "2000000",
+        "200000"
+      ],
+      "seconds": {
+        "before": 0.176881432,
+        "head": 0.165638357,
+        "delta_percent": -6.356277690017786
+      },
+      "cpu": {
+        "before": 2.449051,
+        "head": 2.523198,
+        "delta_percent": 3.0275808874539623
+      },
+      "rss": {
+        "before": 5516,
+        "head": 5704,
+        "delta_percent": 3.4082668600435184
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "writer",
+        "records": 2000000,
+        "marks": 200000
+      },
+      "peak_rss_max_kib": {
+        "before": 5660,
+        "head": 5728
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "writer",
+        "2000000",
+        "200000"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "reopen",
+        "2000000",
+        "200000"
+      ],
+      "seconds": {
+        "before": 0.193084183,
+        "head": 0.181001276,
+        "delta_percent": -6.257844020294511
+      },
+      "cpu": {
+        "before": 4.463888,
+        "head": 4.395099,
+        "delta_percent": -1.5410108855777649
+      },
+      "rss": {
+        "before": 7720,
+        "head": 7732,
+        "delta_percent": 0.15544041450776813
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "reopen",
+        "records": 2000000,
+        "marks": 200000
+      },
+      "peak_rss_max_kib": {
+        "before": 7840,
+        "head": 7840
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "reopen",
+        "2000000",
+        "200000"
+      ]
+    },
+    {
+      "case": [
+        "mark",
+        "segment",
+        "2000000",
+        "200000"
+      ],
+      "seconds": {
+        "before": 0.176418593,
+        "head": 0.171380855,
+        "delta_percent": -2.855559561117238
+      },
+      "cpu": {
+        "before": 4.121566,
+        "head": 4.3098,
+        "delta_percent": 4.567050485179669
+      },
+      "rss": {
+        "before": 7720,
+        "head": 7736,
+        "delta_percent": 0.2072538860103723
+      },
+      "phase": "v7",
+      "storage": "tmpfs",
+      "pairs": 5,
+      "example": "record_mark_load",
+      "equal_work": {
+        "mode": "segment",
+        "records": 2000000,
+        "marks": 200000
+      },
+      "peak_rss_max_kib": {
+        "before": 7840,
+        "head": 7788
+      },
+      "write_bytes_median": {
+        "before": 0,
+        "head": 0
+      },
+      "command_arguments": [
+        "segment",
+        "2000000",
+        "200000"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "defrag",
+        "16384",
+        "65536"
+      ],
+      "seconds": {
+        "before": 1.09003361,
+        "head": 1.004402499,
+        "delta_percent": -7.855822996136796
+      },
+      "cpu": {
+        "before": 1.408118,
+        "head": 1.327658,
+        "delta_percent": -5.714009763386308
+      },
+      "rss": {
+        "before": 3984,
+        "head": 4000,
+        "delta_percent": 0.40160642570281624
+      },
+      "phase": "v7",
+      "storage": "overlay filesystem",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "defrag",
+        "records": 16384,
+        "payload": 65536,
+        "file_bytes": 1075970094,
+        "dropped": 0
+      },
+      "peak_rss_max_kib": {
+        "before": 4052,
+        "head": 4060
+      },
+      "write_bytes_median": {
+        "before": 2152038400,
+        "head": 2151993344
+      },
+      "command_arguments": [
+        "defrag",
+        "16384",
+        "65536"
+      ]
+    },
+    {
+      "case": [
+        "maintenance",
+        "defrag",
+        "65536",
+        "65536"
+      ],
+      "seconds": {
+        "before": 3.296422545,
+        "head": 2.967443297,
+        "delta_percent": -9.979887089990768
+      },
+      "cpu": {
+        "before": 4.886118,
+        "head": 4.685164,
+        "delta_percent": -4.112753723917417
+      },
+      "rss": {
+        "before": 6496,
+        "head": 6508,
+        "delta_percent": 0.1847290640394128
+      },
+      "phase": "v7",
+      "storage": "overlay filesystem",
+      "pairs": 5,
+      "example": "oom_maintenance_load",
+      "equal_work": {
+        "mode": "defrag",
+        "records": 65536,
+        "payload": 65536,
+        "file_bytes": 4303880238,
+        "dropped": 0
+      },
+      "peak_rss_max_kib": {
+        "before": 6556,
+        "head": 6584
+      },
+      "write_bytes_median": {
+        "before": 8621002752,
+        "head": 8620380160
+      },
+      "command_arguments": [
+        "defrag",
+        "65536",
+        "65536"
+      ]
+    },
+    {
+      "case": [
+        "concurrent",
+        "1GiB"
+      ],
+      "phase": "v6",
+      "storage": "overlay filesystem",
+      "pairs": 5,
+      "status": "passed",
+      "samples_per_version": 5,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "1073741824",
+          "--epoch-bytes": "16777216",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 1073741824,
+        "epoch": 16777216,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            12013369885672098846
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            11811335965011780335
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            6575331053473991156
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            15949282062931151593
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            6929931957242686864
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            9247543884215279603
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            14275219730953207679
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            3654627253138164260
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            14350256076685368
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 18.47535231700749,
+          "after": 19.148140613979194,
+          "change_percent": 3.6415451539312027,
+          "before_range": [
+            17.713047951983754,
+            18.922331521986052
+          ],
+          "after_range": [
+            18.274744890019065,
+            19.43209602398565
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 70.64010999999999,
+          "after": 74.020118,
+          "change_percent": 4.784828336195979,
+          "before_range": [
+            68.449276,
+            73.35666800000001
+          ],
+          "after_range": [
+            70.407633,
+            74.854566
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 26243072,
+          "after": 26296320,
+          "change_percent": 0.20290307476198421,
+          "before_range": [
+            26075136,
+            26243072
+          ],
+          "after_range": [
+            26226688,
+            26296320
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 1142337536,
+          "after": 1142337536,
+          "change_percent": 0.0,
+          "before_range": [
+            1142304768,
+            1142386688
+          ],
+          "after_range": [
+            1142267904,
+            1142374400
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    },
+    {
+      "case": [
+        "concurrent",
+        "4GiB"
+      ],
+      "phase": "v6",
+      "storage": "overlay filesystem",
+      "pairs": 5,
+      "status": "passed",
+      "samples_per_version": 5,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "4294967296",
+          "--epoch-bytes": "67108864",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 4294967296,
+        "epoch": 67108864,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            3208747743188020222
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            15746876979075427631
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            9747968542438937268
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            9243847713027586313
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            4903863259750067952
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            5778843666330398067
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            8200585148807637375
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            1933305620900094980
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            12118611058152487384
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 20.739680879021762,
+          "after": 21.08620230498491,
+          "change_percent": 1.670813683124961,
+          "before_range": [
+            20.171491469984176,
+            21.395220509992214
+          ],
+          "after_range": [
+            19.967781417974038,
+            22.69045417101006
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 76.685766,
+          "after": 78.863324,
+          "change_percent": 2.839585640964981,
+          "before_range": [
+            74.61887999999999,
+            78.738974
+          ],
+          "after_range": [
+            73.928756,
+            84.263754
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 51322880,
+          "after": 51281920,
+          "change_percent": -0.07980845969672856,
+          "before_range": [
+            51224576,
+            51322880
+          ],
+          "after_range": [
+            51216384,
+            51281920
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 4398448640,
+          "after": 4398481408,
+          "change_percent": 0.0007449899426248408,
+          "before_range": [
+            4398379008,
+            4398571520
+          ],
+          "after_range": [
+            4398379008,
+            4398542848
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    }
+  ],
+  "validation": {
+    "workspace": {
+      "passed": 1301,
+      "failed": 0,
+      "ignored": 29,
+      "suites": 131,
+      "artifact_cleanup": "verified empty"
+    },
+    "python_tooling": {
+      "passed": 33
+    },
+    "release_contracts": [
+      {
+        "name": "native-boundary-proof",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--lib",
+          "file::tests::serialized_directory_cannot_authorize_marking_an_embedded_record",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 17.191,
+        "log": "native-boundary-proof.log"
+      },
+      {
+        "name": "rewrite-source-integrity",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "record_liveness",
+          "defragment_refuses_payload_damage_without_republishing",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 13.794,
+        "log": "rewrite-source-integrity.log"
+      },
+      {
+        "name": "matrix-mmap-evidence",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "matrix_integrity_scaling",
+          "mmap_reads_require_crc_validity_even_when_the_stored_crc_matches",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 2.079,
+        "log": "matrix-mmap-evidence.log"
+      },
+      {
+        "name": "nonresident-record-budget",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "index_residency",
+          "nonresident_records_still_count_toward_the_explicit_record_limit",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 1.431,
+        "log": "nonresident-record-budget.log"
+      },
+      {
+        "name": "nonresident-follow-sequence",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "index_residency",
+          "follow_refuses_nonresident_sequences_older_than_its_snapshot",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.165,
+        "log": "nonresident-follow-sequence.log"
+      },
+      {
+        "name": "index-cache-shape",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "index_corruption_guards",
+          "aliased_finite_extents_return_errors_through_public_reads",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.826,
+        "log": "index-cache-shape.log"
+      },
+      {
+        "name": "index-traversal",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--lib",
+          "disk_index::tree::corruption_guards::duplicated_subtrees_stop_before_repeated_leaf_delivery",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.166,
+        "log": "index-traversal.log"
+      },
+      {
+        "name": "index-oom",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "index_oom_guards",
+          "public_index_reads_return_oom_and_remain_usable_after_each_refusal",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 1.228,
+        "log": "index-oom.log"
+      },
+      {
+        "name": "kernel-short-write",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--test",
+          "io_failure_recovery",
+          "partial_kernel_writes_preserve_retry_and_reopen",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 13.735,
+        "log": "kernel-short-write.log"
+      },
+      {
+        "name": "torn-publication",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--lib",
+          "disk_index::storage::failure_tests::torn_publication_heads_never_invent_a_confirmed_generation",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.164,
+        "log": "torn-publication.log"
+      },
+      {
+        "name": "consistent-frontiers",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--lib",
+          "disk_index::storage::failure_tests::valid_checksums_do_not_admit_inconsistent_checkpoint_frontiers",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.164,
+        "log": "consistent-frontiers.log"
+      },
+      {
+        "name": "checked-chain-links",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit-core",
+          "--all-features",
+          "--lib",
+          "file::validation_tests::checksummed_chain_links_must_decrease_and_stay_in_their_block",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.215,
+        "log": "checked-chain-links.log"
+      },
+      {
+        "name": "failed-history",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "stateful_failure_guards",
+          "failed_batches_recover_through_delete_reinsert_follow_and_compaction",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 1.024,
+        "log": "failed-history.log"
+      },
+      {
+        "name": "decode-memory",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "resource_amplification_guards",
+          "decoded_memory_is_bounded_and_released_across_sizes_and_failures",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.83,
+        "log": "decode-memory.log"
+      },
+      {
+        "name": "oom-recovery",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "oom_recovery_guards",
+          "allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 1.83,
+        "log": "oom-recovery.log"
+      },
+      {
+        "name": "zstd-context-oom",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "oom_recovery_guards",
+          "zstd_context_allocation_failures_return_errors",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1",
+          "--ignored"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 0.268,
+        "log": "zstd-context-oom.log"
+      },
+      {
+        "name": "cardinality-growth",
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "varlit-test-runner",
+          "--",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "varlit",
+          "--all-features",
+          "--test",
+          "high_cardinality",
+          "cardinality_growth_respects_memory_budget",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1",
+          "--ignored"
+        ],
+        "status": "passed",
+        "reason": null,
+        "seconds": 4.287,
+        "log": "cardinality-growth.log"
+      }
+    ],
+    "clippy": "passed with -D warnings, workspace/all-targets/all-features",
+    "no_default_features": "workspace check passed",
+    "format_and_whitespace": "passed",
+    "public_declaration_diff": "no additions/removals/changes in core public declarations",
+    "new_production_unsafe_blocks": 0,
+    "remote_ci": "not yet run on the follow-up commit",
+    "initial_failure": "The initial final-suite run detected an obsolete direct-call edge in source_audit.rs after header parsing moved to fault_record_entry_prefixed. The guard now requires both caller edges and mutation identity validation; the full suite then passed. Production code and benchmark binaries did not change for this guard update.",
+    "log_sha256": {
+      "workspace-tests-v7.log": "0a0b9db921afcd7888d730cc5f3ba6d5b2b3b46d03da85a3eceb53f6e8367951",
+      "clippy-v7.log": "c19d4aa47150ee024199303d914e27352ebc4f8c1d41840b334e0bf4b9723cb4",
+      "no-default-v7.log": "254d492dd1f9f2c2543ebc3cd9af57ecf504a160109673181a57e6b49e8d21f2",
+      "python-tests-v7.log": "643f8698195dca6dba630583ae62ee43b09c2068bc3f47baacb45938713f364f",
+      "contracts-v7.log": "17d004f2e52fefb7079641730bddc8a719233b67b43117f81f0e18f38090e154"
+    }
+  },
+  "decode_fixtures": {
+    "chunks-128m.bin": {
+      "bytes": 587808,
+      "sha256": "33fe579d9764168b237c97e0a3de1d532643d39895cfaa0b23d2d31e91b0e6fa"
+    },
+    "chunks-64m.bin": {
+      "bytes": 4702240,
+      "sha256": "40f2b2a13f2a219ee96485b50635f569f82182ddb51b2dd6a21cdc17d5664a60"
+    }
+  },
+  "reproduction": {
+    "build": "Build baseline 317fc981e5cb78eec26f6820c9e010baf2873bcb and candidate with separate CARGO_TARGET_DIR values; copy the same benchmark examples and their Cargo.toml entries into baseline. cargo build --offline --release -p varlit --all-features --examples. Match binary SHA256 before attributing measurements to these phases.",
+    "single_process": "cc -O2 measure-child.c -o measure-child; invoke measure-child USAGE_JSON ABSOLUTE_EXAMPLE_BINARY followed by command_arguments. Use taskset with one allowed CPU, alternate before/after ordering, retain five pairs. TMPDIR=/tmp for tmpfs or a disk-backed directory for disk maintenance.",
+    "decode_fixture": "Run oom_maintenance_load prepare-decode BYTE_COUNT CHUNK_BYTES FIXTURE once; use that same fixture on both sides and compare its SHA256 to decode_fixtures.",
+    "concurrent": "python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib SIZE --epoch-mib EPOCH --reader-checks-per-epoch 16384 --read-seconds 1 --data-root DATA --output OUTPUT --binary ABSOLUTE_SCALABLE_BINARY. SIZE/EPOCH are 1/16 and 4/64. Alternate five pairs and compare with scripts/compare_load.py.",
+    "phase_changes": {
+      "v5_to_v6": [
+        "crates/varlit-core/src/spill_rows.rs"
+      ],
+      "v6_to_v7": [
+        "crates/varlit-core/src/file.rs",
+        "crates/varlit-core/src/file/scan.rs",
+        "crates/varlit-core/src/file/validation_tests.rs"
+      ]
+    }
+  },
+  "fixes": [
+    {
+      "area": "Native mutation boundary",
+      "files": [
+        "crates/varlit-core/src/file.rs",
+        "crates/varlit-core/src/native_directory.rs"
+      ],
+      "regression_tests": [
+        "marking_embedded_record_bytes_refuses_without_writing",
+        "serialized_directory_cannot_authorize_marking_an_embedded_record",
+        "marking_refuses_a_damaged_internal_identity_without_writing",
+        "mutable_record_prefix_never_accepts_a_truncated_footer"
+      ]
+    },
+    {
+      "area": "Rewrite publication and source integrity",
+      "files": [
+        "crates/varlit-core/src/file.rs"
+      ],
+      "regression_tests": [
+        "defragment_refuses_dead_commit_without_publishing",
+        "defragment_refuses_payload_damage_without_republishing",
+        "defragment_preserves_active_readers_on_the_old_generation"
+      ]
+    },
+    {
+      "area": "SWMR compatibility",
+      "regression_tests": [
+        "marking_between_appends_preserves_records_and_a_live_reader",
+        "lazy_writer_can_mark_a_real_historical_record"
+      ]
+    },
+    {
+      "area": "Matrix CRC validity",
+      "files": [
+        "crates/varlit-core/src/matrix.rs",
+        "crates/varlit-core/src/file/mmap_views.rs"
+      ],
+      "regression_tests": [
+        "mmap_reads_require_crc_validity_even_when_the_stored_crc_matches"
+      ]
+    },
+    {
+      "area": "Nonresident accounting and sequence continuity",
+      "files": [
+        "crates/varlit-core/src/file/scan.rs",
+        "crates/varlit-core/src/native_scan.rs"
+      ],
+      "regression_tests": [
+        "nonresident_records_still_count_toward_the_explicit_record_limit",
+        "nonresident_sequence_checks_include_records_omitted_from_the_directory",
+        "follow_refuses_nonresident_sequences_older_than_its_snapshot"
+      ]
+    },
+    {
+      "area": "Trusted schema and control identity",
+      "regression_tests": [
+        "valid_checksum_cannot_authorize_duplicate_or_undeclared_header_entries",
+        "commit_records_require_the_internal_flag_and_supported_version",
+        "lazy_open_honors_explicit_at_open_verification"
+      ]
+    },
+    {
+      "area": "Index publication storage bounds",
+      "regression_tests": [
+        "reserved_storage_pages_cannot_supply_nodes_or_long_keys"
+      ]
+    }
+  ]
+}
