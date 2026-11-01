@@ -1,0 +1,15 @@
+{
+  "baseline": "521b9f6aa7485e0a6184f32af52a6572f1f0c090",
+  "build": "cargo build --locked --release -p varlit --features integrity,compression-zstd,scalable-fault-injection --example scalable_load --example record_mutation_load --example oom_maintenance_load",
+  "toolchain": "1.95.0",
+  "runtime_method_bodies_unchanged": true,
+  "source_change": "cfg(kani) module declaration, proofs, tests, CI and documentation only",
+  "pairs_per_size": 3,
+  "samples": 12,
+  "ordering": "alternating before/after, after/before, before/after",
+  "concurrent_builds_or_tests": false,
+  "baseline_binary_directory": "/workspace/scratch/dependency-update-20261102/after-target/release/examples",
+  "candidate_binary_directory": "/workspace/scratch/publication-verification-20261102/after-target/release/examples",
+  "runner": "docs/performance/dependency-update-20261102/bench.py --pairs 3 --phase concurrent",
+  "retention": "All twelve complete report objects retained; JSON whitespace compacted only."
+}

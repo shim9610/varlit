@@ -12,7 +12,7 @@ spec.loader.exec_module(gate)
 class StorageSelectionTests(unittest.TestCase):
     def test_failure_and_resource_categories_are_required(self):
         self.assertEqual({row[0] for row in gate.CASES}, {
-            "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
+            "publication-head-pairs", "publication-histories", "publication-live-crashes", "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
             "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-evidence",
             "nonresident-record-budget", "nonresident-follow-sequence", "mutation-amortized-work", "recovery-linear-work", "mutation-uniform-proof", "mutation-rewritten-boundaries",
             "checked-chain-links", "failed-history", "decode-memory", "cardinality-growth", "oom-recovery", "zstd-context-oom"})

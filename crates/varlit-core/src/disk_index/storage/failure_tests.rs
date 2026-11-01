@@ -110,3 +110,48 @@ fn valid_checksums_do_not_admit_inconsistent_checkpoint_frontiers() {
         );
     }
 }
+
+#[test]
+fn independently_torn_heads_never_mix_publication_generations() {
+    let (before, after, old, new) = images();
+    let mut cases = 0;
+    for first_cut in 0..=64 {
+        for second_cut in 0..=64 {
+            for keep_new_checkpoint in [false, true] {
+                let mut image = after.clone();
+                for (slot, cut) in CONFIRMED.into_iter().zip([first_cut, second_cut]) {
+                    let slot = slot as usize;
+                    image[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
+                    image[slot..slot + cut].copy_from_slice(&after[slot..slot + cut]);
+                }
+                if !keep_new_checkpoint {
+                    image.truncate(old.end as usize);
+                }
+                // Both anchors may be torn: rejection is permitted, invented
+                // or mixed metadata is not. Complete images must be readable.
+                match open_image(&image) {
+                    Ok(actual) => {
+                        assert!(
+                            actual.offset == old.offset
+                                || (keep_new_checkpoint && actual.offset == new.offset)
+                        );
+                        let expected = if actual.offset == old.offset {
+                            &old
+                        } else {
+                            &new
+                        };
+                        assert_eq!(actual.metadata, expected.metadata);
+                        assert_eq!(actual.end, expected.end);
+                    }
+                    Err(_) => assert!(
+                        !(first_cut == 0 && second_cut == 0
+                            || keep_new_checkpoint && first_cut == 64 && second_cut == 64)
+                    ),
+                }
+                cases += 1;
+            }
+        }
+    }
+    assert_eq!(cases, 8450);
+    println!("PUBLICATION_IMAGES independent head prefixes=8450");
+}

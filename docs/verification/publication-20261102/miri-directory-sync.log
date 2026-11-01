@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running unittests src/lib.rs (target/miri/x86_64-unknown-linux-gnu/debug/build/varlit-core/63bdcee09f1bfe0f/out/varlit_core-63bdcee09f1bfe0f)
+
+running 1 test
+test stream::tests::confirmed_partial_record_is_an_error_for_both_cursors ... error: unsupported operation: `fsync` is only supported on file-backed file descriptors
+    --> /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/fs/unix.rs:1253:13
+     |
+1253 |             libc::fsync(fd)
+     |             ^^^^^^^^^^^^^^^ unsupported operation occurred here
+     |
+     = help: this is likely not a bug in the program; it indicates that the program performed an operation that Miri does not support
+     = note: this is on thread `stream::tests::`
+     = note: stack backtrace:
+             0: std::sys::fs::unix::File::fsync::os_fsync
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/fs/unix.rs:1253:13: 1253:28
+             1: std::sys::fs::unix::File::fsync::{closure#0}
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/fs/unix.rs:1244:27: 1244:53
+             2: std::sys::pal::unix::cvt_r::<i32, {closure@std::sys::fs::unix::File::fsync::{closure#0}}>
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/pal/unix/mod.rs:250:19: 250:22
+             3: std::sys::fs::unix::File::fsync
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/fs/unix.rs:1244:9: 1244:56
+             4: std::fs::File::sync_all
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/fs.rs:791:9: 791:27
+             5: file::publication::sync_parent_directory::{closure#2}
+                 at crates/varlit-core/src/file/publication.rs:659:56: 659:76
+             6: std::result::Result::<std::fs::File, std::io::Error>::and_then::<(), {closure@crates/varlit-core/src/file/publication.rs:659:44: 659:55}>
+                 at /workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1486:22: 1486:27
+             7: file::publication::sync_parent_directory
+                 at crates/varlit-core/src/file/publication.rs:659:16: 659:77
+             8: file::publication::replace_path_atomically
+                 at crates/varlit-core/src/file/publication.rs:534:11: 534:40
+             9: file::publication::publish_temp_path_with
+                 at crates/varlit-core/src/file/publication.rs:397:11: 397:38
+             10: file::publication::publish_temp_path_atomically
+                 at crates/varlit-core/src/file/publication.rs:389:5: 389:71
+             11: stream::create_state_store
+                 at crates/varlit-core/src/stream.rs:1971:11: 1971:60
+             12: stream::VarlitStreamWriter::create::<&std::path::PathBuf>
+                 at crates/varlit-core/src/stream.rs:876:21: 881:10
+             13: stream::tests::confirmed_partial_record_is_an_error_for_both_cursors
+                 at crates/varlit-core/src/stream.rs:2574:26: 2574:91
+             14: stream::tests::confirmed_partial_record_is_an_error_for_both_cursors::{closure#0}
+                 at crates/varlit-core/src/stream.rs:2570:67: 2570:77
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error
+
+error: test failed, to rerun pass `-p varlit-core --lib`
+
+Caused by:
+  process didn't exit successfully: `/workspace/tooling/rustup/toolchains/nightly-2026-10-12-x86_64-unknown-linux-gnu/bin/cargo-miri runner /workspace/varlit/target/miri/x86_64-unknown-linux-gnu/debug/build/varlit-core/63bdcee09f1bfe0f/out/varlit_core-63bdcee09f1bfe0f 'stream::tests::confirmed_partial_record_is_an_error_for_both_cursors' --exact --nocapture` (exit status: 1)

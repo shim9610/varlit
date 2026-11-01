@@ -1,0 +1,209 @@
+{
+  "baseline": "521b9f6aa7485e0a6184f32af52a6572f1f0c090",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "rust": "1.95.0",
+  "kani": {
+    "passed": 6,
+    "failed": 0,
+    "harnesses": [
+      {
+        "name": "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected",
+        "seconds": 44.213776
+      },
+      {
+        "name": "disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier",
+        "seconds": 78.67684
+      },
+      {
+        "name": "disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected",
+        "seconds": 7.198487
+      },
+      {
+        "name": "disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers",
+        "seconds": 28.425522
+      },
+      {
+        "name": "file::record_extent_proofs::checked_extent_matches_wide_arithmetic",
+        "seconds": 3.0260992
+      },
+      {
+        "name": "file::resident_index::uniform_prefix_proofs::observed_prefix_never_invents_membership",
+        "seconds": 5.359584
+      }
+    ],
+    "unwind": {
+      "existing": 5,
+      "publication": 35
+    }
+  },
+  "production_method_bodies_changed": false,
+  "public_api_format_budgets_dependencies_changed": false,
+  "workspace_tests": {
+    "passed": 1311,
+    "failed": 0,
+    "ignored": 30
+  },
+  "release_contracts": {
+    "passed": 24,
+    "markers": {
+      "publication-head-pairs": [
+        "PUBLICATION_IMAGES independent head prefixes=8450"
+      ],
+      "publication-histories": [
+        "PUBLICATION_HISTORIES exhaustive=512 seeded=16 steps=2304"
+      ],
+      "publication-live-crashes": [
+        "PUBLICATION_CRASHES boundaries=244 reader_observations=734 recovery=verified"
+      ]
+    }
+  },
+  "python_tests": {
+    "passed": 33
+  },
+  "clippy": "passed with -D warnings",
+  "format_and_actionlint": "passed",
+  "miri_new_image_sweep": {
+    "command": [
+      "cargo",
+      "+nightly-2026-10-12",
+      "miri",
+      "test",
+      "--locked",
+      "-p",
+      "varlit-core",
+      "--no-default-features",
+      "--lib",
+      "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations",
+      "--",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit_code": null,
+    "timed_out": true,
+    "seconds": 300.0017110579938
+  },
+  "miri_selection": {
+    "selected": 197,
+    "enumerated": 248,
+    "documented_exclusions": 51
+  },
+  "negative_controls": {
+    "frontier_equality_removed": {
+      "detected": true,
+      "log": "negative-frontier-final.log",
+      "failed_assertion": "m.committed == m.working",
+      "exit_code": 1
+    },
+    "working_head_exposed": {
+      "detected": true,
+      "log": "negative-working-head2.log",
+      "exit_code": 101
+    }
+  },
+  "source_sha256": {
+    "crates/varlit-core/src/disk_index/publication_proofs.rs": "09556e1ae4a3d1dceee069430caa073088e0c7984b2f083a289b1cc506228942",
+    "crates/varlit-core/src/disk_index/storage/failure_tests.rs": "a546849d12597d2fa52d141e6320c397eb0b951a4fcdb294186ed6ebe4dfe88d",
+    "crates/varlit/tests/support/publication_histories.rs": "2a29d4fb1d50812a9ca084a5da97a7e7b097fb3a1aeb40e59a1b8449386c54c0",
+    "crates/varlit/tests/scalable_crash_faults.rs": "44399f35b1e24906bb7b3079bbb7cf8e9f19d274e406175b087bded2394bbce8",
+    "scripts/check_storage_contracts.py": "150c019ede4f23f83629b5f57006be585e3acea9acd2f46626e82d1db26068da",
+    "scripts/miri-exclusions.json": "97b2c32436e2fd8867c952ee18a2127b508d5e9ff7af8198f919e4fa436068e8",
+    "crates/varlit-core/src/disk_index.rs": "f736784c9414d0bda88bcc801770a0dbcd2af98f416d7c3bdc5fb57701a23b3a"
+  },
+  "local_log_sha256": {
+    "workspace-tests.log": "6c267f4cdf9b1c56e0c80c23d92e9f30c1b3ed4fff2b4e6c16a0c214e799437d",
+    "clippy-final.log": "30f534ad5b5d6e27225ba6bafcf55d3e5f842617a2f44e47f4b9cc256e622006",
+    "kani-final.log": "84aac8819712d1df77d1edb898c18d2ef14ff3cefd706c780f7bfba848dff62f",
+    "python-final.log": "d430effef4de2b1402a68738f755c475922a7306af5f9e225f177882356f825e",
+    "miri-head-images.log": "d845dca80b953b205524ad58708c6260be9575e8ac830ebdbafff1b96dbee85a",
+    "negative-frontier-final.log": "cb4d294c1033eadd6325f49cfc68bb0ab182cb7a9aee8b063c48d85ddf972ed7",
+    "negative-working-head2.log": "5108386ad2379f166c2b7274eb803665b0f073af50be394f89dc5c376964652a"
+  },
+  "log_retention_note": "Full local logs are in /workspace/scratch/publication-verification-20261102; CI retains proof and contract logs independently.",
+  "miri_stream_reproduction": [
+    {
+      "test": "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
+      "command": [
+        "cargo",
+        "+nightly-2026-10-12",
+        "miri",
+        "test",
+        "--locked",
+        "-p",
+        "varlit-core",
+        "--no-default-features",
+        "--lib",
+        "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 1,
+      "seconds": 7.953573078993941,
+      "log": "miri-confirmed_partial_record_is_an_error_for_both_cursors.log"
+    },
+    {
+      "test": "stream::tests::non_increasing_sequences_are_streaming_unsupported",
+      "command": [
+        "cargo",
+        "+nightly-2026-10-12",
+        "miri",
+        "test",
+        "--locked",
+        "-p",
+        "varlit-core",
+        "--no-default-features",
+        "--lib",
+        "stream::tests::non_increasing_sequences_are_streaming_unsupported",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 7.341693871014286,
+      "log": "miri-non_increasing_sequences_are_streaming_unsupported.log"
+    },
+    {
+      "test": "stream::tests::unsupported_policy_is_rejected_before_create",
+      "command": [
+        "cargo",
+        "+nightly-2026-10-12",
+        "miri",
+        "test",
+        "--locked",
+        "-p",
+        "varlit-core",
+        "--no-default-features",
+        "--lib",
+        "stream::tests::unsupported_policy_is_rejected_before_create",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 7.4884962950018235,
+      "log": "miri-unsupported_policy_is_rejected_before_create.log"
+    }
+  ],
+  "baseline_remote_checks": {
+    "head": "521b9f6aa7485e0a6184f32af52a6572f1f0c090",
+    "ci_run": 41323882623,
+    "ci": "success",
+    "sanitizers_run": 41323882631,
+    "asan": "success",
+    "fuzz": "success",
+    "miri": "failed: unsupported directory fsync in confirmed_partial_record_is_an_error_for_both_cursors",
+    "miri_job": 124899646500
+  },
+  "performance": {
+    "samples": 12,
+    "pairs_per_size": 3,
+    "sizes_gib": [
+      1,
+      4
+    ],
+    "gate_percent": 5,
+    "status": "passed",
+    "complete_reports": "performance/"
+  },
+  "miri_directory_sync_error": "unsupported operation: `fsync` is only supported on file-backed file descriptors"
+}

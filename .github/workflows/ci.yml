@@ -139,6 +139,8 @@ jobs:
       - name: CI helper regressions
         run: python3 -m unittest discover -s scripts/tests
       - run: cargo fmt --all -- --check
+      # cargo fmt does not traverse include! source files.
+      - run: rustfmt --edition 2024 --check crates/varlit/tests/support/publication_histories.rs
 
   # Discover configurations from Cargo metadata. Adding a feature adds both
   # Clippy and a native singleton test job without editing this workflow.
