@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-redb = { version = "4.3.0", path = "../vendor/redb" }
+redb = { version = "4.4.0", path = "../vendor/redb" }
 libfuzzer-sys = "0.4"
 tempfile = "3"
 

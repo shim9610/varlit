@@ -36,7 +36,7 @@ varlit-core = { path = "../varlit-core", version = "0.12.1" }
 varlit-macros = { path = "../varlit-macros", version = "0.12.1" }
 
 [dev-dependencies]
-redb = { version = "4.3.0", path = "../../vendor/redb" }
+redb = { version = "4.4.0", path = "../../vendor/redb" }
 proptest.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true

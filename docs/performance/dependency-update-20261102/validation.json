@@ -1,0 +1,607 @@
+{
+  "workspace-tests": {
+    "sha256": "e63818e245e22029d225d9bcedc15c6d2dcbd835c0a4cae23965c2cfa8aa6971",
+    "test_counts": {
+      "passed": 1308,
+      "failed": 0,
+      "ignored": 29
+    },
+    "last_lines": [
+      "running 2 tests",
+      "test crates/varlit-macros/src/lib.rs - derive_varlit_block (line 37) - compile ... ok",
+      "test crates/varlit-macros/src/lib.rs - varlit_format (line 90) - compile ... ok",
+      "",
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "",
+      "all doctests ran in 0.63s; merged doctests compilation took 0.63s",
+      "Varlit test artifact cleanup: verified empty"
+    ]
+  },
+  "vendor-tests": {
+    "sha256": "1b6ff820d035013c678032f403617f488e1be0fd813a94d8f652471433750a7d",
+    "test_counts": {
+      "passed": 629,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "running 3 tests",
+      "test src/multimap_table.rs - multimap_table::multimap_range_keeps_the_table_borrowed (line 364) - compile fail ... ok",
+      "test src/table.rs - table::cursor_keeps_the_table_borrowed (line 1523) - compile fail ... ok",
+      "test src/table.rs - table::range_keeps_the_table_borrowed (line 1151) - compile fail ... ok",
+      "",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+      "",
+      "all doctests ran in 2.82s; merged doctests compilation took 2.60s"
+    ]
+  },
+  "clippy": {
+    "sha256": "689fc559f467f4e68d22285222bb2c6c3ceafa4a3fff6725687181403baa908d",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "   Compiling redb v4.4.0 (/workspace/varlit/vendor/redb)",
+      "   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)",
+      "    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)",
+      "    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)",
+      "    Finished `dev` profile [unoptimized] target(s) in 43.66s"
+    ]
+  },
+  "no-default": {
+    "sha256": "94e9c53dbedbc907b30aa69f19b5cfe362cd25f76c728e12c78fa35cb4cdd167",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "   Compiling toml_edit v0.25.17+spec-1.1.0",
+      "    Checking proc-macro-crate v3.5.0",
+      "   Compiling thiserror-impl v2.0.21",
+      "   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)",
+      "    Checking thiserror v2.0.21",
+      "    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)",
+      "    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)",
+      "    Finished `dev` profile [unoptimized] target(s) in 19.19s"
+    ]
+  },
+  "runtime-deps": {
+    "sha256": "ac3d23c7f2fe6a84f8a44e540b19cc8034b49c8e5d1130669f76e2951005e40b",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "Runtime dependency graph excludes redb, Crossbeam and verification tools; dev-dependencies are permitted."
+    ]
+  },
+  "python-tests": {
+    "sha256": "2541d26bcd91ecec8d55a010592b48e8878c0bdd37d3e017caf98978954f77ee",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      ".................................",
+      "----------------------------------------------------------------------",
+      "Ran 33 tests in 6.073s",
+      "",
+      "OK"
+    ]
+  },
+  "contracts": {
+    "sha256": "7b84f5cf82cbfefd9dfc77a1743abcec59f115c5170b589a02530129e23268ed",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "RUN decode-memory",
+      "PASSED decode-memory: contract executed",
+      "RUN oom-recovery",
+      "PASSED oom-recovery: contract executed",
+      "RUN zstd-context-oom",
+      "PASSED zstd-context-oom: contract executed",
+      "RUN cardinality-growth",
+      "PASSED cardinality-growth: contract executed"
+    ]
+  },
+  "kani": {
+    "sha256": "1662abdbb0d2b4d1f0a14f06c89cc10d95a258b89e76aa9b598e4dab398a52a3",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "SUMMARY:",
+      " ** 0 of 416 failed (1 unreachable)",
+      "",
+      "VERIFICATION:- SUCCESSFUL",
+      "Verification Time: 10.799396s",
+      "",
+      "Manual Harness Summary:",
+      "Complete - 2 successfully verified harnesses, 0 failures, 2 total."
+    ]
+  },
+  "loom": {
+    "sha256": "f4589efc9ece277c8006236a26ebd37682f18c8a3e10ddbc3f26068c76c9941c",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "    Finished `dev` profile [unoptimized] target(s) in 0.03s",
+      "     Running `tools/verification/target/debug/varlit-concurrency-models`",
+      "Both production cancellation models passed"
+    ]
+  },
+  "api-fixture": {
+    "sha256": "e0782f653fa3ca868c9d9cd9233d03fb15b1429b051e254a6118fb8c961f5c42",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "   Compiling proc-macro-crate v3.5.0",
+      "   Compiling thiserror-impl v2.0.21",
+      "   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)",
+      "    Checking zstd v0.14.3",
+      "    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)",
+      "    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)",
+      "    Checking public-api-fixture v0.1.0 (/workspace/varlit/tools/public-api-fixture)",
+      "    Finished `dev` profile [unoptimized] target(s) in 17.59s"
+    ]
+  },
+  "rename-fixture": {
+    "sha256": "92f4d76c43e6b60bb56322c495cc7095e7f6313fef3ada260a1113215d940ba3",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "   Compiling proc-macro-crate v3.5.0",
+      "   Compiling thiserror-impl v2.0.21",
+      "    Checking tempfile v3.27.0",
+      "   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)",
+      "    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)",
+      "    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)",
+      "    Checking rename-fixture v0.1.0 (/workspace/varlit/tools/rename-fixture)",
+      "    Finished `dev` profile [unoptimized] target(s) in 13.80s"
+    ]
+  },
+  "miri-array-correct": {
+    "sha256": "3d59d361d6d7f3ff303e72861eb58ae6a06e51c19be76568573a5dcb69941d32",
+    "test_counts": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "test a_truncated_array_errors_without_panicking_or_leaking ... ok",
+      "test an_above_budget_array_still_reserves_on_the_heap ... ok",
+      "test byte_array_fast_path_keeps_limits_framing_and_aliases ... ok",
+      "test fixed_arrays_round_trip_unchanged ... ok",
+      "test small_fixed_arrays_decode_without_allocating ... ok",
+      "",
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.96s",
+      ""
+    ]
+  },
+  "fuzz-regressions": {
+    "sha256": "5075fffe3b075c19a36a0aa581ea1a76f9aea177590a72b4d5bd8f1d920b95c8",
+    "test_counts": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "     Running unittests src/lib.rs (target/debug/build/varlit-fuzz/35043d0bc78c80e3/out/varlit_fuzz-35043d0bc78c80e3)",
+      "",
+      "running 2 tests",
+      "test tests::fuzz_file_removes_input_and_lock_marker_on_drop ... ok",
+      "test sidecar::tests::corrupted_confirmed_heads_do_not_restore_an_older_generation ... ok",
+      "",
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+      ""
+    ]
+  },
+  "sbom": {
+    "sha256": "620e48c5996644679c71479e9020b256efac05fa78b2d3e2ef0c719412fc761a",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "Six publishable-crate SBOMs written to /workspace/varlit/target/sbom"
+    ]
+  },
+  "just-test-docker3": {
+    "sha256": "3e8b98dd37d0df13996a54c4b89d8021241ed1728dc068465f2c5a3dbfe143e6",
+    "test_counts": {
+      "passed": 629,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "running 3 tests",
+      "test src/multimap_table.rs - multimap_table::multimap_range_keeps_the_table_borrowed (line 364) - compile fail ... ok",
+      "test src/table.rs - table::cursor_keeps_the_table_borrowed (line 1523) - compile fail ... ok",
+      "test src/table.rs - table::range_keeps_the_table_borrowed (line 1151) - compile fail ... ok",
+      "",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+      "",
+      "all doctests ran in 0.69s; merged doctests compilation took 0.64s"
+    ]
+  },
+  "miri-selection": {
+    "sha256": "14708288725c04c27713cac8e187ae1a32495149ecaec67a8526aae834d517ac",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "Miri: 198 selected / 247 enumerated; 49 documented exclusions"
+    ]
+  },
+  "native-ci-regression": {
+    "sha256": "786de1cc8b0765bc405be1f459b5a8c852f7f35619b1d389691030a065859f06",
+    "test_counts": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      "    Finished `test` profile [unoptimized] target(s) in 12.65s",
+      "     Running unittests src/lib.rs (target/debug/deps/varlit_core-f654d0e1d9ee4dc2)",
+      "",
+      "running 1 test",
+      "test indexed::tests::rebuild_refuses_truncated_record_instead_of_publishing_a_prefix ... ok",
+      "",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 247 filtered out; finished in 0.00s",
+      ""
+    ]
+  },
+  "python-tests-final": {
+    "sha256": "26fa27637d5a1c67b26e5523d3a20f15b3744c5a9aed469f35a10cb3919344dd",
+    "test_counts": {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    "last_lines": [
+      ".................................",
+      "----------------------------------------------------------------------",
+      "Ran 33 tests in 5.554s",
+      "",
+      "OK"
+    ]
+  },
+  "audits": {
+    "root": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 81
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    },
+    "fuzz": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 50
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    },
+    "api": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 43
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    },
+    "rename": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 35
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    },
+    "models": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 31
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    },
+    "vendor": {
+      "database": {
+        "advisory-count": 1395,
+        "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+        "last-updated": "2026-10-30T12:12:39+01:00"
+      },
+      "lockfile": {
+        "dependency-count": 54
+      },
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      },
+      "vulnerabilities": {
+        "found": false,
+        "count": 0,
+        "list": []
+      },
+      "warnings": {}
+    }
+  },
+  "fuzz": [
+    {
+      "target": "codec_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "a57b0c9772fb669a4a2bb5b0642b946e2e638347983d80be7449179a43bc4afd",
+      "completion": [
+        "Done 2669708 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "digest_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "7616f233fb2eb0a893f53d3e4c6ad4538db3a924095be88accf6eb3d63e94aa4",
+      "completion": [
+        "Done 1495 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "header_tails_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "a393d08aaad799d5697cb4071b4d3df4bb7fc1e3af8cbff731c8f9f069dc78bb",
+      "completion": [
+        "Done 1704 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "layout_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "a9edcb9fe02cb3f8ab0e5023f74e46a459c95b510494d1f814dcf22c3a226303",
+      "completion": [
+        "Done 179348 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "matrix_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "2c8702b4589bc6598f08d3a47edba4f6b4337b1e9d70a7e2a47099ad866f0e0f",
+      "completion": [
+        "Done 32004 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "matrix_reuse_publication",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "0f128175deb000af5d252a0b00cee021bfd1b33e4ccfec79a6b5658d12e96f79",
+      "completion": [
+        "Done 673 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "matrix_reuse_state_machine",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "418639b70a51b00988e0f2e464e88a98619a1ee963f3b161e140f05376f149dd",
+      "completion": [
+        "Done 356 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "matrix_state_machine",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "8f03c6398e2d50edd50fd5c7095a3de93cfc304ad1af7f572c7be945fb19f6ce",
+      "completion": [
+        "Done 15462 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "native_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "cb55903b6a09e0e7af8f1b16fe6707a6311d28536775a92459d5a0855143c57f",
+      "completion": [
+        "Done 109381 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "native_redb_differential",
+      "seconds": 120,
+      "exit_code": 0,
+      "sha256": "a7e12992f5a4648db89c8ddf9de30f894596e47f4bd1dfff6acbca60030f2a53",
+      "completion": [
+        "Done 18041 runs in 121 second(s)"
+      ]
+    },
+    {
+      "target": "sidecar_arbitrary",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "8622d7d49959181daef0aa405bf857e4aee881dac7ca0e8f0ad65d79cce1441c",
+      "completion": [
+        "Done 20343 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "sidecar_mutation",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "fa6fc1bec2d95623d54f95dc9c2b3094d6f2aa5caa1d30943204625a44aa2277",
+      "completion": [
+        "Done 6357 runs in 31 second(s)"
+      ]
+    },
+    {
+      "target": "sidecar_state_machine",
+      "seconds": 30,
+      "exit_code": 0,
+      "sha256": "ec9b92d89cf83b6749f4a341e2330a4032ee8da879b6aba2ff821be0d7321950",
+      "completion": [
+        "Done 6514 runs in 31 second(s)"
+      ]
+    }
+  ],
+  "contracts_passed": [
+    "mutation-rewritten-boundaries",
+    "mutation-uniform-proof",
+    "mutation-amortized-work",
+    "recovery-linear-work",
+    "native-boundary-proof",
+    "rewrite-source-integrity",
+    "matrix-mmap-evidence",
+    "nonresident-record-budget",
+    "nonresident-follow-sequence",
+    "index-cache-shape",
+    "index-traversal",
+    "index-oom",
+    "kernel-short-write",
+    "torn-publication",
+    "consistent-frontiers",
+    "checked-chain-links",
+    "failed-history",
+    "decode-memory",
+    "oom-recovery",
+    "zstd-context-oom",
+    "cardinality-growth"
+  ],
+  "redb_archives": [
+    {
+      "version": "4.3.0",
+      "sha256": "fb338a6c67830a61bed824b78c2bb034ab1ff401a20616bd7957524f4fdc2f22"
+    },
+    {
+      "version": "4.4.0",
+      "sha256": "39178e0a867f9e3eaa6292a4ab1dd3613f2519c5b564341e1e7b29b270736cc4"
+    }
+  ]
+}

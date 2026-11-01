@@ -4,7 +4,7 @@ use crate::tree_store::{FILE_FORMAT_VERSION3, MAX_VALUE_LENGTH};
 use crate::{ReadTransaction, TypeName};
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::fmt::{Display, Formatter};
 use core::panic;
 
@@ -72,9 +72,6 @@ pub enum StorageError {
     Corrupted(String),
     /// The value being inserted exceeds the maximum of 3GiB
     ValueTooLarge(usize),
-    /// The key does not sort strictly between the entries adjacent to the cursor
-    #[cfg(feature = "experimental_cursor")]
-    UnorderedKey,
     Io(io::Error),
     /// The backend does not support a required storage operation.
     Unsupported,
@@ -109,8 +106,6 @@ impl From<StorageError> for Error {
         match err {
             StorageError::Corrupted(msg) => Error::Corrupted(msg),
             StorageError::ValueTooLarge(x) => Error::ValueTooLarge(x),
-            #[cfg(feature = "experimental_cursor")]
-            StorageError::UnorderedKey => Error::UnorderedKey,
             StorageError::Io(x) => Error::Io(x),
             StorageError::Unsupported => Error::Unsupported,
             StorageError::PreviousIo => Error::PreviousIo,
@@ -131,13 +126,6 @@ impl Display for StorageError {
                     f,
                     "The value (length={len}) being inserted exceeds the maximum of {}GiB",
                     MAX_VALUE_LENGTH / 1024 / 1024 / 1024
-                )
-            }
-            #[cfg(feature = "experimental_cursor")]
-            StorageError::UnorderedKey => {
-                write!(
-                    f,
-                    "The key does not sort strictly between the entries adjacent to the cursor"
                 )
             }
             StorageError::Io(err) => {
@@ -327,7 +315,6 @@ impl From<BackendError> for DatabaseError {
 }
 
 impl DatabaseError {
-    #[cfg(feature = "experimental-multiprocess")]
     pub(crate) fn into_storage_error_or_corrupted(self) -> StorageError {
         match self {
             DatabaseError::Storage(storage) => storage,
@@ -639,6 +626,47 @@ impl Display for CommitError {
 
 impl core::error::Error for CommitError {}
 
+/// Errors related to cursors
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CursorError {
+    /// The key does not sort strictly between the entries adjacent to the cursor
+    UnorderedKey,
+    /// Error from underlying storage
+    Storage(StorageError),
+}
+
+impl From<CursorError> for Error {
+    fn from(err: CursorError) -> Error {
+        match err {
+            CursorError::UnorderedKey => Error::UnorderedKey,
+            CursorError::Storage(storage) => storage.into(),
+        }
+    }
+}
+
+impl From<StorageError> for CursorError {
+    fn from(err: StorageError) -> CursorError {
+        CursorError::Storage(err)
+    }
+}
+
+impl Display for CursorError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            CursorError::UnorderedKey => {
+                write!(
+                    f,
+                    "The key does not sort strictly between the entries adjacent to the cursor"
+                )
+            }
+            CursorError::Storage(storage) => storage.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for CursorError {}
+
 /// Superset of all other errors that can occur. Convenience enum so that users can convert all errors into a single type
 #[derive(Debug)]
 #[non_exhaustive]
@@ -679,7 +707,6 @@ pub enum Error {
     /// The value being inserted exceeds the maximum of 3GiB
     ValueTooLarge(usize),
     /// The key does not sort strictly between the entries adjacent to the cursor
-    #[cfg(feature = "experimental_cursor")]
     UnorderedKey,
     /// Table types didn't match.
     TableTypeMismatch {
@@ -760,7 +787,6 @@ impl Display for Error {
                     MAX_VALUE_LENGTH / 1024 / 1024 / 1024
                 )
             }
-            #[cfg(feature = "experimental_cursor")]
             Error::UnorderedKey => {
                 write!(
                     f,

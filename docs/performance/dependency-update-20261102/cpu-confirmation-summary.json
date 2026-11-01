@@ -1,0 +1,230 @@
+{
+  "initial": {
+    "pairs": 5,
+    "metrics": {
+      "cpu_seconds": {
+        "before": 3.983062,
+        "after": 4.403903,
+        "change_percent": 10.565765735004874,
+        "before_range": [
+          3.930419,
+          4.385109
+        ],
+        "after_range": [
+          3.946813,
+          4.49523
+        ]
+      },
+      "operation_seconds": {
+        "before": 0.186924556,
+        "after": 0.185953898,
+        "change_percent": -0.5192779486928312,
+        "before_range": [
+          0.168952999,
+          0.19963322
+        ],
+        "after_range": [
+          0.169359154,
+          0.191429654
+        ]
+      },
+      "peak_rss_kib": {
+        "before": 5776,
+        "after": 5764,
+        "change_percent": -0.20775623268698418,
+        "before_range": [
+          5620,
+          5776
+        ],
+        "after_range": [
+          5648,
+          5764
+        ]
+      },
+      "write_bytes": {
+        "before": 175497216,
+        "after": 175472640,
+        "change_percent": -0.014003640946647078,
+        "before_range": [
+          175468544,
+          175505408
+        ],
+        "after_range": [
+          175468544,
+          175476736
+        ]
+      }
+    }
+  },
+  "confirmation": {
+    "pairs": 15,
+    "metrics": {
+      "cpu_seconds": {
+        "before": 4.208888,
+        "after": 4.077437,
+        "change_percent": -3.123176477967582,
+        "before_range": [
+          3.906195,
+          4.75592
+        ],
+        "after_range": [
+          3.916295,
+          4.49588
+        ]
+      },
+      "operation_seconds": {
+        "before": 0.188840668,
+        "after": 0.174724991,
+        "change_percent": -7.4749137193266035,
+        "before_range": [
+          0.175501204,
+          0.256816563
+        ],
+        "after_range": [
+          0.16304592,
+          0.20335714
+        ]
+      },
+      "peak_rss_kib": {
+        "before": 5776,
+        "after": 5772,
+        "change_percent": -0.06925207756233176,
+        "before_range": [
+          5620,
+          5776
+        ],
+        "after_range": [
+          5620,
+          5772
+        ]
+      },
+      "write_bytes": {
+        "before": 175468544,
+        "after": 175468544,
+        "change_percent": 0.0,
+        "before_range": [
+          175464448,
+          175517696
+        ],
+        "after_range": [
+          175464448,
+          175497216
+        ]
+      }
+    }
+  },
+  "pooled": {
+    "pairs": 20,
+    "metrics": {
+      "cpu_seconds": {
+        "before": 4.208406999999999,
+        "after": 4.0993135,
+        "change_percent": -2.5922754144263926,
+        "before_range": [
+          3.906195,
+          4.75592
+        ],
+        "after_range": [
+          3.916295,
+          4.49588
+        ]
+      },
+      "operation_seconds": {
+        "before": 0.1877458945,
+        "after": 0.1762121875,
+        "change_percent": -6.143253907477586,
+        "before_range": [
+          0.168952999,
+          0.256816563
+        ],
+        "after_range": [
+          0.16304592,
+          0.20335714
+        ]
+      },
+      "peak_rss_kib": {
+        "before": 5776,
+        "after": 5772,
+        "change_percent": -0.06925207756233176,
+        "before_range": [
+          5620,
+          5776
+        ],
+        "after_range": [
+          5620,
+          5772
+        ]
+      },
+      "write_bytes": {
+        "before": 175468544.0,
+        "after": 175468544.0,
+        "change_percent": 0.0,
+        "before_range": [
+          175464448,
+          175517696
+        ],
+        "after_range": [
+          175464448,
+          175497216
+        ]
+      }
+    }
+  },
+  "same_binary_control": {
+    "pairs": 10,
+    "metrics": {
+      "cpu_seconds": {
+        "before": 4.1876755,
+        "after": 4.179088999999999,
+        "change_percent": -0.2050421528602353,
+        "before_range": [
+          4.133437,
+          4.468927
+        ],
+        "after_range": [
+          3.980129,
+          4.525956
+        ]
+      },
+      "operation_seconds": {
+        "before": 0.19372702749999998,
+        "after": 0.2004549805,
+        "change_percent": 3.4729036453109208,
+        "before_range": [
+          0.177637373,
+          0.206016296
+        ],
+        "after_range": [
+          0.178801081,
+          0.217735444
+        ]
+      },
+      "peak_rss_kib": {
+        "before": 5796,
+        "after": 5776,
+        "change_percent": -0.3450655624568699,
+        "before_range": [
+          5616,
+          5796
+        ],
+        "after_range": [
+          5620,
+          5776
+        ]
+      },
+      "write_bytes": {
+        "before": 175470592.0,
+        "after": 175470592.0,
+        "change_percent": 0.0,
+        "before_range": [
+          175468544,
+          175509504
+        ],
+        "after_range": [
+          175468544,
+          175529984
+        ]
+      }
+    }
+  }
+}

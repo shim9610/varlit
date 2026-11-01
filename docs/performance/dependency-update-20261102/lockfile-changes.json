@@ -1,0 +1,598 @@
+{
+  "Cargo.lock": {
+    "before_sha256": "af0a76a1a86090f01e31b4c8faab11e4d2502371b3a0608034cf706310b5af7a",
+    "after_sha256": "f48d3be7e29740241ad47947b69b38a2790cb7fbc262e088d706eb4394c88278",
+    "changes": [
+      {
+        "name": "cc",
+        "before": [
+          "1.5.1"
+        ],
+        "after": [
+          "1.10.0"
+        ]
+      },
+      {
+        "name": "equivalent",
+        "before": [
+          "1.0.2"
+        ],
+        "after": [
+          "1.0.3"
+        ]
+      },
+      {
+        "name": "find-msvc-tools",
+        "before": [
+          "0.1.14"
+        ],
+        "after": [
+          "0.1.15"
+        ]
+      },
+      {
+        "name": "redb",
+        "before": [
+          "4.3.0"
+        ],
+        "after": [
+          "4.4.0"
+        ]
+      },
+      {
+        "name": "rustix",
+        "before": [
+          "1.1.5"
+        ],
+        "after": [
+          "1.1.6"
+        ]
+      },
+      {
+        "name": "serde_json",
+        "before": [
+          "1.0.151"
+        ],
+        "after": [
+          "1.0.154"
+        ]
+      },
+      {
+        "name": "serde_spanned",
+        "before": [
+          "1.1.1"
+        ],
+        "after": [
+          "1.1.2"
+        ]
+      },
+      {
+        "name": "toml",
+        "before": [
+          "1.1.6+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.8+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_datetime",
+        "before": [
+          "1.1.1+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.2+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_edit",
+        "before": [
+          "0.25.15+spec-1.1.0"
+        ],
+        "after": [
+          "0.25.17+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_parser",
+        "before": [
+          "1.1.3+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.5+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_writer",
+        "before": [
+          "1.1.2+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.3+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "before": [
+          "1.0.26"
+        ],
+        "after": [
+          "1.0.27"
+        ]
+      }
+    ]
+  },
+  "fuzz/Cargo.lock": {
+    "before_sha256": "2847f8668115c6123c0ad520a0044927dc5ae6de5c3594c3e21f8a15750fa3cc",
+    "after_sha256": "04aa8581b84f71729f634e3481aef094907def966baa560d7754bc6cd3cdd527",
+    "changes": [
+      {
+        "name": "arbitrary",
+        "before": [
+          "1.4.2"
+        ],
+        "after": [
+          "1.5.0"
+        ]
+      },
+      {
+        "name": "cc",
+        "before": [
+          "1.5.1"
+        ],
+        "after": [
+          "1.10.0"
+        ]
+      },
+      {
+        "name": "equivalent",
+        "before": [
+          "1.0.2"
+        ],
+        "after": [
+          "1.0.3"
+        ]
+      },
+      {
+        "name": "find-msvc-tools",
+        "before": [
+          "0.1.14"
+        ],
+        "after": [
+          "0.1.15"
+        ]
+      },
+      {
+        "name": "redb",
+        "before": [
+          "4.3.0"
+        ],
+        "after": [
+          "4.4.0"
+        ]
+      },
+      {
+        "name": "rustix",
+        "before": [
+          "1.1.5"
+        ],
+        "after": [
+          "1.1.6"
+        ]
+      },
+      {
+        "name": "toml_datetime",
+        "before": [
+          "1.1.1+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.2+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_edit",
+        "before": [
+          "0.25.15+spec-1.1.0"
+        ],
+        "after": [
+          "0.25.17+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_parser",
+        "before": [
+          "1.1.3+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.5+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "before": [
+          "1.0.26"
+        ],
+        "after": [
+          "1.0.27"
+        ]
+      }
+    ]
+  },
+  "tools/public-api-fixture/Cargo.lock": {
+    "before_sha256": "5766982c095dfd94b7e91dfd10e46631a7d9d06023ab6c9669be64bc571820d7",
+    "after_sha256": "6483d2727ecaa091e0f1f828403c8b857b7f61c5ed07e10645f8670cbdc415e4",
+    "changes": [
+      {
+        "name": "cc",
+        "before": [
+          "1.5.1"
+        ],
+        "after": [
+          "1.10.0"
+        ]
+      },
+      {
+        "name": "equivalent",
+        "before": [
+          "1.0.2"
+        ],
+        "after": [
+          "1.0.3"
+        ]
+      },
+      {
+        "name": "find-msvc-tools",
+        "before": [
+          "0.1.14"
+        ],
+        "after": [
+          "0.1.15"
+        ]
+      },
+      {
+        "name": "rustix",
+        "before": [
+          "1.1.5"
+        ],
+        "after": [
+          "1.1.6"
+        ]
+      },
+      {
+        "name": "toml_datetime",
+        "before": [
+          "1.1.1+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.2+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_edit",
+        "before": [
+          "0.25.15+spec-1.1.0"
+        ],
+        "after": [
+          "0.25.17+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_parser",
+        "before": [
+          "1.1.3+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.5+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "before": [
+          "1.0.26"
+        ],
+        "after": [
+          "1.0.27"
+        ]
+      }
+    ]
+  },
+  "tools/rename-fixture/Cargo.lock": {
+    "before_sha256": "efc333fec57305f43a56786c658b71cb0f20885a5f51794ee40824012faf0d7c",
+    "after_sha256": "a19331bdc7c94347c3481edd4cbed7b2ec34d552ada818119301cd511ea0d656",
+    "changes": [
+      {
+        "name": "equivalent",
+        "before": [
+          "1.0.2"
+        ],
+        "after": [
+          "1.0.3"
+        ]
+      },
+      {
+        "name": "rustix",
+        "before": [
+          "1.1.5"
+        ],
+        "after": [
+          "1.1.6"
+        ]
+      },
+      {
+        "name": "toml_datetime",
+        "before": [
+          "1.1.1+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.2+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_edit",
+        "before": [
+          "0.25.15+spec-1.1.0"
+        ],
+        "after": [
+          "0.25.17+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_parser",
+        "before": [
+          "1.1.3+spec-1.1.0"
+        ],
+        "after": [
+          "1.1.5+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "before": [
+          "1.0.26"
+        ],
+        "after": [
+          "1.0.27"
+        ]
+      }
+    ]
+  },
+  "tools/verification/Cargo.lock": {
+    "before_sha256": "6f70bee22000505cc2fae88ecddc43561cfc7013ce5ee8761e5a96cf676c0fce",
+    "after_sha256": "6f70bee22000505cc2fae88ecddc43561cfc7013ce5ee8761e5a96cf676c0fce",
+    "changes": []
+  },
+  "vendor/redb/Cargo.lock": {
+    "before_sha256": "f9a7afa545f402b2fb5741f8bdcf01625e9670793e2bbb4214dd147e09a2ba6b",
+    "after_sha256": "3cedee01297fd9ae32c2bed55711fcca8af5bb294190f975c4150453f40e84f6",
+    "changes": [
+      {
+        "name": "android_system_properties",
+        "before": [
+          "0.1.5"
+        ],
+        "after": [
+          "0.1.6"
+        ]
+      },
+      {
+        "name": "bitflags",
+        "before": [
+          "2.13.1"
+        ],
+        "after": [
+          "2.13.2"
+        ]
+      },
+      {
+        "name": "cc",
+        "before": [
+          "1.2.67"
+        ],
+        "after": [
+          "1.10.0"
+        ]
+      },
+      {
+        "name": "cfg-if",
+        "before": [
+          "1.0.4"
+        ],
+        "after": [
+          "1.0.5"
+        ]
+      },
+      {
+        "name": "cpufeatures",
+        "before": [
+          "0.3.0"
+        ],
+        "after": [
+          "0.3.1"
+        ]
+      },
+      {
+        "name": "fastrand",
+        "before": [
+          "2.4.1"
+        ],
+        "after": [
+          "2.5.0"
+        ]
+      },
+      {
+        "name": "find-msvc-tools",
+        "before": [
+          "0.1.9"
+        ],
+        "after": [
+          "0.1.15"
+        ]
+      },
+      {
+        "name": "futures-core",
+        "before": [
+          "0.3.32"
+        ],
+        "after": [
+          "0.3.34"
+        ]
+      },
+      {
+        "name": "futures-task",
+        "before": [
+          "0.3.32"
+        ],
+        "after": [
+          "0.3.34"
+        ]
+      },
+      {
+        "name": "futures-util",
+        "before": [
+          "0.3.32"
+        ],
+        "after": [
+          "0.3.34"
+        ]
+      },
+      {
+        "name": "js-sys",
+        "before": [
+          "0.3.103"
+        ],
+        "after": [
+          "0.3.107"
+        ]
+      },
+      {
+        "name": "libc",
+        "before": [
+          "0.2.186"
+        ],
+        "after": [
+          "0.2.191"
+        ]
+      },
+      {
+        "name": "log",
+        "before": [
+          "0.4.33"
+        ],
+        "after": [
+          "0.4.35"
+        ]
+      },
+      {
+        "name": "proc-macro2",
+        "before": [
+          "1.0.106"
+        ],
+        "after": [
+          "1.0.107"
+        ]
+      },
+      {
+        "name": "quote",
+        "before": [
+          "1.0.46"
+        ],
+        "after": [
+          "1.0.47"
+        ]
+      },
+      {
+        "name": "rand",
+        "before": [
+          "0.10.2"
+        ],
+        "after": [
+          "0.10.3"
+        ]
+      },
+      {
+        "name": "redb",
+        "before": [
+          "2.6.0",
+          "4.3.0"
+        ],
+        "after": [
+          "2.6.0",
+          "4.4.0"
+        ]
+      },
+      {
+        "name": "rustix",
+        "before": [
+          "1.1.4"
+        ],
+        "after": [
+          "1.1.6"
+        ]
+      },
+      {
+        "name": "syn",
+        "before": [
+          "2.0.119"
+        ],
+        "after": [
+          "2.0.119",
+          "3.0.9"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "before": [
+          "1.0.24"
+        ],
+        "after": [
+          "1.0.27"
+        ]
+      },
+      {
+        "name": "uuid",
+        "before": [
+          "1.24.0"
+        ],
+        "after": [
+          "1.29.0"
+        ]
+      },
+      {
+        "name": "wasm-bindgen",
+        "before": [
+          "0.2.126"
+        ],
+        "after": [
+          "0.2.130"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-macro",
+        "before": [
+          "0.2.126"
+        ],
+        "after": [
+          "0.2.130"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-macro-support",
+        "before": [
+          "0.2.126"
+        ],
+        "after": [
+          "0.2.130"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-shared",
+        "before": [
+          "0.2.126"
+        ],
+        "after": [
+          "0.2.130"
+        ]
+      }
+    ]
+  }
+}

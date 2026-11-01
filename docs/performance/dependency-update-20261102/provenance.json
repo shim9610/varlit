@@ -1,0 +1,59 @@
+{
+  "baseline_commit": "7e4396196fc4672487e7e7c84d4750f8e133f977",
+  "rust": "1.95.0",
+  "features": [
+    "integrity",
+    "compression-zstd",
+    "scalable-fault-injection"
+  ],
+  "build": "cargo build --locked --release -p varlit --features integrity,compression-zstd,scalable-fault-injection --example scalable_load --example record_mutation_load --example oom_maintenance_load",
+  "production_source_diff_empty": true,
+  "identical_harness_sha256": {
+    "crates/varlit/examples/record_mutation_load.rs": "3e8f9ef8df0afee4e9223ea1f53c4cc9854a4d4c2e1bc211e9a7373ff209ffad",
+    "crates/varlit/examples/oom_maintenance_load.rs": "e082782e7604b05fddd7bcefe0f69e498c100d1a8a67600b518150113caea14c",
+    "crates/varlit/examples/scalable_load.rs": "377aa8f477a619d40c65576e3706ce83dd0159323a8ea40cb01693cfdebc8373",
+    "scripts/load_scalable.py": "e974f5e0223e20a2f2874e799250148c23b3cbc402c37bef555bd0ea12d7de21",
+    "scripts/compare_load.py": "8bf5d427bba288bef8094385f2cead134a5bf4d1a88933590513db1206c4bb13"
+  },
+  "cpu_max": "400000 100000",
+  "memory_max": "17179869184",
+  "native_pinned_cpu": 0,
+  "container_image": "rust@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082",
+  "sbom": [
+    {
+      "name": "varlit-core-default.cdx.json",
+      "sha256": "865c01be34fa9871d9b8a51cf334c9928eb1f38cc5595de0a25a8128b8b9f679",
+      "components": 21
+    },
+    {
+      "name": "varlit-macros-all-features.cdx.json",
+      "sha256": "fd0bcbcab977637c4169438268429b0e17a2bee2f8bf4e7f3499683227ae8ca7",
+      "components": 15
+    },
+    {
+      "name": "varlit-core-all-features.cdx.json",
+      "sha256": "b6d65390684ee8934b77f0471057c3be9f01abb272bacaa2aebc49a830d8dbb3",
+      "components": 33
+    },
+    {
+      "name": "varlit-macros-default.cdx.json",
+      "sha256": "fd0bcbcab977637c4169438268429b0e17a2bee2f8bf4e7f3499683227ae8ca7",
+      "components": 15
+    },
+    {
+      "name": "varlit-default.cdx.json",
+      "sha256": "25fa451649e770e2a3b78bb840fbdf3c5c1c4c7c2b5fa878db61e6fb664dc1fd",
+      "components": 34
+    },
+    {
+      "name": "varlit-all-features.cdx.json",
+      "sha256": "7c0eb9fbd0e9c016410b360774a09de73de29e5c5230aaf02702c612f4ef2a7a",
+      "components": 46
+    }
+  ],
+  "benchmark_gate_note": "The two SWMR comparisons use the unchanged scripts/compare_load.py 5% gate. New orchestration rejects a failed comparison; paths are normalized for reproduction.",
+  "orchestration_sha256": {
+    "bench.py": "6b3126369e0dca49fc2430ea8418df44da24549934938ac782db03d94fa2135e",
+    "confirm-cpu.py": "813f86f098b14654c37e64f11e60d8d27cc9cca865b14d9bd3da0fdfaecb9d1d"
+  }
+}

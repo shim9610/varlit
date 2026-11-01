@@ -1,0 +1,1565 @@
+{
+  "checked_on": "2026-11-01",
+  "baseline_commit": "7e4396196fc4672487e7e7c84d4750f8e133f977",
+  "registry_packages_checked": 98,
+  "scope": "Latest published stable requirements and current workspace graphs; resolution only, no candidate build qualification",
+  "workspaces": {
+    "root": {
+      "compatible_updates": [
+        {
+          "package": "cc",
+          "from": "1.5.1",
+          "to": "1.10.0"
+        },
+        {
+          "package": "equivalent",
+          "from": "1.0.2",
+          "to": "1.0.3"
+        },
+        {
+          "package": "find-msvc-tools",
+          "from": "0.1.14",
+          "to": "0.1.15"
+        },
+        {
+          "package": "rustix",
+          "from": "1.1.5",
+          "to": "1.1.6"
+        },
+        {
+          "package": "serde_json",
+          "from": "1.0.151",
+          "to": "1.0.154"
+        },
+        {
+          "package": "serde_spanned",
+          "from": "1.1.1",
+          "to": "1.1.2"
+        },
+        {
+          "package": "toml",
+          "from": "1.1.6+spec-1.1.0",
+          "to": "1.1.8+spec-1.1.0"
+        },
+        {
+          "package": "toml_datetime",
+          "from": "1.1.1+spec-1.1.0",
+          "to": "1.1.2+spec-1.1.0"
+        },
+        {
+          "package": "toml_edit",
+          "from": "0.25.15+spec-1.1.0",
+          "to": "0.25.17+spec-1.1.0"
+        },
+        {
+          "package": "toml_parser",
+          "from": "1.1.3+spec-1.1.0",
+          "to": "1.1.5+spec-1.1.0"
+        },
+        {
+          "package": "toml_writer",
+          "from": "1.1.2+spec-1.1.0",
+          "to": "1.1.3+spec-1.1.0"
+        },
+        {
+          "package": "unicode-ident",
+          "from": "1.0.26",
+          "to": "1.0.27"
+        }
+      ]
+    },
+    "fuzz": {
+      "compatible_updates": [
+        {
+          "package": "arbitrary",
+          "from": "1.4.2",
+          "to": "1.5.0"
+        },
+        {
+          "package": "cc",
+          "from": "1.5.1",
+          "to": "1.10.0"
+        },
+        {
+          "package": "equivalent",
+          "from": "1.0.2",
+          "to": "1.0.3"
+        },
+        {
+          "package": "find-msvc-tools",
+          "from": "0.1.14",
+          "to": "0.1.15"
+        },
+        {
+          "package": "rustix",
+          "from": "1.1.5",
+          "to": "1.1.6"
+        },
+        {
+          "package": "toml_datetime",
+          "from": "1.1.1+spec-1.1.0",
+          "to": "1.1.2+spec-1.1.0"
+        },
+        {
+          "package": "toml_edit",
+          "from": "0.25.15+spec-1.1.0",
+          "to": "0.25.17+spec-1.1.0"
+        },
+        {
+          "package": "toml_parser",
+          "from": "1.1.3+spec-1.1.0",
+          "to": "1.1.5+spec-1.1.0"
+        },
+        {
+          "package": "unicode-ident",
+          "from": "1.0.26",
+          "to": "1.0.27"
+        }
+      ]
+    },
+    "api": {
+      "compatible_updates": [
+        {
+          "package": "cc",
+          "from": "1.5.1",
+          "to": "1.10.0"
+        },
+        {
+          "package": "equivalent",
+          "from": "1.0.2",
+          "to": "1.0.3"
+        },
+        {
+          "package": "find-msvc-tools",
+          "from": "0.1.14",
+          "to": "0.1.15"
+        },
+        {
+          "package": "rustix",
+          "from": "1.1.5",
+          "to": "1.1.6"
+        },
+        {
+          "package": "toml_datetime",
+          "from": "1.1.1+spec-1.1.0",
+          "to": "1.1.2+spec-1.1.0"
+        },
+        {
+          "package": "toml_edit",
+          "from": "0.25.15+spec-1.1.0",
+          "to": "0.25.17+spec-1.1.0"
+        },
+        {
+          "package": "toml_parser",
+          "from": "1.1.3+spec-1.1.0",
+          "to": "1.1.5+spec-1.1.0"
+        },
+        {
+          "package": "unicode-ident",
+          "from": "1.0.26",
+          "to": "1.0.27"
+        }
+      ]
+    },
+    "rename": {
+      "compatible_updates": [
+        {
+          "package": "equivalent",
+          "from": "1.0.2",
+          "to": "1.0.3"
+        },
+        {
+          "package": "rustix",
+          "from": "1.1.5",
+          "to": "1.1.6"
+        },
+        {
+          "package": "toml_datetime",
+          "from": "1.1.1+spec-1.1.0",
+          "to": "1.1.2+spec-1.1.0"
+        },
+        {
+          "package": "toml_edit",
+          "from": "0.25.15+spec-1.1.0",
+          "to": "0.25.17+spec-1.1.0"
+        },
+        {
+          "package": "toml_parser",
+          "from": "1.1.3+spec-1.1.0",
+          "to": "1.1.5+spec-1.1.0"
+        },
+        {
+          "package": "unicode-ident",
+          "from": "1.0.26",
+          "to": "1.0.27"
+        }
+      ]
+    },
+    "models": {
+      "compatible_updates": []
+    }
+  },
+  "outdated_packages": {
+    "cc@1.5.1": {
+      "latest_stable": "1.10.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "zstd-sys",
+          "parent_version": "2.1.2+zstd.1.5.7",
+          "current_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.1.2+zstd.1.5.7",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/zstd-sys/2.1.2+zstd.1.5.7/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "libfuzzer-sys",
+          "parent_version": "0.4.13",
+          "current_requirements": [
+            {
+              "req": "^1.0.83",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.4.13",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0.83",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/libfuzzer-sys/0.4.13/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "zstd-sys",
+          "parent_version": "2.1.2+zstd.1.5.7",
+          "current_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.1.2+zstd.1.5.7",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/zstd-sys/2.1.2+zstd.1.5.7/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "zstd-sys",
+          "parent_version": "2.1.2+zstd.1.5.7",
+          "current_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.1.2+zstd.1.5.7",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0.45",
+              "kind": "build",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/zstd-sys/2.1.2+zstd.1.5.7/dependencies"
+        }
+      ]
+    },
+    "equivalent@1.0.2": {
+      "latest_stable": "1.0.3",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "indexmap",
+          "parent_version": "2.14.2",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.14.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/indexmap/2.14.2/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "indexmap",
+          "parent_version": "2.14.2",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.14.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/indexmap/2.14.2/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "indexmap",
+          "parent_version": "2.14.2",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.14.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/indexmap/2.14.2/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "indexmap",
+          "parent_version": "2.14.2",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "2.14.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/indexmap/2.14.2/dependencies"
+        }
+      ]
+    },
+    "find-msvc-tools@0.1.14": {
+      "latest_stable": "0.1.15",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "cc",
+          "parent_version": "1.5.1",
+          "current_requirements": [
+            {
+              "req": "^0.1.14",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.10.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.1.15",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/cc/1.10.0/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "cc",
+          "parent_version": "1.5.1",
+          "current_requirements": [
+            {
+              "req": "^0.1.14",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.10.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.1.15",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/cc/1.10.0/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "cc",
+          "parent_version": "1.5.1",
+          "current_requirements": [
+            {
+              "req": "^0.1.14",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.10.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.1.15",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/cc/1.10.0/dependencies"
+        }
+      ]
+    },
+    "quick-error@1.2.3": {
+      "latest_stable": "2.0.1",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "rusty-fork",
+          "parent_version": "0.3.1",
+          "current_requirements": [
+            {
+              "req": "^1.2",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.3.1",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/rusty-fork/0.3.1/dependencies"
+        }
+      ]
+    },
+    "r-efi@6.0.0": {
+      "latest_stable": "7.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "getrandom",
+          "parent_version": "0.4.3",
+          "current_requirements": [
+            {
+              "req": "^6",
+              "kind": null,
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "latest_parent_version": "0.4.3",
+          "latest_parent_requirements": [
+            {
+              "req": "^6",
+              "kind": "normal",
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/getrandom/0.4.3/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "getrandom",
+          "parent_version": "0.4.3",
+          "current_requirements": [
+            {
+              "req": "^6",
+              "kind": null,
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "latest_parent_version": "0.4.3",
+          "latest_parent_requirements": [
+            {
+              "req": "^6",
+              "kind": "normal",
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/getrandom/0.4.3/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "getrandom",
+          "parent_version": "0.4.3",
+          "current_requirements": [
+            {
+              "req": "^6",
+              "kind": null,
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "latest_parent_version": "0.4.3",
+          "latest_parent_requirements": [
+            {
+              "req": "^6",
+              "kind": "normal",
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/getrandom/0.4.3/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "getrandom",
+          "parent_version": "0.4.3",
+          "current_requirements": [
+            {
+              "req": "^6",
+              "kind": null,
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "latest_parent_version": "0.4.3",
+          "latest_parent_requirements": [
+            {
+              "req": "^6",
+              "kind": "normal",
+              "target": "cfg(all(target_os = \"uefi\", getrandom_backend = \"efi_rng\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/getrandom/0.4.3/dependencies"
+        }
+      ]
+    },
+    "rustix@1.1.5": {
+      "latest_stable": "1.1.6",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "tempfile",
+          "parent_version": "3.27.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": null,
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "latest_parent_version": "3.27.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": "normal",
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/tempfile/3.27.0/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "tempfile",
+          "parent_version": "3.27.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": null,
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "latest_parent_version": "3.27.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": "normal",
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/tempfile/3.27.0/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "tempfile",
+          "parent_version": "3.27.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": null,
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "latest_parent_version": "3.27.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": "normal",
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/tempfile/3.27.0/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "tempfile",
+          "parent_version": "3.27.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": null,
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "latest_parent_version": "3.27.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.4",
+              "kind": "normal",
+              "target": "cfg(any(unix, target_os = \"wasi\"))"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/tempfile/3.27.0/dependencies"
+        }
+      ]
+    },
+    "serde_json@1.0.151": {
+      "latest_stable": "1.0.154",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "trybuild",
+          "parent_version": "1.0.122",
+          "current_requirements": [
+            {
+              "req": "^1.0.110",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.122",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0.110",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/trybuild/1.0.122/dependencies"
+        },
+        {
+          "workspace": "root",
+          "parent": "varlit",
+          "parent_version": "0.12.1",
+          "current_requirements": [
+            {
+              "req": "^1.0.151",
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        }
+      ]
+    },
+    "serde_spanned@1.1.1": {
+      "latest_stable": "1.1.2",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "toml",
+          "parent_version": "1.1.6+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.1.8+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml/1.1.8+spec-1.1.0/dependencies"
+        }
+      ]
+    },
+    "syn@2.0.119": {
+      "latest_stable": "3.0.9",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "zerocopy-derive",
+          "parent_version": "0.8.63",
+          "current_requirements": [
+            {
+              "req": "^2.0.46",
+              "kind": null,
+              "target": null
+            },
+            {
+              "req": "^2.0.46",
+              "kind": "dev",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.8.63",
+          "latest_parent_requirements": [
+            {
+              "req": "^2.0.46",
+              "kind": "normal",
+              "target": null
+            },
+            {
+              "req": "^2.0.46",
+              "kind": "dev",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/zerocopy-derive/0.8.63/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "zerocopy-derive",
+          "parent_version": "0.8.63",
+          "current_requirements": [
+            {
+              "req": "^2.0.46",
+              "kind": null,
+              "target": null
+            },
+            {
+              "req": "^2.0.46",
+              "kind": "dev",
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.8.63",
+          "latest_parent_requirements": [
+            {
+              "req": "^2.0.46",
+              "kind": "normal",
+              "target": null
+            },
+            {
+              "req": "^2.0.46",
+              "kind": "dev",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/zerocopy-derive/0.8.63/dependencies"
+        }
+      ]
+    },
+    "toml@1.1.6+spec-1.1.0": {
+      "latest_stable": "1.1.8+spec-1.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "trybuild",
+          "parent_version": "1.0.122",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.122",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/trybuild/1.0.122/dependencies"
+        }
+      ]
+    },
+    "toml_datetime@1.1.1+spec-1.1.0": {
+      "latest_stable": "1.1.2+spec-1.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "toml",
+          "parent_version": "1.1.6+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.1.8+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml/1.1.8+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "root",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        }
+      ]
+    },
+    "toml_edit@0.25.15+spec-1.1.0": {
+      "latest_stable": "0.25.17+spec-1.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "proc-macro-crate",
+          "parent_version": "3.5.0",
+          "current_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.5.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro-crate/3.5.0/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "proc-macro-crate",
+          "parent_version": "3.5.0",
+          "current_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.5.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro-crate/3.5.0/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "proc-macro-crate",
+          "parent_version": "3.5.0",
+          "current_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.5.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro-crate/3.5.0/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "proc-macro-crate",
+          "parent_version": "3.5.0",
+          "current_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.5.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.25.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro-crate/3.5.0/dependencies"
+        }
+      ]
+    },
+    "toml_parser@1.1.3+spec-1.1.0": {
+      "latest_stable": "1.1.5+spec-1.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "toml",
+          "parent_version": "1.1.6+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.1.8+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.5",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml/1.1.8+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "root",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.5",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.5",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.5",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "toml_edit",
+          "parent_version": "0.25.15+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.25.17+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.5",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml_edit/0.25.17+spec-1.1.0/dependencies"
+        }
+      ]
+    },
+    "toml_writer@1.1.2+spec-1.1.0": {
+      "latest_stable": "1.1.3+spec-1.1.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "toml",
+          "parent_version": "1.1.6+spec-1.1.0",
+          "current_requirements": [
+            {
+              "req": "^1.1.2",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.1.8+spec-1.1.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.1.3",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/toml/1.1.8+spec-1.1.0/dependencies"
+        }
+      ]
+    },
+    "unicode-ident@1.0.26": {
+      "latest_stable": "1.0.27",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "proc-macro2",
+          "parent_version": "1.0.107",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.107",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/dependencies"
+        },
+        {
+          "workspace": "root",
+          "parent": "syn",
+          "parent_version": "2.0.119",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        },
+        {
+          "workspace": "root",
+          "parent": "syn",
+          "parent_version": "3.0.9",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "proc-macro2",
+          "parent_version": "1.0.107",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.107",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "syn",
+          "parent_version": "2.0.119",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "syn",
+          "parent_version": "3.0.9",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "proc-macro2",
+          "parent_version": "1.0.107",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.107",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "syn",
+          "parent_version": "3.0.9",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "proc-macro2",
+          "parent_version": "1.0.107",
+          "current_requirements": [
+            {
+              "req": "^1.0",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "1.0.107",
+          "latest_parent_requirements": [
+            {
+              "req": "^1.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "syn",
+          "parent_version": "3.0.9",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "3.0.9",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/syn/3.0.9/dependencies"
+        }
+      ]
+    },
+    "windows-link@0.2.1": {
+      "latest_stable": "0.100.0",
+      "parents": [
+        {
+          "workspace": "root",
+          "parent": "windows-sys",
+          "parent_version": "0.61.2",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.61.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-sys/0.61.2/dependencies"
+        },
+        {
+          "workspace": "fuzz",
+          "parent": "windows-sys",
+          "parent_version": "0.61.2",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.61.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-sys/0.61.2/dependencies"
+        },
+        {
+          "workspace": "api",
+          "parent": "windows-sys",
+          "parent_version": "0.61.2",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.61.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-sys/0.61.2/dependencies"
+        },
+        {
+          "workspace": "rename",
+          "parent": "windows-sys",
+          "parent_version": "0.61.2",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.61.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-sys/0.61.2/dependencies"
+        },
+        {
+          "workspace": "models",
+          "parent": "generator",
+          "parent_version": "0.8.11",
+          "current_requirements": [
+            {
+              "req": ">=0.1, <=0.2",
+              "kind": null,
+              "target": "cfg(windows)"
+            }
+          ],
+          "latest_parent_version": "0.8.11",
+          "latest_parent_requirements": [
+            {
+              "req": ">=0.1, <=0.2",
+              "kind": "normal",
+              "target": "cfg(windows)"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/generator/0.8.11/dependencies"
+        },
+        {
+          "workspace": "models",
+          "parent": "windows-result",
+          "parent_version": "0.4.1",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.100.0",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.100.0",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-result/0.100.0/dependencies"
+        },
+        {
+          "workspace": "models",
+          "parent": "windows-sys",
+          "parent_version": "0.61.2",
+          "current_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.61.2",
+          "latest_parent_requirements": [
+            {
+              "req": "^0.2.1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/windows-sys/0.61.2/dependencies"
+        }
+      ]
+    },
+    "arbitrary@1.4.2": {
+      "latest_stable": "1.5.0",
+      "parents": [
+        {
+          "workspace": "fuzz",
+          "parent": "libfuzzer-sys",
+          "parent_version": "0.4.13",
+          "current_requirements": [
+            {
+              "req": "^1",
+              "kind": null,
+              "target": null
+            }
+          ],
+          "latest_parent_version": "0.4.13",
+          "latest_parent_requirements": [
+            {
+              "req": "^1",
+              "kind": "normal",
+              "target": null
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/libfuzzer-sys/0.4.13/dependencies"
+        }
+      ]
+    },
+    "windows-result@0.4.1": {
+      "latest_stable": "0.100.0",
+      "parents": [
+        {
+          "workspace": "models",
+          "parent": "generator",
+          "parent_version": "0.8.11",
+          "current_requirements": [
+            {
+              "req": ">=0.3.1, <=0.4",
+              "kind": null,
+              "target": "cfg(windows)"
+            }
+          ],
+          "latest_parent_version": "0.8.11",
+          "latest_parent_requirements": [
+            {
+              "req": ">=0.3.1, <=0.4",
+              "kind": "normal",
+              "target": "cfg(windows)"
+            }
+          ],
+          "source": "https://crates.io/api/v1/crates/generator/0.8.11/dependencies"
+        }
+      ]
+    }
+  }
+}

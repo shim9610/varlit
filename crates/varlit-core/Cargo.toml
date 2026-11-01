@@ -50,7 +50,7 @@ libc.workspace = true
 
 # redb is only an independent test oracle, never a runtime dependency.
 [dev-dependencies]
-redb = { version = "4.3.0", path = "../../vendor/redb" }
+redb = { version = "4.4.0", path = "../../vendor/redb" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(varlit_loom)'] }
