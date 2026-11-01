@@ -41,7 +41,7 @@ env:
   # not evidence of a workflow defect.
   #
   #   actions/checkout                v7.0.1
-  #   Swatinem/rust-cache             v2.9.2
+  #   Swatinem/rust-cache             v2.9.3
   #   EmbarkStudios/cargo-deny-action v2.1.1
   #   dtolnay/rust-toolchain          master (the action pins no toolchain of
   #                                   its own; the toolchain is the `toolchain`
@@ -53,6 +53,10 @@ env:
   MSRV: 1.95.0
 
 jobs:
+  verification:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    uses: ./.github/workflows/verification.yml
+
   storage-contracts:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     name: storage failure and resource contracts
@@ -706,6 +710,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
+      - verification
       - codeql
       - fmt
       - feature-config

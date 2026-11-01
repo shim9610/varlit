@@ -462,6 +462,10 @@ pub(super) struct UniformPrefix {
     last: u64,
     closed: bool,
 }
+
+#[cfg(kani)]
+#[path = "verification/uniform_prefix.rs"]
+mod uniform_prefix_proofs;
 impl UniformPrefix {
     pub(super) fn observe(proof: &mut Option<Self>, row: usize, offset: u64) {
         match proof {
