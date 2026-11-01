@@ -1,5 +1,9 @@
 # Dependency review — 2026-11-01
 
+Update implementation and measured results are recorded in the
+[2026-11-02 qualification](performance/dependency-update-20261102/README.md).
+The review below describes the pre-update baseline.
+
 Baseline: `e5e81a10201ef95834360ac2c2407f5701b12fbd`. Inspected the root, fuzz,
 public-API fixture and rename fixture lockfiles, current crates.io metadata,
 upstream changes and Cargo's dry-run resolution. Dependency versions were not
@@ -30,10 +34,57 @@ offers nine, including `arbitrary`. None requires raising the project's Rust
 1.95 minimum according to the current resolution and registry metadata.
 These are resolution results, not test qualification of the proposed updates.
 
-`quick-error 1→2`, `r-efi 6→7` and `windows-link 0.2→0.100` appear newer when
-comparing registry maxima but cross dependency compatibility boundaries. Do not
-force them into this graph. The simultaneously locked `syn 2` and `syn 3` serve
-different dependencies; the presence of syn 2 is not itself a missed update.
+## Parent dependency and release checks
+
+The follow-up inspects five workspace graphs (root, fuzz, public-API fixture,
+rename fixture and isolated Loom models), and current version/dependency
+metadata for 98 distinct packages, including the vendored redb release.
+The latest published parent manifests were checked, not only the current
+lockfile's constraints. All five blocked substitutions below were also attempted
+with `cargo update -p PACKAGE --precise VERSION --dry-run`: Cargo rejected each
+on the named requirement, without changing any lockfile.
+
+| Candidate | Actual dependency chain and published requirement | Latest published parent support / development status |
+| --- | --- | --- |
+| quick-error 1.2.3 → 2.0.1 | varlit tests → proptest 1.12.0 → rusty-fork 0.3.1 → quick-error `^1.2` | proptest 1.12.0 and rusty-fork 0.3.1 are already latest stable. rusty-fork master still requests 1.2. No released parent upgrade enables 2.x. |
+| r-efi 6.0.0 → 7.1.0 | tempfile 3.27.0 → getrandom 0.4.3 → r-efi `^6` | getrandom 0.4.3 is latest published stable. Its development branch already requests r-efi 7; that change is not in the registry release. This edge is specific to UEFI with the efi_rng backend. |
+| windows-link 0.2.1 → 0.100.0 | varlit-core (Windows) → windows-sys 0.61.2 → windows-link `^0.2.1` | windows-sys 0.61.2 is latest published stable. Upstream master has windows-sys 0.100.0 and windows-link 0.100.0, but that windows-sys version is not currently available as a stable registry release. |
+| syn 2.0.119 → 3.0.9 | zerocopy 0.8.63 → zerocopy-derive `=0.8.63` → syn `^2.0.46` | Latest published zerocopy/derive still require syn 2. Other macros in the same workspace already use syn 3; upgrading those does not remove this requirement. |
+| windows-result 0.4.1 → 0.100.0 (new Loom workspace) | loom 0.7.2 → generator 0.8.11 → windows-result `>=0.3.1, <=0.4` | Loom and generator are already latest stable. windows-result 0.100.0 supports windows-link 0.100.0, but generator still excludes both: its own windows-link requirement is `>=0.1, <=0.2`. Both edges are Windows-specific. |
+
+For these cases, updating already-current published parents cannot select the
+new child version. A local fork or unreleased Git dependency would be a separate
+source change requiring qualification, not an ordinary lockfile refresh. The
+getrandom development change shows that an upstream transition exists; it must
+not be described as absent simply because it has not shipped.
+
+The 13 compatible registry candidates above need no parent requirement changes:
+
+| Candidate group | Existing parent requirements that permit the update |
+| --- | --- |
+| rustix | tempfile: `^1.1.4` |
+| cc / find-msvc-tools | zstd-sys: cc `^1.0.45`; libfuzzer-sys: cc `^1.0.83`; current cc: find-msvc-tools `^0.1.14` |
+| equivalent | indexmap: `^1.0` |
+| serde_json | varlit tests: `^1.0.151`; trybuild: `^1.0.110` |
+| unicode-ident | proc-macro2 and syn: `^1.0` / `^1` |
+| toml / toml_edit | trybuild: toml `^1`; proc-macro-crate: toml_edit `^0.25.0` |
+| serde_spanned / toml_datetime / toml_parser / toml_writer | Existing toml/toml_edit dependencies already allow the proposed 1.x patch releases |
+| arbitrary | libfuzzer-sys: `^1` |
+
+Fresh Cargo dry runs select 12 updates in root, nine in fuzz, eight in the
+public-API fixture, six in the rename fixture and zero in the Loom workspace.
+These overlap: the union remains 13 registry packages. Vendored redb 4.4.0 is
+an additional source-update candidate. Resolution succeeds within Rust 1.95;
+the candidate versions have not yet been built/tested together.
+
+Published requirements were read from the versioned crates.io dependency API
+(`https://crates.io/api/v1/crates/NAME/VERSION/dependencies`), and compared to
+`cargo metadata --locked --all-features` for each workspace. Development evidence:
+[getrandom at 6a049007](https://github.com/rust-random/getrandom/blob/6a04900732207b537b2d3ea7bee61ab0a6c6ca9f/Cargo.toml),
+[Windows workspace at be2831da](https://github.com/microsoft/windows-rs/blob/be2831da5cf6c3f7e6f88bf8b7222e46b5efd4cc/Cargo.toml),
+and [rusty-fork master](https://github.com/altsysrq/rusty-fork/blob/master/Cargo.toml).
+The inspected constraints and workspace membership are retained in
+[parent-resolution evidence](dependency-parent-resolution-20261101.json).
 
 ## rustix: important upstream fixes, distinct from current reachability
 

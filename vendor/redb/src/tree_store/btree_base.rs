@@ -750,14 +750,12 @@ impl OwnedEntryBuffer {
     }
 
     // Appends one pair, which must be greater than every buffered entry.
-    #[cfg(feature = "experimental_cursor")]
     pub(super) fn push_back(&mut self, key: &[u8], value: &[u8]) {
         let pair = self.store(key, value);
         self.pairs.push_back(pair);
     }
 
     // Prepends one pair, which must be smaller than every buffered entry.
-    #[cfg(feature = "experimental_cursor")]
     pub(super) fn push_front(&mut self, key: &[u8], value: &[u8]) {
         let pair = self.store(key, value);
         self.pairs.push_front(pair);
@@ -766,7 +764,6 @@ impl OwnedEntryBuffer {
     // Copies `range` of the leaf's pairs to one end of the buffer. The pairs
     // must all be greater than the buffered entries when `back` is true, and
     // entirely smaller otherwise.
-    #[cfg(feature = "experimental_cursor")]
     pub(super) fn extend_from_leaf_range(
         &mut self,
         accessor: &LeafAccessor<'_>,
@@ -801,14 +798,12 @@ impl OwnedEntryBuffer {
         self.data.len()
     }
 
-    #[cfg(feature = "experimental_cursor")]
     pub(super) fn back(&self) -> Option<(&[u8], &[u8])> {
         self.pairs
             .back()
             .map(|(key, value)| (&self.data[key.clone()], &self.data[value.clone()]))
     }
 
-    #[cfg(feature = "experimental_cursor")]
     pub(super) fn front(&self) -> Option<(&[u8], &[u8])> {
         self.pairs
             .front()
@@ -1805,14 +1800,13 @@ impl<'a> LeafPageMut<'a> {
 }
 
 // Provides a simple zero-copy way to access a branch page
-pub(super) struct BranchAccessor<'a: 'b, 'b, T: Page + 'a> {
+pub(super) struct BranchAccessor<'b, T: Page> {
     page: &'b T,
     num_keys: usize,
     fixed_key_size: Option<usize>,
-    _page_lifetime: PhantomData<&'a ()>,
 }
 
-impl<'a: 'b, 'b, T: Page + 'a> BranchAccessor<'a, 'b, T> {
+impl<'b, T: Page> BranchAccessor<'b, T> {
     pub(crate) fn new(page: &'b T, fixed_key_size: Option<usize>) -> Self {
         debug_assert_eq!(page.memory()[0], BRANCH);
         let num_keys = u16::from_le_bytes(page.memory()[2..4].try_into().unwrap()) as usize;
@@ -1820,7 +1814,6 @@ impl<'a: 'b, 'b, T: Page + 'a> BranchAccessor<'a, 'b, T> {
             page,
             num_keys,
             fixed_key_size,
-            _page_lifetime: PhantomData,
         }
     }
 
@@ -1987,7 +1980,7 @@ impl<'a, 'b> BranchBuilder<'a, 'b> {
         self.keys.push(key);
     }
 
-    pub(super) fn push_all<T: Page>(&mut self, accessor: &'a BranchAccessor<'_, '_, T>) {
+    pub(super) fn push_all<T: Page>(&mut self, accessor: &'a BranchAccessor<'_, T>) {
         for i in 0..accessor.count_children() {
             let child = accessor.child_page(i).unwrap();
             let checksum = accessor.child_checksum(i).unwrap();
