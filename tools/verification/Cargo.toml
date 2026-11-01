@@ -1,0 +1,14 @@
+[package]
+name = "varlit-concurrency-models"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Isolated: Loom and its scheduler never enter the published dependency graph.
+[workspace]
+
+[dependencies]
+loom = "=0.7.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(varlit_loom)'] }

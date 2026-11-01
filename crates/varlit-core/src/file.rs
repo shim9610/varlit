@@ -1318,6 +1318,10 @@ pub struct RecordIndexEntry {
     pub committed: bool,
 }
 
+#[cfg(kani)]
+#[path = "verification/record_extent.rs"]
+mod record_extent_proofs;
+
 impl RecordIndexEntry {
     /// Reads stored payload bytes by reopening the object currently named by
     /// `path`.

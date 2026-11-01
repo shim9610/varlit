@@ -1,4 +1,11 @@
 use std::num::NonZeroU64;
+// The isolated Loom runner includes this exact module; normal builds retain std.
+#[cfg(varlit_loom)]
+use loom::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+#[cfg(not(varlit_loom))]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
