@@ -27,6 +27,11 @@ mod enabled {
         bootstrap_stream_checkpoint, clear_stale_writer_lock, rebuild_disk_index,
     };
 
+    mod histories {
+        use super::*;
+        include!("support/publication_histories.rs");
+    }
+
     const CHILD_ENV: &str = "VARLIT_SCALABLE_FAULT_CHILD";
     const SCENARIO_ENV: &str = "VARLIT_SCALABLE_FAULT_SCENARIO";
     const ROOT_ENV: &str = "VARLIT_SCALABLE_FAULT_ROOT";

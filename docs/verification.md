@@ -56,7 +56,33 @@ prefix correctness. Five unwind steps cover these four-row loops; unwinding
 assertions stay enabled. This is a proof bound, not a limit on accepted files.
 Ordinary tests and large-file resource/performance qualification still apply.
 New registered core harnesses run automatically; CI also rejects the loss of
-either initial harness or a zero-harness result.
+any of the six required harnesses or a zero-harness result.
+
+Four publication harnesses additionally call the production metadata and
+checkpoint validators. They establish accepted-frontier consistency and
+preservation of the confirmed frontier during checkpoint validation, and check
+that consistent clean/restore examples are accepted. Offsets, counts, generations,
+sequence options and digest bytes use their full symbolic widths. Their local
+unwind bound is 35 for fixed-size 32-byte comparisons; the original harnesses
+retain the default bound of five. Unwinding assertions remain enabled. As in the
+arithmetic harness, error destruction is excluded, not validation. These are
+validator proofs, not proofs of all filesystem operations or crash schedules.
+
+## Publication and recovery
+
+[Publication qualification](verification/publication-20261102/README.md) defines
+the observable contract and its assumptions. Required release tests now include
+8,450 independently torn publication-head images, all 512 length-three histories
+over a stated eight-operation alphabet, 16 longer seeded histories, and a mixed
+history interrupted at every discovered fault-hook occurrence while readers stay
+open. Recovery and subsequent publication must also work.
+
+The oracle checks complete confirmed generations, pinned-reader stability and
+failed-follow handle preservation. It does not equate `flush()` with publication,
+or a returned write error with proof that publication did not occur. Native
+process termination does not simulate loss of the operating system's page cache.
+New tests join discovery automatically, but new API operations need an explicit
+operation model and expected result; they do not automatically enter this alphabet.
 
 ## Loom
 

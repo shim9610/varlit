@@ -8,6 +8,8 @@ use std::{
 
 #[cfg(test)]
 mod oracle;
+#[cfg(kani)]
+mod publication_proofs;
 mod slots;
 mod storage;
 mod tree;

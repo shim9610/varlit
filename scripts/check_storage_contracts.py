@@ -10,6 +10,9 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("publication-head-pairs", "varlit-core", None, "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations", False, "PUBLICATION_IMAGES independent head prefixes=8450"),
+    ("publication-histories", "varlit", "scalable_crash_faults", "enabled::histories::bounded_and_generated_histories_preserve_committed_snapshots", False, "PUBLICATION_HISTORIES exhaustive=512 seeded=16 steps=2304"),
+    ("publication-live-crashes", "varlit", "scalable_crash_faults", "enabled::histories::every_mixed_history_crash_boundary_preserves_live_readers_and_recovery", False, "PUBLICATION_CRASHES boundaries="),
     ("mutation-rewritten-boundaries", "varlit", "record_liveness", "rewritten_boundaries_preserve_exact_membership_across_small_pages", False, None),
     ("mutation-uniform-proof", "varlit-core", None, "file::resident_index::tests::uniform_prefix_never_authorizes_unobserved_or_truncated_offsets", False, None),
     ("mutation-amortized-work", "varlit", "record_liveness", "boundary_proof_reuses_reverse_random_repeated_and_failed_requests", False, None),

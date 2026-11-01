@@ -24,6 +24,10 @@
     "reason": "The redb test oracle requires unsupported fcntl syscall 72. Retained in native tests and ASan."
   },
   {
+    "test": "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations",
+    "reason": "The 8,450-image filesystem sweep exceeded a measured 300-second Miri trial on nightly-2026-10-12. Required native release contracts and ASan retain the complete sweep; production decoding is not stubbed."
+  },
+  {
     "test": "file::tests::atomic_replace_invokes_parent_directory_sync",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
@@ -166,6 +170,10 @@
   {
     "test": "stream::tests::clean_open_append_and_sync_construct_no_scanner",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
+    "reason": "Reproduced on nightly-2026-10-12 after CI job 124899646500: stream creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Native tests and ASan retain this partial-record check."
   },
   {
     "test": "stream::tests::dirty_checkpoint_restore_truncates_without_scanning",

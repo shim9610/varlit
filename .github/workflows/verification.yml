@@ -70,6 +70,10 @@ jobs:
           # Fail on accidental removal/selection of zero or partial harnesses.
           grep -Fq 'Checking harness file::record_extent_proofs::checked_extent_matches_wide_arithmetic...' target/verification/kani.log
           grep -Fq 'Checking harness file::resident_index::uniform_prefix_proofs::observed_prefix_never_invents_membership...' target/verification/kani.log
+          grep -Fq 'Checking harness disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers...' target/verification/kani.log
+          grep -Fq 'Checking harness disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected...' target/verification/kani.log
+          grep -Fq 'Checking harness disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier...' target/verification/kani.log
+          grep -Fq 'Checking harness disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected...' target/verification/kani.log
           grep -Eq '^Complete - [1-9][0-9]* successfully verified harnesses, 0 failures,' target/verification/kani.log
           git diff --exit-code -- Cargo.lock
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
