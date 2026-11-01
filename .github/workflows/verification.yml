@@ -74,8 +74,19 @@ jobs:
           grep -Fq 'Checking harness disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected...' target/verification/kani.log
           grep -Fq 'Checking harness disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier...' target/verification/kani.log
           grep -Fq 'Checking harness disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::commit_survives_every_io_failure_effect...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::poisoned_writer_never_reaches_publication...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::resumed_writer_cannot_acknowledge_a_volatile_head...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::successful_commit_is_reachable_and_durable...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::nonconfirmed_publications_do_not_use_a_second_head...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::follow_error_preserves_the_entire_reader...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition...' target/verification/kani.log
+          grep -Fq 'Checking harness publication_protocol::proofs::initial_frontier_satisfies_the_inductive_invariant...' target/verification/kani.log
           grep -Eq '^Complete - [1-9][0-9]* successfully verified harnesses, 0 failures,' target/verification/kani.log
           git diff --exit-code -- Cargo.lock
+      - name: Verify production bindings and reject every broken publication protocol
+        run: python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

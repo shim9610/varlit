@@ -56,7 +56,7 @@ prefix correctness. Five unwind steps cover these four-row loops; unwinding
 assertions stay enabled. This is a proof bound, not a limit on accepted files.
 Ordinary tests and large-file resource/performance qualification still apply.
 New registered core harnesses run automatically; CI also rejects the loss of
-any of the six required harnesses or a zero-harness result.
+any of the fifteen required harnesses or a zero-harness result.
 
 Four publication harnesses additionally call the production metadata and
 checkpoint validators. They establish accepted-frontier consistency and
@@ -67,6 +67,23 @@ unwind bound is 35 for fixed-size 32-byte comparisons; the original harnesses
 retain the default bound of five. Unwinding assertions remain enabled. As in the
 arithmetic harness, error destruction is excluded, not validation. These are
 validator proofs, not proofs of all filesystem operations or crash schedules.
+
+## Shared publication control flow
+
+[Protocol verifier and negative controls](verification/protocol-verifier-20261102/README.md)
+adds nine harnesses that call the same generic commit, checkpoint, restore, resume
+and follow drivers used by production. They explore before/partial/after-effect I/O
+errors, uncertain publication, poisoned-writer reuse, durable acknowledgement and
+failed reader adoption. Initialization plus an arbitrary-state transition proof
+establishes an abstract frontier invariant without a history-length bound.
+The OS durability, immutable-prefix and callback-validation assumptions are
+explicit; this is not a refinement proof of the whole library.
+
+The required Kani job also runs `scripts/check_publication_protocol.py`. Eleven
+independent mutations of the production driver must compile and fail their
+expected assertions. Compiler errors, timeouts and unrelated failures do not
+count as detection. All five production bindings and the clean-open reconciliation call are checked; the unmodified
+protocol must pass first. New registered harnesses join the run automatically.
 
 ## Publication and recovery
 
@@ -128,12 +145,13 @@ upstream fixes not reported by the advisory database at the time of inspection.
 
 ## Runtime and maintenance
 
-All additions execute in CI or explicitly selected verification builds.
-Production method bodies, public signatures, persistent format and runtime
-dependency resolution are unchanged. There are no new production allocations,
-locks or file-size limits. Instrumented timings are not performance benchmarks.
-Any future production refactor made to support proofs must pass the existing
-large-file and equal-work concurrency performance checks.
+Proofs and negative controls execute in CI or explicitly selected verification
+builds. Five production entry points now delegate ordering to statically
+dispatched generic drivers shared with the proofs. Public signatures, persisted
+format, dependency resolution and configured budgets are unchanged. There are
+no new production allocations or locks. Uncertain clean writer resumes now sync
+the sidecar; matching confirmed heads avoid that extra sync. Instrumented timings are not performance
+benchmarks; the protocol follow-up includes large-file equal-work qualification.
 
 Miri and fuzzing keep their existing limitations and manifests; adding these
 tools does not make all input combinations verified. Properties, model setup

@@ -1,0 +1,465 @@
+[
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "work": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.173430145,
+        "after": 0.169811266,
+        "change_percent": -2.0866493538363895
+      },
+      "process_cpu_seconds": {
+        "before": 4.190721,
+        "after": 4.088242,
+        "change_percent": -2.4453787307720964
+      },
+      "process_peak_rss_kib": {
+        "before": 5740,
+        "after": 5756,
+        "change_percent": 0.2787456445993097
+      },
+      "process_write_bytes": {
+        "before": 175464448,
+        "after": 175464448,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "work": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.038373189,
+        "after": 0.041294974,
+        "change_percent": 7.614131314444572
+      },
+      "process_cpu_seconds": {
+        "before": 0.503472,
+        "after": 0.520638,
+        "change_percent": 3.409524263514152
+      },
+      "process_peak_rss_kib": {
+        "before": 4356,
+        "after": 4356,
+        "change_percent": 0.0
+      },
+      "process_write_bytes": {
+        "before": 46702592,
+        "after": 46702592,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "work": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.091754765,
+        "after": 0.079934346,
+        "change_percent": -12.882621409362226
+      },
+      "process_cpu_seconds": {
+        "before": 2.088313,
+        "after": 2.238347,
+        "change_percent": 7.184459417721389
+      },
+      "process_peak_rss_kib": {
+        "before": 6524,
+        "after": 6536,
+        "change_percent": 0.18393623543837556
+      },
+      "process_write_bytes": {
+        "before": 137957376,
+        "after": 137957376,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "work": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.477834013,
+        "after": 0.443429215,
+        "change_percent": -7.2001567623860225
+      },
+      "process_cpu_seconds": {
+        "before": 0.915908,
+        "after": 0.859295,
+        "change_percent": -6.181079322377359
+      },
+      "process_peak_rss_kib": {
+        "before": 4356,
+        "after": 4356,
+        "change_percent": 0.0
+      },
+      "process_write_bytes": {
+        "before": 45588480,
+        "after": 45588480,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "work": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.020568464,
+        "after": 0.015072179,
+        "change_percent": -26.721903006466608
+      },
+      "process_cpu_seconds": {
+        "before": 1.721503,
+        "after": 1.667173,
+        "change_percent": -3.155963132216444
+      },
+      "process_peak_rss_kib": {
+        "before": 3460,
+        "after": 3464,
+        "change_percent": 0.11560693641619046
+      },
+      "process_write_bytes": {
+        "before": 4311871488,
+        "after": 4311773184,
+        "change_percent": -0.0022798453124917017
+      }
+    }
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "work": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.094658497,
+        "after": 0.090201803,
+        "change_percent": -4.708181664874733
+      },
+      "process_cpu_seconds": {
+        "before": 1.770866,
+        "after": 1.778263,
+        "change_percent": 0.4177052357434041
+      },
+      "process_peak_rss_kib": {
+        "before": 3460,
+        "after": 3388,
+        "change_percent": -2.0809248554913284
+      },
+      "process_write_bytes": {
+        "before": 4318048256,
+        "after": 4318052352,
+        "change_percent": 9.48576708070803e-05
+      }
+    }
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "work": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.05805126,
+        "after": 0.056145481,
+        "change_percent": -3.2829244360932153
+      },
+      "process_cpu_seconds": {
+        "before": 2.089575,
+        "after": 2.019004,
+        "change_percent": -3.377289640237857
+      },
+      "process_peak_rss_kib": {
+        "before": 4612,
+        "after": 4604,
+        "change_percent": -0.17346053772766545
+      },
+      "process_write_bytes": {
+        "before": 4333916160,
+        "after": 4337012736,
+        "change_percent": 0.07144983626079515
+      }
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "work": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.6238785,
+        "after": 0.617888796,
+        "change_percent": -0.9600753992965005
+      },
+      "process_cpu_seconds": {
+        "before": 1.377208,
+        "after": 1.387526,
+        "change_percent": 0.7491969259545428
+      },
+      "process_peak_rss_kib": {
+        "before": 8628,
+        "after": 8492,
+        "change_percent": -1.5762633286972694
+      },
+      "process_write_bytes": {
+        "before": 100380672,
+        "after": 100380672,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "work": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 1.7937373939999999,
+        "after": 1.712254369,
+        "change_percent": -4.54263958997333
+      },
+      "process_cpu_seconds": {
+        "before": 3.523249,
+        "after": 3.483405,
+        "change_percent": -1.130887995710772
+      },
+      "process_peak_rss_kib": {
+        "before": 16876,
+        "after": 16872,
+        "change_percent": -0.023702299123018467
+      },
+      "process_write_bytes": {
+        "before": 254939136,
+        "after": 254935040,
+        "change_percent": -0.0016066579907159095
+      }
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "work": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.221138368,
+        "after": 0.210737576,
+        "change_percent": -4.703295992489187
+      },
+      "process_cpu_seconds": {
+        "before": 0.337528,
+        "after": 0.320934,
+        "change_percent": -4.916332867199169
+      },
+      "process_peak_rss_kib": {
+        "before": 67780,
+        "after": 67684,
+        "change_percent": -0.14163470050162497
+      },
+      "process_write_bytes": {
+        "before": 0,
+        "after": 0,
+        "change_percent": null
+      }
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "work": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20
+    },
+    "pairs": 3,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.383589724,
+        "after": 0.36055811,
+        "change_percent": -6.004231229093104
+      },
+      "process_cpu_seconds": {
+        "before": 0.482116,
+        "after": 0.466539,
+        "change_percent": -3.230965161911248
+      },
+      "process_peak_rss_kib": {
+        "before": 134028,
+        "after": 134060,
+        "change_percent": 0.023875608081902477
+      },
+      "process_write_bytes": {
+        "before": 0,
+        "after": 0,
+        "change_percent": null
+      }
+    }
+  }
+]

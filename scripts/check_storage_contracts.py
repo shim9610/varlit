@@ -10,6 +10,8 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("publication-resume", "varlit-core", None, "disk_index::storage::failure_tests::divergent_clean_heads_require_sync_before_writer_resume", False, None),
+    ("publication-clean-resume", "varlit-core", None, "disk_index::storage::failure_tests::matching_clean_heads_do_not_add_a_resume_sync", False, None),
     ("publication-head-pairs", "varlit-core", None, "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations", False, "PUBLICATION_IMAGES independent head prefixes=8450"),
     ("publication-histories", "varlit", "scalable_crash_faults", "enabled::histories::bounded_and_generated_histories_preserve_committed_snapshots", False, "PUBLICATION_HISTORIES exhaustive=512 seeded=16 steps=2304"),
     ("publication-live-crashes", "varlit", "scalable_crash_faults", "enabled::histories::every_mixed_history_crash_boundary_preserves_live_readers_and_recovery", False, "PUBLICATION_CRASHES boundaries="),

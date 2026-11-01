@@ -1083,18 +1083,28 @@ impl VarlitStreamWriter {
         let checkpoint = stream_checkpoint_from_frontier(guard.frontier(), guard.tails());
         let base_eof = guard.base_eof();
         checkpoint.validate(spec, header_len, base_eof)?;
-        crate::scalable_fault_point("restore.native_truncate");
-        let truncate = file.set_len(base_eof);
-        crate::scalable_fault_point("restore.native_truncate");
-        truncate?;
-        crate::scalable_fault_point("restore.native_sync");
-        let sync = file.sync_all();
-        crate::scalable_fault_point("restore.native_sync");
-        sync?;
-        let observed_len = file.metadata()?.len();
-        guard
-            .commit_after_native_sync(observed_len)
-            .map_err(state_error)?;
+        crate::publication_protocol::restore(
+            || -> Result<()> {
+                crate::scalable_fault_point("restore.native_truncate");
+                let truncate = file.set_len(base_eof);
+                crate::scalable_fault_point("restore.native_truncate");
+                truncate?;
+                Ok(())
+            },
+            || -> Result<()> {
+                crate::scalable_fault_point("restore.native_sync");
+                let sync = file.sync_all();
+                crate::scalable_fault_point("restore.native_sync");
+                sync?;
+                Ok(())
+            },
+            || {
+                let observed_len = file.metadata()?.len();
+                guard
+                    .commit_after_native_sync(observed_len)
+                    .map_err(state_error)
+            },
+        )?;
         file.seek(SeekFrom::Start(base_eof))?;
         let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, base_eof)?;
         Ok((

@@ -1,0 +1,535 @@
+{
+  "pairs": 5,
+  "opens_per_sample": 1000,
+  "binary_sha256": {
+    "before": "cb8f9049d53b82e1077b5abef4178568f315e263060db34dd310db31e8ededb3",
+    "after": "8fdcc07fe4c53ef6a04240db58efe2310130b7b5cade54d76228bf02e53a7d8e"
+  },
+  "scope": "warm repeated opens; divergent heads stay divergent; not power-loss latency",
+  "samples": [
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.067803483
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.078262332
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.071885469
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.077901418
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.066932338
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.06250609
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.059896128
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.05754013
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056831209
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.063625072
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.063335954
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.154604604
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.168493016
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.052909961
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.062507208
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.153121773
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.166154267
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056255724
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.065021075
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.161268618
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.057298915
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056328679
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056568031
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.062914818
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056358524
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.053776384
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.055395981
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.056538937
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.057670786
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.058220338
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.060942374
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "pair": 0,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.16386986
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.145246136
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "pair": 1,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.052071469
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.052421557
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "pair": 2,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.162862463
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.155625656
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "pair": 3,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.049887679
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.05063529
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "pair": 4,
+      "event": "writer_open_complete",
+      "opens": 1000,
+      "seconds": 0.151062448
+    }
+  ],
+  "summaries": [
+    {
+      "gib": 1,
+      "state": "matching",
+      "seconds": {
+        "before": 0.066932338,
+        "after": 0.063625072
+      },
+      "microseconds_per_open": {
+        "before": 66.93233799999999,
+        "after": 63.62507200000001
+      },
+      "change_percent": -4.941207940472648,
+      "files": {
+        "data.varlit": 1075986001,
+        "data.varlit.lock": 0,
+        "data.varlit.vki": 61223200
+      }
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "seconds": {
+        "before": 0.062507208,
+        "after": 0.161268618
+      },
+      "microseconds_per_open": {
+        "before": 62.50720799999999,
+        "after": 161.268618
+      },
+      "change_percent": 158.000034172059,
+      "files": {
+        "data.varlit": 1075986001,
+        "data.varlit.lock": 0,
+        "data.varlit.vki": 61223200
+      }
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "seconds": {
+        "before": 0.057298915,
+        "after": 0.056328679
+      },
+      "microseconds_per_open": {
+        "before": 57.298915,
+        "after": 56.328678999999994
+      },
+      "change_percent": -1.6932886076464038,
+      "files": {
+        "data.varlit": 4303917397,
+        "data.varlit.lock": 0,
+        "data.varlit.vki": 89399584
+      }
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "seconds": {
+        "before": 0.052071469,
+        "after": 0.155625656
+      },
+      "microseconds_per_open": {
+        "before": 52.07146900000001,
+        "after": 155.625656
+      },
+      "change_percent": 198.86934052119787,
+      "files": {
+        "data.varlit": 4303917397,
+        "data.varlit.lock": 0,
+        "data.varlit.vki": 89399584
+      }
+    }
+  ],
+  "syscalls": [
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "before",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 502,
+      "log": "trace-1-matching-before.log",
+      "trace_sha256": "f116fa972a7ebdcf4c7af9169ca6b0e4ffef741472df79639b3a5fae2d843394"
+    },
+    {
+      "gib": 1,
+      "state": "matching",
+      "side": "after",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 522,
+      "log": "trace-1-matching-after.log",
+      "trace_sha256": "2c52b430402f83c8ab1b396fd4b47c272b38352b974742abccb38418d0aa78f6"
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "before",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 502,
+      "log": "trace-1-divergent-before.log",
+      "trace_sha256": "56ed65d1ef17e8024b95b922abbaba3e76c983c2780c1407d7178890b55ff5b9"
+    },
+    {
+      "gib": 1,
+      "state": "divergent",
+      "side": "after",
+      "opens": 10,
+      "fdatasync": 10,
+      "fsync": 0,
+      "pread": 522,
+      "log": "trace-1-divergent-after.log",
+      "trace_sha256": "9966e5174fec973391eeea839e1534a00c592bea608ddc01e25a5c602586a7e6"
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "before",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 502,
+      "log": "trace-4-matching-before.log",
+      "trace_sha256": "381f584e94ec13d91ff69a7a4c5aee657f04ce53b457a693eb2260ee87eca3aa"
+    },
+    {
+      "gib": 4,
+      "state": "matching",
+      "side": "after",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 522,
+      "log": "trace-4-matching-after.log",
+      "trace_sha256": "41da2539a5e32b09a01e54fb187a9232f99f393869ce4645187c9130040b53d4"
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "before",
+      "opens": 10,
+      "fdatasync": 0,
+      "fsync": 0,
+      "pread": 502,
+      "log": "trace-4-divergent-before.log",
+      "trace_sha256": "f086f51467673d6fff4a3d906b3a14c1df6e17ccef817ccec35c652543cb294f"
+    },
+    {
+      "gib": 4,
+      "state": "divergent",
+      "side": "after",
+      "opens": 10,
+      "fdatasync": 10,
+      "fsync": 0,
+      "pread": 522,
+      "log": "trace-4-divergent-after.log",
+      "trace_sha256": "724504e343ea56fe34d6d42d14125b686ec669c00012ef865c960d3fb31c0270"
+    }
+  ]
+}

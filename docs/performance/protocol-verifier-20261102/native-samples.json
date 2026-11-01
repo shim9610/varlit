@@ -1,0 +1,3656 @@
+[
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.173430145,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.190721,
+      "rss": 5612,
+      "write_blocks": 342712
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.170305781,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.114625,
+      "rss": 5628,
+      "write_blocks": 342704
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.169339666,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.914048,
+      "rss": 5756,
+      "write_blocks": 342704
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.184497237,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.203552,
+      "rss": 5692,
+      "write_blocks": 342704
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.169261714,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.020415,
+      "rss": 5740,
+      "write_blocks": 342704
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.169811266,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.088242,
+      "rss": 5628,
+      "write_blocks": 342704
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.042302045,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.524951,
+      "rss": 4204,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.041462306,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.516477,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.040121862,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.520638,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.037350153,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.496308,
+      "rss": 4204,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.038373189,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.503472,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.041294974,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.534288,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.091754765,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.212329,
+      "rss": 6392,
+      "write_blocks": 269448
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.088690446,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.238347,
+      "rss": 6380,
+      "write_blocks": 269448
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.079934346,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.264477,
+      "rss": 6536,
+      "write_blocks": 269456
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.073364521,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.077961,
+      "rss": 6524,
+      "write_blocks": 269448
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.110751304,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.088313,
+      "rss": 6392,
+      "write_blocks": 269456
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.07555758,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.162484,
+      "rss": 6504,
+      "write_blocks": 269448
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.477834013,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.915908,
+      "rss": 4336,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.443429215,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.859295,
+      "rss": 4284,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.416435579,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.81654,
+      "rss": 4328,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.461666073,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.868549,
+      "rss": 4204,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.51992052,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.916422,
+      "rss": 4356,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 3,
+    "binary": "record_mutation_load",
+    "args": [
+      "recovery",
+      "fixed",
+      "forward",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "recovery",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 14400186,
+      "seconds": 0.456310891,
+      "frames": 400000,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 0.897187,
+      "rss": 4356,
+      "write_blocks": 89040
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011246842,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.818599,
+      "rss": 3388,
+      "write_blocks": 8423368
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011315539,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.630795,
+      "rss": 3464,
+      "write_blocks": 8420080
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.015072179,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.667173,
+      "rss": 3452,
+      "write_blocks": 8421432
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.020568464,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.61833,
+      "rss": 3388,
+      "write_blocks": 8421304
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.021356712,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.721503,
+      "rss": 3460,
+      "write_blocks": 8421624
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.020623869,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.686576,
+      "rss": 3432,
+      "write_blocks": 8421880
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.095854814,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.765952,
+      "rss": 3308,
+      "write_blocks": 8433696
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.090201803,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.72683,
+      "rss": 3324,
+      "write_blocks": 8433696
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.109976797,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.788,
+      "rss": 3324,
+      "write_blocks": 8433696
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.094658497,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.802239,
+      "rss": 3320,
+      "write_blocks": 8433688
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.09155907,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.770866,
+      "rss": 3460,
+      "write_blocks": 8433688
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 5,
+    "binary": "record_mutation_load",
+    "args": [
+      "lazy",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "lazy",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.088779196,
+      "frames": 69632,
+      "temporary_bytes": 516096
+    },
+    "usage": {
+      "cpu": 1.778263,
+      "rss": 3388,
+      "write_blocks": 8433696
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.061567807,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 2.089575,
+      "rss": 4592,
+      "write_blocks": 8464680
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.056145481,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 2.019004,
+      "rss": 4540,
+      "write_blocks": 8470728
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.310064981,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 2.362198,
+      "rss": 4604,
+      "write_blocks": 8480128
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.05805126,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 2.729166,
+      "rss": 4540,
+      "write_blocks": 8464896
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.048640344,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 2.068669,
+      "rss": 4612,
+      "write_blocks": 8459504
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 6,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "mixed",
+      "random",
+      "131072",
+      "8192"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "mixed",
+      "order": "random",
+      "count": 131072,
+      "marks": 8192,
+      "source_bytes": 4306436326,
+      "seconds": 0.053254254,
+      "frames": 8192,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 1.904076,
+      "rss": 4540,
+      "write_blocks": 8461816
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.612107292
+    },
+    "usage": {
+      "cpu": 1.341965,
+      "rss": 8428,
+      "write_blocks": 196056
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.604690261
+    },
+    "usage": {
+      "cpu": 1.287533,
+      "rss": 8484,
+      "write_blocks": 196056
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.617888796
+    },
+    "usage": {
+      "cpu": 1.387526,
+      "rss": 8488,
+      "write_blocks": 196056
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.664342712
+    },
+    "usage": {
+      "cpu": 1.424458,
+      "rss": 8460,
+      "write_blocks": 196064
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.6238785
+    },
+    "usage": {
+      "cpu": 1.377208,
+      "rss": 8628,
+      "write_blocks": 196056
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.634351774
+    },
+    "usage": {
+      "cpu": 1.411483,
+      "rss": 8492,
+      "write_blocks": 196056
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.900277178
+    },
+    "usage": {
+      "cpu": 3.965331,
+      "rss": 16744,
+      "write_blocks": 497928
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.712886403
+    },
+    "usage": {
+      "cpu": 3.430347,
+      "rss": 16796,
+      "write_blocks": 497920
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.655288141
+    },
+    "usage": {
+      "cpu": 3.487553,
+      "rss": 16872,
+      "write_blocks": 497920
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.7937373939999999
+    },
+    "usage": {
+      "cpu": 3.523036,
+      "rss": 16796,
+      "write_blocks": 497928
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.687046794
+    },
+    "usage": {
+      "cpu": 3.523249,
+      "rss": 16876,
+      "write_blocks": 497920
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 8,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "checkpoint",
+      "200000",
+      "256"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "checkpoint",
+      "records": 200000,
+      "payload": 256,
+      "file_bytes": 109062095,
+      "dropped": 28571,
+      "seconds": 1.712254369
+    },
+    "usage": {
+      "cpu": 3.483405,
+      "rss": 16800,
+      "write_blocks": 497928
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.213454021
+    },
+    "usage": {
+      "cpu": 0.323845,
+      "rss": 67780,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.210737576
+    },
+    "usage": {
+      "cpu": 0.318237,
+      "rss": 67684,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.214338449
+    },
+    "usage": {
+      "cpu": 0.328956,
+      "rss": 67652,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.228549783
+    },
+    "usage": {
+      "cpu": 0.339827,
+      "rss": 67692,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.221138368
+    },
+    "usage": {
+      "cpu": 0.337528,
+      "rss": 67780,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.209994052
+    },
+    "usage": {
+      "cpu": 0.320934,
+      "rss": 67652,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.356392813
+    },
+    "usage": {
+      "cpu": 0.455857,
+      "rss": 133964,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.36055811
+    },
+    "usage": {
+      "cpu": 0.466539,
+      "rss": 133972,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.369142068
+    },
+    "usage": {
+      "cpu": 0.475247,
+      "rss": 134060,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.383589724
+    },
+    "usage": {
+      "cpu": 0.482116,
+      "rss": 134016,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.385621031
+    },
+    "usage": {
+      "cpu": 0.500075,
+      "rss": 134028,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/protocol-verifier-20261102/native-performance/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.356217263
+    },
+    "usage": {
+      "cpu": 0.456028,
+      "rss": 133820,
+      "write_blocks": 0
+    },
+    "stage": "native-performance"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036952948,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.510945,
+      "rss": 4220,
+      "write_blocks": 91224
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.039356808,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.498278,
+      "rss": 4364,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.038824413,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.5309,
+      "rss": 4324,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036831675,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.476125,
+      "rss": 4204,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.046323074,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.588735,
+      "rss": 4364,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.045467342,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.704984,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036309457,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.494728,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.04489257,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.531751,
+      "rss": 4216,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.05775183,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.645314,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.039012405,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.52655,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 5,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.047254786,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.515115,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 5,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.04603236,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.550174,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 6,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.035094752,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.48499,
+      "rss": 4356,
+      "write_blocks": 91224
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 6,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.039369834,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.501917,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 7,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.037996962,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.490292,
+      "rss": 4348,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 7,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036907838,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.495677,
+      "rss": 4284,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 8,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036827056,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.487362,
+      "rss": 4336,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 8,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.040323604,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.545554,
+      "rss": 4360,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 9,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036443428,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.555748,
+      "rss": 4360,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 9,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.03618653,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.47611,
+      "rss": 4204,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 10,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.044471755,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.521149,
+      "rss": 4348,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 10,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036734877,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.596219,
+      "rss": 4360,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 11,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.038648935,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.502402,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 11,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.036086277,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.554853,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 12,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.043646258,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.486379,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 12,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.04737865,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.539225,
+      "rss": 4220,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 13,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.040187625,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.510442,
+      "rss": 4364,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 13,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.037205147,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.493462,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 14,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.038700521,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.503524,
+      "rss": 4356,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 1,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 14,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.035180447,
+      "frames": 20000,
+      "temporary_bytes": 2097152
+    },
+    "usage": {
+      "cpu": 0.463938,
+      "rss": 4348,
+      "write_blocks": 91216
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.074992974,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.220847,
+      "rss": 6532,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.070942453,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.927485,
+      "rss": 6560,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.073303688,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.073621,
+      "rss": 6540,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.07359154,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.106435,
+      "rss": 6508,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.078246117,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.018062,
+      "rss": 6512,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.074395848,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.999002,
+      "rss": 6396,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.076035126,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.042842,
+      "rss": 6380,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.086095529,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.141064,
+      "rss": 6380,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.07185249,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.182712,
+      "rss": 6512,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.069877007,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.036698,
+      "rss": 6380,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 5,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.079678632,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.972934,
+      "rss": 6396,
+      "write_blocks": 269568
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 5,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.073616322,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.974838,
+      "rss": 6380,
+      "write_blocks": 269496
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 6,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.074304277,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.934929,
+      "rss": 6532,
+      "write_blocks": 269512
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 6,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.07718322,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.024312,
+      "rss": 6380,
+      "write_blocks": 269504
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 7,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.078664725,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.000581,
+      "rss": 6380,
+      "write_blocks": 269480
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 7,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.085330042,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.046895,
+      "rss": 6532,
+      "write_blocks": 269472
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 8,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.067132404,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.981537,
+      "rss": 6460,
+      "write_blocks": 269464
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 8,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.072925464,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.964666,
+      "rss": 6396,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 9,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.075316017,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.020757,
+      "rss": 6536,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 9,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.070878362,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.026056,
+      "rss": 6392,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 10,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.070773523,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.070592,
+      "rss": 6540,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 10,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.077858808,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.950603,
+      "rss": 6504,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 11,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.068768833,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.101928,
+      "rss": 6380,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 11,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.070178804,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.039021,
+      "rss": 6512,
+      "write_blocks": 269456
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 12,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.074873678,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.943418,
+      "rss": 6532,
+      "write_blocks": 269480
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 12,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.078002582,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.021235,
+      "rss": 6380,
+      "write_blocks": 269464
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 13,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.079277813,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 2.023165,
+      "rss": 6380,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 13,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.073035133,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.996781,
+      "rss": 6532,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 14,
+    "side": "before",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.06855496,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.889282,
+      "rss": 6508,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  },
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "pair": 14,
+    "side": "after",
+    "result": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "seconds": 0.071225647,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "usage": {
+      "cpu": 1.944543,
+      "rss": 6396,
+      "write_blocks": 269448
+    },
+    "stage": "native-confirm"
+  }
+]
