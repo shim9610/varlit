@@ -558,16 +558,39 @@ pub(crate) fn read_native_record_header<R: Read>(
         ));
     }
 
+    // Keep the canonical field-table decoder, but construct missing-field
+    // errors only when a field is absent. Error carries drop glue.
+    let Some(block_id) = block_id else {
+        return Err(Error::LayoutFieldMissing("block_id"));
+    };
+    let Some(block_version) = block_version else {
+        return Err(Error::LayoutFieldMissing("block_version"));
+    };
+    let Some(flags) = flags else {
+        return Err(Error::LayoutFieldMissing("flags"));
+    };
+    let Some(sequence) = sequence else {
+        return Err(Error::LayoutFieldMissing("sequence"));
+    };
+    let Some(payload_len) = payload_len else {
+        return Err(Error::LayoutFieldMissing("payload_len"));
+    };
+    let Some(checksum) = checksum else {
+        return Err(Error::LayoutFieldMissing("checksum"));
+    };
+    let Some(uncompressed_len_hint) = uncompressed_len_hint else {
+        return Err(Error::LayoutFieldMissing("uncompressed_len_hint"));
+    };
+
     Ok(DecodedRecordHeader {
         fields: RecordHeaderFields {
-            block_id: block_id.ok_or(Error::LayoutFieldMissing("block_id"))?,
-            block_version: block_version.ok_or(Error::LayoutFieldMissing("block_version"))?,
-            flags: flags.ok_or(Error::LayoutFieldMissing("flags"))?,
-            sequence: sequence.ok_or(Error::LayoutFieldMissing("sequence"))?,
-            payload_len: payload_len.ok_or(Error::LayoutFieldMissing("payload_len"))?,
-            checksum: checksum.ok_or(Error::LayoutFieldMissing("checksum"))?,
-            uncompressed_len_hint: uncompressed_len_hint
-                .ok_or(Error::LayoutFieldMissing("uncompressed_len_hint"))?,
+            block_id,
+            block_version,
+            flags,
+            sequence,
+            payload_len,
+            checksum,
+            uncompressed_len_hint,
         },
         lead_in_len: native_record_header_len(),
     })
@@ -701,9 +724,11 @@ pub(crate) fn decode_native_record_footer(
         });
     }
 
-    let flags = flags.ok_or(Error::InvalidRecordFooter {
-        offset: footer_offset,
-    })?;
+    let Some(flags) = flags else {
+        return Err(Error::InvalidRecordFooter {
+            offset: footer_offset,
+        });
+    };
     if flags & !crate::file::RECORD_FOOTER_KNOWN_FLAGS != 0 {
         return Err(Error::InvalidRecordFooter {
             offset: footer_offset,
