@@ -8642,6 +8642,57 @@ mod page_store_lock_audit_tests {
 mod page_store_lru_tests {
     use super::*;
 
+    #[test]
+    fn memory_only_recency_trace_preserves_links_accounting_and_writer_pages() {
+        let mut store = PageStore::default();
+        let retained = Arc::new(vec![1u8; 8]);
+        for page in 0..5 {
+            store.pages.insert(
+                page,
+                BitmapPage {
+                    bytes: retained.clone(),
+                    ones: 1,
+                    cached: page != 4,
+                    lru_prev: NO_PAGE,
+                    lru_next: NO_PAGE,
+                },
+            );
+            store.ones += 1;
+            if page != 4 {
+                store.cached_bytes += 8;
+                store.lru_push_back(page);
+            } else {
+                store.charged_bytes += 8;
+            }
+        }
+        let mut model = std::collections::VecDeque::from([0, 1, 2, 3]);
+        for step in 0..64 {
+            let page = (step * 3) % 5;
+            store.note_used(page);
+            if let Some(at) = model.iter().position(|&p| p == page) {
+                model.remove(at);
+                model.push_back(page);
+            }
+            if step % 3 == 0 && !model.is_empty() {
+                let victim = model.pop_front().unwrap();
+                assert!(store.evict_one());
+                assert!(!store.pages.contains_key(&victim));
+            }
+            store.assert_lru_consistent();
+            assert_eq!(store.lru_len(), model.len());
+            assert_eq!(store.lru_head, model.front().copied().unwrap_or(NO_PAGE));
+            assert_eq!(store.lru_tail, model.back().copied().unwrap_or(NO_PAGE));
+            assert_eq!(store.cached_bytes, model.len() as u64 * 8);
+            assert_eq!(store.charged_bytes, 8);
+            assert_eq!(store.ones, model.len() as u64 + 1);
+            assert!(store.pages.contains_key(&4));
+            assert_eq!(Arc::strong_count(&retained), store.pages.len() + 1);
+        }
+        assert!(!store.evict_one());
+        drop(store);
+        assert_eq!(Arc::strong_count(&retained), 1);
+    }
+
     /// Published pages in the fixture. The default demand cache is 512 pages,
     /// so this is the size at which "constant per touch" and "half the cache
     /// per touch" are two orders of magnitude apart.

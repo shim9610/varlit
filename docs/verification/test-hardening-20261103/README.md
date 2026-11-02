@@ -78,9 +78,12 @@ Initial failing API-contract experiments and the test-only Clippy failure are
 retained with corrected passing logs. No assertion or resource bound was relaxed.
 Performance results and exact-source CI status are recorded with the PR update.
 
-At `e9537e9d4770dc61dc7c55680ee387b008b18db0`, GitHub's separate CodeQL
-result check completed successfully with **no new alerts**, confirming removal
-of the 30 reported false positives. The newly added local-SARIF step initially
+An interim GitHub CodeQL check snapshot at
+`e9537e9d4770dc61dc7c55680ee387b008b18db0` reported **no new alerts**.
+That snapshot did **not** establish final Rust analysis success. The subsequent
+completed Rust analysis at `598ec8b` contains 153 blocking findings (144 logging,
+9 cryptographic-value), and the required SARIF gate correctly fails. See the
+[follow-up and retained SARIF](../compound-failures-20261102/README.md). The newly added local-SARIF step initially
 failed because the action defaults to `../results`, not `results`. Its follow-up
 uses the pinned action's documented `sarif-output` output for both validation
 and archiving; no path assumption or optional missing-file fallback remains.
