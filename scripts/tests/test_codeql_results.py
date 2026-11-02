@@ -44,11 +44,33 @@ class CodeQLGateTests(unittest.TestCase):
             with self.subTest(item=item), self.assertRaises((ValueError, KeyError)):
                 gate.validate(item)
 
+    def test_codeql_pack_rules_in_extensions_are_checked(self):
+        # CodeQL 2.27.2 emits an empty driver inventory and per-pack extensions.
+        value = report()
+        driver = value['runs'][0]['tool']['driver']
+        rules = driver.pop('rules')
+        driver['rules'] = []
+        value['runs'][0]['tool']['extensions'] = [
+            {'name': 'codeql/rust-queries', 'rules': rules},
+            {'name': 'codeql/rust-all', 'rules': []},
+        ]
+        gate.validate(value)
+        value['runs'][0]['results'] = [{'ruleId': 'rust/cleartext-logging',
+            'rule': {'id': 'rust/cleartext-logging', 'toolComponent': {'index': 0}}}]
+        with self.assertRaisesRegex(ValueError, 'blocking CodeQL'):
+            gate.validate(value)
+        value['runs'][0]['results'][0]['rule']['toolComponent']['index'] = 1
+        with self.assertRaisesRegex(ValueError, 'unknown or ambiguous'):
+            gate.validate(value)
+        value['runs'][0]['results'][0]['rule']['toolComponent']['index'] = -1
+        with self.assertRaisesRegex(ValueError, 'invalid SARIF'):
+            gate.validate(value)
+
     def test_invalid_metadata_and_error_results_fail_closed(self):
         for severity in ['NaN', 'inf', '-1', '11', 'invalid']:
             with self.subTest(severity=severity), self.assertRaises(ValueError):
                 gate.validate(report(severity, [{'ruleId': 'rust/cleartext-logging'}]))
         with self.assertRaises(ValueError):
             gate.validate(report('0', [{'ruleId': 'rust/cleartext-logging', 'level': 'error'}]))
-        with self.assertRaises(KeyError):
+        with self.assertRaises(ValueError):
             gate.validate(report(results=[{'ruleId': 'missing'}]))

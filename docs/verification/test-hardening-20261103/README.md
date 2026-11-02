@@ -65,7 +65,7 @@ to GitHub code scanning; this script is not an all-severity zero-alert claim.
 * Ownership integration suite: **8/8 default native and 8/8 Miri**.
 * Miri unit selection: **205 selected / 260 enumerated, 55 explicit exclusions**.
   This selection check is not a claim that all 205 were rerun locally in this unit.
-* Python gate regressions: **54 passed**. Clippy 1.95.0 workspace/all-target/all-feature,
+* Python gate regressions: **55 passed**. Clippy 1.95.0 workspace/all-target/all-feature,
   formatting, actionlint and API validation contracts passed.
 * Actual scoped Kani memory run: **2 scalar validity + 1 refusal initialization**
   and **6 calibration controls** passed. Strengthened ordinary-log parsing also
@@ -84,3 +84,61 @@ of the 30 reported false positives. The newly added local-SARIF step initially
 failed because the action defaults to `../results`, not `results`. Its follow-up
 uses the pinned action's documented `sarif-output` output for both validation
 and archiving; no path assumption or optional missing-file fallback remains.
+
+
+The real CodeQL 2.27.2 SARIF then exposed a second integration issue: its query
+rules are stored under `tool.extensions` rather than `tool.driver.rules`.
+The validator now resolves pack-scoped rule identities, rejects invalid or
+ambiguous references, and is tested against actual clean Actions/Python SARIF
+plus an injected high-severity finding in the actual Actions report. Missing
+inventories still fail closed. The prior integration failures are retained.
+
+## Equal-work performance
+
+Limits remain four CPUs and 16 GiB; no additional OOM/kill events occurred.
+There are **182 qualified timing observations and four separate resource
+probes**, plus **50 retained, unqualified native observations**. A binary
+inspection command overlapped the initial native timing series; that entire
+series was retained as diagnostic and replaced. Final native cases 0 and 4
+triggered the predeclared 15-pair confirmation and combine all 20 pairs. The
+1-GiB clone likewise combines its initial and confirmation pairs. SWMR uses
+three pairs at each size, with eight following readers plus a pinned reader.
+
+| Workload | Pairs | Elapsed | CPU |
+| --- | ---: | ---: | ---: |
+| Clone bytes-67108864 | 5 | -2.61% | -2.32% |
+| Clone bytes-1073741824 | 20 | +2.23% | +0.59% |
+| Clone nested-16384 | 5 | -6.87% | -6.46% |
+| Single writer, 2M fixed records | 20 | +12.24% | +5.29% |
+| Single writer, large reverse updates | 20 | +8.74% | -1.66% |
+| Complex maintenance, 65,536 × 512 B | 5 | -1.10% | -3.12% |
+| Compression, 64 MiB | 5 | -2.67% | -2.11% |
+| Decoding, 64 MiB | 5 | +1.11% | +2.30% |
+| SWMR 1 GiB | 3 | +4.89% | +6.24% |
+| SWMR 4 GiB | 3 | +2.11% | +0.87% |
+
+**Performance is not an all-pass result.** Fixed-record writer elapsed +12.24%
+and CPU +5.29%, reverse-writer elapsed +8.74%, and 1-GiB SWMR CPU +6.24%
+exceed the unchanged 5% threshold. These remain failed gates; no favorable
+subset or earlier diagnostic series replaces them. 4-GiB SWMR passes.
+
+All six binaries have identical `.text` and `.rodata` sections. The only
+allocated-section differences are build IDs and, in four binaries, ten
+`format.rs` source-location line numbers incremented by the added comment.
+`location-metadata.json` records their decoded file/line/column values.
+Thus these measurements do not establish a new algorithmic cost from this
+change; nor do binary comparisons turn the observed timing gates green.
+The two core examples were rebuilt at the baseline with matching default
+features; the other four baseline executables retain the preceding qualified
+builds and identical machine-code/constant sections. Exact hashes are retained.
+
+The maximum final native peak-RSS increase is 0.56%. Large-clone peak RSS stays
+about 2,049 MiB. Complex temporary allocation stays **4,194,304 bytes**, and
+open regular-file allocation **91,955,200 bytes**, on both sides; large cloning
+uses no temporary files. Sampled resource-probe times are recorded separately
+from the timing comparisons, without pooling them into favorable results.
+
+`results.json` contains the qualified and failed metrics. `evidence.tar.xz`
+retains the completed/failed local logs, actual SARIF reports, all timing and
+resource observations, source snapshots, benchmark scripts and binary hashes;
+executable binaries, Cargo caches and workload files are excluded.
