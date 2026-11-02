@@ -116,17 +116,21 @@ jobs:
           build-mode: none
           config-file: .github/codeql/config.yml
           tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.2/codeql-bundle-linux64.tar.gz
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - id: codeql-analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}
       - name: Require clean security results, not only successful analysis upload
-        run: python3 scripts/check_codeql_results.py results/${{ matrix.language }}.sarif
+        env:
+          SARIF_DIRECTORY: ${{ steps.codeql-analysis.outputs.sarif-output }}
+          CODEQL_LANGUAGE: ${{ matrix.language }}
+        run: python3 scripts/check_codeql_results.py "$SARIF_DIRECTORY/$CODEQL_LANGUAGE.sarif"
       - name: Retain CodeQL findings and analysis diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codeql-${{ matrix.language }}-sarif
-          path: results/${{ matrix.language }}.sarif
+          path: ${{ steps.codeql-analysis.outputs.sarif-output }}/${{ matrix.language }}.sarif
           if-no-files-found: error
           retention-days: 14
 
