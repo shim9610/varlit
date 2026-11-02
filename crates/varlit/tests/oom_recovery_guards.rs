@@ -471,7 +471,7 @@ fn zstd_context_refusal_child() -> Result<()> {
     );
     // Range streaming has no Rust output allocation: refuse its C context,
     // then its streaming history/workspace, and retry the same immutable input.
-    for nth in [b'1', b'2'] {
+    for nth in *b"12" {
         std::fs::write(&flag, [nth])?;
         let result = encoded.stream_range(3..65530, &mut [0; 127], 1024 * 1024, |_, _| Ok(()));
         assert!(

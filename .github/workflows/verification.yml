@@ -73,12 +73,15 @@ jobs:
           python3 scripts/check_proof_contracts.py --capture target/verification/source-before.json
           features=()
           if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
-          cargo kani -p varlit-core "${features[@]}" --default-unwind 5 -Z unstable-options --harness-timeout 300 2>&1 | tee target/verification/kani.log
+          cargo kani -p varlit-core "${features[@]}" --default-unwind 5 -Z stubbing -Z unstable-options --harness-timeout 300 2>&1 | tee target/verification/kani.log
           python3 scripts/check_proof_contracts.py --source-before target/verification/source-before.json --log target/verification/kani.log --features '${{ matrix.features }}' --output target/verification/contracts.json
           git diff --exit-code -- Cargo.lock
       - name: Verify production bindings and reject every broken publication protocol
         if: matrix.features == 'default'
         run: python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
+      - name: Reject broken ownership allocation contracts
+        if: matrix.features == 'default'
+        run: python3 scripts/check_ownership_mutations.py --output target/verification/ownership-mutations
       - name: Reject broken resource and traversal implementations
         if: matrix.features == 'default'
         run: python3 scripts/check_resource_mutations.py --output target/verification/resource-mutations

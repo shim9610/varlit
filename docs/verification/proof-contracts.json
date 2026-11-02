@@ -145,6 +145,34 @@
       ],
       "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting",
       "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom codecs. Hash table layout bound assumes the documented supported std layout. No global process OOM claim."
+    },
+    {
+      "id": "fallible-ownership",
+      "harnesses": [
+        "fallible::proofs::box_value_refusal_or_unique_ownership",
+        "fallible::proofs::box_initializer_runs_only_after_reservation",
+        "fallible::proofs::uninitialized_box_alignment_and_zero_size",
+        "fallible::proofs::byte_clone_preserves_source_on_every_refusal",
+        "fallible::proofs::nested_clone_0_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_1_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_2_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_3_releases_every_partial_owner",
+        "fallible::proofs::shared_initializer_refusal_and_last_owner_drop",
+        "fallible::proofs::copy_on_write_refusal_preserves_shared_source",
+        "fallible::proofs::full_width_clone_capacity_refuses_without_abort",
+        "fallible::proofs::shared_vector_initialization_preserves_payload",
+        "fallible::proofs::boxed_clone_reserves_before_payload_callback",
+        "fallible::proofs::empty_vector_model_obeys_its_standard_contract",
+        "fallible::proofs::shared_value_refusal_or_unique_ownership"
+      ],
+      "sources": [
+        "crates/varlit-core/src/fallible.rs",
+        "crates/varlit-core/src/fallible/proofs.rs",
+        "crates/varlit-core/src/lib.rs",
+        "Cargo.lock"
+      ],
+      "scope": "Actual Box/clone/private Arc helpers; symbolic allocation refusal; full-width u16 capacity requests; byte vectors <=4 elements, nested boxed clones <=3 elements, COW vector of 3 bytes; single-threaded refcounts",
+      "limits": "Allocator obeys Rust contract and returns null on refusal. User initializers/TryClone/Drop return normally and satisfy contracts. No universal proof of arbitrary T, container size, concurrency, refcount overflow, OS termination or stack space. Returned heap-free errors are forgotten at caller boundary; payload and partial-owner drops execute. Kani 0.68 RawVec::new_in layout problem requires an explicit standard empty-Vec constructor model, independently checked; fresh clone growth is forbidden by the allocator model."
     }
   ]
 }

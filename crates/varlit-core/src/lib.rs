@@ -1,4 +1,5 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![cfg_attr(kani, feature(allocator_api))]
 
 extern crate alloc;
 
@@ -104,6 +105,7 @@ pub use disk_index::{
 };
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
+pub use fallible::{try_box_uninit, try_box_with};
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
     DirectoryRead, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID, IndexEntries, KeyedChain,

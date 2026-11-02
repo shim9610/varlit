@@ -1214,6 +1214,12 @@ pages are copied before persistence. Existing public `Clone` implementations and
 infallible constructors/builders remain for compatibility. In particular,
 `ScanCancellationToken::try_new` is the fallible alternative to `new`/`default`.
 
+`try_box_uninit` lets callers reserve storage before constructing a value;
+`try_box_with` and internal shared initialization defer callbacks until owner
+storage is reserved. Their [ownership proofs](verification/ownership-20261102/README.md)
+state the allocator/callback preconditions, typed bounds and verifier models.
+The caller decides recovery after an error reaches that API boundary.
+
 This is not a whole-library OOM-freedom claim. `BTreeMap` node allocation remains
 infallible and deferred. Other allocations, including convenience/report builders,
 formatting, user codecs/callbacks and dependency internals, need their own audit.

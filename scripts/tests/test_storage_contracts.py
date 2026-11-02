@@ -12,7 +12,7 @@ spec.loader.exec_module(gate)
 class StorageSelectionTests(unittest.TestCase):
     def test_failure_and_resource_categories_are_required(self):
         self.assertEqual({row[0] for row in gate.CASES}, {
-            "ownership-clone", "ownership-box", "ownership-arc", "ownership-arc-threads",
+            "ownership-deferred-box", "ownership-box-order", "ownership-inplace-box", "ownership-deferred-arc", "ownership-clone", "ownership-box", "ownership-arc", "ownership-arc-threads",
             "ownership-token", "ownership-preflight", "ownership-published", "ownership-mmap",
             "ownership-generated", "ownership-path-error", "ownership-disk-error",
             "ownership-fatal-copy", "ownership-incomplete-copy",

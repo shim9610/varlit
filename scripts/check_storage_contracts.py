@@ -10,6 +10,10 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("ownership-deferred-box", "varlit-core", "fallible_ownership", "reserved_boxes_skip_initialization_on_refusal_and_release_failed_initializers", False, None),
+    ("ownership-box-order", "varlit-core", "fallible_ownership", "boxed_clone_reserves_owner_before_cloning_payload", False, None),
+    ("ownership-inplace-box", "varlit-core", "fallible_ownership", "uninitialized_large_box_can_be_filled_on_a_small_stack", False, None),
+    ("ownership-deferred-arc", "varlit-core", None, "fallible::tests::shared_initialization_and_cow_reserve_before_calling_user_code", False, None),
     ("ownership-generated", "varlit", "fallible_publication", "generated_layout_fields_refuse_before_creating_the_file", False, None),
     ("ownership-path-error", "varlit-core", None, "fallible::tests::publication_path_and_source_refusals_keep_the_same_outcome", False, None),
     ("ownership-disk-error", "varlit-core", None, "fallible::tests::disk_error_wrapper_refusal_keeps_publication_facts", False, None),

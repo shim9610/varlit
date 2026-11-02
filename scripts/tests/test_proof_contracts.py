@@ -23,7 +23,7 @@ class ProofContractTests(unittest.TestCase):
         contracts = manifest['contracts']
         self.assertTrue({'record-extent', 'observed-prefix', 'publication-metadata',
                          'publication-protocol', 'compression-steps', 'limited-spill',
-                         'chunk-parser', 'materialization', 'index-visits'} <= {c['id'] for c in contracts})
+                         'chunk-parser', 'materialization', 'index-visits', 'fallible-ownership'} <= {c['id'] for c in contracts})
         harnesses = [h for c in contracts for h in c['harnesses']]
         self.assertEqual(len(harnesses), len(set(harnesses)))
         for c in contracts:

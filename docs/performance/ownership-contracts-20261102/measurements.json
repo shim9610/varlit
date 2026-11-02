@@ -1,0 +1,1887 @@
+{
+  "box": {
+    "owner": [
+      {
+        "case": "box",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.0981633835,
+            "after": 0.102891956,
+            "change_percent": 4.817043108543628
+          },
+          "cpu": {
+            "before": 0.0998095,
+            "after": 0.10387199999999999,
+            "change_percent": 4.070253833552906
+          },
+          "rss": {
+            "before": 1232,
+            "after": 1168,
+            "change_percent": -5.1948051948051965
+          }
+        }
+      },
+      {
+        "case": "nested-box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.282706059,
+            "after": 0.234541605,
+            "change_percent": -17.036937294647803
+          },
+          "cpu": {
+            "before": 0.283486,
+            "after": 0.235369,
+            "change_percent": -16.97332496137376
+          },
+          "rss": {
+            "before": 1360,
+            "after": 1296,
+            "change_percent": -4.705882352941182
+          }
+        }
+      },
+      {
+        "case": "shared",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.16655223549999998,
+            "after": 0.1691278215,
+            "change_percent": 1.5464133473009012
+          },
+          "cpu": {
+            "before": 0.1675055,
+            "after": 0.17012500000000003,
+            "change_percent": 1.5638292473978632
+          },
+          "rss": {
+            "before": 1232,
+            "after": 1168,
+            "change_percent": -5.1948051948051965
+          }
+        }
+      }
+    ],
+    "direct": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.490381191,
+            "after": 0.480964369,
+            "change_percent": -1.9203065233388994
+          },
+          "cpu": {
+            "before": 0.521566,
+            "after": 0.503795,
+            "change_percent": -3.40723896879781
+          },
+          "rss": {
+            "before": 132172,
+            "after": 132168,
+            "change_percent": -0.003026359592050998
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.80763247,
+            "after": 0.785215276,
+            "change_percent": -2.7756677489700343
+          },
+          "cpu": {
+            "before": 1.123702,
+            "after": 1.103441,
+            "change_percent": -1.8030581061527107
+          },
+          "rss": {
+            "before": 2098252,
+            "after": 2098248,
+            "change_percent": -0.00019063487131099066
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.061614985,
+            "after": 0.063096466,
+            "change_percent": 2.4044167177838416
+          },
+          "cpu": {
+            "before": 0.065463,
+            "after": 0.067276,
+            "change_percent": 2.7695033835907434
+          },
+          "rss": {
+            "before": 11604,
+            "after": 11604,
+            "change_percent": 0.0
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.179220818,
+            "after": 0.174669537,
+            "change_percent": -2.5394823273265033
+          },
+          "cpu": {
+            "before": 4.241595,
+            "after": 4.37439,
+            "change_percent": 3.1307798127826914
+          },
+          "rss_kib": {
+            "before": 5768,
+            "after": 5772,
+            "change_percent": 0.06934812760055475
+          },
+          "write_bytes": {
+            "before": 175476736,
+            "after": 175472640,
+            "change_percent": -0.002334212553389836
+          }
+        }
+      },
+      {
+        "case": 4,
+        "pairs": 20,
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.0110968285,
+            "after": 0.01131317,
+            "change_percent": 1.9495795577988861
+          },
+          "cpu": {
+            "before": 1.474073,
+            "after": 1.445483,
+            "change_percent": -1.9395240262863434
+          },
+          "rss_kib": {
+            "before": 3464,
+            "after": 3468,
+            "change_percent": 0.11547344110853786
+          },
+          "write_bytes": {
+            "before": 4310953984.0,
+            "after": 4311183360.0,
+            "change_percent": 0.005320771245798106
+          }
+        }
+      },
+      {
+        "case": 7,
+        "pairs": 5,
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.651337516,
+            "after": 0.621496731,
+            "change_percent": -4.581462646779277
+          },
+          "cpu": {
+            "before": 1.347446,
+            "after": 1.336319,
+            "change_percent": -0.8257844841277451
+          },
+          "rss_kib": {
+            "before": 8624,
+            "after": 8580,
+            "change_percent": -0.5102040816326481
+          },
+          "write_bytes": {
+            "before": 100380672,
+            "after": 100380672,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 9,
+        "pairs": 5,
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.208354091,
+            "after": 0.20628976,
+            "change_percent": -0.9907801618351697
+          },
+          "cpu": {
+            "before": 0.315021,
+            "after": 0.311263,
+            "change_percent": -1.1929363439262763
+          },
+          "rss_kib": {
+            "before": 67652,
+            "after": 67692,
+            "change_percent": 0.059126116005447926
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "pairs": 5,
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.340547752,
+            "after": 0.337933323,
+            "change_percent": -0.7677128933154642
+          },
+          "cpu": {
+            "before": 0.440176,
+            "after": 0.438947,
+            "change_percent": -0.2792064992184984
+          },
+          "rss_kib": {
+            "before": 134056,
+            "after": 134148,
+            "change_percent": 0.06862803604463785
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 21.565422170999227,
+            "after": 21.39594610500353,
+            "change_percent": -0.7858694564468305,
+            "before_range": [
+              21.237780786999792,
+              21.636549544004083
+            ],
+            "after_range": [
+              21.118744886996865,
+              22.752826889998687
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 80.576189,
+            "after": 79.636931,
+            "change_percent": -1.1656768726056255,
+            "before_range": [
+              78.670401,
+              82.76715899999999
+            ],
+            "after_range": [
+              79.019963,
+              85.01877400000001
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26169344,
+            "after": 26112000,
+            "change_percent": -0.2191266238848022,
+            "before_range": [
+              26042368,
+              26169344
+            ],
+            "after_range": [
+              26099712,
+              26112000
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142300672,
+            "after": 1142366208,
+            "change_percent": 0.005737193508359439,
+            "before_range": [
+              1142272000,
+              1142345728
+            ],
+            "after_range": [
+              1142325248,
+              1142398976
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 24.847107869994943,
+            "after": 24.098051868000766,
+            "change_percent": -3.0146607239498024,
+            "before_range": [
+              24.58605804299441,
+              25.369700062001357
+            ],
+            "after_range": [
+              23.809901163003815,
+              24.76712922799925
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 88.44062100000001,
+            "after": 85.692256,
+            "change_percent": -3.1075822047880064,
+            "before_range": [
+              87.553451,
+              89.707427
+            ],
+            "after_range": [
+              84.389147,
+              88.034649
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51191808,
+            "after": 51216384,
+            "change_percent": 0.048007681228989796,
+            "before_range": [
+              51167232,
+              51191808
+            ],
+            "after_range": [
+              51167232,
+              51216384
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398526464,
+            "after": 4398424064,
+            "change_percent": -0.00232805237931899,
+            "before_range": [
+              4398522368,
+              4398686208
+            ],
+            "after_range": [
+              4398395392,
+              4398485504
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "matrix": [
+      {
+        "case": "ordinary",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 1.196252048,
+            "after": 1.222802803,
+            "change_percent": 2.219495050762066
+          },
+          "cpu": {
+            "before": 2.889163,
+            "after": 3.003793,
+            "change_percent": 3.9675850756776265
+          },
+          "rss": {
+            "before": 30220,
+            "after": 30088,
+            "change_percent": -0.43679682329582636
+          },
+          "writes": {
+            "before": 368872,
+            "after": 368872,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "durable",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 6.586994358,
+            "after": 6.827273349,
+            "change_percent": 3.647778910090871
+          },
+          "cpu": {
+            "before": 3.83348,
+            "after": 3.954267,
+            "change_percent": 3.1508446633346177
+          },
+          "rss": {
+            "before": 29852,
+            "after": 29880,
+            "change_percent": 0.0937960605654542
+          },
+          "writes": {
+            "before": 783448,
+            "after": 783488,
+            "change_percent": 0.005105635600566316
+          }
+        }
+      }
+    ]
+  },
+  "arc": {
+    "owner": [
+      {
+        "case": "box",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.1038525125,
+            "after": 0.10764182250000001,
+            "change_percent": 3.6487417673212397
+          },
+          "cpu": {
+            "before": 0.1047815,
+            "after": 0.108839,
+            "change_percent": 3.872343877497464
+          },
+          "rss": {
+            "before": 1168,
+            "after": 1168,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.249332117,
+            "after": 0.237451539,
+            "change_percent": -4.764960945645047
+          },
+          "cpu": {
+            "before": 0.250517,
+            "after": 0.238586,
+            "change_percent": -4.7625510444401
+          },
+          "rss": {
+            "before": 1292,
+            "after": 1296,
+            "change_percent": 0.3095975232198178
+          }
+        }
+      },
+      {
+        "case": "shared",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.158674641,
+            "after": 0.156205006,
+            "change_percent": -1.556414424154895
+          },
+          "cpu": {
+            "before": 0.159467,
+            "after": 0.15713,
+            "change_percent": -1.4655069700941326
+          },
+          "rss": {
+            "before": 1100,
+            "after": 1092,
+            "change_percent": -0.727272727272732
+          }
+        }
+      }
+    ],
+    "direct": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.437529131,
+            "after": 0.435535202,
+            "change_percent": -0.45572485549539854
+          },
+          "cpu": {
+            "before": 0.457395,
+            "after": 0.45756,
+            "change_percent": 0.0360738530154503
+          },
+          "rss": {
+            "before": 132172,
+            "after": 132176,
+            "change_percent": 0.0030263595920398956
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.816367981,
+            "after": 0.78279312,
+            "change_percent": -4.112711642471922
+          },
+          "cpu": {
+            "before": 1.139836,
+            "after": 1.08462,
+            "change_percent": -4.8442056576560315
+          },
+          "rss": {
+            "before": 2098256,
+            "after": 2098232,
+            "change_percent": -0.0011438070473768214
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.07036075950000001,
+            "after": 0.06951006800000001,
+            "change_percent": -1.2090425203553967
+          },
+          "cpu": {
+            "before": 0.0750935,
+            "after": 0.07377349999999999,
+            "change_percent": -1.7578085986137304
+          },
+          "rss": {
+            "before": 11604,
+            "after": 11604,
+            "change_percent": 0.0
+          },
+          "writes": {
+            "before": 8.0,
+            "after": 8.0,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.1704757,
+            "after": 0.176170519,
+            "change_percent": 3.340545895984004
+          },
+          "cpu": {
+            "before": 4.172656,
+            "after": 4.15015,
+            "change_percent": -0.5393686898704342
+          },
+          "rss_kib": {
+            "before": 5772,
+            "after": 5772,
+            "change_percent": 0.0
+          },
+          "write_bytes": {
+            "before": 175464448,
+            "after": 175468544,
+            "change_percent": 0.002334376021284612
+          }
+        }
+      },
+      {
+        "case": 4,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.011668162,
+            "after": 0.012014606,
+            "change_percent": 2.969139441156221
+          },
+          "cpu": {
+            "before": 1.497501,
+            "after": 1.473368,
+            "change_percent": -1.611551511484799
+          },
+          "rss_kib": {
+            "before": 3468,
+            "after": 3468,
+            "change_percent": 0.0
+          },
+          "write_bytes": {
+            "before": 4311134208,
+            "after": 4311117824,
+            "change_percent": -0.0003800392010422371
+          }
+        }
+      },
+      {
+        "case": 7,
+        "pairs": 5,
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.616402717,
+            "after": 0.593012134,
+            "change_percent": -3.794691742087186
+          },
+          "cpu": {
+            "before": 1.294214,
+            "after": 1.273376,
+            "change_percent": -1.6100892124486288
+          },
+          "rss_kib": {
+            "before": 8632,
+            "after": 8632,
+            "change_percent": 0.0
+          },
+          "write_bytes": {
+            "before": 100380672,
+            "after": 100380672,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 9,
+        "pairs": 5,
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.204157802,
+            "after": 0.206243296,
+            "change_percent": 1.0215108017277652
+          },
+          "cpu": {
+            "before": 0.315062,
+            "after": 0.312893,
+            "change_percent": -0.6884359268969353
+          },
+          "rss_kib": {
+            "before": 67692,
+            "after": 67684,
+            "change_percent": -0.011818235537430777
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "pairs": 5,
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.345301841,
+            "after": 0.35197345,
+            "change_percent": 1.9321093049138982
+          },
+          "cpu": {
+            "before": 0.44132,
+            "after": 0.451844,
+            "change_percent": 2.3846641892504294
+          },
+          "rss_kib": {
+            "before": 134060,
+            "after": 134012,
+            "change_percent": -0.03580486349396006
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 20.51307133100636,
+            "after": 21.459621813999547,
+            "change_percent": 4.614377182818252,
+            "before_range": [
+              20.18993694600067,
+              21.813402594001673
+            ],
+            "after_range": [
+              21.123475897999015,
+              21.853733766001824
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 77.09758,
+            "after": 79.96350799999999,
+            "change_percent": 3.7172736161108944,
+            "before_range": [
+              75.828902,
+              80.65098
+            ],
+            "after_range": [
+              79.174814,
+              80.170849
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26206208,
+            "after": 26161152,
+            "change_percent": -0.17192872772741064,
+            "before_range": [
+              26046464,
+              26206208
+            ],
+            "after_range": [
+              26071040,
+              26161152
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142366208,
+            "after": 1142341632,
+            "change_percent": -0.002151324140009514,
+            "before_range": [
+              1142296576,
+              1142390784
+            ],
+            "after_range": [
+              1142312960,
+              1142390784
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 24.646733123998274,
+            "after": 23.304528966000362,
+            "change_percent": -5.44576902441899,
+            "before_range": [
+              22.809747479004727,
+              24.718854837003164
+            ],
+            "after_range": [
+              23.29191091100074,
+              25.527514362998772
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 86.36399800000001,
+            "after": 82.450412,
+            "change_percent": -4.531501656512016,
+            "before_range": [
+              81.490042,
+              87.27485200000001
+            ],
+            "after_range": [
+              82.04491000000002,
+              89.666634
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51245056,
+            "after": 51257344,
+            "change_percent": 0.023978898569265716,
+            "before_range": [
+              51126272,
+              51245056
+            ],
+            "after_range": [
+              51187712,
+              51257344
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398428160,
+            "after": 4398379008,
+            "change_percent": -0.0011174901171973062,
+            "before_range": [
+              4398415872,
+              4398710784
+            ],
+            "after_range": [
+              4398379008,
+              4398387200
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "matrix": [
+      {
+        "case": "ordinary",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 1.345087503,
+            "after": 1.263620869,
+            "change_percent": -6.056604779860186
+          },
+          "cpu": {
+            "before": 3.449315,
+            "after": 3.115349,
+            "change_percent": -9.682096300279907
+          },
+          "rss": {
+            "before": 30088,
+            "after": 29684,
+            "change_percent": -1.3427279978729056
+          },
+          "writes": {
+            "before": 368864,
+            "after": 368864,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "durable",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 6.95661351,
+            "after": 6.669377277,
+            "change_percent": -4.128966379792464
+          },
+          "cpu": {
+            "before": 4.020372,
+            "after": 3.827488,
+            "change_percent": -4.797665489661163
+          },
+          "rss": {
+            "before": 29664,
+            "after": 29656,
+            "change_percent": -0.026968716289099692
+          },
+          "writes": {
+            "before": 783456,
+            "after": 783472,
+            "change_percent": 0.0020422333864233977
+          }
+        }
+      }
+    ]
+  },
+  "final": {
+    "owner": [
+      {
+        "case": "box",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.0994292415,
+            "after": 0.108147193,
+            "change_percent": 8.767995580052768
+          },
+          "cpu": {
+            "before": 0.100439,
+            "after": 0.109584,
+            "change_percent": 9.105028923027913
+          },
+          "rss": {
+            "before": 1232,
+            "after": 1100,
+            "change_percent": -10.71428571428571
+          }
+        }
+      },
+      {
+        "case": "nested-box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.35427653,
+            "after": 0.288655102,
+            "change_percent": -18.52265742808308
+          },
+          "cpu": {
+            "before": 0.355401,
+            "after": 0.289652,
+            "change_percent": -18.49994794612283
+          },
+          "rss": {
+            "before": 1356,
+            "after": 1220,
+            "change_percent": -10.029498525073743
+          }
+        }
+      },
+      {
+        "case": "shared",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.18193586,
+            "after": 0.1835028455,
+            "change_percent": 0.8612845757840271
+          },
+          "cpu": {
+            "before": 0.1828315,
+            "after": 0.18461850000000002,
+            "change_percent": 0.9774026904554312
+          },
+          "rss": {
+            "before": 1232,
+            "after": 1168,
+            "change_percent": -5.1948051948051965
+          }
+        }
+      }
+    ]
+  },
+  "matched-isolated-after": {
+    "owner": [
+      {
+        "case": "box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.090043022,
+            "after": 0.089063561,
+            "change_percent": -1.0877700217569286
+          },
+          "cpu": {
+            "before": 0.090955,
+            "after": 0.089914,
+            "change_percent": -1.1445220163817327
+          },
+          "rss": {
+            "before": 1208,
+            "after": 1156,
+            "change_percent": -4.304635761589404
+          }
+        }
+      },
+      {
+        "case": "nested-box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.281621301,
+            "after": 0.245404971,
+            "change_percent": -12.859939880754967
+          },
+          "cpu": {
+            "before": 0.282653,
+            "after": 0.24635,
+            "change_percent": -12.843663431840447
+          },
+          "rss": {
+            "before": 1360,
+            "after": 1208,
+            "change_percent": -11.176470588235299
+          }
+        }
+      },
+      {
+        "case": "shared",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.1538081565,
+            "after": 0.1534170595,
+            "change_percent": -0.2542758517491084
+          },
+          "cpu": {
+            "before": 0.1546705,
+            "after": 0.15447149999999998,
+            "change_percent": -0.1286606043169214
+          },
+          "rss": {
+            "before": 1228,
+            "after": 1144,
+            "change_percent": -6.84039087947883
+          }
+        }
+      }
+    ]
+  },
+  "superseded_diagnostic": {
+    "status": "not-qualified",
+    "reason": "before used default features; after used all features",
+    "owner": [
+      {
+        "case": "box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.09295364,
+            "after": 0.096163926,
+            "change_percent": 3.4536420521025235
+          },
+          "cpu": {
+            "before": 0.093887,
+            "after": 0.097361,
+            "change_percent": 3.700192784943601
+          },
+          "rss": {
+            "before": 1216,
+            "after": 1080,
+            "change_percent": -11.184210526315786
+          }
+        }
+      },
+      {
+        "case": "nested-box",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.298019878,
+            "after": 0.254196146,
+            "change_percent": -14.70496944502474
+          },
+          "cpu": {
+            "before": 0.29844,
+            "after": 0.251591,
+            "change_percent": -15.697962739579141
+          },
+          "rss": {
+            "before": 1336,
+            "after": 1272,
+            "change_percent": -4.790419161676651
+          }
+        }
+      },
+      {
+        "case": "shared",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.153610522,
+            "after": 0.160332128,
+            "change_percent": 4.3757458229326085
+          },
+          "cpu": {
+            "before": 0.153945,
+            "after": 0.161581,
+            "change_percent": 4.960213063106966
+          },
+          "rss": {
+            "before": 1216,
+            "after": 1080,
+            "change_percent": -11.184210526315786
+          }
+        }
+      }
+    ]
+  },
+  "resource_probes": [
+    {
+      "stage": "box",
+      "case": "complex",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/before-bin/oom_maintenance_load",
+            "complex",
+            "65536",
+            "512"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 206,
+          "peaks": {
+            "rss_bytes": 8777728,
+            "temporary_deleted_logical_bytes": 4194190,
+            "temporary_deleted_allocated_bytes": 4194304,
+            "deleted_regular_logical_bytes": 51447742,
+            "open_regular_allocated_bytes": 91955200,
+            "cgroup_current_bytes": 2911354880
+          },
+          "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.505541649}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/oom_maintenance_load",
+            "complex",
+            "65536",
+            "512"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 207,
+          "peaks": {
+            "rss_bytes": 8728576,
+            "temporary_deleted_logical_bytes": 4194190,
+            "temporary_deleted_allocated_bytes": 4194304,
+            "deleted_regular_logical_bytes": 51447742,
+            "open_regular_allocated_bytes": 91955200,
+            "cgroup_current_bytes": 2910973952
+          },
+          "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.517782711}\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "stage": "box",
+      "case": "clone-large",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/before-bin/ownership_load",
+            "bytes",
+            "1073741824",
+            "2"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 216,
+          "peaks": {
+            "rss_bytes": 2148573184,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 0,
+            "open_regular_allocated_bytes": 0,
+            "cgroup_current_bytes": 4961513472
+          },
+          "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.81235639}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/ownership_load",
+            "bytes",
+            "1073741824",
+            "2"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 201,
+          "peaks": {
+            "rss_bytes": 2148589568,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 0,
+            "open_regular_allocated_bytes": 0,
+            "cgroup_current_bytes": 4953767936
+          },
+          "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.780229056}\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "stage": "box",
+      "case": "matrix",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/before-bin/matrix_ownership_load",
+            "8192",
+            "64",
+            "8",
+            "512",
+            "durable"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 1262,
+          "peaks": {
+            "rss_bytes": 29224960,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 148422656,
+            "open_regular_allocated_bytes": 182317056,
+            "cgroup_current_bytes": 3059437568
+          },
+          "stdout": "{\"rows\":8192,\"epochs\":64,\"readers\":8,\"checks\":512,\"sum\":1207349842,\"seconds\":6.747121412}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/matrix_ownership_load",
+            "8192",
+            "64",
+            "8",
+            "512",
+            "durable"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 1291,
+          "peaks": {
+            "rss_bytes": 29175808,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 148422656,
+            "open_regular_allocated_bytes": 182312960,
+            "cgroup_current_bytes": 3059249152
+          },
+          "stdout": "{\"rows\":8192,\"epochs\":64,\"readers\":8,\"checks\":512,\"sum\":1207349842,\"seconds\":6.964205651}\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "stage": "arc",
+      "case": "complex",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/oom_maintenance_load",
+            "complex",
+            "65536",
+            "512"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 207,
+          "peaks": {
+            "rss_bytes": 8663040,
+            "temporary_deleted_logical_bytes": 4194190,
+            "temporary_deleted_allocated_bytes": 4194304,
+            "deleted_regular_logical_bytes": 51447742,
+            "open_regular_allocated_bytes": 91955200,
+            "cgroup_current_bytes": 2927067136
+          },
+          "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.505215196}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/arc-bin/oom_maintenance_load",
+            "complex",
+            "65536",
+            "512"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 199,
+          "peaks": {
+            "rss_bytes": 8720384,
+            "temporary_deleted_logical_bytes": 4194190,
+            "temporary_deleted_allocated_bytes": 4194304,
+            "deleted_regular_logical_bytes": 51447742,
+            "open_regular_allocated_bytes": 91955200,
+            "cgroup_current_bytes": 2927550464
+          },
+          "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.499794362}\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "stage": "arc",
+      "case": "clone-large",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/ownership_load",
+            "bytes",
+            "1073741824",
+            "2"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 202,
+          "peaks": {
+            "rss_bytes": 2148560896,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 0,
+            "open_regular_allocated_bytes": 0,
+            "cgroup_current_bytes": 4974002176
+          },
+          "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.756361213}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/arc-bin/ownership_load",
+            "bytes",
+            "1073741824",
+            "2"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 216,
+          "peaks": {
+            "rss_bytes": 2148577280,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 0,
+            "open_regular_allocated_bytes": 0,
+            "cgroup_current_bytes": 4980035584
+          },
+          "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.802508508}\n",
+          "stderr": ""
+        }
+      ]
+    },
+    {
+      "stage": "arc",
+      "case": "matrix",
+      "observations": [
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/box-bin/matrix_ownership_load",
+            "8192",
+            "64",
+            "8",
+            "512",
+            "durable"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 1277,
+          "peaks": {
+            "rss_bytes": 29892608,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 148422656,
+            "open_regular_allocated_bytes": 182308864,
+            "cgroup_current_bytes": 3075510272
+          },
+          "stdout": "{\"rows\":8192,\"epochs\":64,\"readers\":8,\"checks\":512,\"sum\":1207349842,\"seconds\":6.987785459}\n",
+          "stderr": ""
+        },
+        {
+          "command": [
+            "/workspace/scratch/ownership-contracts/arc-bin/matrix_ownership_load",
+            "8192",
+            "64",
+            "8",
+            "512",
+            "durable"
+          ],
+          "exit": 0,
+          "sample_interval_seconds": 0.005,
+          "samples": 1240,
+          "peaks": {
+            "rss_bytes": 29196288,
+            "temporary_deleted_logical_bytes": 0,
+            "temporary_deleted_allocated_bytes": 0,
+            "deleted_regular_logical_bytes": 148422656,
+            "open_regular_allocated_bytes": 182312960,
+            "cgroup_current_bytes": 3074867200
+          },
+          "stdout": "{\"rows\":8192,\"epochs\":64,\"readers\":8,\"checks\":512,\"sum\":1207349842,\"seconds\":6.608852271}\n",
+          "stderr": ""
+        }
+      ]
+    }
+  ]
+}

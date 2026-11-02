@@ -1,0 +1,16 @@
+{
+  ".github/workflows/verification.yml": "c6a55fe847e0522d3fd832a297210e34b741b653f404707f2e15fc923cbb6966",
+  "crates/varlit-core/examples/ownership_boundary_load.rs": "e6153bae85d7ee631fdbea96e692a61a6fb04efc2a7592abfc35ed9a1528af03",
+  "crates/varlit-core/examples/ownership_isolated_load.rs": "b4844e26c89b22a984ec6b30aa9c55d0cb6f63a95ec13cb34621c22381f96213",
+  "crates/varlit-core/src/fallible.rs": "e0a858f6f35a75ea12d41d8e1ed1679ec21c6a56ea3a5d7239f01f3981af9e33",
+  "crates/varlit-core/src/fallible/proofs.rs": "7c74a987017f1eb7db3e221bab279420c9fe1ef740d8eec7dcfd642149c035f5",
+  "crates/varlit-core/src/lib.rs": "65b1e1c6f03f94e960bed0548d6799d7dc426e8a2e65375834c7b30e1226a23f",
+  "crates/varlit-core/tests/fallible_ownership.rs": "21635aa2a20ac20cafdeaea8ea1554006ee3e60fd9fb457318b8ae1de918861e",
+  "crates/varlit/tests/oom_recovery_guards.rs": "4d4be87aaf1bedde4f0de2bfcbfdf1ab680cc05fcff919883efd3633831219bb",
+  "crates/varlit/tests/validation_coverage.rs": "48f7e9f4663d7edfe44e3bb9a22560c136e87703c15f836641a06002679e453e",
+  "docs/verification/proof-contracts.json": "da1d01019d0a5e5902a2fdbdda82a22b0be3e459aa4f20fb8107765432224302",
+  "scripts/check_ownership_mutations.py": "489e6dffda362f58228daefb16b5db340900cbfce084057de3dbd6e9688414b3",
+  "scripts/check_storage_contracts.py": "52062d0a50cf64502c5c51b23a5b81a6edc2293105e381dee190a80cfe69f91b",
+  "scripts/tests/test_proof_contracts.py": "c8f6fa180f47a82c93d0f8d3b75a189eccfb856fcf8d3e90c5e6e11fd78fba86",
+  "scripts/tests/test_storage_contracts.py": "cc38db702b4ffb2e03fab606bf440eea64dd2a067c8e44a7e8a176c17fcfd57e"
+}

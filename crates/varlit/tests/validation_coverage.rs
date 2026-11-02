@@ -355,6 +355,22 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
+    contract!("core/fallible.rs::fallible::fn:try_box_uninit@7c6aee6d6de73bc3",
+        valid { let value = Box::write(varlit::try_box_uninit::<u64>()?, 7); assert_eq!(*value, 7); Ok(()) },
+        invalid { let result = refusing_allocations(|| varlit::try_box_uninit::<u64>().map(drop)); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:try_box_uninit@0ef305f46cad72a7",
+        valid { let value = Box::write(varlit::try_box_uninit::<u64>()?, 7); assert_eq!(*value, 7); Ok(()) },
+        invalid { let result = refusing_allocations(|| varlit::try_box_uninit::<u64>().map(drop)); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); Ok(()) }
+    ),
+    contract!("core/fallible.rs::fallible::fn:try_box_with@ddecaa8ec6cd266b",
+        valid { let value = varlit::try_box_with(|| Ok(7u64))?; assert_eq!(*value, 7); Ok(()) },
+        invalid { let invoked = std::cell::Cell::new(false); let result = refusing_allocations(|| varlit::try_box_with(|| { invoked.set(true); Ok(7u64) })); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); assert!(!invoked.get()); assert!(matches!(varlit::try_box_with::<u64>(|| Err(varlit::Error::InvalidMatrixLayout)), Err(varlit::Error::InvalidMatrixLayout))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:try_box_with@c1a6bf4795c41fb6",
+        valid { let value = varlit::try_box_with(|| Ok(7u64))?; assert_eq!(*value, 7); Ok(()) },
+        invalid { let invoked = std::cell::Cell::new(false); let result = refusing_allocations(|| varlit::try_box_with(|| { invoked.set(true); Ok(7u64) })); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); assert!(!invoked.get()); assert!(matches!(varlit::try_box_with::<u64>(|| Err(varlit::Error::InvalidMatrixLayout)), Err(varlit::Error::InvalidMatrixLayout))); Ok(()) }
+    ),
     contract!("core/fallible.rs::fallible::fn:try_box@36a82d3283743b0b",
         valid { let value = varlit::try_box(7u64)?; assert_eq!(*value, 7); Ok(()) },
         invalid {

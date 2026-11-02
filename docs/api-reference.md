@@ -19,7 +19,28 @@ Supported values include `Vec`, `String`, `PathBuf`, `HashMap`, `VecDeque`, `Box
 
 `try_box(value) -> Result<Box<T>>` reports storage refusal. It consumes the input
 and drops it normally on failure; clone the source fallibly first if the source
-must remain available. `ScanCancellationToken::try_new()` is the fallible
+must remain available. `try_box_with(|| -> Result<T> { ... })` reserves the Box
+before invoking the initializer. If reservation fails, the initializer is not
+called; if initialization returns an error, the storage is released and that
+error is returned. `Box<T>::try_clone` follows this reservation-first order.
+The initializer is consumed even when it is not called, so its owned captures
+are dropped normally; borrow the source if it must remain available for retry.
+
+`try_box_uninit::<T>() -> Result<Box<MaybeUninit<T>>>` reserves storage without
+constructing `T`. Use `Box::write` to initialize it safely, or write in place and
+uphold `assume_init`'s safety requirements. This is useful for large values that
+should not first be constructed on the stack. The `with` callback still returns
+its value by value and does not remove arbitrary stack temporaries. Dropping an
+uninitialized Box releases its storage without dropping a `T`.
+If caller-controlled initialization writes owned fields in stages, the caller
+must also clean up those initialized fields when abandoning that initialization.
+
+The caller can release other storage and retry after refusal; the helpers impose
+no retry policy. Initializers, user `TryClone` implementations and destructors
+must themselves return normally. A `Result` signature cannot convert their
+panics, aborts or nontermination into an allocation error.
+
+`ScanCancellationToken::try_new()` is the fallible
 alternative to its existing `new` and `default` constructors. Internal shared
 file/page owners use fallible allocation without changing public `std::sync::Arc`
 types or persisted file formats.
