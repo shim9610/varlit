@@ -27,4 +27,5 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 trybuild = "1.0.121"
 zerocopy = "0.8.59"
-zstd = "0.14.0"
+# Safe block-bound query for the legacy frame compatibility path. No custom FFI.
+zstd = { version = "0.14.0", features = ["experimental"] }

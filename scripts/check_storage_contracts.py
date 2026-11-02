@@ -10,6 +10,8 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("zstd-header-allocation", "varlit-core", "decompression_allocation", "untrusted_sizes_do_not_request_the_declared_maximum", False, None),
+    ("chunk-header-allocation", "varlit-core", "decompression_allocation", "chunk_headers_do_not_authorize_container_allocation", False, None),
     ("publication-resume", "varlit-core", None, "disk_index::storage::failure_tests::divergent_clean_heads_require_sync_before_writer_resume", False, None),
     ("publication-clean-resume", "varlit-core", None, "disk_index::storage::failure_tests::matching_clean_heads_do_not_add_a_resume_sync", False, None),
     ("publication-head-pairs", "varlit-core", None, "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations", False, "PUBLICATION_IMAGES independent head prefixes=8450"),

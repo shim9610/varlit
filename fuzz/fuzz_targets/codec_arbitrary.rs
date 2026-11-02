@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    match selector % 12 {
+    match selector % 13 {
         0 => drop(decode_from_slice::<FuzzPoint>(payload, Endian::Little)),
         1 => drop(decode_from_slice::<FuzzRecord>(payload, Endian::Little)),
         2 => drop(decode_from_slice::<Vec<u8>>(payload, Endian::Little)),
@@ -38,9 +38,14 @@ fuzz_target!(|data: &[u8]| {
             payload,
             Endian::Little,
         )),
-        _ => drop(decode_from_slice::<(u128, i128, f64, bool)>(
+        11 => drop(decode_from_slice::<(u128, i128, f64, bool)>(
             payload,
             Endian::Little,
         )),
+        _ => {
+            if let Ok(chunks) = varlit::ChunkedBytes::from_encoded(payload.to_vec()) {
+                drop(chunks.decode_to_vec_limited(4 * 1024 * 1024));
+            }
+        }
     }
 });

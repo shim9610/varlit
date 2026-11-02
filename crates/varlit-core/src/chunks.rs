@@ -98,6 +98,9 @@ impl ChunkedBytes {
                 limit: max_uncompressed_len,
             });
         }
+        // Every chunk's declaration must fit the output bound derived from its
+        // complete blocks; untrusted frame/container lengths alone cannot
+        // authorize the full output reservation below.
         let frame_sizes_known = validate_chunked_bytes(&self.encoded, true)?;
         let output_len =
             usize::try_from(header.uncompressed_len).map_err(|_| Error::InvalidChunkedBytes)?;
