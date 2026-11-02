@@ -32,6 +32,36 @@ Format declarations and user-provided codecs are trusted application code.
 Documented mmap mutation exclusions and experimental feature limitations still
 apply; see [known limitations](docs/known-limitations.md).
 
+## Mapped files and external modification
+
+Memory mapping (`mmap`) is not isolation from another handle or process that
+writes or truncates the same file object. Keep mapped backing bytes stable for
+the lifetime of the view and all borrowed references. An advisory writer lock
+only coordinates cooperating writers. CRC checks detect corruption when checked;
+they neither prevent later writes nor authenticate the file.
+
+An external truncate can make a mapped page inaccessible and cause an operating
+system fault such as `SIGBUS`, rather than a recoverable Rust error. External
+writes can invalidate previously checked contents; mutation while a zero-copy
+reference is live violates the existing unsafe API's immutability requirements.
+The documented layout and immutability conditions on `raw_fixed` and `raw_cell`
+still apply. Supported Varlit publication/snapshot operations do not authorize
+uncoordinated in-place modification or truncation by other software. Use owned
+reads when the application cannot maintain the mapped-file lifetime contract;
+owned reads still need a coherent input and do not make concurrent external
+writes transactionally consistent.
+
+## Vendored advisory coverage
+
+Lockfile-based `cargo audit` and `cargo deny` do not match a local path package
+itself against registry advisories. The required supply-chain job also runs
+`scripts/check_vendored_advisories.py`, which derives the actual names/versions
+from `vendor/*/Cargo.toml` and audits temporary registry identities. Its synthetic
+advisory control verifies that an affected redb identity fails and a patched
+version passes. This neither replaces the lockfile audits nor certifies local
+patches: vendored redb 4.4.0 remains a development-only oracle, and its local
+snapshot extension still needs source review and tests.
+
 PR checks include native platform tests, dependency/license policy, Rust/Python/
 Actions CodeQL analysis, Miri, ASan and a bounded fuzz smoke run. CodeQL's
 build-free scan examines checked-in source; generated APIs also require the
