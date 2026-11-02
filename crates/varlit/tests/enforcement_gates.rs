@@ -697,6 +697,7 @@ fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
         "pub fn reopen",
         "-> &File",
         "-> Arc<File>",
+        "-> Box<File>",
     ] {
         assert!(
             !module.contains(lent),
@@ -705,7 +706,12 @@ fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
         );
     }
     // Ownership, rather than a thread-local weak registry, bounds handle lifetime.
-    assert!(module.contains("handle: OnceCell<Option<Arc<File>>>"));
+    assert!(module.contains("handle: OnceCell<Option<Box<File>>>"));
+    assert!(module.contains("crate::fallible::try_box("));
+    assert!(
+        !module.contains("get_or_init"),
+        "a refused reopen must remain retryable"
+    );
     assert!(!module.contains("thread_local!"));
     assert!(!module.contains("Mutex<"));
 }
@@ -1315,8 +1321,12 @@ fn crc_validity_completeness_can_only_come_from_an_enumeration_that_ran() {
     );
     assert_eq!(
         code.matches("from_parts_for_tests_only").count(),
-        2,
-        "the deliberate test-only escape must keep its name (which says so at the call site),          its `#[cfg(test)]`, and its single caller in the type's own unit tests"
+        3,
+        "the deliberate test-only escape has two unit-test callers: evidence checks and fallible-copy checks"
+    );
+    assert!(
+        !shipped.contains("from_parts_for_tests_only"),
+        "neither the test escape nor either caller may enter shipped code"
     );
 }
 

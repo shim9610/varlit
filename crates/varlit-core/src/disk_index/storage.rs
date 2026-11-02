@@ -2,8 +2,8 @@
 //! non-durable batches can never overwrite the last durable recovery anchor.
 use super::tree::{self, read_at, write_at};
 use super::*;
+use crate::fallible::Arc;
 use std::fs::{File, OpenOptions};
-use std::sync::Arc;
 
 #[cfg(test)]
 mod failure_tests;
@@ -105,7 +105,7 @@ impl Store {
             None
         };
         // Independent read-only file description; snapshots cannot retain a writer lock.
-        let file = Arc::new(File::open(path)?);
+        let file = crate::fallible::try_arc(File::open(path)?)?;
         if let Some(writer) = &writer
             && opened_sidecar_identity(&writer.0)? != opened_sidecar_identity(&file)?
         {

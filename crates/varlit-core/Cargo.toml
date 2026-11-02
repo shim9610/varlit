@@ -35,6 +35,8 @@ scalable-fault-injection = []
 experimental-matrix-reuse = []
 
 [dependencies]
+# Stable fallible shared ownership; no weak references are needed internally.
+triomphe = { version = "=0.1.17", default-features = false, features = ["std"] }
 crc32fast.workspace = true
 memmap2 = { workspace = true, optional = true }
 tempfile.workspace = true

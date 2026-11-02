@@ -1,7 +1,7 @@
+use crate::fallible::Arc;
 use std::{
     fs::File,
     io::{BufReader, Read, Seek, SeekFrom, Write},
-    sync::Arc,
 };
 
 use crate::scalable_extent::{UntrustedRecordPointer, ValidatedRecordPointer};
@@ -53,7 +53,7 @@ impl SnapshotFile {
     pub(crate) fn from_file_with_len(file: File, len: u64) -> Result<Self> {
         let bounds = checked_snapshot_bounds(&file, len)?;
         Ok(Self {
-            file: Arc::new(file),
+            file: crate::fallible::try_arc(file)?,
             bounds,
         })
     }

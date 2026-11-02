@@ -556,6 +556,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
+name = "triomphe"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d15f4f5898bcfc5d8a8e45ed30b2f108d710c1a2e5489dbf80e078f707181bc"
+
+[[package]]
 name = "trybuild"
 version = "1.0.122"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -609,6 +615,7 @@ dependencies = [
  "redb",
  "tempfile",
  "thiserror",
+ "triomphe",
  "windows-sys",
  "zerocopy",
  "zstd",

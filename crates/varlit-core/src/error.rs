@@ -7,6 +7,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// Detailed error allocation failed. This inline context preserves whether
+    /// an append/publication happened or is uncertain; do not blindly retry it.
+    #[error("could not allocate detailed error after {context:?}")]
+    ErrorContextAllocationFailed { context: AllocationFailureContext },
+
     #[error("{resource} buffer is too small: need {required} bytes, got {provided}")]
     BufferTooSmall {
         resource: &'static str,
@@ -742,12 +747,59 @@ impl Error {
                 sequence,
                 source,
                 parent_sync: None,
-            } => Error::PublishedButRebindFailed {
-                sequence,
-                source,
-                parent_sync: Some(Box::new(parent_sync)),
+            } => match crate::fallible::try_box(parent_sync) {
+                Ok(parent_sync) => Error::PublishedButRebindFailed {
+                    sequence,
+                    source,
+                    parent_sync: Some(parent_sync),
+                },
+                Err(_) => Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedRebind {
+                        sequence,
+                        parent_sync_pending: true,
+                    },
+                },
+            },
+            Error::ErrorContextAllocationFailed {
+                context: AllocationFailureContext::PublishedRebind { sequence, .. },
+            } => Error::ErrorContextAllocationFailed {
+                context: crate::AllocationFailureContext::PublishedRebind {
+                    sequence,
+                    parent_sync_pending: true,
+                },
             },
             other => other,
         }
+    }
+}
+
+/// Allocation-free operation facts retained when a detailed error cannot be boxed.
+/// Each variant states a completed append/publication or an explicitly uncertain
+/// outcome. Detailed source errors and path text may be unavailable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AllocationFailureContext {
+    /// The append happened; its requested Immediate boundary failed.
+    Appended { sequence: u64 },
+    /// The record was published; the derived index needs repair.
+    PublishedIndex { sequence: u64 },
+    /// The replacement was published; this handle could not rebind to it.
+    PublishedRebind {
+        sequence: u64,
+        parent_sync_pending: bool,
+    },
+    /// The commit marker was written; durability remains unconfirmed.
+    Committed { sequence: u64 },
+    /// The replacement was published; parent-directory sync remains pending.
+    ParentSyncPending,
+    /// The experimental generation is durable; cleanup failed.
+    ReusePublished { generation: u64 },
+    /// The experimental generation may have been published; inspect before retry.
+    ReusePublicationUncertain { generation: u64 },
+}
+
+impl From<crate::DiskIndexError> for Error {
+    fn from(error: crate::DiskIndexError) -> Self {
+        crate::disk_index::index_error(error)
     }
 }

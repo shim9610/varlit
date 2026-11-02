@@ -1,0 +1,1830 @@
+{
+  "stage1": {
+    "direct": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.455203682,
+            "after": 0.457959736,
+            "change_percent": 0.6054551201982505
+          },
+          "cpu": {
+            "before": 0.476937,
+            "after": 0.48012,
+            "change_percent": 0.6673837425068774
+          },
+          "rss": {
+            "before": 132292,
+            "after": 132220,
+            "change_percent": -0.05442505971638978
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.841019848,
+            "after": 0.844143057,
+            "change_percent": 0.37135972562682973
+          },
+          "cpu": {
+            "before": 1.233248,
+            "after": 1.210318,
+            "change_percent": -1.8593178338825567
+          },
+          "rss": {
+            "before": 2098364,
+            "after": 2098368,
+            "change_percent": 0.00019062469618358335
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.0543399675,
+            "after": 0.0603538185,
+            "change_percent": 11.067086118518565
+          },
+          "cpu": {
+            "before": 0.0582935,
+            "after": 0.06408,
+            "change_percent": 9.926492662132148
+          },
+          "rss": {
+            "before": 11732,
+            "after": 11644,
+            "change_percent": -0.7500852369587419
+          },
+          "writes": {
+            "before": 8.0,
+            "after": 8.0,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.184650747,
+            "after": 0.174701899,
+            "change_percent": -5.387927296064509
+          },
+          "cpu": {
+            "before": 4.179869,
+            "after": 4.17457,
+            "change_percent": -0.12677430799864498
+          },
+          "rss_kib": {
+            "before": 5896,
+            "after": 5900,
+            "change_percent": 0.06784260515604323
+          },
+          "write_bytes": {
+            "before": 175472640,
+            "after": 175489024,
+            "change_percent": 0.00933706816059754
+          }
+        }
+      },
+      {
+        "case": 4,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.021510742,
+            "after": 0.013965662,
+            "change_percent": -35.07587046509134
+          },
+          "cpu": {
+            "before": 1.686946,
+            "after": 1.6387,
+            "change_percent": -2.8599611368710143
+          },
+          "rss_kib": {
+            "before": 3528,
+            "after": 3532,
+            "change_percent": 0.11337868480725266
+          },
+          "write_bytes": {
+            "before": 4311822336,
+            "after": 4311904256,
+            "change_percent": 0.0018998927510560648
+          }
+        }
+      },
+      {
+        "case": 7,
+        "pairs": 5,
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.588666604,
+            "after": 0.603772008,
+            "change_percent": 2.566037192760451
+          },
+          "cpu": {
+            "before": 1.268086,
+            "after": 1.295059,
+            "change_percent": 2.12706393730393
+          },
+          "rss_kib": {
+            "before": 8744,
+            "after": 8708,
+            "change_percent": -0.4117108874656883
+          },
+          "write_bytes": {
+            "before": 100384768,
+            "after": 100388864,
+            "change_percent": 0.004080300310094209
+          }
+        }
+      },
+      {
+        "case": 9,
+        "pairs": 5,
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.201152941,
+            "after": 0.202608033,
+            "change_percent": 0.7233759510381743
+          },
+          "cpu": {
+            "before": 0.307466,
+            "after": 0.305912,
+            "change_percent": -0.5054217376880721
+          },
+          "rss_kib": {
+            "before": 67932,
+            "after": 68080,
+            "change_percent": 0.2178649237472685
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "pairs": 5,
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.332672177,
+            "after": 0.328206508,
+            "change_percent": -1.342363235865085
+          },
+          "cpu": {
+            "before": 0.426851,
+            "after": 0.429671,
+            "change_percent": 0.6606520776570868
+          },
+          "rss_kib": {
+            "before": 134216,
+            "after": 134348,
+            "change_percent": 0.09834893008284773
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 21.260071568998683,
+            "after": 22.138974626999698,
+            "change_percent": 4.134055029629469,
+            "before_range": [
+              20.259420152997336,
+              22.209341213998414
+            ],
+            "after_range": [
+              21.574454331999732,
+              22.215556221999577
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 81.187555,
+            "after": 81.27429599999999,
+            "change_percent": 0.1068402663437551,
+            "before_range": [
+              73.79043300000001,
+              81.715643
+            ],
+            "after_range": [
+              81.056176,
+              81.69370599999999
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26255360,
+            "after": 26177536,
+            "change_percent": -0.2964118564742546,
+            "before_range": [
+              26144768,
+              26255360
+            ],
+            "after_range": [
+              26091520,
+              26177536
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142296576,
+            "after": 1142272000,
+            "change_percent": -0.0021514552802082143,
+            "before_range": [
+              1141129216,
+              1142415360
+            ],
+            "after_range": [
+              1142267904,
+              1142272000
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 24.80549801500092,
+            "after": 24.81988107199868,
+            "change_percent": 0.05798334300346486,
+            "before_range": [
+              24.24769949900292,
+              25.2213129619995
+            ],
+            "after_range": [
+              24.22382136899978,
+              25.390349539000454
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 87.390439,
+            "after": 87.248123,
+            "change_percent": -0.16285076677552413,
+            "before_range": [
+              86.734273,
+              88.673934
+            ],
+            "after_range": [
+              86.643393,
+              90.47296399999999
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51310592,
+            "after": 51240960,
+            "change_percent": -0.13570687315398455,
+            "before_range": [
+              51208192,
+              51310592
+            ],
+            "after_range": [
+              51200000,
+              51240960
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398379008,
+            "after": 4398383104,
+            "change_percent": 9.31252170932595e-05,
+            "before_range": [
+              4398379008,
+              4398493696
+            ],
+            "after_range": [
+              4398379008,
+              4398383104
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "matrix": []
+  },
+  "stage2": {
+    "direct": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.536445897,
+            "after": 0.552230482,
+            "change_percent": 2.9424374551605625
+          },
+          "cpu": {
+            "before": 0.562202,
+            "after": 0.576366,
+            "change_percent": 2.519379155534862
+          },
+          "rss": {
+            "before": 132160,
+            "after": 132156,
+            "change_percent": -0.0030266343825635644
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.952854091,
+            "after": 0.95002931,
+            "change_percent": -0.29645472761054004
+          },
+          "cpu": {
+            "before": 1.379702,
+            "after": 1.384092,
+            "change_percent": 0.31818465146822295
+          },
+          "rss": {
+            "before": 2098304,
+            "after": 2098236,
+            "change_percent": -0.003240712499241738
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.058036312,
+            "after": 0.058095071,
+            "change_percent": 0.1012452341906167
+          },
+          "cpu": {
+            "before": 0.06191,
+            "after": 0.06177,
+            "change_percent": -0.22613471167824972
+          },
+          "rss": {
+            "before": 11648,
+            "after": 11580,
+            "change_percent": -0.5837912087912067
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "pairs": 20,
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.193921174,
+            "after": 0.18918019549999998,
+            "change_percent": -2.444796719310305
+          },
+          "cpu": {
+            "before": 4.662945499999999,
+            "after": 4.643801,
+            "change_percent": -0.41056666864323077
+          },
+          "rss_kib": {
+            "before": 5852,
+            "after": 5900,
+            "change_percent": 0.8202323991797655
+          },
+          "write_bytes": {
+            "before": 175472640.0,
+            "after": 175464448.0,
+            "change_percent": -0.00466853408029877
+          }
+        }
+      },
+      {
+        "case": 4,
+        "pairs": 5,
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.014503338,
+            "after": 0.014039921,
+            "change_percent": -3.195243743198972
+          },
+          "cpu": {
+            "before": 1.801845,
+            "after": 1.790026,
+            "change_percent": -0.6559387738678923
+          },
+          "rss_kib": {
+            "before": 3548,
+            "after": 3588,
+            "change_percent": 1.1273957158962844
+          },
+          "write_bytes": {
+            "before": 4311777280,
+            "after": 4312100864,
+            "change_percent": 0.007504654785872589
+          }
+        }
+      },
+      {
+        "case": 7,
+        "pairs": 5,
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.623279979,
+            "after": 0.632846748,
+            "change_percent": 1.5349071560663674
+          },
+          "cpu": {
+            "before": 1.291236,
+            "after": 1.277214,
+            "change_percent": -1.085936265717502
+          },
+          "rss_kib": {
+            "before": 8704,
+            "after": 8700,
+            "change_percent": -0.04595588235294379
+          },
+          "write_bytes": {
+            "before": 100388864,
+            "after": 100388864,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 9,
+        "pairs": 20,
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.22628098349999998,
+            "after": 0.2309083605,
+            "change_percent": 2.0449694571881727
+          },
+          "cpu": {
+            "before": 0.34333199999999997,
+            "after": 0.3494845,
+            "change_percent": 1.7919972504747639
+          },
+          "rss_kib": {
+            "before": 68128,
+            "after": 67992,
+            "change_percent": -0.1996242367308554
+          },
+          "write_bytes": {
+            "before": 0.0,
+            "after": 0.0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "pairs": 5,
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.377131756,
+            "after": 0.386344117,
+            "change_percent": 2.4427433790539688
+          },
+          "cpu": {
+            "before": 0.482478,
+            "after": 0.483295,
+            "change_percent": 0.1693341458055997
+          },
+          "rss_kib": {
+            "before": 134392,
+            "after": 134212,
+            "change_percent": -0.1339365438418949
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 22.228612197002803,
+            "after": 21.74210310700073,
+            "change_percent": -2.188661557862226,
+            "before_range": [
+              21.549780624998675,
+              22.369537825001316
+            ],
+            "after_range": [
+              21.171871536000253,
+              22.279246726000565
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 81.896683,
+            "after": 80.138474,
+            "change_percent": -2.146862285008533,
+            "before_range": [
+              80.08609999999999,
+              85.689824
+            ],
+            "after_range": [
+              79.422707,
+              81.073438
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26181632,
+            "after": 26304512,
+            "change_percent": 0.46933667083854935,
+            "before_range": [
+              26054656,
+              26181632
+            ],
+            "after_range": [
+              26140672,
+              26304512
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142308864,
+            "after": 1142280192,
+            "change_percent": -0.0025100041594394717,
+            "before_range": [
+              1142276096,
+              1142349824
+            ],
+            "after_range": [
+              1142272000,
+              1142366208
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 25.75196792800125,
+            "after": 25.60570513499988,
+            "change_percent": -0.5679674400430268,
+            "before_range": [
+              23.125239575001615,
+              26.159274460002052
+            ],
+            "after_range": [
+              23.34827546700035,
+              26.25625600499916
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 91.858679,
+            "after": 91.247627,
+            "change_percent": -0.6652087822861086,
+            "before_range": [
+              80.785042,
+              92.18100899999999
+            ],
+            "after_range": [
+              84.13003899999998,
+              94.519024
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51277824,
+            "after": 51318784,
+            "change_percent": 0.07987858455147379,
+            "before_range": [
+              51200000,
+              51277824
+            ],
+            "after_range": [
+              51273728,
+              51318784
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398587904,
+            "after": 4398387200,
+            "change_percent": -0.004562918927175641,
+            "before_range": [
+              4398379008,
+              4398759936
+            ],
+            "after_range": [
+              4398379008,
+              4398387200
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "matrix": [
+      {
+        "case": "ordinary",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 1.249629436,
+            "after": 1.2677822029999999,
+            "change_percent": 1.4526520004287002
+          },
+          "cpu": {
+            "before": 3.131754,
+            "after": 3.075156,
+            "change_percent": -1.807230069794763
+          },
+          "rss": {
+            "before": 30016,
+            "after": 30300,
+            "change_percent": 0.9461620469083165
+          },
+          "writes": {
+            "before": 368888,
+            "after": 368880,
+            "change_percent": -0.0021686799245301813
+          }
+        }
+      },
+      {
+        "case": "durable",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 6.430939021,
+            "after": 6.66293309,
+            "change_percent": 3.607468026713234
+          },
+          "cpu": {
+            "before": 3.83263,
+            "after": 3.973922,
+            "change_percent": 3.686554663507824
+          },
+          "rss": {
+            "before": 28964,
+            "after": 29132,
+            "change_percent": 0.5800303825438391
+          },
+          "writes": {
+            "before": 783432,
+            "after": 783448,
+            "change_percent": 0.002042295949111761
+          }
+        }
+      }
+    ]
+  },
+  "stage3": {
+    "direct": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.463122957,
+            "after": 0.45320641,
+            "change_percent": -2.1412341690502767
+          },
+          "cpu": {
+            "before": 0.483539,
+            "after": 0.476605,
+            "change_percent": -1.434010493465887
+          },
+          "rss": {
+            "before": 132156,
+            "after": 132168,
+            "change_percent": 0.009080177971498848
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 1.032525885,
+            "after": 0.943811371,
+            "change_percent": -8.591989342717554
+          },
+          "cpu": {
+            "before": 1.416438,
+            "after": 1.322179,
+            "change_percent": -6.654650609486623
+          },
+          "rss": {
+            "before": 2098220,
+            "after": 2098240,
+            "change_percent": 0.0009531888934377619
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.059234891,
+            "after": 0.05976357,
+            "change_percent": 0.892512826604186
+          },
+          "cpu": {
+            "before": 0.063665,
+            "after": 0.063562,
+            "change_percent": -0.16178433990419183
+          },
+          "rss": {
+            "before": 11580,
+            "after": 11612,
+            "change_percent": 0.2763385146804742
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "pairs": 20,
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.185154229,
+            "after": 0.188623403,
+            "change_percent": 1.8736671685743556
+          },
+          "cpu": {
+            "before": 4.398778,
+            "after": 4.3071909999999995,
+            "change_percent": -2.0821009835004345
+          },
+          "rss_kib": {
+            "before": 5804,
+            "after": 5832,
+            "change_percent": 0.4824259131633424
+          },
+          "write_bytes": {
+            "before": 175468544.0,
+            "after": 175468544.0,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 4,
+        "pairs": 20,
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.014942993,
+            "after": 0.015681078,
+            "change_percent": 4.939338457831055
+          },
+          "cpu": {
+            "before": 1.769853,
+            "after": 1.7514755,
+            "change_percent": -1.038363073091375
+          },
+          "rss_kib": {
+            "before": 3528,
+            "after": 3528,
+            "change_percent": 0.0
+          },
+          "write_bytes": {
+            "before": 4311808000.0,
+            "after": 4311969792.0,
+            "change_percent": 0.003752300659032315
+          }
+        }
+      },
+      {
+        "case": 7,
+        "pairs": 5,
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.602900499,
+            "after": 0.596779311,
+            "change_percent": -1.0152899209990407
+          },
+          "cpu": {
+            "before": 1.261612,
+            "after": 1.264104,
+            "change_percent": 0.19752507109951356
+          },
+          "rss_kib": {
+            "before": 8664,
+            "after": 8704,
+            "change_percent": 0.4616805170821747
+          },
+          "write_bytes": {
+            "before": 100380672,
+            "after": 100380672,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 9,
+        "pairs": 5,
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.207079419,
+            "after": 0.212623586,
+            "change_percent": 2.6773143496215956
+          },
+          "cpu": {
+            "before": 0.316322,
+            "after": 0.322952,
+            "change_percent": 2.0959655035059255
+          },
+          "rss_kib": {
+            "before": 67872,
+            "after": 67928,
+            "change_percent": 0.08250825082507518
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "pairs": 5,
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "metrics": {
+          "operation": {
+            "before": 0.366713182,
+            "after": 0.360285606,
+            "change_percent": -1.7527529184920398
+          },
+          "cpu": {
+            "before": 0.466984,
+            "after": 0.454919,
+            "change_percent": -2.5836002946567738
+          },
+          "rss_kib": {
+            "before": 134248,
+            "after": 134152,
+            "change_percent": -0.0715094452058862
+          },
+          "write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 22.568348316999618,
+            "after": 21.722086530000524,
+            "change_percent": -3.749772801767892,
+            "before_range": [
+              21.27632155899846,
+              22.664022986002237
+            ],
+            "after_range": [
+              21.55234170699987,
+              21.935472696000943
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 83.50419199999999,
+            "after": 80.29169300000001,
+            "change_percent": -3.8471110528199404,
+            "before_range": [
+              77.95199399999998,
+              85.708069
+            ],
+            "after_range": [
+              79.546879,
+              81.77062000000001
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26259456,
+            "after": 26288128,
+            "change_percent": 0.109187334269234,
+            "before_range": [
+              26152960,
+              26259456
+            ],
+            "after_range": [
+              26189824,
+              26288128
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142353920,
+            "after": 1142333440,
+            "change_percent": -0.0017927894010338896,
+            "before_range": [
+              1142337536,
+              1142378496
+            ],
+            "after_range": [
+              1142321152,
+              1142370304
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 25.54278635599985,
+            "after": 24.707220216998394,
+            "change_percent": -3.2712411533958874,
+            "before_range": [
+              25.492807801001618,
+              25.93445545799841
+            ],
+            "after_range": [
+              24.592632961001073,
+              25.297515790000034
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 90.37194400000001,
+            "after": 87.46521899999999,
+            "change_percent": -3.216401984226458,
+            "before_range": [
+              90.26859400000001,
+              91.957371
+            ],
+            "after_range": [
+              87.0164,
+              88.728429
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51286016,
+            "after": 51273728,
+            "change_percent": -0.023959747623991667,
+            "before_range": [
+              51204096,
+              51286016
+            ],
+            "after_range": [
+              51175424,
+              51273728
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398669824,
+            "after": 4398497792,
+            "change_percent": -0.0039110005270570625,
+            "before_range": [
+              4398399488,
+              4398714880
+            ],
+            "after_range": [
+              4398383104,
+              4398714880
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "matrix": [
+      {
+        "case": "ordinary",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 1.2981061409999999,
+            "after": 1.201800644,
+            "change_percent": -7.418923149520785
+          },
+          "cpu": {
+            "before": 3.0068,
+            "after": 2.993356,
+            "change_percent": -0.4471198616469385
+          },
+          "rss": {
+            "before": 29788,
+            "after": 29956,
+            "change_percent": 0.5639854975157732
+          },
+          "writes": {
+            "before": 368864,
+            "after": 368872,
+            "change_percent": 0.0021688210288806076
+          }
+        }
+      },
+      {
+        "case": "durable",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 6.755784856,
+            "after": 6.6284271385,
+            "change_percent": -1.885165383662124
+          },
+          "cpu": {
+            "before": 4.1148045,
+            "after": 4.1849419999999995,
+            "change_percent": 1.7045159739666804
+          },
+          "rss": {
+            "before": 29256,
+            "after": 29220,
+            "change_percent": -0.12305168170632097
+          },
+          "writes": {
+            "before": 783456.0,
+            "after": 783452.0,
+            "change_percent": -0.0005105583466114005
+          }
+        }
+      }
+    ]
+  }
+}

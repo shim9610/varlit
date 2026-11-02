@@ -541,7 +541,18 @@ pub(crate) fn index_error(error: DiskIndexError) -> Error {
         {
             Error::Io(error)
         }
-        error => Error::DiskIndex(Box::new(error)),
+        error => match crate::fallible::try_box(DiskIndexError::Busy) {
+            Ok(mut slot) => {
+                *slot = error;
+                Error::DiskIndex(slot)
+            }
+            Err(refusal) => match error {
+                // Preserve any completed/uncertain publication facts even if
+                // the extra disk-index wrapper cannot be allocated.
+                DiskIndexError::Primary(source) => source,
+                _ => refusal,
+            },
+        },
     }
 }
 
@@ -1830,7 +1841,8 @@ impl DiskIndexStore {
         }
         let state = self.storage.state(&base, None)?;
         let before_bytes = self.storage.file.metadata()?.len();
-        let target = self.storage.path.clone();
+        let target =
+            crate::TryClone::try_clone(&self.storage.path).map_err(DiskIndexError::Primary)?;
         let temp = tempfile::Builder::new()
             .prefix(".varlit-compact-")
             .tempfile_in(target.parent().unwrap_or(Path::new(".")))?
@@ -1895,7 +1907,7 @@ impl DiskIndexStore {
         let after_bytes = replacement.file.metadata()?.len();
         // Construct all fallible local state before publishing the replacement.
         let identity = opened_sidecar_identity(&replacement.file)?;
-        replacement.path = target.clone();
+        replacement.path = crate::TryClone::try_clone(&target).map_err(DiskIndexError::Primary)?;
         let new_slots = if !self.finite_layout.is_empty() {
             let checkpoint = replacement.current()?;
             Some(slots::Working::load(
@@ -1914,12 +1926,14 @@ impl DiskIndexStore {
         match publication {
             crate::file::ReplaceDurability::Durable => {}
             crate::file::ReplaceDurability::ParentSyncPending(source) => {
-                return Err(DiskIndexError::Primary(
-                    Error::PublishedButParentSyncPending {
-                        path: target.display().to_string(),
-                        source: Box::new(source),
+                return Err(DiskIndexError::Primary(crate::fallible::boxed_path_error(
+                    source,
+                    &target,
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::ParentSyncPending,
                     },
-                ));
+                    |path, source| Error::PublishedButParentSyncPending { path, source },
+                )));
             }
         }
         Ok(IndexCompaction {
@@ -3569,7 +3583,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 /// buffer. No writer admission, shared cache, publication or durability I/O:
 /// this file is disposable scratch owned by a single handle.
 pub(crate) struct ScratchIndex {
-    file: std::sync::Arc<std::fs::File>,
+    file: crate::fallible::Arc<std::fs::File>,
     root: tree::Root,
     reader: tree::Reader,
     cache_bytes: usize,
@@ -3611,7 +3625,7 @@ impl ScratchIndex {
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
         let (file, maximum) = crate::spill_file::SpillFile::new()?.into_parts();
         crate::spill_file::check_extent(maximum, tree::PAGE as u64)?;
-        let file = std::sync::Arc::new(file);
+        let file = crate::fallible::try_arc(file)?;
         file.set_len(tree::PAGE as u64)?;
         let reader = tree::Reader::new(
             file.clone(),

@@ -1,0 +1,29 @@
+{
+  "before-bin": {
+    "scalable_load": "afd6b2a9ae613d6f503addd75c735cc35fe6ed967370d005aff95a53770372bc",
+    "ownership_load": "b6c55468cd66a323236637ac1c09c1be152d554764990e47c390d00d30a4aa66",
+    "oom_maintenance_load": "307a1e2dbc43d474a2efc361e9739451693c3a9aedad7720adcfac1a1788ec21",
+    "record_mutation_load": "5c1b0eeba07d272ebb7087c6a7e51c95cbe8a4599a1c3549fdb0a0326a1ffc5c"
+  },
+  "stage3-bin": {
+    "scalable_load": "e53a2b10cc8b24457d0bb5c90278a4b03dd0812d04adbc1668abadb754fd2bc6",
+    "matrix_ownership_load": "b18356d4b9287df265edfc0944354e337de727db8caba0a2dc197b911ba71478",
+    "ownership_load": "e9d7c2e5139f53ccf3e80477aad8b769f2e2a95f431ae968fd9897f3b3c2d4d3",
+    "oom_maintenance_load": "232d7a3e2ec660bb1ebbb816ff2fdfc39cb0aef7efd91b731dabf74d7d785f82",
+    "record_mutation_load": "be8d16e1b60c4ae97648e5555f7882ab6e917e51a8bb70b9255f217fb129c01c"
+  },
+  "stage2-bin": {
+    "scalable_load": "11d47b7493019d47c870e2b17edba41e193c606aae08f3d03fe0f25ee6076688",
+    "matrix_ownership_load": "fb897f5639be576e5b4b18e986f511aefe2b8fc470e3308aa3e0bd5dc4228265",
+    "ownership_load": "c62de665772544536cb7e6cd215738c113a85030a28b1483f63df06facb82fd4",
+    "oom_maintenance_load": "bd046aa804044ec019ff16efe5443b49b15c93f6b31f0ef0f493db19573705cd",
+    "record_mutation_load": "a4757879c205ed90967e4f38d321286380bd864ed33b59b3aa17aab60dd19e31"
+  },
+  "stage1-bin": {
+    "scalable_load": "d882a0a8fb4a270d4744c12527c4045b2099ee479e5217b8fa31e6bb4bb4a0fb",
+    "matrix_ownership_load": "ab3a48c163c9f0b3bf9d87dcc79f5a395cb1226322dac1cc366b6fa0617fe1f3",
+    "ownership_load": "526414b3d1772e01a144e438e52c4c9d9bcd6e4306e760255217341bf29a3413",
+    "oom_maintenance_load": "46ca30561093829582355bceaa2eb6efa7bfc4b758f9d283ea96c6bf11802774",
+    "record_mutation_load": "d07a8d104ba883e1779fe0063f4883ce60fbbed412eea379aee1418d81104548"
+  }
+}

@@ -1,10 +1,10 @@
 //! Immutable, append-only index pages. Each handle owns its bounded cache.
 //! Only the sole writer appends pages; published pages are never reused.
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
+use crate::fallible::Arc;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
-use std::sync::Arc;
 
 pub(super) const PAGE: usize = 4096;
 const HEADER: usize = 32;

@@ -32,6 +32,30 @@ thread_local! {
     static COUNTED_ALLOCATIONS: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
+thread_local! { static REFUSE_AFTER: Cell<Option<usize>> = const { Cell::new(None) }; }
+/// Refuse this and every subsequent allocation until the operation returns.
+pub(crate) fn with_allocation_refusal<T>(at: usize, operation: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REFUSE_AFTER.with(|s| s.set(None));
+        }
+    }
+    REFUSE_AFTER.with(|s| s.set(Some(at)));
+    let _reset = Reset;
+    operation()
+}
+fn refused() -> bool {
+    REFUSE_AFTER
+        .try_with(|s| match s.get() {
+            None => false,
+            Some(n) => {
+                s.set(Some(n.saturating_sub(1)));
+                n <= 1
+            }
+        })
+        .unwrap_or(false)
+}
 struct CountingAllocator;
 
 fn count_allocation() {
@@ -47,6 +71,9 @@ fn count_allocation() {
 // retains allocation pointers.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if refused() {
+            return std::ptr::null_mut();
+        }
         count_allocation();
         // SAFETY: the caller supplies the `GlobalAlloc::alloc` layout contract,
         // which is forwarded unchanged to the system allocator.
@@ -54,6 +81,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if refused() {
+            return std::ptr::null_mut();
+        }
         count_allocation();
         // SAFETY: the caller supplies the `GlobalAlloc::alloc_zeroed` layout
         // contract, which is forwarded unchanged to the system allocator.
@@ -67,6 +97,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if refused() {
+            return std::ptr::null_mut();
+        }
         count_allocation();
         // SAFETY: the caller's valid reallocation tuple is forwarded unchanged
         // to the same system allocator that produced `ptr`.

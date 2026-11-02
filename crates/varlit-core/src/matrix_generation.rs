@@ -1,12 +1,13 @@
 //! Copy-on-write matrix pages. Published roots and pages are immutable.
 //! Only the single writer can see the working directory; each public reader
 //! captures a confirmed root and owns its own bounded index-page cache.
+use crate::fallible::Arc;
+use crate::{Error, TryClone};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 const PAGE: usize = 4096;
 const FANOUT: usize = 128;
@@ -78,11 +79,11 @@ fn independent_base(file: &File) -> io::Result<Arc<File>> {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: ReOpenFile returned a new owned read-only handle.
-        Ok(Arc::new(unsafe { File::from_raw_handle(raw as RawHandle) }))
+        crate::fallible::try_arc(unsafe { File::from_raw_handle(raw as RawHandle) })
     }
     #[cfg(not(windows))]
     {
-        Ok(Arc::new(file.try_clone()?))
+        crate::fallible::try_arc(file.try_clone()?)
     }
 }
 fn u64_at(bytes: &[u8], at: usize) -> u64 {
@@ -189,22 +190,31 @@ impl Clone for View {
     }
 }
 impl View {
-    fn cache_page(&self, offset: (u64, Option<u32>), page: Arc<[u8; PAGE]>) {
+    fn cache_page(&self, offset: (u64, Option<u32>), page: Arc<[u8; PAGE]>) -> io::Result<()> {
         let limit = self.cache_bytes / PAGE;
         if limit == 0 {
-            return;
+            return Ok(());
         }
         let mut cache = self.cache.borrow_mut();
         if cache.pages.contains_key(&offset) {
-            return;
+            return Ok(());
         }
         while cache.pages.len() >= limit {
             if let Some(old) = cache.order.pop_front() {
                 cache.pages.remove(&old);
             }
         }
+        cache
+            .pages
+            .try_reserve(1)
+            .map_err(|_| io::ErrorKind::OutOfMemory)?;
+        cache
+            .order
+            .try_reserve(1)
+            .map_err(|_| io::ErrorKind::OutOfMemory)?;
         cache.pages.insert(offset, page);
         cache.order.push_back(offset);
+        Ok(())
     }
     fn root_end(&self) -> (u64, u64) {
         self.working
@@ -247,8 +257,8 @@ impl View {
         if &page[..8] != NODE_MAGIC || page[8] != height || !authentic(&page) {
             return Err(bad("invalid matrix page directory"));
         }
-        let page = Arc::new(page);
-        self.cache_page((offset, None), page.clone());
+        let page = crate::fallible::try_arc(page)?;
+        self.cache_page((offset, None), page.clone())?;
         Ok(page)
     }
     fn entry(&self, page: u64) -> io::Result<Entry> {
@@ -312,7 +322,7 @@ impl View {
                 if checksum(bytes) != entry.crc {
                     return Err(bad("matrix generation page checksum mismatch"));
                 }
-                self.cache_page((offset, Some(entry.crc)), Arc::new(*bytes));
+                self.cache_page((offset, Some(entry.crc)), crate::fallible::try_arc(*bytes)?)?;
             }
         }
         Ok(())
@@ -599,7 +609,7 @@ impl MatrixFile {
         max_pending: usize,
     ) -> io::Result<Self> {
         let path = path(primary, nonce);
-        let log = Arc::new(File::open(&path)?);
+        let log = crate::fallible::try_arc(File::open(&path)?)?;
         let mut header = [0; PAGE];
         read_at(&log, 0, &mut header)?;
         if &header[..8] != MAGIC || header[8..24] != nonce || !authentic(&header) {
@@ -620,7 +630,13 @@ impl MatrixFile {
         } else {
             None
         };
-        let working = writer.as_ref().map(|_| Box::default());
+        let working = writer
+            .as_ref()
+            .map(|_| {
+                crate::fallible::try_box(Working::default())
+                    .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))
+            })
+            .transpose()?;
         Ok(Self {
             view: View {
                 base: independent_base(base)?,
@@ -892,7 +908,7 @@ impl MatrixFile {
         Self::open_from_log(self)
     }
     fn open_from_log(old: &Self) -> io::Result<Self> {
-        let log = Arc::new(File::open(&old.path)?);
+        let log = crate::fallible::try_arc(File::open(&old.path)?)?;
         let mut header = [0; PAGE];
         read_at(&log, 0, &mut header)?;
         if &header[..8] != MAGIC
@@ -911,7 +927,10 @@ impl MatrixFile {
             view,
             writer: None,
             cursor: 0,
-            path: old.path.clone(),
+            path: old
+                .path
+                .try_clone()
+                .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?,
             nonce: old.nonce,
             max_pending: old.max_pending,
         })
@@ -1083,10 +1102,10 @@ impl MatrixFile {
                 .checked_add(1)
                 .ok_or_else(|| bad("matrix compaction epochs exhausted"))?,
         };
-        let next_working = Box::default();
+        let next_working = crate::fallible::try_box(Working::default())?;
         let view = View {
             base: self.view.base.clone(),
-            log: Arc::new(File::open(temp.path())?),
+            log: crate::fallible::try_arc(File::open(temp.path())?)?,
             head,
             len: self.view.len,
             height: self.view.height,
@@ -1099,7 +1118,7 @@ impl MatrixFile {
             view,
             writer: Some(temp.as_file().try_clone()?),
             cursor: 0,
-            path: self.path.clone(),
+            path: self.path.try_clone()?,
             nonce: self.nonce,
             max_pending: self.max_pending,
         };
@@ -1134,10 +1153,14 @@ impl MatrixFile {
         match outcome {
             crate::file::ReplaceDurability::Durable => Ok(()),
             crate::file::ReplaceDurability::ParentSyncPending(source) => {
-                Err(crate::Error::PublishedButParentSyncPending {
-                    path: self.path.display().to_string(),
-                    source: Box::new(source),
-                })
+                Err(crate::fallible::boxed_path_error(
+                    source,
+                    &self.path,
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::ParentSyncPending,
+                    },
+                    |path, source| Error::PublishedButParentSyncPending { path, source },
+                ))
             }
         }
     }
@@ -1358,7 +1381,7 @@ impl MatrixIo for File {
         self
     }
     fn source(&self) -> io::Result<Source> {
-        Ok(Source::Raw(Arc::new(self.try_clone()?)))
+        Ok(Source::Raw(crate::fallible::try_arc(self.try_clone()?)?))
     }
     fn set_len(&self, len: u64) -> io::Result<()> {
         File::set_len(self, len)
@@ -1410,6 +1433,14 @@ impl Source {
             Self::Raw(_) => None,
             Self::Paged(v) => Some(v),
         }
+    }
+}
+
+impl TryClone for Source {
+    fn try_clone(&self) -> crate::Result<Self> {
+        // Raw shares the file; View shares its files and starts empty caches.
+        // View's working transaction is never copied into a reader snapshot.
+        Ok(self.clone())
     }
 }
 

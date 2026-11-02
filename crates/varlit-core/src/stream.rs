@@ -1509,10 +1509,13 @@ impl VarlitStreamWriter {
         self.poison.poison();
         match error {
             already @ Error::PublishedButIndexStale { .. } => already,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         }
     }
 
@@ -1552,10 +1555,13 @@ impl VarlitStreamWriter {
             self.poison.poison();
             return match sequence {
                 // The staged records were already published natively.
-                Some(sequence) => Err(Error::PublishedButIndexStale {
-                    sequence,
-                    source: Box::new(state_error(error)),
-                }),
+                Some(sequence) => Err(crate::fallible::boxed_error(
+                    state_error(error),
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                    },
+                    |source| Error::PublishedButIndexStale { sequence, source },
+                )),
                 None => Err(state_error(error)),
             };
         }
@@ -1984,10 +1990,14 @@ fn create_state_store(
             // Publication already happened: keep the published state sidecar
             // and report the pending parent-directory durability instead of
             // silently promoting it to full success.
-            return Err(Error::PublishedButParentSyncPending {
-                path: sidecar.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &sidecar,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     DiskIndexStore::open_writer_validated(&sidecar, options, metadata.identity, metadata.mode)
@@ -2330,10 +2340,18 @@ impl StreamMutationPermit<'_> {
         // from here on must poison the writer.
         if let Err(error) = self.stage_state_records(records, new_eof) {
             self.poison.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: last_sequence,
-                source: Box::new(error),
-            });
+            return Err(crate::fallible::boxed_error(
+                error,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: last_sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: last_sequence,
+                    source,
+                },
+            ));
         }
         if self
             .state

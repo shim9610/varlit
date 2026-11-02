@@ -1796,7 +1796,7 @@ pub(super) fn layout_header_typed_tokens(
                 path: P,
                 header: #fields_name,
             ) -> ::varlit::__core::Result<#writer_name> {
-                let fields = header.__varlit_layout_values();
+                let fields = header.__varlit_layout_values()?;
                 ::core::result::Result::Ok(#writer_name::from_inner(
                     Self::spec().create_layout_writer_with_header(path, &fields)?
                 ))
@@ -1915,8 +1915,8 @@ pub(super) fn layout_writer_segment_method_tokens(
             &mut self,
             segment: #write_type<'_>,
         ) -> ::varlit::__core::Result<#info_type> {
-            let fields = segment.fields.__varlit_layout_values();
-            let footer_fields = segment.footer_fields.__varlit_layout_values();
+            let fields = segment.fields.__varlit_layout_values()?;
+            let footer_fields = segment.footer_fields.__varlit_layout_values()?;
             let info = self.inner.write_segment(::varlit::__core::SegmentWrite {
                 name: #segment_name,
                 fields: &fields,
@@ -1938,8 +1938,8 @@ pub(super) fn layout_writer_segment_method_tokens(
             M: FnOnce(&mut dyn ::std::io::Write) -> ::varlit::__core::Result<()>,
             R: FnOnce(&mut dyn ::std::io::Write) -> ::varlit::__core::Result<()>,
         {
-            let fields = fields.__varlit_layout_values();
-            let footer_fields = footer_fields.__varlit_layout_values();
+            let fields = fields.__varlit_layout_values()?;
+            let footer_fields = footer_fields.__varlit_layout_values()?;
             let info = self.inner.write_segment_streamed(::varlit::__core::SegmentWriteStream {
                 name: #segment_name,
                 fields: &fields,
@@ -2051,8 +2051,8 @@ pub(super) fn layout_field_struct_tokens(
             #vis struct #name;
 
             impl #name {
-                fn __varlit_layout_values(&self) -> ::std::vec::Vec<::varlit::__core::LayoutFieldValue> {
-                    ::std::vec::Vec::new()
+                fn __varlit_layout_values(&self) -> ::varlit::__core::Result<::std::vec::Vec<::varlit::__core::LayoutFieldValue>> {
+                    ::core::result::Result::Ok(::std::vec::Vec::new())
                 }
             }
         };
@@ -2063,6 +2063,7 @@ pub(super) fn layout_field_struct_tokens(
         let ty = layout_field_rust_type_tokens(&field.ty);
         quote!(pub #field_name: #ty,)
     });
+    let field_count = caller_fields.len();
     let value_entries = caller_fields.iter().map(|field| {
         let field_name = &field.name;
         let field_name_string = field.name.to_string();
@@ -2082,10 +2083,14 @@ pub(super) fn layout_field_struct_tokens(
         }
 
         impl #name {
-            fn __varlit_layout_values(&self) -> ::std::vec::Vec<::varlit::__core::LayoutFieldValue> {
-                vec![
-                    #(#value_entries,)*
-                ]
+            fn __varlit_layout_values(&self) -> ::varlit::__core::Result<::std::vec::Vec<::varlit::__core::LayoutFieldValue>> {
+                let mut values = ::std::vec::Vec::new();
+                values.try_reserve_exact(#field_count).map_err(|_| ::varlit::__core::Error::AllocationFailed {
+                    resource: "generated layout fields",
+                    requested: (#field_count * ::core::mem::size_of::<::varlit::__core::LayoutFieldValue>()) as u64,
+                })?;
+                #(values.push(#value_entries);)*
+                ::core::result::Result::Ok(values)
             }
         }
     }
@@ -2155,7 +2160,7 @@ pub(super) fn layout_field_to_value_tokens(
 ) -> TokenStream2 {
     match field.ty {
         LayoutFieldTypeChoice::Bytes(_) => {
-            quote!(::varlit::__core::LayoutValue::Bytes(#access.clone()))
+            quote!(::varlit::__core::LayoutValue::Bytes(::varlit::__core::TryClone::try_clone(&#access)?))
         }
         LayoutFieldTypeChoice::U8 => quote!(::varlit::__core::LayoutValue::U8(#access)),
         LayoutFieldTypeChoice::U16 => quote!(::varlit::__core::LayoutValue::U16(#access)),
@@ -2559,7 +2564,7 @@ pub(super) fn high_cardinality_api_tokens(
                 #(#indexed_block_descriptors),*
             ];
             ::varlit::__core::DiskIndexPlan::canonical(Self::spec(), BLOCKS)
-                .map_err(|error| ::varlit::__core::Error::DiskIndex(::std::boxed::Box::new(error)))
+                .map_err(::varlit::__core::Error::from)
         }
 
         pub fn open_indexed_reader<P: AsRef<::std::path::Path>>(

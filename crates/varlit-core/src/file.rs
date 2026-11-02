@@ -1,3 +1,4 @@
+use crate::TryClone;
 #[path = "matrix_bulk.rs"]
 mod matrix_bulk;
 
@@ -1925,7 +1926,7 @@ fn encode_compressed_slots(
         let compressed =
             compress_with_algorithm(compression.algorithm, compression.level, &packed)?;
         if compressed.len() >= packed.len() {
-            stored.push(packed.clone());
+            stored.push(packed.try_clone()?);
         } else {
             stored.push(compressed);
         }
@@ -2641,9 +2642,9 @@ impl KeyedTailMap {
             .map(|(key, &offset)| {
                 let mut row = [0; 52];
                 row[..8].copy_from_slice(&offset.to_le_bytes());
-                (key.clone(), row)
+                Ok((key.try_clone()?, row))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         self.spilled.as_mut().unwrap().apply(&updates)?;
         self.offsets.clear();
         self.key_payload_bytes = 0;
@@ -4137,8 +4138,9 @@ impl VarlitWriter {
     /// durability request failed yields [`Error::MatrixCommittedButDurabilityUnproven`].
     /// Both skip the hook. After successful durable publication, hook failure
     /// yields [`Error::MatrixCommittedButHookFailed`]; retry only the notification.
-    /// Outcome boxes are fixed-size allocations and abort on allocator failure.
-    /// See "Allocator Failure And Published Outcomes" in `docs/durability-model.md`.
+    /// Outcome boxes are reserved fallibly before mutation; a late error needs
+    /// no further allocation. See "Allocator Failure And Published Outcomes"
+    /// in `docs/durability-model.md`.
     pub fn write_matrix_cell_durable<T, F>(
         &mut self,
         key: MatrixKey,
@@ -5082,8 +5084,12 @@ impl VarlitFile {
                 | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. }) => Err(error),
                 Err(_) => {
                     let mut scratch = BufferedScan::new(spec);
-                    let file =
-                        Self::open_locked_with_scratch(spec, path.clone(), lock, &mut scratch)?;
+                    let file = Self::open_locked_with_scratch(
+                        spec,
+                        path.try_clone()?,
+                        lock,
+                        &mut scratch,
+                    )?;
                     Ok((file, LazyOpenSource::FullScan))
                 }
             }
@@ -6152,10 +6158,14 @@ impl VarlitFile {
             }
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 return match self.rebind_replacement_generation(info, new_index) {
-                    Ok(_) => Err(Error::PublishedButParentSyncPending {
-                        path: self.path.display().to_string(),
-                        source: Box::new(sync_error),
-                    }),
+                    Ok(_) => Err(crate::fallible::boxed_path_error(
+                        sync_error,
+                        &self.path,
+                        Error::ErrorContextAllocationFailed {
+                            context: crate::AllocationFailureContext::ParentSyncPending,
+                        },
+                        |path, source| Error::PublishedButParentSyncPending { path, source },
+                    )),
                     Err(rebind_error) => Err(rebind_error.with_pending_parent_sync(sync_error)),
                 };
             }
@@ -6358,10 +6368,14 @@ impl VarlitFile {
                 // the published pathname is not yet durable. Both facts are
                 // preserved instead.
                 match self.rebind_replacement_generation(info, new_index) {
-                    Ok(_) => Err(Error::PublishedButParentSyncPending {
-                        path: self.path.display().to_string(),
-                        source: Box::new(sync_error),
-                    }),
+                    Ok(_) => Err(crate::fallible::boxed_path_error(
+                        sync_error,
+                        &self.path,
+                        Error::ErrorContextAllocationFailed {
+                            context: crate::AllocationFailureContext::ParentSyncPending,
+                        },
+                        |path, source| Error::PublishedButParentSyncPending { path, source },
+                    )),
                     Err(rebind_error) => Err(rebind_error.with_pending_parent_sync(sync_error)),
                 }
             }
@@ -6685,10 +6699,14 @@ impl VarlitFile {
                 // the published pathname is not yet durable. Both facts are
                 // preserved instead.
                 match self.rebind_published_generation(sequence, new_index) {
-                    Ok(_) => Err(Error::PublishedButParentSyncPending {
-                        path: self.path.display().to_string(),
-                        source: Box::new(sync_error),
-                    }),
+                    Ok(_) => Err(crate::fallible::boxed_path_error(
+                        sync_error,
+                        &self.path,
+                        Error::ErrorContextAllocationFailed {
+                            context: crate::AllocationFailureContext::ParentSyncPending,
+                        },
+                        |path, source| Error::PublishedButParentSyncPending { path, source },
+                    )),
                     Err(rebind_error) => Err(rebind_error.with_pending_parent_sync(sync_error)),
                 }
             }
@@ -6970,10 +6988,14 @@ impl VarlitFile {
                 // the published pathname is not yet durable. Both facts are
                 // preserved instead.
                 match self.rebind_published_generation(sequence, new_index) {
-                    Ok(_) => Err(Error::PublishedButParentSyncPending {
-                        path: self.path.display().to_string(),
-                        source: Box::new(sync_error),
-                    }),
+                    Ok(_) => Err(crate::fallible::boxed_path_error(
+                        sync_error,
+                        &self.path,
+                        Error::ErrorContextAllocationFailed {
+                            context: crate::AllocationFailureContext::ParentSyncPending,
+                        },
+                        |path, source| Error::PublishedButParentSyncPending { path, source },
+                    )),
                     Err(rebind_error) => Err(rebind_error.with_pending_parent_sync(sync_error)),
                 }
             }
@@ -7122,10 +7144,18 @@ impl VarlitFile {
         // `sync_created_pathname_once` already produces and which leaves the
         // request pending so a later `sync` retries it.
         if let Err(source) = self.flush_and_sync_all() {
-            return Err(Error::CommittedButDurabilityUnproven {
-                sequence: info.sequence,
-                source: Box::new(source),
-            });
+            return Err(crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::Committed {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::CommittedButDurabilityUnproven {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
         }
         let publication = self.publish_matrix_generation();
         self.poison_after_started_matrix_error(publication)?;
@@ -7270,10 +7300,14 @@ impl VarlitFile {
                 self.pending_pathname_parent_sync = false;
                 Ok(())
             }
-            Err(error) => Err(Error::PublishedButParentSyncPending {
-                path: self.path.display().to_string(),
-                source: Box::new(error),
-            }),
+            Err(error) => Err(crate::fallible::boxed_path_error(
+                error,
+                &self.path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            )),
         }
     }
 
@@ -9536,8 +9570,9 @@ impl VarlitFile {
     /// durability request failed yields [`Error::MatrixCommittedButDurabilityUnproven`].
     /// Both skip the hook. After successful durable publication, hook failure
     /// yields [`Error::MatrixCommittedButHookFailed`]; retry only the notification.
-    /// Outcome boxes are fixed-size allocations and abort on allocator failure.
-    /// See "Allocator Failure And Published Outcomes" in `docs/durability-model.md`.
+    /// Outcome boxes are reserved fallibly before mutation; a late error needs
+    /// no further allocation. See "Allocator Failure And Published Outcomes"
+    /// in `docs/durability-model.md`.
     pub fn write_matrix_cell_durable<T, F>(
         &mut self,
         key: MatrixKey,
@@ -9589,6 +9624,10 @@ impl VarlitFile {
             let matrix = self.matrix.as_ref().ok_or(Error::MatrixLayoutMissing)?;
             crate::matrix::commit_event::<T>(self.spec, matrix, key)?
         };
+        // Allocate existing public error payloads before any mutation, so a
+        // late hook/durability error needs no allocation and Error stays small.
+        let event = crate::fallible::try_box(event)?;
+        let mut error_slot = crate::fallible::try_box(Error::InvalidImmediatePolicy)?;
         self.write_matrix_cell(key, value)?;
         // Pre-publication. Nothing is committed yet, so a failure here is a
         // plain refusal: the slot bytes may be on disk but the commit bit is
@@ -9604,15 +9643,16 @@ impl VarlitFile {
         let previous_generation = self.matrix_generation();
         if let Err(source) = self.sync() {
             self.poison.poison();
+            *error_slot = source;
             return Err(if self.matrix_generation() != previous_generation {
                 Error::MatrixCommittedButDurabilityUnproven {
-                    event: Box::new(event),
-                    source: Box::new(source),
+                    event,
+                    source: error_slot,
                 }
             } else {
                 Error::MatrixPublicationUncertain {
-                    event: Box::new(event),
-                    source: Box::new(source),
+                    event,
+                    source: error_slot,
                 }
             });
         }
@@ -9622,9 +9662,12 @@ impl VarlitFile {
         // `Error::MatrixCommittedButHookFailed` carrying the committed event,
         // so a caller can retry the notification alone instead of repeating
         // the durable write and duplicating the hook's external work.
-        hook(event.clone()).map_err(|source| Error::MatrixCommittedButHookFailed {
-            event: Box::new(event),
-            source: Box::new(source),
+        hook((*event).clone()).map_err(|source| {
+            *error_slot = source;
+            Error::MatrixCommittedButHookFailed {
+                event,
+                source: error_slot,
+            }
         })
     }
 
@@ -10079,7 +10122,7 @@ impl VarlitFile {
         )
         .map_err(|_| Error::InvalidMatrixLayout)?;
         let len = usize::try_from(block.stride).map_err(|_| Error::InvalidMatrixLayout)?;
-        Ok(Some(block.slots[start..start + len].to_vec()))
+        Ok(Some(u8::try_clone_slice(&block.slots[start..start + len])?))
     }
 
     /// Whether the open chunk holds a committed value for this cell.
@@ -11666,7 +11709,7 @@ impl VarlitFile {
             .matrix
             .as_ref()
             .ok_or(Error::MatrixLayoutMissing)?
-            .clone();
+            .try_clone()?;
         let mapped_len = self.snapshot.len();
         // `MmapLen` alone. `FileLen` was checked here too, against the same
         // value — the mapping's length is the snapshot's length — so it bounded
@@ -11789,11 +11832,20 @@ impl VarlitFile {
                 self.poison.poison();
                 // F-07: the caller folds in a parent-directory sync failure it
                 // already observed, via `Error::with_pending_parent_sync`.
-                Err(Error::PublishedButRebindFailed {
-                    sequence,
-                    source: Box::new(source),
-                    parent_sync: None,
-                })
+                Err(crate::fallible::boxed_error(
+                    source,
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::PublishedRebind {
+                            sequence,
+                            parent_sync_pending: false,
+                        },
+                    },
+                    |source| Error::PublishedButRebindFailed {
+                        sequence,
+                        source,
+                        parent_sync: None,
+                    },
+                ))
             }
         }
     }
@@ -11859,11 +11911,20 @@ impl VarlitFile {
                 self.poison.poison();
                 // F-07: the caller folds in a parent-directory sync failure it
                 // already observed, via `Error::with_pending_parent_sync`.
-                Err(Error::PublishedButRebindFailed {
-                    sequence: info.sequence,
-                    source: Box::new(source),
-                    parent_sync: None,
-                })
+                Err(crate::fallible::boxed_error(
+                    source,
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::PublishedRebind {
+                            sequence: info.sequence,
+                            parent_sync_pending: false,
+                        },
+                    },
+                    |source| Error::PublishedButRebindFailed {
+                        sequence: info.sequence,
+                        source,
+                        parent_sync: None,
+                    },
+                ))
             }
         }
     }
@@ -12491,10 +12552,11 @@ impl VarlitFile {
             return Ok(None);
         };
         let framed = encode_cold_header_tails_region(self.spec)?;
-        let cold = framed
-            .get(HEADER_TAILS_BLOCK_FRAMING_LEN..)
-            .ok_or(Error::InvalidCompressionHeader)?
-            .to_vec();
+        let cold = u8::try_clone_slice(
+            framed
+                .get(HEADER_TAILS_BLOCK_FRAMING_LEN..)
+                .ok_or(Error::InvalidCompressionHeader)?,
+        )?;
         if extent.payload_len != cold.len() {
             // `write_header_tails` leaves a region of unknown geometry alone,
             // and for a *write* that is right: it cannot encode a slot it does
@@ -14063,10 +14125,14 @@ fn write_keyed_values_atomically(
         // must not treat this as "target unchanged".
         Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
             temp.retain();
-            Err(Error::PublishedButParentSyncPending {
-                path: output.display().to_string(),
-                source: Box::new(sync_error),
-            })
+            Err(crate::fallible::boxed_path_error(
+                sync_error,
+                output,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ))
         }
         Err(error) => {
             if matches!(error, Error::ReplacePublicationIndeterminate { .. }) {
@@ -15436,10 +15502,14 @@ fn write_matrix_sidecar_file<P: AsRef<Path>>(
             // now-published file, and surface the durability gap so a caller
             // that needs a hard guarantee can react (a regenerable sidecar may
             // simply be rewritten).
-            Err(Error::PublishedButParentSyncPending {
-                path: sidecar_path.display().to_string(),
-                source: Box::new(sync_error),
-            })
+            Err(crate::fallible::boxed_path_error(
+                sync_error,
+                sidecar_path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ))
         }
         Err(error) => Err(preserve_temp_on_indeterminate(&temp_path, error)),
     }
@@ -18801,3 +18871,10 @@ mod mmap_views;
 use mmap_views::*;
 #[cfg(feature = "mmap")]
 pub use mmap_views::{MmapMatrix, MmapPayloadWindow, MmapPayloads};
+
+impl crate::TryClone for RecordIndexEntry {
+    fn try_clone(&self) -> Result<Self> {
+        // All fields are integers, booleans, or Option<u64>; no owned heap data.
+        Ok(self.clone())
+    }
+}

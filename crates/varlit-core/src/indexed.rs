@@ -1318,10 +1318,13 @@ impl VarlitIndexedWriter {
         self.stream.poison();
         match error {
             already @ Error::PublishedButIndexStale { .. } => already,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         }
     }
 
@@ -1380,10 +1383,18 @@ impl VarlitIndexedWriter {
             )
         {
             self.stream.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: info.sequence,
-                source: Box::new(index_error(error)),
-            });
+            return Err(crate::fallible::boxed_error(
+                index_error(error),
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
         }
         self.finish_record(info.sequence)?;
         Ok(info)
@@ -1411,10 +1422,18 @@ impl VarlitIndexedWriter {
             .map_err(index_error);
         if let Err(error) = result {
             self.stream.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: info.sequence,
-                source: Box::new(error),
-            });
+            return Err(crate::fallible::boxed_error(
+                error,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
         }
         self.finish_record(info.sequence)?;
         Ok(info)
@@ -1428,10 +1447,13 @@ impl VarlitIndexedWriter {
         }
         self.commit_pending_batch().map_err(|error| match error {
             Error::PublishedButIndexStale { .. } => error,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         })
     }
 
@@ -1729,10 +1751,14 @@ where
             // parent-directory entry's durability is pending. Preserve the
             // published sidecar and surface the durability gap exactly like
             // the native and matrix publication paths.
-            return Err(Error::PublishedButParentSyncPending {
-                path: path.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     Ok(DiskIndexRebuildReport {
@@ -1826,10 +1852,14 @@ fn create_index_store(
             // Publication already happened: keep the published sidecar and
             // report the pending parent-directory durability instead of
             // silently promoting it to full success.
-            return Err(Error::PublishedButParentSyncPending {
-                path: sidecar.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &sidecar,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     DiskIndexStore::open_writer_validated(&sidecar, options, metadata.identity, metadata.mode)

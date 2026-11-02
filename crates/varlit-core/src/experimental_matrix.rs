@@ -4,6 +4,8 @@
 //! With reuse enabled, each read retries against the latest confirmed generation;
 //! it does not retain a historical snapshot. Only owned reads are exposed.
 //! The experimental file format is separate from the native format and may change.
+use crate::TryClone;
+use crate::fallible::Arc;
 use crate::format::ReadLimitKey;
 use crate::{
     BlockKind, Decoder, FormatSpec, MatrixDimensions, MatrixKey, VarlitMatrixBlock, VarlitReader,
@@ -14,10 +16,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PAGE: u64 = 4096;
 const HEADER: u64 = 3 * PAGE;
@@ -731,7 +730,9 @@ impl MatrixWriter {
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let inner = if !options.reuse {
-            WriterInner::Native(Box::new(spec.create_writer_with_dims(&path, dims.clone())?))
+            WriterInner::Native(crate::fallible::try_box(
+                spec.create_writer_with_dims(&path, dims.try_clone()?)?,
+            )?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let file = LockedFile::new(File::create_new(&path)?)?;
@@ -753,7 +754,7 @@ impl MatrixWriter {
             }
             file.sync_all()?;
             crate::file::sync_parent_directory(&path)?;
-            WriterInner::Reuse(Box::new(ReuseWriter {
+            WriterInner::Reuse(crate::fallible::try_box(ReuseWriter {
                 file,
                 stage,
                 journal,
@@ -769,8 +770,8 @@ impl MatrixWriter {
                 bitmap_window: None,
                 poisoned: false,
                 publishing: None,
-                notify: Arc::new(AtomicU64::new(0)),
-            }))
+                notify: crate::fallible::try_arc(AtomicU64::new(0))?,
+            })?)
         };
         Ok(Self {
             inner,
@@ -789,7 +790,7 @@ impl MatrixWriter {
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let inner = if !options.reuse {
-            WriterInner::Native(Box::new(spec.open_writer(&path)?))
+            WriterInner::Native(crate::fallible::try_box(spec.open_writer(&path)?)?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.canonicalize()?;
@@ -815,10 +816,10 @@ impl MatrixWriter {
                 bitmap_window: None,
                 poisoned: false,
                 publishing: None,
-                notify: Arc::new(AtomicU64::new(head.generation)),
+                notify: crate::fallible::try_arc(AtomicU64::new(head.generation))?,
             };
             w.recover()?;
-            WriterInner::Reuse(Box::new(w))
+            WriterInner::Reuse(crate::fallible::try_box(w)?)
         };
         Ok(Self {
             inner,
@@ -832,7 +833,8 @@ impl MatrixWriter {
     /// with this writer, never their caches. Separately opened/process readers use the
     /// authoritative disk heads and have the same retry correctness contract.
     pub fn reader(&self) -> Result<MatrixReader> {
-        let mut r = MatrixReader::open(self.spec, &self.path, self.dims.clone(), self.options)?;
+        let mut r =
+            MatrixReader::open(self.spec, &self.path, self.dims.try_clone()?, self.options)?;
         if let (WriterInner::Reuse(w), ReaderInner::Reuse(v)) = (&self.inner, &mut r.inner) {
             if v.nonce != w.nonce {
                 return Err(invalid("writer pathname was replaced"));
@@ -885,14 +887,29 @@ impl MatrixWriter {
                     }
                     Err(source) => match w.publishing {
                         Some(generation) if w.head.generation == generation => {
-                            Err(MatrixReuseError::Published {
-                                generation,
-                                source: Box::new(source),
+                            Err(match crate::fallible::try_box(source) {
+                                Ok(source) => MatrixReuseError::Published { generation, source },
+                                Err(_) => MatrixReuseError::Native(
+                                    crate::Error::ErrorContextAllocationFailed {
+                                        context: crate::AllocationFailureContext::ReusePublished {
+                                            generation,
+                                        },
+                                    },
+                                ),
                             })
                         }
-                        Some(generation) => Err(MatrixReuseError::PublicationIndeterminate {
-                            generation,
-                            source: Box::new(source),
+                        Some(generation) => Err(match crate::fallible::try_box(source) {
+                            Ok(source) => {
+                                MatrixReuseError::PublicationIndeterminate { generation, source }
+                            }
+                            Err(_) => MatrixReuseError::Native(
+                                crate::Error::ErrorContextAllocationFailed {
+                                    context:
+                                        crate::AllocationFailureContext::ReusePublicationUncertain {
+                                            generation,
+                                        },
+                                },
+                            ),
                         }),
                         None => Err(source),
                     },
@@ -1398,7 +1415,7 @@ impl MatrixReader {
         options: MatrixOptions,
     ) -> Result<Self> {
         let inner = if !options.reuse {
-            ReaderInner::Native(Box::new(spec.open_reader(path)?))
+            ReaderInner::Native(crate::fallible::try_box(spec.open_reader(path)?)?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.as_ref().canonicalize()?;
@@ -1409,14 +1426,14 @@ impl MatrixReader {
                 .read_limits
                 .check(ReadLimitKey::FileLen, file.metadata()?.len())?;
             read_head(&file, nonce)?;
-            ReaderInner::Reuse(Box::new(ReuseReader {
+            ReaderInner::Reuse(crate::fallible::try_box(ReuseReader {
                 journal: File::open(companion(&path, ".reuse-journal"))?,
                 file,
                 geometry,
                 nonce,
                 notify: None,
                 cache: RefCell::new(None),
-            }))
+            })?)
         };
         Ok(Self {
             inner,

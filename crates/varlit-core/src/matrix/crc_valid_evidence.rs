@@ -265,3 +265,26 @@ impl CompleteCrcValidEvidence<'_> {
         self.bits.get(ordinal, read)
     }
 }
+
+impl crate::TryClone for CrcValidEvidence {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            bits: self.bits.try_clone()?,
+            complete: self.complete,
+        })
+    }
+}
+
+#[cfg(test)]
+mod fallible_copy_tests {
+    use super::*;
+    use crate::TryClone;
+    #[test]
+    fn fallible_copy_never_upgrades_incomplete_evidence() {
+        let value =
+            CrcValidEvidence::from_parts_for_tests_only(SparseBitmap::new(8).unwrap(), false);
+        let copy = value.try_clone().unwrap();
+        assert!(copy.complete(BitmapRead::Stored).is_err());
+        assert!(value.complete(BitmapRead::Stored).is_err());
+    }
+}

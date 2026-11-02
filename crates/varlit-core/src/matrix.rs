@@ -1,10 +1,11 @@
+use crate::TryClone;
+use crate::fallible::Arc;
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::SeekFrom;
 #[cfg(test)]
 use std::io::{Seek, Write};
-use std::sync::Arc;
 
 use crate::codec::encode_to_vec_limited;
 use crate::format::ReadLimitKey;
@@ -1832,6 +1833,31 @@ impl Clone for SparseBitmap {
     }
 }
 
+impl TryClone for SparseBitmap {
+    fn try_clone(&self) -> Result<Self> {
+        let source = self.store();
+        Ok(Self {
+            bit_count: self.bit_count,
+            byte_len: self.byte_len,
+            page_count: self.page_count,
+            store: RefCell::new(PageStore {
+                pages: source.pages.try_clone()?,
+                ones: source.ones,
+                charged_bytes: source.charged_bytes,
+                cached_bytes: source.cached_bytes,
+                // The recency chain rides along inside `pages`: its links are
+                // page numbers, which are stable across the clone, so copying
+                // the two ends is the whole of it.
+                lru_head: source.lru_head,
+                lru_tail: source.lru_tail,
+            }),
+            backing: self.backing.try_clone()?,
+            directory: self.directory.try_clone()?,
+            direct: self.direct.try_clone()?,
+        })
+    }
+}
+
 impl SparseBitmap {
     fn rebind_backing(&mut self, source: &Source) {
         if let Some(index) = &mut self.direct {
@@ -2007,7 +2033,7 @@ impl SparseBitmap {
         store.pages.insert(
             page,
             BitmapPage {
-                bytes: Arc::new(bytes),
+                bytes: crate::fallible::try_arc(bytes)?,
                 ones,
                 cached: true,
                 lru_prev: NO_PAGE,
@@ -2313,10 +2339,10 @@ impl SparseBitmap {
                 if within >= existing.bytes.len() {
                     return Err(Error::InvalidMatrixLayout);
                 }
-                // Take unique ownership now. `Arc::make_mut` clones a shared
-                // payload, and a clone is an allocation; doing it here means the
-                // `make_mut` after persistence can only ever be a no-op.
-                let _ = Arc::make_mut(&mut existing.bytes);
+                // Separate shared bytes fallibly before persistence. A refusal
+                // leaves held snapshots intact; commitment only borrows the
+                // unique page and cannot allocate.
+                let _ = crate::fallible::try_make_mut(&mut existing.bytes)?;
                 page_ones = existing.ones;
             }
             None => {
@@ -2339,7 +2365,7 @@ impl SparseBitmap {
                     ReadLimitKey::MatrixBitmapBytes.resource(),
                 )?;
                 fresh = Some(BitmapPage {
-                    bytes: Arc::new(bytes),
+                    bytes: crate::fallible::try_arc(bytes)?,
                     ones: 0,
                     cached: false,
                     // Never linked: `cached: false` keeps it out of the
@@ -2397,7 +2423,10 @@ impl SparseBitmap {
             // Unreachable: preparation either found the page or built one.
             return PageResidencyDelta::NONE;
         };
-        if let Some(slot) = Arc::make_mut(&mut page.bytes).get_mut(prepared.within) {
+        if let Some(slot) = Arc::get_mut(&mut page.bytes)
+            .expect("page separated before persistence")
+            .get_mut(prepared.within)
+        {
             *slot = prepared.value;
         }
         page.ones = prepared.page_ones_after;
@@ -3217,10 +3246,20 @@ impl MatrixLayout {
         let block = &self.blocks[block_index];
         let dim0 = self
             .dimension(&block.dimensions[0])
-            .ok_or_else(|| Error::MatrixDimensionMissing(block.dimensions[0].clone()))?;
+            .map(Ok)
+            .unwrap_or_else(|| {
+                Err(Error::MatrixDimensionMissing(
+                    block.dimensions[0].try_clone()?,
+                ))
+            })?;
         let dim1 = self
             .dimension(&block.dimensions[1])
-            .ok_or_else(|| Error::MatrixDimensionMissing(block.dimensions[1].clone()))?;
+            .map(Ok)
+            .unwrap_or_else(|| {
+                Err(Error::MatrixDimensionMissing(
+                    block.dimensions[1].try_clone()?,
+                ))
+            })?;
         if key.scan >= dim0 || key.ch >= dim1 {
             return Err(Error::MatrixKeyOutOfBounds {
                 scan: key.scan,
@@ -3349,7 +3388,7 @@ pub(crate) fn create_layout(
     )?;
     for (index, value) in dimensions.iter().enumerate() {
         dimension_index.insert(
-            value.name.clone(),
+            value.name.try_clone()?,
             u16::try_from(index).map_err(|_| Error::InvalidMatrixLayout)?,
         );
     }
@@ -3363,7 +3402,7 @@ pub(crate) fn create_layout(
     let mut next_commit_offset = commit_map_off;
     for (name, _, bit_count) in &commit_plans {
         let len = bit_bytes(*bit_count)?;
-        commit_offsets.insert(name.clone(), (next_commit_offset, len));
+        commit_offsets.insert(name.try_clone()?, (next_commit_offset, len));
         next_commit_offset = next_commit_offset
             .checked_add(len)
             .ok_or(Error::InvalidMatrixLayout)?;
@@ -4682,7 +4721,7 @@ pub(crate) fn verify_matrix_metadata(
             &mut buffer,
         )?;
         if !intact {
-            fresh.insert(commit.name.clone(), commit_map_finding(&commit.name));
+            fresh.insert(commit.name.try_clone()?, commit_map_finding(&commit.name));
         }
     }
     let mut report = report_from(layout, Some(&fresh), BitmapRead::new(file));
@@ -4812,7 +4851,7 @@ fn report_from(
 /// relaxes *reading* fatal state, not writing into a half-published index; the
 /// route back is to reopen with forensics and rebuild.
 fn poison_interrupted_rebuild(layout: &mut MatrixLayout, commit_index: usize) {
-    let category = layout.commits[commit_index].name.clone();
+    let category = &layout.commits[commit_index].name;
     layout.crc_findings.push(MatrixRecoveryFinding {
         kind: MatrixCorruptionKind::CommitMap,
         severity: MatrixCorruptionSeverity::Fatal,
@@ -5227,7 +5266,7 @@ fn prepare_commit_bit(
     layout.ensure_fatal_access_allowed()?;
     let commit = &mut layout.commits[commit_index];
     if commit.quarantine_finding.is_some() {
-        return Err(Error::MatrixCommitQuarantined(commit.name.clone()));
+        return Err(Error::MatrixCommitQuarantined(commit.name.try_clone()?));
     }
     let bitmap = prepare_bitmap_update(
         &mut commit.bits,
@@ -6250,17 +6289,9 @@ fn matrix_aux_offsets(spec: FormatSpec, start: u64) -> Result<HashMap<String, (u
 }
 
 fn aux_absolute_offset(aux: &MatrixAuxLayout, offset: u64, len: u64) -> Result<u64> {
-    let end = offset
-        .checked_add(len)
-        .ok_or_else(|| Error::MatrixAuxOutOfBounds {
-            name: aux.name.clone(),
-            offset,
-            len,
-            byte_len: aux.byte_len,
-        })?;
-    if end > aux.byte_len {
+    if offset.checked_add(len).is_none_or(|end| end > aux.byte_len) {
         return Err(Error::MatrixAuxOutOfBounds {
-            name: aux.name.clone(),
+            name: aux.name.try_clone()?,
             offset,
             len,
             byte_len: aux.byte_len,
@@ -6306,9 +6337,11 @@ fn layout_from_parts(
     for (commit_index, ((name, kind, bit_count), raw_bits)) in
         commit_plans.iter().zip(commit_bits).enumerate()
     {
-        let (map_offset, map_len) = *commit_offsets
-            .get(name)
-            .ok_or_else(|| Error::MatrixCommitMissing(name.clone()))?;
+        let (map_offset, map_len) = *commit_offsets.get(name).ok_or_else(|| {
+            name.try_clone()
+                .map(Error::MatrixCommitMissing)
+                .unwrap_or_else(|error| error)
+        })?;
         if raw_bits.byte_len != map_len {
             return Err(Error::InvalidMatrixLayout);
         }
@@ -6323,7 +6356,7 @@ fn layout_from_parts(
         // itself, because `ones_total` authenticates what it reads.
         let quarantine_finding = commit_findings.remove(name);
         commits.push(MatrixCommitLayout {
-            name: name.clone(),
+            name: name.try_clone()?,
             kind: *kind,
             bit_count: *bit_count,
             map_offset,
@@ -6780,20 +6813,20 @@ impl LazyResidency {
             .checked_mul(BITMAP_PAGE_BYTES)
             .ok_or(Error::InvalidMatrixLayout)?;
         Ok(Self {
-            file: Box::new(file.source()?),
+            file: crate::fallible::try_box(file.source()?)?,
             pool: MatrixReadPool::new(),
             cache_limit,
         })
     }
 
-    fn backing(&self, source: &PagedBitmapSource<'_>) -> LazyBacking {
-        LazyBacking {
-            file: self.file.clone(),
+    fn backing(&self, source: &PagedBitmapSource<'_>) -> Result<LazyBacking> {
+        Ok(LazyBacking {
+            file: self.file.try_clone()?,
             pool: self.pool.clone(),
             base_offset: source.base_offset,
             digest_base: source.digest_base,
             cache_limit: self.cache_limit,
-        }
+        })
     }
 }
 
@@ -7066,7 +7099,7 @@ fn load_paged_bitmap(
             true
         }
     };
-    bits.backing = Some(source.residency.backing(&source));
+    bits.backing = Some(source.residency.backing(&source)?);
     Ok(LoadedPagedBitmap {
         bits,
         intact,
@@ -7150,7 +7183,7 @@ fn load_commit_bitmaps(
         if !intact {
             verification
                 .commit_findings
-                .insert(name.clone(), commit_map_finding(name));
+                .insert(name.try_clone()?, commit_map_finding(name));
         }
         bitmaps.push(bits);
     }
@@ -7532,9 +7565,11 @@ fn encode_category_table(
     })?;
     try_reserve_bytes(&mut bytes, expected_len, MATRIX_DESCRIPTOR_RESOURCE)?;
     for (name, kind, bit_count) in commits {
-        let (map_off, map_len) = *offsets
-            .get(name)
-            .ok_or_else(|| Error::MatrixCommitMissing(name.clone()))?;
+        let (map_off, map_len) = *offsets.get(name).ok_or_else(|| {
+            name.try_clone()
+                .map(Error::MatrixCommitMissing)
+                .unwrap_or_else(|error| error)
+        })?;
         write_name(&mut bytes, name)?;
         bytes.push(commit_kind_byte(*kind));
         bytes.extend_from_slice(&[0; 3]);
@@ -7649,7 +7684,7 @@ fn validate_commit_table(
             return Err(Error::InvalidMatrixLayout);
         }
         if offsets
-            .insert(expected_name.clone(), (actual.3, actual.4))
+            .insert(expected_name.try_clone()?, (actual.3, actual.4))
             .is_some()
         {
             return Err(Error::InvalidMatrixLayout);
@@ -9614,3 +9649,111 @@ mod sparse;
 use sparse::*;
 
 pub use sparse::MatrixStorageDiagnostics;
+
+impl TryClone for MatrixDimensionValue {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            name: self.name.try_clone()?,
+            value: self.value,
+        })
+    }
+}
+impl TryClone for MatrixDimensions {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            values: self.values.try_clone()?,
+        })
+    }
+}
+impl TryClone for PackedBitmap {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            bit_len: self.bit_len,
+            bytes: self.bytes.try_clone()?,
+        })
+    }
+}
+impl TryClone for MatrixRecoveryFinding {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            kind: self.kind,
+            severity: self.severity,
+            message: self.message.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for BitmapPage {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            ones: self.ones,
+            cached: self.cached,
+            lru_prev: self.lru_prev,
+            lru_next: self.lru_next,
+            bytes: self.bytes.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for LazyBacking {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            base_offset: self.base_offset,
+            digest_base: self.digest_base,
+            cache_limit: self.cache_limit,
+            file: self.file.try_clone()?,
+            pool: self.pool.clone(),
+        })
+    }
+}
+
+impl TryClone for MatrixCommitLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            kind: self.kind,
+            bit_count: self.bit_count,
+            map_offset: self.map_offset,
+            digest_offset: self.digest_offset,
+            index_offset: self.index_offset,
+            name: self.name.try_clone()?,
+            bits: self.bits.try_clone()?,
+            quarantine_finding: self.quarantine_finding.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for MatrixBlockLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            block_id: self.block_id,
+            slot_stride: self.slot_stride,
+            slot_region_offset: self.slot_region_offset,
+            cell_count: self.cell_count,
+            crc_offset: self.crc_offset,
+            crc_valid_offset: self.crc_valid_offset,
+            crc_valid_index_offset: self.crc_valid_index_offset,
+            crc_valid_bits: self.crc_valid_bits.try_clone()?,
+            current_write_bits: self.current_write_bits.try_clone()?,
+            dimensions: [
+                self.dimensions[0].try_clone()?,
+                self.dimensions[1].try_clone()?,
+            ],
+        })
+    }
+}
+
+impl TryClone for MatrixAuxLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            offset: self.offset,
+            byte_len: self.byte_len,
+            name: self.name.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for MatrixLayout {
+    fn try_clone(&self) -> Result<Self> {
+        fatal_access::try_clone_layout(self)
+    }
+}
