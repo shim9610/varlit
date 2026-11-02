@@ -505,6 +505,10 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
           cargo audit
+      - name: Vendored package advisories and detection control
+        run: |
+          python3 scripts/check_vendored_advisories.py --self-test
+          python3 scripts/check_vendored_advisories.py
 
   # F-09 negative policy fixture. `deny.toml` enables `allow-wildcard-paths`,
   # which is a CATEGORY allowance, not an allowance for the single
