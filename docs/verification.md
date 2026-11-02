@@ -57,7 +57,7 @@ prefix correctness. Five unwind steps cover these four-row loops; unwinding
 assertions stay enabled. This is a proof bound, not a limit on accepted files.
 Ordinary tests and large-file resource/performance qualification still apply.
 CI checks both feature configurations against
-[the contract manifest](verification/proof-contracts.json), currently 28 harnesses.
+[the contract manifest](verification/proof-contracts.json), currently 34 harnesses.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
 unfinished proofs and verifies source hashes captured before and after each run.
 A zero-harness result fails.
@@ -179,3 +179,8 @@ Miri and fuzzing keep their existing limitations and manifests; adding these
 tools does not make all input combinations verified. Properties, model setup
 and expected outcomes still need to be specified by maintainers. Verus and
 Ferrocene are not introduced in this change.
+
+[Conditional memory contract excluding BTreeMap](verification/conditional-memory-20261102/README.md)
+adds decoder charge/transfer and rehash-overlap obligations. Its whole-library
+acceptance target remains open; passing the registered harnesses is not a global
+OOM-free claim.

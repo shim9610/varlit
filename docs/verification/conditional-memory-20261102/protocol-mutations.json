@@ -1,0 +1,121 @@
+{
+  "driver_sha256": "9e0652073c2546688d6d18d85621f5bd45b56f3c280dd618b285a28a47b981e0",
+  "proofs_sha256": "dfcf3c441e0d27a86e036ec67673b50b64a1b94f121c79ecdb540325f5434aa9",
+  "bindings": [
+    {
+      "path": "indexed.rs",
+      "method": "pub fn sync(&mut self)",
+      "driver": "commit"
+    },
+    {
+      "path": "indexed.rs",
+      "method": "pub fn follow(&mut self)",
+      "driver": "follow"
+    },
+    {
+      "path": "stream.rs",
+      "method": "pub(crate) fn restore_checkpointed(",
+      "driver": "restore"
+    },
+    {
+      "path": "disk_index/storage.rs",
+      "method": "pub fn publish(",
+      "driver": "checkpoint"
+    },
+    {
+      "path": "disk_index/storage.rs",
+      "method": "pub(super) fn reconcile_confirmed_heads(",
+      "driver": "resume"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "volatile-head-resume",
+      "harness": "resumed_writer_cannot_acknowledge_a_volatile_head",
+      "expected_assertion": "resumed writer acknowledged volatile head",
+      "detected": true,
+      "exit_code": 1,
+      "log": "volatile-head-resume.log"
+    },
+    {
+      "name": "newest-head-overwritten-first",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "newest prior anchor was destroyed",
+      "detected": true,
+      "exit_code": 1,
+      "log": "newest-head-overwritten-first.log"
+    },
+    {
+      "name": "readiness-check-omitted",
+      "harness": "poisoned_writer_never_reaches_publication",
+      "expected_assertion": "poisoned writer accepted a commit",
+      "detected": true,
+      "exit_code": 1,
+      "log": "readiness-check-omitted.log"
+    },
+    {
+      "name": "primary-sync-omitted",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "head exposed before primary durability",
+      "detected": true,
+      "exit_code": 1,
+      "log": "primary-sync-omitted.log"
+    },
+    {
+      "name": "checkpoint-sync-omitted",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "head exposed before checkpoint durability",
+      "detected": true,
+      "exit_code": 1,
+      "log": "checkpoint-sync-omitted.log"
+    },
+    {
+      "name": "first-head-sync-omitted",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "assertion failed: self.persisted.iter().any",
+      "detected": true,
+      "exit_code": 1,
+      "log": "first-head-sync-omitted.log"
+    },
+    {
+      "name": "poison-omitted",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "uncertain publication left writer usable",
+      "detected": true,
+      "exit_code": 1,
+      "log": "poison-omitted.log"
+    },
+    {
+      "name": "publication-error-swallowed",
+      "harness": "commit_survives_every_io_failure_effect",
+      "expected_assertion": "assertion failed: result.is_ok() == medium.finished",
+      "detected": true,
+      "exit_code": 1,
+      "log": "publication-error-swallowed.log"
+    },
+    {
+      "name": "recovery-published-before-sync",
+      "harness": "recovery_never_publishes_before_truncate_and_sync",
+      "expected_assertion": "recovery published before native sync",
+      "detected": true,
+      "exit_code": 1,
+      "log": "recovery-published-before-sync.log"
+    },
+    {
+      "name": "follow-error-panics",
+      "harness": "follow_error_preserves_the_entire_reader",
+      "expected_assertion": "failed follow panicked",
+      "detected": true,
+      "exit_code": 1,
+      "log": "follow-error-panics.log"
+    },
+    {
+      "name": "success-without-publication",
+      "harness": "successful_commit_is_reachable_and_durable",
+      "expected_assertion": "assertion failed: medium.finished",
+      "detected": true,
+      "exit_code": 1,
+      "log": "success-without-publication.log"
+    }
+  ]
+}

@@ -127,6 +127,23 @@
       ],
       "scope": "full-width decreasing fuel",
       "limits": "Binding guard plus real CRC-valid hostile index tests; callbacks and node parser not formally refined"
+    },
+    {
+      "id": "decoder-memory",
+      "harnesses": [
+        "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_zero_width_work",
+        "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
+        "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
+        "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
+        "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables"
+      ],
+      "sources": [
+        "crates/varlit-core/src/codec.rs",
+        "crates/varlit-core/src/verification/decoder.rs"
+      ],
+      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting",
+      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom codecs. Hash table layout bound assumes the documented supported std layout. No global process OOM claim."
     }
   ]
 }
