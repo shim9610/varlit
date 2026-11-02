@@ -161,14 +161,13 @@ impl SnapshotFile {
 
         let mut consumed = 0usize;
         while consumed < buffer.len() {
-            let current_offset = offset
-                .checked_add(
-                    u64::try_from(consumed)
-                        .map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
-                )
-                .ok_or(Error::ResourceArithmeticOverflow {
+            let Some(current_offset) = offset.checked_add(
+                u64::try_from(consumed).map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
+            ) else {
+                return Err(Error::ResourceArithmeticOverflow {
                     resource: "snapshot read offset",
-                })?;
+                });
+            };
             match read_at(&self.file, &mut buffer[consumed..], current_offset) {
                 Ok(0) => return Err(Error::UnexpectedEof),
                 Ok(read) => consumed += read,
