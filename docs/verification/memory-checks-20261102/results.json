@@ -1,0 +1,789 @@
+{
+  "base": "e84d0d93af5b689057f9b1c7e7b1f332002a9c62",
+  "kani_revision": "947fcec757d9b6a2d07283a0952aaa088e1d8df1",
+  "standard_proofs": {
+    "default": 52,
+    "all": 52,
+    "same_sources": true
+  },
+  "extra_memory": {
+    "value_validity_harnesses_per_configuration": 2,
+    "initialization_harnesses_per_configuration": 1,
+    "calibration_controls_per_configuration": 6,
+    "full_ownership_initialization": "blocked",
+    "full_diagnostic_exit_code": 1
+  },
+  "native_workspace": {
+    "passed": 1352,
+    "ignored": 27,
+    "selection": "workspace --all-features --lib --tests; UI snapshots skipped"
+  },
+  "miri": {
+    "unit": 7,
+    "integration": 6
+  },
+  "mutation_controls": {
+    "ownership": 5,
+    "publication": 11,
+    "resource": 17
+  },
+  "python_tests": 47,
+  "runtime_binaries": [
+    {
+      "binary": "matrix_ownership_load",
+      "before": "e7d3fff4e07816ad209f3799e608cc46828f1e4168a76c6f1e9199b51e73a1c9",
+      "after": "e7d3fff4e07816ad209f3799e608cc46828f1e4168a76c6f1e9199b51e73a1c9",
+      "identical": true
+    },
+    {
+      "binary": "oom_maintenance_load",
+      "before": "f13dd04b80fadabfcd547d7645420c2088d13bbfdb50409a1d1ec5d1429bc41a",
+      "after": "f13dd04b80fadabfcd547d7645420c2088d13bbfdb50409a1d1ec5d1429bc41a",
+      "identical": true
+    },
+    {
+      "binary": "ownership_boundary_load",
+      "before": "b9cf05069a37987630d32dd56a244d63e9f5608d2a3bc6b8dbf6422ab2f55e44",
+      "after": "b9cf05069a37987630d32dd56a244d63e9f5608d2a3bc6b8dbf6422ab2f55e44",
+      "identical": true
+    },
+    {
+      "binary": "ownership_load",
+      "before": "b38d9581e8ce23c7f460cb480ed8c28ca664248b73afb6735cdb3030b0478cac",
+      "after": "b38d9581e8ce23c7f460cb480ed8c28ca664248b73afb6735cdb3030b0478cac",
+      "identical": true
+    },
+    {
+      "binary": "record_mutation_load",
+      "before": "412c7d1292767a7d96f7b67c0a92d4f8a5bc81cfd4b85e7995b6dc9fb16fa8ea",
+      "after": "bc80c3cec106dab634950fd800c67309f39cc9e53a892eac15d7032374797936",
+      "identical": false
+    },
+    {
+      "binary": "scalable_load",
+      "before": "47b4876c3dfee505766d85a3448989dd4f214aeff2e58f42dac3439694ba2f4d",
+      "after": "47b4876c3dfee505766d85a3448989dd4f214aeff2e58f42dac3439694ba2f4d",
+      "identical": true
+    }
+  ],
+  "resources": {
+    "complex-before": {
+      "command": [
+        "/workspace/scratch/kani-checks/before-bin/oom_maintenance_load",
+        "complex",
+        "65536",
+        "512"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 217,
+      "peaks": {
+        "rss_bytes": 8777728,
+        "temporary_deleted_logical_bytes": 4194190,
+        "temporary_deleted_allocated_bytes": 4194304,
+        "deleted_regular_logical_bytes": 51447742,
+        "open_regular_allocated_bytes": 91955200,
+        "cgroup_current_bytes": 6811205632
+      },
+      "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.506936498}\n",
+      "stderr": ""
+    },
+    "complex-after": {
+      "command": [
+        "/workspace/scratch/kani-checks/after-bin/oom_maintenance_load",
+        "complex",
+        "65536",
+        "512"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 203,
+      "peaks": {
+        "rss_bytes": 8802304,
+        "temporary_deleted_logical_bytes": 4194190,
+        "temporary_deleted_allocated_bytes": 4194304,
+        "deleted_regular_logical_bytes": 51447742,
+        "open_regular_allocated_bytes": 91955200,
+        "cgroup_current_bytes": 6811406336
+      },
+      "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.519918941}\n",
+      "stderr": ""
+    },
+    "clone-large-before": {
+      "command": [
+        "/workspace/scratch/kani-checks/before-bin/ownership_load",
+        "bytes",
+        "1073741824",
+        "2"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 216,
+      "peaks": {
+        "rss_bytes": 2148601856,
+        "temporary_deleted_logical_bytes": 0,
+        "temporary_deleted_allocated_bytes": 0,
+        "deleted_regular_logical_bytes": 0,
+        "open_regular_allocated_bytes": 0,
+        "cgroup_current_bytes": 8862916608
+      },
+      "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.809956998}\n",
+      "stderr": ""
+    },
+    "clone-large-after": {
+      "command": [
+        "/workspace/scratch/kani-checks/after-bin/ownership_load",
+        "bytes",
+        "1073741824",
+        "2"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 237,
+      "peaks": {
+        "rss_bytes": 2148659200,
+        "temporary_deleted_logical_bytes": 0,
+        "temporary_deleted_allocated_bytes": 0,
+        "deleted_regular_logical_bytes": 0,
+        "open_regular_allocated_bytes": 0,
+        "cgroup_current_bytes": 8856231936
+      },
+      "stdout": "{\"mode\":\"bytes\",\"count\":1073741824,\"iterations\":2,\"sum\":2147483682,\"seconds\":0.954834976}\n",
+      "stderr": ""
+    }
+  },
+  "performance": {
+    "clone": [
+      {
+        "case": "bytes-67108864",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.503256787,
+            "after": 0.504444012,
+            "change_percent": 0.2359083932235162
+          },
+          "cpu": {
+            "before": 0.527585,
+            "after": 0.529412,
+            "change_percent": 0.34629490982496236
+          },
+          "rss": {
+            "before": 132176,
+            "after": 132200,
+            "change_percent": 0.01815760803776101
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "bytes-1073741824",
+        "pairs": 20,
+        "metrics": {
+          "operation": {
+            "before": 0.810768551,
+            "after": 0.825541994,
+            "change_percent": 1.8221529414008897
+          },
+          "cpu": {
+            "before": 1.1507985,
+            "after": 1.1672535000000002,
+            "change_percent": 1.4298767334159912
+          },
+          "rss": {
+            "before": 2098256,
+            "after": 2098304,
+            "change_percent": 0.0022876140947536427
+          },
+          "writes": {
+            "before": 8.0,
+            "after": 8.0,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": "nested-16384",
+        "pairs": 5,
+        "metrics": {
+          "operation": {
+            "before": 0.069693221,
+            "after": 0.070857081,
+            "change_percent": 1.6699759076998388
+          },
+          "cpu": {
+            "before": 0.074644,
+            "after": 0.076714,
+            "change_percent": 2.7731632817105334
+          },
+          "rss": {
+            "before": 11600,
+            "after": 11644,
+            "change_percent": 0.3793103448275881
+          },
+          "writes": {
+            "before": 8,
+            "after": 8,
+            "change_percent": 0.0
+          }
+        }
+      }
+    ],
+    "native": [
+      {
+        "case": 0,
+        "binary": "record_mutation_load",
+        "args": [
+          "writer",
+          "fixed",
+          "forward",
+          "2000000",
+          "200000"
+        ],
+        "work": {
+          "mode": "writer",
+          "layout": "fixed",
+          "order": "forward",
+          "count": 2000000,
+          "marks": 200000,
+          "source_bytes": 144000230,
+          "frames": 200000,
+          "temporary_bytes": 31457280
+        },
+        "pairs": 5,
+        "metrics": {
+          "operation_seconds": {
+            "before": 0.213700074,
+            "after": 0.216592529,
+            "change_percent": 1.353511463922108
+          },
+          "process_cpu_seconds": {
+            "before": 4.562298,
+            "after": 4.640658,
+            "change_percent": 1.7175554950597194
+          },
+          "process_peak_rss_kib": {
+            "before": 5772,
+            "after": 5800,
+            "change_percent": 0.485100485100487
+          },
+          "process_write_bytes": {
+            "before": 175468544,
+            "after": 175468544,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 4,
+        "binary": "record_mutation_load",
+        "args": [
+          "writer",
+          "large",
+          "reverse",
+          "65536",
+          "4096"
+        ],
+        "work": {
+          "mode": "writer",
+          "layout": "large",
+          "order": "reverse",
+          "count": 65536,
+          "marks": 4096,
+          "source_bytes": 4300734694,
+          "frames": 4096,
+          "temporary_bytes": 0
+        },
+        "pairs": 5,
+        "metrics": {
+          "operation_seconds": {
+            "before": 0.012024438,
+            "after": 0.011352611,
+            "change_percent": -5.587180041179474
+          },
+          "process_cpu_seconds": {
+            "before": 1.483673,
+            "after": 1.478377,
+            "change_percent": -0.35695196987476363
+          },
+          "process_peak_rss_kib": {
+            "before": 3440,
+            "after": 3472,
+            "change_percent": 0.9302325581395321
+          },
+          "process_write_bytes": {
+            "before": 4310904832,
+            "after": 4311052288,
+            "change_percent": 0.0034205348006244307
+          }
+        }
+      },
+      {
+        "case": 7,
+        "binary": "oom_maintenance_load",
+        "args": [
+          "complex",
+          "65536",
+          "512"
+        ],
+        "work": {
+          "mode": "complex",
+          "records": 65536,
+          "payload": 512,
+          "file_bytes": 47253552,
+          "dropped": 9362
+        },
+        "pairs": 5,
+        "metrics": {
+          "operation_seconds": {
+            "before": 0.615575863,
+            "after": 0.635999503,
+            "change_percent": 3.3178103995932684
+          },
+          "process_cpu_seconds": {
+            "before": 1.288864,
+            "after": 1.351909,
+            "change_percent": 4.891516870670598
+          },
+          "process_peak_rss_kib": {
+            "before": 8628,
+            "after": 8600,
+            "change_percent": -0.3245248029670855
+          },
+          "process_write_bytes": {
+            "before": 100384768,
+            "after": 100384768,
+            "change_percent": 0.0
+          }
+        }
+      },
+      {
+        "case": 9,
+        "binary": "oom_maintenance_load",
+        "args": [
+          "chunks",
+          "67108864",
+          "1048576"
+        ],
+        "work": {
+          "mode": "chunks",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "pairs": 5,
+        "metrics": {
+          "operation_seconds": {
+            "before": 0.220313353,
+            "after": 0.216873189,
+            "change_percent": -1.5614868337099796
+          },
+          "process_cpu_seconds": {
+            "before": 0.33143,
+            "after": 0.330944,
+            "change_percent": -0.14663729897715916
+          },
+          "process_peak_rss_kib": {
+            "before": 67728,
+            "after": 67720,
+            "change_percent": -0.011811953697138389
+          },
+          "process_write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      },
+      {
+        "case": 10,
+        "binary": "oom_maintenance_load",
+        "args": [
+          "decode",
+          "67108864",
+          "1048576",
+          "/workspace/scratch/kani-checks/after-perf/native/disk-data/decode-fixture.bin"
+        ],
+        "work": {
+          "mode": "decode",
+          "records": 67108864,
+          "payload": 1048576,
+          "work": 20
+        },
+        "pairs": 5,
+        "metrics": {
+          "operation_seconds": {
+            "before": 0.397434953,
+            "after": 0.409624665,
+            "change_percent": 3.0670961142162056
+          },
+          "process_cpu_seconds": {
+            "before": 0.494234,
+            "after": 0.51501,
+            "change_percent": 4.203676800867595
+          },
+          "process_peak_rss_kib": {
+            "before": 133924,
+            "after": 134056,
+            "change_percent": 0.09856336429616697
+          },
+          "process_write_bytes": {
+            "before": 0,
+            "after": 0,
+            "change_percent": null
+          }
+        }
+      }
+    ],
+    "swmr": {
+      "1": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "1073741824",
+            "--epoch-bytes": "16777216",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 1073741824,
+          "epoch": 16777216,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              12013369885672098846
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              11811335965011780335
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              6575331053473991156
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              15949282062931151593
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              6929931957242686864
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              9247543884215279603
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              14275219730953207679
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              3654627253138164260
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              14350256076685368
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 22.717763996006397,
+            "after": 23.0092814669988,
+            "change_percent": 1.2832137486930906,
+            "before_range": [
+              21.740585918996658,
+              23.683938758003933
+            ],
+            "after_range": [
+              22.553152930995566,
+              23.563310758996522
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 84.619889,
+            "after": 84.496539,
+            "change_percent": -0.14576951288602924,
+            "before_range": [
+              82.475371,
+              87.97981300000001
+            ],
+            "after_range": [
+              83.196699,
+              86.606288
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 26234880,
+            "after": 26161152,
+            "change_percent": -0.2810304449648693,
+            "before_range": [
+              26161152,
+              26234880
+            ],
+            "after_range": [
+              26071040,
+              26161152
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 1142386688,
+            "after": 1142280192,
+            "change_percent": -0.009322237480413609,
+            "before_range": [
+              1142280192,
+              1142456320
+            ],
+            "after_range": [
+              1142276096,
+              1142345728
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      },
+      "4": {
+        "status": "passed",
+        "samples_per_version": 3,
+        "limit_percent": 5,
+        "workload": {
+          "config": {
+            "name": "indexed-r8-20g",
+            "mode": "indexed",
+            "readers": 8,
+            "checks_per_epoch": 16384
+          },
+          "effective_arguments": {
+            "--phase": "write",
+            "--mode": "indexed",
+            "--total-bytes": "4294967296",
+            "--epoch-bytes": "67108864",
+            "--record-bytes": "65536",
+            "--batch-bytes": "4194304",
+            "--index-batch-records": "16384",
+            "--cache-bytes": "8388608",
+            "--readers": "8",
+            "--pinned-readers": "1",
+            "--crc": "true",
+            "--reader-pause-us": "0",
+            "--seconds": "1",
+            "--reader-checks-per-epoch": "16384"
+          },
+          "payload": 4294967296,
+          "epoch": 67108864,
+          "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+          "cpu_max": "400000 100000",
+          "memory_max": "17179869184",
+          "instrumentation": "none",
+          "readers": [
+            [
+              0,
+              1,
+              32,
+              524288,
+              3208747743188020222
+            ],
+            [
+              1,
+              32,
+              32,
+              524288,
+              15746876979075427631
+            ],
+            [
+              2,
+              32,
+              32,
+              524288,
+              9747968542438937268
+            ],
+            [
+              3,
+              32,
+              32,
+              524288,
+              9243847713027586313
+            ],
+            [
+              4,
+              32,
+              32,
+              524288,
+              4903863259750067952
+            ],
+            [
+              5,
+              32,
+              32,
+              524288,
+              5778843666330398067
+            ],
+            [
+              6,
+              32,
+              32,
+              524288,
+              8200585148807637375
+            ],
+            [
+              7,
+              32,
+              32,
+              524288,
+              1933305620900094980
+            ],
+            [
+              8,
+              32,
+              32,
+              524288,
+              12118611058152487384
+            ]
+          ]
+        },
+        "metrics": {
+          "wall_seconds": {
+            "before": 25.20513336300064,
+            "after": 25.81935746599629,
+            "change_percent": 2.4369008255171076,
+            "before_range": [
+              24.899964923999505,
+              26.610642257001018
+            ],
+            "after_range": [
+              25.345695370000612,
+              26.335447808996832
+            ],
+            "status": "passed"
+          },
+          "cpu_seconds": {
+            "before": 89.720207,
+            "after": 91.428427,
+            "change_percent": 1.903941215828886,
+            "before_range": [
+              86.78338600000001,
+              93.018858
+            ],
+            "after_range": [
+              88.07662300000001,
+              93.890983
+            ],
+            "status": "passed"
+          },
+          "observed_peak_rss_bytes": {
+            "before": 51257344,
+            "after": 51261440,
+            "change_percent": 0.007991050023981039,
+            "before_range": [
+              51204096,
+              51257344
+            ],
+            "after_range": [
+              51179520,
+              51261440
+            ],
+            "status": "passed"
+          },
+          "write_bytes": {
+            "before": 4398428160,
+            "after": 4398514176,
+            "change_percent": 0.0019556077050841836,
+            "before_range": [
+              4398395392,
+              4398489600
+            ],
+            "after_range": [
+              4398419968,
+              4398567424
+            ],
+            "status": "passed"
+          }
+        },
+        "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+      }
+    },
+    "primary_observations": 122,
+    "separate_resource_probes": 4,
+    "host": {
+      "cpu.max": "400000 100000\n",
+      "memory.max": "17179869184\n",
+      "memory.events": "low 0\nhigh 0\nmax 1188484\noom 6\noom_kill 3\noom_group_kill 0\n",
+      "binaries": {
+        "before": {
+          "scalable_load": "47b4876c3dfee505766d85a3448989dd4f214aeff2e58f42dac3439694ba2f4d",
+          "matrix_ownership_load": "e7d3fff4e07816ad209f3799e608cc46828f1e4168a76c6f1e9199b51e73a1c9",
+          "ownership_load": "b38d9581e8ce23c7f460cb480ed8c28ca664248b73afb6735cdb3030b0478cac",
+          "ownership_boundary_load": "b9cf05069a37987630d32dd56a244d63e9f5608d2a3bc6b8dbf6422ab2f55e44",
+          "oom_maintenance_load": "f13dd04b80fadabfcd547d7645420c2088d13bbfdb50409a1d1ec5d1429bc41a",
+          "record_mutation_load": "04812f75a076ed68017d7cce344eb7214f866d2c88289c5da474c5a32cf0dc7e"
+        },
+        "after": {
+          "scalable_load": "47b4876c3dfee505766d85a3448989dd4f214aeff2e58f42dac3439694ba2f4d",
+          "matrix_ownership_load": "e7d3fff4e07816ad209f3799e608cc46828f1e4168a76c6f1e9199b51e73a1c9",
+          "ownership_load": "b38d9581e8ce23c7f460cb480ed8c28ca664248b73afb6735cdb3030b0478cac",
+          "ownership_boundary_load": "b9cf05069a37987630d32dd56a244d63e9f5608d2a3bc6b8dbf6422ab2f55e44",
+          "oom_maintenance_load": "f13dd04b80fadabfcd547d7645420c2088d13bbfdb50409a1d1ec5d1429bc41a",
+          "record_mutation_load": "b68d036b74c064e2897c72d40c03bbe078b7227fe3dd6a915c625ffdbea74d1d"
+        }
+      },
+      "memory.events_after": "low 0\nhigh 0\nmax 1188484\noom 6\noom_kill 3\noom_group_kill 0\n"
+    }
+  }
+}

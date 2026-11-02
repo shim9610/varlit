@@ -383,6 +383,63 @@ mod tests {
     }
 
     #[test]
+    fn restricted_values_and_padding_survive_owner_initialization_and_refusal() {
+        // Miri checks initialized bytes, validity and aliasing here. In
+        // particular, padding is not required to be initialized or zeroed.
+        #[repr(C, align(64))]
+        struct Payload {
+            flag: bool,
+            nonzero: std::num::NonZeroU32,
+            reference: &'static u8,
+            // Separate allocations exercise failure after partial cloning.
+            #[allow(clippy::vec_box)]
+            nested: Vec<Box<bool>>,
+        }
+        impl TryClone for Payload {
+            fn try_clone(&self) -> Result<Self> {
+                Ok(Self {
+                    flag: self.flag,
+                    nonzero: self.nonzero,
+                    reference: self.reference,
+                    nested: self.nested.try_clone()?,
+                })
+            }
+        }
+        for flag in [false, true] {
+            let mut owner = try_arc(Payload {
+                flag,
+                nonzero: std::num::NonZeroU32::new(19).unwrap(),
+                reference: &37,
+                nested: vec![try_box(flag).unwrap(), try_box(!flag).unwrap()],
+            })
+            .unwrap();
+            let retained = owner.clone();
+            // Header, vector, first Box and second Box: every failure point
+            // includes real payload/error drops, including partial clones.
+            for at in 1..=4 {
+                let result = with_allocation_refusal(at, || try_make_mut(&mut owner));
+                assert!(result.is_err());
+                drop(result);
+                assert!(Arc::ptr_eq(&owner, &retained));
+                assert_eq!(owner.flag, flag);
+                assert_eq!(owner.nonzero.get(), 19);
+                assert_eq!(*owner.reference, 37);
+                assert_eq!(*owner.nested[0], flag);
+                assert_eq!(*owner.nested[1], !flag);
+            }
+            let changed = try_make_mut(&mut owner).unwrap();
+            changed.flag = !flag;
+            *changed.nested[0] = !flag;
+            assert!(!Arc::ptr_eq(&owner, &retained));
+            assert_eq!(retained.flag, flag);
+            assert_eq!(*retained.nested[0], flag);
+            assert_eq!((&*owner as *const Payload as usize) % 64, 0);
+            let boxed = try_box_with(|| retained.try_clone()).unwrap();
+            assert!(Arc::ptr_eq(&boxed, &retained));
+        }
+    }
+
+    #[test]
     fn shared_owners_across_threads_destroy_the_payload_once() {
         struct Counted<'a>(&'a AtomicUsize);
         impl Drop for Counted<'_> {
@@ -455,3 +512,6 @@ mod tests {
 
 #[cfg(kani)]
 mod proofs;
+
+#[cfg(kani)]
+mod memory_proofs;

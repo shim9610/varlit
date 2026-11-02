@@ -173,6 +173,19 @@
       ],
       "scope": "Actual Box/clone/private Arc helpers; symbolic allocation refusal; full-width u16 capacity requests; byte vectors <=4 elements, nested boxed clones <=3 elements, COW vector of 3 bytes; single-threaded refcounts",
       "limits": "Allocator obeys Rust contract and returns null on refusal. User initializers/TryClone/Drop return normally and satisfy contracts. No universal proof of arbitrary T, container size, concurrency, refcount overflow, OS termination or stack space. Returned heap-free errors are forgotten at caller boundary; payload and partial-owner drops execute. Kani 0.68 RawVec::new_in layout problem requires an explicit standard empty-Vec constructor model, independently checked; fresh clone growth is forbidden by the allocator model."
+    },
+    {
+      "id": "scalar-owner-memory",
+      "harnesses": [
+        "fallible::memory_proofs::initialized_scalar_box_and_clone",
+        "fallible::memory_proofs::refused_scalar_box_does_not_initialize"
+      ],
+      "sources": [
+        "crates/varlit-core/src/fallible.rs",
+        "crates/varlit-core/src/fallible/memory_proofs.rs"
+      ],
+      "scope": "Actual u32 Box construction and boxed TryClone success; complete allocator refusal before callback.",
+      "limits": "No arbitrary-T, Arc, partial multi-allocation failure or global OOM claim. Extra validity checks cover both harnesses; extra uninit checks cover refusal only. Successful Box::write is unsupported by uninit instrumentation (raw pointer/union). Success uses normal Kani allocation models; refusal returns null. Heap-free error is forgotten at caller boundary."
     }
   ]
 }
