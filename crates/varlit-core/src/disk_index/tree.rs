@@ -26,16 +26,93 @@ fn corrupt(message: &'static str) -> DiskIndexError {
     DiskIndexError::CheckpointMismatch(message)
 }
 
+// Test-only syscall seam: production continues to call the native positional
+// read directly. Fault state is thread-local, so other readers are unaffected.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ReadFault {
+    chunk: usize,
+    fail_at: usize,
+    calls: usize,
+    interrupted: usize,
+    kind: std::io::ErrorKind,
+}
+#[cfg(test)]
+thread_local! {
+    static READ_FAULT: std::cell::Cell<Option<ReadFault>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+fn with_read_fault<T>(
+    chunk: usize,
+    fail_at: usize,
+    kind: std::io::ErrorKind,
+    op: impl FnOnce() -> T,
+) -> (T, usize) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            READ_FAULT.with(|s| s.set(None));
+        }
+    }
+    assert!(chunk > 0);
+    READ_FAULT.with(|s| {
+        assert!(s.get().is_none());
+        s.set(Some(ReadFault {
+            chunk,
+            fail_at,
+            calls: 0,
+            interrupted: 0,
+            kind,
+        }));
+    });
+    let _reset = Reset;
+    let result = op();
+    let calls = READ_FAULT.with(|s| {
+        let f = s.get().unwrap();
+        f.calls - f.interrupted
+    });
+    (result, calls)
+}
+
 pub(super) fn read_at(file: &File, mut offset: u64, mut bytes: &mut [u8]) -> std::io::Result<()> {
     while !bytes.is_empty() {
+        #[cfg(test)]
+        let limit = READ_FAULT.with(|state| -> std::io::Result<usize> {
+            let Some(mut fault) = state.get() else {
+                return Ok(bytes.len());
+            };
+            fault.calls += 1;
+            state.set(Some(fault));
+            if fault.calls == fault.fail_at {
+                // A zero-length syscall result exercises the real EOF branch.
+                if fault.kind == std::io::ErrorKind::UnexpectedEof {
+                    return Ok(0);
+                }
+                return Err(fault.kind.into());
+            }
+            Ok(bytes.len().min(fault.chunk))
+        })?;
+        #[cfg(test)]
+        let target = &mut bytes[..limit];
+        #[cfg(not(test))]
+        let target = &mut *bytes;
         #[cfg(unix)]
-        let result = std::os::unix::fs::FileExt::read_at(file, bytes, offset);
+        let result = std::os::unix::fs::FileExt::read_at(file, target, offset);
         #[cfg(windows)]
-        let result = std::os::windows::fs::FileExt::seek_read(file, bytes, offset);
+        let result = std::os::windows::fs::FileExt::seek_read(file, target, offset);
         #[cfg(not(any(unix, windows)))]
         let result: std::io::Result<usize> = Err(std::io::ErrorKind::Unsupported.into());
         let n = match result {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                #[cfg(test)]
+                READ_FAULT.with(|s| {
+                    if let Some(mut f) = s.get() {
+                        f.interrupted += 1;
+                        s.set(Some(f));
+                    }
+                });
+                continue;
+            }
             other => other?,
         };
         if n == 0 {
@@ -1315,6 +1392,65 @@ mod corruption_guards {
         }
         (file, root)
     }
+    #[test]
+    fn hostile_child_with_short_reads_io_errors_and_allocation_refusal_recovers() {
+        use std::io::ErrorKind;
+        let (file, root) = image(1);
+        let valid = page(0, Root::default());
+        let mut hostile = valid;
+        hostile[8] = 255;
+        hostile[16..20].fill(0);
+        let crc = crc32fast::hash(&hostile);
+        hostile[16..20].copy_from_slice(&crc.to_le_bytes());
+        let end = file.metadata().unwrap().len();
+        let mut trials = 0;
+        let mut io_errors = 0;
+        let mut allocation_errors = 0;
+        for chunk in [31, 4096] {
+            // Fail before reading, inside the root, and inside the bad child;
+            // MAX lets the CRC-valid hostile shape itself cause rejection.
+            let root_calls = PAGE.div_ceil(chunk);
+            for fail_at in [1, 2, root_calls + 2, usize::MAX] {
+                for kind in [ErrorKind::UnexpectedEof, ErrorKind::PermissionDenied] {
+                    for allocation in [1, 2, 3, 4, usize::MAX] {
+                        write_at(&file, PAGE as u64, &hostile).unwrap();
+                        let read = Reader::new(file.clone(), end, 4096, 8192);
+                        let (result, calls) = with_read_fault(chunk, fail_at, kind, || {
+                            crate::pib_probe::with_allocation_refusal(allocation, || {
+                                read.get(root, &1u64.to_be_bytes())
+                            })
+                        });
+                        assert!(result.is_err(), "hostile child accepted");
+                        // A native syscall may return LESS than the supplied chunk
+                        // (Miri exercises this). Each non-interrupted success
+                        // advances at least one byte; at most one terminal error.
+                        assert!(calls <= 2 * PAGE + 1, "unbounded read work: {calls}");
+                        if let Err(DiskIndexError::Io(error)) = &result {
+                            io_errors += usize::from(error.kind() == kind);
+                            allocation_errors +=
+                                usize::from(error.kind() == ErrorKind::OutOfMemory);
+                        }
+                        // Repair only the rejected child. Retry on the SAME
+                        // reader, including any partially warmed root cache.
+                        write_at(&file, PAGE as u64, &valid).unwrap();
+                        assert!(read.get(root, &1u64.to_be_bytes()).unwrap().is_some());
+                        let cache = read.cache.borrow();
+                        assert!(cache.pages.values().all(Option::is_some));
+                        assert!(cache.keys.values().all(Option::is_some));
+                        assert!(cache.bytes <= read.budget);
+                        drop(cache);
+                        drop(read);
+                        assert_eq!(Arc::strong_count(&file), 1);
+                        trials += 1;
+                    }
+                }
+            }
+        }
+        assert!(io_errors > 0 && allocation_errors > 0);
+        assert_eq!(trials, 80);
+        println!("COMPOUND_READ trials=80 retries=80 bounded=true");
+    }
+
     #[test]
     fn duplicated_subtrees_stop_before_repeated_leaf_delivery() {
         for height in [4, 8, 12] {

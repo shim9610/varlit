@@ -187,3 +187,83 @@ fn matching_clean_heads_do_not_add_a_resume_sync() {
         "normal resume issued an unnecessary sync"
     );
 }
+
+// Pure parsing counterpart to the native torn-head filesystem sweeps. This
+// exercises the production parser; it does not simulate fsync or durability.
+#[test]
+fn head_parser_rejects_torn_and_hostile_words() {
+    fn encoded(offset: u64, end: u64) -> [u8; 64] {
+        let mut bytes = [0; 64];
+        bytes[..8].copy_from_slice(HEAD_MAGIC);
+        bytes[8..16].copy_from_slice(&offset.to_le_bytes());
+        bytes[16..24].copy_from_slice(&end.to_le_bytes());
+        let crc = crc32fast::hash(&bytes[..28]);
+        bytes[28..32].copy_from_slice(&crc.to_le_bytes());
+        bytes
+    }
+    let old = encoded(FILE_HEADER as u64, FILE_HEADER as u64 + ROOT_HEADER as u64);
+    let new = encoded(0x12345678, 0x12345678 + ROOT_HEADER as u64);
+    for (before, after) in [(old, new), (new, old)] {
+        for cut in 0..=64 {
+            let mut torn = before;
+            torn[..cut].copy_from_slice(&after[..cut]);
+            if let Some(head) = parse_head(&torn) {
+                assert!(
+                    (head.offset == read_u64(&old, 8) && head.end == read_u64(&old, 16))
+                        || (head.offset == read_u64(&new, 8) && head.end == read_u64(&new, 16))
+                );
+            }
+        }
+    }
+    for (offset, end) in [
+        (0, 352),
+        (24575, 24927),
+        (24576, 24576),
+        (24576, 24927),
+        (u64::MAX, 0),
+        (u64::MAX - 351, u64::MAX),
+    ] {
+        assert!(parse_head(&encoded(offset, end)).is_none());
+    }
+    for byte in 24..64 {
+        let mut damaged = old;
+        damaged[byte] ^= 1;
+        assert!(parse_head(&damaged).is_none());
+    }
+    assert!(parse_head(&old).is_some());
+    assert!(parse_head(&new).is_some());
+}
+
+#[test]
+fn failed_resume_releases_writer_lock_while_snapshot_owners_survive() {
+    let (before, mut after, _, checkpoint) = images();
+    let slot = CONFIRMED[1] as usize;
+    after[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owner-lifetime");
+    std::fs::write(&path, after).unwrap();
+    let store = Store::open(&path, DiskIndexOptions::default(), false, true).unwrap();
+    let file = store.file.clone();
+    let readers: Vec<_> = (0..8).map(|_| store.reader(&checkpoint)).collect();
+    let count = Arc::strong_count(&file);
+    assert!(count > 8);
+    RECONCILE_SYNC_FAILURE.with(|flag| flag.set(true));
+    assert!(store.reconcile_confirmed_heads().is_err());
+    assert_eq!(Arc::strong_count(&file), count);
+    drop(store);
+    let replacement = Store::open(&path, DiskIndexOptions::default(), false, true).unwrap();
+    replacement.reconcile_confirmed_heads().unwrap();
+    for reader in &readers {
+        assert!(reader.get(checkpoint.root, b"absent").unwrap().is_none());
+    }
+    drop(replacement);
+    drop(readers);
+    assert_eq!(
+        Arc::strong_count(&file),
+        1,
+        "snapshot retained a file owner"
+    );
+    // Consuming the final library owner transfers the actual File, without
+    // leaving an Arc allocation or a hidden snapshot reference behind.
+    drop(Arc::try_unwrap(file).expect("last file owner"));
+}

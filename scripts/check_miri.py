@@ -36,6 +36,21 @@ def validate_completion(output, expected):
         raise ValueError("successful process did not execute every selected test")
 
 
+def validate_exclusion_audit(selected, exclusions, audit):
+    names = [row["test"] for row in audit]
+    if len(names) != len(set(names)) or set(names) != {row["test"] for row in exclusions}:
+        raise ValueError("exclusion audit must cover each exclusion exactly once")
+    for row in audit:
+        if row["category"] not in {"unsupported-os", "workload-cost", "opt-in-probe"}:
+            raise ValueError("unknown exclusion category")
+        if row["alternative"] not in {"native-and-asan", "not-required"} or not row["remaining_gap"]:
+            raise ValueError("missing alternative or remaining gap")
+        if (row["category"] == "opt-in-probe") != (row["alternative"] == "not-required"):
+            raise ValueError("ignored probes cannot count as required coverage")
+        if not set(row["portable_tests"]).issubset(selected):
+            raise ValueError("portable counterpart must actually be selected by Miri")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", default="nightly-2026-10-12")
@@ -68,6 +83,10 @@ def main():
     tests = [line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")]
     report["selected"] = selected_tests(tests, exclusions)
     report["enumerated_count"] = len(tests)
+    if not args.test:
+        audit = json.loads((ROOT / "scripts/miri-exclusion-audit.json").read_text())
+        validate_exclusion_audit(report["selected"], exclusions, audit)
+        report["exclusion_audit"] = audit
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Miri: {len(report['selected'])} selected / {len(tests)} enumerated; "
           f"{len(exclusions)} documented exclusions", flush=True)

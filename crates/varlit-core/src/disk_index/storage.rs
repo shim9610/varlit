@@ -79,6 +79,30 @@ struct Head {
     end: u64,
 }
 
+// Shared by file-backed recovery and portable corruption checks.
+fn parse_head(bytes: &[u8; 64]) -> Option<Head> {
+    if &bytes[..8] != HEAD_MAGIC
+        || bytes[24..28] != [0; 4]
+        || bytes[32..] != [0; 32]
+        || crc32fast::hash(&bytes[..28]) != read_u32(bytes, 28)
+    {
+        return None;
+    }
+    let head = Head {
+        offset: read_u64(bytes, 8),
+        end: read_u64(bytes, 16),
+    };
+    if head.offset < FILE_HEADER as u64
+        || head
+            .end
+            .checked_sub(head.offset)
+            .is_none_or(|n| n < ROOT_HEADER as u64)
+    {
+        return None;
+    }
+    Some(head)
+}
+
 impl Store {
     pub fn open(
         path: &Path,
@@ -175,26 +199,7 @@ impl Store {
     fn head(&self, slot: u64) -> DiskIndexResult<Option<Head>> {
         let mut bytes = [0; 64];
         read_at(&self.file, slot, &mut bytes)?;
-        if &bytes[..8] != HEAD_MAGIC
-            || bytes[24..28] != [0; 4]
-            || bytes[32..] != [0; 32]
-            || crc32fast::hash(&bytes[..28]) != read_u32(&bytes, 28)
-        {
-            return Ok(None);
-        }
-        let head = Head {
-            offset: read_u64(&bytes, 8),
-            end: read_u64(&bytes, 16),
-        };
-        if head.offset < FILE_HEADER as u64
-            || head
-                .end
-                .checked_sub(head.offset)
-                .is_none_or(|n| n < ROOT_HEADER as u64)
-        {
-            return Ok(None);
-        }
-        Ok(Some(head))
+        Ok(parse_head(&bytes))
     }
     pub fn at(&self, offset: u64) -> DiskIndexResult<Checkpoint> {
         let mut bytes = [0; ROOT_HEADER];

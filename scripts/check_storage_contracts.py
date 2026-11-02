@@ -10,6 +10,11 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("compound-read", "varlit-core", None, "disk_index::tree::corruption_guards::hostile_child_with_short_reads_io_errors_and_allocation_refusal_recovers", False, "COMPOUND_READ trials=80 retries=80 bounded=true"),
+    ("failed-swmr", "varlit", "publication_failure_results", "enabled::failed_writer_preserves_concurrent_readers_and_retry_after_recovery", False, "FAILED_SWMR readers=8 probes=2048 retained_cursors=8 recovered=true"),
+    ("snapshot-owner-release", "varlit-core", None, "disk_index::storage::failure_tests::failed_resume_releases_writer_lock_while_snapshot_owners_survive", False, None),
+    ("portable-head-parser", "varlit-core", None, "disk_index::storage::failure_tests::head_parser_rejects_torn_and_hostile_words", False, None),
+    ("portable-recency", "varlit-core", None, "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages", False, None),
     ("ownership-deferred-box", "varlit-core", "fallible_ownership", "reserved_boxes_skip_initialization_on_refusal_and_release_failed_initializers", False, None),
     ("ownership-box-order", "varlit-core", "fallible_ownership", "boxed_clone_reserves_owner_before_cloning_payload", False, None),
     ("ownership-inplace-box", "varlit-core", "fallible_ownership", "uninitialized_large_box_can_be_filled_on_a_small_stack", False, None),
