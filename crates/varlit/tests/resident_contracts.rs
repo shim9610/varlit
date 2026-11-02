@@ -1,3 +1,4 @@
+// These keys are synthetic fixture identifiers, never real user identities.
 // Resident-facade contract regressions for the 2026-07-19 adversarial review.
 //
 // API2-05 (report finding API-02): `VarlitFile::push_info` and
@@ -585,10 +586,10 @@ fn block_tail_construction_has_no_quadratic_term() -> varlit::Result<()> {
 }
 
 #[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
-#[varlit(id = 60, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 60, version = 1, kind = "variable", key = "fixture_key")]
 struct ResidentMergeUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     name: String,
 }
@@ -631,7 +632,7 @@ fn resident_merge_estimate_includes_the_open_time_transient() -> varlit::Result<
         let mut file = ResidentEstimateFormat::create(path)?;
         for key in 0..keys {
             file.push(&ResidentMergeUser {
-                user_id: key,
+                fixture_key: key,
                 name: format!("user-{key}"),
             })?;
         }
@@ -957,7 +958,7 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> varlit:
         let mut file = ResidentEstimateFormat::create(path)?;
         for key in 0..keys {
             file.push(&ResidentMergeUser {
-                user_id: key,
+                fixture_key: key,
                 name: "n".repeat(NAME_BYTES),
             })?;
         }

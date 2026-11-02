@@ -518,7 +518,8 @@ pub struct ReadLimits {
     /// one open and not of the file: it changes no byte, so it is neither
     /// hashed nor persisted.
     pub integrity_verification: IntegrityVerification,
-    trusted_api: bool,
+    // Authorization state, not a secret payload. Keep the boolean name explicit.
+    is_trusted_api: bool,
 }
 
 macro_rules! read_limit_setters {
@@ -568,7 +569,7 @@ impl ReadLimits {
         // would win over a format's declaration through `overlay`.
         matrix_metadata_verification: MatrixMetadataVerification::Missing,
         integrity_verification: IntegrityVerification::Missing,
-        trusted_api: false,
+        is_trusted_api: false,
     };
     /// Finite companion to [`Self::STANDARD`] for input from untrusted
     /// sources. Every aggregate dimension that `STANDARD` leaves effectively
@@ -615,7 +616,7 @@ impl ReadLimits {
             matrix_directory_cache_bytes: ReadLimit::Missing,
             matrix_metadata_verification: MatrixMetadataVerification::Missing,
             integrity_verification: IntegrityVerification::Missing,
-            trusted_api: false,
+            is_trusted_api: false,
         }
     }
 
@@ -922,7 +923,7 @@ impl ReadLimits {
             max_keyed_tail_bytes: self
                 .max_keyed_tail_bytes
                 .tighten(runtime.max_keyed_tail_bytes),
-            trusted_api: false,
+            is_trusted_api: false,
         }
     }
 
@@ -992,7 +993,7 @@ impl ReadLimits {
             max_keyed_tail_bytes: self
                 .max_keyed_tail_bytes
                 .overlay(runtime.max_keyed_tail_bytes),
-            trusted_api: false,
+            is_trusted_api: false,
         }
     }
 
@@ -1001,20 +1002,20 @@ impl ReadLimits {
     }
 
     pub(crate) const fn authorize_trusted_api(mut self) -> Self {
-        self.trusted_api = true;
+        self.is_trusted_api = true;
         self
     }
 
     const fn clear_trusted_api(mut self) -> Self {
-        self.trusted_api = false;
+        self.is_trusted_api = false;
         self
     }
 
     pub(crate) fn require(self, key: ReadLimitKey) -> Result<Option<u64>> {
         match key.value(self) {
             ReadLimit::Finite(value) => Ok(Some(value)),
-            ReadLimit::Missing if self.trusted_api => Ok(None),
-            ReadLimit::TrustedUnbounded if self.trusted_api => Ok(None),
+            ReadLimit::Missing if self.is_trusted_api => Ok(None),
+            ReadLimit::TrustedUnbounded if self.is_trusted_api => Ok(None),
             ReadLimit::Missing => Err(Error::MissingResourceLimit {
                 resource: key.resource(),
             }),
@@ -2552,7 +2553,7 @@ impl FormatSpec {
     }
 
     pub(crate) const fn resolve_entrypoint(self) -> Self {
-        if self.read_limits.trusted_api {
+        if self.read_limits.is_trusted_api {
             self
         } else {
             self.ordinary_read()
@@ -4690,7 +4691,7 @@ mod read_limit_tests {
 
         assert_eq!(effective.max_file_len, ReadLimit::Finite(50));
         assert_eq!(effective.max_records, ReadLimit::Finite(0));
-        assert!(!effective.trusted_api);
+        assert!(!effective.is_trusted_api);
     }
 
     #[test]

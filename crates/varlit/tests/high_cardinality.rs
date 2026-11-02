@@ -1,3 +1,4 @@
+// These keys are synthetic fixture identifiers, never real user identities.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -467,10 +468,10 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
 // the cardinality boundary instead of exhausting memory.
 
 #[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
-#[varlit(id = 40, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 40, version = 1, kind = "variable", key = "fixture_key")]
 struct MergeUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     name: String,
 }
@@ -506,7 +507,7 @@ fn write_merge_input(path: &Path, keys: u64, deleted: u64) -> varlit::Result<()>
     let mut file = ResidentMergeFormat::create(path)?;
     for key in 0..keys {
         file.push(&MergeUser {
-            user_id: key,
+            fixture_key: key,
             name: format!("user-{key}"),
         })?;
     }

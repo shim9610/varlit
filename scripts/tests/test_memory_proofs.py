@@ -16,6 +16,9 @@ class MemoryProofControls(unittest.TestCase):
         gate.require_failure(valid, 1, 'bad', 'invalid value')
         for code, log in [
             (0, valid), (1, 'compiler panicked: invalid value'),
+            (-9, valid), (124, valid), (2, valid),
+            (1, valid + valid.splitlines()[-1] + '\n'),
+            (1, valid + 'Complete - 1 successfully verified harnesses, 0 failures, 1 total.\n'),
             (1, valid.replace('invalid value', 'unsupported construct')),
             (1, valid.replace('bad...', 'wrong...')),
             (1, valid+'Failed Checks: another defect\n'),

@@ -205,6 +205,24 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
+    contract!("core/format.rs::format::ReadLimits::const:STANDARD@b1db10fa579da382",
+        valid {
+            let (directory, _reader, offset) = probe(false)?;
+            let reader = ProbeFormat::spec().open_readonly_with_limits(
+                directory.path().join("contract.varlit"), varlit::ReadLimits::STANDARD)?;
+            assert_eq!(reader.read_block_at::<Probe>(offset)?, Probe { value: 19 });
+            Ok(())
+        },
+        invalid {
+            let (directory, _reader, offset) = probe(false)?;
+            let result = ProbeFormat::spec().open_readonly_with_limits(
+                directory.path().join("contract.varlit"),
+                varlit::ReadLimits::STANDARD.with_max_record_payload_len(0))
+                .and_then(|reader| reader.read_block_at::<Probe>(offset));
+            assert!(matches!(result, Err(varlit::Error::LimitExceeded { limit: 0, .. })));
+            Ok(())
+        }
+    ),
     contract!("core/scan_control.rs::scan_control::ScanCancellationToken::fn:try_new@d8624e1b9e8ccf6f",
         valid { let token = varlit::ScanCancellationToken::try_new()?; assert!(!token.is_cancelled()); token.cancel(); assert!(token.is_cancelled()); Ok(()) },
         invalid { let result = refusing_allocations(|| varlit::ScanCancellationToken::try_new().map(|token| token.is_cancelled())); assert!(matches!(result, Err(varlit::Error::Io(e)) if e.kind() == std::io::ErrorKind::OutOfMemory)); Ok(()) }
@@ -828,6 +846,10 @@ fn stub_or_unrelated_callbacks_cannot_count_as_api_coverage() {
         signature: String::new(),
         reference: "read_block_at".into(),
     };
+    let reference = CONTRACTS
+        .iter()
+        .find(|contract| contract.symbol.contains("::fn:read_block_at@"))
+        .unwrap();
     for stub in [
         "{ Ok(()) }",
         "{ assert!(true); Ok(()) }",
@@ -836,10 +858,10 @@ fn stub_or_unrelated_callbacks_cannot_count_as_api_coverage() {
     ] {
         let mut contract = Contract {
             invalid_source: stub,
-            ..CONTRACTS[0]
+            ..*reference
         };
         assert!(check_registration(&surface, &contract).is_err());
-        contract.invalid_source = CONTRACTS[0].invalid_source;
+        contract.invalid_source = reference.invalid_source;
         assert!(check_registration(&surface, &contract).is_ok());
     }
 }

@@ -303,3 +303,137 @@ fn uninitialized_large_box_can_be_filled_on_a_small_stack() {
     assert!(matches!(result, Err(Error::AllocationFailed { .. })));
     assert_eq!(state.live, 0);
 }
+
+#[test]
+fn callback_errors_clean_partial_deque_clones_and_allow_retry() {
+    use std::collections::VecDeque;
+    struct Item<'a> {
+        value: usize,
+        calls: &'a Cell<usize>,
+        fail_at: &'a Cell<usize>,
+        live_clones: &'a Cell<usize>,
+        cloned: bool,
+    }
+    impl TryClone for Item<'_> {
+        fn try_clone(&self) -> Result<Self> {
+            let call = self.calls.get() + 1;
+            self.calls.set(call);
+            if call == self.fail_at.get() {
+                return Err(Error::InvalidMatrixLayout);
+            }
+            self.live_clones.set(self.live_clones.get() + 1);
+            Ok(Self {
+                cloned: true,
+                ..*self
+            })
+        }
+    }
+    impl Drop for Item<'_> {
+        fn drop(&mut self) {
+            if self.cloned {
+                self.live_clones.set(self.live_clones.get() - 1);
+            }
+        }
+    }
+    let calls = Cell::new(0);
+    let fail_at = Cell::new(usize::MAX);
+    let live_clones = Cell::new(0);
+    let mut source: VecDeque<_> = (0..8)
+        .map(|value| Item {
+            value,
+            calls: &calls,
+            fail_at: &fail_at,
+            live_clones: &live_clones,
+            cloned: false,
+        })
+        .collect();
+    // Exercise a rotated deque, including its logical order after a failure.
+    source.rotate_left(3);
+    for refusal in 1..=source.len() {
+        calls.set(0);
+        fail_at.set(refusal);
+        let (result, state) = measure(usize::MAX, || source.try_clone().map(drop));
+        assert!(matches!(result, Err(Error::InvalidMatrixLayout)));
+        assert_eq!(calls.get(), refusal);
+        assert_eq!(live_clones.get(), 0);
+        assert_eq!(state.live, 0);
+        assert_eq!(state.denied, 0);
+        assert!(
+            source
+                .iter()
+                .map(|item| item.value)
+                .eq([3, 4, 5, 6, 7, 0, 1, 2])
+        );
+        fail_at.set(usize::MAX);
+        calls.set(0);
+        let copy = source.try_clone().unwrap();
+        assert!(
+            copy.iter()
+                .map(|item| item.value)
+                .eq(source.iter().map(|item| item.value))
+        );
+        assert_eq!(live_clones.get(), source.len());
+        drop(copy);
+        assert_eq!(live_clones.get(), 0);
+    }
+    fail_at.set(usize::MAX);
+    sweep("rotated deque", || source.try_clone().map(drop));
+    assert_eq!(live_clones.get(), 0);
+}
+
+#[test]
+#[allow(clippy::mutable_key_type)] // The counter tracks ownership; Eq/Hash never read it.
+fn map_value_clone_error_drops_the_already_cloned_key() {
+    use std::hash::{Hash, Hasher};
+    struct Key<'a>(&'a Cell<usize>);
+    impl PartialEq for Key<'_> {
+        fn eq(&self, _: &Self) -> bool {
+            true
+        }
+    }
+    impl Eq for Key<'_> {}
+    impl Hash for Key<'_> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0u8.hash(state);
+        }
+    }
+    impl TryClone for Key<'_> {
+        fn try_clone(&self) -> Result<Self> {
+            self.0.set(self.0.get() + 1);
+            Ok(Self(self.0))
+        }
+    }
+    impl Drop for Key<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() - 1);
+        }
+    }
+    struct Value<'a>(&'a Cell<bool>);
+    impl TryClone for Value<'_> {
+        fn try_clone(&self) -> Result<Self> {
+            if self.0.get() {
+                Err(Error::InvalidMatrixLayout)
+            } else {
+                Ok(Self(self.0))
+            }
+        }
+    }
+    let owners = Cell::new(1);
+    let reject = Cell::new(true);
+    let source: HashMap<_, _> = [(Key(&owners), Value(&reject))].into();
+    for _ in 0..3 {
+        let (result, state) = measure(usize::MAX, || source.try_clone().map(drop));
+        assert!(matches!(result, Err(Error::InvalidMatrixLayout)));
+        assert_eq!(owners.get(), 1);
+        assert_eq!(state.live, 0);
+        assert_eq!(source.len(), 1);
+        reject.set(false);
+        let copy = source.try_clone().unwrap();
+        assert_eq!(owners.get(), 2);
+        drop(copy);
+        assert_eq!(owners.get(), 1);
+        reject.set(true);
+    }
+    drop(source);
+    assert_eq!(owners.get(), 0);
+}

@@ -206,5 +206,17 @@
   {
     "test": "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate",
     "reason": "795 valid-CRC hostile files form a native CPU/resource corpus; required release contracts run it. The direct_cycles_are_rejected_by_lookup_and_visit test remains under Miri."
+  },
+  {
+    "test": "disk_index::oracle::lookup_profiles",
+    "reason": "Explicitly ignored native release timing profile; not an executed Miri contract."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_pib",
+    "reason": "Explicitly ignored native sparse-file probe requiring integrity and filesystem support; not an executed Miri contract."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_tib_smoke",
+    "reason": "Explicitly ignored native sparse-file probe requiring integrity and filesystem support; not an executed Miri contract."
   }
 ]

@@ -198,6 +198,8 @@ jobs:
       # just to make Miri green. Default alias/validity checks remain enabled.
       - name: unit tests under Miri
         run: python3 scripts/check_miri.py
+      - name: ownership refusal, callback errors and real cleanup under Miri
+        run: python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
       - name: array decoding and partial-drop contracts under Miri
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
