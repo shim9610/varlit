@@ -228,3 +228,78 @@ fn cancellation_token_refusal_and_retry() {
     assert_eq!(state.calls, 0);
     assert!(token.is_cancelled());
 }
+
+#[test]
+fn reserved_boxes_skip_initialization_on_refusal_and_release_failed_initializers() {
+    let runs = Cell::new(0);
+    let (result, state) = measure(1, || {
+        let _ = varlit_core::try_box_with(|| {
+            runs.set(runs.get() + 1);
+            Ok([19u8; 64])
+        })?;
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::AllocationFailed { .. })));
+    assert_eq!(runs.get(), 0);
+    assert_eq!(state.live, 0);
+    let (result, state) = measure(usize::MAX, || {
+        let _ = varlit_core::try_box_with::<[u8; 64]>(|| {
+            runs.set(runs.get() + 1);
+            Err(Error::InvalidMatrixLayout)
+        })?;
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::InvalidMatrixLayout)));
+    assert_eq!(runs.get(), 1);
+    assert_eq!(state.live, 0);
+    assert_eq!(*varlit_core::try_box_with(|| Ok(17u64)).unwrap(), 17);
+}
+
+#[test]
+fn boxed_clone_reserves_owner_before_cloning_payload() {
+    struct Probe<'a>(&'a Cell<usize>);
+    impl TryClone for Probe<'_> {
+        fn try_clone(&self) -> Result<Self> {
+            self.0.set(self.0.get() + 1);
+            Ok(Self(self.0))
+        }
+    }
+    let calls = Cell::new(0);
+    let source = Box::new(Probe(&calls));
+    let (result, state) = measure(1, || {
+        let _ = source.try_clone()?;
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::AllocationFailed { .. })));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(state.live, 0);
+    drop(source.try_clone().unwrap());
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn uninitialized_large_box_can_be_filled_on_a_small_stack() {
+    const LENGTH: usize = 16 * 1024 * 1024;
+    std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(|| {
+            let mut storage = varlit_core::try_box_uninit::<[u8; LENGTH]>().unwrap();
+            // SAFETY: the allocation holds LENGTH bytes; u8 has no invalid bit
+            // pattern. Every array element is initialized before assume_init.
+            unsafe {
+                storage.as_mut_ptr().cast::<u8>().write_bytes(23, LENGTH);
+            }
+            let owner = unsafe { storage.assume_init() };
+            assert_eq!(owner[0], 23);
+            assert_eq!(owner[LENGTH - 1], 23);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let (result, state) = measure(1, || {
+        let _ = varlit_core::try_box_uninit::<[u8; LENGTH]>()?;
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::AllocationFailed { .. })));
+    assert_eq!(state.live, 0);
+}

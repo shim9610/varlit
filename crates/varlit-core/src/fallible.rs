@@ -158,30 +158,49 @@ impl<T: ?Sized> TryClone for std::sync::Arc<T> {
 /// The value is dropped normally on refusal. User-defined destructors are outside
 /// the allocator contract. Zero-sized values need no allocation.
 pub fn try_box<T>(value: T) -> Result<Box<T>> {
-    let layout = std::alloc::Layout::new::<T>();
+    Ok(Box::write(try_box_uninit()?, value))
+}
+
+/// Reserve uninitialized storage without constructing a `T` first.
+///
+/// The returned box owns only storage; dropping it does not run `T::drop`.
+/// Initialize it with `Box::write`, or initialize in place and satisfy the
+/// safety contract of `assume_init`. Zero-sized types require no allocation.
+/// This avoids a mandatory by-value `T` argument, but does not make arbitrary
+/// caller initialization or destructors fallible.
+pub fn try_box_uninit<T>() -> Result<Box<std::mem::MaybeUninit<T>>> {
+    use std::mem::MaybeUninit;
+    let layout = std::alloc::Layout::new::<MaybeUninit<T>>();
     let pointer = if layout.size() == 0 {
-        std::ptr::NonNull::<T>::dangling().as_ptr()
+        std::ptr::NonNull::<MaybeUninit<T>>::dangling().as_ptr()
     } else {
-        // SAFETY: Layout::new supplies the nonzero size and alignment of T.
-        let pointer = unsafe { std::alloc::alloc(layout) }.cast::<T>();
+        // SAFETY: the nonzero layout has T's exact size and alignment.
+        let pointer = unsafe { std::alloc::alloc(layout) }.cast::<MaybeUninit<T>>();
         if pointer.is_null() {
             return Err(allocation("boxed value", layout.size()));
         }
         pointer
     };
-    // SAFETY: the pointer is uniquely owned and aligned; either the allocation
-    // has exactly T's layout, or T is zero-sized and the pointer is dangling.
-    // write moves value without dropping uninitialized storage. from_raw adopts
-    // that single initialized T with the same global allocator/layout. There is
-    // no fallible operation or user callback between allocation and adoption.
-    unsafe {
-        pointer.write(value);
-        Ok(Box::from_raw(pointer))
-    }
+    // SAFETY: MaybeUninit<T> permits uninitialized storage, including a
+    // dangling aligned pointer for ZSTs. Box adopts exactly this global-
+    // allocator layout; neither conversion nor dropping it constructs a T.
+    Ok(unsafe { Box::from_raw(pointer) })
+}
+
+/// Reserve the box before invoking a returning fallible initializer.
+///
+/// Allocation refusal skips `initialize`. Its error is returned unchanged and
+/// releases the reserved storage. Success transfers the initialized value to
+/// the box. Callback panics, nontermination and aborting destructors are outside
+/// the Result contract. The callback still returns T by value; use
+/// `try_box_uninit` for caller-controlled in-place initialization.
+pub fn try_box_with<T>(initialize: impl FnOnce() -> Result<T>) -> Result<Box<T>> {
+    let storage = try_box_uninit()?;
+    Ok(Box::write(storage, initialize()?))
 }
 impl<T: TryClone> TryClone for Box<T> {
     fn try_clone(&self) -> Result<Self> {
-        try_box((**self).try_clone()?)
+        try_box_with(|| (**self).try_clone())
     }
 }
 
@@ -230,7 +249,23 @@ pub(crate) fn boxed_path_error(
 // Kept private: the existing public standard-library Arc API is unchanged.
 pub(crate) use triomphe::Arc;
 pub(crate) fn try_arc<T>(value: T) -> std::io::Result<Arc<T>> {
-    Arc::try_new(value).map_err(|_| std::io::ErrorKind::OutOfMemory.into())
+    let mut storage = triomphe::UniqueArc::try_new_uninit()
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+    storage.write(value);
+    // SAFETY: write initialized the unique allocation exactly once. Conversion
+    // transfers that same allocation without copying or allocating again.
+    Ok(unsafe { triomphe::UniqueArc::assume_init(storage) }.shareable())
+}
+
+// As with try_box_with, initialization is deferred until ownership storage is
+// available. UniqueArc keeps the uninitialized allocation exclusively owned.
+fn try_arc_with<T>(initialize: impl FnOnce() -> Result<T>) -> Result<Arc<T>> {
+    let mut storage = triomphe::UniqueArc::try_new_uninit()
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+    storage.write(initialize()?);
+    // SAFETY: the callback returned an initialized T, written exactly once.
+    // On callback failure, only MaybeUninit storage is dropped instead.
+    Ok(unsafe { triomphe::UniqueArc::assume_init(storage) }.shareable())
 }
 impl<T: ?Sized> TryClone for Arc<T> {
     fn try_clone(&self) -> Result<Self> {
@@ -240,7 +275,7 @@ impl<T: ?Sized> TryClone for Arc<T> {
 pub(crate) fn try_make_mut<T: TryClone>(value: &mut Arc<T>) -> Result<&mut T> {
     if Arc::get_mut(value).is_none() {
         // Finish both allocations before replacing the original snapshot.
-        let replacement = try_arc((**value).try_clone()?)?;
+        let replacement = try_arc_with(|| (**value).try_clone())?;
         *value = replacement;
     }
     Ok(Arc::get_mut(value).expect("unique after fallible copy-on-write"))
@@ -303,6 +338,48 @@ mod tests {
             assert!(!Arc::ptr_eq(&value, &retained));
             with_allocation_refusal(1, || try_make_mut(&mut value)).unwrap()[1] = 3;
         }
+    }
+
+    #[test]
+    fn shared_initialization_and_cow_reserve_before_calling_user_code() {
+        let runs = AtomicUsize::new(0);
+        let refused = with_allocation_refusal(1, || {
+            try_arc_with(|| {
+                runs.fetch_add(1, Ordering::Relaxed);
+                Ok([7u8; 64])
+            })
+        });
+        assert!(
+            matches!(refused, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::OutOfMemory)
+        );
+        assert_eq!(runs.load(Ordering::Relaxed), 0);
+        assert!(matches!(
+            try_arc_with::<u8>(|| Err(Error::InvalidMatrixLayout)),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert_eq!(*try_arc_with(|| Ok(7u8)).unwrap(), 7);
+
+        struct Payload<'a>(&'a AtomicUsize);
+        impl TryClone for Payload<'_> {
+            fn try_clone(&self) -> Result<Self> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Err(Error::InvalidMatrixLayout)
+            }
+        }
+        let mut owner = try_arc(Payload(&runs)).unwrap();
+        let retained = owner.clone();
+        assert!(with_allocation_refusal(1, || try_make_mut(&mut owner)).is_err());
+        assert_eq!(runs.load(Ordering::Relaxed), 0);
+        assert!(Arc::ptr_eq(&owner, &retained));
+        assert!(matches!(
+            try_make_mut(&mut owner),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        assert!(Arc::ptr_eq(&owner, &retained));
+        drop(retained);
+        with_allocation_refusal(1, || try_make_mut(&mut owner)).unwrap();
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -375,3 +452,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(kani)]
+mod proofs;
