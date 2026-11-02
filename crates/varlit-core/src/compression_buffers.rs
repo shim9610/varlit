@@ -80,9 +80,10 @@ impl Compressor {
 
 #[cfg(feature = "compression-zstd")]
 pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
-    // Preserve the backend's frame-size screen: a small frame must not cause
-    // an allocation of a much larger caller-declared maximum.
-    let capacity = match frame_output_len(payload) {
+    // Neither an outer limit nor a frame content-size field can authorize an
+    // allocation larger than the complete blocks can possibly regenerate.
+    let (declared, bound) = frame_sizes(payload)?;
+    let capacity = match declared {
         Some(actual) if actual > maximum as u64 => {
             return Err(Error::DecompressedLengthMismatch {
                 expected: maximum as u64,
@@ -90,9 +91,7 @@ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
             });
         }
         Some(actual) => actual as usize,
-        None => zstd::bulk::Decompressor::upper_bound(payload)
-            .unwrap_or(maximum)
-            .min(maximum),
+        None => usize::try_from(bound).unwrap_or(usize::MAX).min(maximum),
     };
     let mut output = Vec::new();
     output
@@ -107,48 +106,115 @@ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
     Ok(output)
 }
 
+/// Bound output from complete zstd blocks, independently of the content-size
+/// field. Raw/RLE blocks declare their actual length; compressed blocks can
+/// regenerate at most 128 KiB (RFC 8878 section 3.1.1.2). This is an upper bound,
+/// not proof of valid compressed contents: the backend still decodes/checks them.
 #[cfg(feature = "compression-zstd")]
-fn frame_output_len(mut bytes: &[u8]) -> Option<u64> {
+fn frame_sizes(mut bytes: &[u8]) -> Result<(Option<u64>, u64)> {
     let mut total = 0u64;
+    let mut bound = 0u64;
+    let mut known = true;
     while !bytes.is_empty() {
-        let len = zstd::zstd_safe::find_frame_compressed_size(bytes).ok()?;
-        if len == 0 {
-            return None;
+        let magic = bytes.get(..4).ok_or(Error::InvalidChunkedBytes)?;
+        let magic = u32::from_le_bytes(magic.try_into().expect("four bytes"));
+        if magic & 0xfffffff0 == 0x184d2a50 {
+            let size = bytes.get(4..8).ok_or(Error::InvalidChunkedBytes)?;
+            let size = u32::from_le_bytes(size.try_into().expect("four bytes")) as usize;
+            let end = 8usize.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
+            bytes = bytes.get(end..).ok_or(Error::InvalidChunkedBytes)?;
+            continue;
         }
-        total = total.checked_add(zstd::zstd_safe::get_frame_content_size(bytes).ok()??)?;
-        bytes = bytes.get(len..)?;
+        let declared = zstd::zstd_safe::get_frame_content_size(bytes)
+            .map_err(|_| Error::InvalidChunkedBytes)?;
+        if magic == 0x1eb52ffd || (0xfd2fb522..=0xfd2fb527).contains(&magic) {
+            // Legacy layouts differ. The backend's legacy bound is derived
+            // from complete blocks (not its optional frame content-size hint).
+            let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
+            let frame = bytes.get(..len).ok_or(Error::InvalidChunkedBytes)?;
+            let frame_bound = zstd::zstd_safe::decompress_bound(frame).map_err(backend_error)?;
+            if let Some(size) = declared {
+                if size > frame_bound {
+                    return Err(Error::InvalidChunkedBytes);
+                }
+                total = total.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
+            } else {
+                known = false;
+            }
+            bound = bound
+                .checked_add(frame_bound)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            bytes = &bytes[len..];
+            continue;
+        }
+        let descriptor = *bytes.get(4).ok_or(Error::InvalidChunkedBytes)?;
+        let single = descriptor & 0x20 != 0;
+        let content_bytes = match descriptor >> 6 {
+            0 => usize::from(single),
+            1 => 2,
+            2 => 4,
+            _ => 8,
+        };
+        let dictionary_bytes = [0, 1, 2, 4][(descriptor & 3) as usize];
+        let mut offset = 5 + usize::from(!single) + dictionary_bytes + content_bytes;
+        let mut frame_bound = 0u64;
+        loop {
+            let end = offset.checked_add(3).ok_or(Error::InvalidChunkedBytes)?;
+            let header = bytes.get(offset..end).ok_or(Error::InvalidChunkedBytes)?;
+            let header = u32::from_le_bytes([header[0], header[1], header[2], 0]);
+            let size = (header >> 3) as usize;
+            if size > 128 * 1024 {
+                return Err(Error::InvalidChunkedBytes);
+            }
+            let (stored, regenerated) = match (header >> 1) & 3 {
+                0 => (size, size),
+                1 => (1, size),
+                2 => (size, 128 * 1024),
+                _ => return Err(Error::InvalidChunkedBytes),
+            };
+            offset = end.checked_add(stored).ok_or(Error::InvalidChunkedBytes)?;
+            bytes.get(..offset).ok_or(Error::InvalidChunkedBytes)?;
+            frame_bound = frame_bound
+                .checked_add(regenerated as u64)
+                .ok_or(Error::InvalidChunkedBytes)?;
+            if header & 1 != 0 {
+                break;
+            }
+        }
+        if descriptor & 4 != 0 {
+            offset = offset.checked_add(4).ok_or(Error::InvalidChunkedBytes)?;
+        }
+        bytes = bytes.get(offset..).ok_or(Error::InvalidChunkedBytes)?;
+        if let Some(size) = declared {
+            if size > frame_bound {
+                return Err(Error::InvalidChunkedBytes);
+            }
+            total = total.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
+        } else {
+            known = false;
+        }
+        bound = bound
+            .checked_add(frame_bound)
+            .ok_or(Error::InvalidChunkedBytes)?;
     }
-    Some(total)
+    Ok((known.then_some(total), bound))
 }
 
-/// Check embedded frame lengths before reserving a container-wide output.
-/// Frames without a content-size field remain supported by bounded decoding.
+/// Screen both the container length and frame hints against complete blocks
+/// before reserving the container-wide output. Unknown-size frames are supported.
 pub(crate) fn validate_frame_output_len(payload: &[u8], expected: u64) -> Result<bool> {
     #[cfg(feature = "compression-zstd")]
     {
-        let mut bytes = payload;
-        let mut total = 0u64;
-        let mut known = true;
-        while !bytes.is_empty() {
-            let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
-            if len == 0 {
-                return Err(Error::InvalidChunkedBytes);
-            }
-            match zstd::zstd_safe::get_frame_content_size(bytes)
-                .map_err(|_| Error::InvalidChunkedBytes)?
-            {
-                Some(n) => total = total.checked_add(n).ok_or(Error::InvalidChunkedBytes)?,
-                None => known = false,
-            }
-            bytes = bytes.get(len..).ok_or(Error::InvalidChunkedBytes)?;
+        let (declared, bound) = frame_sizes(payload)?;
+        if let Some(actual) = declared
+            && actual != expected
+        {
+            return Err(Error::DecompressedLengthMismatch { expected, actual });
         }
-        if known && total != expected {
-            return Err(Error::DecompressedLengthMismatch {
-                expected,
-                actual: total,
-            });
+        if expected > bound {
+            return Err(Error::InvalidChunkedBytes);
         }
-        Ok(known)
+        Ok(declared.is_some())
     }
     #[cfg(not(feature = "compression-zstd"))]
     {
@@ -185,7 +251,7 @@ impl Decompressor {
         let exact = if prevalidated_size {
             Some(expected as u64)
         } else {
-            frame_output_len(payload)
+            frame_sizes(payload)?.0
         };
         if let Some(actual) = exact
             && actual != expected as u64
@@ -245,7 +311,7 @@ impl Decompressor {
         let written = match if prevalidated_size {
             Some(expected as u64)
         } else {
-            frame_output_len(payload)
+            frame_sizes(payload)?.0
         } {
             Some(actual) if actual != expected as u64 => Err(Error::DecompressedLengthMismatch {
                 expected: expected as u64,
@@ -295,6 +361,56 @@ impl Decompressor {
 #[cfg(all(test, feature = "compression-zstd"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_bounds_cover_encoder_frames_and_reject_structural_amplification() -> Result<()> {
+        for length in [0, 1, 255, 256, 1024, 131071, 131072, 131073, 1048576] {
+            let mut state = 1u64;
+            for pattern in 0..3 {
+                let data: Vec<u8> = (0..length)
+                    .map(|i| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        match pattern {
+                            0 => 7,
+                            1 => (i % 251) as u8,
+                            _ => state as u8,
+                        }
+                    })
+                    .collect();
+                for known in [false, true] {
+                    for checksum in [false, true] {
+                        let mut encoder = zstd::bulk::Compressor::new(1)?;
+                        encoder.include_contentsize(known)?;
+                        encoder.include_checksum(checksum)?;
+                        let encoded = encoder.compress(&data)?;
+                        let (declared, bound) = frame_sizes(&encoded)?;
+                        assert!(bound >= length as u64);
+                        assert_eq!(declared, known.then_some(length as u64));
+                        assert!(decompress(&encoded, length)? == data);
+                        let mut joined = vec![0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3];
+                        joined.extend_from_slice(&encoded);
+                        joined.extend_from_slice(&encoded);
+                        let (_, bound) = frame_sizes(&joined)?;
+                        assert!(bound >= 2 * length as u64);
+                        assert_eq!(decompress(&joined, 2 * length)?.len(), 2 * length);
+                    }
+                }
+            }
+        }
+        // An RLE block may expand greatly, but never beyond the format's block
+        // maximum. A block-length forgery is not permission to allocate either.
+        let oversized_rle = [0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0x40, 0, 3, 0, 0x80, 7];
+        assert!(frame_sizes(&oversized_rle).is_err());
+        for bytes in [
+            &b"invalid"[..],
+            &[0x50, 0x2a, 0x4d, 0x18, 0xff, 0xff, 0xff, 0xff],
+        ] {
+            assert!(frame_sizes(bytes).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn append_preserves_prefix_and_bounds_known_unknown_and_concatenated_frames() -> Result<()> {
