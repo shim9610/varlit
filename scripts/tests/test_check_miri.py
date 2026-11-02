@@ -9,6 +9,16 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_ignored_or_duplicate_completion_cannot_count_as_execution(self):
+        valid = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;\n"
+        MODULE.validate_completion(valid, ["a", "b"])
+        for log in [valid.replace("2 passed", "1 passed").replace("0 ignored", "1 ignored"),
+                    valid + valid, "", valid.replace("0 failed", "1 failed")]:
+            with self.assertRaises(ValueError):
+                MODULE.validate_completion(log, ["a", "b"])
+        with self.assertRaises(ValueError):
+            MODULE.selected_tests(["a", "a"], [])
+
     def test_renamed_exclusion_refuses_the_gate(self):
         with self.assertRaisesRegex(ValueError, "stale or ambiguous"):
             MODULE.selected_tests(["file::renamed"], [{"test": "file::old", "reason": "unsupported"}])

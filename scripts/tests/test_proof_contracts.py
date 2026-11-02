@@ -17,6 +17,18 @@ class ProofContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.validate('Complete - 0 successfully verified harnesses, 0 failures, 0 total.\n', [])
 
+    def test_contradictory_or_repeated_evidence_is_not_a_proof(self):
+        log = 'Checking harness a...\nComplete - 1 successfully verified harnesses, 0 failures, 1 total.\n'
+        for evidence, expected in [
+            (log, ['a', 'a']),
+            (log + 'Failed Checks: invalid value\n', ['a']),
+            (log + log, ['a']),
+            (log + 'Complete - 0 successfully verified harnesses, 1 failures, 1 total.\n', ['a']),
+            (log.replace('a...', 'unexpected...'), ['a']),
+        ]:
+            with self.subTest(evidence=evidence, expected=expected), self.assertRaises(ValueError):
+                gate.validate(evidence, expected)
+
     def test_manifest_keeps_the_required_contract_families(self):
         import json
         manifest = json.loads(gate.MANIFEST.read_text())

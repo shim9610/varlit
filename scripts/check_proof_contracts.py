@@ -13,15 +13,16 @@ MANIFEST = ROOT / 'docs/verification/proof-contracts.json'
 
 def validate(log, expected):
     log = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", log)
-    if not expected:
-        raise ValueError("empty proof contract manifest")
+    if not expected or len(expected) != len(set(expected)):
+        raise ValueError("empty or duplicate proof contract manifest")
     checked = re.findall(r'^Checking harness (\S+)\.\.\.$', log, re.M)
     if len(checked) != len(set(checked)) or set(checked) != set(expected):
         raise ValueError(f'proof selection mismatch: missing={sorted(set(expected)-set(checked))}, unexpected={sorted(set(checked)-set(expected))}')
     summaries = re.findall(r'^Complete - (\d+) successfully verified harnesses, (\d+) failures, (\d+) total\.$', log, re.M)
     if summaries != [(str(len(expected)), '0', str(len(expected)))]:
         raise ValueError('missing or inconsistent successful completion')
-    if 'Status: FAILURE' in log or 'VERIFICATION:- FAILED' in log:
+    if ('Status: FAILURE' in log or 'VERIFICATION:- FAILED' in log
+            or re.search(r'^Failed Checks:', log, re.M)):
         raise ValueError('failed property in allegedly successful log')
     return checked
 

@@ -22,7 +22,8 @@ def require_failure(log, code, harness, expected):
     checks = re.findall(r'^Failed Checks: (.*)$', log, re.M)
     checked = re.findall(r'^Checking harness (\S+)\.\.\.$', log, re.M)
     summary = 'Complete - 0 successfully verified harnesses, 1 failures, 1 total.'
-    if not code or checked != [harness] or summary not in log or checks != [expected]:
+    summaries = re.findall(r'^Complete - .*$', log, re.M)
+    if code != 1 or checked != [harness] or summaries != [summary] or checks != [expected]:
         raise ValueError(f'control did not fail for exactly the expected property: {harness}')
 
 

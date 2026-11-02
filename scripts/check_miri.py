@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def selected_tests(tests, exclusions):
     """Refuse stale names and substring collisions in libtest's --skip filters."""
+    if len(tests) != len(set(tests)):
+        raise ValueError("duplicate enumerated test")
     names = [entry["test"] for entry in exclusions]
     if len(names) != len(set(names)):
         raise ValueError("duplicate Miri exclusion")
@@ -28,16 +30,24 @@ def selected_tests(tests, exclusions):
     return selected
 
 
+def validate_completion(output, expected):
+    summaries = re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;", output, re.M)
+    if not expected or summaries != [(str(len(expected)), "0", "0")]:
+        raise ValueError("successful process did not execute every selected test")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--toolchain", default="nightly-2026-10-12")
     parser.add_argument("--output", type=Path, default=ROOT / "target/miri-report")
     parser.add_argument("--list-only", action="store_true")
+    parser.add_argument("--test", choices=["fallible_ownership"])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    exclusions = json.loads((ROOT / "scripts/miri-exclusions.json").read_text())
+    exclusions = [] if args.test else json.loads((ROOT / "scripts/miri-exclusions.json").read_text())
     command = ["cargo", f"+{args.toolchain}", "miri", "test", "--locked",
-               "-p", "varlit-core", "--no-default-features", "--lib", "--"]
+               "-p", "varlit-core", "--no-default-features"]
+    command += ["--test", args.test, "--"] if args.test else ["--lib", "--"]
     env = {**os.environ, "MIRIFLAGS": "-Zmiri-disable-isolation",
            "CARGO_BUILD_JOBS": "4", "RUST_TEST_THREADS": "1", "CARGO_TERM_COLOR": "never"}
     # Preserve default alias/validity checks; never use permissive provenance flags.
@@ -69,10 +79,12 @@ def main():
                                 stdout=log, stderr=subprocess.STDOUT)
     report["exit_code"] = result.returncode
     output = (args.output / "results.log").read_text()
-    match = re.search(r"test result: ok\. (\d+) passed; 0 failed; (\d+) ignored;", output)
-    if result.returncode == 0 and (not match or sum(map(int, match.groups())) != len(report["selected"])):
-        report["error"] = "successful process did not account for every selected test"
-        report["exit_code"] = 1
+    if result.returncode == 0:
+        try:
+            validate_completion(output, report["selected"])
+        except ValueError as error:
+            report["error"] = str(error)
+            report["exit_code"] = 1
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     print(output[-6000:], flush=True)
     return report["exit_code"]

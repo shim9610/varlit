@@ -1,3 +1,4 @@
+// These keys are synthetic fixture identifiers, never real user identities.
 use std::fs::{OpenOptions, metadata, remove_file};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -78,10 +79,10 @@ impl VarlitMatrixBlock for PerfMatrixCell {
 }
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
-#[varlit(id = 101, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 101, version = 1, kind = "variable", key = "fixture_key")]
 struct PerfUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     region: u16,
     #[varlit(field_id = 3)]
@@ -224,8 +225,8 @@ varlit_format! {
         index: [scan_on_open, block_offset_chain, keyed_offset_chain];
         commit: transaction_marker(on_flush);
         blocks {
-            variable PerfV3User(id = 201, key = [user_id]) {
-                user_id: u64,
+            variable PerfV3User(id = 201, key = [fixture_key]) {
+                fixture_key: u64,
                 name: String,
                 payload: Vec<u8>,
             }
@@ -546,7 +547,7 @@ fn resized_replacement(case: PerfCase) -> varlit::Result<()> {
 
     let target = case.records / 2;
     let replacement = PerfUser {
-        user_id: target as u64,
+        fixture_key: target as u64,
         region: 9,
         name: "resized replacement".to_string(),
         payload: vec![0xA5; 256 * 1024],
@@ -1101,7 +1102,7 @@ fn matrix_direct_access_with_spec(
 
 fn perf_user(index: usize) -> PerfUser {
     PerfUser {
-        user_id: index as u64,
+        fixture_key: index as u64,
         region: (index % 16) as u16,
         name: format!("user-{index}"),
         payload: vec![(index % 251) as u8; 32],
@@ -1110,7 +1111,7 @@ fn perf_user(index: usize) -> PerfUser {
 
 fn perf_v3_user(key: usize, index: usize) -> PerfV3User {
     PerfV3User {
-        user_id: key as u64,
+        fixture_key: key as u64,
         name: format!("v3-user-{index}"),
         payload: vec![(index % 251) as u8; 64],
     }
@@ -1119,7 +1120,7 @@ fn perf_v3_user(key: usize, index: usize) -> PerfV3User {
 #[cfg(feature = "compression-zstd")]
 fn perf_compressible_user(index: usize) -> PerfUser {
     PerfUser {
-        user_id: index as u64,
+        fixture_key: index as u64,
         region: (index % 16) as u16,
         name: format!("compressible-{index}"),
         payload: vec![b'Z'; 512],
