@@ -6,6 +6,14 @@ increment the minor version.
 
 ## Unreleased
 
+- Screen zstd frame and chunk-container allocation hints against complete block
+  output bounds, including legacy frames, before reserving output buffers.
+- Audit vendored package identities separately from lockfiles and document mmap
+  exposure to external writes and truncation.
+- Allow disposable spills on `VARLIT_SPILL_DIR` with an optional per-file
+  `VARLIT_SPILL_MAX_BYTES` policy. Defaults retain platform temporary storage
+  without an additional capacity cap; database size and file format are unchanged.
+
 - Keep native frame validation in CRC-enabled indexed point reads: matching
   record/sidecar checksums do not permit unknown record flags. Share the
   positional frame parser without adding a payload checksum pre-pass.

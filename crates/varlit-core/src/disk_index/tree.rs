@@ -801,6 +801,16 @@ pub(super) fn apply(
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
 ) -> DiskIndexResult<Root> {
+    apply_with_limit(file, reader, root, updates, None)
+}
+
+pub(super) fn apply_with_limit(
+    file: &File,
+    reader: &Reader,
+    root: Root,
+    updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+    maximum: Option<u64>,
+) -> DiskIndexResult<Root> {
     if updates.is_empty() {
         return Ok(root);
     }
@@ -808,6 +818,7 @@ pub(super) fn apply(
         file,
         reader,
         end: file.metadata()?.len().max(PAGE as u64),
+        maximum,
     };
     let mut sorted = Vec::new();
     sorted.try_reserve_exact(updates.len()).map_err(oom)?;
@@ -834,6 +845,7 @@ struct Writer<'a> {
     file: &'a File,
     reader: &'a Reader,
     end: u64,
+    maximum: Option<u64>,
 }
 
 impl Writer<'_> {
@@ -842,6 +854,7 @@ impl Writer<'_> {
         self.end = start
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| corrupt("index file size overflow"))?;
+        crate::spill_file::check_extent(self.maximum, self.end)?;
         write_at(self.file, start, bytes)?;
         Ok(start)
     }

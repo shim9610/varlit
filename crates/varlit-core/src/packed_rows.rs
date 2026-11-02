@@ -1,6 +1,6 @@
 //! Bounded, lossless private rows for rewrite metadata. Pages delta-code words;
 //! neither the page directory nor decoded pages grow with the record count.
-use crate::spill_rows::SpillRows;
+use crate::{spill_file::SpillFile, spill_rows::SpillRows};
 use std::{
     cell::RefCell,
     fs::File,
@@ -12,7 +12,7 @@ const READ_PAGES: usize = 4;
 #[derive(Debug)]
 pub(crate) struct PackedRows<const N: usize> {
     pages: SpillRows<8>,
-    file: Option<File>,
+    file: Option<SpillFile>,
     file_end: u64,
     spilled_bytes: u64,
     retained: Vec<u8>,
@@ -158,7 +158,7 @@ impl<const N: usize> PackedRows<N> {
             && !self.retained.is_empty()
         {
             if self.file.is_none() {
-                self.file = Some(tempfile::tempfile()?);
+                self.file = Some(SpillFile::new()?);
             }
             let file = self.file.as_mut().unwrap();
             // A partial spill leaves the authoritative tail intact for retry.
@@ -182,7 +182,7 @@ impl<const N: usize> PackedRows<N> {
             self.retained.extend_from_slice(&self.encoded);
         } else {
             if self.file.is_none() {
-                self.file = Some(tempfile::tempfile()?);
+                self.file = Some(SpillFile::new()?);
             }
             let file = self.file.as_mut().unwrap();
             file.seek(SeekFrom::Start(self.file_end))?;
