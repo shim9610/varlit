@@ -1,6 +1,10 @@
 //! Fallible Rust output buffers for the compression backend.
 use crate::{CompressionLevel, Error, Result};
 
+#[cfg(any(feature = "compression-zstd", kani))]
+#[path = "compression_steps.rs"]
+mod resource_steps;
+
 #[cfg(feature = "compression-zstd")]
 fn context_allocation_error() -> std::io::Error {
     std::io::ErrorKind::OutOfMemory.into()
@@ -83,16 +87,12 @@ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
     // Neither an outer limit nor a frame content-size field can authorize an
     // allocation larger than the complete blocks can possibly regenerate.
     let (declared, bound) = frame_sizes(payload)?;
-    let capacity = match declared {
-        Some(actual) if actual > maximum as u64 => {
-            return Err(Error::DecompressedLengthMismatch {
-                expected: maximum as u64,
-                actual,
-            });
-        }
-        Some(actual) => actual as usize,
-        None => usize::try_from(bound).unwrap_or(usize::MAX).min(maximum),
-    };
+    let capacity = resource_steps::output_capacity(declared, bound, maximum).ok_or(
+        Error::DecompressedLengthMismatch {
+            expected: maximum as u64,
+            actual: declared.unwrap_or(bound),
+        },
+    )?;
     let mut output = Vec::new();
     output
         .try_reserve_exact(capacity)
@@ -131,7 +131,10 @@ fn frame_sizes(mut bytes: &[u8]) -> Result<(Option<u64>, u64)> {
             // Legacy layouts differ. The backend's legacy bound is derived
             // from complete blocks (not its optional frame content-size hint).
             let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
-            let frame = bytes.get(..len).ok_or(Error::InvalidChunkedBytes)?;
+            let frame = bytes
+                .get(..len)
+                .filter(|_| len != 0)
+                .ok_or(Error::InvalidChunkedBytes)?;
             let frame_bound = zstd::zstd_safe::decompress_bound(frame).map_err(backend_error)?;
             if let Some(size) = declared {
                 if size > frame_bound {
@@ -162,20 +165,11 @@ fn frame_sizes(mut bytes: &[u8]) -> Result<(Option<u64>, u64)> {
             let end = offset.checked_add(3).ok_or(Error::InvalidChunkedBytes)?;
             let header = bytes.get(offset..end).ok_or(Error::InvalidChunkedBytes)?;
             let header = u32::from_le_bytes([header[0], header[1], header[2], 0]);
-            let size = (header >> 3) as usize;
-            if size > 128 * 1024 {
-                return Err(Error::InvalidChunkedBytes);
-            }
-            let (stored, regenerated) = match (header >> 1) & 3 {
-                0 => (size, size),
-                1 => (1, size),
-                2 => (size, 128 * 1024),
-                _ => return Err(Error::InvalidChunkedBytes),
-            };
-            offset = end.checked_add(stored).ok_or(Error::InvalidChunkedBytes)?;
-            bytes.get(..offset).ok_or(Error::InvalidChunkedBytes)?;
+            let (next, regenerated) = resource_steps::block_extent(offset, header, bytes.len())
+                .ok_or(Error::InvalidChunkedBytes)?;
+            offset = next;
             frame_bound = frame_bound
-                .checked_add(regenerated as u64)
+                .checked_add(regenerated)
                 .ok_or(Error::InvalidChunkedBytes)?;
             if header & 1 != 0 {
                 break;

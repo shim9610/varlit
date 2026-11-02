@@ -96,39 +96,55 @@ impl Write for SpillFile {
         self.position += n as u64;
         Ok(n)
     }
-    fn write_all(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         // Preserve File's specialized complete-write path for the default
         // unlimited policy. Position is relevant only to a captured limit.
         if self.maximum.is_none() {
             return self.file.write_all(bytes);
         }
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        let end = self
-            .position
-            .checked_add(bytes.len() as u64)
-            .ok_or(io::ErrorKind::InvalidInput)?;
-        check_extent(self.maximum, end)?;
-        // Keep exact progress through interrupted/partial limited writes so a
-        // retry cannot authorize an extent from a stale stream position.
-        while !bytes.is_empty() {
-            match self.file.write(bytes) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-                Ok(n) => {
-                    self.position += n as u64;
-                    bytes = &bytes[n..];
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(())
+        limited_write_all(&mut self.position, bytes, self.maximum.unwrap(), |bytes| {
+            self.file.write(bytes)
+        })
     }
+
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
     }
 }
+
+// The real limited path and symbolic I/O harness execute this same loop.
+fn limited_write_all(
+    position: &mut u64,
+    mut bytes: &[u8],
+    maximum: u64,
+    mut write: impl FnMut(&[u8]) -> io::Result<usize>,
+) -> io::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let end = (*position)
+        .checked_add(bytes.len() as u64)
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    check_extent(Some(maximum), end)?;
+    // Keep exact progress through interrupted/partial limited writes so a
+    // retry cannot authorize an extent from a stale stream position.
+    while !bytes.is_empty() {
+        match write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => {
+                *position += n as u64;
+                bytes = &bytes[n..];
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(kani)]
+#[path = "verification/spill.rs"]
+mod proofs;
 
 #[cfg(all(test, not(miri)))]
 mod tests {

@@ -10,6 +10,9 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("hostile-follow", "varlit", "index_corruption_guards", "failed_follow_of_checksums_valid_metadata_preserves_real_readers", False, "HOSTILE_FOLLOW valid_crc_fields=3 followers=8 pinned=1 retries=24"),
+    ("hostile-codec", "varlit-core", "decompression_allocation", "hostile_frame_and_container_metadata_stays_bounded", False, "HOSTILE_METADATA frames=2576 containers=80 large_requests=0"),
+    ("hostile-index", "varlit-core", None, "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate", False, "HOSTILE_INDEX valid_crc_cases=795 delivered=0"),
     ("spill-policy", "varlit-core", None, "spill_file::tests::isolated_policy_preserves_paths_limits_and_retry_state", False, "SPILL_POLICY isolated path, capacity and retry cases=8"),
     ("spill-byte-policy", "varlit-core", None, "file::external_merge::tests::spill_byte_policy_failure_keeps_the_existing_prefix", False, None),
     ("zstd-header-allocation", "varlit-core", "decompression_allocation", "untrusted_sizes_do_not_request_the_declared_maximum", False, None),

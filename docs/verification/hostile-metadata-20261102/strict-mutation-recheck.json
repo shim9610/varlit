@@ -1,0 +1,10 @@
+[
+  {
+    "group": "protocol-mutations",
+    "detected": 11
+  },
+  {
+    "group": "resource-mutations",
+    "detected": 10
+  }
+]

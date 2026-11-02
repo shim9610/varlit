@@ -1,0 +1,96 @@
+{
+  "completed": [
+    {
+      "check": "Kani default",
+      "count": 28,
+      "log_member": "logs/kani-default.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "Kani all features",
+      "count": 28,
+      "log_member": "logs/kani-all.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "workspace/doc",
+      "count": 1325,
+      "log_member": "logs/workspace.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "release storage/resource contracts",
+      "count": 33,
+      "log_member": "logs/contracts-driver.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "Python tooling",
+      "count": 46,
+      "log_member": "logs/python-final-complete.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "Clippy warnings denied",
+      "count": null,
+      "log_member": "logs/clippy.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "minimal features",
+      "count": null,
+      "log_member": "logs/minimal.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "formatting",
+      "count": null,
+      "log_member": "logs/fmt-final.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "actionlint",
+      "count": null,
+      "log_member": "logs/actionlint-final.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "Loom",
+      "count": 2,
+      "log_member": "logs/loom.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "public API",
+      "count": null,
+      "log_member": "logs/public-api.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "renamed dependency",
+      "count": null,
+      "log_member": "logs/rename-api.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "ASan codec",
+      "count": 3623475,
+      "log_member": "logs/fuzz-codec_arbitrary.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "ASan native",
+      "count": 303310,
+      "log_member": "logs/fuzz-native_arbitrary.log",
+      "archive": "logs.tar.gz"
+    },
+    {
+      "check": "ASan sidecar mutation",
+      "count": 20868,
+      "log_member": "logs/fuzz-sidecar_mutation.log",
+      "archive": "logs.tar.gz"
+    }
+  ],
+  "ignored_workspace_tests": 30,
+  "miri": "Selection checked locally: 199/251, 52 explicit exclusions. Full run belongs to published-head CI."
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "case": 2,
+    "binary": "record_mutation_load",
+    "args": [
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "work": {
+      "mode": "rewrite",
+      "layout": "variable",
+      "order": "random",
+      "count": 200000,
+      "marks": 20000,
+      "source_bytes": 44599997,
+      "frames": 20000,
+      "temporary_bytes": 1522046
+    },
+    "pairs": 15,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.074267325,
+        "after": 0.070409081,
+        "change_percent": -5.1950760310809585
+      },
+      "process_cpu_seconds": {
+        "before": 2.060755,
+        "after": 2.00253,
+        "change_percent": -2.8254207802480003
+      },
+      "process_peak_rss_kib": {
+        "before": 6528,
+        "after": 6520,
+        "change_percent": -0.1225490196078427
+      },
+      "process_write_bytes": {
+        "before": 137957376,
+        "after": 137957376,
+        "change_percent": 0.0
+      }
+    }
+  }
+]

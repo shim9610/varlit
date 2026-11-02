@@ -77,9 +77,13 @@ def check_bindings():
 def detected(log, code, expected):
     # Require a failed assertion in a completed verification, not a matching
     # string in compiler diagnostics or an unrelated unwinding failure.
-    if code == 0 or "VERIFICATION:- FAILED" not in log or "Manual Harness Summary:" not in log:
+    if code != 1 or "VERIFICATION:- FAILED" not in log or "Manual Harness Summary:" not in log:
         return False
     checks = re.split(r"Check \d+: ", log)
+    if any("Status: FAILURE" in check and (
+        "unwinding assertion" in check.lower() or "unsupported" in check.lower()
+    ) for check in checks):
+        return False
     return any("Status: FAILURE" in check and expected in check for check in checks)
 
 

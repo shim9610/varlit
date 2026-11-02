@@ -54,6 +54,10 @@ jobs:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default, all]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -66,31 +70,22 @@ jobs:
           set -o pipefail
           mkdir -p target/verification
           cargo metadata --locked --format-version 1 > /dev/null
-          cargo kani -p varlit-core --default-unwind 5 2>&1 | tee target/verification/kani.log
-          # Fail on accidental removal/selection of zero or partial harnesses.
-          grep -Fq 'Checking harness file::record_extent_proofs::checked_extent_matches_wide_arithmetic...' target/verification/kani.log
-          grep -Fq 'Checking harness file::resident_index::uniform_prefix_proofs::observed_prefix_never_invents_membership...' target/verification/kani.log
-          grep -Fq 'Checking harness disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers...' target/verification/kani.log
-          grep -Fq 'Checking harness disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected...' target/verification/kani.log
-          grep -Fq 'Checking harness disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier...' target/verification/kani.log
-          grep -Fq 'Checking harness disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::commit_survives_every_io_failure_effect...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::poisoned_writer_never_reaches_publication...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::resumed_writer_cannot_acknowledge_a_volatile_head...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::successful_commit_is_reachable_and_durable...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::nonconfirmed_publications_do_not_use_a_second_head...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::follow_error_preserves_the_entire_reader...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition...' target/verification/kani.log
-          grep -Fq 'Checking harness publication_protocol::proofs::initial_frontier_satisfies_the_inductive_invariant...' target/verification/kani.log
-          grep -Eq '^Complete - [1-9][0-9]* successfully verified harnesses, 0 failures,' target/verification/kani.log
+          python3 scripts/check_proof_contracts.py --capture target/verification/source-before.json
+          features=()
+          if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
+          cargo kani -p varlit-core "${features[@]}" --default-unwind 5 -Z unstable-options --harness-timeout 300 2>&1 | tee target/verification/kani.log
+          python3 scripts/check_proof_contracts.py --source-before target/verification/source-before.json --log target/verification/kani.log --features '${{ matrix.features }}' --output target/verification/contracts.json
           git diff --exit-code -- Cargo.lock
       - name: Verify production bindings and reject every broken publication protocol
+        if: matrix.features == 'default'
         run: python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
+      - name: Reject broken resource and traversal implementations
+        if: matrix.features == 'default'
+        run: python3 scripts/check_resource_mutations.py --output target/verification/resource-mutations
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: kani
+          name: kani-${{ matrix.features }}
           path: target/verification/
           retention-days: 14
 

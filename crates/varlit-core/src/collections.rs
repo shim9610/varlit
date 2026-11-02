@@ -398,3 +398,7 @@ fn ensure_block_contract<T: VarlitBlock>(spec: FormatSpec) -> Result<()> {
         "typed block access requires a declared block identity",
     ))
 }
+
+#[cfg(kani)]
+#[path = "verification/materialization.rs"]
+mod resource_proofs;

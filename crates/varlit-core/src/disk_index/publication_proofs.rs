@@ -89,8 +89,11 @@ fn accepted_metadata_has_consistent_publication_frontiers() {
 fn valid_clean_frontiers_are_not_rejected() {
     let mut m = metadata();
     m.state = DiskIndexState::Clean;
-    m.mode = DiskIndexMode::StateOnly;
-    m.primary_generation = DiskIndexPrimaryGeneration::EMPTY;
+    if let DiskIndexMode::DiskPlan(digest) = m.mode {
+        kani::assume(!digest.is_zero());
+    }
+    kani::assume(m.primary_generation.len <= PRIMARY_GENERATION_WINDOW);
+    kani::assume(m.primary_generation.len <= m.committed.eof);
     m.working = m.committed;
     m.checkpoint = None;
     m.working_tail_count = m.committed_tail_count;
@@ -126,9 +129,12 @@ fn restore_cannot_change_the_confirmed_frontier() {
 #[kani::unwind(35)]
 fn valid_checkpoint_restore_is_not_rejected() {
     let mut clean = metadata();
-    clean.mode = DiskIndexMode::StateOnly;
     clean.state = DiskIndexState::Clean;
-    clean.primary_generation = DiskIndexPrimaryGeneration::EMPTY;
+    if let DiskIndexMode::DiskPlan(digest) = clean.mode {
+        kani::assume(!digest.is_zero());
+    }
+    kani::assume(clean.primary_generation.len <= PRIMARY_GENERATION_WINDOW);
+    kani::assume(clean.primary_generation.len <= clean.committed.eof);
     clean.working = clean.committed;
     clean.checkpoint = None;
     clean.working_tail_count = clean.committed_tail_count;

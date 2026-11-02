@@ -1,0 +1,88 @@
+[
+  {
+    "group": "final-native",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/scratch/metadata-verification/final-bin",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/final-native",
+      "--phase",
+      "native",
+      "--pairs",
+      "5",
+      "--native-cases",
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 156.79261992099964,
+    "reason": "Final rebuild changed record_mutation_load binary; other three binaries match exactly"
+  },
+  {
+    "group": "final-native-confirmation",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/scratch/metadata-verification/final-bin",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/final-native-confirmation",
+      "--phase",
+      "native",
+      "--pairs",
+      "15",
+      "--native-cases",
+      "1",
+      "6"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 89.75226445999942,
+    "reason": "Final binary initial sample increase >5%; retain all observations"
+  },
+  {
+    "group": "final-policy",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/scratch/metadata-verification/final-bin",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/final-policy",
+      "--phase",
+      "native",
+      "--pairs",
+      "3",
+      "--native-cases",
+      "0",
+      "2"
+    ],
+    "environment_overrides": {
+      "VARLIT_SPILL_DIR": "/workspace/scratch/metadata-verification/performance/spill-policy",
+      "VARLIT_SPILL_MAX_BYTES": "33554432"
+    },
+    "exit": 0,
+    "seconds": 38.86413490099949,
+    "reason": "Final rebuild changed record_mutation_load binary; other three binaries match exactly"
+  }
+]

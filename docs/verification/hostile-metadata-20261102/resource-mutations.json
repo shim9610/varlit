@@ -1,0 +1,113 @@
+{
+  "bindings": [
+    [
+      "compression_buffers.rs",
+      "resource_steps::output_capacity(",
+      1
+    ],
+    [
+      "compression_buffers.rs",
+      "resource_steps::block_extent(",
+      1
+    ],
+    [
+      "spill_file.rs",
+      "limited_write_all(&mut self.position",
+      1
+    ],
+    [
+      "disk_index/tree.rs",
+      "take_visit(remaining)",
+      1
+    ],
+    [
+      "disk_index/tree.rs",
+      "!height_matches(",
+      2
+    ],
+    [
+      "chunks.rs",
+      "table_extent(header.chunk_count as usize, encoded.len())",
+      1
+    ]
+  ],
+  "mutations": [
+    {
+      "name": "output-ignores-blocks",
+      "harness": "output_requests_respect_both_limits",
+      "expected_assertion": "output exceeds complete blocks",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "output-rejects-valid",
+      "harness": "output_requests_respect_both_limits",
+      "expected_assertion": "valid output reservation rejected",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "block-does-not-progress",
+      "harness": "arbitrary_block_step_progresses_or_rejects",
+      "expected_assertion": "block acceptance differs from wide oracle",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "block-size-cap-omitted",
+      "harness": "arbitrary_block_step_progresses_or_rejects",
+      "expected_assertion": "block acceptance differs from wide oracle",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "chunk-table-limit-omitted",
+      "harness": "full_width_chunk_table_bounds_iteration_by_real_input",
+      "expected_assertion": "chunk table exceeds real input",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "child-height-not-checked",
+      "harness": "accepted_child_height_strictly_decreases",
+      "expected_assertion": "child height did not decrease",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "prefix-truncation-count-lost",
+      "harness": "full_width_bounded_prefix_truncation_only_removes_rows",
+      "expected_assertion": "assertion failed: p.count == count.min",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "visit-fuel-not-consumed",
+      "harness": "every_node_visit_consumes_finite_fuel",
+      "expected_assertion": "traversal did not decrease fuel",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "spill-cap-bypassed",
+      "harness": "limited_writes_preserve_progress_across_failure_and_retry",
+      "expected_assertion": "over-limit write reached backend",
+      "detected": true,
+      "exit_code": 1
+    },
+    {
+      "name": "spill-partial-progress-lost",
+      "harness": "limited_writes_preserve_progress_across_failure_and_retry",
+      "expected_assertion": "partial write position lost",
+      "detected": true,
+      "exit_code": 1
+    }
+  ],
+  "sources": {
+    "compression_steps.rs": "5410454a43f927995e039770c02d9df9f540226863230b591af79728408ba63b",
+    "spill_file.rs": "316fd6489f2cae3dbfa1269472ae078dbd1a26e134d4cdf1867a1fbc840ecafb",
+    "uniform.rs": "01663c5fa3d4945a2aa8c003eddf1880b99a45002e229f75007fce9344373480",
+    "chunks.rs": "71e03df2e3b7c4f5a3ba0a207d2966a5a5c91e9527c144115e3680b8023bd081",
+    "tree.rs": "46780464356eee73a7d02e2dce5742494a8581b78d6faa46cc0b6e2962537207"
+  }
+}

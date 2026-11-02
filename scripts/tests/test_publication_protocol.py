@@ -17,6 +17,15 @@ class ProtocolGateTests(unittest.TestCase):
         self.assertFalse(gate.detected(log, 1, "broken invariant"))
         self.assertTrue(gate.detected(log.replace("Description: unwinding assertion", "Description: broken invariant"), 1, "broken invariant"))
 
+    def test_matching_assertion_plus_unwind_failure_is_not_detection(self):
+        log = "Check 1: x\n - Status: FAILURE\n - Description: broken invariant\nCheck 2: y\n - Status: FAILURE\n - Description: unwinding assertion\nVERIFICATION:- FAILED\nManual Harness Summary:"
+        self.assertFalse(gate.detected(log, 1, "broken invariant"))
+
+    def test_timeout_or_signal_with_matching_text_is_not_detection(self):
+        log = "Check 1: x\n - Status: FAILURE\n - Description: broken invariant\nVERIFICATION:- FAILED\nManual Harness Summary:"
+        for code in [124, 137, -9, 101]:
+            self.assertFalse(gate.detected(log, code, "broken invariant"))
+
     def test_each_required_family_has_a_negative_control(self):
         self.assertEqual(len(gate.MUTATIONS), 11)
         self.assertEqual(len({m[0] for m in gate.MUTATIONS}), 11)

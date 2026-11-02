@@ -1,0 +1,235 @@
+[
+  {
+    "name": "native",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/native",
+      "--pairs",
+      "5",
+      "--phase",
+      "native"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 216.07957325499956
+  },
+  {
+    "name": "standalone",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/extra.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/standalone",
+      "--pairs",
+      "5"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 22.854380603999743
+  },
+  {
+    "name": "swmr",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/swmr",
+      "--pairs",
+      "3",
+      "--phase",
+      "concurrent"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 325.82531820199983
+  },
+  {
+    "name": "policy",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-verification-before/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/policy",
+      "--pairs",
+      "3",
+      "--phase",
+      "native",
+      "--native-cases",
+      "0",
+      "2",
+      "7"
+    ],
+    "environment_overrides": {
+      "VARLIT_SPILL_DIR": "/workspace/scratch/metadata-verification/performance/spill-policy",
+      "VARLIT_SPILL_MAX_BYTES": "33554432"
+    },
+    "exit": 0,
+    "seconds": 46.08450556199932
+  },
+  {
+    "name": "resources-before-forward",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-before-forward.json",
+      "/workspace/target-verification-before/release/examples/record_mutation_load",
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 2.728970799998933
+  },
+  {
+    "name": "resources-before-rewrite",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-before-rewrite.json",
+      "/workspace/target-verification-before/release/examples/record_mutation_load",
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.4812206589995185
+  },
+  {
+    "name": "resources-before-large",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-before-large.json",
+      "/workspace/target-verification-before/release/examples/record_mutation_load",
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.2861495990000549
+  },
+  {
+    "name": "resources-before-complex",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-before-complex.json",
+      "/workspace/target-verification-before/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.13946686700001
+  },
+  {
+    "name": "resources-after-forward",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-after-forward.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 2.6417808039986994
+  },
+  {
+    "name": "resources-after-rewrite",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-after-rewrite.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.4836563720000413
+  },
+  {
+    "name": "resources-after-large",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-after-large.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.3180197519996
+  },
+  {
+    "name": "resources-after-complex",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/metadata-verification/performance/resources-after-complex.json",
+      "/workspace/varlit/target/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.0615669759990851
+  }
+]

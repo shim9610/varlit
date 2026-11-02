@@ -651,7 +651,7 @@ impl Reader {
                 if node.count != root.count {
                     return Err(corrupt("index subtree count mismatch"));
                 }
-                if expected_height.is_some_and(|h| h != node.height) {
+                if !height_matches(expected_height, node.height) {
                     return Err(corrupt("index height mismatch"));
                 }
                 if minimum.as_ref().is_some_and(|k| *k != node.entries[0].key) {
@@ -753,14 +753,13 @@ impl Reader {
         remaining: &mut u64,
         visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>,
     ) -> DiskIndexResult<()> {
-        *remaining = remaining
-            .checked_sub(1)
+        take_visit(remaining)
             .ok_or_else(|| corrupt("index traversal exceeds checkpoint extent"))?;
         let node = self.node(root)?;
         if minimum.is_some_and(|key| *key != node.entries[0].key) {
             return Err(corrupt("index separator mismatch"));
         }
-        if height.is_some_and(|h| h != node.height) {
+        if !height_matches(height, node.height) {
             return Err(corrupt("index height mismatch"));
         }
         if let Some((bound, packed)) = upper
@@ -1355,6 +1354,61 @@ mod corruption_guards {
         assert!(read.visit(root, &mut |_, _| Ok(())).is_err());
     }
     #[test]
+    fn checksummed_hostile_heights_and_counts_terminate() {
+        let mut cases = 0;
+        for height in 1..=u8::MAX {
+            for count in [1, u64::MAX / 2, u64::MAX] {
+                let file = Arc::new(tempfile::tempfile().unwrap());
+                let root = Root {
+                    offset: PAGE as u64,
+                    count,
+                };
+                // Self-references with freshly recomputed, valid CRCs.
+                write_at(&file, root.offset, &page(height, root)).unwrap();
+                let read = Reader::new(file, 2 * PAGE as u64, 4096, 0);
+                assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+                let mut delivered = 0;
+                assert!(
+                    read.visit(root, &mut |_, _| {
+                        delivered += 1;
+                        Ok(())
+                    })
+                    .is_err()
+                );
+                assert_eq!(delivered, 0);
+                cases += 1;
+            }
+        }
+        // Valid, backward child extents reach the height check (cycles above
+        // can be rejected earlier by the extent/shape checks).
+        for height in 2..=31 {
+            let (file, leaf) = image(0);
+            let root = Root {
+                offset: 2 * PAGE as u64,
+                count: 2,
+            };
+            write_at(&file, root.offset, &page(height, leaf)).unwrap();
+            let read = Reader::new(file, 3 * PAGE as u64, 4096, 0);
+            assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+            assert!(
+                read.page_reads.get() >= 2,
+                "child height check was not reached"
+            );
+            let mut delivered = 0;
+            assert!(
+                read.visit(root, &mut |_, _| {
+                    delivered += 1;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(delivered, 0);
+            cases += 1;
+        }
+        println!("HOSTILE_INDEX valid_crc_cases={cases} delivered=0");
+    }
+
+    #[test]
     fn child_keys_cannot_overlap_the_next_separator() {
         for long in [false, true] {
             let file = Arc::new(tempfile::tempfile().unwrap());
@@ -1438,3 +1492,17 @@ mod corruption_guards {
         }
     }
 }
+
+fn height_matches(expected: Option<u8>, actual: u8) -> bool {
+    expected.is_none_or(|height| height == actual)
+}
+
+// Success consumes exactly one visit before reading attacker-controlled nodes.
+fn take_visit(remaining: &mut u64) -> Option<()> {
+    *remaining = remaining.checked_sub(1)?;
+    Some(())
+}
+
+#[cfg(kani)]
+#[path = "../verification/traversal.rs"]
+mod resource_proofs;
