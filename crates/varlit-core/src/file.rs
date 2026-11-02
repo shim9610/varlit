@@ -6545,11 +6545,13 @@ impl VarlitFile {
                 "marking a record requires a record footer",
             ));
         };
-        let word_offset = footer_offset
-            .checked_add(RECORD_FOOTER_LEN - RECORD_FOOTER_MUTABLE_LEN)
-            .ok_or(Error::ResourceArithmeticOverflow {
+        let Some(word_offset) =
+            footer_offset.checked_add(RECORD_FOOTER_LEN - RECORD_FOOTER_MUTABLE_LEN)
+        else {
+            return Err(Error::ResourceArithmeticOverflow {
                 resource: "record footer offset",
-            })?;
+            });
+        };
         let updated = entry.mutable_flags | set;
         if updated == entry.mutable_flags {
             // Already marked. Skipping the write is not an optimisation — it
@@ -15185,12 +15187,11 @@ fn fault_record_entry_with<const PREFIX: usize>(
     )?;
     debug_assert_eq!(decoded.lead_in_len, RECORD_HEADER_LEN);
     let header = decoded.fields;
-    let payload_offset =
-        record_offset
-            .checked_add(RECORD_HEADER_LEN)
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "record payload offset",
-            })?;
+    let Some(payload_offset) = record_offset.checked_add(RECORD_HEADER_LEN) else {
+        return Err(Error::ResourceArithmeticOverflow {
+            resource: "record payload offset",
+        });
+    };
     let mut entry = RecordIndexEntry {
         block_id: header.block_id,
         block_version: header.block_version,
@@ -15208,11 +15209,11 @@ fn fault_record_entry_with<const PREFIX: usize>(
         committed,
     };
     if spec.spec_needs_record_footer() {
-        let footer_offset = payload_offset.checked_add(entry.payload_len).ok_or(
-            Error::ResourceArithmeticOverflow {
+        let Some(footer_offset) = payload_offset.checked_add(entry.payload_len) else {
+            return Err(Error::ResourceArithmeticOverflow {
                 resource: "record footer offset",
-            },
-        )?;
+            });
+        };
         let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
         let within_prefix = if PREFIX > RECORD_HEADER_LEN as usize {
             usize::try_from(footer_offset - record_offset)
