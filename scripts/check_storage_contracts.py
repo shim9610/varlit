@@ -10,6 +10,8 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("spill-policy", "varlit-core", None, "spill_file::tests::isolated_policy_preserves_paths_limits_and_retry_state", False, "SPILL_POLICY isolated path, capacity and retry cases=8"),
+    ("spill-byte-policy", "varlit-core", None, "file::external_merge::tests::spill_byte_policy_failure_keeps_the_existing_prefix", False, None),
     ("zstd-header-allocation", "varlit-core", "decompression_allocation", "untrusted_sizes_do_not_request_the_declared_maximum", False, None),
     ("chunk-header-allocation", "varlit-core", "decompression_allocation", "chunk_headers_do_not_authorize_container_allocation", False, None),
     ("publication-resume", "varlit-core", None, "disk_index::storage::failure_tests::divergent_clean_heads_require_sync_before_writer_resume", False, None),

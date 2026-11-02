@@ -34,6 +34,7 @@ mod packed_rows;
 mod publication_protocol;
 mod scan_control;
 mod snapshot;
+mod spill_file;
 mod spill_rows;
 
 mod stream;

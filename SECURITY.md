@@ -51,6 +51,31 @@ reads when the application cannot maintain the mapped-file lifetime contract;
 owned reads still need a coherent input and do not make concurrent external
 writes transactionally consistent.
 
+## Private spill storage
+
+Disposable row directories, rewrite metadata, merge bytes and scratch indexes
+use `VARLIT_SPILL_DIR` when set, otherwise the platform temporary directory
+(including `TMPDIR` where supported). The selected directory must already exist
+and be writable. An invalid explicit selection returns an error; it does not
+silently fall back to another volume. Set process environment configuration
+before opening handles/starting worker threads. Each spill file captures its
+policy when created.
+
+`VARLIT_SPILL_MAX_BYTES` optionally limits the logical length of **each** private
+spill file, in unsigned decimal bytes. Unset means no additional capacity cap;
+`0` refuses nonempty spills. A write beyond the chosen limit returns a storage-full
+I/O error before that write, retaining existing authoritative state. This is not
+an aggregate process/directory quota or a promise of available free space. Use a
+filesystem/project quota or a dedicated volume for an aggregate capacity policy;
+concurrent files, allocation granularity and other users of the volume also
+consume space. Genuine filesystem-full and partial-write errors still propagate.
+
+This policy does not cap database size or require spills beside the database.
+Publication/replacement files that must be atomically renamed remain beside their
+destination and are outside this disposable-spill policy. Temporary storage on
+`tmpfs` consumes system memory that process resident-set size (RSS) does not fully
+reflect. Choose a disk-backed directory when that distinction matters.
+
 ## Vendored advisory coverage
 
 Lockfile-based `cargo audit` and `cargo deny` do not match a local path package

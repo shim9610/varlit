@@ -1,12 +1,12 @@
 //! Reader-local fixed-width temporary directories. The memory budget controls
 //! buffering, never the number of rows that can be addressed.
+use crate::spill_file::SpillFile;
 use std::cell::RefCell;
-use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 
 #[derive(Debug)]
 pub(crate) struct SpillRows<const N: usize> {
-    file: Option<File>,
+    file: Option<SpillFile>,
     spilled: usize,
     buffer: Vec<u8>,
     capacity: usize,
@@ -32,7 +32,7 @@ impl<const N: usize> SpillRows<N> {
         }
         if self.buffer.capacity() > retained && !self.buffer.is_empty() {
             if self.file.is_none() {
-                self.file = Some(tempfile::tempfile()?);
+                self.file = Some(SpillFile::new()?);
             }
             let offset = (self.spilled as u64)
                 .checked_mul(N as u64)
@@ -123,7 +123,7 @@ impl<const N: usize> SpillRows<N> {
     pub(crate) fn reserve_one(&mut self) -> io::Result<()> {
         if self.buffer.len() >= self.capacity {
             if self.file.is_none() {
-                self.file = Some(tempfile::tempfile()?);
+                self.file = Some(SpillFile::new()?);
             }
             let offset = (self.spilled as u64)
                 .checked_mul(N as u64)
@@ -155,7 +155,7 @@ impl<const N: usize> SpillRows<N> {
     pub(crate) fn push(&mut self, row: [u8; N]) -> io::Result<()> {
         if self.capacity == 0 {
             if self.file.is_none() {
-                self.file = Some(tempfile::tempfile()?);
+                self.file = Some(SpillFile::new()?);
             }
             let offset = (self.spilled as u64)
                 .checked_mul(N as u64)

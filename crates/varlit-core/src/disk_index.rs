@@ -3574,6 +3574,7 @@ pub(crate) struct ScratchIndex {
     reader: tree::Reader,
     cache_bytes: usize,
     end: u64,
+    maximum: Option<u64>,
 }
 impl Clone for ScratchIndex {
     fn clone(&self) -> Self {
@@ -3582,6 +3583,7 @@ impl Clone for ScratchIndex {
             root: self.root,
             cache_bytes: self.cache_bytes,
             end: self.end,
+            maximum: self.maximum,
             reader: tree::Reader::new(
                 self.file.clone(),
                 self.end,
@@ -3607,7 +3609,9 @@ impl ScratchIndex {
         }
     }
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
-        let file = std::sync::Arc::new(tempfile::tempfile()?);
+        let (file, maximum) = crate::spill_file::SpillFile::new()?.into_parts();
+        crate::spill_file::check_extent(maximum, tree::PAGE as u64)?;
+        let file = std::sync::Arc::new(file);
         file.set_len(tree::PAGE as u64)?;
         let reader = tree::Reader::new(
             file.clone(),
@@ -3621,6 +3625,7 @@ impl ScratchIndex {
             reader,
             cache_bytes,
             end: tree::PAGE as u64,
+            maximum,
         })
     }
     pub(crate) fn get(&self, key: &[u8]) -> crate::Result<Option<[u8; 52]>> {
@@ -3644,7 +3649,23 @@ impl ScratchIndex {
         result.map_err(index_error)
     }
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
-        let root = tree::apply(&self.file, &self.reader, self.root, values).map_err(index_error)?;
+        // A refused limited batch must not consume the remaining scratch
+        // allowance with unpublished nodes. Preserve all pre-existing clones.
+        let prior = self
+            .maximum
+            .map(|_| self.file.metadata().map(|m| m.len()))
+            .transpose()?;
+        let root =
+            match tree::apply_with_limit(&self.file, &self.reader, self.root, values, self.maximum)
+            {
+                Ok(root) => root,
+                Err(error) => {
+                    if let Some(prior) = prior {
+                        self.file.set_len(prior)?;
+                    }
+                    return Err(index_error(error));
+                }
+            };
         self.end = self.file.metadata()?.len();
         self.reader = tree::Reader::new(
             self.file.clone(),

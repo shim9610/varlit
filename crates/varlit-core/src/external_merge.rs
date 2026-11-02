@@ -82,7 +82,7 @@ impl BufferedIndex {
 /// need no rewrite. Each buffer is separately bounded; no publication occurs.
 struct SpillBytes {
     memory: std::io::Cursor<Vec<u8>>,
-    disk: Option<File>,
+    disk: Option<crate::spill_file::SpillFile>,
     limit: usize,
 }
 impl SpillBytes {
@@ -119,7 +119,7 @@ impl Write for SpillBytes {
                 .checked_add(bytes.len() as u64)
                 .ok_or(std::io::ErrorKind::InvalidInput)?;
             if end > self.limit as u64 {
-                let mut file = tempfile::tempfile()?;
+                let mut file = crate::spill_file::SpillFile::new()?;
                 file.write_all(self.memory.get_ref())?;
                 file.seek(SeekFrom::Start(self.memory.position()))?;
                 self.disk = Some(file);
@@ -453,6 +453,42 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(miri))]
+    #[test]
+    fn spill_byte_policy_failure_keeps_the_existing_prefix() -> Result<()> {
+        if std::env::var_os("VARLIT_SPILL_BYTE_CHILD").is_none() {
+            let directory = tempfile::tempdir()?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["file::external_merge::tests::spill_byte_policy_failure_keeps_the_existing_prefix", "--exact", "--nocapture"])
+                .env("VARLIT_SPILL_BYTE_CHILD", "1")
+                .env("VARLIT_SPILL_DIR", directory.path())
+                .env("VARLIT_SPILL_MAX_BYTES", "32")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return Ok(());
+        }
+        let mut bytes = SpillBytes::new(16);
+        bytes.write_all(&[7; 8])?;
+        assert_eq!(
+            bytes.write_all(&[8; 32]).unwrap_err().kind(),
+            std::io::ErrorKind::StorageFull
+        );
+        bytes.seek(SeekFrom::Start(0))?;
+        let mut prefix = [0; 8];
+        bytes.read_exact(&mut prefix)?;
+        assert_eq!(prefix, [7; 8]);
+        bytes.write_all(&[9; 8])?;
+        bytes.seek(SeekFrom::Start(8))?;
+        bytes.read_exact(&mut prefix)?;
+        assert_eq!(prefix, [9; 8]);
+        Ok(())
+    }
+
     #[test]
     fn scratch_buffers_stay_in_memory_until_full_and_keep_offsets_on_spill() -> Result<()> {
         let mut bytes = SpillBytes::new(64);
