@@ -1,0 +1,21 @@
+{
+  "crates/varlit-core/Cargo.toml": "d7792418392056aee2d60e57ffc860dfaffcb315bfbc1eb468bc239e18ca02b4",
+  "crates/varlit-core/src/chunks.rs": "ca303815dd6ff4993b55b78b60db3d45ab8b19771230adecad159c00a0e63bef",
+  "crates/varlit-core/src/compression_buffers.rs": "3d686212f983d5d528872182ac0ac6fea9025e07e4733789faacecc2654ba17e",
+  "crates/varlit-core/src/compression_steps.rs": "80160daf666414f2f8d9ea2ab10fa22d81f39d3b49f34688fd034799770b564e",
+  "crates/varlit-core/src/diagnostics.rs": "5bfed4f43a825197229ebbc5de12ee3fd8d9a796e660f279b63718bdd448e9b4",
+  "crates/varlit-core/src/error.rs": "f6e3e53a0bb792490e3ddf107181677e47cc06d67d982a80ac9bb741e9426e3e",
+  "crates/varlit-core/src/verification/compression.rs": "9ecd085ae977848b70152d04fc9229a795fef6d396b60cb32ec02971fcaa239d",
+  "crates/varlit-core/tests/decompression_allocation.rs": "19f6e54e5f182b536d1999094c6827751b26e785105ceb6e2b26297ee0a166b8",
+  "crates/varlit/tests/oom_recovery_guards.rs": "705a0d5cd64dc3de4dc5ea62008fe9ef84d6a630c5dab614a0bc33d5cd5b5e63",
+  "crates/varlit/tests/validation_coverage.rs": "8efdb988c299417eb996810380051b50f7a54b208db27f8719dc0663a469e547",
+  "docs/api-reference.md": "9bd53c25fc02d77bb5172993828cddda401c9feca3f1ce9c52028079f4f3722b",
+  "docs/verification/proof-contracts.json": "711b63ce77ba4a8257a846a6ca8a9f0f9b8c1b7149a5348e42b5c1a3a826930f",
+  "fuzz/fuzz_targets/codec_arbitrary.rs": "8cb52ceef5ca9fbd611a25a3cdf7c7c7c45028e35478b78dcd349221ac3c7cf6",
+  "scripts/check_resource_mutations.py": "786bcd8ceb995527ca90690e46e7e0c4abfe0e90bb2f73168f587ff6c9a5d153",
+  "scripts/check_storage_contracts.py": "d257e07c65e1bb9549c0214f461f45c5d7cac03d767352bbdcb532c2bd22e7cf",
+  "scripts/tests/test_storage_contracts.py": "725fe0b9285c7e501fae13a5f03ca2edf85f57157217b4046343b757e201da8a",
+  "crates/varlit-core/examples/chunk_stream_load.rs": "af0a6bc3159af1165f88c2d5b3664dd93853276ca78dc68532c45bcb6e402349",
+  "crates/varlit-core/tests/chunk_stream.rs": "06ea1a41fc5f1d87b7596632f2b78cc1e962683f4ddae5475a26fd7200647e3a",
+  "docs/chunk-streaming.md": "3e51093185a3309779f4ab4342b3a1c9b4691778e356b053e2a98a81820e0d37"
+}

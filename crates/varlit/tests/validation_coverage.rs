@@ -183,6 +183,67 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
+    contract!("core/chunks.rs::chunks::ChunkedBytes::fn:decoded_len@b0b7b3a38476cd40",
+        valid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            assert_eq!(chunks.decoded_len(), 33);
+            Ok(())
+        },
+        invalid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let mut bytes = chunks.into_encoded(); bytes[40] ^= 1;
+            let damaged = varlit::ChunkedBytes::from_encoded(bytes)?;
+            assert_eq!(damaged.decoded_len(), 33); // declaration is not authentication
+            assert!(damaged.decode_to_vec_limited(33).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/chunks.rs::chunks::ChunkedBytes::fn:stream_range@6061cb400976e6d8",
+        valid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            assert!(chunks.decode_to_vec_limited(8).is_err());
+            let mut count = 0;
+            chunks.stream_range(7..24, &mut [0; 3], 1024, |at, bytes| {
+                assert_eq!(at, 7 + count); assert!(bytes.iter().all(|&b| b == 3));
+                count += bytes.len() as u64; Ok(())
+            })?;
+            assert_eq!(count, 17);
+            Ok(())
+        },
+        invalid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let mut bytes = chunks.into_encoded(); bytes[40] ^= 1;
+            let damaged = varlit::ChunkedBytes::from_encoded(bytes)?;
+            assert!(matches!(damaged.stream_range(0..1, &mut [0; 3], 1024, |_, _| Ok(())), Err(varlit::Error::ChunkChecksumMismatch { .. })));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::Error::variant:BufferTooSmall@fd4e892a42401b1a",
+        valid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let result = chunks.stream_range(0..1, &mut [0; 1], 1024, |_, _| Ok(()));
+            assert!(!matches!(result, Err(varlit::Error::BufferTooSmall { .. })));
+            result?; Ok(())
+        },
+        invalid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            assert!(matches!(chunks.stream_range(0..1, &mut [], 1024, |_, _| panic!("delivery before buffer refusal")), Err(varlit::Error::BufferTooSmall { required: 1, provided: 0, .. })));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::Error::variant:InvalidChunkedRange@ae2ff6d176b1722e",
+        valid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let result = chunks.stream_range(33..33, &mut [], 0, |_, _| panic!("empty delivery"));
+            assert!(!matches!(result, Err(varlit::Error::InvalidChunkedRange { .. })));
+            result?; Ok(())
+        },
+        invalid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            assert!(matches!(chunks.stream_range(33..34, &mut [0; 1], 1024, |_, _| panic!("out of bounds delivery")), Err(varlit::Error::InvalidChunkedRange { start: 33, end: 34, len: 33 })));
+            Ok(())
+        }
+    ),
 ];
 
 #[derive(Default)]

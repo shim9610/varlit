@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/workspace/scratch/chunk-stream/after-bin/chunk_stream_load",
+    "stream",
+    "/workspace/scratch/chunk-stream/performance/large.bin",
+    "1073741824",
+    "0",
+    "1073741824",
+    "2",
+    "1"
+  ],
+  "exit": 0,
+  "sample_interval_seconds": 0.005,
+  "samples": 742,
+  "peaks": {
+    "rss_bytes": 18223104,
+    "temporary_deleted_logical_bytes": 0,
+    "temporary_deleted_allocated_bytes": 0,
+    "deleted_regular_logical_bytes": 0,
+    "open_regular_allocated_bytes": 15552512,
+    "cgroup_current_bytes": 9145008128
+  },
+  "stdout": "{\"mode\":\"stream\",\"length\":1073741824,\"start\":0,\"count\":1073741824,\"iterations\":2,\"readers\":1,\"crc\":3394341414,\"seconds\":1.321518926}\n",
+  "stderr": ""
+}

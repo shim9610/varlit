@@ -223,6 +223,158 @@ pub(crate) struct Decompressor {
     #[cfg(feature = "compression-zstd")]
     buffer: Vec<u8>,
 }
+
+/// Streaming history belongs to zstd, never to a decoded-chunk Vec.
+#[cfg(feature = "integrity")]
+pub(crate) struct StreamDecompressor {
+    #[cfg(feature = "compression-zstd")]
+    context: zstd::zstd_safe::DCtx<'static>,
+    #[cfg(feature = "compression-zstd")]
+    max_window: u64,
+}
+
+/// Legacy buffered decoders bypass DCtx's WindowLogMax. Preflight every frame,
+/// including concatenated legacy frames, before entering the native decoder.
+/// v0.4/0.5 use a four-bit log plus 11; v0.6 uses plus 12. v0.7 and current
+/// frames share the window descriptor/single-segment layout (upstream legacy
+/// ZSTD*_getFrameParams and RFC 8878 section 3.1.1.1).
+#[cfg(all(feature = "integrity", feature = "compression-zstd"))]
+fn validate_stream_windows(mut bytes: &[u8], maximum: u64) -> Result<()> {
+    while !bytes.is_empty() {
+        let magic = u32::from_le_bytes(
+            bytes
+                .get(..4)
+                .ok_or(Error::InvalidChunkedBytes)?
+                .try_into()
+                .expect("four bytes"),
+        );
+        let window = if magic & 0xfffffff0 == 0x184d2a50 {
+            0
+        } else {
+            let descriptor = *bytes.get(4).ok_or(Error::InvalidChunkedBytes)?;
+            match magic {
+                0xfd2fb524 | 0xfd2fb525 => 1u64 << ((descriptor & 15) + 11),
+                0xfd2fb526 => 1u64 << ((descriptor & 15) + 12),
+                0xfd2fb527 | 0xfd2fb528 => if descriptor & 0x20 != 0 {
+                    zstd::zstd_safe::get_frame_content_size(bytes)
+                        .map_err(|_| Error::InvalidChunkedBytes)?
+                        .ok_or(Error::InvalidChunkedBytes)?
+                } else {
+                    let window = *bytes.get(5).ok_or(Error::InvalidChunkedBytes)?;
+                    let base = 1u64 << ((window >> 3) + 10);
+                    base + (base >> 3) * u64::from(window & 7)
+                }
+                .max(1024),
+                // zstd's streaming adapter does not support versions 0.1-0.3.
+                _ => return Err(std::io::Error::from(std::io::ErrorKind::Unsupported).into()),
+            }
+        };
+        if window > maximum {
+            return Err(Error::LimitExceeded {
+                resource: "zstd streaming window bytes",
+                actual: window,
+                limit: maximum,
+            });
+        }
+        let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
+        bytes = bytes
+            .get(len..)
+            .filter(|_| len != 0)
+            .ok_or(Error::InvalidChunkedBytes)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+impl StreamDecompressor {
+    pub(crate) fn new(max_window_bytes: usize) -> Result<Self> {
+        #[cfg(feature = "compression-zstd")]
+        {
+            if max_window_bytes < 1024 {
+                return Err(Error::LimitExceeded {
+                    resource: "zstd streaming window bytes",
+                    actual: 1024,
+                    limit: max_window_bytes as u64,
+                });
+            }
+            let mut context = new_decoder()?;
+            let log = max_window_bytes
+                .ilog2()
+                .min(if usize::BITS == 32 { 30 } else { 31 });
+            context
+                .set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(log))
+                .map_err(backend_error)?;
+            Ok(Self {
+                context,
+                max_window: 1u64 << log,
+            })
+        }
+        #[cfg(not(feature = "compression-zstd"))]
+        {
+            let _ = max_window_bytes;
+            Err(Error::CompressionFeatureDisabled)
+        }
+    }
+
+    pub(crate) fn decode(
+        &mut self,
+        payload: &[u8],
+        buffer: &mut [u8],
+        expected: u64,
+        mut visit: impl FnMut(u64, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        #[cfg(feature = "compression-zstd")]
+        {
+            use zstd::zstd_safe::{InBuffer, OutBuffer, ResetDirective};
+            validate_stream_windows(payload, self.max_window)?;
+            self.context
+                .reset(ResetDirective::SessionOnly)
+                .map_err(backend_error)?;
+            let mut input = InBuffer {
+                src: payload,
+                pos: 0,
+            };
+            let mut decoded = 0u64;
+            loop {
+                let before = input.pos;
+                let mut output = OutBuffer::around(&mut *buffer);
+                let remaining = self
+                    .context
+                    .decompress_stream(&mut output, &mut input)
+                    .map_err(backend_error)?;
+                let written = output.pos();
+                let next = resource_steps::stream_progress(
+                    before,
+                    input.pos,
+                    payload.len(),
+                    decoded,
+                    written,
+                    expected,
+                )
+                .ok_or(Error::InvalidChunkedBytes)?;
+                if written != 0 {
+                    visit(decoded, &buffer[..written])?;
+                }
+                decoded = next;
+                if remaining == 0 && input.pos == payload.len() {
+                    break;
+                }
+            }
+            if decoded != expected {
+                return Err(Error::DecompressedLengthMismatch {
+                    expected,
+                    actual: decoded,
+                });
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "compression-zstd"))]
+        {
+            let _ = (payload, buffer, expected, &mut visit);
+            Err(Error::CompressionFeatureDisabled)
+        }
+    }
+}
 impl Decompressor {
     #[cfg(feature = "compression-zstd")]
     pub(crate) fn new() -> Result<Self> {

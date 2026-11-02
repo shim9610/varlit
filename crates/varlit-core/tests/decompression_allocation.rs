@@ -8,11 +8,14 @@ use varlit_core::{CompressionLevel, Error, Result};
 mod compression_buffers;
 struct Meter;
 static ENABLED: AtomicBool = AtomicBool::new(false);
+thread_local! { static DENY_ALL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 static DENIED: AtomicUsize = AtomicUsize::new(0);
 static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MAXIMUM: usize = 4 * 1024 * 1024;
 fn refuse(n: usize) -> bool {
-    if ENABLED.load(Relaxed) && n >= MAXIMUM {
+    if ENABLED.load(Relaxed)
+        && (n >= MAXIMUM || DENY_ALL.try_with(|flag| flag.get()).unwrap_or(false))
+    {
         DENIED.fetch_add(1, Relaxed);
         true
     } else {
@@ -41,6 +44,38 @@ unsafe impl GlobalAlloc for Meter {
 }
 #[global_allocator]
 static ALLOCATOR: Meter = Meter;
+
+#[cfg(feature = "integrity")]
+#[test]
+fn range_streaming_never_requests_a_rust_output_allocation() -> Result<()> {
+    let _lock = LOCK.lock().unwrap();
+    let data = vec![17; 8 * 1024 * 1024];
+    let chunks =
+        varlit_core::ChunkedBytes::from_zstd_chunks(&data, data.len(), CompressionLevel::Fast)?;
+    assert!(chunks.decode_to_vec_limited(4096).is_err());
+    let mut buffer = [0; 8192];
+    let mut count = 0;
+    DENIED.store(0, Relaxed);
+    DENY_ALL.with(|flag| flag.set(true));
+    ENABLED.store(true, Relaxed);
+    let result = chunks.stream_range(
+        13..data.len() as u64 - 7,
+        &mut buffer,
+        8 * 1024 * 1024,
+        |_, bytes| {
+            assert!(bytes.iter().all(|&byte| byte == 17));
+            count += bytes.len();
+            Ok(())
+        },
+    );
+    ENABLED.store(false, Relaxed);
+    DENY_ALL.with(|flag| flag.set(false));
+    result?;
+    assert_eq!(count, data.len() - 20);
+    assert_eq!(DENIED.load(Relaxed), 0);
+    // C zstd allocation is checked separately by the native malloc refusal test.
+    Ok(())
+}
 #[test]
 fn untrusted_sizes_do_not_request_the_declared_maximum() {
     let _lock = LOCK.lock().unwrap();

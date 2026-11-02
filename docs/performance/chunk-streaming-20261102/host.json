@@ -1,0 +1,21 @@
+{
+  "cpu.max": "400000 100000\n",
+  "memory.max": "17179869184\n",
+  "memory.events": "low 0\nhigh 0\nmax 115339\noom 0\noom_kill 0\noom_group_kill 0\n",
+  "baseline": "b837577cca7a2436a1da0074e94149c003503680",
+  "binaries": {
+    "before": {
+      "chunk_stream_load": "dea0d0fae6ab4dedc8a066a24722b311c6af55b67a5c473a8f20958be8208576",
+      "scalable_load": "afd6b2a9ae613d6f503addd75c735cc35fe6ed967370d005aff95a53770372bc",
+      "oom_maintenance_load": "307a1e2dbc43d474a2efc361e9739451693c3a9aedad7720adcfac1a1788ec21",
+      "record_mutation_load": "5c1b0eeba07d272ebb7087c6a7e51c95cbe8a4599a1c3549fdb0a0326a1ffc5c"
+    },
+    "after": {
+      "chunk_stream_load": "c4bb90b6b83fbe05a48715067b2141865f11904224cddee0fcbfa0d5252e9fcb",
+      "scalable_load": "afd6b2a9ae613d6f503addd75c735cc35fe6ed967370d005aff95a53770372bc",
+      "oom_maintenance_load": "307a1e2dbc43d474a2efc361e9739451693c3a9aedad7720adcfac1a1788ec21",
+      "record_mutation_load": "5c1b0eeba07d272ebb7087c6a7e51c95cbe8a4599a1c3549fdb0a0326a1ffc5c"
+    }
+  },
+  "memory.events_after": "low 0\nhigh 0\nmax 117803\noom 0\noom_kill 0\noom_group_kill 0\n"
+}

@@ -58,3 +58,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(varlit_loom)'
 [[example]]
 name = "decompression_load"
 required-features = ["compression-zstd"]
+
+[[example]]
+name = "chunk_stream_load"
+required-features = ["compression-zstd", "integrity"]
