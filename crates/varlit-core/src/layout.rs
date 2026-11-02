@@ -1,3 +1,4 @@
+use crate::TryClone;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
@@ -28,7 +29,7 @@ pub enum LayoutValue {
 impl LayoutValue {
     pub fn to_bytes(&self, field: &'static str) -> Result<Vec<u8>> {
         match self {
-            Self::Bytes(bytes) => Ok(bytes.clone()),
+            Self::Bytes(bytes) => bytes.try_clone(),
             _ => Err(Error::LayoutFieldTypeMismatch(field)),
         }
     }
@@ -1991,7 +1992,7 @@ fn read_static_layout_fields(
         })?;
     for field in descriptors {
         let value = read_layout_value_from_slice(&bytes, relative, *field, endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2635,7 +2636,7 @@ fn read_layout_segment_at(
     for field in descriptor.lead_in.fields {
         let value_offset = position;
         let value = read_layout_value_from_slice(&lead_in_bytes, relative, *field, spec.endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2795,7 +2796,7 @@ fn read_footer_layout_fields(
         })?;
     for field in descriptors {
         let value = read_layout_value_from_slice(&bytes, relative, *field, endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2936,7 +2937,7 @@ fn normalize_layout_value(
         (LayoutFieldType::Bytes { len }, LayoutValue::Bytes(bytes))
             if len == bytes.len() as u64 =>
         {
-            LayoutValue::Bytes(bytes.clone())
+            LayoutValue::Bytes(bytes.try_clone()?)
         }
         (LayoutFieldType::U8, LayoutValue::U8(value)) => LayoutValue::U8(*value),
         (LayoutFieldType::U8, LayoutValue::U64(value)) => LayoutValue::U8(
@@ -3235,4 +3236,17 @@ fn write_i64<W: Write>(writer: &mut W, value: i64, endian: Endian) -> Result<()>
     };
     writer.write_all(&bytes)?;
     Ok(())
+}
+
+impl TryClone for LayoutValue {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(match self {
+            Self::Bytes(value) => Self::Bytes(value.try_clone()?),
+            Self::U8(v) => Self::U8(*v),
+            Self::U16(v) => Self::U16(*v),
+            Self::U32(v) => Self::U32(*v),
+            Self::U64(v) => Self::U64(*v),
+            Self::I64(v) => Self::I64(*v),
+        })
+    }
 }

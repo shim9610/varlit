@@ -10,6 +10,20 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("ownership-generated", "varlit", "fallible_publication", "generated_layout_fields_refuse_before_creating_the_file", False, None),
+    ("ownership-path-error", "varlit-core", None, "fallible::tests::publication_path_and_source_refusals_keep_the_same_outcome", False, None),
+    ("ownership-disk-error", "varlit-core", None, "fallible::tests::disk_error_wrapper_refusal_keeps_publication_facts", False, None),
+    ("ownership-fatal-copy", "varlit-core", None, "matrix::fatal_access::tests::fallible_layout_copy_keeps_blocked_state_and_original_after_refusal", False, None),
+    ("ownership-incomplete-copy", "varlit-core", None, "matrix::crc_valid_evidence::fallible_copy_tests::fallible_copy_never_upgrades_incomplete_evidence", False, None),
+    ("ownership-clone", "varlit-core", "fallible_ownership", "fallible_clones_release_partial_output_and_preserve_sources", False, "TRY_CLONE refusal_points=47 partial_cleanup=true source_unchanged=true"),
+    ("ownership-box", "varlit-core", "fallible_ownership", "boxes_preserve_alignment_drop_once_and_clean_up_partial_clones", False, None),
+    ("ownership-arc", "varlit-core", None, "fallible::tests::arc_refusal_drops_input_once_and_shared_cow_is_transactional", False, None),
+    ("ownership-arc-threads", "varlit-core", None, "fallible::tests::shared_owners_across_threads_destroy_the_payload_once", False, None),
+    ("ownership-token", "varlit-core", "fallible_ownership", "cancellation_token_refusal_and_retry", False, None),
+    ("ownership-preflight", "varlit", "fallible_publication", "error_reservation_refusal_happens_before_matrix_mutation", False, None),
+    ("ownership-published", "varlit", "fallible_publication", "failed_error_boxes_preserve_the_committed_matrix_event", False, None),
+    ("ownership-mmap", "varlit", "fallible_publication", "mmap_layout_clone_refusal_preserves_the_reader_and_retries", False, "original_readable=true all_retried=true"),
+
     ("chunk-stream-window", "varlit-core", "chunk_stream", "enabled::legacy_windows_and_large_output_shortcuts_cannot_bypass_the_cap", False, None),
     ("chunk-stream-refusal", "varlit-core", "decompression_allocation", "range_streaming_never_requests_a_rust_output_allocation", False, None),
     ("chunk-stream-fallback", "varlit-core", "chunk_stream", "enabled::fallback_streams_requested_ranges_with_one_byte_scratch", False, None),

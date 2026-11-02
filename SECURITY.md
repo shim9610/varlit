@@ -51,6 +51,21 @@ reads when the application cannot maintain the mapped-file lifetime contract;
 owned reads still need a coherent input and do not make concurrent external
 writes transactionally consistent.
 
+## Allocation refusal and ownership
+
+`TryClone` and `try_box` report refused allocations on their supported paths.
+Internal shared owners and copy-on-write page separation also return errors;
+`ScanCancellationToken::try_new` provides a fallible constructor. Existing public
+`Clone`, `new`/`default` and convenience builders retain their original contracts.
+This does not establish process-wide OOM freedom: `BTreeMap`, other unaudited
+allocations, application callbacks, allocator aborts and OS OOM kills remain
+outside this scope. See [allocation limitations](docs/known-limitations.md#72-some-allocations-abort-instead-of-returning-an-error).
+
+When detailed error allocation fails after publication, inspect
+`Error::ErrorContextAllocationFailed` and its `AllocationFailureContext` before
+retrying: an append may already be visible or publication may be uncertain.
+Durable matrix writes reserve their existing error/event boxes before mutation.
+
 ## Private spill storage
 
 Disposable row directories, rewrite metadata, merge bytes and scratch indexes

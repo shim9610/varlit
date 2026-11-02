@@ -1208,20 +1208,31 @@ or job-object policy**, not to `ReadLimits`.
 
 ### 7.2 Some allocations abort instead of returning an error
 
-Published deliberately. Content-sized allocations — those whose size a file can
-choose — are charged to a `ReadLimits` ceiling and reserved fallibly, surfacing as
-`Error::AllocationFailed` or `Error::LimitExceeded`. Shape-sized allocations —
-those bounded by the program's own compile-time shape — use ordinary infallible
-allocation and **abort the process** if the allocator refuses.
+`TryClone` and `try_box` provide explicit failure-returning ownership operations.
+Internal file/snapshot/page owners use fallible shared allocation; shared bitmap
+pages are copied before persistence. Existing public `Clone` implementations and
+infallible constructors/builders remain for compatibility. In particular,
+`ScanCancellationToken::try_new` is the fallible alternative to `new`/`default`.
 
-The consequence, written down rather than discovered: an allocator refusal *after*
-a publication terminates the process rather than substituting a different outcome.
-No caller ever observes a wrong outcome, and the on-disk state is the published
-one.
+This is not a whole-library OOM-freedom claim. `BTreeMap` node allocation remains
+infallible and deferred. Other allocations, including convenience/report builders,
+formatting, user codecs/callbacks and dependency internals, need their own audit.
+A `TryClone` implementation is an explicit behavioral contract, not a Rust type
+system proof that arbitrary user implementations cannot allocate infallibly.
+OS OOM kills, allocator implementations that terminate instead of returning null,
+and reference-count overflow are outside this allocation-refusal contract.
 
-`AllocatedExtents` is capped by a compile-time constant rather than by a
-`ReadLimits` charge (open item 6) and grows with infallible `Vec::push`, so an
-allocator refusal there aborts rather than returning a typed error.
+Error wrapping also has a failure path. Record/replacement operations retain an
+allocation-free `AllocationFailureContext` when detailed error storage is refused;
+completed and uncertain publications must not be treated as retryable appends.
+Durable matrix writes reserve their error/event boxes before mutation, retaining
+the original error shape after commit without an additional allocation. A generic
+allocation error elsewhere does not promise that every writer operation is safe
+to repeat; existing poison/recovery rules still apply.
+
+`AllocatedExtents` remains capped by a compile-time constant rather than by a
+`ReadLimits` charge (open item 6) and uses infallible growth. Limits bound selected
+resources; they do not reserve physical memory or guarantee allocator success.
 
 ### 7.3 `max_keyed_tail_bytes` is per block id
 

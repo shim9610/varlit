@@ -901,6 +901,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         Error::Io(_)
         | Error::AppendedButImmediateFailed { .. }
         | Error::AllocationFailed { .. }
+        | Error::ErrorContextAllocationFailed { .. }
         | Error::WriterLockHeld(_)
         | Error::WriterLockMalformed(_)
         | Error::WriterPoisoned(_)

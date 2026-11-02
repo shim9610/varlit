@@ -150,6 +150,28 @@ varlit::varlit_format! {
     struct ProbeFormat { magic: b"VCONTRACT"; version: 1; endian: little; integrity: crc32_with_header; blocks: [Probe]; }
 }
 
+varlit::varlit_format! {
+    pub format OwnershipHeader {
+        magic: b"OWHD"; version: 1; preset: none;
+        layout {
+            file_header Header { bytes magic = b"OWHD"; u16 kind; }
+            segment Data repeat until_eof {
+                lead_in Lead { bytes magic = b"DATA"; u16 kind;
+                    i64 next = finalize(target = segment_end, relative_to = after_lead_in);
+                    i64 raw = finalize(target = raw_region_start, relative_to = after_lead_in);
+                }
+                metadata Meta; raw_region Raw;
+            }
+        }
+    }
+}
+varlit::varlit_format! {
+    pub format OwnershipIndex {
+        magic: b"OWIX"; version: 1; index: keyed_offset_chain;
+        blocks { variable OwnedEntry(id = 71, key = [id], key_index = disk) { id: u64, value: u64, } }
+    }
+}
+
 fn probe(
     damaged: bool,
 ) -> Result<(tempfile::TempDir, varlit::VarlitFile, u64), Box<dyn std::error::Error>> {
@@ -180,6 +202,322 @@ const CONTRACTS: &[Contract] = &[
         invalid {
             let (_directory, reader, offset) = probe(true)?;
             assert!(matches!(reader.read_block_at::<Probe>(offset), Err(varlit::Error::ChecksumMismatch { .. })));
+            Ok(())
+        }
+    ),
+    contract!("core/scan_control.rs::scan_control::ScanCancellationToken::fn:try_new@d8624e1b9e8ccf6f",
+        valid { let token = varlit::ScanCancellationToken::try_new()?; assert!(!token.is_cancelled()); token.cancel(); assert!(token.is_cancelled()); Ok(()) },
+        invalid { let result = refusing_allocations(|| varlit::ScanCancellationToken::try_new().map(|token| token.is_cancelled())); assert!(matches!(result, Err(varlit::Error::Io(e)) if e.kind() == std::io::ErrorKind::OutOfMemory)); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@61f1678165055f69", generated "disk_index_plan",
+        valid { let plan = OwnershipIndex::disk_index_plan()?; assert_eq!(plan.descriptors().len(), 1); assert!(plan.validate(OwnershipIndex::spec()).is_ok()); Ok(()) },
+        invalid { let plan = OwnershipIndex::disk_index_plan()?; let error = plan.validate(ProbeFormat::spec()).unwrap_err(); assert!(matches!(error, varlit::DiskIndexError::PlanBlockMissing { .. })); let error = refusing_allocations(|| varlit::Error::from(error)); assert!(matches!(error, varlit::Error::AllocationFailed { .. })); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:layout_field_struct_tokens@1b03f39d4b518018", generated "__varlit_layout_values",
+        valid { let fields = OwnershipHeaderHeaderLayoutFields { kind: 42 }.__varlit_layout_values()?; assert_eq!(fields.len(), 1); assert_eq!(fields[0].value.to_u16("kind")?, 42); Ok(()) },
+        invalid { let fields = OwnershipHeaderHeaderLayoutFields { kind: 42 }; let result = refusing_allocations(|| fields.__varlit_layout_values()); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); assert_eq!(fields.kind, 42); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:layout_field_to_value_tokens@5525b6594eca5be7", generated "__varlit_layout_values",
+        valid { let fields = OwnershipHeaderHeaderLayoutFields { kind: 42 }.__varlit_layout_values()?; assert_eq!(fields.len(), 1); assert_eq!(fields[0].value.to_u16("kind")?, 42); Ok(()) },
+        invalid { let fields = OwnershipHeaderHeaderLayoutFields { kind: 42 }; let result = refusing_allocations(|| fields.__varlit_layout_values()); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); assert_eq!(fields.kind, 42); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:layout_header_typed_tokens@095075385290c05c", generated "create_layout_writer_with_typed_header",
+        valid { let dir = tempfile::tempdir()?; let path = dir.path().join("header"); let mut writer = OwnershipHeader::create_layout_writer_with_typed_header(&path, OwnershipHeaderHeaderLayoutFields { kind: 42 })?; writer.flush()?; assert_eq!(&std::fs::read(path)?[..6], b"OWHD\x2a\x00"); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let path = dir.path().join("header"); let result = refusing_allocations(|| OwnershipHeader::create_layout_writer_with_typed_header(&path, OwnershipHeaderHeaderLayoutFields { kind: 42 })); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); assert!(!path.exists()); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:layout_writer_segment_method_tokens@6d7f0cdfe27d767e", generated "write_data",
+        valid { let dir = tempfile::tempdir()?; let path = dir.path().join("segment"); let mut writer = OwnershipHeader::create_layout_writer_with_typed_header(&path, OwnershipHeaderHeaderLayoutFields { kind: 42 })?; let info = writer.write_data(OwnershipHeaderDataLayoutWrite { fields: OwnershipHeaderDataLayoutFields { kind: 7 }, footer_fields: OwnershipHeaderDataLayoutFooterFields, metadata: b"", raw: b"data" })?; assert_eq!(info.kind()?, 7); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let path = dir.path().join("segment"); let mut writer = OwnershipHeader::create_layout_writer_with_typed_header(&path, OwnershipHeaderHeaderLayoutFields { kind: 42 })?; writer.flush()?; let before = std::fs::read(&path)?; let result = refusing_allocations(|| writer.write_data(OwnershipHeaderDataLayoutWrite { fields: OwnershipHeaderDataLayoutFields { kind: 7 }, footer_fields: OwnershipHeaderDataLayoutFooterFields, metadata: b"", raw: b"data" })); assert!(matches!(result, Err(varlit::Error::AllocationFailed { .. }))); writer.flush()?; assert_eq!(std::fs::read(path)?, before); Ok(()) }
+    ),
+    contract!("core/fallible.rs::fallible::TryClone::fn:try_clone@4c103a12486804c7",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/fallible.rs::fallible::TryClone::fn:try_clone_slice@d5101c54b8f22ed5",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/fallible.rs::fallible::macro:copy_clone@98ecf16d6ba68408", generated "try_clone_slice",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/fallible.rs::fallible::macro:copy_clone@e451f0eff70d84c4", generated "try_clone_slice",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/fallible.rs::fallible::trait:TryClone@cbf29ce484222325",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/lib.rs::::export:TryClone@4aefc82d5057d594",
+        valid {
+            use varlit::TryClone;
+            let value = vec![Some(String::from("fallible"))];
+            assert_eq!(value.try_clone()?, value);
+            assert_eq!(u64::try_clone_slice(&[1, 2, 3])?, [1, 2, 3]);
+            Ok(())
+        },
+        invalid {
+            use varlit::TryClone;
+            struct Refuses;
+            impl TryClone for Refuses {
+                fn try_clone(&self) -> varlit::Result<Self> {
+                    Err(varlit::Error::AllocationFailed { resource: "contract clone", requested: 1 })
+                }
+            }
+            assert!(matches!(vec![Refuses].try_clone(), Err(varlit::Error::AllocationFailed { .. })));
+            assert!(Refuses::try_clone_slice(&[Refuses]).is_err());
+            Ok(())
+        }
+    ),
+    contract!("core/fallible.rs::fallible::fn:try_box@36a82d3283743b0b",
+        valid { let value = varlit::try_box(7u64)?; assert_eq!(*value, 7); Ok(()) },
+        invalid {
+            let result = refusing_allocations(|| varlit::try_box(7u64));
+            assert!(matches!(result, Err(varlit::Error::AllocationFailed { resource: "boxed value", requested: 8 })));
+            Ok(())
+        }
+    ),
+    contract!("core/lib.rs::::export:try_box@2b506e7fd8ea20d1",
+        valid { let value = varlit::try_box(7u64)?; assert_eq!(*value, 7); Ok(()) },
+        invalid {
+            let result = refusing_allocations(|| varlit::try_box(7u64));
+            assert!(matches!(result, Err(varlit::Error::AllocationFailed { resource: "boxed value", requested: 8 })));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:Appended@3e545469e68cc7aa",
+        valid {
+            let context = varlit::AllocationFailureContext::Appended { sequence: 7 };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::Appended { sequence: 7 };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:Committed@45da4a7a68fd6d31",
+        valid {
+            let context = varlit::AllocationFailureContext::Committed { sequence: 7 };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::Committed { sequence: 7 };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:ParentSyncPending@1ca51b4e9b780955",
+        valid {
+            let context = varlit::AllocationFailureContext::ParentSyncPending;
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::ParentSyncPending;
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:PublishedIndex@7f5272beab4899bb",
+        valid {
+            let context = varlit::AllocationFailureContext::PublishedIndex { sequence: 7 };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::PublishedIndex { sequence: 7 };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:PublishedRebind@cdc4933fe9a8855f",
+        valid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:ReusePublicationUncertain@9d4ea81e875b4593",
+        valid {
+            let context = varlit::AllocationFailureContext::ReusePublicationUncertain { generation: 7 };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::ReusePublicationUncertain { generation: 7 };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::AllocationFailureContext::variant:ReusePublished@8674705202a61abc",
+        valid {
+            let context = varlit::AllocationFailureContext::ReusePublished { generation: 7 };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::ReusePublished { generation: 7 };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::Error::variant:ErrorContextAllocationFailed@23755b55305b9bb1",
+        valid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::enum:AllocationFailureContext@cbf29ce484222325",
+        valid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
+            Ok(())
+        }
+    ),
+    contract!("core/lib.rs::::export:AllocationFailureContext@4ccf3b018025dd40",
+        valid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = varlit::Error::ErrorContextAllocationFailed { context: context.clone() };
+            assert!(matches!(error, varlit::Error::ErrorContextAllocationFailed { context: actual } if actual == context));
+            Ok(())
+        },
+        invalid {
+            let context = varlit::AllocationFailureContext::PublishedRebind { sequence: 7, parent_sync_pending: true };
+            let error = refusing_allocations(|| varlit::try_box(context)).unwrap_err();
+            assert!(matches!(error, varlit::Error::AllocationFailed { .. }));
+            assert!(!matches!(error, varlit::Error::ErrorContextAllocationFailed { .. }));
             Ok(())
         }
     ),
@@ -561,4 +899,53 @@ fn case_generators_retain_every_registered_shape_and_parameter() {
             }
         }
     }
+}
+
+// Dedicated current-thread refusal; other concurrently running contracts are untouched.
+struct ContractAllocator;
+thread_local! { static REFUSE_CONTRACT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+fn contract_refuses() -> bool {
+    REFUSE_CONTRACT
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(false)
+}
+// SAFETY: forwarding preserves System's layout/ownership; refusal returns null.
+unsafe impl std::alloc::GlobalAlloc for ContractAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if contract_refuses() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { std::alloc::GlobalAlloc::alloc(&std::alloc::System, layout) }
+        }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if contract_refuses() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { std::alloc::GlobalAlloc::alloc_zeroed(&std::alloc::System, layout) }
+        }
+    }
+    unsafe fn realloc(&self, pointer: *mut u8, layout: std::alloc::Layout, size: usize) -> *mut u8 {
+        if contract_refuses() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { std::alloc::GlobalAlloc::realloc(&std::alloc::System, pointer, layout, size) }
+        }
+    }
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::GlobalAlloc::dealloc(&std::alloc::System, pointer, layout) }
+    }
+}
+#[global_allocator]
+static CONTRACT_ALLOCATOR: ContractAllocator = ContractAllocator;
+fn refusing_allocations<T>(body: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REFUSE_CONTRACT.with(|state| state.set(false));
+        }
+    }
+    REFUSE_CONTRACT.with(|state| state.set(true));
+    let _reset = Reset;
+    body()
 }

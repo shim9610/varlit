@@ -11,6 +11,7 @@ mod diagnostics;
 
 mod disk_index;
 mod error;
+mod fallible;
 mod file;
 mod format;
 mod immediate;
@@ -101,7 +102,8 @@ pub use disk_index::{
     DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
     sidecar_path as disk_index_sidecar_path,
 };
-pub use error::{Error, Result};
+pub use error::{AllocationFailureContext, Error, Result};
+pub use fallible::{TryClone, try_box};
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
     DirectoryRead, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID, IndexEntries, KeyedChain,

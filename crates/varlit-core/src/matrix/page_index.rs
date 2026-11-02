@@ -108,7 +108,7 @@ impl PreparedDirect {
                 .map(u64::to_le_bytes),
             count,
         };
-        index.prepare_cache_update(&plan.entries[..plan.used], plan.header);
+        index.prepare_cache_update(&plan.entries[..plan.used], plan.header)?;
         Ok(plan)
     }
     fn remove(
@@ -139,7 +139,7 @@ impl PreparedDirect {
             plan.entries[2] = (index.reverse_offset(moved)?, (slot + 1).to_le_bytes());
             plan.used = 3;
         }
-        index.prepare_cache_update(&plan.entries[..plan.used], plan.header);
+        index.prepare_cache_update(&plan.entries[..plan.used], plan.header)?;
         Ok(Some(plan))
     }
     fn commit(self, file: &mut impl MatrixIo, bits: &mut SparseBitmap) -> Result<()> {

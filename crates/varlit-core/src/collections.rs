@@ -1,3 +1,4 @@
+use crate::TryClone;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -402,3 +403,22 @@ fn ensure_block_contract<T: VarlitBlock>(spec: FormatSpec) -> Result<()> {
 #[cfg(kani)]
 #[path = "verification/materialization.rs"]
 mod resource_proofs;
+
+impl<T> TryClone for BlockVec<T> {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            spec: self.spec,
+            snapshot: self.snapshot.clone(),
+            entries: self.entries.try_clone()?,
+            _marker: PhantomData,
+        })
+    }
+}
+impl<K: Eq + Hash + TryClone, T> TryClone for KeyedBlockVec<K, T> {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            inner: self.inner.try_clone()?,
+            by_key: self.by_key.try_clone()?,
+        })
+    }
+}

@@ -609,3 +609,11 @@ mod oom_tests {
 #[cfg(kani)]
 #[path = "verification/chunks.rs"]
 mod resource_proofs;
+
+impl crate::TryClone for ChunkedBytes {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            encoded: crate::TryClone::try_clone(&self.encoded)?,
+        })
+    }
+}

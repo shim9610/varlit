@@ -3,6 +3,36 @@
 This is a practical public API map for application authors. It is not a
 rustdoc replacement; it explains which API to reach for and what it means.
 
+## Fallible ownership
+
+`TryClone::try_clone(&self) -> Result<Self>` creates an owned copy using fallible
+allocations. Refusal releases partial output and leaves the source unchanged.
+There is no blanket implementation for `T: Clone`: user implementations and any
+hash/equality callbacks must uphold the same contract. Existing public `Clone`
+implementations keep their original behavior.
+
+Supported values include `Vec`, `String`, `PathBuf`, `HashMap`, `VecDeque`, `Box`,
+`Option`, scalar/copy arrays, and Varlit's `BlockVec`, `KeyedBlockVec`,
+`MatrixLayout`, `ChunkedBytes`, `PackedBitmap`, `MatrixDimensions` and
+`LayoutValue`. Shared owners clone their reference count without allocating.
+`BTreeMap` has no `TryClone` implementation in this change.
+
+`try_box(value) -> Result<Box<T>>` reports storage refusal. It consumes the input
+and drops it normally on failure; clone the source fallibly first if the source
+must remain available. `ScanCancellationToken::try_new()` is the fallible
+alternative to its existing `new` and `default` constructors. Internal shared
+file/page owners use fallible allocation without changing public `std::sync::Arc`
+types or persisted file formats.
+
+Direct buffer/box refusal uses `Error::AllocationFailed`; internal shared-owner
+refusal can surface as `Error::Io` with `std::io::ErrorKind::OutOfMemory`.
+After publication, also inspect `Error::ErrorContextAllocationFailed` before
+retrying, because its inline context can indicate an already completed or
+uncertain operation.
+
+These are scoped allocation-refusal contracts, not a global OOM guarantee. See
+[allocation limitations](known-limitations.md#72-some-allocations-abort-instead-of-returning-an-error).
+
 ## Generated Format API
 
 For a format declared as:
@@ -1265,15 +1295,14 @@ hook did not run, and only power-loss durability is unproven. Those two are the
 call's only published outcomes; every other error means the cell was not
 committed.
 
-That family statement describes the value the call *returns* (F-06). Both
-variants box their event and their source, so building either one allocates
-after the cell is authoritative. Those are shape-sized allocations — fixed by
-the type, never by a file length or caller count — and Varlit allocates
-shape-sized memory infallibly, so an allocator refusal terminates the process
-instead of returning a different outcome. No caller observes a wrong outcome;
-the cell is committed on disk, and reopening the file shows it. The crate-wide
-rule, and the alternatives that were rejected, are in
-`docs/durability-model.md` under "Allocator Failure And Published Outcomes".
+The helper reserves its event and error boxes before mutation with `try_box`.
+Refusal of either reservation returns before writing the cell. A later source
+error moves into the reserved box, so the existing post-commit variants require
+no additional allocation. Successful durable cell writes therefore include two
+small allocations. Record/index/replacement paths instead retain inline
+`AllocationFailureContext` facts if detailed error storage is refused; do not
+repeat an already completed append. See `docs/durability-model.md` under
+"Allocator Failure And Published Outcomes" for recovery semantics and scope.
 
 Matrix slot types must have a width fixed by the type itself, because a slot
 needs a stride the compiler knows. Scalars and fixed arrays of them qualify.

@@ -1686,15 +1686,8 @@ fn the_post_commit_event_stays_shape_sized() {
     assert_eq!(slot_len, 4);
 }
 
-/// F-06, invariant 4: the code's narrowing and the documents' narrowing agree.
-///
-/// The durability contract published an absolute structural claim — that the
-/// two typed variants are the only post-publication outcomes — and a harness
-/// disproved it by terminating the process between the commit and the
-/// construction of either variant. The claim is kept, because it is true of
-/// every value the call *returns*, and its scope is now published beside it.
-/// This test fails if one copy is corrected and another is not, which is the
-/// half-applied correction invariant 4 exists to catch.
+/// Keep the documented preflight reservation and fallback publication facts
+/// aligned across the durability guide, API reference and public rustdoc.
 #[test]
 fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1709,11 +1702,17 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
         "the crate-wide allocator-failure policy must be published where the \
          published-outcome family is defined"
     );
-    for needle in ["shape-sized", "content-sized", "terminates the process"] {
+    for needle in [
+        "try_box",
+        "AllocationFailureContext",
+        "scalar placeholder",
+        "post-commit allocation",
+        "BTreeMap",
+    ] {
         assert!(
             durability.contains(needle),
             "docs/durability-model.md no longer states {needle:?}: the policy \
-             must name both allocation classes and say what a refusal does"
+             must describe preflight reservation, retained outcomes and the deferred allocation scope"
         );
     }
 

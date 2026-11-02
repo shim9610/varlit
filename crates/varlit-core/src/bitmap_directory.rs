@@ -6,7 +6,11 @@
 //! Scratch is never published or synced. Sharing immutable RAM nodes between
 //! a handle's staged roots does not share mutable reader caches.
 use crate::{Error, Result, disk_index::ScratchIndex};
-use std::{cell::Cell, collections::BTreeMap, sync::Arc};
+use crate::{
+    TryClone,
+    fallible::{Arc, try_arc},
+};
+use std::{cell::Cell, collections::BTreeMap};
 
 type Key = (u8, u64);
 type Entry = (Key, Option<u64>);
@@ -17,7 +21,7 @@ const EDITS: usize = 64;
 #[derive(Clone, Debug, Default)]
 pub(super) struct BitmapDirectory {
     tree: Option<ScratchIndex>,
-    memory: Arc<BTreeMap<Key, Option<u64>>>,
+    memory: Option<Arc<BTreeMap<Key, Option<u64>>>>,
     pending: Vec<Entry>,
     memory_count: usize,
     limit: usize,
@@ -58,7 +62,12 @@ impl BitmapDirectory {
     /// then copies only a tiny overlay, never the whole growing directory.
     /// Existing snapshots keep their old base; disk edits stay batched.
     pub(super) fn prepare_stage(&mut self) -> Result<()> {
-        if self.tree.is_none() && Arc::get_mut(&mut self.memory).is_some() {
+        if self.tree.is_none()
+            && self
+                .memory
+                .as_mut()
+                .is_none_or(|v| Arc::get_mut(v).is_some())
+        {
             self.flush_pending()?;
         }
         Ok(())
@@ -91,13 +100,13 @@ impl BitmapDirectory {
         if self.tree.is_some() {
             (self.limit / 4 + self.pending.capacity() * std::mem::size_of::<Entry>()) as u64
         } else {
-            (self.memory.len() * 128 + self.pending.capacity() * std::mem::size_of::<Entry>())
-                as u64
+            (self.memory.as_ref().map_or(0, |v| v.len()) * 128
+                + self.pending.capacity() * std::mem::size_of::<Entry>()) as u64
         }
     }
     fn spill(&mut self, limit: usize) -> Result<()> {
         let mut values = BTreeMap::new();
-        for (&(kind, n), &v) in self.memory.iter() {
+        for (&(kind, n), &v) in self.memory.iter().flat_map(|v| v.iter()) {
             values.insert(key(kind, n), value(v));
         }
         for &((kind, n), v) in &self.pending {
@@ -108,7 +117,7 @@ impl BitmapDirectory {
             tree.apply(&values)?;
         }
         self.tree = Some(tree);
-        self.memory = Arc::default();
+        self.memory = None;
         self.memory_count = 0;
         self.pending.clear();
         Ok(())
@@ -125,7 +134,16 @@ impl BitmapDirectory {
                 .collect();
             tree.apply(&values)?;
         } else {
-            let memory = Arc::make_mut(&mut self.memory);
+            if self.memory.is_none() {
+                self.memory = Some(try_arc(BTreeMap::new())?);
+            }
+            let shared = self.memory.as_mut().expect("initialized RAM base");
+            if Arc::get_mut(shared).is_none() {
+                // BTreeMap node allocation is explicitly outside this change.
+                // The shared-owner allocation itself still reports refusal.
+                *shared = try_arc((**shared).clone())?;
+            }
+            let memory = Arc::get_mut(shared).expect("unique RAM base");
             for &(key, v) in &self.pending {
                 memory.insert(key, v);
             }
@@ -151,7 +169,12 @@ impl BitmapDirectory {
         }
         match &self.tree {
             Some(t) => Ok(t.get(&key(kind, n))?.and_then(decode)),
-            None => Ok(self.memory.get(&(kind, n)).copied().flatten()),
+            None => Ok(self
+                .memory
+                .as_ref()
+                .and_then(|m| m.get(&(kind, n)))
+                .copied()
+                .flatten()),
         }
     }
     pub(super) fn first(&self, page: u64) -> Result<Option<u64>> {
@@ -172,8 +195,8 @@ impl BitmapDirectory {
             if self.get(k.0, k.1)? == v {
                 continue;
             }
-            let exists =
-                self.memory.contains_key(&k) || self.pending.iter().any(|(key, _)| *key == k);
+            let exists = self.memory.as_ref().is_some_and(|m| m.contains_key(&k))
+                || self.pending.iter().any(|(key, _)| *key == k);
             if self.tree.is_none()
                 && (self.memory_rows() + usize::from(!exists)).saturating_mul(ENTRY_BYTES)
                     > self.limit
@@ -188,7 +211,7 @@ impl BitmapDirectory {
                 }
                 self.pending
                     .try_reserve_exact(1)
-                    .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                    .map_err(|_| Error::Io(std::io::ErrorKind::OutOfMemory.into()))?;
                 self.pending.push((k, v));
             }
             if self.edit_limit() == 0 {
@@ -247,7 +270,7 @@ impl BitmapDirectory {
                 Ok(())
             })?;
         } else {
-            for (&(kind, n), &v) in self.memory.iter() {
+            for (&(kind, n), &v) in self.memory.iter().flat_map(|v| v.iter()) {
                 if kind == 1
                     && !self.pending.iter().any(|(key, _)| *key == (kind, n))
                     && let Some(at) = v
@@ -280,6 +303,21 @@ impl BitmapDirectory {
     }
 }
 
+impl TryClone for BitmapDirectory {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            tree: self.tree.clone(), // Shares file; starts with an empty owner-local cache.
+            memory: self.memory.clone(),
+            pending: self.pending.try_clone()?,
+            memory_count: self.memory_count,
+            limit: self.limit,
+            count: self.count,
+            distinct: self.distinct,
+            recent: self.recent.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,7 +328,11 @@ mod tests {
             directory.prepare_stage()?;
             let mut next = directory.clone();
             next.push(page)?;
-            assert!(Arc::ptr_eq(&directory.memory, &next.memory));
+            assert!(match (&directory.memory, &next.memory) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            });
             assert_eq!(directory.len(), page);
             assert_eq!(next.slot(page)?, Some(page));
             directory = next;

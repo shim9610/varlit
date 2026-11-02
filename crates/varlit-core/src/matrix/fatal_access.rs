@@ -21,7 +21,7 @@ pub struct FatalAccessAllowed(());
 /// layout onto a blocked one, undoing `FatalAccessGate::block`. A gate
 /// that can be copied out of one layout is a gate that can be installed
 /// into another, so the derive is the bypass. `MatrixLayout` is therefore
-/// not `Clone` either; nothing in the crate cloned it.
+/// cloned only as a whole inside this module; no gate can be extracted.
 #[derive(Debug)]
 pub struct FatalAccessGate {
     blocked: bool,
@@ -189,10 +189,60 @@ pub(super) fn clone_layout(layout: &MatrixLayout) -> MatrixLayout {
     }
 }
 
+pub(super) fn try_clone_layout(layout: &MatrixLayout) -> Result<MatrixLayout> {
+    use crate::TryClone;
+    Ok(MatrixLayout {
+        storage: layout.storage,
+        dimensions: layout.dimensions.try_clone()?,
+        commits: layout.commits.try_clone()?,
+        blocks: layout.blocks.try_clone()?,
+        aux: layout.aux.try_clone()?,
+        crc_findings: layout.crc_findings.try_clone()?,
+        append_log_start: layout.append_log_start,
+        read_limits: layout.read_limits,
+        resident_bitmap_bytes: layout.resident_bitmap_bytes,
+        resident_page_index_bytes: layout.resident_page_index_bytes,
+        fatal_access: FatalAccessGate {
+            blocked: layout.fatal_access.blocked,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FatalAccessGate, MatrixRecoveryFinding};
     use crate::matrix::{MatrixCorruptionKind, MatrixCorruptionSeverity, bypass_catalogue};
+
+    #[test]
+    fn fallible_layout_copy_keeps_blocked_state_and_original_after_refusal() {
+        use crate::{ReadLimits, TryClone};
+        let mut layout = super::assemble_layout(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![MatrixRecoveryFinding {
+                kind: MatrixCorruptionKind::CommitMap,
+                severity: MatrixCorruptionSeverity::Fatal,
+                message: String::from("blocked"),
+            }],
+            0,
+            ReadLimits::default(),
+            0,
+            0,
+            bypass_catalogue::probe_spec(),
+        );
+        layout.fatal_access.block();
+        for at in [1, 2] {
+            // findings vector and message
+            let result = crate::pib_probe::with_allocation_refusal(at, || layout.try_clone());
+            assert!(result.is_err());
+            assert!(super::allow_for(&layout).is_err());
+            let copy = layout.try_clone().unwrap();
+            assert!(super::allow_for(&copy).is_err());
+            assert_eq!(copy.crc_findings, layout.crc_findings);
+        }
+    }
 
     /// The gate the layout carries is the one `evaluate` derived from that
     /// layout's findings — not a value any caller chose.

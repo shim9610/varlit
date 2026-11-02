@@ -35,8 +35,8 @@ impl BufferedIndex {
             let sorted = self
                 .pending
                 .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect::<BTreeMap<_, _>>();
+                .map(|(k, v)| Ok((k.try_clone()?, *v)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
             self.disk.as_mut().unwrap().apply(&sorted)?;
             self.pending.clear();
             self.bytes = 0;
@@ -57,7 +57,7 @@ impl BufferedIndex {
             let mut sorted: Vec<_> = self.pending.iter().collect();
             sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
             for (key, value) in sorted {
-                visitor(key.clone(), *value)?;
+                visitor(key.try_clone()?, *value)?;
             }
             Ok(())
         }

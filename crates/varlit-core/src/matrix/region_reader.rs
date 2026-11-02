@@ -2,16 +2,13 @@ use super::{Error, MatrixIo, Result, Source};
 use crate::matrix_generation::View;
 use std::cell::OnceCell;
 use std::fs::File;
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Weak;
 
 /// One reader's lazily opened private Windows file object. No thread-local
 /// registry or shared handle list: this owner moves with its reader and is
 /// Send + !Sync. A clone starts with its own empty handle cache.
 #[derive(Debug, Default)]
 pub struct MatrixReadPool {
-    handle: OnceCell<Option<Arc<File>>>,
+    handle: OnceCell<Option<Box<File>>>,
 }
 
 impl Clone for MatrixReadPool {
@@ -30,16 +27,8 @@ impl MatrixReadPool {
         usize::from(self.handle.get().is_some_and(Option::is_some))
     }
 
-    #[cfg(test)]
-    pub(crate) fn first_private_handle_weak(&self) -> Option<Weak<File>> {
-        self.handle
-            .get()
-            .and_then(Option::as_ref)
-            .map(Arc::downgrade)
-    }
-
     #[cfg(windows)]
-    fn reopen(file: &File) -> Option<Arc<File>> {
+    fn reopen(file: &File) -> Result<Option<Box<File>>> {
         use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::Storage::FileSystem::{
@@ -58,21 +47,25 @@ impl MatrixReadPool {
             )
         };
         if raw.is_null() || raw == INVALID_HANDLE_VALUE {
-            return None;
+            return Ok(None);
         }
         // SAFETY: `ReOpenFile` returned a handle owned by this call and not
         // aliased anywhere else; `File` takes ownership and closes it.
-        let handle = Arc::new(unsafe { File::from_raw_handle(raw as RawHandle) });
-        Some(handle)
+        let handle = crate::fallible::try_box(unsafe { File::from_raw_handle(raw as RawHandle) })?;
+        Ok(Some(handle))
     }
 
     #[cfg(not(windows))]
-    fn reopen(_file: &File) -> Option<Arc<File>> {
-        None
+    fn reopen(_file: &File) -> Result<Option<Box<File>>> {
+        Ok(None)
     }
 
-    fn private_handle(&self, file: &File) -> Option<&Arc<File>> {
-        self.handle.get_or_init(|| Self::reopen(file)).as_ref()
+    fn private_handle(&self, file: &File) -> Result<Option<&File>> {
+        if self.handle.get().is_none() {
+            // Refusal leaves the cache uninitialized so the caller may retry.
+            let _ = self.handle.set(Self::reopen(file)?);
+        }
+        Ok(self.handle.get().and_then(Option::as_deref))
     }
 }
 
@@ -189,8 +182,12 @@ impl<'a> MatrixRegionReader<'a> {
         if let Some(view) = self.view {
             return view.read_exact_at(offset, buffer).map_err(Error::Io);
         }
-        let private = self.pool.and_then(|pool| pool.private_handle(self.file));
-        let file: &File = private.map(Arc::as_ref).unwrap_or(self.file);
+        let private = self
+            .pool
+            .map(|pool| pool.private_handle(self.file))
+            .transpose()?
+            .flatten();
+        let file = private.unwrap_or(self.file);
         let mut consumed = 0usize;
         while consumed < buffer.len() {
             let delta =
@@ -303,18 +300,30 @@ mod tests {
         std::fs::write(&path, vec![9u8; 512]).expect("write");
         let file = std::fs::File::open(&path).expect("open");
 
-        let weak = {
+        {
             let pool = MatrixReadPool::new();
             let mut bytes = [0u8; 16];
             MatrixRegionReader::with_pool(&file, &pool)
                 .read_exact_at(0, &mut bytes)
                 .expect("pooled read");
             assert_eq!(bytes, [9u8; 16]);
-            pool.first_private_handle_weak()
-        };
-        assert!(
-            weak.is_none_or(|handle| handle.upgrade().is_none()),
-            "a private handle outlived the pool that owns it"
-        );
+            #[cfg(windows)]
+            assert_eq!(pool.private_handle_count(), 1);
+            #[cfg(not(windows))]
+            assert_eq!(pool.private_handle_count(), 0);
+        }
+        drop(file);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // This path belongs only to this test. A leaked pooled read handle
+            // would conflict with this exclusive open; unrelated handle reuse
+            // in concurrent tests cannot make the assertion flaky.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path)
+                .expect("private handle outlived its pool");
+        }
     }
 }

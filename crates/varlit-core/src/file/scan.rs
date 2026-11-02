@@ -1616,7 +1616,7 @@ pub(super) fn corroborate_header_tails(
     Ok(Some(OpenDigest {
         physical_end: file_len,
         sequence_high_water: Some(sequence_high_water),
-        block_tails: BlockTails::from_sorted(slot.tails.clone()),
+        block_tails: BlockTails::from_sorted(slot.tails.try_clone()?),
     }))
 }
 
