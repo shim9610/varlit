@@ -1,0 +1,12 @@
+{
+  "before": {
+    "record_mutation_load": "6801d2354fb7036ded5e5e63862c06489dbd62de9cf5c61303369ee4e7a9c99e",
+    "oom_maintenance_load": "1ade1b56732186743393916dd12b71f912baef4d7760892315e507f6f24ab98a",
+    "scalable_load": "8fdcc07fe4c53ef6a04240db58efe2310130b7b5cade54d76228bf02e53a7d8e"
+  },
+  "after": {
+    "record_mutation_load": "65427ffd8bed8c9cf5188077ce353e18e57b4d61395874a9249e685ac6cfcf81",
+    "oom_maintenance_load": "744c6de2560a8508e3e6dab8f52e4919e747a500e14c8aa10ed831e69c66b0e5",
+    "scalable_load": "7c9de1e09026dad84b8180f80bd8b4d023cbbe7f4a4325097d61bec8c0d98dbc"
+  }
+}

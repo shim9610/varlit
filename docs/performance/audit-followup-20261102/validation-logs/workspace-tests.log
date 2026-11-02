@@ -1,0 +1,2354 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target/debug/varlit-test-runner test --locked --workspace --all-features`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-11030-1793589650864381289-0
+   Compiling unicode-ident v1.0.27
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling rustix v1.1.6
+   Compiling find-msvc-tools v0.1.15
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling cc v1.10.0
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling syn v3.0.9
+   Compiling zstd-safe v8.2.0
+   Compiling syn v2.0.119
+   Compiling tempfile v3.27.0
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling equivalent v1.0.3
+   Compiling indexmap v2.14.2
+   Compiling toml_edit v0.25.17+spec-1.1.0
+   Compiling redb v4.4.0 (/workspace/varlit/vendor/redb)
+   Compiling proc-macro-crate v3.5.0
+   Compiling zerocopy-derive v0.8.63
+   Compiling zerocopy v0.8.63
+   Compiling thiserror-impl v2.0.21
+   Compiling thiserror v2.0.21
+   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)
+   Compiling serde_json v1.0.154
+   Compiling serde_spanned v1.1.2
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling rusty-fork v0.3.1
+   Compiling zstd v0.14.3
+   Compiling varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling serde_derive v1.0.229
+   Compiling proptest v1.12.0
+   Compiling trybuild v1.0.122
+   Compiling varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/debug/deps/varlit-1702a5fd7746d50f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapter_sidecar_verify.rs (target/debug/deps/adapter_sidecar_verify-20d1f91d7e71266f)
+
+running 3 tests
+test a_policy_that_verifies_nothing_reads_nothing ... ok
+test a_length_only_policy_answers_below_the_fingerprint_ceiling ... ok
+test verify_and_inspect_agree_on_every_row_of_the_status_table ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapter_toolkit.rs (target/debug/deps/adapter_toolkit-6e4db23ebc19f331)
+
+running 15 tests
+test adapter_tail_status_summarizes_remaining_physical_tail ... ok
+test binary_writer_and_cursor_roundtrip_endian_values ... ok
+test adapter_input_file_materializes_bytes_and_cleans_up_temp_path ... ok
+test chunk_index_validates_raw_bounds_and_keeps_duplicate_keys ... ok
+test cursor_reports_eof_and_invalid_utf8 ... ok
+test length_prefix_widths_roundtrip ... ok
+test reducer_applies_stateful_segment_metadata ... ok
+test adapter_report_preserves_layout_tail_status ... ok
+test sidecar_identity_default_rejects_large_extent_before_scanning ... ok
+test layout_segment_and_index_limits_stop_scans_before_growth ... ok
+test layout_report_rejects_complete_malformed_segments_as_fatal ... ok
+test sidecar_identity_scan_limit_is_explicit ... ok
+test tagged_value_codec_keeps_type_id_policy_user_owned ... ok
+test sidecar_policy_checks_presence_and_identity ... ok
+test sidecar_identity_hashes_exactly_the_captured_extent_during_growth ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/append_allocation_contract.rs (target/debug/deps/append_allocation_contract-41d33047bbb7a06b)
+
+running 4 tests
+test the_written_bytes_are_unchanged ... ok
+test writing_a_record_footer_allocates_nothing_per_record ... ok
+test a_declared_compression_spec_below_the_minimum_copies_no_more_either ... ok
+test a_default_append_copies_the_payload_no_more_than_the_encoder_does ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/append_syscall_probe.rs (target/debug/deps/append_syscall_probe-1559a8a40d2ddfe6)
+
+running 1 test
+test appends_records_for_an_external_syscall_count ... ignored, measurement harness; run under strace with two values of N
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bare_filename_parent_sync.rs (target/debug/deps/bare_filename_parent_sync-18eaae55ea7d06f7)
+
+running 2 tests
+test bare_filename_child ... ignored, invoked only as the bare-filename subprocess
+test a_bare_filename_is_a_usable_pathname ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/caller_supplied_buffers.rs (target/debug/deps/caller_supplied_buffers-ebac0f1f2dfc60c7)
+
+running 6 tests
+test a_reused_buffer_is_cut_to_each_record_and_never_carries_the_last_one ... ok
+test block_vec_get_into_matches_get_and_reuses_the_buffer ... ok
+test every_into_form_clears_and_matches_the_allocating_one ... ok
+test opening_a_writer_through_a_scratch_buffer_sees_the_same_file ... ok
+test read_payload_into_matches_the_allocating_form ... ok
+test decode_block_into_refuses_an_entry_of_another_block ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/checkpoint_growth.rs (target/debug/deps/checkpoint_growth-315991607526a7ea)
+
+running 6 tests
+test checkpointless_tail_recovers_from_empty_file ... ok
+test checkpoint_on_flush_grows_linearly_not_quadratically ... ok
+test reopened_writer_recovers_checkpoint_cadence ... ok
+test sparse_checkpoints_reopen_sees_every_record ... ok
+test checkpoint_cadence_touches_grow_linearly ... ok
+test opening_a_checkpointed_file_does_not_read_the_checkpoints ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/codec_array_allocation.rs (target/debug/deps/codec_array_allocation-8c4d17de5af58e48)
+
+running 6 tests
+test a_custom_u8_wire_codec_keeps_its_element_validation ... ok
+test a_truncated_array_errors_without_panicking_or_leaking ... ok
+test fixed_arrays_round_trip_unchanged ... ok
+test an_above_budget_array_still_reserves_on_the_heap ... ok
+test byte_array_fast_path_keeps_limits_framing_and_aliases ... ok
+test small_fixed_arrays_decode_without_allocating ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec_hardening.rs (target/debug/deps/codec_hardening-e0b94be38c865211)
+
+running 30 tests
+test bool_codec_accepts_only_literal_zero_and_one ... ok
+test btree_map_rejects_duplicate_key_before_decoding_its_value ... ok
+test btree_map_entries_are_charged_their_real_node_cost ... ok
+test built_in_allocations_share_a_finite_decoder_budget ... ok
+test byte_derived_counts_are_rejected_before_loops_or_allocations ... ok
+test chunked_bytes_roundtrips_through_the_codec ... ok
+test chunked_bytes_is_usable_as_a_derived_variable_field ... ok
+test chunked_bytes_declares_a_stable_non_zero_schema_identity ... ok
+test duplicate_large_field_ids_are_rejected_without_extra_charge ... ok
+test field_extent_is_checked_before_large_field_id_bookkeeping ... ok
+test field_headers_decode_checked_lengths_while_writers_emit_zero_flags ... ok
+test hash_map_budget_still_admits_honest_maps ... ok
+test hash_map_encoding_sorts_borrowed_non_clone_keys_by_ord ... ok
+test hash_map_rejects_duplicate_key_before_decoding_its_value ... ok
+test map_preflight_includes_the_final_value_before_budget_or_reserve ... ok
+test large_field_id_bookkeeping_is_charged_to_the_materialization_budget ... ok
+test maps_accept_only_strictly_increasing_keys ... ok
+test nested_bool_decoders_reject_noncanonical_values ... ok
+test nested_field_and_top_level_map_decoders_report_exact_trailing_bytes ... ok
+test the_2026_07_20_oom_reproducer_stays_refused ... ok
+test nonzero_field_flags_are_rejected_for_known_and_unknown_fields ... ok
+test one_byte_map_small_table_classes_are_charged_exactly ... ok
+test truncated_duplicate_variable_field_is_rejected_before_field_id_allocation ... ok
+test truncated_and_oversized_payloads_return_errors_without_panicking ... ok
+test variable_field_lengths_are_checked_before_payload_access ... ok
+test zero_flag_unknown_fields_remain_skippable ... ok
+test zero_sized_hash_map_entries_are_charged_their_real_table_cost ... ok
+test zero_sized_map_small_table_classes_are_charged_exactly ... ok
+test zero_width_maps_terminate_on_hostile_counts ... ok
+test hash_map_charges_never_fall_as_the_declared_count_rises ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compile.rs (target/debug/deps/compile-fd55467aa767c0dc)
+
+running 4 tests
+   Compiling unicode-ident v1.0.27
+   Compiling find-msvc-tools v0.1.15
+   Compiling rustix v1.1.6
+   Compiling zstd-safe v8.2.0
+   Compiling proc-macro2 v1.0.107
+   Compiling cc v1.10.0
+   Compiling equivalent v1.0.3
+   Compiling indexmap v2.14.2
+   Compiling quote v1.0.47
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling tempfile v3.27.0
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling crc32fast v1.5.3
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling toml_edit v0.25.17+spec-1.1.0
+   Compiling zmij v1.0.23
+   Compiling serde_core v1.0.229
+   Compiling zerocopy-derive v0.8.63
+   Compiling proc-macro-crate v3.5.0
+   Compiling thiserror-impl v2.0.21
+   Compiling memmap2 v0.9.12
+   Compiling serde_json v1.0.154
+   Compiling redb v4.4.0 (/workspace/varlit/vendor/redb)
+   Compiling rusty-fork v0.3.1
+   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)
+   Compiling thiserror v2.0.21
+   Compiling zerocopy v0.8.63
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling proptest v1.12.0
+   Compiling zstd v0.14.3
+   Compiling varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+   Compiling varlit v0.12.1 (/workspace/varlit/crates/varlit)
+   Compiling varlit-tests v0.0.0 (/workspace/varlit/target/tests/trybuild/varlit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.68s
+
+
+test tests/ui/pass_mmap_unsafe.rs [should pass] ... ok
+test tests/ui/fail_mmap_requires_unsafe.rs [should fail to compile] ... ok
+
+
+test mmap_safety_contracts ... ok
+   Compiling varlit-tests v0.0.0 (/workspace/varlit/target/tests/trybuild/varlit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+
+
+test tests/ui/pass_basic.rs [should pass] ... ok
+test tests/ui/pass_policies.rs [should pass] ... ok
+test tests/ui/pass_format_dsl.rs [should pass] ... ok
+test tests/ui/pass_matrix_aux.rs [should pass] ... ok
+test tests/ui/fail_share_matrix_reader_fault.rs [should fail to compile] ... ok
+test tests/ui/fail_share_generated_matrix_reader_fault.rs [should fail to compile] ... ok
+test tests/ui/pass_layout.rs [should pass] ... ok
+test tests/ui/fail_share_generated_layout_reader.rs [should fail to compile] ... ok
+test tests/ui/pass_macro_hygiene.rs [should pass] ... ok
+test tests/ui/pass_read_limits.rs [should pass] ... ok
+test tests/ui/pass_optional_partial_limits.rs [should pass] ... ok
+test tests/ui/pass_replacement_api.rs [should pass] ... ok
+test tests/ui/pass_packed_bitmap_variable_field.rs [should pass] ... ok
+test tests/ui/pass_matrix_type_alias.rs [should pass] ... ok
+test tests/ui/fail_duplicate_id.rs [should fail to compile] ... ok
+test tests/ui/fail_duplicate_field_id.rs [should fail to compile] ... ok
+test tests/ui/fail_zero_field_id.rs [should fail to compile] ... ok
+test tests/ui/fail_missing_block_id.rs [should fail to compile] ... ok
+test tests/ui/fail_reserved_block_id.rs [should fail to compile] ... ok
+test tests/ui/fail_unsupported_kind.rs [should fail to compile] ... ok
+test tests/ui/fail_unsupported_endian.rs [should fail to compile] ... ok
+test tests/ui/fail_tuple_struct.rs [should fail to compile] ... ok
+test tests/ui/fail_unknown_format_key.rs [should fail to compile] ... ok
+test tests/ui/fail_empty_key.rs [should fail to compile] ... ok
+test tests/ui/fail_invalid_key.rs [should fail to compile] ... ok
+test tests/ui/fail_empty_key_segment.rs [should fail to compile] ... ok
+test tests/ui/fail_duplicate_key.rs [should fail to compile] ... ok
+test tests/ui/fail_missing_key.rs [should fail to compile] ... ok
+test tests/ui/fail_fixed_default.rs [should fail to compile] ... ok
+test tests/ui/fail_inline_empty_key.rs [should fail to compile] ... ok
+test tests/ui/fail_matrix_unbounded_field.rs [should fail to compile] ... ok
+test tests/ui/fail_matrix_packed_bitmap_field.rs [should fail to compile] ... ok
+test tests/ui/fail_matrix_shadowed_packed_bitmap.rs [should fail to compile] ... ok
+test tests/ui/fail_matrix_tuple_field.rs [should fail to compile] ... ok
+test tests/ui/fail_duplicate_format_key.rs [should fail to compile] ... ok
+test tests/ui/fail_generic_derive.rs [should fail to compile] ... ok
+test tests/ui/fail_unknown_limit_key.rs [should fail to compile] ... ok
+test tests/ui/fail_duplicate_limit_key.rs [should fail to compile] ... ok
+test tests/ui/fail_manual_block_fingerprint_mismatch.rs [should fail to compile] ... ok
+test tests/ui/fail_custom_codec_missing_schema_id.rs [should fail to compile] ... ok
+test tests/ui/fail_container_codec_missing_schema_id.rs [should fail to compile] ... ok
+test tests/ui/fail_keyed_contradiction.rs [should fail to compile] ... ok
+test tests/ui/fail_keyed_contradiction_merge.rs [should fail to compile] ... ok
+
+
+test macro_compile_contracts ... ok
+    Checking rustix v1.1.6
+    Checking zstd-sys v2.1.2+zstd.1.5.7
+    Checking unicode-ident v1.0.27
+    Checking thiserror v2.0.21
+    Checking zerocopy v0.8.63
+    Checking proc-macro2 v1.0.107
+    Checking zstd-safe v8.2.0
+    Checking zstd v0.14.3
+    Checking crc32fast v1.5.3
+    Checking memmap2 v0.9.12
+    Checking quote v1.0.47
+    Checking zmij v1.0.23
+    Checking serde_core v1.0.229
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+    Checking syn v3.0.9
+    Checking tempfile v3.27.0
+    Checking rusty-fork v0.3.1
+    Checking proptest v1.12.0
+    Checking serde_json v1.0.154
+    Checking redb v4.4.0 (/workspace/varlit/vendor/redb)
+    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Checking varlit-tests v0.0.0 (/workspace/varlit/target/tests/trybuild/varlit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.82s
+
+
+test tests/ui/fail_fabricated_mutation_permit.rs ... ok
+test tests/ui/fail_unpermitted_mutation_window.rs ... ok
+test tests/ui/fail_cross_writer_mutation_permit.rs ... ok
+test tests/ui/fail_replace_permitted_writer.rs ... ok
+test tests/ui/fail_fabricated_index_reservation.rs ... ok
+test tests/ui/fail_fabricated_replacement_target.rs ... ok
+test tests/ui/fail_fabricated_record_overwrite.rs ... ok
+test tests/ui/fail_fabricated_crc_valid_completeness.rs ... ok
+test tests/ui/fail_fabricated_fatal_access.rs ... ok
+test tests/ui/fail_minted_fatal_access_gate.rs ... ok
+test tests/ui/fail_minted_crc_valid_completeness.rs ... ok
+
+
+test mechanical_enforcement_contracts ... ok
+   Compiling varlit-tests v0.0.0 (/workspace/varlit/target/tests/trybuild/varlit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+
+
+test tests/ui/pass_high_cardinality_macro.rs [should pass] ... ok
+test tests/ui/fail_send_stream_cursors.rs [should fail to compile] ... ok
+test tests/ui/fail_share_stream_reader.rs [should fail to compile] ... ok
+test tests/ui/fail_share_indexed_reader.rs [should fail to compile] ... test high_cardinality_compile_contracts has been running for over 60 seconds
+ok
+test tests/ui/fail_share_generated_readers.rs [should fail to compile] ... ok
+test tests/ui/pass_petabyte_plan_batch.rs [should pass] ... ok
+test tests/ui/fail_key_index_matrix.rs [should fail to compile] ... ok
+test tests/ui/fail_key_index_value.rs [should fail to compile] ... ok
+test tests/ui/fail_key_index_without_key.rs [should fail to compile] ... ok
+test tests/ui/fail_petabyte_chain_stream_keyed_batch.rs [should fail to compile] ... ok
+test tests/ui/fail_petabyte_chain_unindexed_keyed_mutation.rs [should fail to compile] ... ok
+test tests/ui/fail_manual_block_missing_keyedness.rs [should fail to compile] ... ok
+test tests/ui/fail_keyed_contradiction_stream_delete.rs [should fail to compile] ... ok
+test tests/ui/fail_keyed_contradiction_indexed_delete.rs [should fail to compile] ... ok
+
+
+test high_cardinality_compile_contracts ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 62.50s
+
+     Running tests/compression.rs (target/debug/deps/compression-20f537bff1a599d7)
+
+running 13 tests
+test block_specific_compression_rejects_invalid_descriptors ... ok
+test chunked_bytes_default_decode_enforces_standard_logical_limit ... ok
+test chunked_bytes_limited_decode_checks_logical_len_before_allocation ... ok
+test chunked_bytes_rejects_hostile_header_extents_before_decode_allocation ... ok
+test chunked_bytes_rejects_inconsistent_count_and_chunk_extents ... ok
+test block_specific_record_explicit_compression_overrides_global_none ... ok
+test file_explicit_uses_varlit2_header_and_raw_compressed_payload ... ok
+test file_explicit_with_record_footer_uses_varlit3_header_and_extensions ... ok
+test compressed_checkpoint_and_rewrite_preserve_length_hint ... ok
+test chunked_bytes_roundtrip_and_chunk_crc_detection ... ok
+test mmap_windows_expose_physical_compressed_payloads ... ok
+test format_contract_requires_computed_schema_hash ... ok
+test record_explicit_variable_blocks_roundtrip_with_physical_scan ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compression_stream.rs (target/debug/deps/compression_stream-bbb380ce40df68e3)
+
+running 3 tests
+test compressed_crc_stream_preserves_format_contract_and_checks_payloads ... ok
+test compressed_crc_rebuild_preserves_format_contract_and_checks_payloads ... ok
+test embedded_manifest_leaves_capacity_for_creation_and_tombstone_tails ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/defragment.rs (target/debug/deps/defragment-f7c94cbfc4d5183e)
+
+running 4 tests
+test it_is_refused_without_the_liveness_policy ... ok
+test a_reader_open_across_the_republish_keeps_its_generation ... ok
+test dead_records_are_dropped_and_the_chain_still_reads ... ok
+test defragmenting_a_file_with_no_dead_records_changes_nothing_readable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/diagnose_file_resolved_limits.rs (target/debug/deps/diagnose_file_resolved_limits-e418164142fcac45)
+
+running 2 tests
+test diagnose_file_still_enforces_a_format_declared_ceiling ... ok
+test diagnose_file_resolves_limits_like_an_ordinary_open ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/digest_after_replacement.rs (target/debug/deps/digest_after_replacement-121a18a9809e1e07)
+
+running 6 tests
+test an_in_place_replacement_is_refused_on_a_digest_format ... ok
+test a_lazy_append_with_no_replacement_is_the_baseline ... ok
+test replace_leaves_a_resumable_digest ... ok
+test replacing_a_variable_record_leaves_a_resumable_digest ... ok
+test replace_block_leaves_a_resumable_digest ... ok
+test a_checkpoint_format_keeps_the_in_place_route ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/directory_generation.rs (target/debug/deps/directory_generation-0fbe0c9185cd893b)
+
+running 2 tests
+test a_directory_from_this_generation_still_reads ... ok
+test a_directory_from_a_superseded_generation_is_refused ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/disk_index_composite_key.rs (target/debug/deps/disk_index_composite_key-07b0258ebb2d2af5)
+
+running 3 tests
+test the_keyed_chain_still_stores_rows_under_the_key_they_are_read_by ... ok
+test the_default_policy_path_does_not_move ... ok
+test the_keyed_chain_builds_one_composite_key_per_record ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/doc_claims.rs (target/debug/deps/doc_claims-3384eefd971962b4)
+
+running 14 tests
+test matrix_concurrency_docs_state_confirmed_generations_and_explicit_follow ... ok
+test only_the_shipped_vmat_version_mismatch_contract_is_published ... ok
+test no_document_declares_an_ordered_barrier_as_a_format_key ... ok
+test the_header_slot_entry_framing_is_published_as_twelve_bytes ... ok
+test documented_vmat_layout_version_matches_the_shipped_constant ... ok
+test the_deleted_full_scan_fallback_is_not_described_anywhere ... ok
+test the_keyed_tail_charge_is_documented_against_its_own_limit_and_its_build ... ok
+test the_retracted_digest_sequence_sentinel_is_not_published_anywhere ... ok
+test the_renamed_record_scanner_is_not_published_under_its_old_name ... ok
+test the_retracted_matrix_open_cost_claim_is_not_published_anywhere ... ok
+test no_document_says_a_matrix_dimension_cannot_grow ... ok
+test the_zero_range_counter_qualifications_are_documented ... ok
+test the_retired_wall_clock_scaling_gate_is_not_published_as_a_contract ... ok
+test the_superseded_assurance_claims_are_not_still_published ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/doc_dsl_examples.rs (target/debug/deps/doc_dsl_examples-0ecbba2728733cbf)
+
+running 1 test
+test docs_still_contain_the_examples_compiled_here ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/enforcement_gates.rs (target/debug/deps/enforcement_gates-7288c023cdd2cc18)
+
+running 16 tests
+test an_in_place_record_write_still_demands_a_version_checked_target ... ok
+test every_reserved_block_id_is_in_the_internal_list ... ok
+test crc_validity_completeness_can_only_come_from_an_enumeration_that_ran ... ok
+test matrix_state_is_only_addressed_through_the_fatal_access_witness ... ok
+test no_file_length_ceiling_is_enforced ... ok
+test no_writer_keeps_its_own_poison_boolean ... ok
+test the_crc_validity_bitmap_is_only_read_through_its_evidence_type ... ok
+test the_matrix_page_index_writers_stay_unreachable_outside_their_gate ... ok
+test the_primary_handle_escape_is_only_for_the_matrix_region ... ok
+test a_permit_can_only_be_minted_from_the_writers_own_poison_flag ... ok
+test no_guard_consults_a_bare_boolean_field ... ok
+test the_private_matrix_read_handles_are_read_only_and_never_lent_out ... ok
+test the_in_crate_bypass_catalogues_are_still_there ... ok
+test the_resident_record_index_cannot_be_grown_or_outrun ... ok
+test the_primary_record_handle_is_only_written_through_its_four_gated_operations ... ok
+test the_shipped_code_stripper_removes_test_modules_and_nothing_else ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/experimental_matrix_reuse.rs (target/debug/deps/experimental_matrix_reuse-35721f17c1173fb6)
+
+running 27 tests
+test bounds_geometry_and_single_writer_are_checked ... ok
+test fault_tests::crash_child ... ignored, subprocess entry point
+test aliased_sidecars_are_refused_without_truncating_the_primary ... ok
+test erased_latest_header_and_truncation_do_not_return_old_values ... ok
+test fault_tests::a_paused_reader_does_not_block_reuse_and_discards_its_old_copy ... ok
+test fault_tests::injected_sync_failure_poisoning_and_recovery_keep_a_confirmed_generation ... ok
+test logical_chunk_larger_than_working_budget_opens_and_updates_locally ... ok
+test fault_tests::process_abort_matrix_recovers_and_never_resurrects_discarded_chunks ... ok
+test old_experimental_format_and_invalid_page_geometry_are_refused ... ok
+test one_page_cache_io_benchmark ... ignored, paired writer-cache I/O benchmark; run release with --ignored --nocapture
+test independent_threads_observe_whole_generations ... ok
+test pages_span_cells_and_tiny_writer_cache_survives_eviction ... ok
+test payload_corruption_is_not_hidden_by_an_older_slot ... ok
+test process_reader_child ... ignored, cross-process reader entry point
+test publication_errors_distinguish_durable_and_indeterminate ... ok
+test fuzz_style_history_matches_confirmed_model ... ok
+test restarting_a_scan_does_not_evict_its_own_active_page ... ok
+test retry_budget_is_bounded_and_writer_keeps_publishing ... ok
+test reuse_is_opt_in_and_off_keeps_native_snapshots ... ok
+test reuse_load_campaign ... ignored, bounded load test; VARLIT_REUSE_SOAK_SECONDS and VARLIT_REUSE_SOAK_ROOT configure it
+
+running 1 test
+test repeated_updates_reuse_slots_and_dirty_readers_see_confirmed_data ... ok
+test sparse_updates_write_one_page_and_bulk_reads_coalesce_pages ... ok
+test unsynced_drop_is_discarded_and_deleted_cells_stay_missing ... ok
+test writer_factory_does_not_rebind_to_a_replaced_path ... ok
+test model_histories_match_across_evictions_deletes_and_reopens ... ok
+test process_reader_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.64s
+
+test separately_opened_process_reader_follows_reused_slots ... ok
+test one_page_writer_does_not_stage_a_full_data_page_for_each_bitmap_lookup ... ok
+
+test result: ok. 23 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 2.49s
+
+     Running tests/finite_key_benchmark.rs (target/debug/deps/finite_key_benchmark-bf17c4d87374feb4)
+
+running 1 test
+test compare_finite_representation ... ignored, controlled I/O benchmark; use scripts/compare_finite_keys.py
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/finite_key_compile.rs (target/debug/deps/finite_key_compile-4d90ec5b33da9541)
+
+running 1 test
+    Checking varlit-tests v0.0.0 (/workspace/varlit/target/tests/trybuild/varlit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+
+
+test tests/ui/fail_finite_key_limit.rs ... ok
+test tests/ui/fail_finite_key_hash.rs ... ok
+test tests/ui/fail_finite_key_raw_fields.rs ... ok
+
+
+test finite_key_compile_contracts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/finite_key_limit.rs (target/debug/deps/finite_key_limit-6d89501e069e838d)
+
+running 1 test
+test all_4096_combinations_roundtrip_without_runtime_registration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/finite_slot_storage.rs (target/debug/deps/finite_slot_storage-84d2858f76fbc933)
+
+running 7 tests
+test corrupt_slot_chunk_is_rejected_before_returning_a_record ... ok
+test mixed_tables_restore_rebuild_and_continue_after_compaction ... ok
+test finite_only_has_no_tree_and_flush_does_not_publish_slot_extents ... ok
+test slots_crash_child ... ok
+test independent_readers_follow_atomic_slot_generations ... ok
+test interrupted_slot_and_directory_writes_preserve_confirmed_generation ... ok
+test randomized_full_domain_matches_redb_through_reopen_and_compaction ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+     Running tests/follow_damaged_tail.rs (target/debug/deps/follow_damaged_tail-29359ad189acaa4b)
+
+running 1 test
+test a_follow_answers_a_damaged_tail_the_way_an_open_does ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/follow_matrix_chunks.rs (target/debug/deps/follow_matrix_chunks-6e5ef5f65444312c)
+
+running 2 tests
+test following_an_overwritten_chunk_adopts_only_its_confirmed_version ... ok
+test a_follow_invalidates_a_chunk_directory_built_before_it ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/follow_read_limits.rs (target/debug/deps/follow_read_limits-154f9a7b58eab6ba)
+
+running 1 test
+test a_follow_is_refused_by_the_ceiling_that_refuses_an_open ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/format_doc_placement.rs (target/debug/deps/format_doc_placement-6073b681d6997b19)
+
+running 1 test
+test the_effective_policy_accessors_carry_their_own_rustdoc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/format_dsl.rs (target/debug/deps/format_dsl-5d7ca8abf04fdbb6)
+
+running 10 tests
+test crc32_with_header_detects_header_tampering ... ok
+test durable_commit_marks_visible_records ... ok
+test crc32_covers_varlit3_record_footer ... ok
+test transaction_marker_crc_corruption_before_marker_is_fatal ... ok
+test crc_transaction_fixed_cow_preserves_old_snapshot_and_footer_chain ... ok
+test explicit_transaction_marker_controls_reader_visibility ... ok
+test format_first_dsl_generates_typed_api_and_offset_chains ... ok
+test transaction_marker_crc_tail_after_latest_marker_is_ignored ... ok
+test transaction_writer_open_truncates_uncommitted_tail ... ok
+test typed_replacement_translates_keyed_tails_after_resize ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/format_policy_lifecycle.rs (target/debug/deps/format_policy_lifecycle-36aa4129f9a476bf)
+
+running 1 test
+test format_policies_survive_stream_and_index_lifecycles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.96s
+
+     Running tests/format_visibility.rs (target/debug/deps/format_visibility-64311da444beb079)
+
+running 2 tests
+test scoped_layout_handles_are_usable_within_the_crate ... ok
+test scoped_format_handles_are_usable_within_the_crate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/generated_keyed_atomicity.rs (target/debug/deps/generated_keyed_atomicity-e4a51b54eab28b0d)
+
+running 26 tests
+test a_generated_keyed_mutation_runs_no_user_hash_or_eq ... ok
+test clone_delete_trait::leaves_no_trace ... ok
+test clone_delete_inherent::never_links_around ... ok
+test clone_delete_inherent::leaves_no_trace ... ok
+test clone_delete_trait::never_links_around ... ok
+test clone_push_inherent::leaves_no_trace ... ok
+test clone_push_inherent::never_links_around ... ok
+test clone_push_trait::leaves_no_trace ... ok
+test eq_delete_inherent::leaves_no_trace ... ok
+test eq_delete_inherent::never_links_around ... ok
+test clone_push_trait::never_links_around ... ok
+test eq_delete_trait::leaves_no_trace ... ok
+test eq_push_inherent::leaves_no_trace ... ok
+test eq_delete_trait::never_links_around ... ok
+test eq_push_inherent::never_links_around ... ok
+test eq_push_trait::leaves_no_trace ... ok
+test eq_push_trait::never_links_around ... ok
+test hash_delete_trait::leaves_no_trace ... ok
+test hash_delete_inherent::leaves_no_trace ... ok
+test hash_delete_trait::never_links_around ... ok
+test hash_delete_inherent::never_links_around ... ok
+test hash_push_inherent::leaves_no_trace ... ok
+test the_writer_still_deletes_after_a_key_trait_panic ... ok
+test hash_push_trait::leaves_no_trace ... ok
+test hash_push_inherent::never_links_around ... ok
+test hash_push_trait::never_links_around ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/generated_matrix_shared_reader.rs (target/debug/deps/generated_matrix_shared_reader-fc3c5823c7f57087)
+
+running 2 tests
+test generated_matrix_reads_take_shared_self ... ok
+test independent_generated_readers_serve_concurrent_threads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/header_extension_limit.rs (target/debug/deps/header_extension_limit-7e7574afa68975d2)
+
+running 4 tests
+test a_region_over_the_undeclared_ceiling_is_refused ... ok
+test the_undeclared_ceiling_is_still_64_kib ... ok
+test the_reader_enforces_the_declared_ceiling ... ok
+test a_declared_ceiling_admits_a_larger_region ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/header_extensions.rs (target/debug/deps/header_extensions-467d7844f0909634)
+
+running 5 tests
+test a_region_that_cannot_be_framed_is_refused ... ok
+test an_oversized_region_is_refused_without_reading_it ... ok
+test a_format_without_extensions_still_writes_varlit1 ... ok
+test an_unknown_block_is_skipped_at_open ... ok
+test a_rewrite_writes_the_unknown_block_back ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/header_slots.rs (target/debug/deps/header_slots-824207c6febbb414)
+
+running 18 tests
+test a_declared_region_is_reserved_at_create ... ok
+test a_block_that_does_not_fit_is_refused_before_anything_is_written ... ok
+test a_written_block_survives_a_reopen ... ok
+test a_sealed_region_is_verified_on_read ... ok
+test a_region_written_after_a_replacement_is_still_editable ... ok
+test a_reader_opened_before_a_write_does_not_see_it ... ok
+test an_undeclared_block_is_refused ... ok
+test an_undeclared_region_reports_no_capacity ... ok
+test an_unsealed_region_is_not_verified_under_sealed_integrity ... ok
+test removing_a_block_frees_its_bytes ... ok
+test integrity_none_ignores_a_corrupted_region ... ok
+test sealing_is_refused_on_every_other_integrity ... ok
+test sealed_integrity_refuses_writes_after_the_seal ... ok
+test rolling_integrity_catches_a_corrupted_region ... ok
+test the_region_does_not_move_the_append_log ... ok
+test valid_checksum_cannot_authorize_duplicate_or_undeclared_header_entries ... ok
+test the_region_survives_a_republishing_replacement ... ok
+test rewriting_a_block_does_not_consume_more_of_the_region ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/header_slots_from_writer.rs (target/debug/deps/header_slots_from_writer-9c367bfc275869d8)
+
+running 5 tests
+test a_bare_varlit_writer_reaches_it_too ... ok
+test a_generated_writer_writes_the_region_directly ... ok
+test an_offset_recorded_at_append_seeds_a_read ... ok
+test the_accessors_agree_across_all_three_layers ... ok
+test the_writer_keeps_writing_afterwards ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/header_tail_region.rs (target/debug/deps/header_tail_region-0458524355117ce6)
+
+running 34 tests
+test a_header_tails_file_can_still_be_mapped ... ok
+test a_lazily_opened_handle_refuses_to_map_rather_than_answering_empty ... ok
+test a_file_with_an_uncommitted_tail_is_truncated_by_the_scan ... ok
+test a_byte_past_the_commit_point_takes_the_table_out_of_use ... ok
+test a_lazily_resumed_writer_keeps_warming_the_region ... ok
+test a_lazy_open_reads_its_tails_from_the_header ... ok
+test a_table_naming_an_older_commit_marker_is_refused ... ok
+test a_non_resident_blocks_tail_is_in_the_region ... ok
+test a_tail_naming_another_blocks_record_is_refused ... ok
+test a_replacement_publishes_a_cold_region ... ok
+test a_torn_slot_is_skipped_and_the_other_one_answers ... ok
+test a_writer_resumed_from_the_header_appends_a_chain_the_scan_agrees_with ... ok
+test an_explicit_marker_format_resumes_from_the_header ... ok
+test a_writer_resumed_from_the_header_continues_the_sequence ... ok
+test an_overflow_slot_is_not_adopted ... ok
+test both_extension_blocks::the_plan_sums_both_extension_blocks ... ok
+test commit_offset_must_name_a_commit_marker ... ok
+test matrix_refusal::a_matrix_format_may_not_declare_the_region ... ok
+test the_dsl_keyword_produces_the_builder_policy ... ok
+test crc32_with_header::a_header_checksummed_format_resumes_from_the_header ... ok
+test each_field_the_slot_decoder_checks_takes_the_table_out_of_use ... ok
+test the_published_layout_plan_describes_the_header_the_writer_writes ... ok
+test the_region_and_the_open_digest_are_not_declared_together ... ok
+test the_option_is_inert_when_it_is_off ... ok
+test the_region_contents_may_drift_but_its_framing_may_not ... ok
+test the_region_requires_a_commit_marker_to_name ... ok
+test the_region_requires_a_crc32_integrity_policy ... ok
+test the_region_requires_the_chain_it_hands_out_entry_points_to ... ok
+test the_region_length_is_fixed_by_the_declaration ... ok
+test the_region_starts_cold_and_a_commit_warms_exactly_one_slot ... ok
+test turning_it_on_changes_the_schema_hash_and_the_file_it_describes ... ok
+test the_region_write_is_one_seek_per_commit_point ... ok
+test the_open_cost_does_not_move_with_the_file ... ok
+test an_in_place_replacement_retires_the_warm_region ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/header_tails_after_replacement.rs (target/debug/deps/header_tails_after_replacement-cfbbfaaf1cf17cbb)
+
+running 5 tests
+test a_lazy_append_with_no_replacement_is_the_baseline ... ok
+test the_republishing_route_leaves_the_file_resumable ... ok
+test the_unsafe_in_place_route_leaves_the_file_resumable ... ok
+test the_fast_route_pauses_for_exactly_one_open ... ok
+test an_in_place_replacement_leaves_the_file_resumable ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/header_tails_keyed_resume.rs (target/debug/deps/header_tails_keyed_resume-8b211fa078ebad81)
+
+running 4 tests
+test a_deleted_key_points_at_its_tombstone_through_the_header_route ... ok
+test a_lazy_keyed_resume_answers_what_the_scan_answers ... ok
+test the_resume_cost_is_bounded_by_the_keys_not_by_the_file ... ok
+test the_scanning_open_really_does_read_the_whole_file ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/header_tails_segment_combo.rs (target/debug/deps/header_tails_segment_combo-2da04e5d8574b012)
+
+running 5 tests
+test a_lazy_writer_is_refused_by_the_segment_policy_not_by_the_region ... ok
+test the_slot_names_the_segment_from_its_own_commit_point ... ok
+test a_file_with_segments_still_resumes_from_the_header ... ok
+test a_segment_is_what_sits_between_the_marker_and_the_end_of_the_file ... ok
+test the_header_route_does_not_read_the_segment ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/header_tails_sidecar_identity.rs (target/debug/deps/header_tails_sidecar_identity-007912665c5d2fbe)
+
+running 3 tests
+test the_region_cannot_be_declared_without_a_commit_marker ... ok
+test the_declaration_itself_is_valid ... ok
+test a_disk_index_cannot_handle_a_primary_that_carries_commit_markers ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/high_cardinality.rs (target/debug/deps/high_cardinality-f3f3cfeb2c552b32)
+
+running 10 tests
+test cardinality_growth_respects_memory_budget ... ignored, 10k/100k/1m memory growth gate; run alone with --test-threads=1
+test explicit_scan_progress_and_cancellation_are_exact ... ok
+test million_unique_keys_keep_varlit_resident_maps_empty ... ignored, one-million-key allocator stress probe; run alone with --test-threads=1
+test cancelled_bootstrap_and_rebuild_publish_nothing ... ok
+test a_generated_keyed_writer_spills_long_keys_and_keeps_tombstone_predecessors ... ok
+test resident_single_input_compact_fails_typed_at_the_key_ceiling ... ok
+test resident_merge_and_compact_fail_typed_at_the_key_ceiling ... ok
+test resident_merge_estimate_reports_the_k_ever_bound ... ok
+test generated_indexed_api_stays_key_map_free_and_preserves_latest_values ... ok
+test steady_state_generated_keyed_appends_do_not_grow_resident_memory ... ok
+
+test result: ok. 8 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/immediate_native.rs (target/debug/deps/immediate_native-6e09791e1c3feb5b)
+
+running 1 test
+test declarations_and_native_writer_api_work_without_scalable_features ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/immediate_policy.rs (target/debug/deps/immediate_policy-7d34cd9aec9673e4)
+
+running 7 tests
+test immediate_crash_child ... ignored, subprocess entry point; exits without running writer destructors
+
+running 1 test
+test automatic_immediate_failure_reports_the_already_written_prefix ... ok
+test mandatory_blocks_cover_prior_writes_and_deletes ... ok
+test runtime_conditions_and_explicit_immediate_share_the_same_counters ... ok
+
+running 1 test
+
+running 1 test
+test stream_scalar_batch_and_unindexed_batch_honor_declarations ... ok
+
+running 1 test
+test process_exit_after_immediate_preserves_acknowledged_records ... ok
+test value_conditions_cut_batches_at_the_record_and_recovery_keeps_the_boundary ... ok
+
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/index_corruption_guards.rs (target/debug/deps/index_corruption_guards-6fee514609bd06ae)
+
+running 1 test
+test aliased_finite_extents_return_errors_through_public_reads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/index_oom_guards.rs (target/debug/deps/index_oom_guards-257909b8946b4dee)
+
+running 1 test
+test public_index_reads_return_oom_and_remain_usable_after_each_refusal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/index_rebuild_cost.rs (target/debug/deps/index_rebuild_cost-6d69b4a8d3144da2)
+
+running 10 tests
+test publication_state::bootstrap_preserves_the_replacement_temp_on_indeterminate_publication ... ok
+test publication_state::bootstrap_surfaces_parent_sync_pending_and_preserves_the_sidecar ... ok
+test publication_state::create_preserves_the_replacement_temp_on_indeterminate_publication ... ok
+test publication_state::create_surfaces_parent_sync_pending_and_preserves_the_sidecar ... ok
+test publication_state::rebuild_preserves_the_replacement_temp_on_indeterminate_publication ... ok
+test publication_state::rebuild_surfaces_parent_sync_pending_and_preserves_the_sidecar ... ok
+test rebuild_aborts_when_pathname_identity_changes_before_publish ... ok
+test crc_single_traversal::rebuild_reads_frames_only_outside_the_plan_and_verifies_indexed_payloads ... ok
+test historical_distinct_keys_follows_k_ever_across_rebuild ... ok
+test rebuild_cost_is_independent_of_plan_descriptor_count ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/index_residency.rs (target/debug/deps/index_residency-80a12d5cf039e043)
+
+running 17 tests
+test a_generation_rewrite_is_refused_for_a_non_resident_format ... ok
+test a_markerless_reopen_does_not_reissue_a_non_resident_sequence ... ok
+test a_non_resident_block_is_readable_through_the_chain_alone ... ok
+test a_non_resident_block_without_a_chain_is_refused ... ok
+test a_non_resident_block_refuses_the_resident_readers ... ok
+test a_self_referential_chain_link_is_refused_at_open ... ok
+test a_non_resident_block_still_appends_and_survives_a_reopen ... ok
+test a_reopen_does_not_reissue_a_non_resident_sequence ... ok
+test follow_refuses_nonresident_sequences_older_than_its_snapshot ... ok
+test nonresident_records_still_count_toward_the_explicit_record_limit ... ok
+test residency_declared_for_an_undeclared_block_is_refused ... ok
+test nonresident_sequence_checks_include_records_omitted_from_the_directory ... ok
+test residency_changes_no_byte_and_no_hash ... ok
+test the_chain_refuses_a_format_without_the_footer_chain ... ok
+test the_chain_reaches_every_non_resident_record_exactly_once ... ok
+test residency_is_bounded_by_the_resident_blocks_alone ... ok
+test a_kill_at_every_offset_loses_no_committed_non_resident_record ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/index_segments.rs (target/debug/deps/index_segments-a1a7058a8c438a61)
+
+running 30 tests
+test a_chain_with_no_commit_marker_falls_back ... ok
+test a_checkpoint_and_a_segment_chain_cannot_both_be_declared ... ok
+test a_chain_past_the_segment_ceiling_still_opens ... ok
+test a_checkpoint_that_fits_is_still_written ... ok
+test a_broken_chain_link_falls_back ... ok
+test a_corrupt_segment_payload_falls_back ... ok
+test a_file_written_before_segments_were_enabled_falls_back ... ok
+test a_flush_that_added_nothing_writes_no_segment ... ok
+test a_format_without_segments_writes_no_segment_record ... ok
+test a_corrupt_trailer_falls_back_rather_than_refusing ... ok
+test a_matrix_file_builds_and_walks_a_segment_chain ... ok
+test a_matrix_file_puts_the_append_log_after_the_matrix_region ... ok
+test a_record_appended_after_the_chain_falls_back ... ok
+test a_recovery_open_still_scans ... ok
+test a_matrix_file_open_frames_commit_points_not_records ... ok
+test a_replacement_generation_re_encodes_the_chain ... ok
+test a_truncated_tail_falls_back ... ok
+test all_off_writes_the_same_bytes_as_before ... ok
+test a_writer_reopen_keeps_appending_a_valid_chain ... ok
+test a_re_encoded_checkpoint_still_validates_strictly ... ok
+test each_flush_appends_one_segment_record_last ... ok
+test flush_survives_a_checkpoint_that_cannot_fit ... ok
+test an_in_place_replacement_is_refused ... ok
+test segment_option_defaults_off_and_changes_no_hash ... ok
+test segments_do_not_grow_when_a_writer_stops_uncommitted ... ok
+test every_record_survives_the_chained_open ... ok
+test the_segment_record_sits_inside_the_commit_boundary ... ok
+test the_chain_and_the_scan_produce_the_same_index ... ok
+test a_chained_file_opens_without_scanning_it_whatever_the_reader_declared ... ok
+test open_frames_commit_points_not_records ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/index_shared_readers.rs (target/debug/deps/index_shared_readers-4d124583386f4bfe)
+
+running 6 tests
+test independent_readers_share_one_sidecar_database ... ok
+test dirty_generation_reads_the_saved_root_without_writer_admission ... ok
+test crc_point_lookups_verify_payloads_and_detect_corruption ... ok
+test rebuild_replaces_the_sidecar_for_fresh_handles ... ok
+test concurrent_opens_of_unrelated_and_same_sidecars_all_succeed ... ok
+test independently_opened_files_keep_their_own_snapshots ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/integrity_verification.rs (target/debug/deps/integrity_verification-c8cd6de748350e7b)
+
+running 5 tests
+test the_default_is_on_demand ... ok
+test at_open_still_refuses_a_corrupt_file_at_open ... ok
+test on_demand_opens_the_same_corrupt_file_and_still_refuses_the_bad_record ... ok
+test an_intact_file_reads_identically_under_both_policies ... ok
+test verify_all_recovers_the_announcement_that_on_demand_defers ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/keyed_chain_walk.rs (target/debug/deps/keyed_chain_walk-f9d9ab72dd973a7e)
+
+running 8 tests
+test keyed_chain_is_refused_without_the_declaration ... ok
+test a_chain_that_does_not_decrease_is_refused ... ok
+test a_hand_written_walk_reaches_every_generation ... ok
+test keyed_chain_walks_the_same_54_hops ... ok
+test an_op_record_is_not_on_the_chain ... ok
+test record_entry_at_returns_what_read_block_at_discards ... ok
+test the_walk_crosses_a_tombstone ... ok
+test the_walk_costs_the_hops_and_not_the_file ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/keyed_get_allocations.rs (target/debug/deps/keyed_get_allocations-7384d3f71bcea0ec)
+
+running 3 tests
+test a_run_of_scalable_appends_pays_no_per_record_metadata_syscall ... ok
+test staging_a_record_for_append_does_not_allocate_per_record ... ok
+test a_successful_get_does_not_build_the_key_to_compare_it ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/keyed_tail_prime_cost.rs (target/debug/deps/keyed_tail_prime_cost-8558064983c43773)
+
+running 4 tests
+test a_lazy_handle_builds_the_same_keyed_tails_as_a_resident_one ... ok
+test a_lazy_keyed_tail_build_reads_the_chain_and_not_the_file ... ok
+test reading_one_block_reads_that_blocks_records_and_not_the_file ... ok
+test priming_the_keyed_tails_reads_the_keyed_records_and_not_the_file ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/layout_adapter_hardening.rs (target/debug/deps/layout_adapter_hardening-a0b7551e9d33c63e)
+
+running 16 tests
+test adapter_caller_path_is_never_removed ... ok
+test adapter_temp_path_lives_until_final_clone_is_dropped ... ok
+test adapter_temp_paths_are_unique_and_hold_independent_bytes ... ok
+test array_f64_checks_complete_extent_before_allocation_or_cursor_movement ... ok
+test adapter_temp_suffix_grammar_is_exact ... ok
+test binary_cursor_materialization_budget_is_cumulative ... ok
+test binary_cursor_materialization_ceiling_rejects_hostile_counts_before_allocation ... ok
+test caller_field_prevalidation_runs_before_callbacks_or_poison ... ok
+test callback_panic_leaves_layout_writer_poisoned ... ok
+test layout_owned_reads_apply_materialization_limit_after_bounded_open ... ok
+test layout_open_and_region_reads_enforce_runtime_limits ... ok
+test len_prefixed_string_checks_extent_and_ceiling_before_allocation ... ok
+test layout_reader_payloads_stay_bound_to_the_open_object ... ok
+test layout_writer_limits_fail_before_unbounded_growth_and_roll_back ... ok
+test returned_stream_error_rolls_back_and_writer_is_reusable ... ok
+test ordinary_layout_open_resolves_missing_and_handle_specs_sanitize_trust ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_dsl.rs (target/debug/deps/layout_dsl-7580b04727c820f6)
+
+running 22 tests
+test custom_layout_declaration_defaults_to_byte_zero_physical_layout ... ok
+test custom_layout_report_preserves_complete_prefix_before_truncated_tail ... ok
+test custom_layout_rejects_corrupt_declared_file_header_and_footer ... ok
+test bmp_style_layout_uses_u32_finalized_offsets ... ok
+test custom_layout_streams_metadata_and_raw_without_prebuffering ... ok
+test multi_segment_layout_dispatches_by_extended_literal_prefix ... ok
+test custom_layout_writes_file_header_and_segment_footer ... ok
+test explicit_varlit_native_preset_preserves_native_bytes ... ok
+test multi_segment_layout_dispatches_by_leading_literal_tag ... ok
+test multi_segment_layout_rejects_repeated_once_segment_on_scan ... ok
+test native_record_layout_codec_preserves_header_and_footer_bytes ... ok
+test native_file_header_layout_codec_preserves_varlit3_extension_len_zero ... ok
+test native_record_layout_codec_preserves_block_offset_chain_footer ... ok
+test native_record_layout_codec_rejects_invalid_footer_fields ... ok
+test tdms_physical_adapter_can_encode_metadata_and_raw_with_public_api ... ok
+test tdms_style_layout_rejects_corrupt_physical_segments ... ok
+test tdms_style_layout_writes_physical_leadin_offsets_and_raw_region ... ok
+test tdms_style_layout_reopens_and_appends_multiple_segments ... ok
+test typed_layout_api_handles_caller_file_header_fields ... ok
+test varlit3_native_preset_exposes_footer_layout_plan ... ok
+test varlit_native_preset_exposes_effective_layout_plan ... ok
+test typed_layout_api_writes_and_reads_tdms_style_segments ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/layout_segment_ordinals.rs (target/debug/deps/layout_segment_ordinals-f1cbae9373d2de31)
+
+running 1 test
+test typed_layout_segment_lookup_is_not_quadratic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/layout_writer_open_residency.rs (target/debug/deps/layout_writer_open_residency-d2185be077d7c1c5)
+
+running 4 tests
+test a_reopened_writer_still_knows_which_segments_it_has ... ok
+test tiny_directory_budget_spills_and_does_not_limit_append_or_lookup ... ok
+test opening_a_layout_writer_costs_the_same_at_1_000_and_50_000_segments ... ok
+test opening_a_layout_reader_keeps_a_directory_and_not_the_segments ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+     Running tests/manual_trait_invariants.rs (target/debug/deps/manual_trait_invariants-9fa1099e54bb2fb9)
+
+running 11 tests
+test keyed_mirror_with_agreeing_keyedness_registers_and_reads ... ok
+test correct_manual_mirror_still_registers ... ok
+test impostor_with_different_schema_is_rejected ... ok
+test impostor_registered_first_is_rejected_against_the_format_identity ... ok
+test keyedness_denial_is_rejected_even_with_forged_fingerprint ... ok
+test manual_schemas_use_independent_explicit_type_contracts ... ok
+test manual_endian_disagreement_is_rejected_and_never_byte_swaps ... ok
+test missing_identity_is_rejected_and_explicit_identity_is_authoritative ... ok
+test matrix_impostor_same_stride_mmap_is_rejected ... ok
+test matrix_impostor_same_stride_write_is_rejected ... ok
+test matrix_impostor_same_stride_read_is_rejected ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/materialization_budget_scope.rs (target/debug/deps/materialization_budget_scope-cf69c4de775420f1)
+
+running 6 tests
+test a_ceiling_below_one_keyed_record_still_refuses_the_append ... ok
+test a_ceiling_below_one_record_still_refuses_the_first_item ... ok
+test a_healthy_keyed_file_stays_appendable_under_a_small_ceiling ... ok
+test iter_and_a_get_loop_bound_the_same_thing ... ok
+test metadata_still_refuses_a_single_entry_over_the_ceiling ... ok
+test metadata_lookup_is_bounded_per_record_and_still_latest_wins ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix.rs (target/debug/deps/matrix-50c65f50650026a4)
+
+running 22 tests
+test matrix_aux_declaration_order_changes_schema_hash ... ok
+test matrix_aux_region_is_preallocated_noncommit_storage ... ok
+test format_first_matrix_dsl_generates_typed_api ... ok
+test matrix_byte_copy_migration_scaffold_copies_compatible_committed_slot ... ok
+test barrier_failures_before_generation_publication_leave_readers_unchanged ... ok
+test matrix_durable_barrier_observes_data_then_commit_sync_then_hook ... ok
+test matrix_mmap_payload_window_is_checked_and_snapshot_based ... ok
+test matrix_mmap_rejects_backing_file_truncated_after_open ... ok
+test matrix_p1_p2_extension_points_are_usable ... ok
+test matrix_recovery_clear_category_and_cell_actions_are_applied ... ok
+test matrix_commit_map_crc_corruption_reports_recoverable_region_and_rebuilds ... ok
+test matrix_random_order_write_read_commit_and_append_log_coexist ... ok
+test matrix_crc_rebuild_preserves_committed_zero_payloads ... ok
+test matrix_spec_rejects_duplicate_cell_categories ... ok
+test matrix_sidecar_identity_uses_computed_schema_hash ... ok
+test matrix_write_cell_bounds_hostile_encode_at_the_slot_stride ... ok
+test matrix_verified_sidecar_checks_parent_identity_and_payload_crc ... ok
+test matrix_rejects_corrupt_append_log_start ... ok
+test the_post_commit_event_stays_shape_sized ... ok
+test matrix_zero_copy_raw_cell_views_committed_slot ... ok
+test the_allocator_failure_narrowing_is_published_with_the_outcome_family ... ok
+test matrix_slot_crc_corruption_rejects_committed_cell_read ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/matrix_bulk.rs (target/debug/deps/matrix_bulk-62187a16e290c816)
+
+running 10 tests
+test chunk_run_reads_metadata_per_batch_instead_of_per_cell ... ok
+test bulk_reads_keep_old_generation_and_reject_a_missing_middle_cell ... ok
+test corrupted_chunk_cell_is_not_returned_by_bulk_read ... ok
+test declaration_order_selects_contiguous_columns_and_generated_run_methods ... ok
+test column_snapshots_follow_deletes_and_budget_refusals ... ok
+test column_chunk_metadata_is_batched_and_payload_amplification_is_bounded ... ok
+test typed_run_budget_is_checked_before_output_changes ... ok
+test sparse_columns_cross_batches_and_chunks_without_requiring_gap_cells ... ok
+test compressed_runs_cross_subblocks_and_match_encoded_output ... ok
+test runs_cross_rows_chunks_and_bitmap_pages_with_no_cache ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+     Running tests/matrix_chunks.rs (target/debug/deps/matrix_chunks-db8d14e1f52c28aa)
+
+running 58 tests
+test a_chunk_that_could_never_be_written_is_refused_at_create ... ok
+test a_cell_never_written_still_refuses_to_commit ... ok
+test a_chunk_nothing_committed_is_not_written ... ok
+test a_block_that_never_arrived_reads_as_absent_across_a_write ... ok
+test a_chunk_written_under_a_different_rows_per_chunk_is_refused ... ok
+test a_corrupted_compressed_sub_block_is_refused ... ok
+test a_crafted_block_count_cannot_make_the_reader_allocate ... ok
+test a_crafted_cell_count_cannot_outrun_its_commit_map ... ok
+test a_crafted_commit_length_cannot_read_outside_the_record ... ok
+test a_flipped_bit_in_a_written_chunk_is_refused_not_returned ... ok
+test a_format_without_integrity_stores_no_chunk_checksums ... ok
+test a_format_without_the_declaration_refuses_a_row_past_the_extent ... ok
+test a_crafted_stride_or_cell_count_is_refused ... ok
+test a_format_without_the_declaration_writes_no_chunk_record ... ok
+test a_chunked_read_does_not_pay_for_records_it_does_not_touch ... ok
+test a_quarantined_category_refuses_a_chunked_row_as_it_refuses_a_region_row ... ok
+test a_lazy_writer_refuses_a_chunked_row_instead_of_duplicating_its_record ... ok
+test a_quarantined_category_refuses_the_category_clear ... ok
+test a_reopened_writer_edits_a_chunk_written_by_the_previous_handle ... ok
+test a_skipped_chunk_can_be_filled_in_after_a_later_one_was_written ... ok
+test a_spec_that_declares_nothing_hashes_as_it_did_before ... ok
+test a_smaller_chunk_height_bounds_the_waste ... ok
+test a_truncated_chunk_payload_is_refused ... ok
+test a_type_that_disagrees_with_the_schema_is_refused_on_a_chunked_row ... ok
+test a_write_into_a_written_chunk_appends_a_generation ... ok
+test a_writer_reads_back_what_it_just_wrote_into_the_open_chunk ... ok
+test a_written_chunk_cell_can_be_overwritten_with_a_new_value ... ok
+test a_zero_valued_cell_can_be_committed ... ok
+test a_zero_valued_chunk_cell_commits_after_a_flush ... ok
+test an_uncommitted_cell_in_a_written_chunk_stays_uncommitted ... ok
+test an_uncommitted_write_to_the_open_chunk_reads_as_absent ... ok
+test an_unfilled_chunk_costs_its_whole_size ... ok
+test both_spellings_of_a_cell_clear_reach_a_written_chunk ... ok
+test chunk_compression_is_inert_when_not_declared ... ok
+test chunk_compression_requires_a_growing_dimension ... ok
+test clearing_a_category_counts_the_open_chunk_and_refuses_a_written_one ... ok
+test clearing_a_category_does_not_write_a_dead_chunk ... ok
+test clearing_a_cell_works_in_a_written_chunk_as_in_the_open_one ... ok
+test compressed_chunks_read_back_every_cell ... ok
+test compression_cannot_be_declared_on_a_matrix_block ... ok
+test dropping_a_writer_does_not_publish_the_open_chunk ... ok
+test one_chunk_record_is_written_per_chunk_that_holds_a_value ... ok
+test a_compressed_read_costs_one_sub_block_not_the_chunk ... ok
+test rows_past_the_declared_extent_are_written_and_read_back ... ok
+test sync_after_a_chunk_write_leaves_the_digest_usable ... ok
+test sync_makes_a_committed_chunked_cell_durable ... ok
+test the_bulk_clear_reaches_every_written_chunk_and_reaches_the_file ... ok
+test the_declared_extent_must_equal_the_chunk_height ... ok
+test the_entry_points_that_do_not_apply_say_so_by_name ... ok
+test the_growing_dimension_must_be_declared_and_first ... ok
+test the_option_defaults_off_and_changes_no_hash ... ok
+test reading_one_cell_does_not_read_the_chunk ... ok
+test the_payload_write_entry_point_routes_like_the_typed_one ... ok
+test the_resume_signal_is_not_clean_over_an_open_chunk ... ok
+test the_segment_chain_still_frames_commit_points_not_chunks ... ok
+test write_then_flush_then_commit_keeps_the_write ... ok
+test a_truncated_dirty_tail_preserves_the_confirmed_chunk_generation ... ok
+test a_partly_filled_chunk_costs_less_when_compressed ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/matrix_concurrent_reads.rs (target/debug/deps/matrix_concurrent_reads-7c27bef959683121)
+
+running 8 tests
+test independent_reader_scaling_beats_one_thread_on_an_idle_host ... ignored, wall-clock scaling: measures the host, so it is a manual benchmark rather than a gate
+test every_matrix_read_entry_point_takes_a_shared_borrow ... ok
+test dirty_matrix_mapping_faults_bitmap_pages_from_its_copied_image ... ok
+test dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction ... ok
+test the_reader_and_writer_handles_are_send ... ok
+test independent_readers_read_every_cell_correctly ... ok
+test report_the_scaling_of_independent_handles ... ok
+test no_read_is_issued_while_a_bitmap_page_store_lock_is_held ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/matrix_direct_directory.rs (target/debug/deps/matrix_direct_directory-9136593b4fab2678)
+
+running 1 test
+test independent_matrix_directories_survive_zero_cache_follow_and_compaction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/matrix_fatal_gate.rs (target/debug/deps/matrix_fatal_gate-f4ad897a2b549c70)
+
+running 3 tests
+test uncorrupted_file_is_unaffected_by_the_fatal_gate ... ok
+test forensic_opt_in_reads_through_and_surfaces_fatal_finding ... ok
+test fatal_metadata_crc_blocks_default_reads_and_writes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix_generations.rs (target/debug/deps/matrix_generations-6984d3a86b5d6f5a)
+
+running 19 tests
+test damaged_new_root_does_not_partially_advance_the_reader ... ok
+test compaction_preserves_old_readers_and_follow_crosses_the_replacement ... ok
+test dirty_overwrites_and_aux_remain_invisible_until_sync_and_follow ... ok
+test default_matrix_admission_is_independent_of_the_working_set ... ok
+test explicit_immediate_publishes_and_cache_capacity_is_configurable ... ok
+test crashes_at_every_publication_boundary_keep_a_complete_generation ... ok
+test matrix_cell_mapping_charges_only_its_window_and_cow_pages ... ok
+test matrix_only_sync_never_publishes_a_native_tail_that_recovery_will_truncate ... ok
+test follow_spills_many_changed_bitmap_slots_without_publishing_dirty_state ... ok
+test publication_abort_child ... ok
+test publication_error_child ... ok
+test publication_io_errors_report_uncertainty_and_do_not_run_the_hook ... ok
+test readers_keep_one_generation_across_concurrent_overwrites_and_clear ... ok
+test reopened_writer_discards_unpublished_matrix_changes ... ok
+test on_demand_open_reads_no_page_list_even_with_zero_directory_cache ... ok
+test follow_verifies_only_changed_pages_and_rebuilds_only_after_compaction ... ok
+test tiny_bitmap_budget_follows_growing_and_shrinking_indexes ... ok
+test skipped_generations_update_growing_shrinking_and_reordered_bitmap_indexes ... ok
+test directory_budgets_preserve_snapshots_follow_and_compaction ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/matrix_hardening.rs (target/debug/deps/matrix_hardening-bd70367b8f518db9)
+
+running 18 tests
+test a_cell_write_refused_by_the_bitmap_budget_leaves_the_slot_unwritten ... ok
+test crc_region_length_must_match_the_dimension_derived_extent ... ok
+test aggregate_commit_and_slot_lengths_must_be_descriptor_derived ... ok
+test corrupt_commit_maps_are_quarantined_until_whole_category_recovery ... ok
+test damaged_page_index_blocks_cell_access_without_forensics ... ok
+test fresh_reader_rejects_uncommitted_matrix_overwrite ... ok
+test damaged_page_index_occupancy_header_is_reported_fatal ... ok
+test header_counts_and_descriptor_table_lengths_are_exact ... ok
+test packed_bitmap_decode_failures_are_codec_errors ... ok
+test interrupted_rebuild_marker_is_reported_fatal_and_recommends_a_rebuild ... ok
+test stored_block_cell_count_must_match_declared_dimensions ... ok
+test stored_block_slots_must_be_contiguous_in_descriptor_order ... ok
+test quarantine_recommendations_match_available_recovery_paths ... ok
+test valid_commit_visibility_and_wire_bytes_are_unchanged_by_open ... ok
+test zero_sized_matrix_create_and_open_reject_cell_access_before_slot_io ... ok
+test stored_commit_bit_counts_must_match_descriptor_keyspaces ... ok
+test every_hostile_vmat_header_extent_fails_without_panicking ... ok
+test hostile_commit_map_offsets_are_rejected_unless_exactly_contiguous ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/matrix_hot_path_costs.rs (target/debug/deps/matrix_hot_path_costs-37eb628a980caca6)
+
+running 6 tests
+test committing_a_cell_reads_its_slot_back_once_per_pass_that_needs_it ... ok
+test a_bitmap_byte_that_does_not_change_hashes_no_page ... ok
+test a_re_read_keeps_a_page_resident_that_arrival_order_would_have_evicted ... ok
+test rewriting_a_committed_cell_still_clears_its_commit_bit ... ok
+test writing_a_fresh_cell_stores_no_bitmap_byte_and_committing_it_stores_every_one ... ok
+test a_cell_read_spends_a_bounded_number_of_recency_probes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/matrix_integrity_scaling.rs (target/debug/deps/matrix_integrity_scaling-7a24af78bf4b9bac)
+
+running 39 tests
+test a_single_mutation_hashes_exactly_one_page_anywhere_in_the_map ... ok
+test a_failed_page_allocation_cannot_leave_a_bit_on_disk ... ok
+test an_interrupted_rebuild_header_write_fails_closed ... ok
+test category_clear_refunds_payload_and_page_index_residency_every_cycle ... ok
+test cleared_pages_are_evicted_and_residency_returns_to_baseline ... ok
+test commit_bit_mutation_hashing_cost_is_independent_of_cell_count ... ok
+test crc_rebuild_refuses_an_incompletely_loaded_validity_index ... ok
+test create_metadata_bytes_do_not_scale_with_cell_count ... ok
+test damaged_page_index_entry_is_reported_and_later_pages_still_load ... ok
+test damaged_page_index_header_is_reported_not_read_as_empty ... ok
+test a_rebuild_that_never_started_leaves_the_old_page_index_intact ... ok
+test matrix_rebuild_interruption_child ... ignored, child process driven by the rebuild interruption test
+test failed_direct_directory_removal_cannot_publish_mismatched_metadata ... ok
+test measured_open_cost_is_scale_free_and_its_size_is_verification ... ok
+test measured_resident_bitmap_bytes_against_the_ceiling ... ok
+test mmap_reads_require_crc_validity_even_when_the_stored_crc_matches ... ok
+test never_written_and_zero_written_pages_are_distinguishable ... ok
+test open_bitmap_bytes_read_do_not_scale_with_cell_count ... ok
+test on_demand_directory_damage_is_detected_by_access_scrub_and_rebuild ... ok
+test open_bitmap_pages_visited_do_not_scale_with_cell_count ... ok
+test open_reads_follow_live_pages_but_residency_does_not ... ok
+test open_stays_bounded_without_an_allocation_map ... ok
+test previous_layout_version_artifact_is_rejected_typed ... ok
+test page_index_residency_returns_to_baseline_across_page_churn ... ok
+test published_page_corruption_is_detected_and_rebuild_recovers ... ok
+test reopen_after_churn_visits_only_live_pages ... ok
+test repeated_populate_clear_cycles_do_not_exhaust_the_bitmap_ceiling ... ok
+test resident_bitmap_bytes_after_open_do_not_scale_with_cell_count ... ok
+test slot_corruption_still_rejects_a_committed_cell_read ... ok
+test stray_bytes_in_a_skipped_region_are_still_detected ... ok
+test untouched_matrix_holds_no_resident_bitmap_pages ... ok
+test version_three_page_index_artifact_is_rejected_typed ... ok
+test whole_category_clear_accounts_for_every_range_it_zeroes ... ok
+test whole_category_clear_cost_does_not_scale_with_cell_count ... ok
+test whole_category_clear_reports_whether_it_streamed_zeros ... ok
+test zero_page_index_region_is_an_empty_index_not_damage ... ok
+test an_interrupted_rebuild_entry_write_fails_closed_and_rebuilds ... ok
+test an_interrupted_rebuild_process_fails_closed_at_every_stage ... ok
+test published_page_corruption_is_detected_without_an_allocation_map ... ok
+
+test result: ok. 38 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.15s
+
+     Running tests/matrix_lazy_residency.rs (target/debug/deps/matrix_lazy_residency-6ddb1e64f759d4af)
+
+running 18 tests
+test a_lazy_open_reads_a_bounded_number_of_bytes_whatever_the_file_holds ... ok
+test a_live_set_larger_than_the_bitmap_ceiling_is_openable_lazily ... ok
+test a_lazily_opened_matrix_answers_exactly_what_a_verified_one_does ... ok
+test a_live_set_over_the_bitmap_ceiling_opens_under_the_derived_default_cache ... ok
+test a_resource_limits_overlay_keeps_a_spec_declared_residency ... ok
+test a_lazy_open_does_not_read_a_page_per_live_page ... ok
+test an_unpublished_page_is_not_the_same_as_an_uncached_one ... ok
+test concurrent_lazy_readers_are_not_serialised_behind_the_page_store ... ignored, wall-clock scaling requires an idle host; cache isolation is tested deterministically
+test an_emptied_commit_page_releases_its_persisted_index_entry ... ok
+test moving_a_warmed_reader_to_another_thread_preserves_its_cache ... ok
+test cached_and_cold_pages_belong_to_the_captured_generation ... ok
+test page_corruption_is_detected_at_first_touch_and_never_silently_answered ... ok
+test readers_have_independent_cache_contents_eviction_and_budgets ... ok
+test the_default_policy_is_resolved_in_exactly_one_place ... ok
+test verification_reports_the_same_damage_at_open_and_on_demand ... ok
+test writes_through_a_lazy_handle_match_writes_through_a_verified_one ... ok
+test b_resident_bytes_track_the_working_set_and_stop_at_the_ceiling ... ok
+test the_derived_default_cache_bounds_open_cost_and_the_working_set ... ok
+
+test result: ok. 17 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/matrix_limits.rs (target/debug/deps/matrix_limits-9656634b3b0ea138)
+
+running 9 tests
+test aggregate_cell_and_slot_limits_cover_every_matrix_block ... ok
+test aux_reads_check_file_and_payload_limits_before_allocation ... ok
+test create_checks_all_non_crc_matrix_limits_before_preallocation ... ok
+test cell_reads_check_materialization_limit_before_allocating_slot_bytes ... ok
+test create_checks_crc_region_and_resident_validity_bytes_before_allocation ... ok
+test a_quarantined_commit_map_is_reported_without_being_retained ... ok
+test nonzero_vmat_flags_are_rejected_as_noncanonical ... ok
+test hostile_dimension_is_rejected_before_derived_bitmap_or_slot_work ... ok
+test resident_bitmap_budget_is_charged_as_pages_are_materialized ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix_model.rs (target/debug/deps/matrix_model-81b96acff72a3109)
+
+running 1 test
+test seeded_matrix_histories_match_independent_snapshots ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+
+     Running tests/matrix_rebuild_sparse_evidence.rs (target/debug/deps/matrix_rebuild_sparse_evidence-c548116b53df36e3)
+
+running 2 tests
+test a_sparse_rebuild_reads_only_the_slots_its_evidence_names ... ok
+test a_dense_rebuild_claims_no_saving_it_does_not_make ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/matrix_reuse_model.rs (target/debug/deps/matrix_reuse_model-5b4c7b311c8a370e)
+
+running 5 tests
+test reuse_during_partial_range_copy_never_returns_mixed_pages ... ok
+test reuse_current_page_corruption_never_falls_back_to_old_values ... ok
+test reuse_corrupt_undo_entry_refuses_repair_before_modifying_primary ... ok
+test reuse_every_publication_cut_has_an_exact_recovery_generation ... ok
+test reuse_model_histories_cover_dirty_discard_and_eviction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.31s
+
+     Running tests/matrix_sidecar_identity.rs (target/debug/deps/matrix_sidecar_identity-b293891504df1ab4)
+
+running 4 tests
+test failed_publish_leaves_original_sidecar_intact ... ok
+test create_new_with_dims_is_exclusive_and_initializes_the_claimed_handle ... ok
+test same_spec_sibling_file_sidecar_is_rejected ... ok
+test same_object_matrix_recreation_rejects_stale_sidecar ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix_storage_diagnostics.rs (target/debug/deps/matrix_storage_diagnostics-cf2c6d8f0f17aeeb)
+
+running 2 tests
+test observations_survive_reopen_without_changing_reads ... ok
+test missing_allocation_map_warns_without_rejecting_the_file ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metadata_lookup_allocations.rs (target/debug/deps/metadata_lookup_allocations-12d2ff252a311512)
+
+running 1 test
+test a_metadata_lookup_decodes_only_the_entry_it_returns ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mmap_zero_copy.rs (target/debug/deps/mmap_zero_copy-4e9451d37b2afdc0)
+
+running 10 tests
+test mmap_constructor_enforces_captured_mapping_length_limit ... ok
+test mmap_payload_windows_match_indexed_payload_reads ... ok
+test individual_mapping_works_without_a_resident_directory_or_whole_file_budget ... ok
+test mmap_rejects_entries_outside_snapshot ... ok
+test mmap_snapshot_refreshes_after_append ... ok
+test zero_copy_raw_fixed_successfully_views_canonical_little_endian_payload ... ok
+test zero_copy_rejects_raw_endian_mismatch ... ok
+test zero_copy_rejects_raw_payload_size_mismatch ... ok
+test zero_copy_rejects_variable_raw_block ... ok
+test mapped_record_reads_verify_crc_before_exposing_bytes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_budgeted_directory.rs (target/debug/deps/native_budgeted_directory-56c298b061358ab4)
+
+running 1 test
+test tiny_directory_budget_covers_append_dirty_open_follow_and_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/native_diagnostics_security.rs (target/debug/deps/native_diagnostics_security-fd1e6c06c20d0ffb)
+
+running 5 tests
+test native_file_header_rejects_nonzero_reserved_flags ... ok
+test native_header_and_footer_bytes_remain_canonical ... ok
+test diagnostics_bound_each_live_payload_instead_of_the_entire_scan ... ok
+test internal_key_and_op_envelopes_reject_trailing_bytes ... ok
+test native_record_footer_rejects_reserved_and_noncanonical_fields ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_redb_differential.rs (target/debug/deps/native_redb_differential-8c73b66592eb8526)
+
+running 1 test
+test seeded_native_redb_equivalence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+
+     Running tests/native_security_hardening.rs (target/debug/deps/native_security_hardening-50a081421cf44fa8)
+
+running 9 tests
+test default_lock_refusal_does_not_parse_and_inspection_is_bounded ... ok
+test duplicate_native_sequences_are_rejected ... ok
+test fixed_cow_preserves_old_reader_and_supports_record_footers ... ok
+test exclusive_in_place_replace_is_explicitly_not_snapshot_safe ... ok
+test record_limit_failure_is_fatal_to_recovery_and_preserves_file ... ok
+test keyed_tombstone_order_uses_sequence_before_physical_ordinal ... ok
+test native_reader_and_lazy_collection_stay_on_original_path_generation ... ok
+test trusted_handle_spec_is_sanitized_before_it_can_escape ... ok
+test sidecar_metadata_limit_is_checked_before_body_materialization ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/oom_recovery_guards.rs (target/debug/deps/oom_recovery_guards-0de98bf3af8dcf02)
+
+running 2 tests
+test zstd_context_allocation_failures_return_errors ... ignored, GNU malloc interposition; executed by required storage-contracts
+test allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.98s
+
+     Running tests/open_digest.rs (target/debug/deps/open_digest-2cd8f3129f2fbbe7)
+
+running 17 tests
+test a_digest_requires_the_chain_it_hands_out_entry_points_to ... ok
+test a_real_digest_sets_the_sequence_flag_and_carries_its_own_sequence ... ok
+test a_reader_that_does_not_declare_the_digest_still_reads_the_file ... ok
+test a_reopened_writer_does_not_pile_up_digests ... ok
+test a_record_appended_past_the_digest_falls_back ... ok
+test a_replacement_generation_re_encodes_the_digest ... ok
+test an_idle_flush_does_not_grow_the_file ... ok
+test both_tail_records_at_once_do_not_grow_an_idle_file ... ok
+test open_recover_accepts_a_file_that_ends_in_a_digest ... ok
+test replace_rewrite_is_unreachable_for_a_digest_format ... ok
+test the_block_chain_still_walks_from_a_digest_open ... ok
+test a_rotted_digest_falls_back_instead_of_lying ... ok
+test a_digest_does_not_advance_the_checkpoint_cadence ... ok
+test the_option_is_inert_when_it_is_off ... ok
+test a_digest_open_frames_no_record_at_all ... ok
+test the_digest_open_keeps_no_directory_and_the_map_supplies_one ... ok
+test the_digest_costs_the_same_bytes_however_many_records_there_are ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/partial_record_map.rs (target/debug/deps/partial_record_map-a6d7332745a6511f)
+
+running 6 tests
+test clear_rewinds_and_release_keeps_the_ground_covered ... ok
+test the_map_is_a_directory_every_read_already_understands ... ok
+test a_completed_map_is_the_open_scans_index ... ok
+test the_map_never_allocates_a_buffer_of_its_own ... ok
+test a_second_question_resumes_and_a_repeat_reads_nothing ... ok
+test find_stops_at_the_answer_instead_of_at_the_end ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/perf_smoke.rs (target/debug/deps/perf_smoke-955eb6d69cacfd6b)
+
+running 1 test
+test perf_smoke_core_paths ... ignored, performance smoke test: run with `cargo test -p varlit --test perf_smoke -- --ignored --nocapture`
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/policies.rs (target/debug/deps/policies-27b4d60e64a79d35)
+
+running 22 tests
+test crc_integrity_detects_payload_tampering ... ok
+test corrupt_checkpoint_falls_back_to_full_scan_without_hiding_data ... ok
+test checkpoint_open_uses_latest_checkpoint_and_scans_tail ... ok
+test explicit_migration_reads_source_version_while_normal_read_rejects_mismatch ... ok
+test explicit_age_based_lock_break_is_opt_in ... ok
+test format_spec_builder_matches_direct_spec_construction ... ok
+test format_spec_validation_rejects_bad_specs ... ok
+test embedded_manifest_is_optional_and_retrievable ... ok
+test header_contract_rejects_version_endian_and_schema_mismatch ... ok
+test malformed_writer_lock_is_reported_and_not_broken ... ok
+test map_codec_roundtrips_in_canonical_key_order ... ok
+test metadata_and_checkpoint_are_written_as_internal_blocks ... ok
+test schema_debug_dump_and_hash_are_stable_and_field_aware ... ok
+test rich_codec_roundtrips_options_arrays_sequences_and_bytes ... ok
+test strict_open_rejects_and_recover_truncates_partial_tail ... ok
+test user_defined_codec_type_roundtrips_as_block_field ... ok
+test typed_read_rejects_unexpected_block_version ... ok
+test variable_unknown_field_policy_is_skip_known_wire_reject_unknown_wire ... ok
+test write_apis_enforce_registry_membership_and_version ... ok
+test writer_lock_metadata_is_inspectable_and_default_open_refuses ... ok
+test stale_lock_can_be_cleared_without_opening_the_data_file ... ok
+test concurrent_stale_lock_recovery_allows_exactly_one_writer ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/properties.rs (target/debug/deps/properties-7f6787ff942dae66)
+
+running 7 tests
+test fixed_blocks_roundtrip ... ok
+test scalar_edges_roundtrip_signed_unsigned_floats_tuples_and_options ... ok
+test recovery_truncates_incomplete_tail_without_dropping_complete_records ... ok
+test variable_unknown_fields_are_skipped_and_unknown_wire_types_rejected ... ok
+test keyed_put_op_tombstone_materialization_matches_model ... ok
+test variable_blocks_roundtrip ... ok
+test rewrite_preserves_surrounding_variable_records_and_updates_target ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/publication_failure_results.rs (target/debug/deps/publication_failure_results-3170be764b7008d5)
+
+running 12 tests
+test enabled::a_durability_failure_after_the_commit_marker_is_reported_as_published ... ok
+test enabled::a_failed_append_rollback_during_an_indexed_delete_poisons_the_writer ... ok
+test enabled::a_failed_append_rollback_poisons_every_later_indexed_mutation ... ok
+test enabled::a_failed_append_rollback_poisons_every_later_stream_mutation ... ok
+test enabled::a_restamp_failure_after_a_published_indexed_chunk_is_reported_as_published ... ok
+test enabled::a_restamp_failure_after_a_published_stream_chunk_is_reported_as_published ... ok
+test enabled::indexed_batch_failure_poisons_the_writer_conservatively ... ok
+test enabled::indexed_create_reports_parent_sync_pending_instead_of_success ... ok
+test enabled::stream_batch_that_wrote_nothing_stays_retryable ... ok
+test enabled::stream_create_reports_parent_sync_pending_instead_of_success ... ok
+test enabled::stream_partial_batch_poisons_the_writer_and_flush_sync_stay_typed ... ok
+test enabled::unfaulted_flush_and_sync_report_success ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/raw_ident_key.rs (target/debug/deps/raw_ident_key-cdbe60f51516c771)
+
+running 2 tests
+test derived_raw_identifier_key_binds_the_raw_field ... ok
+test dsl_raw_identifier_key_survives_the_attribute_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/read_route_differential.rs (target/debug/deps/read_route_differential-d96b435c00ccb961)
+
+running 1 test
+test read_routes_agree_on_valid_and_corrupt_payloads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/reader_follow.rs (target/debug/deps/reader_follow-50da6c522cf86783)
+
+running 20 tests
+test a_block_with_no_record_in_the_followed_range_keeps_its_tail ... ok
+test a_directoryless_handle_follows_its_tails ... ok
+test a_follow_stops_at_the_commit_boundary_an_open_stops_at ... ok
+test a_followed_run_that_repeats_a_sequence_is_refused ... ok
+test a_follow_does_not_cross_a_republished_generation ... ok
+test a_handle_catches_up_to_records_written_after_it_opened ... ok
+test a_handle_can_tell_that_its_generation_was_replaced ... ok
+test a_markerless_format_follows_to_the_last_complete_record ... ok
+test a_removed_pathname_is_not_current_and_the_handle_still_reads ... ok
+test a_handle_that_never_follows_reads_on_without_being_told ... ok
+test a_write_handle_has_nothing_to_follow ... ok
+test a_reopen_keeps_the_route_the_handle_was_using ... ok
+test detecting_and_reopening_a_generation_take_a_shared_borrow ... ok
+test following_a_file_that_did_not_grow_costs_nothing ... ok
+test reopen_moves_to_the_current_generation_without_disturbing_the_old ... ok
+test independent_readers_remain_usable_while_a_replacement_is_opened ... ok
+test the_reader_wrapper_exposes_the_pair ... ok
+test a_shrunk_pathname_leaves_a_held_generation_whole ... ok
+test a_follow_is_charged_for_the_tail_and_not_for_the_prefix ... ok
+test the_cost_of_a_follow_is_the_tail_and_not_the_file ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/readonly_snapshot_extent.rs (target/debug/deps/readonly_snapshot_extent-04db345b8aecea23)
+
+running 4 tests
+test a_markerless_read_only_handle_reaches_every_non_resident_record ... ok
+test an_uncommitted_tail_stays_outside_the_read_only_snapshot ... ok
+test a_torn_trailing_record_leaves_the_snapshot_at_the_last_complete_one ... ok
+test without_residency_the_snapshot_still_ends_at_the_last_index_entry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/record_index_residency.rs (target/debug/deps/record_index_residency-7c57f4a4b391a890)
+
+running 8 tests
+test a_host_supplied_directory_answers_every_read_the_same ... ok
+test an_open_handle_keeps_a_record_directory_and_not_the_records ... ok
+test a_walk_of_n_records_allocates_one_payload_buffer_not_n ... ok
+test a_handle_can_keep_no_directory_and_still_answer_every_read ... ok
+test spilled_open_peak_and_retained_memory_do_not_scale_with_record_count ... ok
+test the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index ... ok
+test opening_many_files_through_one_buffer_allocates_the_entry_array_once ... ok
+test segment_link_staging_obeys_the_buffer_before_falling_back ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
+
+     Running tests/record_liveness.rs (target/debug/deps/record_liveness-d62d74eadb5e312e)
+
+running 27 tests
+test a_clean_close_is_told_apart_from_an_abandoned_one ... ok
+test a_crashed_tail_is_marked_dead_instead_of_truncated ... ok
+test a_marked_record_stays_readable_and_says_it_is_dead ... ok
+test a_reader_does_not_claim_a_crash_verdict ... ok
+test an_internal_record_cannot_be_marked ... ok
+test commit_records_require_the_internal_flag_and_supported_version ... ok
+test boundary_proof_stops_on_corrupt_lengths_and_reuses_the_valid_prefix ... ok
+test defragment_refuses_dead_commit_without_publishing ... ok
+test defragment_refuses_payload_damage_without_republishing ... ok
+test it_is_refused_where_there_is_no_footer ... ok
+test lazy_open_honors_explicit_at_open_verification ... ok
+test lazy_writer_can_mark_a_real_historical_record ... ok
+test mark_tail_refuses_without_its_prerequisites ... ok
+test a_lazy_writers_own_append_needs_no_historical_boundary_scan ... ok
+test marking_between_appends_preserves_records_and_a_live_reader ... ok
+test marking_embedded_record_bytes_refuses_without_writing ... ok
+test marking_is_refused_without_the_policy ... ok
+test marking_refuses_a_damaged_internal_identity_without_writing ... ok
+test marked_tail_recovery_frames_linearly_at_two_cardinalities ... ok
+test the_default_policy_still_truncates ... ok
+test the_header_checksum_policy_is_unaffected ... ok
+test the_option_is_inert_when_it_is_off ... ok
+test the_trailing_word_is_outside_the_checksum_only_when_the_option_is_on ... ok
+test turning_it_on_changes_the_schema_hash ... ok
+test defragment_preserves_active_readers_on_the_old_generation ... ok
+test boundary_proof_reuses_reverse_random_repeated_and_failed_requests ... ok
+test rewritten_boundaries_preserve_exact_membership_across_small_pages ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/record_reads_take_shared_borrows.rs (target/debug/deps/record_reads_take_shared_borrows-c94e6cf96ab749fc)
+
+running 2 tests
+test independent_handles_serve_threads_reading_records ... ok
+test every_record_read_entry_point_takes_a_shared_borrow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/replace_dispatch.rs (target/debug/deps/replace_dispatch-946c4b0d613c5206)
+
+running 5 tests
+test a_footered_format_replaces_a_fixed_record ... ok
+test a_footered_format_replaces_a_variable_record_and_keeps_the_chain ... ok
+test the_named_routes_still_refuse_where_they_do_not_apply ... ok
+test a_footerless_format_replaces_a_variable_record ... ok
+test a_footerless_format_replaces_a_fixed_record ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/replace_publication_state.rs (target/debug/deps/replace_publication_state-edec8ba10eaccfa9)
+
+running 14 tests
+test classification::every_other_os_error_is_pre_publication ... ok
+test classification::error_1175_is_the_documented_no_mutation_failure ... ok
+test classification::errors_1176_and_1177_are_indeterminate_publication ... ok
+test cross_version_and_keyed_refusals::an_in_place_mutation_cannot_leave_a_stale_keyed_tail ... ok
+test cross_version_and_keyed_refusals::block_replacement_refuses_a_cross_version_target ... ok
+test cross_version_and_keyed_refusals::a_same_key_in_place_replacement_keeps_the_chain_correct ... ok
+test cross_version_and_keyed_refusals::every_replacement_entry_point_refuses_a_cross_version_target_at_every_ordinal ... ok
+test cross_version_and_keyed_refusals::in_place_replacement_refuses_a_cross_version_target ... ok
+test cross_version_and_keyed_refusals::fixed_replacement_refuses_a_cross_version_target ... ok
+test cross_version_and_keyed_refusals::rewrite_replacement_refuses_a_cross_version_target ... ok
+test enabled::indeterminate_publication_poisons_writer_and_preserves_temp ... ok
+test enabled::parent_sync_failure_after_publication_rebinds_writer_to_new_generation ... ok
+test enabled::replace_without_injected_failure_stays_durable ... ok
+test enabled::resident_replace_reaches_registered_fault_points ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/resident_contracts.rs (target/debug/deps/resident_contracts-378097cba2b9b08b)
+
+running 20 tests
+test generated_keyed_writer_opens_above_the_tail_cache_budget ... ok
+test a_small_reopened_tail_cache_can_grow_beyond_its_budget ... ok
+test generated_keyed_writer_spills_tails_for_puts_and_tombstones ... ok
+test generic_push_accepts_keyed_blocks_without_keyed_chaining ... ok
+test generic_push_rejects_keyed_blocks_on_keyed_chaining_formats ... ok
+test keyed_chains_survive_reopen ... ok
+test keyed_delete_links_the_predecessor_chain ... ok
+test keyed_delete_tail_reservation_fails_before_the_append ... ok
+test keyed_push_tail_reservation_fails_before_the_append ... ok
+test interleaved_block_ids_chain_correctly_across_reopen ... ok
+test maintained_keyed_tails_recover_after_an_explicit_predecessor ... ok
+test keyed_tail_commit_loss_never_links_around_the_committed_record ... ok
+test maintaining_keyed_facades_link_the_predecessor_chain ... ok
+test owned_tail_map_is_limited_but_writer_tail_cache_can_spill ... ok
+test block_tail_construction_has_no_quadratic_term ... ok
+test resident_keyed_tail_growth_spills_and_preserves_predecessors ... ok
+test the_generated_into_twins_exist_on_both_routes ... ok
+test resident_merge_estimate_includes_the_open_time_transient ... ok
+test resident_merge_estimate_is_structural_and_not_an_allocated_bound ... ok
+test append_time_predecessor_lookup_never_reads_the_resident_index ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/resource_amplification_guards.rs (target/debug/deps/resource_amplification_guards-2497aba634eea857)
+
+running 1 test
+test decoded_memory_is_bounded_and_released_across_sizes_and_failures ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+     Running tests/roundtrip.rs (target/debug/deps/roundtrip-0e7c0a4a3ac378b6)
+
+running 18 tests
+test fixed_replace_publishes_copy_on_write_generation ... ok
+test compact_keyed_file_writes_only_final_keyed_state ... ok
+test compact_keyed_files_materializes_base_and_delta_shards ... ok
+test fixed_variable_nested_roundtrip_and_lazy_collections ... ok
+test keyed_materialization_merge_and_compact_share_one_cumulative_budget ... ok
+test keyed_blocks_hide_same_file_tombstoned_keys ... ok
+test low_level_native_entrypoints_resolve_missing_runtime_policy ... ok
+test materialized_keyed_blocks_apply_same_file_ops_and_tombstones ... ok
+test keyed_merge_applies_put_op_and_tombstone_by_sequence ... ok
+test merge_and_materialized_reject_block_version_mismatch ... ok
+test native_replace_block_honors_materialization_budget_before_decode ... ok
+test reader_writer_handles_cover_common_workflow ... ok
+test merge_uses_shard_order_before_local_sequence ... ok
+test native_replace_block_resizes_preserves_sequence_and_rejects_key_changes ... ok
+test typed_decode_charges_nested_allocations_to_handle_budget ... ok
+test variable_replace_rewrite_preserves_records_and_cleans_temp ... ok
+test replacement_keeps_older_put_behind_later_keyed_events ... ok
+test external_merge_spills_and_preserves_shard_ops_deletes_and_atomic_output ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/scalable_crash_faults.rs (target/debug/deps/scalable_crash_faults-a76feb6de65bd1e6)
+
+running 7 tests
+test enabled::histories::history_child ... ignored, invoked only by the publication-history crash parent
+test enabled::scalable_fault_child ... ignored, invoked only as a scalable crash-test subprocess
+
+running 1 test
+test enabled::scalable_fault_inert_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+test enabled::scalable_fault_environment_is_inert_until_armed ... ok
+test enabled::scalable_fault_inert_child ... ignored, invoked only to prove environment variables do not arm hooks
+test enabled::histories::every_mixed_history_crash_boundary_preserves_live_readers_and_recovery ... ok
+test enabled::scalable_crash_fault_matrix ... ok
+test enabled::histories::bounded_and_generated_histories_preserve_committed_snapshots ... ok
+
+test result: ok. 4 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+     Running tests/scalable_identity.rs (target/debug/deps/scalable_identity-c894388a3d404a75)
+
+running 10 tests
+test mismatched_descriptor_plan_is_rejected_before_any_decode ... ok
+test matching_descriptor_plan_still_builds_and_indexes ... ok
+test indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primary ... ok
+test same_object_equal_length_rewrite_is_refused_and_rebuild_recovers ... ok
+test every_create_stamps_a_distinct_nonce_inside_the_primary ... ok
+test stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary ... ok
+test stream_state_sidecar_refuses_a_rewritten_primary ... ok
+test stream_state_sidecar_refuses_a_wholesale_primary_replacement ... ok
+test stream_state_sidecar_refuses_a_rewrite_beyond_the_generation_window ... ok
+test rewrite_that_shares_the_generation_window_is_still_refused ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/scalable_qualification.rs (target/debug/deps/scalable_qualification-8c3cfa049fc16413)
+
+running 7 tests
+test external_kill_stress ... ignored, long external kill/recovery campaign; scripts/qualify_scalable.py
+test model_history_stress ... ignored, long deterministic model campaign; scripts/qualify_scalable.py
+test qualification_kill_child ... ignored, subprocess entry point, only invoked by kill/recovery tests
+test opening_readers_does_not_interrupt_the_single_writer ... ok
+test repeated_external_kill_preserves_acknowledged_generations ... ok
+test concurrent_snapshots_survive_many_publications ... ok
+test model_history_regression ... ok
+
+test result: ok. 4 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.73s
+
+     Running tests/scalable_reader_follow.rs (target/debug/deps/scalable_reader_follow-77285748880402c5)
+
+running 7 tests
+test dirty_reopen_and_restore_do_not_invalidate_existing_readers ... ok
+test follow_retains_scan_limits_and_cannot_revive_a_failed_cursor ... ok
+test foreign_cursor_is_rejected_before_the_reader_changes ... ok
+test dirty_overwrites_and_deletes_preserve_the_confirmed_index ... ok
+test readers_open_and_follow_inside_an_active_write_batch ... ok
+test stream_cursors_resume_from_eof_across_dirty_generations ... ok
+test eight_followers_observe_atomic_generations_during_single_writer_updates ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/scalable_reader_management.rs (target/debug/deps/scalable_reader_management-5b09dc467467ace3)
+
+running 7 tests
+test independent_process_reader_child ... ignored, cross-process reader subprocess
+test indexed_snapshot_release_reports_lag_and_reacquires_while_dirty ... ok
+test compaction_keeps_old_readers_and_follow_adopts_new_file ... ok
+test stream_release_preserves_cursor_and_follow_releases_old_generation ... ok
+test independent_process_reads_dirty_writer_and_follows_compaction ... ok
+test cold_reader_retries_never_reject_or_interrupt_the_single_writer ... ok
+test moving_reader_with_live_local_cursors_keeps_positions_independent ... ok
+
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+     Running tests/schema_hash_contract.rs (target/debug/deps/schema_hash_contract-d4942bc1e2f4826c)
+
+running 12 tests
+test built_in_codec_identities_are_structural ... ok
+test custom_nested_codecs_with_equal_spelling_cannot_share_an_identity ... ok
+test containers_do_not_launder_a_missing_codec_identity ... ok
+test endian_variants_change_computed_schema_hash ... ok
+test custom_non_nested_codecs_with_equal_spelling_cannot_share_an_identity ... ok
+test generated_format_pins_identity_covered_hash ... ok
+test identical_schemas_still_match ... ok
+test nested_block_codec_identity_is_transitive ... ok
+test reordered_field_declarations_change_computed_schema_hash ... ok
+test keyedness_and_codec_identity_change_computed_schema_hash ... ok
+test file_created_with_omitted_hash_rejects_pinned_open ... ok
+test omitted_schema_hash_zero_disables_open_comparison ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/schema_key_kinds.rs (target/debug/deps/schema_key_kinds-7217a5212252c4a9)
+
+running 7 tests
+test cartesian_domains_include_each_value_combination_once ... ok
+test changed_value_mapping_changes_schema_identity ... ok
+test actual_combinations_have_fixed_codes_and_two_byte_encoding ... ok
+test combined_field_preserves_non_key_field_order_and_ids ... ok
+test indexed::opening_with_reassigned_codes_is_rejected ... ok
+test indexed::bounded_keys_follow_delete_compact_and_preserve_record_offsets ... ok
+test indexed::finite_operations_match_redb_and_model ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/self_check.rs (target/debug/deps/self_check-1f570a68a5e8cae3)
+
+running 13 tests
+test diagnostics_classify_file_mismatch_and_bad_format_spec ... ok
+test a_self_test_that_cannot_reacquire_its_lock_marker_reports_a_cleanup_failure ... ok
+test matrix_self_test_reports_missing_dims_as_caller_usage ... ok
+test generated_format_self_test_roundtrips_append_and_keyed_blocks ... ok
+test generated_variable_push_rejects_oversized_field_with_typed_limit_error ... ok
+test self_test_cleanup_refuses_a_directory_other_users_can_write ... ok
+test matrix_self_test_roundtrips_committed_uncommitted_and_aux_paths ... ok
+test self_test_cleanup_refuses_to_delete_a_swapped_in_file_object ... ok
+test self_test_cleanup_removes_files_created_by_the_run ... ok
+test self_test_never_truncates_or_deletes_pre_existing_append_target ... ok
+test self_test_never_truncates_or_deletes_pre_existing_matrix_target ... ok
+test writer_encode_paths_reject_oversized_values_with_typed_limit_error ... ok
+test generated_nested_field_encode_inherits_the_entry_point_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/single_writer_lock.rs (target/debug/deps/single_writer_lock-580dcc70c6e45404)
+
+running 15 tests
+test a_failed_open_on_a_corrupt_tail_releases_the_writer_lock ... ok
+test a_failed_open_on_a_refused_limit_releases_the_writer_lock ... ok
+test a_failed_open_on_a_version_mismatch_releases_the_writer_lock ... ok
+test a_failed_open_on_a_schema_hash_mismatch_releases_the_writer_lock ... ok
+test a_failed_open_on_an_invalid_header_releases_the_writer_lock ... ok
+test create_new_refuses_existing_path ... ok
+test hard_link_alias_create_is_refused_before_truncation ... ok
+test hard_link_alias_cannot_acquire_second_writer ... ok
+test layout_create_over_live_alias_is_refused_before_truncation ... ok
+test layout_create_over_stale_file_truncates_through_bound_handle ... ok
+test same_path_second_writer_is_still_refused ... ok
+test stream_create_over_live_alias_is_refused_before_truncation ... ok
+test stream_create_binds_object_lock_against_hard_link_alias ... ok
+test stream_create_over_stale_file_truncates_through_bound_handle ... ok
+test a_release_beside_a_forked_child_does_not_strand_the_writer_claim ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/stateful_failure_guards.rs (target/debug/deps/stateful_failure_guards-fdd1295e8335f2e0)
+
+running 1 test
+test failed_batches_recover_through_delete_reinsert_follow_and_compaction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/storage_hardening.rs (target/debug/deps/storage_hardening-507354d2e948fb74)
+
+running 16 tests
+test a_hard_linked_lock_marker_is_refused_and_left_untouched ... ok
+test an_ordinary_lock_marker_is_still_accepted ... ok
+test custom_codec_guide_charging_example::samples_refuse_to_materialize_past_the_budget ... ok
+test a_symlinked_lock_marker_is_refused_and_left_untouched ... ok
+test empty_reopen_starts_sequence_at_zero ... ok
+test create_and_sync_reports_pathname_durability ... ok
+test hostile_on_disk_payload_lengths_fail_without_panicking_or_allocating ... ok
+test mmap_constructor_rejects_truncated_empty_snapshot ... ok
+test logical_limit_does_not_cap_compressed_storage_overhead ... ok
+test mmap_constructor_rejects_a_stale_index_extent ... ok
+test payload_reads_check_extent_limit_and_physical_end ... ok
+test sparse_payload_rejects_standard_limit_before_reading ... ok
+test indeterminate_merge_publication_still_retains_its_rewrite_temp ... ok
+test refused_keyed_compact_leaves_no_marker_for_its_internal_temp ... ok
+test successful_keyed_compact_leaves_no_marker_for_its_internal_temp ... ok
+test rewrite_temp_is_removed_when_preparation_fails_after_creation ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/stream_append_perf_contract.rs (target/debug/deps/stream_append_perf_contract-d79df528a7a8e087)
+
+running 8 tests
+test commit_contract::commit_contract_child ... ignored, invoked only as the commit-contract subprocess
+test bootstrap_aborts_when_pathname_identity_changes_before_publish ... ok
+test crc_typed_scan_decodes_all_values ... ok
+test commit_contract::scalar_appends_bound_sidecar_commits ... ok
+test interleaved_scalar_and_plural_appends_stay_consistent ... ok
+test scalar_pushes_survive_sync_and_reopen ... ok
+test crc_typed_scan_skips_foreign_payloads_and_gates_decode ... ok
+test primary_generation_witness_stops_scanning_once_its_window_is_full ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/tdms_model.rs (target/debug/deps/tdms_model-90c279587b0b2e1f)
+
+running 1 test
+test tdms_data_model_reader_writer_can_be_built_on_public_api ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/validation_architecture.rs (target/debug/deps/validation_architecture-4b8c1717a3ebda7e)
+
+running 4 tests
+test untraversed_source_inclusion_cannot_silently_hide_interfaces ... ok
+test checker_follows_external_modules_and_their_parent_cfg ... ok
+test checker_rejects_reintroduced_bypasses_independent_of_formatting ... ok
+test production_readers_keep_the_validation_boundaries ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+     Running tests/validation_coverage.rs (target/debug/deps/validation_coverage-717c17b3c4e2a077)
+
+running 6 tests
+test registered_callbacks_are_executed_and_their_failure_is_fatal ... ok
+test case_generators_retain_every_registered_shape_and_parameter ... ok
+test new_methods_fields_variants_and_signature_changes_require_contracts ... ok
+test stub_or_unrelated_callbacks_cannot_count_as_api_coverage ... ok
+test unregistered_policy_variants_fail_even_for_non_exhaustive_enums ... ok
+test every_new_interface_has_executed_validation_contracts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+
+     Running tests/verify_all_non_resident.rs (target/debug/deps/verify_all_non_resident-e615bd7862bb4e65)
+
+running 4 tests
+test verify_all_finds_damage_in_a_non_resident_record ... ok
+test an_empty_chain_verifies_rather_than_errors ... ok
+test verify_all_still_finds_damage_in_a_resident_record ... ok
+test verify_all_visits_the_records_of_a_non_resident_block ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/varlit_core-45ef8132eae6ce17)
+
+running 267 tests
+test codec::tests::encoder_preserves_public_auto_traits_and_catch_unwind_usage ... ok
+test codec::field_guard_tests::zero_field_id_is_refused_by_both_codec_directions ... ok
+test codec::tests::hash_table_model_dominates_the_real_reservation_at_every_capacity ... ok
+test codec::tests::limited_encoder_stops_before_the_over_limit_allocation ... ok
+test codec::tests::nested_encode_inherits_the_parent_remaining_budget ... ok
+test codec::tests::hash_table_model_is_monotonic_and_never_free ... ok
+test compression_buffers::tests::append_preserves_prefix_and_bounds_known_unknown_and_concatenated_frames ... ok
+test diagnostics::tests::a_pin_keeps_a_recreated_file_off_the_pinned_identity ... ok
+test diagnostics::tests::cleanup_does_not_delete_a_file_interposed_before_the_unlink ... ok
+test diagnostics::tests::cleanup_leaves_a_swapped_pathname_alone ... ok
+test diagnostics::tests::cleanup_refuses_a_shared_writable_directory ... ok
+test diagnostics::tests::cleanup_removes_the_verified_object ... ok
+test diagnostics::tests::lock_marker_removal_leaves_a_swapped_object_alone ... ok
+test diagnostics::tests::storage_capabilities_are_environment_warnings_not_corruption ... ok
+test diagnostics::tests::unlink_interposition_stays_on_the_calling_test_thread ... ok
+test disk_index::oracle::lookup_profiles ... ignored, release timing profile
+test chunks::oom_tests::streamed_chunk_encoding_preserves_the_existing_wire_bytes ... ok
+test disk_index::storage::failure_tests::divergent_clean_heads_require_sync_before_writer_resume ... ok
+test codec::field_guard_tests::field_set_budget_covers_growth_and_rehash ... ok
+test disk_index::storage::failure_tests::matching_clean_heads_do_not_add_a_resume_sync ... ok
+test disk_index::storage::failure_tests::torn_publication_heads_never_invent_a_confirmed_generation ... ok
+test disk_index::storage::failure_tests::valid_checksums_do_not_admit_inconsistent_checkpoint_frontiers ... ok
+test disk_index::tests::a_finite_directory_cannot_shadow_a_nonfinite_schema ... ok
+test disk_index::tests::arbitrary_sidecar_codec_bytes_never_panic ... ok
+test disk_index::tests::batch_options_reject_less_than_one_checkpoint_item ... ok
+test disk_index::tests::begin_batch_and_clean_use_one_rollback_checkpoint ... ok
+test disk_index::tests::bounded_batch_rejects_the_next_record_without_advancing ... ok
+test disk_index::tests::canonical_plan_is_deterministic_and_validates_generated_digest ... ok
+test disk_index::tests::canonical_witness_does_not_skip_validation_against_another_spec ... ok
+test disk_index::tests::completed_generation_survives_one_head_loss_without_regressing ... ok
+test disk_index::tests::composite_rows_store_schema_tags_and_values_without_interning ... ok
+test disk_index::tests::corrupt_durable_checkpoint_never_silently_rolls_back_acknowledged_data ... ok
+test disk_index::tests::dirty_checkpoint_survives_reopen_and_restores ... ok
+test disk_index::tests::generation_exhaustion_is_typed_without_deleting_checkpoint ... ok
+test disk_index::tests::latest_codec_carries_physical_extent_and_crc ... ok
+test disk_index::tests::legacy_tail_capacity_upgrades_without_a_scan_or_extra_open_write ... ok
+test disk_index::tests::legacy_tail_compatibility_refuses_other_bounds ... ok
+test disk_index::tests::metadata_v2_codec_rejects_specific_corruption ... ok
+test disk_index::tests::on_disk_metadata_corruption_is_specific ... ok
+test disk_index::tests::reader_allows_physical_tail_but_writer_requires_exact_eof ... ok
+test disk_index::tests::reader_validation_is_independent_of_a_pending_batch ... ok
+test disk_index::tests::rebuild_streams_into_a_clean_prepared_sidecar ... ok
+test disk_index::tests::rollback_checkpoint_must_point_backwards ... ok
+test disk_index::tests::staged_restore_aborts_without_mutation_then_commits_after_native_sync ... ok
+test disk_index::tests::state_only_mode_rejects_key_tables_but_tracks_coverage ... ok
+test disk_index::tests::torn_working_head_preserves_confirmed_checkpoint ... ok
+test disk_index::tests::writer_rejects_untrusted_tail_bound_before_tail_allocation ... ok
+test disk_index::tree::corruption_guards::child_keys_cannot_overlap_the_next_separator ... ok
+test disk_index::tree::corruption_guards::direct_cycles_are_rejected_by_lookup_and_visit ... ok
+test disk_index::tree::corruption_guards::duplicated_subtrees_stop_before_repeated_leaf_delivery ... ok
+test disk_index::tree::corruption_guards::key_extent_overflow_returns_an_allocation_error_before_io ... ok
+test disk_index::tree::corruption_guards::old_and_rewritten_roots_visit_each_key_once_with_tiny_caches ... ok
+test disk_index::tree::tests::ambiguous_long_prefixes_still_validate_full_order ... ok
+test disk_index::tree::tests::compact_branches_preserve_split_boundaries_and_old_roots ... ok
+test disk_index::tree::tests::distinct_long_keys_are_loaded_on_demand_and_crc_checked ... ok
+test compression_buffers::tests::block_bounds_cover_encoder_frames_and_reject_structural_amplification ... ok
+test disk_index::tree::tests::previous_page_format_is_rejected ... ok
+test disk_index::tree::tests::reserved_storage_pages_cannot_supply_nodes_or_long_keys ... ok
+test file::bypass_catalogue::a_refused_charge_yields_no_reservation ... ok
+test file::bypass_catalogue::the_checked_route_still_produces_the_reservation_it_should ... ok
+test file::external_merge::tests::scratch_buffers_stay_in_memory_until_full_and_keep_offsets_on_spill ... ok
+test file::external_merge::tests::spill_byte_policy_failure_keeps_the_existing_prefix ... ok
+test file::external_merge::tests::spilled_hash_collisions_use_key_equality_not_encoded_byte_equality ... ok
+test file::locks::failed_acquisition_guard_releases_a_fork_style_duplicate ... ok
+test file::native_rewrite::tests::compact_rows_preserve_fields_and_refuse_inconsistent_geometry ... ok
+test file::native_rewrite::tests::digest_tail_cache_is_sorted_and_falls_back_when_full ... ok
+test file::native_rewrite::tests::disjoint_sequence_runs_never_admit_a_duplicate ... ok
+test file::native_rewrite::tests::external_sequence_validation_catches_duplicates_across_runs ... ok
+test file::native_rewrite::tests::remapping_keeps_distinct_chains_across_spills ... ok
+test file::resident_index::tests::adopted_prefix_and_append_tail_rollback_independently ... ok
+test file::resident_index::tests::uniform_prefix_never_authorizes_unobserved_or_truncated_offsets ... ok
+test file::tests::a_checkpoint_that_skips_records_is_refused ... ok
+test file::tests::a_checkpoint_that_stops_short_of_its_coverage_is_refused ... ok
+test file::tests::a_digest_sequence_mark_survives_the_round_trip_including_the_last_number ... ok
+test file::tests::a_digest_with_an_unknown_flag_is_refused ... ok
+test file::tests::a_failed_chunk_write_keeps_the_chunk ... ok
+test file::tests::a_failed_region_clear_leaves_every_chunk_alone ... ok
+test file::tests::a_lazy_writer_open_frames_no_record_and_still_appends ... ok
+test file::tests::a_lazy_writer_refuses_the_policies_it_cannot_serve ... ok
+test file::tests::a_non_resident_append_still_earns_a_new_digest ... ok
+test file::tests::a_rolled_back_first_append_leaves_no_tail ... ok
+test file::tests::a_rolled_back_non_resident_append_leaves_the_tail_alone ... ok
+test file::tests::a_snapshot_read_moves_the_writers_offset_and_the_writer_survives_it ... ok
+test file::tests::a_written_witness_cannot_shrink_a_snapshot ... ok
+test file::tests::an_all_non_resident_file_still_gets_a_digest ... ok
+test file::tests::an_append_window_issues_no_metadata_syscall ... ok
+test file::tests::an_append_window_issues_no_seek_per_record ... ok
+test file::tests::append_failure_rolls_back_and_preserves_sequence ... ok
+test file::tests::atomic_replace_invokes_parent_directory_sync ... ok
+test file::tests::blanking_covers_the_mutable_payload_and_nothing_else ... ok
+test file::tests::block_replacement_double_publication_fault_reports_both_facts ... ok
+test file::tests::block_tail_construction_moves_nothing_for_reverse_ordered_block_ids ... ok
+test file::tests::checkpoint_rejects_oversized_extent_before_index_allocation ... ok
+test file::tests::create_then_sync_makes_the_new_pathname_durable_once ... ok
+test file::tests::derived_state_matches_the_three_rules_it_replaced ... ok
+test file::tests::every_index_entry_can_be_rebuilt_from_its_own_record ... ok
+test file::tests::failed_matrix_commit_publish_keeps_memory_uncommitted_and_poisons_writer ... ok
+test file::tests::fixed_publish_rebind_failure_is_explicit_and_poisoned ... ok
+test file::tests::fixed_replacement_double_publication_fault_reports_both_facts ... ok
+test file::tests::max_sequence_publishes_once_then_reopens_exhausted ... ok
+test file::tests::partial_matrix_overwrite_is_withdrawn_and_poisons_writer ... ok
+test disk_index::tree::tests::mixed_page_and_key_eviction_stays_bounded ... ok
+test file::tests::replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot ... ok
+test file::tests::replace_block_preserves_transaction_visibility_and_next_sequence ... ok
+test file::tests::replace_block_translates_keyed_predecessors_after_target ... ok
+test file::tests::replace_block_validates_key_before_publication ... ok
+test file::tests::replacement_info_translates_grow_and_shrink_offsets ... ok
+test file::tests::replacement_publish_rebind_failure_is_explicit_and_poisoned ... ok
+test file::tests::rewrite_publish_rebind_failure_is_explicit_and_poisoned ... ok
+test file::tests::rewrite_replacement_double_publication_fault_reports_both_facts ... ok
+test file::tests::rollback_failure_poisons_mutation_flush_and_sync ... ok
+test file::tests::schema_manifest_rejects_huge_and_truncated_counts_before_iteration ... ok
+test file::tests::serialized_directory_cannot_authorize_marking_an_embedded_record ... ok
+test file::tests::the_digest_route_and_the_scan_route_agree_on_the_next_sequence ... ok
+test file::tests::the_last_sequence_number_is_not_the_absence_of_one ... ok
+test file::validation_tests::checksummed_chain_links_must_decrease_and_stay_in_their_block ... ok
+test disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations ... ok
+test file::validation_tests::framing_routes_preserve_every_footer_field ... ok
+test file::validation_tests::mutable_record_prefix_never_accepts_a_truncated_footer ... ok
+test file::validation_tests::no_truncated_frame_is_returned_as_a_complete_record ... ok
+test format::read_limit_tests::missing_fields_resolve_from_standard_policy ... ok
+test format::read_limit_tests::ordinary_and_trusted_resolution_are_distinct ... ok
+test format::read_limit_tests::read_limits_do_not_change_schema_hash ... ok
+test format::read_limit_tests::resource_overlay_can_raise_or_lower_format_defaults ... ok
+test format::read_limit_tests::runtime_limits_only_tighten_finite_declarations ... ok
+test format::read_limit_tests::scalar_meet_never_promotes_missing_to_trust ... ok
+test format::read_limit_tests::untrusted_preset_is_finite_in_every_aggregate_dimension ... ok
+test indexed::tests::clean_index_open_and_append_do_not_scan_native_records ... ok
+test indexed::tests::concurrent_handles_share_the_sidecar_database ... ok
+test indexed::tests::crc_rebuild_materializes_each_indexed_payload_exactly_once ... ok
+test indexed::tests::dirty_index_restore_uses_checkpoint_without_native_scan ... ok
+test indexed::tests::equal_length_primary_files_reject_swapped_sidecars ... ok
+test indexed::tests::failed_clean_publication_stops_further_indexed_mutation ... ok
+test indexed::tests::finite_sidecar_read_policy_does_not_cap_index_lifetime ... ok
+test indexed::tests::following_a_dirty_reader_only_parses_new_records ... ok
+test indexed::tests::indexed_candidates_reject_unknown_flags_even_with_matching_checksums ... ok
+test indexed::tests::indexed_mutations_encode_each_sidecar_key_once ... ok
+test indexed::tests::indexed_roundtrip_overwrite_tombstone_reopen_and_rebuild ... ok
+test indexed::tests::point_lookup_stops_canonical_key_encoding_at_max_key_bytes ... ok
+test indexed::tests::rebuild_decodes_each_tombstone_key_once_across_descriptors ... ok
+test indexed::tests::rebuild_refuses_to_promote_an_existing_dirty_generation ... ok
+test indexed::tests::rebuild_refuses_truncated_record_instead_of_publishing_a_prefix ... ok
+test indexed::tests::rebuild_retires_a_sidecar_published_for_a_replaced_primary ... ok
+test indexed::tests::rebuild_splits_at_the_configured_sidecar_batch_bound ... ok
+test indexed::tests::sidecar_batch_bound_splits_before_native_publication ... ok
+test indexed::tests::tombstone_records_use_the_mirrored_internal_flag ... ok
+test matrix::allocated_extents_tests::a_length_that_overflows_is_treated_as_unproven ... ok
+test matrix::allocated_extents_tests::an_empty_map_proves_every_range_is_a_hole ... ok
+test matrix::allocated_extents_tests::overlap_is_exact_at_every_boundary ... ok
+test matrix::allocated_extents_tests::the_unit_walk_is_ascending_bounded_and_allocation_driven ... ok
+test file::tests::replace_block_finds_predecessors_without_rescanning_the_prefix ... ok
+test matrix::bitmap_directory::tests::reducing_a_directory_budget_spills_and_preserves_values ... ok
+test matrix::bitmap_directory::tests::repeated_writer_stages_share_the_base_and_only_copy_edits ... ok
+test matrix::bitmap_directory::tests::staged_roots_preserve_old_slots_and_duplicate_first_positions ... ok
+test matrix::bypass_catalogue::the_checked_route_still_produces_the_evidence_it_should ... ok
+test matrix::bypass_catalogue::the_mirror_escape_lends_no_route_back_to_the_bitmap ... ok
+test file::validation_tests::every_record_flag_word_has_the_same_framing_verdict ... ok
+test matrix::crc_valid_evidence_tests::clearing_the_map_does_not_restore_completeness ... ok
+test matrix::crc_valid_evidence_tests::complete_evidence_reads_bits ... ok
+test matrix::crc_valid_evidence_tests::incomplete_evidence_issues_no_witness ... ok
+test matrix::crc_valid_evidence_tests::selected_validity_bits_fail_closed_on_incomplete_evidence ... ok
+test matrix::crc_valid_evidence_tests::the_fail_closed_reader_yields_a_refusal_not_a_bit ... ok
+test matrix::fatal_access::tests::the_gate_is_derived_from_the_findings_not_supplied ... ok
+test matrix::generation_follow::tests::deltas_preserve_duplicate_survivors_swap_removals_and_header_only_growth ... ok
+test matrix::limit_tests::sidecar_plan_checks_exact_lengths_limits_and_reserved_fields ... ok
+test matrix::matrix_directory::tests::prepared_word_updates_keep_unrelated_windows_and_cloned_cache_bytes ... ok
+test matrix::mutation_precharge_rollback_tests::a_failed_commit_bit_refunds_its_payload_precharge_at_every_boundary ... ok
+test matrix::mutation_precharge_rollback_tests::a_failed_validity_bit_refunds_its_payload_precharge ... ok
+test matrix::column_gather_tests::coalesced_windows_preserve_selected_bytes_and_bound_gap_reads ... ok
+test matrix::mutation_precharge_rollback_tests::repeated_failed_mutations_do_not_accumulate_payload_charges ... ok
+test matrix::mutation_precharge_rollback_tests::cell_write_preparation_and_publication_take_no_dynamic_bitmap_borrows ... ok
+test matrix::page_store_lock_audit_tests::a_fault_in_reads_through_the_pool_it_holds ... ok
+test matrix::page_store_lock_audit_tests::a_fault_in_reads_without_holding_the_page_store_lock ... ok
+test matrix::page_store_lock_audit_tests::an_aggregate_reads_without_holding_the_page_store_lock ... ok
+test matrix::page_store_lock_audit_tests::exclusive_preparation_avoids_dynamic_borrows_on_fault_hit_noop_or_eviction ... ok
+test matrix::page_store_lock_audit_tests::exclusive_preparation_rejects_corrupt_backing_before_mutation ... ok
+test matrix::page_store_lock_audit_tests::the_aggregate_reads_through_the_pool_it_holds ... ok
+test matrix::page_store_lock_audit_tests::bitmap_reads_preserve_small_cache_eviction_without_bookkeeping_when_all_pages_fit ... ok
+test matrix::page_store_lock_audit_tests::the_audit_counts_a_read_issued_under_the_lock ... ok
+test matrix::bitmap_directory::tests::bounded_memory_spills_without_changing_held_snapshots ... ok
+test matrix::page_store_lru_tests::a_recency_touch_costs_a_bounded_number_of_probes ... ok
+test matrix::page_store_lru_tests::a_page_released_by_a_clear_leaves_the_recency_order ... ok
+test matrix::region_reader::tests::a_pooled_read_returns_the_same_bytes_as_a_direct_one ... ok
+test matrix::region_reader::tests::dropping_the_pool_releases_the_private_handles ... ok
+test matrix::region_reader::tests::two_threads_get_two_private_handles_and_the_right_bytes ... ok
+test matrix::slot_frame_tests::the_slot_frame_follows_the_slot_width ... ok
+test matrix::sparse::tests::a_bounded_allocation_probe_preserves_the_private_handle_position ... ok
+test matrix::sparse_bitmap_tests::a_prepared_byte_write_installs_without_allocating_or_failing ... ok
+test matrix::sparse_bitmap_tests::a_short_trailing_page_keeps_its_exact_length ... ok
+test matrix::sparse_bitmap_tests::one_authentication_decision_serves_the_fault_in_and_the_verification_pass ... ok
+test matrix::sparse_bitmap_tests::pages_materialize_only_when_they_carry_a_set_bit ... ok
+test matrix::sparse_bitmap_tests::set_bit_totals_track_every_transition ... ok
+test matrix::sparse_bitmap_tests::the_rebuild_marker_is_never_a_valid_occupancy_header ... ok
+test matrix::sparse_bitmap_tests::the_verification_buffer_is_one_page_and_never_grows ... ok
+test matrix_generation::tests::abandoned_private_spills_leave_the_last_confirmed_generation ... ok
+test matrix_generation::tests::aliased_empty_radix_subtrees_cannot_amplify_enumeration_or_follow ... ok
+test matrix_generation::tests::cold_reads_cross_radix_boundaries_in_a_large_sparse_region ... ok
+test matrix_generation::tests::cyclic_directory_links_fail_height_validation_before_repeated_traversal ... ok
+test matrix_generation::tests::damaged_data_is_refused_and_a_torn_head_falls_back_to_the_previous_root ... ok
+test matrix_generation::tests::normal_sparse_roots_allow_spills_shared_generations_and_compaction_with_exact_budgets ... ok
+test matrix::page_store_lru_tests::a_writer_materialised_page_is_never_evicted ... ok
+test matrix_generation::tests::root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs ... ok
+test matrix_generation::tests::tiny_pending_budget_spills_without_publishing_and_compacts_in_batches ... ok
+test matrix_generation::tests::unpublished_pages_coalesce_and_zeroing_preserves_adjacent_bytes ... ok
+test native_layout::tests::liveness_policy_moves_the_schema_hash ... ok
+test native_layout::tests::native_record_header_and_footer_decode_the_captured_bytes ... ok
+test native_layout::tests::native_record_header_bytes_are_unchanged_by_the_role_dispatch ... ok
+test native_layout::tests::record_field_tables_sum_to_the_published_lengths ... ok
+test native_layout::tests::the_plan_extension_length_is_the_length_the_writer_emits ... ok
+test packed_rows::tests::corrupt_page_is_refused_and_never_cached_as_complete ... ok
+test matrix::page_store_lru_tests::eviction_drops_the_least_recently_used_page ... ok
+test packed_rows::tests::retained_and_spilled_remaps_agree_when_chain_deltas_repeat ... ok
+test pib_probe::real_file_positional_io_at_one_pib ... ignored, creates and probes a real sparse file with a logical offset of one PiB
+test pib_probe::real_file_positional_io_at_one_tib_smoke ... ignored, creates and probes a real sparse file with a logical offset of one TiB
+test scalable_extent::tests::empty_payload_is_valid_when_the_frame_is_complete ... ok
+test scalable_extent::tests::one_pib_offsets_and_bounds_remain_exact ... ok
+test scalable_extent::tests::primitive_checked_additions_reject_u64_overflow ... ok
+test scalable_extent::tests::record_parts_reject_gaps_overlaps_and_reverse_ordering ... ok
+test scalable_extent::tests::record_validation_checks_every_extent_at_the_u64_boundary ... ok
+test scalable_extent::tests::record_validation_rejects_extent_past_snapshot ... ok
+test scalable_extent::tests::record_validation_rejects_framing_below_minimum ... ok
+test scalable_extent::tests::snapshot_ranges_cover_the_full_u64_domain_without_saturation ... ok
+test scalable_extent::tests::usize_conversion_is_explicit_and_platform_checked ... ok
+test scan_control::tests::callback_can_cancel_through_a_cloned_token ... ok
+test scan_control::tests::cancellation_after_a_record_reports_exact_unnotified_progress ... ok
+test scan_control::tests::cancellation_from_complete_callback_reports_complete_progress ... ok
+test scan_control::tests::emits_started_running_and_complete_at_coalesced_cadence ... ok
+test scan_control::tests::emitted_counts_bytes_and_offsets_are_monotonic ... ok
+test scan_control::tests::pre_cancel_skips_started_callback_and_reports_initial_progress ... ok
+test scan_control::tests::progress_bookkeeping_performs_no_allocations ... ok
+test snapshot::tests::hostile_overflow_ranges_fail_before_read_or_allocation ... ok
+test snapshot::tests::positional_reads_stay_bound_to_the_open_object ... ok
+test snapshot::tests::range_copy_and_limit_checks_are_bounded ... ok
+test snapshot::tests::record_pointer_validation_uses_native_minimum_framing ... ok
+test snapshot::tests::snapshot_is_send_and_sync ... ok
+test snapshot::tests::snapshot_length_does_not_grow_with_the_file ... ok
+test snapshot::tests::snapshot_length_rebinding_and_growth_are_fallible ... ok
+test snapshot::tests::validated_logical_eof_can_be_shorter_than_physical_eof ... ok
+test spill_file::tests::isolated_policy_preserves_paths_limits_and_retry_state ... ok
+test spill_rows::tests::cached_floor_agrees_with_sorted_rows_after_spill_and_truncate ... ok
+test spill_rows::tests::cached_floor_handles_irregular_record_extents ... ok
+test spill_rows::tests::lending_budget_preserves_rows_and_bounds_both_buffers ... ok
+test spill_rows::tests::reads_between_spills_do_not_move_the_append_position ... ok
+test spill_rows::tests::rollback_across_a_spill_keeps_the_prefix_and_replaces_the_tail ... ok
+test stream::tests::batch_writer_coalesces_records_and_matches_single_append ... ok
+test stream::tests::bootstrap_refuses_to_promote_an_existing_dirty_generation ... ok
+test stream::tests::bootstrap_retires_a_sidecar_published_for_a_replaced_primary ... ok
+test stream::tests::clean_open_append_and_sync_construct_no_scanner ... ok
+test stream::tests::confirmed_partial_record_is_an_error_for_both_cursors ... ok
+test stream::tests::dirty_checkpoint_restore_truncates_without_scanning ... ok
+test stream::tests::low_level_stream_methods_cannot_bypass_keyed_chain_indexing ... ok
+test stream::tests::non_increasing_sequences_are_streaming_unsupported ... ok
+test stream::tests::reopen_and_owned_iterators_remain_bounded ... ok
+test stream::tests::restore_validates_format_tails_before_native_truncate ... ok
+test stream::tests::scalable_writer_stops_encoding_at_the_runtime_payload_limit ... ok
+test stream::tests::state_sidecar_bound_splits_native_batch ... ok
+test stream::tests::stream_writer_matches_resident_native_bytes ... ok
+test stream::tests::unsupported_policy_is_rejected_before_create ... ok
+test writer_permit::tests::a_live_handle_rechecks_poison_before_another_guarded_step ... ok
+test writer_permit::tests::a_poisoned_flag_issues_no_permit ... ok
+test writer_permit::tests::an_open_in_flight_window_refuses_a_second_permit ... ok
+test writer_permit::tests::ending_a_window_does_not_clear_a_poison_raised_inside_it ... ok
+test writer_permit::tests::replacing_contents_through_a_handle_cannot_launder_a_poisoned_writer ... ok
+test writer_permit::tests::same_type_writers_have_independent_bound_handles ... ok
+test packed_rows::tests::packed_words_roundtrip_wraparound_and_partial_words_across_pages ... ok
+test matrix_generation::tests::seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction ... ok
+test disk_index::oracle::randomized_pages_match_redb_across_splits_and_old_roots ... ok
+
+test result: ok. 264 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 9.83s
+
+     Running tests/decompression_allocation.rs (target/debug/deps/decompression_allocation-d4b8fbc9530f452e)
+
+running 6 tests
+test compression_buffers::tests::append_preserves_prefix_and_bounds_known_unknown_and_concatenated_frames ... ok
+test bounded_decode_preserves_large_unknown_concatenated_and_empty_frames ... ok
+test chunk_headers_do_not_authorize_container_allocation ... ok
+test untrusted_sizes_do_not_request_the_declared_maximum ... ok
+test upstream_legacy_and_current_frames_remain_compatible ... ok
+test compression_buffers::tests::block_bounds_cover_encoder_frames_and_reject_structural_amplification ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/io_failure_recovery.rs (target/debug/deps/io_failure_recovery-0ba3aa08166cc52f)
+
+running 2 tests
+test kernel_failure_child ... ignored, isolated child; invoked by partial_kernel_writes_preserve_retry_and_reopen
+test partial_kernel_writes_preserve_retry_and_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running unittests src/lib.rs (target/debug/deps/varlit_macros-4e3d0b012c0bba62)
+
+running 20 tests
+test finite_key::tests::invalid_and_ambiguous_schemas_fail_at_compile_time ... ok
+test tests::disk_index_plan_is_sorted_by_block_id ... ok
+test tests::disk_key_index_generates_indexed_api ... ok
+test tests::declared_visibility_reaches_the_generated_record_api ... ok
+test tests::declared_visibility_reaches_the_generated_layout_api ... ok
+test tests::generated_batch_method_uses_plural_and_borrowed_iterator ... ok
+test tests::inline_key_index_defaults_to_memory ... ok
+test tests::inline_key_index_rejects_matrix_blocks ... ok
+test tests::inline_key_index_rejects_unkeyed_blocks ... ok
+test tests::inline_key_index_rejects_unknown_value ... ok
+test tests::immediate_declarations_reject_invalid_or_ambiguous_policies ... ok
+test tests::parses_matrix_format_syntax ... ok
+test tests::memory_key_index_generates_only_stream_api ... ok
+test tests::rebrand_leaves_non_facade_tokens_alone ... ok
+test tests::keyed_chain_exposes_only_plan_backed_keyed_mutations ... ok
+test tests::rebrand_recurses_into_groups ... ok
+test tests::rebrand_rewrites_absolute_facade_paths ... ok
+test tests::rebrand_rewrites_absolute_paths_after_type_ascription_colon ... ok
+test tests::public_format_still_generates_public_handles ... ok
+test finite_key::tests::combination_limit_is_checked_before_cartesian_expansion ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/main.rs (target/debug/deps/varlit_test_runner-03e90c872b03c189)
+
+running 12 tests
+test tests::cleanup_refuses_paths_outside_owned_session_namespace ... ok
+test tests::a_failed_session_that_produced_nothing_is_not_retained ... ok
+test tests::a_start_outside_any_workspace_is_refused ... ok
+test tests::dropping_a_session_with_artifacts_retains_it ... ok
+test tests::dropping_an_untouched_session_removes_it ... ok
+test tests::explicit_resolution_modes_are_left_alone ... ok
+test tests::locked_is_inserted_before_the_test_binary_arguments ... ok
+test tests::forwarded_commands_default_to_locked_resolution ... ok
+test tests::failed_session_can_be_preserved_for_diagnosis ... ok
+test tests::preexisting_candidate_is_never_reused ... ok
+test tests::sessions_are_fresh_unique_and_cleanup_is_verified ... ok
+test tests::the_workspace_root_follows_the_starting_directory ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests varlit
+
+running 1 test
+test crates/varlit/src/lib.rs - (line 34) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.53s; merged doctests compilation took 0.52s
+   Doc-tests varlit_core
+
+running 3 tests
+test crates/varlit-core/src/file.rs - file::RecordMap (line 940) ... ignored
+test crates/varlit-core/src/file.rs - file::VarlitFile::open_readonly_without_directory (line 4635) ... ignored
+test crates/varlit-core/src/file.rs - file::VarlitFile::with_directory (line 7518) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crates/varlit-core/src/experimental_matrix.rs - experimental_matrix::MatrixReader (line 1365) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+all doctests ran in 0.18s; merged doctests compilation took 0.13s
+   Doc-tests varlit_macros
+
+running 2 tests
+test crates/varlit-macros/src/lib.rs - varlit_format (line 90) - compile ... ok
+test crates/varlit-macros/src/lib.rs - derive_varlit_block (line 37) - compile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.46s; merged doctests compilation took 0.46s
+Varlit test artifact cleanup: verified empty

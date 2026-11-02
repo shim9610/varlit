@@ -1,0 +1,14 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test oom_recovery_guards zstd_context_allocation_failures_return_errors -- --exact --nocapture --test-threads=1 --ignored`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-69244-1793592299360355534-0
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running tests/oom_recovery_guards.rs (target/release/deps/oom_recovery_guards-15ea5774a53ea1e8)
+
+running 1 test
+test zstd_context_allocation_failures_return_errors ... C_CONTEXT_REFUSAL compression and decompression passed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.05s
+
+Varlit test artifact cleanup: verified empty

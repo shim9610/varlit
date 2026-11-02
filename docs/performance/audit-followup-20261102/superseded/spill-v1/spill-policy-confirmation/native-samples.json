@@ -1,0 +1,872 @@
+[
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.170523056,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.974097,
+      "rss": 5760,
+      "write_blocks": 342728
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.173021981,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.127963,
+      "rss": 5756,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.161783814,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.182944,
+      "rss": 5724,
+      "write_blocks": 342800
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.185155751,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.181598,
+      "rss": 5752,
+      "write_blocks": 342752
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.31271142,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.277433,
+      "rss": 5736,
+      "write_blocks": 342728
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.193632462,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.289907,
+      "rss": 5748,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.161615629,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.242664,
+      "rss": 5620,
+      "write_blocks": 342720
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.164485911,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.934752,
+      "rss": 5736,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.162168547,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.965958,
+      "rss": 5752,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.166384476,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.201918,
+      "rss": 5620,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 5,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.164019849,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.991199,
+      "rss": 5748,
+      "write_blocks": 342704
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 5,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.194983409,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.141233,
+      "rss": 5752,
+      "write_blocks": 342704
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 6,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.23361657,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.329782,
+      "rss": 5752,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 6,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.169527294,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.282323,
+      "rss": 5756,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 7,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.203045441,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.533088,
+      "rss": 5620,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 7,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.187793804,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.979214,
+      "rss": 5608,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 8,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.212533956,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.598885,
+      "rss": 5736,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 8,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.335705558,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 5.531376,
+      "rss": 5756,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 9,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.221025784,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.809859,
+      "rss": 5748,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 9,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.164531452,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.295738,
+      "rss": 5752,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 10,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.170132265,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.074085,
+      "rss": 5608,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 10,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.175854211,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.332792,
+      "rss": 5744,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 11,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.191718281,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.240782,
+      "rss": 5616,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 11,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.172184821,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.032912,
+      "rss": 5608,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 12,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.176557793,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.116536,
+      "rss": 5752,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 12,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.163582069,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.932793,
+      "rss": 5748,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 13,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.171902569,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.04331,
+      "rss": 5684,
+      "write_blocks": 342728
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 13,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.166257866,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 3.942533,
+      "rss": 5736,
+      "write_blocks": 342720
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 14,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.16665702,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.02124,
+      "rss": 5608,
+      "write_blocks": 342712
+    }
+  },
+  {
+    "case": 0,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "pair": 14,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "fixed",
+      "order": "forward",
+      "count": 2000000,
+      "marks": 200000,
+      "source_bytes": 144000230,
+      "seconds": 0.170322014,
+      "frames": 200000,
+      "temporary_bytes": 31457280
+    },
+    "usage": {
+      "cpu": 4.146628,
+      "rss": 5756,
+      "write_blocks": 342712
+    }
+  }
+]

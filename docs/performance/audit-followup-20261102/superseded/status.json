@@ -1,0 +1,10 @@
+{
+  "unit1-native": "progressive v1; rejected",
+  "unit1-swmr": "progressive v1; interrupted after measured codec regression; five complete reports and one partial report retained (the partial report remains status running at interruption); NOT final qualification",
+  "unit1-v2-codec": "progressive v2; rejected",
+  "unit1-v3-codec": "block screen before restoring legacy zstd compatibility; superseded",
+  "unit1-final-native": "block screen before restoring legacy zstd compatibility; superseded despite historical folder name",
+  "unit1-final-swmr": "block screen before restoring legacy zstd compatibility; superseded despite historical folder name",
+  "baseline-aa": "initial same-binary environment calibration",
+  "spill-v1": "initial spill wrapper at 714923d; repeated default 2M-record process CPU increase: initial +7.26%, confirmation +5.25%, pooled 20 pairs +6.37%; complete measurements retained; superseded by native complete-write fast path"
+}

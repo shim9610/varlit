@@ -1,0 +1,512 @@
+[
+  {
+    "case": 0,
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.081730824
+    },
+    "usage": {
+      "cpu": 0.084526,
+      "rss": 3992,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.081334575
+    },
+    "usage": {
+      "cpu": 0.084452,
+      "rss": 3884,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.077646957
+    },
+    "usage": {
+      "cpu": 0.080996,
+      "rss": 3900,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.085285775
+    },
+    "usage": {
+      "cpu": 0.088558,
+      "rss": 3892,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.088762204
+    },
+    "usage": {
+      "cpu": 0.094867,
+      "rss": 3888,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.088523007
+    },
+    "usage": {
+      "cpu": 0.091393,
+      "rss": 3900,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.093913705
+    },
+    "usage": {
+      "cpu": 0.096894,
+      "rss": 3872,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.081460285
+    },
+    "usage": {
+      "cpu": 0.084908,
+      "rss": 3944,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.079613697
+    },
+    "usage": {
+      "cpu": 0.082183,
+      "rss": 3984,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.077373173
+    },
+    "usage": {
+      "cpu": 0.080388,
+      "rss": 3992,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 5,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.078654621
+    },
+    "usage": {
+      "cpu": 0.081327,
+      "rss": 3884,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 5,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.096963423
+    },
+    "usage": {
+      "cpu": 0.099582,
+      "rss": 3988,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 6,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.097906609
+    },
+    "usage": {
+      "cpu": 0.101208,
+      "rss": 3932,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 6,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.102997179
+    },
+    "usage": {
+      "cpu": 0.106127,
+      "rss": 3992,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 7,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.090070427
+    },
+    "usage": {
+      "cpu": 0.093797,
+      "rss": 3984,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 7,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.177171743
+    },
+    "usage": {
+      "cpu": 0.179951,
+      "rss": 3904,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 8,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.092095416
+    },
+    "usage": {
+      "cpu": 0.095251,
+      "rss": 3896,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 8,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.084655267
+    },
+    "usage": {
+      "cpu": 0.088551,
+      "rss": 3888,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 9,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.086910327
+    },
+    "usage": {
+      "cpu": 0.090279,
+      "rss": 3904,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 9,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.0741906
+    },
+    "usage": {
+      "cpu": 0.077381,
+      "rss": 3872,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 10,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.077141733
+    },
+    "usage": {
+      "cpu": 0.080908,
+      "rss": 3980,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 10,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.076674386
+    },
+    "usage": {
+      "cpu": 0.07928,
+      "rss": 3864,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 11,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.07609497
+    },
+    "usage": {
+      "cpu": 0.078907,
+      "rss": 3876,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 11,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.074076406
+    },
+    "usage": {
+      "cpu": 0.076883,
+      "rss": 3876,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 12,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.07396597
+    },
+    "usage": {
+      "cpu": 0.076628,
+      "rss": 3904,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 12,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.079421481
+    },
+    "usage": {
+      "cpu": 0.082639,
+      "rss": 3888,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 13,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.082259895
+    },
+    "usage": {
+      "cpu": 0.084785,
+      "rss": 3912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 13,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.080812395
+    },
+    "usage": {
+      "cpu": 0.083555,
+      "rss": 3908,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 14,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.081555885
+    },
+    "usage": {
+      "cpu": 0.084468,
+      "rss": 3868,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 14,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.07940083
+    },
+    "usage": {
+      "cpu": 0.08201,
+      "rss": 3932,
+      "write_blocks": 0
+    }
+  }
+]

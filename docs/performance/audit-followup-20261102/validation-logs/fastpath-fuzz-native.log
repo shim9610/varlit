@@ -1,0 +1,35 @@
+#286832	REDUCE cov: 3243 ft: 6825 corp: 212/72Kb lim: 2974 exec/s: 3541 rss: 444Mb L: 186/1629 MS: 1 EraseBytes-
+#287394	REDUCE cov: 3243 ft: 6825 corp: 212/72Kb lim: 2974 exec/s: 3548 rss: 444Mb L: 123/1629 MS: 2 ShuffleBytes-EraseBytes-
+#289160	REDUCE cov: 3243 ft: 6826 corp: 213/73Kb lim: 2985 exec/s: 3526 rss: 444Mb L: 1236/1629 MS: 1 PersAutoDict- DE: "\253\377\377\377"-
+#289828	REDUCE cov: 3243 ft: 6826 corp: 213/73Kb lim: 2985 exec/s: 3534 rss: 444Mb L: 509/1629 MS: 3 PersAutoDict-ChangeByte-EraseBytes- DE: "\253\377\377\377"-
+#297575	REDUCE cov: 3243 ft: 6826 corp: 213/73Kb lim: 3062 exec/s: 3542 rss: 444Mb L: 518/1629 MS: 2 ChangeBinInt-EraseBytes-
+#298026	REDUCE cov: 3243 ft: 6826 corp: 213/73Kb lim: 3062 exec/s: 3547 rss: 444Mb L: 58/1629 MS: 1 EraseBytes-
+#301373	REDUCE cov: 3243 ft: 6827 corp: 214/74Kb lim: 3095 exec/s: 3545 rss: 444Mb L: 1236/1629 MS: 2 ChangeASCIIInt-ChangeBit-
+#302061	NEW    cov: 3243 ft: 6830 corp: 215/76Kb lim: 3095 exec/s: 3512 rss: 444Mb L: 1657/1657 MS: 3 CrossOver-CopyPart-ShuffleBytes-
+#303097	REDUCE cov: 3243 ft: 6830 corp: 215/76Kb lim: 3095 exec/s: 3524 rss: 444Mb L: 247/1657 MS: 1 EraseBytes-
+#303124	NEW    cov: 3243 ft: 6831 corp: 216/76Kb lim: 3095 exec/s: 3524 rss: 444Mb L: 79/1657 MS: 2 CopyPart-ChangeBinInt-
+#303572	REDUCE cov: 3243 ft: 6831 corp: 216/76Kb lim: 3095 exec/s: 3529 rss: 444Mb L: 1152/1629 MS: 3 InsertByte-ChangeBit-EraseBytes-
+#303658	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3095 exec/s: 3530 rss: 444Mb L: 1105/1629 MS: 1 EraseBytes-
+#304892	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3106 exec/s: 3545 rss: 444Mb L: 834/1629 MS: 4 CopyPart-PersAutoDict-ShuffleBytes-EraseBytes- DE: "\377\377\377\253\000$\000\000"-
+#306064	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3117 exec/s: 3517 rss: 444Mb L: 247/1629 MS: 2 ChangeBit-EraseBytes-
+#307076	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3117 exec/s: 3529 rss: 444Mb L: 160/1629 MS: 2 CMP-EraseBytes- DE: "0FRV"-
+#309147	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3128 exec/s: 3513 rss: 444Mb L: 634/1629 MS: 1 EraseBytes-
+#311133	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3139 exec/s: 3535 rss: 444Mb L: 586/1629 MS: 1 EraseBytes-
+#312579	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3150 exec/s: 3512 rss: 444Mb L: 63/1629 MS: 1 EraseBytes-
+#315337	REDUCE cov: 3243 ft: 6831 corp: 216/75Kb lim: 3172 exec/s: 3543 rss: 444Mb L: 445/1629 MS: 3 ChangeASCIIInt-ChangeBinInt-EraseBytes-
+#319022	DONE   cov: 3243 ft: 6831 corp: 216/75Kb lim: 3205 exec/s: 3505 rss: 444Mb
+###### Recommended dictionary. ######
+"\002\000\000\000" # Uses: 3303
+"\033\000\000\000\000\000\000\000" # Uses: 2902
+"\253\377\377\377" # Uses: 2902
+"\376\377\377\377" # Uses: 2648
+"\377\377\377\377" # Uses: 2430
+"G\206\\U.\004\000\000" # Uses: 2528
+"\377\377\377\000" # Uses: 2025
+"EHCV" # Uses: 1576
+"\377\377\377\253\000$\000\000" # Uses: 1234
+"\362\217\212u" # Uses: 722
+"\000\000\000\000\000\000\000\001" # Uses: 628
+"0FRV" # Uses: 93
+###### End of recommended dictionary. ######
+Done 319022 runs in 91 second(s)

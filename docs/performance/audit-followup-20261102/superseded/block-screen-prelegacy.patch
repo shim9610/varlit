@@ -1,0 +1,385 @@
+diff --git a/crates/varlit-core/src/chunks.rs b/crates/varlit-core/src/chunks.rs
+index 1ccac5a..af55481 100644
+--- a/crates/varlit-core/src/chunks.rs
++++ b/crates/varlit-core/src/chunks.rs
+@@ -98,6 +98,9 @@ impl ChunkedBytes {
+                 limit: max_uncompressed_len,
+             });
+         }
++        // Every chunk's declaration must fit the output bound derived from its
++        // complete blocks; untrusted frame/container lengths alone cannot
++        // authorize the full output reservation below.
+         let frame_sizes_known = validate_chunked_bytes(&self.encoded, true)?;
+         let output_len =
+             usize::try_from(header.uncompressed_len).map_err(|_| Error::InvalidChunkedBytes)?;
+diff --git a/crates/varlit-core/src/compression_buffers.rs b/crates/varlit-core/src/compression_buffers.rs
+index f6f1850..85c881d 100644
+--- a/crates/varlit-core/src/compression_buffers.rs
++++ b/crates/varlit-core/src/compression_buffers.rs
+@@ -80,9 +80,10 @@ impl Compressor {
+ 
+ #[cfg(feature = "compression-zstd")]
+ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
+-    // Preserve the backend's frame-size screen: a small frame must not cause
+-    // an allocation of a much larger caller-declared maximum.
+-    let capacity = match frame_output_len(payload) {
++    // Neither an outer limit nor a frame content-size field can authorize an
++    // allocation larger than the complete blocks can possibly regenerate.
++    let (declared, bound) = frame_sizes(payload)?;
++    let capacity = match declared {
+         Some(actual) if actual > maximum as u64 => {
+             return Err(Error::DecompressedLengthMismatch {
+                 expected: maximum as u64,
+@@ -90,9 +91,7 @@ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
+             });
+         }
+         Some(actual) => actual as usize,
+-        None => zstd::bulk::Decompressor::upper_bound(payload)
+-            .unwrap_or(maximum)
+-            .min(maximum),
++        None => usize::try_from(bound).unwrap_or(usize::MAX).min(maximum),
+     };
+     let mut output = Vec::new();
+     output
+@@ -107,48 +106,95 @@ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
+     Ok(output)
+ }
+ 
++/// Bound output from complete zstd blocks, independently of the content-size
++/// field. Raw/RLE blocks declare their actual length; compressed blocks can
++/// regenerate at most 128 KiB (RFC 8878 section 3.1.1.2). This is an upper bound,
++/// not proof of valid compressed contents: the backend still decodes/checks them.
+ #[cfg(feature = "compression-zstd")]
+-fn frame_output_len(mut bytes: &[u8]) -> Option<u64> {
++fn frame_sizes(mut bytes: &[u8]) -> Result<(Option<u64>, u64)> {
+     let mut total = 0u64;
++    let mut bound = 0u64;
++    let mut known = true;
+     while !bytes.is_empty() {
+-        let len = zstd::zstd_safe::find_frame_compressed_size(bytes).ok()?;
+-        if len == 0 {
+-            return None;
++        let magic = bytes.get(..4).ok_or(Error::InvalidChunkedBytes)?;
++        let magic = u32::from_le_bytes(magic.try_into().expect("four bytes"));
++        if magic & 0xfffffff0 == 0x184d2a50 {
++            let size = bytes.get(4..8).ok_or(Error::InvalidChunkedBytes)?;
++            let size = u32::from_le_bytes(size.try_into().expect("four bytes")) as usize;
++            let end = 8usize.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
++            bytes = bytes.get(end..).ok_or(Error::InvalidChunkedBytes)?;
++            continue;
+         }
+-        total = total.checked_add(zstd::zstd_safe::get_frame_content_size(bytes).ok()??)?;
+-        bytes = bytes.get(len..)?;
++        let declared = zstd::zstd_safe::get_frame_content_size(bytes)
++            .map_err(|_| Error::InvalidChunkedBytes)?;
++        let descriptor = *bytes.get(4).ok_or(Error::InvalidChunkedBytes)?;
++        let single = descriptor & 0x20 != 0;
++        let content_bytes = match descriptor >> 6 {
++            0 => usize::from(single),
++            1 => 2,
++            2 => 4,
++            _ => 8,
++        };
++        let dictionary_bytes = [0, 1, 2, 4][(descriptor & 3) as usize];
++        let mut offset = 5 + usize::from(!single) + dictionary_bytes + content_bytes;
++        let mut frame_bound = 0u64;
++        loop {
++            let end = offset.checked_add(3).ok_or(Error::InvalidChunkedBytes)?;
++            let header = bytes.get(offset..end).ok_or(Error::InvalidChunkedBytes)?;
++            let header = u32::from_le_bytes([header[0], header[1], header[2], 0]);
++            let size = (header >> 3) as usize;
++            if size > 128 * 1024 {
++                return Err(Error::InvalidChunkedBytes);
++            }
++            let (stored, regenerated) = match (header >> 1) & 3 {
++                0 => (size, size),
++                1 => (1, size),
++                2 => (size, 128 * 1024),
++                _ => return Err(Error::InvalidChunkedBytes),
++            };
++            offset = end.checked_add(stored).ok_or(Error::InvalidChunkedBytes)?;
++            bytes.get(..offset).ok_or(Error::InvalidChunkedBytes)?;
++            frame_bound = frame_bound
++                .checked_add(regenerated as u64)
++                .ok_or(Error::InvalidChunkedBytes)?;
++            if header & 1 != 0 {
++                break;
++            }
++        }
++        if descriptor & 4 != 0 {
++            offset = offset.checked_add(4).ok_or(Error::InvalidChunkedBytes)?;
++        }
++        bytes = bytes.get(offset..).ok_or(Error::InvalidChunkedBytes)?;
++        if let Some(size) = declared {
++            if size > frame_bound {
++                return Err(Error::InvalidChunkedBytes);
++            }
++            total = total.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
++        } else {
++            known = false;
++        }
++        bound = bound
++            .checked_add(frame_bound)
++            .ok_or(Error::InvalidChunkedBytes)?;
+     }
+-    Some(total)
++    Ok((known.then_some(total), bound))
+ }
+ 
+-/// Check embedded frame lengths before reserving a container-wide output.
+-/// Frames without a content-size field remain supported by bounded decoding.
++/// Screen both the container length and frame hints against complete blocks
++/// before reserving the container-wide output. Unknown-size frames are supported.
+ pub(crate) fn validate_frame_output_len(payload: &[u8], expected: u64) -> Result<bool> {
+     #[cfg(feature = "compression-zstd")]
+     {
+-        let mut bytes = payload;
+-        let mut total = 0u64;
+-        let mut known = true;
+-        while !bytes.is_empty() {
+-            let len = zstd::zstd_safe::find_frame_compressed_size(bytes).map_err(backend_error)?;
+-            if len == 0 {
+-                return Err(Error::InvalidChunkedBytes);
+-            }
+-            match zstd::zstd_safe::get_frame_content_size(bytes)
+-                .map_err(|_| Error::InvalidChunkedBytes)?
+-            {
+-                Some(n) => total = total.checked_add(n).ok_or(Error::InvalidChunkedBytes)?,
+-                None => known = false,
+-            }
+-            bytes = bytes.get(len..).ok_or(Error::InvalidChunkedBytes)?;
++        let (declared, bound) = frame_sizes(payload)?;
++        if let Some(actual) = declared
++            && actual != expected
++        {
++            return Err(Error::DecompressedLengthMismatch { expected, actual });
+         }
+-        if known && total != expected {
+-            return Err(Error::DecompressedLengthMismatch {
+-                expected,
+-                actual: total,
+-            });
++        if expected > bound {
++            return Err(Error::InvalidChunkedBytes);
+         }
+-        Ok(known)
++        Ok(declared.is_some())
+     }
+     #[cfg(not(feature = "compression-zstd"))]
+     {
+@@ -185,7 +231,7 @@ impl Decompressor {
+         let exact = if prevalidated_size {
+             Some(expected as u64)
+         } else {
+-            frame_output_len(payload)
++            frame_sizes(payload)?.0
+         };
+         if let Some(actual) = exact
+             && actual != expected as u64
+@@ -245,7 +291,7 @@ impl Decompressor {
+         let written = match if prevalidated_size {
+             Some(expected as u64)
+         } else {
+-            frame_output_len(payload)
++            frame_sizes(payload)?.0
+         } {
+             Some(actual) if actual != expected as u64 => Err(Error::DecompressedLengthMismatch {
+                 expected: expected as u64,
+@@ -296,6 +342,56 @@ impl Decompressor {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn block_bounds_cover_encoder_frames_and_reject_structural_amplification() -> Result<()> {
++        for length in [0, 1, 255, 256, 1024, 131071, 131072, 131073, 1048576] {
++            let mut state = 1u64;
++            for pattern in 0..3 {
++                let data: Vec<u8> = (0..length)
++                    .map(|i| {
++                        state ^= state << 13;
++                        state ^= state >> 7;
++                        state ^= state << 17;
++                        match pattern {
++                            0 => 7,
++                            1 => (i % 251) as u8,
++                            _ => state as u8,
++                        }
++                    })
++                    .collect();
++                for known in [false, true] {
++                    for checksum in [false, true] {
++                        let mut encoder = zstd::bulk::Compressor::new(1)?;
++                        encoder.include_contentsize(known)?;
++                        encoder.include_checksum(checksum)?;
++                        let encoded = encoder.compress(&data)?;
++                        let (declared, bound) = frame_sizes(&encoded)?;
++                        assert!(bound >= length as u64);
++                        assert_eq!(declared, known.then_some(length as u64));
++                        assert!(decompress(&encoded, length)? == data);
++                        let mut joined = vec![0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3];
++                        joined.extend_from_slice(&encoded);
++                        joined.extend_from_slice(&encoded);
++                        let (_, bound) = frame_sizes(&joined)?;
++                        assert!(bound >= 2 * length as u64);
++                        assert_eq!(decompress(&joined, 2 * length)?.len(), 2 * length);
++                    }
++                }
++            }
++        }
++        // An RLE block may expand greatly, but never beyond the format's block
++        // maximum. A block-length forgery is not permission to allocate either.
++        let oversized_rle = [0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0x40, 0, 3, 0, 0x80, 7];
++        assert!(frame_sizes(&oversized_rle).is_err());
++        for bytes in [
++            &b"invalid"[..],
++            &[0x50, 0x2a, 0x4d, 0x18, 0xff, 0xff, 0xff, 0xff],
++        ] {
++            assert!(frame_sizes(bytes).is_err());
++        }
++        Ok(())
++    }
++
+     #[test]
+     fn append_preserves_prefix_and_bounds_known_unknown_and_concatenated_frames() -> Result<()> {
+         let input = [23u8; 4096];
+diff --git a/crates/varlit-core/tests/decompression_allocation.rs b/crates/varlit-core/tests/decompression_allocation.rs
+new file mode 100644
+index 0000000..ce68d1e
+--- /dev/null
++++ b/crates/varlit-core/tests/decompression_allocation.rs
+@@ -0,0 +1,109 @@
++//! Refuse large requests; this is not an OOM-kill experiment.
++#![cfg(feature = "compression-zstd")]
++use std::alloc::{GlobalAlloc, Layout, System};
++use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
++use varlit_core::{CompressionLevel, Error, Result};
++#[allow(dead_code)]
++#[path = "../src/compression_buffers.rs"]
++mod compression_buffers;
++struct Meter;
++static ENABLED: AtomicBool = AtomicBool::new(false);
++static DENIED: AtomicUsize = AtomicUsize::new(0);
++static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
++const MAXIMUM: usize = 4 * 1024 * 1024;
++fn refuse(n: usize) -> bool {
++    if ENABLED.load(Relaxed) && n >= MAXIMUM {
++        DENIED.fetch_add(1, Relaxed);
++        true
++    } else {
++        false
++    }
++}
++// SAFETY: unchanged System layouts; refusal returns null, without allocating.
++unsafe impl GlobalAlloc for Meter {
++    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
++        if refuse(l.size()) {
++            std::ptr::null_mut()
++        } else {
++            unsafe { System.alloc(l) }
++        }
++    }
++    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
++        unsafe { System.dealloc(p, l) }
++    }
++    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
++        if refuse(n) {
++            std::ptr::null_mut()
++        } else {
++            unsafe { System.realloc(p, l, n) }
++        }
++    }
++}
++#[global_allocator]
++static ALLOCATOR: Meter = Meter;
++#[test]
++fn untrusted_sizes_do_not_request_the_declared_maximum() {
++    let _lock = LOCK.lock().unwrap();
++    let inflated = [0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0x40, 0, 9, 0, 0, 7];
++    for input in [inflated.as_slice(), b"invalid"] {
++        DENIED.store(0, Relaxed);
++        ENABLED.store(true, Relaxed);
++        let result = compression_buffers::decompress(input, MAXIMUM);
++        ENABLED.store(false, Relaxed);
++        assert!(result.is_err());
++        let denied = DENIED.load(Relaxed);
++        println!("input_bytes={} denied_large_requests={denied}", input.len());
++        if std::env::var_os("VARLIT_BASELINE_PROBE").is_some() {
++            assert!(denied > 0);
++        } else {
++            assert_eq!(denied, 0, "invalid input requested the declared output");
++        }
++    }
++}
++
++#[cfg(feature = "integrity")]
++#[test]
++fn chunk_headers_do_not_authorize_container_allocation() {
++    let _lock = LOCK.lock().unwrap();
++    // One malformed frame claims 4 MiB both in zstd and in the container.
++    let frame = [0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0x40, 0, 9, 0, 0, 7];
++    let mut bytes = vec![0; 48];
++    bytes[..8].copy_from_slice(b"VCHK\x01\x00\x01\x00");
++    bytes[8..16].copy_from_slice(&(MAXIMUM as u64).to_le_bytes());
++    bytes[16..24].copy_from_slice(&(MAXIMUM as u64).to_le_bytes());
++    bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
++    bytes[32..36].copy_from_slice(&(MAXIMUM as u32).to_le_bytes());
++    bytes[36..40].copy_from_slice(&(frame.len() as u32).to_le_bytes());
++    bytes.extend_from_slice(&frame);
++    let chunks = varlit_core::ChunkedBytes::from_encoded(bytes).unwrap();
++    DENIED.store(0, Relaxed);
++    ENABLED.store(true, Relaxed);
++    let result = chunks.decode_to_vec_limited(MAXIMUM as u64);
++    ENABLED.store(false, Relaxed);
++    assert!(result.is_err());
++    assert_eq!(DENIED.load(Relaxed), 0);
++}
++
++#[test]
++fn bounded_decode_preserves_large_unknown_concatenated_and_empty_frames() -> Result<()> {
++    let _lock = LOCK.lock().unwrap();
++    let data: Vec<_> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
++    let mut encoder = zstd::bulk::Compressor::new(1)?;
++    for known in [true, false] {
++        encoder.include_contentsize(known)?;
++        let frame = encoder.compress(&data)?;
++        assert_eq!(compression_buffers::decompress(&frame, data.len())?, data);
++        assert!(compression_buffers::decompress(&frame, data.len() - 1).is_err());
++        for n in [0, 1, frame.len() - 1] {
++            assert!(compression_buffers::decompress(&frame[..n], data.len()).is_err() || n == 0);
++        }
++        let mut both = frame.clone();
++        both.extend_from_slice(&frame);
++        let decoded = compression_buffers::decompress(&both, 2 * data.len())?;
++        assert_eq!(decoded[..data.len()], data);
++        assert_eq!(decoded[data.len()..], data);
++        let empty = encoder.compress(&[])?;
++        assert!(compression_buffers::decompress(&empty, 0)?.is_empty());
++    }
++    Ok(())
++}
+diff --git a/scripts/check_storage_contracts.py b/scripts/check_storage_contracts.py
+index 9bda60a..58b767a 100644
+--- a/scripts/check_storage_contracts.py
++++ b/scripts/check_storage_contracts.py
+@@ -10,6 +10,8 @@ import sys
+ from qualify_scalable import ROOT, classify, run_command, source_identity
+ 
+ CASES = [
++    ("zstd-header-allocation", "varlit-core", "decompression_allocation", "untrusted_sizes_do_not_request_the_declared_maximum", False, None),
++    ("chunk-header-allocation", "varlit-core", "decompression_allocation", "chunk_headers_do_not_authorize_container_allocation", False, None),
+     ("publication-resume", "varlit-core", None, "disk_index::storage::failure_tests::divergent_clean_heads_require_sync_before_writer_resume", False, None),
+     ("publication-clean-resume", "varlit-core", None, "disk_index::storage::failure_tests::matching_clean_heads_do_not_add_a_resume_sync", False, None),
+     ("publication-head-pairs", "varlit-core", None, "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations", False, "PUBLICATION_IMAGES independent head prefixes=8450"),
+diff --git a/scripts/tests/test_storage_contracts.py b/scripts/tests/test_storage_contracts.py
+index abf5810..3ff4877 100644
+--- a/scripts/tests/test_storage_contracts.py
++++ b/scripts/tests/test_storage_contracts.py
+@@ -12,7 +12,7 @@ spec.loader.exec_module(gate)
+ class StorageSelectionTests(unittest.TestCase):
+     def test_failure_and_resource_categories_are_required(self):
+         self.assertEqual({row[0] for row in gate.CASES}, {
+-            "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-histories", "publication-live-crashes", "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
++            "zstd-header-allocation", "chunk-header-allocation", "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-histories", "publication-live-crashes", "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
+             "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-evidence",
+             "nonresident-record-budget", "nonresident-follow-sequence", "mutation-amortized-work", "recovery-linear-work", "mutation-uniform-proof", "mutation-rewritten-boundaries",
+             "checked-chain-links", "failed-history", "decode-memory", "cardinality-growth", "oom-recovery", "zstd-context-oom"})

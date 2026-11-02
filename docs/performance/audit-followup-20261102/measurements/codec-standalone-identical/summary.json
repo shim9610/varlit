@@ -1,0 +1,110 @@
+[
+  {
+    "case": 0,
+    "work": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045
+    },
+    "pairs": 5,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.071233788,
+        "after": 0.073736363,
+        "change_percent": 3.5131853440111716
+      },
+      "cpu_seconds": {
+        "before": 0.073809,
+        "after": 0.076373,
+        "change_percent": 3.4738311046078385
+      },
+      "peak_rss_kib": {
+        "before": 3984,
+        "after": 3988,
+        "change_percent": 0.10040160642570406
+      }
+    }
+  },
+  {
+    "case": 1,
+    "work": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931
+    },
+    "pairs": 5,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.592404518,
+        "after": 0.596046176,
+        "change_percent": 0.6147248863486832
+      },
+      "cpu_seconds": {
+        "before": 0.699641,
+        "after": 0.699262,
+        "change_percent": -0.05417063894196383
+      },
+      "peak_rss_kib": {
+        "before": 132964,
+        "after": 132944,
+        "change_percent": -0.015041665413195737
+      }
+    }
+  },
+  {
+    "case": 2,
+    "work": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652
+    },
+    "pairs": 5,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.621591127,
+        "after": 0.629332771,
+        "change_percent": 1.2454560021414096
+      },
+      "cpu_seconds": {
+        "before": 0.726514,
+        "after": 0.738457,
+        "change_percent": 1.643877475175981
+      },
+      "peak_rss_kib": {
+        "before": 132928,
+        "after": 132916,
+        "change_percent": -0.00902744342802242
+      }
+    }
+  },
+  {
+    "case": 3,
+    "work": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635
+    },
+    "pairs": 5,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.618180903,
+        "after": 0.625269366,
+        "change_percent": 1.1466648299227833
+      },
+      "cpu_seconds": {
+        "before": 0.733476,
+        "after": 0.738531,
+        "change_percent": 0.6891841041833713
+      },
+      "peak_rss_kib": {
+        "before": 132980,
+        "after": 132952,
+        "change_percent": -0.021055797864344417
+      }
+    }
+  }
+]

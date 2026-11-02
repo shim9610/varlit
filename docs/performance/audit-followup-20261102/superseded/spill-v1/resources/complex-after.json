@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/workspace/varlit/target/release/examples/oom_maintenance_load",
+    "complex",
+    "65536",
+    "512"
+  ],
+  "exit": 0,
+  "sample_interval_seconds": 0.005,
+  "samples": 272,
+  "peaks": {
+    "rss_bytes": 8794112,
+    "anonymous_scratch_logical_bytes": 51447742,
+    "anonymous_scratch_allocated_bytes": 51449856,
+    "deleted_regular_logical_bytes": 51447742,
+    "open_regular_allocated_bytes": 91955200,
+    "cgroup_current_bytes": 10161766400
+  },
+  "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.644106026}\n",
+  "stderr": ""
+}

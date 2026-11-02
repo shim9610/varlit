@@ -1,0 +1,29 @@
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+   ┌─ /workspace/varlit/Cargo.lock:47:1
+   │  
+47 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+48 │ │ syn 3.0.9 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ syn v2.0.119
+     └── zerocopy-derive v0.8.63
+         └── zerocopy v0.8.63
+             ├── (dev) varlit v0.12.1
+             │   └── (dev) varlit-macros v0.12.1
+             │       └── varlit v0.12.1 (*)
+             └── varlit-core v0.12.1
+                 └── varlit v0.12.1 (*)
+   ├ syn v3.0.9
+     ├── serde_derive v1.0.229
+     │   └── trybuild v1.0.122
+     │       └── (dev) varlit v0.12.1
+     │           └── (dev) varlit-macros v0.12.1
+     │               └── varlit v0.12.1 (*)
+     ├── thiserror-impl v2.0.21
+     │   └── thiserror v2.0.21
+     │       └── varlit-core v0.12.1
+     │           └── varlit v0.12.1 (*)
+     ├── (dev) varlit v0.12.1 (*)
+     └── varlit-macros v0.12.1 (*)
+
+advisories ok, bans ok, licenses ok, sources ok

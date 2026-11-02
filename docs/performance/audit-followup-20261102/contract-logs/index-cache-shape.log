@@ -1,0 +1,14 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test index_corruption_guards aliased_finite_extents_return_errors_through_public_reads -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-68868-1793592292657781402-0
+   Compiling varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Finished `release` profile [optimized] target(s) in 0.71s
+     Running tests/index_corruption_guards.rs (target/release/deps/index_corruption_guards-062983d3d5e5c421)
+
+running 1 test
+test aliased_finite_extents_return_errors_through_public_reads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Varlit test artifact cleanup: verified empty

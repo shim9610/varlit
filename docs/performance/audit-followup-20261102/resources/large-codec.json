@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/workspace/target-unit1/release/examples/record_mutation_load",
+    "writer",
+    "large",
+    "reverse",
+    "65536",
+    "4096"
+  ],
+  "exit": 0,
+  "sample_interval_seconds": 0.005,
+  "samples": 390,
+  "peaks": {
+    "rss_bytes": 3493888,
+    "temporary_deleted_logical_bytes": 0,
+    "temporary_deleted_allocated_bytes": 0,
+    "deleted_regular_logical_bytes": 0,
+    "open_regular_allocated_bytes": 4300746752,
+    "cgroup_current_bytes": 13724274688
+  },
+  "stdout": "{\"mode\":\"writer\",\"layout\":\"large\",\"order\":\"reverse\",\"count\":65536,\"marks\":4096,\"source_bytes\":4300734694,\"seconds\":0.012814592,\"frames\":4096,\"temporary_bytes\":0}\n",
+  "stderr": ""
+}

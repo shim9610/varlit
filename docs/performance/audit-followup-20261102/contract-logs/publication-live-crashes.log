@@ -1,0 +1,14 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test scalable_crash_faults 'enabled::histories::every_mixed_history_crash_boundary_preserves_live_readers_and_recovery' -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-68114-1793592285565285286-0
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running tests/scalable_crash_faults.rs (target/release/deps/scalable_crash_faults-a17dbad5c963c80a)
+
+running 1 test
+test enabled::histories::every_mixed_history_crash_boundary_preserves_live_readers_and_recovery ... PUBLICATION_CRASHES boundaries=244 reader_observations=720 recovery=verified
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.75s
+
+Varlit test artifact cleanup: verified empty

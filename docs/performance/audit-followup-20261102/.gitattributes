@@ -1,0 +1,4 @@
+# Preserve literal unified-diff context markers and captured tool output.
+# These evidence files are not source-code whitespace.
+*.patch whitespace=-blank-at-eol,-blank-at-eof
+*.log whitespace=-blank-at-eol,-blank-at-eof

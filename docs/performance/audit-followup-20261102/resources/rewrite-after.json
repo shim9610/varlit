@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/workspace/varlit/target/release/examples/record_mutation_load",
+    "rewrite",
+    "variable",
+    "random",
+    "200000",
+    "20000"
+  ],
+  "exit": 0,
+  "sample_interval_seconds": 0.005,
+  "samples": 390,
+  "peaks": {
+    "rss_bytes": 6643712,
+    "temporary_deleted_logical_bytes": 4144723,
+    "temporary_deleted_allocated_bytes": 4149248,
+    "deleted_regular_logical_bytes": 4144723,
+    "open_regular_allocated_bytes": 93360128,
+    "cgroup_current_bytes": 9395580928
+  },
+  "stdout": "{\"mode\":\"rewrite\",\"layout\":\"variable\",\"order\":\"random\",\"count\":200000,\"marks\":20000,\"source_bytes\":44599997,\"seconds\":0.073624011,\"frames\":20000,\"temporary_bytes\":1522046}\n",
+  "stderr": ""
+}

@@ -1,0 +1,1 @@
+Runtime dependency graph excludes redb, Crossbeam and verification tools; dev-dependencies are permitted.

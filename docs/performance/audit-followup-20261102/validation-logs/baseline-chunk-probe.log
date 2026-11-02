@@ -1,0 +1,21 @@
+   Compiling varlit-core v0.12.1 (/workspace/varlit-before/crates/varlit-core)
+    Finished `release` profile [optimized] target(s) in 0.68s
+     Running tests/decompression_allocation.rs (/workspace/varlit-before/target/release/deps/decompression_allocation-7a82c7611a326018)
+
+running 1 test
+
+thread 'chunk_headers_do_not_authorize_container_allocation' (71659) panicked at crates/varlit-core/tests/decompression_allocation.rs:84:5:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test chunk_headers_do_not_authorize_container_allocation ... FAILED
+
+failures:
+
+failures:
+    chunk_headers_do_not_authorize_container_allocation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p varlit-core --test decompression_allocation`

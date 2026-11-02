@@ -1,0 +1,15 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test stateful_failure_guards failed_batches_recover_through_delete_reinsert_follow_and_compaction -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-69086-1793592296090692073-0
+   Compiling varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Finished `release` profile [optimized] target(s) in 0.76s
+     Running tests/stateful_failure_guards.rs (target/release/deps/stateful_failure_guards-b037e5c8e377d755)
+
+running 1 test
+test failed_batches_recover_through_delete_reinsert_follow_and_compaction ... stateful failure epochs=24; independent keys checked after every boundary
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+Varlit test artifact cleanup: verified empty

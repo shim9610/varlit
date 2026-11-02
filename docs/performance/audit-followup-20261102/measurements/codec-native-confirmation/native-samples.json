@@ -1,0 +1,872 @@
+[
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.015535968,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.524528,
+      "rss": 3388,
+      "write_blocks": 8419456
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012288646,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.625002,
+      "rss": 3304,
+      "write_blocks": 8420824
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011386472,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.676161,
+      "rss": 3432,
+      "write_blocks": 8423792
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011583289,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.501784,
+      "rss": 3452,
+      "write_blocks": 8419768
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.015387448,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.546463,
+      "rss": 3460,
+      "write_blocks": 8420472
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012205,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.518606,
+      "rss": 3304,
+      "write_blocks": 8420296
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.010831222,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.503048,
+      "rss": 3316,
+      "write_blocks": 8420152
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012528809,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.587582,
+      "rss": 3428,
+      "write_blocks": 8421480
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012379904,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.512925,
+      "rss": 3464,
+      "write_blocks": 8420160
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012329067,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.477601,
+      "rss": 3384,
+      "write_blocks": 8419512
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 5,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012412284,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.477715,
+      "rss": 3472,
+      "write_blocks": 8419664
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 5,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012898188,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.477389,
+      "rss": 3468,
+      "write_blocks": 8419688
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 6,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013160575,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.533102,
+      "rss": 3460,
+      "write_blocks": 8420280
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 6,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011446383,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.5342,
+      "rss": 3320,
+      "write_blocks": 8419576
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 7,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013045551,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.534736,
+      "rss": 3448,
+      "write_blocks": 8420344
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 7,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013443473,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.548122,
+      "rss": 3460,
+      "write_blocks": 8420472
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 8,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013979825,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.614071,
+      "rss": 3324,
+      "write_blocks": 8421048
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 8,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013779901,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.611991,
+      "rss": 3456,
+      "write_blocks": 8421304
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 9,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.01118008,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.549848,
+      "rss": 3316,
+      "write_blocks": 8419384
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 9,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.015332911,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.478421,
+      "rss": 3344,
+      "write_blocks": 8420472
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 10,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011952318,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.440821,
+      "rss": 3460,
+      "write_blocks": 8418680
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 10,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013049227,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.559924,
+      "rss": 3304,
+      "write_blocks": 8421240
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 11,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.017040303,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 2.164769,
+      "rss": 3448,
+      "write_blocks": 8420096
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 11,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012261155,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.627489,
+      "rss": 3324,
+      "write_blocks": 8420936
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 12,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.01245596,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.567861,
+      "rss": 3452,
+      "write_blocks": 8420576
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 12,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.01149097,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.593552,
+      "rss": 3448,
+      "write_blocks": 8419952
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 13,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.018913957,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.673156,
+      "rss": 3448,
+      "write_blocks": 8419856
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 13,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.013621332,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.587334,
+      "rss": 3460,
+      "write_blocks": 8419832
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 14,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011156204,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.5311,
+      "rss": 3464,
+      "write_blocks": 8419832
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 14,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.014810431,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.549888,
+      "rss": 3320,
+      "write_blocks": 8419832
+    }
+  }
+]

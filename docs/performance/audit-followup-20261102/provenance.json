@@ -1,0 +1,208 @@
+{
+  "runtime_revisions": [
+    {
+      "local_commit": "38c37d0e4d59493aa85abdfc1e4955e9fc3cec7c",
+      "tree": "d7e5eb0da9027508b5e5c32f93e0b74575c71a5f"
+    },
+    {
+      "local_commit": "2c84ebbbc44a04be0b676945b677fcdd2263452f",
+      "tree": "a4625022eed791437bf89303b1c4aa1e64ebf5dd"
+    },
+    {
+      "local_commit": "e5a21a8e961d2e7771b511077624de25be84c595",
+      "tree": "950dc7c2d186a371b8a532e0499285f87900ccc4"
+    },
+    {
+      "local_commit": "714923d5cd6a703075e2bbd3c8937e1a9bce5c58",
+      "tree": "c2ac4f7e545ea8e973bf8cb1c01a883e325be131"
+    },
+    {
+      "local_commit": "412fa51c135a9a11c9fdfcd603b5e513b3f16e9f",
+      "tree": "7468fe651812bbbf7003a9b76fdbe29685483f07"
+    }
+  ],
+  "harness_sha256": {
+    "crates/varlit/examples/oom_maintenance_load.rs": "e082782e7604b05fddd7bcefe0f69e498c100d1a8a67600b518150113caea14c",
+    "crates/varlit/examples/record_mutation_load.rs": "3e8f9ef8df0afee4e9223ea1f53c4cc9854a4d4c2e1bc211e9a7373ff209ffad",
+    "crates/varlit/examples/scalable_load.rs": "13aa47b338aa88456e7eebb90b6a93145ac8424d6f1da5e64e1b20a12f002ae6",
+    "crates/varlit-core/examples/decompression_load.rs": "4522eecb938211a6116c1bd1681ba39053657baa2e9df5ba83b37560698c8fcf"
+  },
+  "report_git_metadata": "Concurrent report git_head/git_status identifies the runner checkout, not each executable source. Binary hashes and runtime_revisions define the compared builds.",
+  "standalone_initial": "The baseline and codec standalone harness initially differed from the retained harness only in rustfmt whitespace. The identical-harness repetitions rebuild both and retain both measurement sets.",
+  "validation_logs": [
+    {
+      "name": "final-checks",
+      "original_bytes": 147,
+      "original_sha256": "0003c495c15c6fe67a001302cd35e50e73fa03299d105c4db224991312b27ec5",
+      "retained": "complete"
+    },
+    {
+      "name": "fastpath-fuzz-native",
+      "original_bytes": 26288,
+      "original_sha256": "2930d178e2a5853f8a63ffe124b0a91bc583c6afa3c3913ee6d50d477ba084cc",
+      "retained": "last 35 lines"
+    },
+    {
+      "name": "fastpath-workspace-tests",
+      "original_bytes": 131749,
+      "original_sha256": "3ce0743af2c68b7d969bf9b2596a47beab113e39b950f9e0fdba3e3549c77989",
+      "retained": "complete"
+    },
+    {
+      "name": "fastpath-policy",
+      "original_bytes": 475,
+      "original_sha256": "b1df658bd8cf638ba8546e94d5a5facbbeadb6860942c9f8208c77fdb99e48e4",
+      "retained": "complete"
+    },
+    {
+      "name": "fastpath-contracts",
+      "original_bytes": 2122,
+      "original_sha256": "90623e6061d60635fdcafc0fa482e8e775725c28ec89a39676a47e35c3680539",
+      "retained": "complete"
+    },
+    {
+      "name": "fastpath-clippy",
+      "original_bytes": 283,
+      "original_sha256": "c7fa09dbfbe8d31ec852fddb6abda08edeae29172a33f8304e6b1130a4e8e63b",
+      "retained": "complete"
+    },
+    {
+      "name": "fastpath-minimal-check",
+      "original_bytes": 206,
+      "original_sha256": "fde5096bed593ab5265e8018dde75e752db450a6596c38df9b8e2a3609083039",
+      "retained": "complete"
+    },
+    {
+      "name": "workspace-tests",
+      "original_bytes": 134656,
+      "original_sha256": "dfdde08cb14f6d22e98e90f10a984992540fe8fefd1ad7c5cb44dc22b2c1bfad",
+      "retained": "complete"
+    },
+    {
+      "name": "contracts",
+      "original_bytes": 2122,
+      "original_sha256": "90623e6061d60635fdcafc0fa482e8e775725c28ec89a39676a47e35c3680539",
+      "retained": "complete"
+    },
+    {
+      "name": "clippy",
+      "original_bytes": 1443,
+      "original_sha256": "18bf3d65a54f7346ff111ca2a1f23aafe772a5dc2f386cc239382489ea3b5977",
+      "retained": "complete"
+    },
+    {
+      "name": "minimal-check",
+      "original_bytes": 752,
+      "original_sha256": "517295a07d8b08b70ba80cc23054f8be4da0549cb6a3bc4afac4be6eaf5adbd4",
+      "retained": "complete"
+    },
+    {
+      "name": "runtime-dependencies",
+      "original_bytes": 106,
+      "original_sha256": "ac3d23c7f2fe6a84f8a44e540b19cc8034b49c8e5d1130669f76e2951005e40b",
+      "retained": "complete"
+    },
+    {
+      "name": "public-api",
+      "original_bytes": 1267,
+      "original_sha256": "09687802ce3d2249b1610c29e07c270eaaa564c56ac9c200f7d6695b7cf8760d",
+      "retained": "complete"
+    },
+    {
+      "name": "rename-api",
+      "original_bytes": 1070,
+      "original_sha256": "db2898462320c25f580b1594a7f3d0bc819cd49247bcb7fc94cf4b1a92bd3df7",
+      "retained": "complete"
+    },
+    {
+      "name": "python-tests",
+      "original_bytes": 139,
+      "original_sha256": "96ccfbc79980fb4594cb640e2733cd8b337879f1a593828f7d0ae193778915f6",
+      "retained": "complete"
+    },
+    {
+      "name": "actionlint",
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained": "complete"
+    },
+    {
+      "name": "deny",
+      "original_bytes": 1378,
+      "original_sha256": "98c7e6eeb7b5eb95d5dc839d58c0cec514ef3d5bdecdef8442ab83450f102cd9",
+      "retained": "complete"
+    },
+    {
+      "name": "fuzz-codec",
+      "original_bytes": 158070,
+      "original_sha256": "f63e19fb8d30fb76490c97357edc811a1a30c97b804d6c84cd54750698f882ac",
+      "retained": "last 35 lines"
+    },
+    {
+      "name": "fuzz-native",
+      "original_bytes": 112353,
+      "original_sha256": "b3805a2200a919b4816baf132238888574c19161c6dbb0aab2a209e971a1d80e",
+      "retained": "last 35 lines"
+    },
+    {
+      "name": "final-codec-compat",
+      "original_bytes": 952,
+      "original_sha256": "29f08215376617986f7def9233350c8e8e6b628065e209412b8fa42fa1ff5906",
+      "retained": "complete"
+    },
+    {
+      "name": "spill-policy-test",
+      "original_bytes": 475,
+      "original_sha256": "48df4db57849f1681e9e2a2f38bcf493b41b6b2ae271428686709e1fc4eee992",
+      "retained": "complete"
+    },
+    {
+      "name": "baseline-probe",
+      "original_bytes": 1446,
+      "original_sha256": "42ef59cde33e3dfae48e4a3ea4f8520dbd14f78a6970f1a4a6f3a0bd0a5e546f",
+      "retained": "complete"
+    },
+    {
+      "name": "unit1-probes",
+      "original_bytes": 680,
+      "original_sha256": "cb28b2bc23e0728e115da9cc41f4a9bcf74c397edf852f26f2ab7d16e0802768",
+      "retained": "complete"
+    },
+    {
+      "name": "unit1-regressions",
+      "original_bytes": 4934,
+      "original_sha256": "e25edff2e8f71ef8bf6f467c47b413100d3141c44b1186cfa13a599f4fbe97cf",
+      "retained": "complete"
+    },
+    {
+      "name": "unit1-final-regressions",
+      "original_bytes": 5007,
+      "original_sha256": "516b5e651eef0dec646986f58389c21793943b941b5818f680f36b1c7035620c",
+      "retained": "complete"
+    },
+    {
+      "name": "unit1-final-tests",
+      "original_bytes": 791,
+      "original_sha256": "87b6a37c511a629fa8e4a1acb5314faaa1aa5be7bcd1b5e1b9655bc38b6f3247",
+      "retained": "complete"
+    },
+    {
+      "name": "unit1-v3-tests",
+      "original_bytes": 681,
+      "original_sha256": "2cecc9693cece832a1e6f96ea41e59798c36f4de73b242cd38ecd7566500fe50",
+      "retained": "complete"
+    },
+    {
+      "name": "vendor-negative-control",
+      "original_bytes": 117,
+      "original_sha256": "0a210ca13c66a5e7fc73c9ccd68291554949703e58ab7593455cd9a747bf80d4",
+      "retained": "complete"
+    },
+    {
+      "name": "baseline-chunk-probe",
+      "original_bytes": 894,
+      "original_sha256": "c5bcc9bb5c326616c444ae5ad29342ece5b10088f178847f9eafe0b8d2224ac7",
+      "retained": "complete"
+    }
+  ]
+}

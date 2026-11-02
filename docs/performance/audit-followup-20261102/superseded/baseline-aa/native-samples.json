@@ -1,0 +1,290 @@
+[
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.631220371
+    },
+    "usage": {
+      "cpu": 1.315186,
+      "rss": 8552,
+      "write_blocks": 196064
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.587795394
+    },
+    "usage": {
+      "cpu": 1.250153,
+      "rss": 8488,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.565968986
+    },
+    "usage": {
+      "cpu": 1.211225,
+      "rss": 8628,
+      "write_blocks": 196064
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.578410471
+    },
+    "usage": {
+      "cpu": 1.221883,
+      "rss": 8568,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.555908222
+    },
+    "usage": {
+      "cpu": 1.192515,
+      "rss": 8548,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.573884287
+    },
+    "usage": {
+      "cpu": 1.198805,
+      "rss": 8492,
+      "write_blocks": 196144
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.307198145
+    },
+    "usage": {
+      "cpu": 0.408194,
+      "rss": 134056,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.335158249
+    },
+    "usage": {
+      "cpu": 0.425987,
+      "rss": 134048,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.334500144
+    },
+    "usage": {
+      "cpu": 0.433522,
+      "rss": 133900,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.299696936
+    },
+    "usage": {
+      "cpu": 0.393014,
+      "rss": 133944,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.30560417
+    },
+    "usage": {
+      "cpu": 0.400173,
+      "rss": 134016,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/baseline-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.312325155
+    },
+    "usage": {
+      "cpu": 0.403913,
+      "rss": 133916,
+      "write_blocks": 0
+    }
+  }
+]

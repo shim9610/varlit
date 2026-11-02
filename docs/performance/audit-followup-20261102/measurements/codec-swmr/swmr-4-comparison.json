@@ -1,0 +1,159 @@
+{
+  "status": "passed",
+  "samples_per_version": 3,
+  "limit_percent": 5,
+  "workload": {
+    "config": {
+      "name": "indexed-r8-20g",
+      "mode": "indexed",
+      "readers": 8,
+      "checks_per_epoch": 16384
+    },
+    "effective_arguments": {
+      "--phase": "write",
+      "--mode": "indexed",
+      "--total-bytes": "4294967296",
+      "--epoch-bytes": "67108864",
+      "--record-bytes": "65536",
+      "--batch-bytes": "4194304",
+      "--index-batch-records": "16384",
+      "--cache-bytes": "8388608",
+      "--readers": "8",
+      "--pinned-readers": "1",
+      "--crc": "true",
+      "--reader-pause-us": "0",
+      "--seconds": "1",
+      "--reader-checks-per-epoch": "16384"
+    },
+    "payload": 4294967296,
+    "epoch": 67108864,
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "cpu_max": "400000 100000",
+    "memory_max": "17179869184",
+    "instrumentation": "none",
+    "readers": [
+      [
+        0,
+        1,
+        32,
+        524288,
+        3208747743188020222
+      ],
+      [
+        1,
+        32,
+        32,
+        524288,
+        15746876979075427631
+      ],
+      [
+        2,
+        32,
+        32,
+        524288,
+        9747968542438937268
+      ],
+      [
+        3,
+        32,
+        32,
+        524288,
+        9243847713027586313
+      ],
+      [
+        4,
+        32,
+        32,
+        524288,
+        4903863259750067952
+      ],
+      [
+        5,
+        32,
+        32,
+        524288,
+        5778843666330398067
+      ],
+      [
+        6,
+        32,
+        32,
+        524288,
+        8200585148807637375
+      ],
+      [
+        7,
+        32,
+        32,
+        524288,
+        1933305620900094980
+      ],
+      [
+        8,
+        32,
+        32,
+        524288,
+        12118611058152487384
+      ]
+    ]
+  },
+  "metrics": {
+    "wall_seconds": {
+      "before": 22.93497769500027,
+      "after": 22.77914776100033,
+      "change_percent": -0.6794422740332928,
+      "before_range": [
+        21.718540895000388,
+        22.994429480000235
+      ],
+      "after_range": [
+        21.7362856980003,
+        24.151790065000114
+      ],
+      "status": "passed"
+    },
+    "cpu_seconds": {
+      "before": 81.16847100000001,
+      "after": 81.44162,
+      "change_percent": 0.3365210612381597,
+      "before_range": [
+        76.633858,
+        81.851229
+      ],
+      "after_range": [
+        76.795474,
+        85.099867
+      ],
+      "status": "passed"
+    },
+    "observed_peak_rss_bytes": {
+      "before": 51191808,
+      "after": 51253248,
+      "change_percent": 0.1200192030724967,
+      "before_range": [
+        51159040,
+        51191808
+      ],
+      "after_range": [
+        51159040,
+        51253248
+      ],
+      "status": "passed"
+    },
+    "write_bytes": {
+      "before": 4398493696,
+      "after": 4398456832,
+      "change_percent": -0.0008381051002426254,
+      "before_range": [
+        4398383104,
+        4398505984
+      ],
+      "after_range": [
+        4398432256,
+        4398522368
+      ],
+      "status": "passed"
+    }
+  },
+  "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+}

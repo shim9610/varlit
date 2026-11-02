@@ -1,0 +1,464 @@
+[
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.018927761,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 3.87983,
+      "rss": 3320,
+      "write_blocks": 8420352
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.010818294,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 2.008341,
+      "rss": 3304,
+      "write_blocks": 8420424
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.014060959,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.501806,
+      "rss": 3456,
+      "write_blocks": 8421832
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.012730151,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.428509,
+      "rss": 3448,
+      "write_blocks": 8420296
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.011747951,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.397953,
+      "rss": 3304,
+      "write_blocks": 8418056
+    }
+  },
+  {
+    "case": 4,
+    "binary": "record_mutation_load",
+    "args": [
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "seconds": 0.009630094,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "usage": {
+      "cpu": 1.448989,
+      "rss": 3448,
+      "write_blocks": 8419120
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.566827367
+    },
+    "usage": {
+      "cpu": 1.229027,
+      "rss": 8488,
+      "write_blocks": 196064
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.671383925
+    },
+    "usage": {
+      "cpu": 1.327949,
+      "rss": 8452,
+      "write_blocks": 196064
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.608674564
+    },
+    "usage": {
+      "cpu": 1.317701,
+      "rss": 8476,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.670681693
+    },
+    "usage": {
+      "cpu": 1.390138,
+      "rss": 8388,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.594401533
+    },
+    "usage": {
+      "cpu": 1.346023,
+      "rss": 8528,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 7,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "complex",
+      "65536",
+      "512"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362,
+      "seconds": 0.609025267
+    },
+    "usage": {
+      "cpu": 1.281224,
+      "rss": 8496,
+      "write_blocks": 196056
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.337056836
+    },
+    "usage": {
+      "cpu": 0.435328,
+      "rss": 133924,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.339938645
+    },
+    "usage": {
+      "cpu": 0.439607,
+      "rss": 134072,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.335157357
+    },
+    "usage": {
+      "cpu": 0.434566,
+      "rss": 133932,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.336577305
+    },
+    "usage": {
+      "cpu": 0.4347,
+      "rss": 133988,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.340711759
+    },
+    "usage": {
+      "cpu": 0.436258,
+      "rss": 134072,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/qualification/audit-docs-aa/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.337201884
+    },
+    "usage": {
+      "cpu": 0.433019,
+      "rss": 134084,
+      "write_blocks": 0
+    }
+  }
+]

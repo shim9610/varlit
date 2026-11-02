@@ -1,0 +1,13 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit-core --all-features --test decompression_allocation chunk_headers_do_not_authorize_container_allocation -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-67955-1793592270610386529-0
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running tests/decompression_allocation.rs (target/release/deps/decompression_allocation-7d7bb8a1a7338e3f)
+
+running 1 test
+test chunk_headers_do_not_authorize_container_allocation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+Varlit test artifact cleanup: verified empty

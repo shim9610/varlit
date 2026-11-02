@@ -1,0 +1,472 @@
+[
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.223839593
+    },
+    "usage": {
+      "cpu": 0.338108,
+      "rss": 67560,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.225452372
+    },
+    "usage": {
+      "cpu": 0.336839,
+      "rss": 67688,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.225978789
+    },
+    "usage": {
+      "cpu": 0.33266,
+      "rss": 67652,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.213032626
+    },
+    "usage": {
+      "cpu": 0.323696,
+      "rss": 67560,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.204107297
+    },
+    "usage": {
+      "cpu": 0.319467,
+      "rss": 67680,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.208175051
+    },
+    "usage": {
+      "cpu": 0.320957,
+      "rss": 67756,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.210286453
+    },
+    "usage": {
+      "cpu": 0.31932,
+      "rss": 67676,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.208856981
+    },
+    "usage": {
+      "cpu": 0.321814,
+      "rss": 67688,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.216535154
+    },
+    "usage": {
+      "cpu": 0.324457,
+      "rss": 67684,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 9,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "chunks",
+      "67108864",
+      "1048576"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.196601644
+    },
+    "usage": {
+      "cpu": 0.298924,
+      "rss": 67692,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.31906425
+    },
+    "usage": {
+      "cpu": 0.41472,
+      "rss": 133952,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.301858332
+    },
+    "usage": {
+      "cpu": 0.395919,
+      "rss": 133968,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.308812189
+    },
+    "usage": {
+      "cpu": 0.402193,
+      "rss": 133916,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.314268392
+    },
+    "usage": {
+      "cpu": 0.408979,
+      "rss": 134076,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.313765591
+    },
+    "usage": {
+      "cpu": 0.413174,
+      "rss": 133944,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.318995032
+    },
+    "usage": {
+      "cpu": 0.413524,
+      "rss": 134024,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.347681531
+    },
+    "usage": {
+      "cpu": 0.455692,
+      "rss": 134060,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.35817017
+    },
+    "usage": {
+      "cpu": 0.460448,
+      "rss": 134088,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.327917277
+    },
+    "usage": {
+      "cpu": 0.436882,
+      "rss": 134136,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 10,
+    "binary": "oom_maintenance_load",
+    "args": [
+      "decode",
+      "67108864",
+      "1048576",
+      "/workspace/scratch/unit1-v3-codec/disk-data/decode-fixture.bin"
+    ],
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20,
+      "seconds": 0.331039485
+    },
+    "usage": {
+      "cpu": 0.427577,
+      "rss": 134088,
+      "write_blocks": 0
+    }
+  }
+]

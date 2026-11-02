@@ -1,0 +1,17 @@
+   Compiling zstd-safe v8.2.0
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling zstd v0.14.3
+   Compiling varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+    Finished `release` profile [optimized] target(s) in 26.00s
+     Running tests/decompression_allocation.rs (target/release/deps/decompression_allocation-7d7bb8a1a7338e3f)
+
+running 6 tests
+test compression_buffers::tests::append_preserves_prefix_and_bounds_known_unknown_and_concatenated_frames ... ok
+test bounded_decode_preserves_large_unknown_concatenated_and_empty_frames ... ok
+test chunk_headers_do_not_authorize_container_allocation ... ok
+test untrusted_sizes_do_not_request_the_declared_maximum ... ok
+test upstream_legacy_and_current_frames_remain_compatible ... ok
+test compression_buffers::tests::block_bounds_cover_encoder_frames_and_reject_structural_amplification ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

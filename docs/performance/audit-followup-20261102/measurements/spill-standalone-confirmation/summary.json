@@ -1,0 +1,29 @@
+[
+  {
+    "case": 0,
+    "work": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045
+    },
+    "pairs": 15,
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.081555885,
+        "after": 0.081334575,
+        "change_percent": -0.271359939261262
+      },
+      "cpu_seconds": {
+        "before": 0.084526,
+        "after": 0.084452,
+        "change_percent": -0.08754702695029648
+      },
+      "peak_rss_kib": {
+        "before": 3992,
+        "after": 3992,
+        "change_percent": 0.0
+      }
+    }
+  }
+]

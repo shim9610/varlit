@@ -1,0 +1,4 @@
+    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Checking varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.19s

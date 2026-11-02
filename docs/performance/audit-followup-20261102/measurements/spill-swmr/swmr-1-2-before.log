@@ -1,0 +1,10 @@
+01-indexed-r8-20g: write
+  passed: 20.733s, guest writes=1.064 GiB, reads=0.000 GiB
+01-indexed-r8-20g: verify
+  passed: 0.740s, guest writes=0.000 GiB, reads=1.002 GiB
+01-indexed-r8-20g: point
+  passed: 0.339s, guest writes=0.000 GiB, reads=0.520 GiB
+01-indexed-r8-20g: random
+  passed: 1.013s, guest writes=0.000 GiB, reads=0.508 GiB
+Study: passed
+/workspace/scratch/qualification/spill-swmr/swmr-1-2-before/report.json

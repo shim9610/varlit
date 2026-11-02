@@ -1,0 +1,13 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test record_liveness boundary_proof_reuses_reverse_random_repeated_and_failed_requests -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-68691-1793592288622950372-0
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running tests/record_liveness.rs (target/release/deps/record_liveness-e0c0a766b12eba1e)
+
+running 1 test
+test boundary_proof_reuses_reverse_random_repeated_and_failed_requests ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.08s
+
+Varlit test artifact cleanup: verified empty

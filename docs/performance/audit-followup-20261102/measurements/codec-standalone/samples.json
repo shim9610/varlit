@@ -1,0 +1,682 @@
+[
+  {
+    "case": 0,
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.077433093
+    },
+    "usage": {
+      "cpu": 0.079908,
+      "rss": 3940,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.075727743
+    },
+    "usage": {
+      "cpu": 0.078515,
+      "rss": 3892,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.070243188
+    },
+    "usage": {
+      "cpu": 0.072972,
+      "rss": 3888,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.074617784
+    },
+    "usage": {
+      "cpu": 0.07735,
+      "rss": 3908,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.072464117
+    },
+    "usage": {
+      "cpu": 0.074911,
+      "rss": 3860,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.072691411
+    },
+    "usage": {
+      "cpu": 0.075126,
+      "rss": 3916,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.074067892
+    },
+    "usage": {
+      "cpu": 0.076963,
+      "rss": 3912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.083435051
+    },
+    "usage": {
+      "cpu": 0.086281,
+      "rss": 3864,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.085184452
+    },
+    "usage": {
+      "cpu": 0.088464,
+      "rss": 3900,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 0,
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 1048576,
+      "iterations": 1000,
+      "encoded_crc": 805061045,
+      "seconds": 0.082691587
+    },
+    "usage": {
+      "cpu": 0.086425,
+      "rss": 3872,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.646627092
+    },
+    "usage": {
+      "cpu": 0.761174,
+      "rss": 132868,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.589174176
+    },
+    "usage": {
+      "cpu": 0.700414,
+      "rss": 132916,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.570657484
+    },
+    "usage": {
+      "cpu": 0.674327,
+      "rss": 132908,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.586365822
+    },
+    "usage": {
+      "cpu": 0.689574,
+      "rss": 132912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.562721547
+    },
+    "usage": {
+      "cpu": 0.669856,
+      "rss": 133012,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.570284982
+    },
+    "usage": {
+      "cpu": 0.672851,
+      "rss": 132884,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.587309513
+    },
+    "usage": {
+      "cpu": 0.697869,
+      "rss": 132880,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.57550824
+    },
+    "usage": {
+      "cpu": 0.679804,
+      "rss": 132884,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.632342501
+    },
+    "usage": {
+      "cpu": 0.741469,
+      "rss": 132920,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 1,
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "known",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 391088931,
+      "seconds": 0.642921472
+    },
+    "usage": {
+      "cpu": 0.751248,
+      "rss": 132896,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.654127346
+    },
+    "usage": {
+      "cpu": 0.768063,
+      "rss": 132964,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.591395199
+    },
+    "usage": {
+      "cpu": 0.702239,
+      "rss": 132916,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.578336698
+    },
+    "usage": {
+      "cpu": 0.690533,
+      "rss": 132868,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.570878611
+    },
+    "usage": {
+      "cpu": 0.673877,
+      "rss": 132940,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.569014592
+    },
+    "usage": {
+      "cpu": 0.670736,
+      "rss": 132924,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.558062546
+    },
+    "usage": {
+      "cpu": 0.661184,
+      "rss": 133020,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.564399011
+    },
+    "usage": {
+      "cpu": 0.668543,
+      "rss": 132916,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.603817722
+    },
+    "usage": {
+      "cpu": 0.708943,
+      "rss": 132912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.565249102
+    },
+    "usage": {
+      "cpu": 0.66988,
+      "rss": 132924,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 2,
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "unknown",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 424276652,
+      "seconds": 0.582727593
+    },
+    "usage": {
+      "cpu": 0.682866,
+      "rss": 132912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 0,
+    "side": "before",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.559801677
+    },
+    "usage": {
+      "cpu": 0.660149,
+      "rss": 132924,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 0,
+    "side": "after",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.553487056
+    },
+    "usage": {
+      "cpu": 0.658461,
+      "rss": 132940,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 1,
+    "side": "after",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.561951148
+    },
+    "usage": {
+      "cpu": 0.662724,
+      "rss": 132912,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 1,
+    "side": "before",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.551513781
+    },
+    "usage": {
+      "cpu": 0.652739,
+      "rss": 132856,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 2,
+    "side": "before",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.548235306
+    },
+    "usage": {
+      "cpu": 0.650912,
+      "rss": 132980,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 2,
+    "side": "after",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.584770827
+    },
+    "usage": {
+      "cpu": 0.685628,
+      "rss": 132932,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 3,
+    "side": "after",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.625984623
+    },
+    "usage": {
+      "cpu": 0.726517,
+      "rss": 132932,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 3,
+    "side": "before",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.669180353
+    },
+    "usage": {
+      "cpu": 0.795708,
+      "rss": 132860,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 4,
+    "side": "before",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.60259083
+    },
+    "usage": {
+      "cpu": 0.7098,
+      "rss": 132996,
+      "write_blocks": 0
+    }
+  },
+  {
+    "case": 3,
+    "pair": 4,
+    "side": "after",
+    "result": {
+      "mode": "concatenated",
+      "bytes": 67108864,
+      "iterations": 20,
+      "encoded_crc": 3887452635,
+      "seconds": 0.604170805
+    },
+    "usage": {
+      "cpu": 0.711363,
+      "rss": 132920,
+      "write_blocks": 0
+    }
+  }
+]

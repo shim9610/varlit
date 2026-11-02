@@ -1,0 +1,135 @@
+[
+  {
+    "case": 4,
+    "pairs": 20,
+    "work": {
+      "mode": "writer",
+      "layout": "large",
+      "order": "reverse",
+      "count": 65536,
+      "marks": 4096,
+      "source_bytes": 4300734694,
+      "frames": 4096,
+      "temporary_bytes": 0
+    },
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.012417932,
+        "after": 0.012246823,
+        "change_percent": -1.3779186421700396
+      },
+      "process_cpu_seconds": {
+        "before": 1.5231560000000002,
+        "after": 1.539209,
+        "change_percent": 1.0539301292841863
+      },
+      "process_peak_rss_kib": {
+        "before": 3468,
+        "after": 3472,
+        "change_percent": 0.11534025374855261
+      },
+      "process_write_bytes": {
+        "before": 4311232512.0,
+        "after": 4311103488.0,
+        "change_percent": -0.0029927404667007274
+      }
+    }
+  },
+  {
+    "case": 7,
+    "pairs": 5,
+    "work": {
+      "mode": "complex",
+      "records": 65536,
+      "payload": 512,
+      "file_bytes": 47253552,
+      "dropped": 9362
+    },
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.604737665,
+        "after": 0.587108048,
+        "change_percent": -2.9152503672811525
+      },
+      "process_cpu_seconds": {
+        "before": 1.266384,
+        "after": 1.277515,
+        "change_percent": 0.8789593046027111
+      },
+      "process_peak_rss_kib": {
+        "before": 8584,
+        "after": 8644,
+        "change_percent": 0.6989748369058635
+      },
+      "process_write_bytes": {
+        "before": 100384768,
+        "after": 100384768,
+        "change_percent": 0.0
+      }
+    }
+  },
+  {
+    "case": 9,
+    "pairs": 5,
+    "work": {
+      "mode": "chunks",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20
+    },
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.227206155,
+        "after": 0.223666713,
+        "change_percent": -1.5578107908212235
+      },
+      "process_cpu_seconds": {
+        "before": 0.340118,
+        "after": 0.333929,
+        "change_percent": -1.8196625876901518
+      },
+      "process_peak_rss_kib": {
+        "before": 67748,
+        "after": 67684,
+        "change_percent": -0.0944677333648225
+      },
+      "process_write_bytes": {
+        "before": 0,
+        "after": 0,
+        "change_percent": null
+      }
+    }
+  },
+  {
+    "case": 10,
+    "pairs": 5,
+    "work": {
+      "mode": "decode",
+      "records": 67108864,
+      "payload": 1048576,
+      "work": 20
+    },
+    "metrics": {
+      "operation_seconds": {
+        "before": 0.332124179,
+        "after": 0.341037292,
+        "change_percent": 2.6836688093100136
+      },
+      "process_cpu_seconds": {
+        "before": 0.426559,
+        "after": 0.433889,
+        "change_percent": 1.7184023781001034
+      },
+      "process_peak_rss_kib": {
+        "before": 134008,
+        "after": 134076,
+        "change_percent": 0.050743239209594115
+      },
+      "process_write_bytes": {
+        "before": 0,
+        "after": 0,
+        "change_percent": null
+      }
+    }
+  }
+]

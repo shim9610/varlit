@@ -1,0 +1,277 @@
+--- a/crates/varlit-core/src/chunks.rs
++++ b/crates/varlit-core/src/chunks.rs
+@@ -108,13 +108,7 @@
+             .checked_add(entries_len)
+             .ok_or(Error::InvalidChunkedBytes)?;
+         let mut output = Vec::new();
+-        output
+-            .try_reserve_exact(output_len)
+-            .map_err(|_| Error::AllocationFailed {
+-                resource: "chunked bytes output",
+-                requested: header.uncompressed_len,
+-            })?;
+-        with_output_pages(&mut output, |output| {
++        {
+             let mut decompressor = (header.chunk_count != 0)
+                 .then(crate::compression_buffers::Decompressor::new)
+                 .transpose()?;
+@@ -142,7 +136,7 @@
+                 let (len, actual) = if header.chunk_count == 1 {
+                     let len = decoder.decompress_append(
+                         stored,
+-                        output,
++                        &mut output,
+                         entry.uncompressed_len as usize,
+                         frame_sizes_known,
+                     )?;
+@@ -154,7 +148,27 @@
+                         frame_sizes_known,
+                     )?;
+                     let actual = crc32_bytes(chunk)?;
+-                    output.extend_from_slice(chunk);
++                    if actual != entry.crc32 {
++                        return Err(Error::ChunkChecksumMismatch {
++                            chunk_index: index as u32,
++                            expected: entry.crc32,
++                            actual,
++                        });
++                    }
++                    // Only successfully decoded bytes authorize output growth.
++                    if end > output.capacity() {
++                        let capacity = end.saturating_mul(8).min(output_len);
++                        output
++                            .try_reserve_exact(capacity - output.len())
++                            .map_err(|_| Error::AllocationFailed {
++                                resource: "chunked bytes output",
++                                requested: capacity as u64,
++                            })?;
++                    }
++                    with_output_pages(&mut output, |output| {
++                        output.extend_from_slice(chunk);
++                        Ok(())
++                    })?;
+                     (chunk.len(), actual)
+                 };
+                 if len != entry.uncompressed_len as usize {
+@@ -177,8 +191,7 @@
+                     actual: output.len() as u64,
+                 });
+             }
+-            Ok(())
+-        })?;
++        }
+         Ok(output)
+     }
+ }
+--- a/crates/varlit-core/src/compression_buffers.rs
++++ b/crates/varlit-core/src/compression_buffers.rs
+@@ -80,31 +80,84 @@
+ 
+ #[cfg(feature = "compression-zstd")]
+ pub(crate) fn decompress(payload: &[u8], maximum: usize) -> Result<Vec<u8>> {
+-    // Preserve the backend's frame-size screen: a small frame must not cause
+-    // an allocation of a much larger caller-declared maximum.
+-    let capacity = match frame_output_len(payload) {
+-        Some(actual) if actual > maximum as u64 => {
+-            return Err(Error::DecompressedLengthMismatch {
+-                expected: maximum as u64,
+-                actual,
+-            });
+-        }
+-        Some(actual) => actual as usize,
+-        None => zstd::bulk::Decompressor::upper_bound(payload)
+-            .unwrap_or(maximum)
+-            .min(maximum),
+-    };
+     let mut output = Vec::new();
+-    output
+-        .try_reserve_exact(capacity)
+-        .map_err(|_| Error::AllocationFailed {
+-            resource: "decompressed payload",
+-            requested: capacity as u64,
+-        })?;
+-    new_decoder()?
+-        .decompress(&mut output, payload)
+-        .map_err(backend_error)?;
++    decode_growing(&mut new_decoder()?, payload, &mut output, maximum, false)?;
+     Ok(output)
++}
++
++/// A header is only a rejection hint. Growth beyond one zstd block requires
++/// the decoder to have exhausted the previous destination. Bulk decoding uses
++/// the destination as history, so an untrusted window cannot move the same
++/// speculative allocation into zstd's streaming history buffer.
++#[cfg(feature = "compression-zstd")]
++fn decode_growing(
++    context: &mut zstd::zstd_safe::DCtx<'_>,
++    payload: &[u8],
++    output: &mut Vec<u8>,
++    maximum: usize,
++    exact: bool,
++) -> Result<usize> {
++    let declared = frame_output_len(payload);
++    if let Some(actual) = declared
++        && (actual > maximum as u64 || (exact && actual != maximum as u64))
++    {
++        return Err(Error::DecompressedLengthMismatch {
++            expected: maximum as u64,
++            actual,
++        });
++    }
++    let limit = declared.map_or(maximum, |n| n as usize);
++    let start = output.len();
++    let mut size = output
++        .capacity()
++        .saturating_sub(start)
++        .min(limit)
++        .max(limit.min(128 * 1024));
++    loop {
++        let end = start.checked_add(size).ok_or(Error::InvalidChunkedBytes)?;
++        output
++            .try_reserve_exact(end - output.len())
++            .map_err(|_| Error::AllocationFailed {
++                resource: "decompressed payload",
++                requested: end as u64,
++            })?;
++        // Slice destinations enforce the caller's limit even when an allocator
++        // supplies extra capacity. Keep the prefix intact on failed attempts.
++        let decoded = if declared.is_some() {
++            // Known frame sizes bound the backend's result, including when a
++            // reusable allocation has spare capacity. Cursor exposes only
++            // bytes initialized by the backend, avoiding a redundant zero fill.
++            let mut tail = std::io::Cursor::new(&mut *output);
++            tail.set_position(start as u64);
++            context.decompress(&mut tail, payload)
++        } else {
++            output.resize(end, 0);
++            context.decompress(&mut output[start..end], payload)
++        };
++        match decoded {
++            Ok(written) => {
++                output.truncate(start + written);
++                if exact && written != maximum {
++                    return Err(Error::DecompressedLengthMismatch {
++                        expected: maximum as u64,
++                        actual: written as u64,
++                    });
++                }
++                return Ok(written);
++            }
++            Err(code) => {
++                output.truncate(start);
++                let too_small =
++                    (zstd::zstd_safe::zstd_sys::ZSTD_ErrorCode::ZSTD_error_dstSize_tooSmall
++                        as usize)
++                        .wrapping_neg();
++                if code != too_small || size == limit {
++                    return Err(backend_error(code).into());
++                }
++                size = size.saturating_mul(2).max(1).min(limit);
++            }
++        }
++    }
+ }
+ 
+ #[cfg(feature = "compression-zstd")]
+@@ -182,44 +235,12 @@
+         expected: usize,
+         prevalidated_size: bool,
+     ) -> Result<&[u8]> {
+-        let exact = if prevalidated_size {
+-            Some(expected as u64)
+-        } else {
+-            frame_output_len(payload)
+-        };
+-        if let Some(actual) = exact
+-            && actual != expected as u64
+-        {
+-            return Err(Error::DecompressedLengthMismatch {
+-                expected: expected as u64,
+-                actual,
+-            });
+-        }
++        let _ = prevalidated_size;
+         self.buffer.clear();
+-        self.buffer
+-            .try_reserve_exact(expected)
+-            .map_err(|_| Error::AllocationFailed {
+-                resource: "decompressed chunk",
+-                requested: expected as u64,
+-            })?;
+-        let len = if exact.is_some() {
+-            self.context
+-                .decompress(&mut self.buffer, payload)
+-                .map_err(backend_error)?
+-        } else {
+-            self.buffer.resize(expected, 0);
+-            self.context
+-                .decompress(self.buffer.as_mut_slice(), payload)
+-                .map_err(backend_error)?
+-        };
+-        if len != expected {
+-            return Err(Error::DecompressedLengthMismatch {
+-                expected: expected as u64,
+-                actual: len as u64,
+-            });
+-        }
++        decode_growing(&mut self.context, payload, &mut self.buffer, expected, true)?;
+         Ok(&self.buffer)
+     }
++
+     #[cfg(not(feature = "compression-zstd"))]
+     pub(crate) fn decompress_chunk(
+         &mut self,
+@@ -237,49 +258,10 @@
+         expected: usize,
+         prevalidated_size: bool,
+     ) -> Result<usize> {
+-        let start = output.len();
+-        let end = start
+-            .checked_add(expected)
+-            .filter(|end| *end <= output.capacity())
+-            .ok_or(Error::InvalidChunkedBytes)?;
+-        let written = match if prevalidated_size {
+-            Some(expected as u64)
+-        } else {
+-            frame_output_len(payload)
+-        } {
+-            Some(actual) if actual != expected as u64 => Err(Error::DecompressedLengthMismatch {
+-                expected: expected as u64,
+-                actual,
+-            }),
+-            Some(_) => {
+-                // The frame headers screen the exact output length. The
+-                // backend's safe Cursor WriteBuf appends directly to reserved
+-                // capacity and marks only initialized bytes as readable.
+-                let mut tail = std::io::Cursor::new(output);
+-                tail.set_position(start as u64);
+-                Ok(self
+-                    .context
+-                    .decompress(&mut tail, payload)
+-                    .map_err(backend_error)?)
+-            }
+-            None => {
+-                // Frames without an exact size retain a strict chunk-sized
+-                // destination, even when the final Vec has spare capacity.
+-                output.resize(end, 0);
+-                Ok(self
+-                    .context
+-                    .decompress(&mut output[start..end], payload)
+-                    .map_err(backend_error)?)
+-            }
+-        }?;
+-        if written != expected {
+-            return Err(Error::DecompressedLengthMismatch {
+-                expected: expected as u64,
+-                actual: written as u64,
+-            });
+-        }
+-        Ok(written)
+-    }
++        let _ = prevalidated_size;
++        decode_growing(&mut self.context, payload, output, expected, true)
++    }
++
+     #[cfg(not(feature = "compression-zstd"))]
+     pub(crate) fn decompress_append(
+         &mut self,

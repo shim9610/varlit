@@ -1,0 +1,27 @@
+   Compiling unicode-ident v1.0.27
+   Compiling rustix v1.1.6
+    Checking cfg-if v1.0.5
+   Compiling equivalent v1.0.3
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling proc-macro2 v1.0.107
+    Checking libc v0.2.191
+   Compiling quote v1.0.47
+   Compiling crc32fast v1.5.3
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling syn v3.0.9
+    Checking bitflags v2.13.2
+    Checking linux-raw-sys v0.12.1
+   Compiling toml_edit v0.25.17+spec-1.1.0
+    Checking getrandom v0.4.3
+    Checking once_cell v1.21.4
+    Checking fastrand v2.5.0
+   Compiling proc-macro-crate v3.5.0
+    Checking tempfile v3.27.0
+   Compiling thiserror-impl v2.0.21
+   Compiling varlit-macros v0.12.1 (/workspace/varlit/crates/varlit-macros)
+    Checking thiserror v2.0.21
+    Checking varlit-core v0.12.1 (/workspace/varlit/crates/varlit-core)
+    Checking varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Checking rename-fixture v0.1.0 (/workspace/varlit/tools/rename-fixture)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.51s

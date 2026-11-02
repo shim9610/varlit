@@ -1,0 +1,533 @@
+[
+  {
+    "name": "fastpath-fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.644806198999504
+  },
+  {
+    "name": "fastpath-policy",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "varlit-core",
+      "--all-features",
+      "--lib",
+      "spill_file::tests::isolated_policy_preserves_paths_limits_and_retry_state",
+      "--",
+      "--exact",
+      "--nocapture"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 18.726907494000443
+  },
+  {
+    "name": "fastpath-workspace-tests",
+    "command": [
+      "cargo",
+      "run",
+      "--locked",
+      "-p",
+      "varlit-test-runner",
+      "--",
+      "test",
+      "--locked",
+      "--workspace",
+      "--all-features"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 144.53958284700002
+  },
+  {
+    "name": "fastpath-contracts",
+    "command": [
+      "python3",
+      "scripts/check_storage_contracts.py",
+      "--output",
+      "/workspace/scratch/fastpath-contracts"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 46.46760881600039
+  },
+  {
+    "name": "fastpath-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--all-features",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 14.254892985999504
+  },
+  {
+    "name": "fastpath-minimal-check",
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "--workspace",
+      "--no-default-features"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 1.491127072999916
+  },
+  {
+    "name": "fastpath-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "--all-features",
+      "-p",
+      "varlit",
+      "--example",
+      "oom_maintenance_load",
+      "--example",
+      "record_mutation_load",
+      "--example",
+      "scalable_load"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 2.820912056000452
+  },
+  {
+    "name": "fastpath-extra-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "--all-features",
+      "-p",
+      "varlit-core",
+      "--example",
+      "decompression_load"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 0.3285329689997525
+  },
+  {
+    "name": "spill-native",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-native",
+      "--pairs",
+      "5",
+      "--phase",
+      "native"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 203.59754991699992
+  },
+  {
+    "name": "spill-swmr",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-swmr",
+      "--pairs",
+      "3",
+      "--phase",
+      "concurrent"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 327.9042497270002
+  },
+  {
+    "name": "spill-standalone-identical",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/extra.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-standalone-identical",
+      "--pairs",
+      "5"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 23.070903196000472
+  },
+  {
+    "name": "spill-policy",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-policy",
+      "--pairs",
+      "3",
+      "--phase",
+      "native",
+      "--native-cases",
+      "0",
+      "2",
+      "7"
+    ],
+    "environment_overrides": {
+      "VARLIT_SPILL_DIR": "/workspace/scratch/policy-spills",
+      "VARLIT_SPILL_MAX_BYTES": "33554432"
+    },
+    "exit": 0,
+    "seconds": 44.760458488999575
+  },
+  {
+    "name": "spill-native-confirmation",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-native-confirmation",
+      "--pairs",
+      "15",
+      "--phase",
+      "native",
+      "--native-cases",
+      "1",
+      "4",
+      "5",
+      "8",
+      "9"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 263.1877287080006
+  },
+  {
+    "name": "spill-policy-confirmation",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/varlit/target/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/spill-policy-confirmation",
+      "--pairs",
+      "15",
+      "--phase",
+      "native",
+      "--native-cases",
+      "2"
+    ],
+    "environment_overrides": {
+      "VARLIT_SPILL_DIR": "/workspace/scratch/policy-spills",
+      "VARLIT_SPILL_MAX_BYTES": "33554432"
+    },
+    "exit": 0,
+    "seconds": 64.63011829100014
+  },
+  {
+    "name": "fastpath-probe-forward-before",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/forward-before.json",
+      "/workspace/target-before/release/examples/record_mutation_load",
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 4.028831659999923
+  },
+  {
+    "name": "fastpath-probe-forward-codec",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/forward-codec.json",
+      "/workspace/target-unit1/release/examples/record_mutation_load",
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 4.385804505999658
+  },
+  {
+    "name": "fastpath-probe-forward-after",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/forward-after.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "writer",
+      "fixed",
+      "forward",
+      "2000000",
+      "200000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 4.188967764999688
+  },
+  {
+    "name": "fastpath-probe-rewrite-before",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/rewrite-before.json",
+      "/workspace/target-before/release/examples/record_mutation_load",
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.0830189159996735
+  },
+  {
+    "name": "fastpath-probe-rewrite-codec",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/rewrite-codec.json",
+      "/workspace/target-unit1/release/examples/record_mutation_load",
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.1457831610005087
+  },
+  {
+    "name": "fastpath-probe-rewrite-after",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/rewrite-after.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "rewrite",
+      "variable",
+      "random",
+      "200000",
+      "20000"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.102848522000386
+  },
+  {
+    "name": "fastpath-probe-large-before",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/large-before.json",
+      "/workspace/target-before/release/examples/record_mutation_load",
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.0536512859998766
+  },
+  {
+    "name": "fastpath-probe-large-codec",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/large-codec.json",
+      "/workspace/target-unit1/release/examples/record_mutation_load",
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.0992658919994938
+  },
+  {
+    "name": "fastpath-probe-large-after",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/large-after.json",
+      "/workspace/varlit/target/release/examples/record_mutation_load",
+      "writer",
+      "large",
+      "reverse",
+      "65536",
+      "4096"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 2.0651438249997227
+  },
+  {
+    "name": "fastpath-probe-complex-before",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/complex-before.json",
+      "/workspace/target-before/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 1.3958271710007466
+  },
+  {
+    "name": "fastpath-probe-complex-codec",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/complex-codec.json",
+      "/workspace/target-unit1/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 1.387729082000078
+  },
+  {
+    "name": "fastpath-probe-complex-after",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/complex-after.json",
+      "/workspace/varlit/target/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data"
+    },
+    "exit": 0,
+    "seconds": 1.446120270999927
+  },
+  {
+    "name": "fastpath-probe-complex-policy",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/resource_probe.py",
+      "--output",
+      "/workspace/scratch/qualification/resources/complex-policy.json",
+      "/workspace/varlit/target/release/examples/oom_maintenance_load",
+      "complex",
+      "65536",
+      "512"
+    ],
+    "environment_overrides": {
+      "TMPDIR": "/workspace/scratch/qualification/probe-data",
+      "VARLIT_SPILL_DIR": "/workspace/scratch/policy-spills",
+      "VARLIT_SPILL_MAX_BYTES": "33554432"
+    },
+    "exit": 0,
+    "seconds": 1.4071080859994254
+  }
+]

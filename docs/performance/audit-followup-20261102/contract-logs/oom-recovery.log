@@ -1,0 +1,15 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running `target/debug/varlit-test-runner test --locked --release -p varlit --all-features --test oom_recovery_guards allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded -- --exact --nocapture --test-threads=1`
+Varlit workspace under test: /workspace/varlit
+Varlit test artifacts: /tmp/varlit-test-session-69183-1793592297641921593-0
+   Compiling varlit v0.12.1 (/workspace/varlit/crates/varlit)
+    Finished `release` profile [optimized] target(s) in 1.28s
+     Running tests/oom_recovery_guards.rs (target/release/deps/oom_recovery_guards-15ea5774a53ea1e8)
+
+running 1 test
+test allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded ... OOM_GUARDS allocation refusal, header limits, chunk scratch and bounded rewrites passed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.38s
+
+Varlit test artifact cleanup: verified empty

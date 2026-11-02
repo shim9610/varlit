@@ -1,0 +1,95 @@
+[
+  {
+    "name": "audit-docs-aa",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-unit1/release/examples",
+      "--after",
+      "/workspace/target-unit1/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/audit-docs-aa",
+      "--pairs",
+      "3",
+      "--phase",
+      "native",
+      "--native-cases",
+      "4",
+      "7",
+      "10"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 26.04668820300003
+  },
+  {
+    "name": "codec-native",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-before/release/examples",
+      "--after",
+      "/workspace/target-unit1/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/codec-native",
+      "--pairs",
+      "5",
+      "--phase",
+      "native",
+      "--native-cases",
+      "4",
+      "7",
+      "9",
+      "10"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 41.40546182800017
+  },
+  {
+    "name": "codec-standalone",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/extra.py",
+      "--before",
+      "/workspace/target-before/release/examples",
+      "--after",
+      "/workspace/target-unit1/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/codec-standalone"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 21.838840466999955
+  },
+  {
+    "name": "codec-swmr",
+    "command": [
+      "python3",
+      "/workspace/varlit/docs/performance/audit-followup-20261102/bench.py",
+      "--before",
+      "/workspace/target-before/release/examples",
+      "--after",
+      "/workspace/target-unit1/release/examples",
+      "--repo",
+      "/workspace/varlit",
+      "--output",
+      "/workspace/scratch/qualification/codec-swmr",
+      "--pairs",
+      "3",
+      "--phase",
+      "concurrent"
+    ],
+    "environment_overrides": {},
+    "exit": 0,
+    "seconds": 323.84775158699995
+  }
+]
