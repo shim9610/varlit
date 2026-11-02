@@ -81,6 +81,9 @@ impl Seek for SpillFile {
 }
 impl Write for SpillFile {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.maximum.is_none() {
+            return self.file.write(bytes);
+        }
         if bytes.is_empty() {
             return Ok(0);
         }
@@ -92,6 +95,35 @@ impl Write for SpillFile {
         let n = self.file.write(bytes)?;
         self.position += n as u64;
         Ok(n)
+    }
+    fn write_all(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+        // Preserve File's specialized complete-write path for the default
+        // unlimited policy. Position is relevant only to a captured limit.
+        if self.maximum.is_none() {
+            return self.file.write_all(bytes);
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let end = self
+            .position
+            .checked_add(bytes.len() as u64)
+            .ok_or(io::ErrorKind::InvalidInput)?;
+        check_extent(self.maximum, end)?;
+        // Keep exact progress through interrupted/partial limited writes so a
+        // retry cannot authorize an extent from a stale stream position.
+        while !bytes.is_empty() {
+            match self.file.write(bytes) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(n) => {
+                    self.position += n as u64;
+                    bytes = &bytes[n..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
@@ -224,7 +256,47 @@ mod tests {
             assert_eq!(held.get(&[1])?, Some([7; 52]));
             index.apply(&BTreeMap::from([(vec![2], [9; 52])]))?;
             assert_eq!(index.get(&[2])?, Some([9; 52]));
+            #[cfg(unix)]
+            limited_partial_write_tracks_progress()?;
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn limited_partial_write_tracks_progress() -> io::Result<()> {
+        let mut file = SpillFile::new()?;
+        assert_eq!(file.maximum, Some(32768));
+        let mut prior = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: this exact test runs alone in an isolated child process;
+        // pointers are valid and its limit/signal handler are restored before
+        // inspecting the deliberately partial write result.
+        let result = unsafe {
+            assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut prior), 0);
+            let signal = libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+            assert_ne!(signal, libc::SIG_ERR);
+            let limit = libc::rlimit {
+                rlim_cur: 16,
+                rlim_max: prior.rlim_max,
+            };
+            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
+            let result = file.write_all(&[7; 32]);
+            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &prior), 0);
+            libc::signal(libc::SIGXFSZ, signal);
+            result
+        };
+        assert!(result.is_err());
+        assert_eq!(file.position, 16);
+        assert_eq!(file.metadata()?.len(), 16);
+        assert_eq!(
+            file.write_all(&[8; 32760]).unwrap_err().kind(),
+            io::ErrorKind::StorageFull
+        );
+        assert_eq!(file.metadata()?.len(), 16);
+        file.write_all(&[9; 8])?;
+        assert_eq!(file.metadata()?.len(), 24);
         Ok(())
     }
 }
