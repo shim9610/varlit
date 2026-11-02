@@ -38,6 +38,7 @@ Install `kani-verifier 0.68.0`, run `cargo kani setup`, then:
 
 ```sh
 cargo kani -p varlit-core --default-unwind 5
+cargo kani -p varlit-core --all-features --default-unwind 5
 ```
 
 The harnesses call production implementations directly, under `cfg(kani)`:
@@ -55,8 +56,11 @@ The second proof is bounded and does not establish arbitrary-length or full-u64
 prefix correctness. Five unwind steps cover these four-row loops; unwinding
 assertions stay enabled. This is a proof bound, not a limit on accepted files.
 Ordinary tests and large-file resource/performance qualification still apply.
-New registered core harnesses run automatically; CI also rejects the loss of
-any of the fifteen required harnesses or a zero-harness result.
+CI checks both feature configurations against
+[the contract manifest](verification/proof-contracts.json), currently 28 harnesses.
+`scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
+unfinished proofs and verifies source hashes captured before and after each run.
+A zero-harness result fails.
 
 Four publication harnesses additionally call the production metadata and
 checkpoint validators. They establish accepted-frontier consistency and
@@ -67,6 +71,24 @@ unwind bound is 35 for fixed-size 32-byte comparisons; the original harnesses
 retain the default bound of five. Unwinding assertions remain enabled. As in the
 arithmetic harness, error destruction is excluded, not validation. These are
 validator proofs, not proofs of all filesystem operations or crash schedules.
+
+## Hostile metadata and resource contracts
+
+[Scope and retained evidence](verification/hostile-metadata-20261102/README.md)
+describes thirteen additional harnesses for complete zstd block progress/output
+reservations, actual chunk header/entry parsing and table bounds, limited spill
+writes/retries, cumulative materialization, index visit fuel/height, and native
+prefix transitions. These mix full-width arithmetic/transition proofs with
+explicitly bounded I/O and prefix models. General prefix geometry induction and
+whole-parser models did not complete within their trial bounds; they are not
+counted as proofs. The existing 16-bit membership proof remains bounded.
+
+The required default-feature job also runs `scripts/check_resource_mutations.py`:
+ten broken variants of exact production helpers must fail their designated
+assertions after the original helpers pass. Allocation refusal, CRC-valid hostile
+files, actual reader preservation/retry, and concurrent live-buffer tests connect
+the modeled contracts to native execution. These checks do not establish a
+process-wide OOM guarantee or termination of arbitrary user callbacks/OS calls.
 
 ## Shared publication control flow
 

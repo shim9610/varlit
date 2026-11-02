@@ -111,6 +111,43 @@ fn decoded_memory_is_bounded_and_released_across_sizes_and_failures() -> Result<
             values
         );
     }
+    // All outputs coexist: per-reader limits alone are not a process bound.
+    // Count shared input once, then verify the aggregate live Rust heap with
+    // eight independent decoder contexts and a synchronization barrier.
+    const READERS: usize = 8;
+    let source = vec![17u8; MIB];
+    let shared = ChunkedBytes::from_zstd_chunks(&source, CHUNK, CompressionLevel::Fast)?;
+    let barrier = std::sync::Barrier::new(READERS + 1);
+    let ((), peak, retained) = measure(|| {
+        std::thread::scope(|scope| {
+            for _ in 0..READERS {
+                scope.spawn(|| {
+                    let output = shared.decode_to_vec_limited(MIB as u64);
+                    barrier.wait();
+                    barrier.wait();
+                    assert_eq!(output.unwrap(), source);
+                });
+            }
+            barrier.wait(); // every output is live simultaneously
+            barrier.wait();
+        });
+    });
+    assert!(
+        peak >= READERS * MIB,
+        "concurrent outputs were not observed"
+    );
+    assert!(
+        peak <= READERS * (MIB + 3 * CHUNK) + MIB,
+        "aggregate decode heap: {peak}"
+    );
+    assert!(
+        retained < CHUNK,
+        "concurrent decoders retained {retained} bytes"
+    );
+    println!(
+        "CONCURRENT_DECODE readers={READERS} live_output_bytes={} peak_bytes={peak}",
+        READERS * MIB
+    );
     println!("decoded sizes=1,8,32 MiB; repeated success/refusal; shared nested budget");
     // Opted in by the required Linux release job, where no sanitizer/compiler
     // instrumentation distorts process memory. Ordinary portable tests retain

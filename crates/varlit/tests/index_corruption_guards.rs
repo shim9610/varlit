@@ -117,3 +117,83 @@ fn aliased_finite_extents_return_errors_through_public_reads() -> varlit::Result
     assert!(result.unwrap().is_err());
     Ok(())
 }
+
+#[test]
+fn failed_follow_of_checksums_valid_metadata_preserves_real_readers()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use varlit::{DiskIndexPlan, DiskIndexedBlock, VarlitIndexedReader, VarlitIndexedWriter};
+    for field in [120usize, 128, 256] {
+        // working EOF/count, primary witness length
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("follow.varlit");
+        let spec = AuditFinite::spec();
+        let options = DiskIndexOptions {
+            cache_bytes: 1024 * 1024,
+            ..DiskIndexOptions::default()
+        };
+        const BLOCKS: &[DiskIndexedBlock] = &[
+            DiskIndexedBlock::of::<Short>(),
+            DiskIndexedBlock::of::<Long>(),
+        ];
+        let plan = DiskIndexPlan::canonical(spec, BLOCKS)?;
+        let key = ShortKey::from_code(0).unwrap();
+        let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
+        writer.push_info(&Short { key, value: 10 })?;
+        writer.sync()?;
+        let mut readers = (0..8)
+            .map(|_| VarlitIndexedReader::open(spec, &path, options, plan))
+            .collect::<varlit::Result<Vec<_>>>()?;
+        let pin = VarlitIndexedReader::open(spec, &path, options, plan)?;
+        let held = pin.committed_len();
+        writer.push_info(&Short { key, value: 20 })?;
+        writer.sync()?;
+        drop(writer);
+        let sidecar = varlit::disk_index_sidecar_path(&path);
+        let valid = std::fs::read(&sidecar)?;
+        let mut damaged = valid.clone();
+        let cp = [4096usize, 8192]
+            .map(|at| word(&valid, at + 8) as usize)
+            .into_iter()
+            .max()
+            .unwrap();
+        damaged[cp + 32 + field..cp + 40 + field].copy_from_slice(&u64::MAX.to_le_bytes());
+        let crc = crc32(&damaged[cp + 32..cp + 328]);
+        damaged[cp + 328..cp + 332].copy_from_slice(&crc.to_le_bytes());
+        let crc = crc32(&damaged[cp..cp + 348]);
+        damaged[cp + 348..cp + 352].copy_from_slice(&crc.to_le_bytes());
+        let statuses = readers
+            .iter()
+            .map(|r| r.snapshot_status())
+            .collect::<varlit::Result<Vec<_>>>()?;
+        let states = readers
+            .iter()
+            .map(|r| r.resident_state())
+            .collect::<Vec<_>>();
+        let cursors = readers
+            .iter()
+            .map(|r| r.blocks::<Short>())
+            .collect::<varlit::Result<Vec<_>>>()?;
+        std::fs::write(&sidecar, damaged)?;
+        for (reader, state) in readers.iter_mut().zip(&states) {
+            assert!(reader.follow().is_err());
+            assert_eq!(reader.committed_len(), held);
+            assert_eq!(reader.resident_state(), *state);
+            assert_eq!(reader.get::<Short>(&key)?.unwrap().value, 10);
+        }
+        std::fs::write(&sidecar, valid)?;
+        for (reader, status) in readers.iter_mut().zip(statuses) {
+            assert_eq!(reader.snapshot_status()?, status);
+            reader.follow()?;
+            assert_eq!(reader.get::<Short>(&key)?.unwrap().value, 20);
+        }
+        for cursor in cursors {
+            let items = cursor.collect::<varlit::Result<Vec<_>>>()?;
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].value, 10);
+        }
+        assert_eq!(pin.committed_len(), held);
+        assert_eq!(pin.get::<Short>(&key)?.unwrap().value, 10);
+    }
+    println!("HOSTILE_FOLLOW valid_crc_fields=3 followers=8 pinned=1 retries=24");
+    Ok(())
+}

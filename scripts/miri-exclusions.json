@@ -202,5 +202,9 @@
   {
     "test": "stream::tests::stream_writer_matches_resident_native_bytes",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate",
+    "reason": "795 valid-CRC hostile files form a native CPU/resource corpus; required release contracts run it. The direct_cycles_are_rejected_by_lookup_and_visit test remains under Miri."
   }
 ]

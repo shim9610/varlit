@@ -306,23 +306,24 @@ struct ChunkedHeader {
     chunk_count: u32,
 }
 
+// Establish the real-input iteration bound before considering declared output.
+fn table_extent(count: usize, input_len: usize) -> Option<usize> {
+    let end = count
+        .checked_mul(CHUNK_ENTRY_LEN)?
+        .checked_add(CHUNKED_HEADER_LEN)?;
+    (end <= input_len).then_some(end)
+}
+
 fn validate_chunked_bytes(encoded: &[u8], check_frames: bool) -> Result<bool> {
     let header = parse_header(encoded)?;
+    let entries_end = table_extent(header.chunk_count as usize, encoded.len())
+        .ok_or(Error::InvalidChunkedBytes)?;
     let expected_chunk_count = if header.uncompressed_len == 0 {
         0
     } else {
         ((header.uncompressed_len - 1) / u64::from(header.chunk_len)) + 1
     };
     if u64::from(header.chunk_count) != expected_chunk_count {
-        return Err(Error::InvalidChunkedBytes);
-    }
-    let entries_len = (header.chunk_count as usize)
-        .checked_mul(CHUNK_ENTRY_LEN)
-        .ok_or(Error::InvalidChunkedBytes)?;
-    let entries_end = CHUNKED_HEADER_LEN
-        .checked_add(entries_len)
-        .ok_or(Error::InvalidChunkedBytes)?;
-    if entries_end > encoded.len() {
         return Err(Error::InvalidChunkedBytes);
     }
     let mut all_sizes_known = check_frames;
@@ -467,3 +468,7 @@ mod oom_tests {
         Ok(())
     }
 }
+
+#[cfg(kani)]
+#[path = "verification/chunks.rs"]
+mod resource_proofs;

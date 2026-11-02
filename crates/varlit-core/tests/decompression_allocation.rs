@@ -122,3 +122,73 @@ fn upstream_legacy_and_current_frames_remain_compatible() -> Result<()> {
     assert!(compression_buffers::decompress(encoded, expected.len() - 1).is_err());
     Ok(())
 }
+
+#[test]
+fn hostile_frame_and_container_metadata_stays_bounded() -> Result<()> {
+    let _lock = LOCK.lock().unwrap();
+    // Raw one-byte frame; checksums and entropy coding are independently tested
+    // by zstd. Every byte of this framing is treated as attacker controlled.
+    let raw = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 1, 9, 0, 0, 7];
+    assert_eq!(compression_buffers::decompress(&raw, 1)?, [7]);
+    let mut cases = Vec::new();
+    for at in 0..raw.len() {
+        for value in 0..=255 {
+            let mut bytes = raw.to_vec();
+            bytes[at] = value;
+            cases.push(bytes);
+        }
+    }
+    for end in 0..raw.len() {
+        cases.push(raw[..end].to_vec());
+    }
+    for size in [0u32, 1, 127, u32::MAX] {
+        let mut bytes = 0x184d2a50u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&size.to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        cases.push(bytes);
+    }
+    // Zero-output blocks still consume their three-byte framing. Many such
+    // blocks/frames exercise progress without growing the permitted output.
+    let mut empty_blocks = vec![0x28, 0xb5, 0x2f, 0xfd, 0x20, 0];
+    empty_blocks.extend_from_slice(&[0; 3 * 4096]);
+    empty_blocks.extend_from_slice(&[1, 0, 0]);
+    cases.push(empty_blocks);
+    cases.push(raw.repeat(4096));
+    let count = cases.len();
+    for bytes in cases {
+        DENIED.store(0, Relaxed);
+        ENABLED.store(true, Relaxed);
+        let result = compression_buffers::decompress(&bytes, MAXIMUM);
+        ENABLED.store(false, Relaxed);
+        if let Ok(output) = result {
+            assert!(output.len() <= MAXIMUM);
+        }
+        assert_eq!(
+            DENIED.load(Relaxed),
+            0,
+            "small hostile frame requested 4 MiB"
+        );
+    }
+    let mut containers = 0;
+    for chunk in [0u64, 1, u32::MAX as u64, u32::MAX as u64 + 1, u64::MAX] {
+        for total in [0u64, 1, MAXIMUM as u64, u64::MAX] {
+            for entries in [0u32, 1, 2, u32::MAX] {
+                let mut bytes = vec![0; 48];
+                bytes[..8].copy_from_slice(b"VCHK\x01\x00\x01\x00");
+                bytes[8..16].copy_from_slice(&chunk.to_le_bytes());
+                bytes[16..24].copy_from_slice(&total.to_le_bytes());
+                bytes[24..28].copy_from_slice(&entries.to_le_bytes());
+                DENIED.store(0, Relaxed);
+                ENABLED.store(true, Relaxed);
+                let result = varlit_core::ChunkedBytes::from_encoded(bytes)
+                    .and_then(|c| c.decode_to_vec_limited(MAXIMUM as u64));
+                ENABLED.store(false, Relaxed);
+                assert!(result.is_err());
+                assert_eq!(DENIED.load(Relaxed), 0, "hostile container requested 4 MiB");
+                containers += 1;
+            }
+        }
+    }
+    println!("HOSTILE_METADATA frames={count} containers={containers} large_requests=0");
+    Ok(())
+}
