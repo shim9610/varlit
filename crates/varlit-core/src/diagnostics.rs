@@ -968,7 +968,9 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
 
         Error::DiskIndex(_) => DiagnosticDomain::FileData,
 
-        Error::WriterLockBreakRefused(_) => DiagnosticDomain::CallerUsage,
+        Error::WriterLockBreakRefused(_)
+        | Error::BufferTooSmall { .. }
+        | Error::InvalidChunkedRange { .. } => DiagnosticDomain::CallerUsage,
         // F-04: the durable write itself succeeded; the caller's own hook is
         // what failed, so the fault is in caller-supplied code.
         Error::MatrixCommittedButHookFailed { .. } => DiagnosticDomain::CallerUsage,

@@ -83,6 +83,143 @@ impl ChunkedBytes {
         self.encoded
     }
 
+    /// Total decoded length declared by the structurally validated container.
+    /// This does not decompress or authenticate its contents.
+    pub fn decoded_len(&self) -> u64 {
+        u64::from_le_bytes(self.encoded[16..24].try_into().expect("validated header"))
+    }
+
+    /// Stream a decoded byte range through caller-owned scratch.
+    ///
+    /// Unlike [`Self::decode_to_vec_limited`], this never allocates the complete
+    /// output or a decoded chunk. `buffer` is reused without resizing; even one
+    /// byte suffices. The callback receives the absolute decoded offset and a
+    /// nonempty slice of this buffer. Bytes outside `range` are not delivered.
+    ///
+    /// Only overlapping chunks are decompressed, but each is decoded to its end
+    /// to check its length and checksum. Other chunks' checksums are not checked.
+    /// **Delivery is provisional until this method returns `Ok(())`:** a late
+    /// checksum/decoder error can follow callbacks. Stage output before publishing
+    /// it; do not use this callback for irreversible effects. Callback errors stop
+    /// immediately and are returned unchanged. Retrying starts the range again.
+    ///
+    /// `max_window_bytes` bounds zstd's history window, rounded down to a power
+    /// of two (minimum 1024). It is not a total allocator/RSS bound: zstd also
+    /// allocates a context and bounded block buffers. Larger-window frames are
+    /// refused by zstd. This explicit policy is independent of the whole-output
+    /// limit used by `decode_to_vec_limited`, allowing a caller to choose this
+    /// path after that operation refuses materialization. The encoded container
+    /// remains resident in `self`; callback-owned allocations are caller policy.
+    ///
+    /// An empty in-bounds range needs neither scratch nor a decoder. A nonempty
+    /// range with empty scratch returns [`Error::BufferTooSmall`] before delivery.
+    ///
+    /// ```no_run
+    /// # fn example(chunks: &varlit_core::ChunkedBytes) -> varlit_core::Result<()> {
+    /// let range = 1024..4096; // decoded byte offsets, exclusive end
+    /// let mut scratch = [0; 8192];
+    /// let mut staged = std::fs::File::create("selected-range.pending")?;
+    /// chunks.stream_range(range, &mut scratch, 8 * 1024 * 1024, |_, bytes| {
+    ///     std::io::Write::write_all(&mut staged, bytes)?;
+    ///     Ok(())
+    /// })?;
+    /// // Only now has the selected data passed all overlapping chunk checks.
+    /// # Ok(()) }
+    /// ```
+    pub fn stream_range(
+        &self,
+        range: std::ops::Range<u64>,
+        buffer: &mut [u8],
+        max_window_bytes: usize,
+        mut visit: impl FnMut(u64, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let header = parse_header(&self.encoded)?;
+        if range.start > range.end || range.end > header.uncompressed_len {
+            return Err(Error::InvalidChunkedRange {
+                start: range.start,
+                end: range.end,
+                len: header.uncompressed_len,
+            });
+        }
+        if range.is_empty() {
+            return Ok(());
+        }
+        if buffer.is_empty() {
+            return Err(Error::BufferTooSmall {
+                resource: "chunk streaming",
+                required: 1,
+                provided: 0,
+            });
+        }
+        #[cfg(not(feature = "integrity"))]
+        {
+            let _ = (max_window_bytes, &mut visit);
+            Err(Error::IntegrityFeatureDisabled)
+        }
+        #[cfg(feature = "integrity")]
+        {
+            let mut decoder =
+                crate::compression_buffers::StreamDecompressor::new(max_window_bytes)?;
+            let mut stored_at = table_extent(header.chunk_count as usize, self.encoded.len())
+                .ok_or(Error::InvalidChunkedBytes)?;
+            let mut decoded_at = 0u64;
+            for index in 0..header.chunk_count as usize {
+                let entry =
+                    parse_entry(&self.encoded, CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN)?;
+                let stored_end = stored_at
+                    .checked_add(entry.stored_len as usize)
+                    .ok_or(Error::InvalidChunkedBytes)?;
+                let decoded_end = decoded_at
+                    .checked_add(u64::from(entry.uncompressed_len))
+                    .ok_or(Error::InvalidChunkedBytes)?;
+                if decoded_end > range.start {
+                    let stored = self
+                        .encoded
+                        .get(stored_at..stored_end)
+                        .ok_or(Error::InvalidChunkedBytes)?;
+                    crate::compression_buffers::validate_frame_output_len(
+                        stored,
+                        u64::from(entry.uncompressed_len),
+                    )?;
+                    let mut crc = crc32fast::Hasher::new();
+                    decoder.decode(
+                        stored,
+                        buffer,
+                        u64::from(entry.uncompressed_len),
+                        |offset, bytes| {
+                            crc.update(bytes);
+                            let start = decoded_at + offset;
+                            let end = start + bytes.len() as u64;
+                            let first = start.max(range.start);
+                            let last = end.min(range.end);
+                            if first < last {
+                                visit(
+                                    first,
+                                    &bytes[(first - start) as usize..(last - start) as usize],
+                                )?;
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    let actual = crc.finalize();
+                    if actual != entry.crc32 {
+                        return Err(Error::ChunkChecksumMismatch {
+                            chunk_index: index as u32,
+                            expected: entry.crc32,
+                            actual,
+                        });
+                    }
+                }
+                if decoded_end >= range.end {
+                    break;
+                }
+                stored_at = stored_end;
+                decoded_at = decoded_end;
+            }
+            Ok(())
+        }
+    }
+
     pub fn decode_to_vec(&self) -> Result<Vec<u8>> {
         let limit = ReadLimits::STANDARD
             .max_logical_payload_len

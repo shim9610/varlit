@@ -1614,6 +1614,8 @@ mmap.
 | `ChunkedBytes::from_zstd_chunks` | caller-managed chunked blob helper |
 | `ChunkedBytes::decode_to_vec()` | decode with the finite standard logical-payload ceiling |
 | `ChunkedBytes::decode_to_vec_limited(limit)` | decode with an explicit caller ceiling |
+| `ChunkedBytes::decoded_len()` | declared decoded length, without decoding or content authentication |
+| `ChunkedBytes::stream_range(range, buffer, max_window_bytes, visit)` | stream selected decoded bytes through caller scratch; see [range streaming](chunk-streaming.md) |
 
 Compression requires the `compression-zstd` feature when records are actually
 compressed or decompressed. `ChunkedBytes` additionally requires `integrity` for

@@ -10,6 +10,10 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("chunk-stream-window", "varlit-core", "chunk_stream", "enabled::legacy_windows_and_large_output_shortcuts_cannot_bypass_the_cap", False, None),
+    ("chunk-stream-refusal", "varlit-core", "decompression_allocation", "range_streaming_never_requests_a_rust_output_allocation", False, None),
+    ("chunk-stream-fallback", "varlit-core", "chunk_stream", "enabled::fallback_streams_requested_ranges_with_one_byte_scratch", False, None),
+    ("chunk-stream-integrity", "varlit-core", "chunk_stream", "enabled::validates_entire_selected_chunk_including_suffix_outside_range", False, None),
     ("decoder-refusal", "varlit-core", "decoder_allocation_failures", "every_builtin_decoder_allocation_failure_returns_and_releases", False, "DECODER_OOM fixtures=20 refusal_points=122 all_retried=true"),
     ("chunk-refusal", "varlit-core", "decoder_allocation_failures", "chunk_output_allocation_failure_returns_and_retries", False, "CHUNK_OOM refusal_points=2 all_retried=true"),
     ("hashmap-rehash-budget", "varlit-core", "decoder_allocation_failures", "hash_map_rehash_peak_fits_charged_materialization", False, "HASH_REHASH entries=4096"),

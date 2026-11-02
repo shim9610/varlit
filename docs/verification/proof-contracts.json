@@ -66,7 +66,8 @@
       "id": "compression-steps",
       "harnesses": [
         "compression_buffers::resource_steps::proofs::output_requests_respect_both_limits",
-        "compression_buffers::resource_steps::proofs::arbitrary_block_step_progresses_or_rejects"
+        "compression_buffers::resource_steps::proofs::arbitrary_block_step_progresses_or_rejects",
+        "compression_buffers::resource_steps::proofs::streaming_step_is_bounded_and_strictly_progresses"
       ],
       "sources": [
         "crates/varlit-core/src/verification/compression.rs",

@@ -65,6 +65,7 @@ def decoder_fixture():
 def bindings():
     checks = [('compression_buffers.rs', 'resource_steps::output_capacity(', 1),
               ('compression_buffers.rs', 'resource_steps::block_extent(', 1),
+              ('compression_buffers.rs', 'resource_steps::stream_progress(', 1),
               ('spill_file.rs', 'limited_write_all(&mut self.position', 1),
               ('disk_index/tree.rs', 'take_visit(remaining)', 1),
               ('disk_index/tree.rs', '!height_matches(', 2),
@@ -86,6 +87,10 @@ MUTATIONS = [
      'retained_sibling_decodes_share_one_budget_even_after_errors', 'accounted decode reset the shared budget'),
     ('hashmap-overlap-omitted', 'decoder.rs', '?.checked_mul(copies)', '?.checked_mul(1)',
      'hashmap_preflight_accounts_for_overlapping_tables', 'rehash overlap is not charged'),
+    ('stream-output-bound-omitted', 'compression_steps.rs', '&& next <= expected', '',
+     'streaming_step_is_bounded_and_strictly_progresses', 'stream step acceptance differs from wide oracle'),
+    ('stream-stall-accepted', 'compression_steps.rs', '&& (after > before || written != 0)', '',
+     'streaming_step_is_bounded_and_strictly_progresses', 'stream step acceptance differs from wide oracle'),
     ('output-ignores-blocks', 'compression_steps.rs', 'actual > bound || ', '',
      'output_requests_respect_both_limits', 'output exceeds complete blocks'),
     ('output-rejects-valid', 'compression_steps.rs', 'Some(actual) => Some(actual as usize)', 'Some(_actual) => None',
@@ -143,7 +148,7 @@ def main():
                 code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
             return code, (out/(name+'.log')).read_text()
         code, log = run('baseline',cmd)
-        if code or 'Complete - 17 successfully verified harnesses, 0 failures, 17 total.' not in log:
+        if code or 'Complete - 18 successfully verified harnesses, 0 failures, 18 total.' not in log:
             raise RuntimeError('unmodified resource proofs failed')
         for name,path,before,after,harness,assertion in MUTATIONS:
             original = originals[path]

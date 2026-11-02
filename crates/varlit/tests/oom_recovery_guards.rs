@@ -469,6 +469,22 @@ fn zstd_context_refusal_child() -> Result<()> {
         !flag.exists(),
         "decompression context refusal did not execute"
     );
+    // Range streaming has no Rust output allocation: refuse its C context,
+    // then its streaming history/workspace, and retry the same immutable input.
+    for nth in [b'1', b'2'] {
+        std::fs::write(&flag, [nth])?;
+        let result = encoded.stream_range(3..65530, &mut [0; 127], 1024 * 1024, |_, _| Ok(()));
+        assert!(
+            matches!(result, Err(Error::Io(ref error)) if error.kind() == std::io::ErrorKind::OutOfMemory)
+        );
+        assert!(!flag.exists(), "streaming malloc refusal did not execute");
+        let mut count = 0;
+        encoded.stream_range(3..65530, &mut [0; 127], 1024 * 1024, |_, bytes| {
+            count += bytes.len();
+            Ok(())
+        })?;
+        assert_eq!(count, 65527);
+    }
     Ok(())
 }
 

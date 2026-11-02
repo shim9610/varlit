@@ -7,6 +7,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("{resource} buffer is too small: need {required} bytes, got {provided}")]
+    BufferTooSmall {
+        resource: &'static str,
+        required: usize,
+        provided: usize,
+    },
+
+    #[error("invalid chunked byte range {start}..{end} for decoded length {len}")]
+    InvalidChunkedRange { start: u64, end: u64, len: u64 },
+
     #[error("invalid follow cursor: {0}")]
     InvalidFollowCursor(&'static str),
 

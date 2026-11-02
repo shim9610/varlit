@@ -1,6 +1,32 @@
 use super::*;
 
 #[kani::proof]
+fn streaming_step_is_bounded_and_strictly_progresses() {
+    let before: usize = kani::any();
+    let after: usize = kani::any();
+    let input_len: usize = kani::any();
+    let decoded: u64 = kani::any();
+    let written: usize = kani::any();
+    let expected: u64 = kani::any();
+    let next = stream_progress(before, after, input_len, decoded, written, expected);
+    let sum = decoded as u128 + written as u128;
+    let valid = before <= after
+        && after <= input_len
+        && sum <= expected as u128
+        && (after > before || written != 0);
+    assert_eq!(
+        next.is_some(),
+        valid,
+        "stream step acceptance differs from wide oracle"
+    );
+    if let Some(next) = next {
+        assert!(next <= expected, "stream output exceeds declared chunk");
+        assert!(after > before || next > decoded, "stream did not progress");
+        assert_eq!(next as u128, sum);
+    }
+}
+
+#[kani::proof]
 fn output_requests_respect_both_limits() {
     let declared: Option<u64> = kani::any();
     let bound: u64 = kani::any();
