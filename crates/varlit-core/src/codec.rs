@@ -623,11 +623,15 @@ impl<'a> Decoder<'a> {
                 "collection count cannot make bounded input progress",
             ));
         }
-        let bytes = hash_table_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
-            resource,
-            actual: u64::MAX,
-            limit: self.materialization_limit,
-        })?;
+        // Growth retains the old table until the new table is populated. Both
+        // allocations fit the final-count bound individually. Charge two tables
+        // when the declared count can exceed the upfront reservation. Payload charges remain separate.
+        let bytes =
+            hash_map_decode_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
+                resource,
+                actual: u64::MAX,
+                limit: self.materialization_limit,
+            })?;
         self.charge_materialization(bytes, resource)
     }
 
@@ -1458,6 +1462,16 @@ const HASH_TABLE_GROUP_BYTES: u64 = 32;
 /// per-entry allocation.
 const MAP_PREALLOCATION_ENTRIES: usize = 1024;
 
+fn hash_map_decode_reservation_bytes<T>(len: usize) -> Option<u64> {
+    // The bounded upfront reservation guarantees no growth for small maps.
+    let copies = if len > MAP_PREALLOCATION_ENTRIES {
+        2
+    } else {
+        1
+    };
+    hash_table_reservation_bytes::<T>(len)?.checked_mul(copies)
+}
+
 /// Upper bound on the heap a `HashMap<K, V>` allocates when asked to hold `len`
 /// entries, with `T = (K, V)`.
 ///
@@ -1759,3 +1773,7 @@ mod field_guard_tests {
         assert!(small.large_field_ids.is_none());
     }
 }
+
+#[cfg(kani)]
+#[path = "verification/decoder.rs"]
+mod resource_proofs;

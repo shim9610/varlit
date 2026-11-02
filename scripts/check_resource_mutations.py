@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,6 +25,43 @@ def function(source, name):
     return source[start:end]
 
 
+
+def decoder_fixture():
+    source = (SRC/'codec.rs').read_text()
+    def body(name):
+        start = re.search(r'fn ' + name + r'[(<]', source).start()
+        opening = source.index('{', start); depth = 1; end = opening + 1
+        while depth:
+            depth += (source[end] == '{') - (source[end] == '}'); end += 1
+        return source[start:end]
+    start = source.index('pub struct Decoder<')
+    structure = source[start:source.index("impl<'a> Decoder", start)]
+    methods = ['new', 'new_limited', 'decode_from_slice_accounted', 'remaining',
+               'decode_nested', 'charge_materialization', 'decode_complete',
+               'read_exact', 'read_u8', 'read_u64', 'preflight_count',
+               'screen_map_wire_length', 'preflight_hash_map_count']
+    # new/new_limited also name Encoder methods: search only the Decoder impl.
+    encoder_end = source.index("impl<'a> Decoder")
+    prefix = source[:encoder_end]; source = source[encoder_end:]
+    methods_text = '\n'.join(body(name) for name in methods)
+    source = prefix + source
+    wire_start = source.index('pub enum WireType')
+    wire = source[wire_start:source.index('impl WireType', wire_start)]
+    standard = re.search(r'const STANDARD_MATERIALIZATION_LIMIT:[^;]+;', source).group()
+    group = re.search(r'const HASH_TABLE_GROUP_BYTES:[^;]+;', source).group() + re.search(r'const MAP_PREALLOCATION_ENTRIES:[^;]+;', source).group()
+    return ("use std::collections::HashSet; use std::mem::{size_of,align_of};\n"
+            "#[derive(Clone, Copy)] enum Endian { Little, Big }\n"
+            "enum Error { UnexpectedEof, InvalidUtf8, TrailingBytes { remaining: usize },"
+            "InvalidCanonicalEncoding(&'static str), ResourceArithmeticOverflow { resource: &'static str },"
+            "LimitExceeded { resource: &'static str, actual: u64, limit: u64 } }\n"
+            "type Result<T> = std::result::Result<T,Error>;\n" + wire + structure +
+            "trait VarlitDecode: Sized { const WIRE_TYPE: WireType; fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self>; }\n"
+            "impl VarlitDecode for () { const WIRE_TYPE: WireType = WireType::Unit; fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(()) } }\n"
+            "impl<'a> Decoder<'a> {" + standard + methods_text + "}\n" + group +
+            body('minimum_wire_size') + body('hash_table_reservation_bytes') + body('hash_map_decode_reservation_bytes') +
+            '\n#[cfg(kani)] #[path="verification/decoder.rs"] mod resource_proofs;\n')
+
+
 def bindings():
     checks = [('compression_buffers.rs', 'resource_steps::output_capacity(', 1),
               ('compression_buffers.rs', 'resource_steps::block_extent(', 1),
@@ -38,6 +76,16 @@ def bindings():
 
 
 MUTATIONS = [
+    ('decoder-charge-omitted', 'decoder.rs', 'self.materialization_remaining -= bytes;', 'let _ = bytes;',
+     'full_width_decoder_charge_preserves_budget_on_failure', 'failed decoder charge replenished or consumed budget'),
+    ('zero-width-charge-omitted', 'decoder.rs', 'materialized_entry_bytes.max(1)', 'materialized_entry_bytes',
+     'full_width_collection_preflight_bounds_zero_width_work', 'collection preflight differs from wide oracle'),
+    ('nested-error-refunds-charge', 'decoder.rs', 'self.materialization_remaining = nested.materialization_remaining;', 'let _ = nested.materialization_remaining;',
+     'nested_failure_cannot_refund_a_successful_charge', 'nested error refunded charge'),
+    ('accounted-error-refunds-charge', 'decoder.rs', '*materialization_remaining = decoder.materialization_remaining;', 'let _ = decoder.materialization_remaining;',
+     'retained_sibling_decodes_share_one_budget_even_after_errors', 'accounted decode reset the shared budget'),
+    ('hashmap-overlap-omitted', 'decoder.rs', '?.checked_mul(copies)', '?.checked_mul(1)',
+     'hashmap_preflight_accounts_for_overlapping_tables', 'rehash overlap is not charged'),
     ('output-ignores-blocks', 'compression_steps.rs', 'actual > bound || ', '',
      'output_requests_respect_both_limits', 'output exceeds complete blocks'),
     ('output-rejects-valid', 'compression_steps.rs', 'Some(actual) => Some(actual as usize)', 'Some(_actual) => None',
@@ -72,6 +120,7 @@ def main():
     prefix_start = directory.rfind('#[derive(Debug)]', 0, directory.index('pub(super) struct UniformPrefix'))
     prefix = directory[prefix_start:directory.index('fn invalid_boundary()',prefix_start)]
     originals = {
+        'decoder.rs': decoder_fixture(),
         'compression_steps.rs': (SRC/'compression_steps.rs').read_text(),
         'spill_file.rs': 'use std::io;\n'+function(spill,'check_extent')+'\n'+function(spill,'limited_write_all')+'\n#[cfg(kani)]\n#[path="verification/spill.rs"]\nmod proofs;\n',
         'uniform.rs': prefix,
@@ -84,9 +133,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='varlit-resource-proofs-') as tmp:
         crate = Path(tmp); (crate/'src/verification').mkdir(parents=True)
         (crate/'Cargo.toml').write_text('[package]\nname="resource-negative-controls"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lints.rust]\nunexpected_cfgs={level="warn",check-cfg=["cfg(kani)"]}\n')
-        (crate/'src/lib.rs').write_text('mod compression_steps;\nmod spill_file;\nmod tree;\nmod chunks;\nmod uniform;\n')
+        (crate/'src/lib.rs').write_text('mod compression_steps;\nmod spill_file;\nmod tree;\nmod chunks;\nmod uniform;\nmod decoder;\n')
         for path, content in originals.items(): (crate/'src'/path).write_text(content)
-        for name in ['compression','spill','traversal','uniform_prefix']:
+        for name in ['compression','spill','traversal','uniform_prefix','decoder']:
             (crate/f'src/verification/{name}.rs').write_bytes((SRC/f'verification/{name}.rs').read_bytes())
         cmd = ['cargo','kani','--manifest-path',str(crate/'Cargo.toml'),'--default-unwind','5']
         def run(name, command):
@@ -94,7 +143,7 @@ def main():
                 code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
             return code, (out/(name+'.log')).read_text()
         code, log = run('baseline',cmd)
-        if code or 'Complete - 11 successfully verified harnesses, 0 failures, 11 total.' not in log:
+        if code or 'Complete - 17 successfully verified harnesses, 0 failures, 17 total.' not in log:
             raise RuntimeError('unmodified resource proofs failed')
         for name,path,before,after,harness,assertion in MUTATIONS:
             original = originals[path]

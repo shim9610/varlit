@@ -10,6 +10,9 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("decoder-refusal", "varlit-core", "decoder_allocation_failures", "every_builtin_decoder_allocation_failure_returns_and_releases", False, "DECODER_OOM fixtures=20 refusal_points=122 all_retried=true"),
+    ("chunk-refusal", "varlit-core", "decoder_allocation_failures", "chunk_output_allocation_failure_returns_and_retries", False, "CHUNK_OOM refusal_points=2 all_retried=true"),
+    ("hashmap-rehash-budget", "varlit-core", "decoder_allocation_failures", "hash_map_rehash_peak_fits_charged_materialization", False, "HASH_REHASH entries=4096"),
     ("hostile-follow", "varlit", "index_corruption_guards", "failed_follow_of_checksums_valid_metadata_preserves_real_readers", False, "HOSTILE_FOLLOW valid_crc_fields=3 followers=8 pinned=1 retries=24"),
     ("hostile-codec", "varlit-core", "decompression_allocation", "hostile_frame_and_container_metadata_stays_bounded", False, "HOSTILE_METADATA frames=2576 containers=80 large_requests=0"),
     ("hostile-index", "varlit-core", None, "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate", False, "HOSTILE_INDEX valid_crc_cases=795 delivered=0"),

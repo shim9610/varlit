@@ -201,20 +201,20 @@ fn the_2026_07_20_oom_reproducer_stays_refused() {
     );
 
     // Verbatim: refused by the standard 1 GiB materialization budget, because
-    // the table this count would reserve is 1,073,741,888 bytes -- 64 over.
+    // the two-table rehash charge is 2,147,483,776 bytes.
     assert!(matches!(
         decode_from_slice::<HashMap<(), ()>>(payload, Endian::Little),
         Err(Error::LimitExceeded {
             resource: "HashMap entries",
-            actual: 1_073_741_888,
+            actual: 2_147_483_776,
             limit: 1_073_741_824,
         })
     ));
 
-    // The largest count the same budget admits reaches the decoder proper and
+    // A large count the same budget admits reaches the decoder proper and
     // is refused on content, not on size. This is the assertion that would fail
     // if the budget stopped being the thing that refuses the reproducer.
-    let mut admitted = 293_601_534u64.to_le_bytes().to_vec();
+    let mut admitted = 146_800_766u64.to_le_bytes().to_vec();
     admitted.extend_from_slice(&payload[8..]);
     assert_invalid_canonical(decode_from_slice::<HashMap<(), ()>>(
         &admitted,
