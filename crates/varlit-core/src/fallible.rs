@@ -104,6 +104,7 @@ fn copy_slice<T: Copy>(source: &[T]) -> Result<Vec<T>> {
 }
 
 impl TryClone for String {
+    #[inline]
     fn try_clone(&self) -> Result<Self> {
         let mut output = String::new();
         output
