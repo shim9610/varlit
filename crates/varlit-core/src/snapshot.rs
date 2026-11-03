@@ -154,6 +154,7 @@ impl SnapshotFile {
         Ok(self.file.try_clone()?)
     }
 
+    #[inline]
     pub(crate) fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> Result<()> {
         let len =
             u64::try_from(buffer.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
