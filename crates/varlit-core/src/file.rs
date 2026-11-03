@@ -6544,6 +6544,7 @@ impl VarlitFile {
     // The caller must have a boundary witness: directory membership, or the
     // next frame of a sequential recovery walk anchored at the commit end.
     // Recheck identity here before every write, including recovery.
+    #[inline]
     fn write_framed_record_flags(&mut self, entry: &RecordIndexEntry, set: u32) -> Result<()> {
         validate_record_entry(&self.spec, entry)?;
         if entry.block_id >= RESERVED_BLOCK_ID_START {
