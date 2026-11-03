@@ -13797,20 +13797,16 @@ fn copy_verified_snapshot_record(
             record_footer_len(spec),
         )?);
     }
-    let mut remaining = len;
-    let mut at = offset;
-    let mut buffer = [0; STREAM_BUFFER_LEN];
-    while remaining != 0 {
-        let count = remaining.min(buffer.len() as u64) as usize;
-        snapshot.read_exact_at(at, &mut buffer[..count])?;
-        output.write_all(&buffer[..count])?;
-        payload.update(&buffer[..count]);
-        remaining -= count as u64;
-        at = at
-            .checked_add(count as u64)
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "rewrite payload offset",
-            })?;
+    if len <= 1024 {
+        copy_snapshot_payload_crc::<1024>(&mut payload, snapshot, output, offset, len)?;
+    } else {
+        copy_snapshot_payload_crc::<STREAM_BUFFER_LEN>(
+            &mut payload,
+            snapshot,
+            output,
+            offset,
+            len,
+        )?;
     }
     let checksum = |footer: &[u8]| {
         let mut hash = payload.clone();
@@ -13833,6 +13829,39 @@ fn copy_verified_snapshot_record(
         });
     }
     Ok(payload)
+}
+
+// Keeping each sized array in its own call frame avoids reserving the wide
+// frame when a small record is copied. Source CRC and footer validation remain
+// in the caller and still precede publication.
+#[cfg(feature = "integrity")]
+#[inline(never)]
+fn copy_snapshot_payload_crc<const BUFFER: usize>(
+    payload: &mut crc32fast::Hasher,
+    snapshot: &SnapshotFile,
+    output: &mut File,
+    offset: u64,
+    len: u64,
+) -> Result<()> {
+    const {
+        assert!(BUFFER > 0);
+    }
+    let mut remaining = len;
+    let mut at = offset;
+    let mut buffer = [0; BUFFER];
+    while remaining != 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        snapshot.read_exact_at(at, &mut buffer[..count])?;
+        output.write_all(&buffer[..count])?;
+        payload.update(&buffer[..count]);
+        remaining -= count as u64;
+        at = at
+            .checked_add(count as u64)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "rewrite payload offset",
+            })?;
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "integrity"))]
@@ -15390,13 +15419,38 @@ fn crc32_record_file(
     header: &[u8],
     footer: &[u8],
 ) -> Result<u32> {
+    if payload_len <= 1024 {
+        crc32_record_file_buffered::<1024>(file, payload_offset, payload_len, header, footer)
+    } else {
+        crc32_record_file_buffered::<STREAM_BUFFER_LEN>(
+            file,
+            payload_offset,
+            payload_len,
+            header,
+            footer,
+        )
+    }
+}
+
+#[cfg(feature = "integrity")]
+#[inline(never)]
+fn crc32_record_file_buffered<const BUFFER: usize>(
+    file: &mut (impl Read + Seek),
+    payload_offset: u64,
+    payload_len: u64,
+    header: &[u8],
+    footer: &[u8],
+) -> Result<u32> {
+    const {
+        assert!(BUFFER > 0);
+    }
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(header);
     file.seek(SeekFrom::Start(payload_offset))?;
     let mut remaining = payload_len;
-    let mut buffer = [0; STREAM_BUFFER_LEN];
+    let mut buffer = [0; BUFFER];
     while remaining != 0 {
-        let chunk_len = usize::try_from(remaining.min(STREAM_BUFFER_LEN as u64)).map_err(|_| {
+        let chunk_len = usize::try_from(remaining.min(BUFFER as u64)).map_err(|_| {
             Error::ResourceArithmeticOverflow {
                 resource: "checksum buffer length",
             }

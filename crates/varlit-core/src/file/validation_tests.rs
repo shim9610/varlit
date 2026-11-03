@@ -480,3 +480,176 @@ fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(feature = "integrity")]
+#[test]
+fn crc_streaming_preserves_bytes_across_short_reads_and_repair() -> Result<()> {
+    struct Reader {
+        cursor: std::io::Cursor<Vec<u8>>,
+        fail_at: Option<u64>,
+        zero: bool,
+    }
+    impl std::io::Read for Reader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let at = self.cursor.position();
+            if self.fail_at == Some(at) {
+                return if self.zero {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other("crc cut"))
+                };
+            }
+            let available = self.fail_at.map_or(usize::MAX, |end| (end - at) as usize);
+            let count = out.len().min(19).min(available);
+            std::io::Read::read(&mut self.cursor, &mut out[..count])
+        }
+    }
+    impl std::io::Seek for Reader {
+        fn seek(&mut self, at: std::io::SeekFrom) -> std::io::Result<u64> {
+            std::io::Seek::seek(&mut self.cursor, at)
+        }
+    }
+    for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+        let bytes: Vec<u8> = (0..len + 8).map(|n| (n % 251) as u8).collect();
+        let mut expected = crc32fast::Hasher::new();
+        expected.update(b"fixture-header");
+        expected.update(&bytes[3..3 + len]);
+        expected.update(b"fixture-footer");
+        let expected = expected.finalize();
+        let mut reader = Reader {
+            cursor: std::io::Cursor::new(bytes),
+            fail_at: None,
+            zero: false,
+        };
+        assert_eq!(
+            crc32_record_file(
+                &mut reader,
+                3,
+                len as u64,
+                b"fixture-header",
+                b"fixture-footer"
+            )?,
+            expected
+        );
+        if len != 0 {
+            for zero in [false, true] {
+                reader.fail_at = Some(3 + (len / 2) as u64);
+                reader.zero = zero;
+                assert!(
+                    crc32_record_file(
+                        &mut reader,
+                        3,
+                        len as u64,
+                        b"fixture-header",
+                        b"fixture-footer"
+                    )
+                    .is_err()
+                );
+                assert_eq!(reader.cursor.position(), reader.fail_at.unwrap());
+                reader.fail_at = None;
+                assert_eq!(
+                    crc32_record_file(
+                        &mut reader,
+                        3,
+                        len as u64,
+                        b"fixture-header",
+                        b"fixture-footer"
+                    )?,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn verified_copy_checks_crc_and_retries_repaired_sources_at_buffer_edges() -> Result<()> {
+    for integrity in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
+        for liveness in [LivenessPolicy::None, LivenessPolicy::FooterFlags] {
+            let spec = spec()
+                .with_integrity_policy(integrity)
+                .with_commit_policy(CommitPolicy::RecordFooter)
+                .with_liveness_policy(liveness);
+            let footer = RecordFooterFields {
+                prev_same_block_offset: None,
+                prev_same_key_offset: None,
+                mutable_flags: if liveness == LivenessPolicy::FooterFlags {
+                    RECORD_MUTABLE_FLAG_DEAD
+                } else {
+                    0
+                },
+            };
+            for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+                let payload: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
+                let mut encoded = vec![0; 17];
+                let entry = append_frame(spec, &mut encoded, 0, &payload, footer)?;
+                let source = snapshot(&encoded)?;
+                let mut output = tempfile::tempfile()?;
+                let mut hash = copy_verified_snapshot_record(
+                    spec,
+                    &source,
+                    &mut output,
+                    &entry,
+                    entry.payload_offset,
+                    len as u64,
+                )?;
+                hash.update(checksummed_footer(spec, &encode_record_footer(footer)?));
+                assert_eq!(hash.finalize(), entry.checksum);
+                output.seek(SeekFrom::Start(0))?;
+                let mut actual = Vec::new();
+                output.read_to_end(&mut actual)?;
+                assert_eq!(actual, payload);
+                output.set_len(0)?;
+                output.seek(SeekFrom::Start(0))?;
+                assert!(
+                    copy_verified_snapshot_record(
+                        spec,
+                        &source,
+                        &mut output,
+                        &entry,
+                        entry.payload_offset + 1,
+                        len as u64
+                    )
+                    .is_err()
+                );
+                assert_eq!(output.metadata()?.len(), 0);
+                if len != 0 {
+                    let changed_at = entry.payload_offset as usize + len / 2;
+                    encoded[changed_at] ^= 1;
+                    let damaged = snapshot(&encoded)?;
+                    assert!(matches!(
+                        copy_verified_snapshot_record(
+                            spec,
+                            &damaged,
+                            &mut output,
+                            &entry,
+                            entry.payload_offset,
+                            len as u64
+                        ),
+                        Err(Error::ChecksumMismatch { .. })
+                    ));
+                    let mut repair = damaged.try_clone_file()?;
+                    repair.seek(SeekFrom::Start(changed_at as u64))?;
+                    repair.write_all(&payload[len / 2..len / 2 + 1])?;
+                    output.set_len(0)?;
+                    output.seek(SeekFrom::Start(0))?;
+                    copy_verified_snapshot_record(
+                        spec,
+                        &damaged,
+                        &mut output,
+                        &entry,
+                        entry.payload_offset,
+                        len as u64,
+                    )?;
+                    output.seek(SeekFrom::Start(0))?;
+                    actual.clear();
+                    output.read_to_end(&mut actual)?;
+                    assert_eq!(actual, payload);
+                }
+            }
+        }
+    }
+    Ok(())
+}

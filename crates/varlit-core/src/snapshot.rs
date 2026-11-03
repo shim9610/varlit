@@ -240,7 +240,24 @@ impl SnapshotFile {
         output: &mut W,
     ) -> Result<()> {
         self.check_range(offset, len)?;
-        let mut buffer = [0u8; 64 * 1024];
+        if len <= 1024 {
+            self.copy_range_buffered::<1024, W>(offset, len, output)
+        } else {
+            self.copy_range_buffered::<{ 64 * 1024 }, W>(offset, len, output)
+        }
+    }
+
+    #[inline(never)]
+    fn copy_range_buffered<const BUFFER: usize, W: Write>(
+        &self,
+        offset: u64,
+        len: u64,
+        output: &mut W,
+    ) -> Result<()> {
+        const {
+            assert!(BUFFER > 0);
+        }
+        let mut buffer = [0u8; BUFFER];
         let mut copied = 0u64;
         while copied < len {
             let remaining = len - copied;
@@ -646,5 +663,67 @@ mod tests {
     fn snapshot_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SnapshotFile>();
+    }
+    #[test]
+    fn range_copy_preserves_prefixes_and_retries_short_or_failed_writes() {
+        struct Sink {
+            bytes: Vec<u8>,
+            fail_at: Option<usize>,
+            zero: bool,
+        }
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_at == Some(self.bytes.len()) {
+                    return if self.zero {
+                        Ok(0)
+                    } else {
+                        Err(std::io::Error::other("copy cut"))
+                    };
+                }
+                let available = self.fail_at.unwrap_or(usize::MAX) - self.bytes.len();
+                let count = bytes.len().min(17).min(available);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let path = temp_path();
+        let bytes: Vec<u8> = (0..65544).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let snapshot = SnapshotFile::new(File::open(&path).unwrap()).unwrap();
+        for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+            let expected = &bytes[3..3 + len];
+            let mut sink = Sink {
+                bytes: Vec::new(),
+                fail_at: None,
+                zero: false,
+            };
+            snapshot.copy_range_to(3, len as u64, &mut sink).unwrap();
+            assert_eq!(sink.bytes, expected);
+            if len != 0 {
+                for zero in [false, true] {
+                    let cut = len / 2;
+                    let mut sink = Sink {
+                        bytes: Vec::new(),
+                        fail_at: Some(cut),
+                        zero,
+                    };
+                    assert!(snapshot.copy_range_to(3, len as u64, &mut sink).is_err());
+                    assert_eq!(sink.bytes, expected[..cut]);
+                    sink.fail_at = None;
+                    snapshot
+                        .copy_range_to(3 + cut as u64, (len - cut) as u64, &mut sink)
+                        .unwrap();
+                    assert_eq!(sink.bytes, expected);
+                }
+            }
+        }
+        let mut untouched = Vec::new();
+        assert!(snapshot.copy_range_to(u64::MAX, 1, &mut untouched).is_err());
+        assert!(untouched.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        remove_file(path).unwrap();
     }
 }
