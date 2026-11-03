@@ -26,6 +26,7 @@ pub(crate) struct PackedRows<const N: usize> {
 struct Cache<const N: usize> {
     pages: [Page<N>; READ_PAGES],
     clock: u64,
+    latest: usize,
 }
 #[derive(Debug)]
 struct Page<const N: usize> {
@@ -105,6 +106,7 @@ impl<const N: usize> PackedRows<N> {
                     encoded: Vec::new(),
                 }),
                 clock: 0,
+                latest: 0,
             }),
         }
     }
@@ -263,6 +265,7 @@ impl<const N: usize> PackedRows<N> {
             .position(|page| page.start == start && page.rows.len() == self.page_rows)
         {
             caches.pages[at].used = clock;
+            caches.latest = at;
             return Ok(Some(caches.pages[at].rows[position - start]));
         }
         let replace = caches
@@ -307,13 +310,21 @@ impl<const N: usize> PackedRows<N> {
             {
                 return Err(invalid());
             }
-            cache.encoded.clear();
-            cache.encoded.try_reserve_exact(bytes).map_err(oom)?;
-            cache.encoded.resize(bytes, 0);
-            self.read_encoded(&mut cache.encoded, data_at)?;
-            cache.rows.try_reserve_exact(self.page_rows).map_err(oom)?;
             let Page { rows, encoded, .. } = cache;
-            let mut input = encoded.as_slice();
+            // Immutable retained bytes already form a complete input slice.
+            // Only spilled pages need a separately allocated read buffer.
+            let mut input = if data_at >= self.spilled_bytes {
+                let start = usize::try_from(data_at - self.spilled_bytes).map_err(|_| invalid())?;
+                let end = start.checked_add(bytes).ok_or_else(invalid)?;
+                self.retained.get(start..end).ok_or_else(invalid)?
+            } else {
+                encoded.clear();
+                encoded.try_reserve_exact(bytes).map_err(oom)?;
+                encoded.resize(bytes, 0);
+                self.read_encoded(encoded, data_at)?;
+                encoded.as_slice()
+            };
+            rows.try_reserve_exact(self.page_rows).map_err(oom)?;
             let mut previous = [0; N];
             let decoded = (|| {
                 for _ in 0..self.page_rows {
@@ -360,7 +371,9 @@ impl<const N: usize> PackedRows<N> {
             }
             cache.start = start;
         }
-        Ok(Some(cache.rows[position - start]))
+        let row = cache.rows[position - start];
+        caches.latest = replace;
+        Ok(Some(row))
     }
     fn read_encoded(&self, mut bytes: &mut [u8], mut at: u64) -> io::Result<()> {
         if at < self.spilled_bytes {
@@ -406,7 +419,11 @@ impl<const N: usize> PackedRows<N> {
                 let mut cache = self.cache.borrow_mut();
                 let mut bounded = false;
                 let mut before = false;
-                for page_at in 0..READ_PAGES {
+                // A caller may have just primed a page from an offset hint.
+                // Try that actual page first and keep its adjacent direction;
+                // unrelated older pages still tighten the verified bounds.
+                for step in 0..READ_PAGES {
+                    let page_at = (cache.latest + step) % READ_PAGES;
                     let page = &cache.pages[page_at];
                     let rows = &page.rows;
                     if rows.is_empty() || page.start < left || page.start + rows.len() > right {
@@ -414,14 +431,19 @@ impl<const N: usize> PackedRows<N> {
                     }
                     if wanted < key(&rows[0]) {
                         right = page.start;
-                        before = true;
+                        if !bounded {
+                            before = true;
+                        }
                     } else if wanted > key(rows.last().unwrap()) {
                         left = page.start + rows.len();
-                        before = false;
+                        if !bounded {
+                            before = false;
+                        }
                     } else {
                         let result = search(rows, wanted, &key);
                         cache.clock = cache.clock.wrapping_add(1);
                         cache.pages[page_at].used = cache.clock;
+                        cache.latest = page_at;
                         return Ok(result);
                     }
                     bounded = true;
@@ -459,6 +481,55 @@ fn read_exact_at(file: &File, mut bytes: &mut [u8], mut at: u64) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_decode_retries_corruption_under_allocation_refusal() -> io::Result<()> {
+        let mut rows = PackedRows::<13>::with_page_rows(64 * 1024, 16);
+        let mut expected = Vec::new();
+        for i in 0..129u64 {
+            let offset = i * 100 + if i >= 64 { 1 << 40 } else { 0 };
+            let mut row = [0; 13];
+            row[..8].copy_from_slice(&offset.to_le_bytes());
+            row[8..12].copy_from_slice(&7u32.to_le_bytes());
+            rows.push(row)?;
+            expected.push(row);
+        }
+        assert!(rows.file.is_none());
+        // Fill all decoded slots. The next page has a longer initial varint;
+        // borrowing retained input must not need a larger encoded allocation.
+        for at in [0, 16, 32, 48] {
+            assert_eq!(rows.get(at)?, Some(expected[at]));
+        }
+        let next = crate::pib_probe::with_allocation_refusal(1, || rows.get(64));
+        assert!(next.is_ok(), "retained input requested extra allocation");
+        assert_eq!(next?, Some(expected[64]));
+        let length = u32::from_le_bytes(rows.retained[..4].try_into().unwrap()) as usize;
+        let at = 4 + length - 1;
+        let saved = rows.retained[at];
+        // Fail after a decoded prefix exists, not just at the page header.
+        rows.retained[at] = 0x80;
+        for _ in 0..2 {
+            let error = crate::pib_probe::with_allocation_refusal(1, || rows.get(0)).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
+        let key = |row: &[u8]| u64::from_le_bytes(row[..8].try_into().unwrap());
+        assert!(rows.find_sorted(800, key).is_err());
+        rows.retained[at] = saved;
+        assert_eq!(
+            crate::pib_probe::with_allocation_refusal(1, || rows.get(0))?,
+            Some(expected[0])
+        );
+        rows.cache.get_mut().clock = u64::MAX;
+        for at in [128, 63, 64, 15, 16, 127, 31, 65, 0] {
+            assert_eq!(rows.get(at)?, Some(expected[at]));
+            assert_eq!(
+                rows.find_sorted(key(&expected[at]), key)?,
+                Some(expected[at])
+            );
+            assert_eq!(rows.find_sorted(key(&expected[at]) + 1, key)?, None);
+        }
+        Ok(())
+    }
+
     #[test]
     fn packed_read_promotion_keeps_bytes_and_failure_state_within_budget() -> io::Result<()> {
         let mut rows = PackedRows::<62>::with_page_rows(4096, 8);
