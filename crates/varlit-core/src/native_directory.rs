@@ -62,10 +62,10 @@ impl RewrittenRows {
             return Self::Full(rows);
         }
         let compact = (|| -> std::io::Result<_> {
-            // Point membership probes should decode only a small neighborhood.
+            // Preserve compression for directories that cannot stay resident.
             // Construction still uses its larger pages; both representations
             // are charged to the same existing directory allowance.
-            let mut compact = crate::packed_rows::PackedRows::with_page_rows(scratch, 8);
+            let mut compact = crate::packed_rows::PackedRows::with_page_rows(scratch, 16);
             for at in 0..rows.len() {
                 let source = rows.get(at)?.ok_or(std::io::ErrorKind::UnexpectedEof)?;
                 compact.push(Self::project(&source))?;
