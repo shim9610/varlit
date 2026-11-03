@@ -7,6 +7,10 @@ use super::{
 use crate::ReadLimit;
 use crate::spill_rows::SpillRows;
 
+// Private rows need no alignment padding or persistent wire representation.
+const RESIDENT_ROW_BYTES: usize = 8 + 4 + 1;
+type ResidentRow = [u8; RESIDENT_ROW_BYTES];
+
 pub(super) fn buffer_bytes(spec: FormatSpec) -> usize {
     match spec.read_limits.resolve().max_index_bytes {
         ReadLimit::Finite(bytes) if bytes != u64::MAX => {
@@ -27,8 +31,8 @@ pub struct ReservedIndexSlot(());
 
 #[derive(Debug)]
 pub struct ResidentIndex {
-    slots: SpillRows<16>,
-    rewritten: Option<RewriteRows>,
+    slots: SpillRows<RESIDENT_ROW_BYTES>,
+    rewritten: Option<RewrittenRows>,
     rewritten_len: usize,
     snapshot: SnapshotFile,
     spec: FormatSpec,
@@ -40,8 +44,73 @@ pub struct ResidentIndex {
     uniform: Option<UniformPrefix>,
     retained: bool,
 }
-fn encode(entry: &RecordIndexEntry) -> [u8; 16] {
-    let mut row = [0; 16];
+// Full rewrite rows are needed while constructing and validating a new
+// generation. Once published, the resident directory uses only offset, block
+// id and committed state. Compact that private metadata under the *remaining*
+// allowance before releasing the original; every failed attempt keeps it.
+#[derive(Debug)]
+enum RewrittenRows {
+    Full(RewriteRows),
+    Compact(crate::packed_rows::PackedRows<RESIDENT_ROW_BYTES>),
+}
+impl RewrittenRows {
+    fn new(rows: RewriteRows, spec: FormatSpec) -> Self {
+        // Keep the conversion overlap small even when the caller allows a large
+        // directory. Release the full rows before promoting the compact data.
+        let scratch = (buffer_bytes(spec) - rewrite_buffer_bytes(spec)).min(64 * 1024);
+        if scratch < crate::packed_rows::PackedRows::<RESIDENT_ROW_BYTES>::minimum_buffer_bytes() {
+            return Self::Full(rows);
+        }
+        let compact = (|| -> std::io::Result<_> {
+            let mut compact = crate::packed_rows::PackedRows::with_page_rows(scratch, 16);
+            for at in 0..rows.len() {
+                let source = rows.get(at)?.ok_or(std::io::ErrorKind::UnexpectedEof)?;
+                compact.push(Self::project(&source))?;
+            }
+            Ok(compact)
+        })();
+        match compact {
+            Ok(mut compact) => {
+                drop(rows);
+                // This is optional cache residency, not publication. A refused
+                // allocation or read retains the complete compact spill data.
+                let _ = compact.try_retain_for_reads(rewrite_buffer_bytes(spec));
+                Self::Compact(compact)
+            }
+            Err(_) => Self::Full(rows),
+        }
+    }
+    fn project(source: &[u8; 62]) -> ResidentRow {
+        let mut row = [0; RESIDENT_ROW_BYTES];
+        row[..8].copy_from_slice(&source[16..24]);
+        row[8..12].copy_from_slice(&source[..4]);
+        row[12] = source[56];
+        row
+    }
+    fn get(&self, at: usize) -> std::io::Result<Option<ResidentRow>> {
+        match self {
+            Self::Full(rows) => Ok(rows.get(at)?.as_ref().map(Self::project)),
+            Self::Compact(rows) => rows.get(at),
+        }
+    }
+    fn contains(&self, offset: u64) -> std::io::Result<bool> {
+        match self {
+            Self::Full(rows) => Ok(rows
+                .find_sorted(offset, |row| {
+                    u64::from_le_bytes(row[16..24].try_into().unwrap())
+                })?
+                .is_some()),
+            Self::Compact(rows) => Ok(rows
+                .find_sorted(offset, |row| {
+                    u64::from_le_bytes(row[..8].try_into().unwrap())
+                })?
+                .is_some()),
+        }
+    }
+}
+
+fn encode(entry: &RecordIndexEntry) -> ResidentRow {
+    let mut row = [0; RESIDENT_ROW_BYTES];
     row[..8].copy_from_slice(&entry.record_offset.to_le_bytes());
     row[8..12].copy_from_slice(&entry.block_id.to_le_bytes());
     row[12] = u8::from(entry.committed);
@@ -58,7 +127,7 @@ impl ResidentIndex {
     ) -> Self {
         Self {
             rewritten_len: rows.len(),
-            rewritten: Some(rows),
+            rewritten: Some(RewrittenRows::new(rows, spec)),
             slots: SpillRows::new(buffer_bytes(spec) - rewrite_buffer_bytes(spec)),
             snapshot,
             spec,
@@ -347,12 +416,7 @@ impl ResidentIndex {
             if guess < self.rewritten_len {
                 let rows = self.rewritten.as_ref().unwrap();
                 rows.get(guess)?;
-                if rows
-                    .find_sorted(offset, |row| {
-                        u64::from_le_bytes(row[16..24].try_into().unwrap())
-                    })?
-                    .is_some()
-                {
+                if rows.contains(offset)? {
                     return Ok(Some(offset));
                 }
             } else {
@@ -406,25 +470,18 @@ impl ResidentIndex {
         }
         Ok(found)
     }
-    fn row_direct(&self, position: usize) -> std::io::Result<Option<[u8; 16]>> {
+    fn row_direct(&self, position: usize) -> std::io::Result<Option<ResidentRow>> {
         if position >= self.rewritten_len {
             self.slots.get_direct(position - self.rewritten_len)
         } else {
             self.row(position)
         }
     }
-    fn row(&self, position: usize) -> std::io::Result<Option<[u8; 16]>> {
+    fn row(&self, position: usize) -> std::io::Result<Option<ResidentRow>> {
         if position >= self.rewritten_len {
             return self.slots.get(position - self.rewritten_len);
         }
-        let Some(source) = self.rewritten.as_ref().unwrap().get(position)? else {
-            return Ok(None);
-        };
-        let mut row = [0; 16];
-        row[..8].copy_from_slice(&source[16..24]);
-        row[8..12].copy_from_slice(&source[..4]);
-        row[12] = source[56];
-        Ok(Some(row))
+        self.rewritten.as_ref().unwrap().get(position)
     }
     pub(crate) fn iter(
         &self,
@@ -643,6 +700,77 @@ impl<'a> FrameWindow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resident_rows_keep_the_boundary_working_set_within_the_same_allowance() -> Result<()> {
+        // A scaled version of 131,072 data rows plus final internal rows at
+        // the ordinary 2-MiB boundary. Padding must not evict this working set.
+        let spec = FormatSpec::builder()
+            .magic(b"VROWWORK")
+            .build()?
+            .with_resource_limits(crate::ReadLimits::STANDARD.with_max_index_bytes(2048));
+        let snapshot = SnapshotFile::new(tempfile::tempfile()?)?;
+        let mut index = ResidentIndex::empty(snapshot, spec);
+        let mut entry = super::super::read_index_entry_payload(&[0; 73], 3);
+        let mut expected = Vec::new();
+        for i in 0..130u64 {
+            entry.record_offset = 100 + i * 80 + i % 3;
+            entry.block_id = if i < 128 {
+                7
+            } else {
+                super::super::SEGMENT_BLOCK_ID
+            };
+            entry.committed = i % 2 == 0;
+            expected.push(encode(&entry));
+            let slot = index.reserve(|| Ok(0))?;
+            index.install(slot, &entry);
+        }
+        for row in expected {
+            let offset = u64::from_le_bytes(row[..8].try_into().unwrap());
+            // No I/O populates the read cache first: all rows must still be
+            // present in the original bounded buffer, including their fields.
+            assert_eq!(
+                index.slots.cached_floor(offset, |row| {
+                    u64::from_le_bytes(row[..8].try_into().unwrap())
+                }),
+                Some(row)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compact_and_fallback_rewrite_rows_preserve_exact_membership_and_fields() -> Result<()> {
+        for budget in [256, 65536] {
+            let spec = FormatSpec::builder()
+                .magic(b"VCMPTROW")
+                .build()?
+                .with_resource_limits(crate::ReadLimits::STANDARD.with_max_index_bytes(budget));
+            let mut rows = RewriteRows::with_page_rows(rewrite_buffer_bytes(spec), 16);
+            let mut expected = Vec::new();
+            let mut offset = 100u64;
+            for i in 0..128u64 {
+                offset += 64 + i * 37 % 271;
+                let mut row = [0; 62];
+                row[..4].copy_from_slice(&(i as u32 % 3 + 1).to_le_bytes());
+                row[16..24].copy_from_slice(&offset.to_le_bytes());
+                row[56] = (i % 2) as u8;
+                expected.push(RewrittenRows::project(&row));
+                rows.push(row)?;
+            }
+            let rows = RewrittenRows::new(rows, spec);
+            assert_eq!(matches!(rows, RewrittenRows::Compact(_)), budget == 65536);
+            for (i, expected) in expected.iter().enumerate().rev() {
+                let offset = u64::from_le_bytes(expected[..8].try_into().unwrap());
+                assert_eq!(rows.get(i)?, Some(*expected));
+                assert!(rows.contains(offset)?);
+                assert!(!rows.contains(offset + 1)?);
+                assert!(!rows.contains(offset - 1)?);
+            }
+            assert_eq!(rows.get(128)?, None);
+        }
+        Ok(())
+    }
+
     #[test]
     fn uniform_prefix_never_authorizes_unobserved_or_truncated_offsets() {
         for break_at in 1..24 {

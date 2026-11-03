@@ -24,12 +24,14 @@ impl<const N: usize> SpillRows<N> {
     /// Transfer part of this buffer budget, not additional memory, to a
     /// secondary directory. Existing rows are durable before releasing RAM.
     pub(crate) fn lend_boundary_budget(&mut self) -> io::Result<usize> {
-        let loan = (self.capacity / 2).min(16 * 1024);
-        let retained = ((self.capacity - loan) / N * N).max(N);
-        let available = self.capacity - retained;
-        if available == 0 {
+        // Round the loan down to complete source rows. Rounding the retained
+        // share down could lend *more* than 16 KiB for unaligned row widths.
+        let available = (self.capacity / 2).min(16 * 1024) / N * N;
+        // The boundary directory needs one u64 write row and one read row.
+        if available < 2 * std::mem::size_of::<u64>() {
             return Ok(0);
         }
+        let retained = self.capacity - available;
         if self.buffer.capacity() > retained && !self.buffer.is_empty() {
             if self.file.is_none() {
                 self.file = Some(SpillFile::new()?);
@@ -61,6 +63,67 @@ impl<const N: usize> SpillRows<N> {
             read_cache: RefCell::new((0, Vec::new())),
         }
     }
+    // Account for the cache that a later read may allocate, not just today's
+    // capacities. This is shared with the parent packed-directory budget.
+    pub(crate) fn read_heap_bytes(&self) -> usize {
+        self.buffer
+            .capacity()
+            .saturating_add(
+                self.read_cache
+                    .borrow()
+                    .1
+                    .capacity()
+                    .max(if self.spilled == 0 {
+                        0
+                    } else {
+                        self.capacity.min(64 * 1024)
+                    }),
+            )
+    }
+
+    /// Optional read-only promotion. The old and new buffers both fit the
+    /// supplied allowance; refusal or short I/O leaves every old row intact.
+    pub(crate) fn try_retain_for_reads(&mut self, budget: usize) -> io::Result<bool> {
+        if self.spilled == 0 {
+            return Ok(true);
+        }
+        let bytes = self
+            .len()
+            .checked_mul(N)
+            .ok_or(io::ErrorKind::InvalidData)?;
+        if bytes > budget.saturating_sub(self.read_heap_bytes()) {
+            return Ok(false);
+        }
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(bytes)
+            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+        buffer.resize(bytes, 0);
+        let prefix = self.spilled * N;
+        let mut consumed = 0;
+        while consumed < prefix {
+            let n = match crate::snapshot::read_at(
+                self.file.as_ref().unwrap(),
+                &mut buffer[consumed..prefix],
+                consumed as u64,
+            ) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                other => other?,
+            };
+            if n == 0 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            consumed += n;
+        }
+        buffer[prefix..].copy_from_slice(&self.buffer);
+        self.buffer = buffer;
+        self.capacity = self.capacity.max(bytes);
+        self.spilled = 0;
+        self.file = None;
+        self.read_cache.get_mut().1 = Vec::new();
+        Ok(true)
+    }
+
     pub(crate) fn reserve_rows_hint(&mut self, count: usize) -> io::Result<()> {
         let bytes = count.saturating_mul(N).min(self.capacity);
         if bytes > self.buffer.capacity() {
@@ -104,16 +167,13 @@ impl<const N: usize> SpillRows<N> {
                     }
                 }
             }
-            let (mut low, mut high) = (0, count);
-            while low < high {
-                let middle = low + (high - low) / 2;
-                if key(&bytes[middle * N..(middle + 1) * N]) <= wanted {
-                    low = middle + 1;
-                } else {
-                    high = middle;
-                }
-            }
-            bytes[(low - 1) * N..low * N].try_into().ok()
+            // The standard slice search uses a fixed iteration schedule and
+            // branchless bound selection for unpredictable irregular offsets.
+            // It still compares real private rows, never an estimated boundary.
+            let (rows, remainder) = bytes.as_chunks::<N>();
+            debug_assert!(remainder.is_empty());
+            let end = rows.partition_point(|row| key(row) <= wanted);
+            end.checked_sub(1).and_then(|at| rows.get(at)).copied()
         }
         search(&self.buffer, wanted, &key)
             .or_else(|| search(&self.read_cache.borrow().1, wanted, &key))
@@ -287,6 +347,146 @@ impl<const N: usize> SpillRows<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_floor_matches_ordered_rows_across_irregular_and_full_width_gaps() -> io::Result<()> {
+        for count in [1usize, 2, 63, 64, 65, 256] {
+            for shape in 0..3 {
+                let keys: Vec<u64> = (0..count)
+                    .scan(0u64, |previous, i| {
+                        let key = match shape {
+                            0 => *previous + 64 + (i as u64 * 8191 % 65536),
+                            1 => i as u64 + if i >= count / 2 { 1u64 << 63 } else { 0 },
+                            _ => {
+                                (i as u128 * u128::from(u64::MAX)
+                                    / count.saturating_sub(1).max(1) as u128)
+                                    as u64
+                            }
+                        };
+                        *previous = key;
+                        Some(key)
+                    })
+                    .collect();
+                let mut rows = SpillRows::<8>::new(count * 8);
+                for key in &keys {
+                    rows.push(key.to_le_bytes())?;
+                }
+                for wanted in keys.iter().flat_map(|&key| {
+                    [Some(key), key.checked_sub(1), key.checked_add(1)]
+                        .into_iter()
+                        .flatten()
+                }) {
+                    let expected = if wanted < keys[0] || wanted > keys[count - 1] {
+                        None
+                    } else {
+                        keys[..keys.partition_point(|&key| key <= wanted)]
+                            .last()
+                            .copied()
+                    };
+                    let found = rows
+                        .cached_floor(wanted, |row| u64::from_le_bytes(row.try_into().unwrap()))
+                        .map(u64::from_le_bytes);
+                    assert_eq!(
+                        found, expected,
+                        "count={count} shape={shape} wanted={wanted}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn read_promotion_is_bounded_and_preserves_retry_after_short_io() -> io::Result<()> {
+        let mut rows = SpillRows::<8>::new(32);
+        for n in 0..80u64 {
+            rows.push((n * 17).to_le_bytes())?;
+        }
+        rows.get(0)?;
+        let spilled = rows.spilled;
+        let budget = rows.read_heap_bytes() + rows.len() * 8;
+        assert!(!rows.try_retain_for_reads(budget - 1)?);
+        assert_eq!(rows.spilled, spilled);
+        let original: Vec<u8> = (0..spilled as u64)
+            .flat_map(|n| (n * 17).to_le_bytes())
+            .collect();
+        rows.file
+            .as_ref()
+            .unwrap()
+            .set_len((original.len() - 1) as u64)?;
+        assert_eq!(
+            rows.try_retain_for_reads(budget).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert_eq!(rows.spilled, spilled);
+        assert_eq!(rows.len(), 80);
+        let file = rows.file.as_mut().unwrap();
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&original)?;
+        assert!(rows.try_retain_for_reads(budget)?);
+        assert!(rows.file.is_none());
+        assert!(rows.read_heap_bytes() <= budget);
+        for n in (0..80).rev() {
+            assert_eq!(rows.get(n)?, Some((n as u64 * 17).to_le_bytes()));
+        }
+        rows.truncate(12);
+        rows.push(999u64.to_le_bytes())?;
+        assert_eq!(rows.get(12)?, Some(999u64.to_le_bytes()));
+        assert_eq!(rows.get(13)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn unaligned_rows_never_round_up_the_lent_boundary_allowance() -> io::Result<()> {
+        assert_eq!(SpillRows::<13>::unbuffered().lend_boundary_budget()?, 0);
+        for budget in [
+            0,
+            13,
+            26,
+            39,
+            52,
+            208,
+            4096,
+            65536,
+            usize::MAX - 1,
+            usize::MAX,
+        ] {
+            let mut original = SpillRows::<13>::new(budget);
+            let initial = original.capacity;
+            for i in 0..200u64 {
+                let mut row = [0; 13];
+                row[..8].copy_from_slice(&i.to_le_bytes());
+                original.push(row)?;
+            }
+            original.get(0)?;
+            let loan = original.lend_boundary_budget()?;
+            assert!(loan <= 16 * 1024 && loan <= initial / 2);
+            assert!(loan == 0 || loan >= 16);
+            let mut proof = if loan == 0 {
+                SpillRows::<8>::unbuffered()
+            } else {
+                SpillRows::<8>::new(loan / 2)
+            };
+            assert!(original.capacity + 2 * proof.capacity <= initial);
+            for i in 0..200u64 {
+                proof.push((i * 17).to_le_bytes())?;
+            }
+            for i in (0..200).rev() {
+                assert_eq!(
+                    u64::from_le_bytes(original.get(i)?.unwrap()[..8].try_into().unwrap()),
+                    i as u64
+                );
+                assert_eq!(proof.get(i)?, Some((i as u64 * 17).to_le_bytes()));
+            }
+            assert!(
+                original.buffer.capacity()
+                    + proof.buffer.capacity()
+                    + proof.read_cache.borrow().1.capacity()
+                    <= initial
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn lending_budget_preserves_rows_and_bounds_both_buffers() -> io::Result<()> {
         for budget in [0, 16, 64, 4096] {

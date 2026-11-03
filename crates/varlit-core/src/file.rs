@@ -6137,6 +6137,10 @@ impl VarlitFile {
             return Err(error);
         }
         drop(temp_file);
+        // All chain links and replacement coverage have been validated. The
+        // remap is no longer needed; release its heap and spill file before
+        // adopting (and optionally compacting) the new private directory.
+        drop(remap);
 
         // Only the two fields the rebind actually reads: it returns this value
         // (which this operation discards in favour of its own report) and names

@@ -127,12 +127,18 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         writer.flush()?;
         drop(writer);
         let mut writer = VarlitFile::open_lazy(spec, &path)?;
-        let (refused, peak) = measure(8192, nth, || -> Result<()> {
+        // Unaligned directory rows round the two boundary buffers below 8 KiB.
+        // Refuse at 4 KiB so both actual reservation sites remain covered.
+        let (refused, peak) = measure(4096, nth, || -> Result<()> {
             writer.mark_record_dead(offsets[9999])?;
             // An interior request exercises the cache allocation on its way
             // to rejection, without authorizing a source write.
             writer.mark_record_dead(offsets[1000] + 1)
         });
+        assert!(
+            MATCHES.load(Relaxed) >= nth,
+            "boundary refusal point was not reached"
+        );
         assert!(
             matches!(refused, Err(Error::Io(ref e)) if e.kind() == std::io::ErrorKind::OutOfMemory)
         );
@@ -410,8 +416,110 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
             777
         );
     }
+    rewrite_read_directory_refusal_keeps_a_usable_generation()?;
     println!(
         "OOM_GUARDS allocation refusal, header limits, chunk scratch and bounded rewrites passed"
+    );
+    Ok(())
+}
+
+// Sweep the rewrite, including optional post-publication read-directory
+// construction. Success after refusal is valid only if the original directory
+// remains usable; an error is followed by reopening, never a blind append retry.
+fn rewrite_read_directory_refusal_keeps_a_usable_generation() -> Result<()> {
+    fn check(reader: &VarlitFile, count: usize) -> Result<()> {
+        let mut seen = 0;
+        for event in reader.scan() {
+            let event = event?;
+            if event.block_id != Blob::ID {
+                continue;
+            }
+            let block = reader.read_block_at::<Blob>(event.record_offset)?;
+            let expected = if seen == 1000 {
+                vec![77; 29]
+            } else {
+                vec![seen as u8; 1 + seen * 37 % 271]
+            };
+            assert_eq!(block.bytes, expected);
+            seen += 1;
+        }
+        assert_eq!(seen, count);
+        Ok(())
+    }
+    let dir = tempfile::tempdir()?;
+    let spec = Format::spec()
+        .with_commit_policy(CommitPolicy::RecordFooter)
+        .with_liveness_policy(LivenessPolicy::FooterFlags)
+        .with_index_policy(IndexPolicy::BlockOffsetChain)
+        .with_computed_schema_hash()
+        .with_resource_limits(ReadLimits::STANDARD.with_max_index_bytes(32768));
+    let mut recovered_refusals = 0;
+    let mut returned_refusals = 0;
+    for nth in 1..=24 {
+        let path = dir.path().join(format!("compact-refusal-{nth}"));
+        let mut writer = spec.create(&path)?;
+        let mut offsets = Vec::new();
+        for n in 0..1000usize {
+            offsets.push(
+                writer
+                    .push_info(&Blob {
+                        bytes: vec![n as u8; 1 + n * 37 % 271],
+                    })?
+                    .record_offset,
+            );
+        }
+        writer.sync()?;
+        let held = spec.open_readonly(&path)?;
+        let (result, peak) = measure(512, nth, || writer.defragment());
+        let matches = MATCHES.load(Relaxed);
+        let did_refuse = matches >= nth;
+        if nth == 24 {
+            assert!(
+                !did_refuse,
+                "extend the sweep to include every refusal point"
+            );
+        }
+        assert!(
+            peak < 256 * 1024,
+            "rewrite/read-directory overlap exceeded its existing allowance: {peak}"
+        );
+        match result {
+            Ok(_) => recovered_refusals += usize::from(did_refuse),
+            Err(error) => {
+                assert!(did_refuse);
+                assert!(
+                    matches!(error, Error::AllocationFailed { .. })
+                        || matches!(error, Error::Io(ref e) if e.kind() == std::io::ErrorKind::OutOfMemory),
+                    "unexpected refusal result: {error:?}"
+                );
+                returned_refusals += 1;
+                drop(writer);
+                writer = spec.open(&path)?;
+            }
+        }
+        check(&held, 1000)?;
+        check(&writer, 1000)?;
+        assert!(writer.mark_record_dead(offsets[313] + 1).is_err());
+        assert!(!writer.record_is_dead(offsets[313])?);
+        writer.mark_record_dead(offsets[313])?;
+        assert!(writer.record_is_dead(offsets[313])?);
+        writer.push_info(&Blob {
+            bytes: vec![77; 29],
+        })?;
+        writer.sync()?;
+        check(&held, 1000)?;
+        check(&spec.open_readonly(&path)?, 1001)?;
+    }
+    assert!(
+        returned_refusals > 0,
+        "pre-publication refusal was not exercised"
+    );
+    assert!(
+        recovered_refusals > 0,
+        "optional read-directory refusal was not exercised"
+    );
+    println!(
+        "REWRITE_DIRECTORY_REFUSALS returned={returned_refusals} recovered={recovered_refusals}"
     );
     Ok(())
 }
