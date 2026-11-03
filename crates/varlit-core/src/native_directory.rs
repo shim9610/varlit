@@ -317,7 +317,7 @@ impl ResidentIndex {
                     false,
                     |position, bytes| reader.read(position, bytes),
                 )?;
-                super::validate_record_entry(self.spec, &entry)?;
+                super::validate_record_entry(&self.spec, &entry)?;
                 let end = entry.checked_physical_end()?;
                 if end <= at || end > self.snapshot.len() {
                     return Err(Error::CorruptTail { offset: at });
