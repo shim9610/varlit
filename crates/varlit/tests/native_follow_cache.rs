@@ -526,3 +526,155 @@ fn nonresident_metadata_refusal_does_not_refuse_logging() -> varlit::Result<()> 
     assert_eq!(count, 8192, "refused metadata caused data loss");
     Ok(())
 }
+
+#[test]
+fn writer_keeps_ingesting_while_eight_readers_decode_queued_commits() -> varlit::Result<()> {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("independent-stream");
+    let (mut writer, pinned) = fixture(&path)?;
+    let held = records(&pinned)?;
+    let label = Label {
+        text: "stream".repeat(8192),
+    };
+    std::thread::scope(|scope| -> varlit::Result<()> {
+        let (answers, receive) = mpsc::channel();
+        let mut sends = Vec::new();
+        let mut joins = Vec::new();
+        for id in 0..8 {
+            let path = &path;
+            let answers = answers.clone();
+            let (send, chunks) = mpsc::channel::<Arc<Vec<(u64, u64)>>>();
+            sends.push(send);
+            joins.push(scope.spawn(move || -> varlit::Result<()> {
+                let mut reader = varlit::VarlitFile::open_readonly(explicit(), path)?;
+                answers.send((id, 0, 0)).unwrap();
+                let mut scratch = Vec::new();
+                let (mut count, mut trace) = (0, 0u64);
+                for chunk in chunks {
+                    for _ in 0..8 {
+                        reader.follow()?;
+                    }
+                    for &(offset, expected) in chunk.iter() {
+                        let entry = reader.record_entry_at(offset)?;
+                        let reading = reader.decode_block_into::<Reading>(&entry, &mut scratch)?;
+                        assert_eq!(reading.value, expected);
+                        count += 1;
+                        trace = trace
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(reading.value);
+                    }
+                }
+                answers.send((id, count, trace)).unwrap();
+                Ok(())
+            }));
+        }
+        drop(answers);
+        for _ in 0..8 {
+            assert_eq!(receive.recv_timeout(Duration::from_secs(30)).unwrap().1, 0);
+        }
+        // No reader acknowledgement is awaited in this loop. Variable records
+        // exercise partial framing while readers decode preceding fixed records.
+        for phase in 0..64 {
+            let mut chunk = Vec::new();
+            for n in 0..128 {
+                let value = 128 + phase * 128 + n;
+                let info = writer.push_info(&Reading { value })?;
+                chunk.push((info.record_offset, value));
+            }
+            writer.push(&label)?;
+            writer.commit()?;
+            let chunk = Arc::new(chunk);
+            for send in &sends {
+                send.send(Arc::clone(&chunk)).unwrap();
+            }
+        }
+        sends.clear();
+        let mut seen = [false; 8];
+        let mut trace = None;
+        for _ in 0..8 {
+            let (id, count, actual) = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert!(!seen[id]);
+            seen[id] = true;
+            assert_eq!(count, 8192);
+            assert_eq!(*trace.get_or_insert(actual), actual);
+        }
+        for join in joins {
+            join.join().unwrap()?;
+        }
+        Ok(())
+    })?;
+    assert_eq!(records(&pinned)?, held);
+    Ok(())
+}
+
+#[test]
+fn publication_allocation_refusal_preserves_the_snapshot_and_retries() -> varlit::Result<()> {
+    for nth in 1..=4 {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("publication-refusal");
+        let (mut writer, mut reader) = fixture(&path)?;
+        let held = records(&reader)?;
+        for value in 128..4224 {
+            writer.push(&Reading { value })?;
+        }
+        writer.flush()?;
+        assert_eq!(reader.follow()?, 0);
+        writer.commit()?;
+        let result = with_refusal(nth, || reader.follow());
+        assert!(
+            result.is_err(),
+            "publication allocation site {nth} did not refuse"
+        );
+        assert_eq!(records(&reader)?, held);
+        assert!(
+            reader.follow()? > 0,
+            "publication retry failed at site {nth}"
+        );
+        assert_eq!(records(&reader)?, held + 4097);
+    }
+    Ok(())
+}
+
+#[test]
+fn publication_replay_reuses_spilled_staging_without_stale_rows() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("spilled-replay");
+    let spec =
+        explicit().with_resource_limits(varlit::ReadLimits::STANDARD.with_max_index_bytes(2048));
+    let mut writer = spec.create(&path)?;
+    let first = writer.push_info(&Reading { value: 41 })?;
+    writer.commit()?;
+    let pinned = varlit::VarlitFile::open_readonly(spec, &path)?;
+    let mut reader = varlit::VarlitFile::open_readonly(spec, &path)?;
+    let mut expected = Vec::new();
+    for value in 0..512 {
+        let info = writer.push_info(&Reading { value })?;
+        expected.push((info.record_offset, value));
+    }
+    writer.flush()?;
+    assert_eq!(reader.follow()?, 0);
+    assert!(reader.record_entry_at(expected[0].0).is_err());
+    writer.commit()?;
+    assert!(reader.follow()? > 0);
+    let mut scratch = Vec::new();
+    for &(offset, value) in &expected {
+        let entry = reader.record_entry_at(offset)?;
+        assert_eq!(
+            reader
+                .decode_block_into::<Reading>(&entry, &mut scratch)?
+                .value,
+            value
+        );
+    }
+    assert!(pinned.record_entry_at(expected[0].0).is_err());
+    let entry = pinned.record_entry_at(first.record_offset)?;
+    assert_eq!(
+        pinned
+            .decode_block_into::<Reading>(&entry, &mut scratch)?
+            .value,
+        41
+    );
+    Ok(())
+}
