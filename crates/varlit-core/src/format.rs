@@ -1006,7 +1006,7 @@ impl ReadLimits {
         self
     }
 
-    const fn clear_trusted_api(mut self) -> Self {
+    const fn without_unbounded_opt_in(mut self) -> Self {
         self.is_trusted_api = false;
         self
     }
@@ -2521,7 +2521,7 @@ impl FormatSpec {
     }
 
     pub const fn with_read_limits(mut self, read_limits: ReadLimits) -> Self {
-        self.read_limits = read_limits.clear_trusted_api();
+        self.read_limits = read_limits.without_unbounded_opt_in();
         self
     }
 
@@ -2548,7 +2548,7 @@ impl FormatSpec {
     }
 
     pub(crate) const fn ordinary_read(mut self) -> Self {
-        self.read_limits = self.read_limits.resolve().clear_trusted_api();
+        self.read_limits = self.read_limits.resolve().without_unbounded_opt_in();
         self
     }
 

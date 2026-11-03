@@ -693,7 +693,7 @@ pub(crate) fn fresh_stream_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
 /// user record and needs no exemption from the caller's read limits.
 pub(crate) fn prepare_stream_creation_nonce_record(
     spec: FormatSpec,
-    nonce: [u8; MATRIX_CREATION_NONCE_LEN],
+    creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
     sequence: u64,
     record_offset: u64,
 ) -> Result<PreparedStreamRecord> {
@@ -703,7 +703,7 @@ pub(crate) fn prepare_stream_creation_nonce_record(
         1,
         RECORD_FLAG_INTERNAL,
         0,
-        &nonce,
+        &creation_id,
         sequence,
         record_offset,
         None,
