@@ -336,6 +336,120 @@ fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()>
 }
 
 #[test]
+fn mark_read_hint_preserves_full_width_geometry() {
+    for count in [0, 1, 31, 32, 33, usize::MAX / 512, usize::MAX] {
+        for bytes in [0, 512, 32 * 512, 32 * 512 + 1, u64::MAX] {
+            assert_eq!(
+                mark_prefers_header_only(bytes, count),
+                count >= 32 && u128::from(bytes) > count as u128 * 512,
+            );
+        }
+    }
+}
+
+#[test]
+fn adaptive_mark_reads_preserve_frames_and_retry_after_io_failure() -> Result<()> {
+    let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
+    for length in [0, 64, 448, 449, 4096] {
+        let mut bytes = Vec::new();
+        let mut expected = None;
+        for i in 0..64 {
+            let mut entry = append_frame(
+                spec,
+                &mut bytes,
+                0,
+                &vec![23; length],
+                RecordFooterFields {
+                    prev_same_block_offset: None,
+                    prev_same_key_offset: None,
+                    mutable_flags: 0,
+                },
+            )?;
+            entry.committed = false;
+            if i == 16 {
+                expected = Some(entry);
+            }
+        }
+        let expected = expected.unwrap();
+        let mut requests = Vec::new();
+        let actual = fault_record_entry_for_mark_with(
+            bytes.len() as u64,
+            64,
+            spec,
+            expected.record_offset,
+            |at, output| {
+                requests.push(output.len());
+                output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                Ok(())
+            },
+        )?;
+        assert_eq!(actual, expected);
+        if length <= 448 {
+            assert_eq!(requests, [512]);
+        } else {
+            assert_eq!(
+                requests,
+                [RECORD_HEADER_LEN as usize, RECORD_FOOTER_LEN as usize]
+            );
+        }
+        for failed_read in 0..requests.len() {
+            let mut call = 0;
+            assert!(
+                fault_record_entry_for_mark_with(
+                    bytes.len() as u64,
+                    64,
+                    spec,
+                    expected.record_offset,
+                    |at, output| {
+                        let fail = call == failed_read;
+                        call += 1;
+                        if fail {
+                            return Err(std::io::Error::from(std::io::ErrorKind::Other).into());
+                        }
+                        output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                        Ok(())
+                    },
+                )
+                .is_err()
+            );
+            assert_eq!(call, failed_read + 1);
+        }
+        // Repair/retry uses the same input and complete framing, on either hint.
+        assert_eq!(
+            fault_record_entry_for_mark_with(
+                bytes.len() as u64,
+                64,
+                spec,
+                expected.record_offset,
+                |at, output| {
+                    output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                    Ok(())
+                },
+            )?,
+            expected
+        );
+        let end = (expected.footer_offset.unwrap() + RECORD_FOOTER_LEN - 1) as usize;
+        assert!(
+            fault_record_entry_for_mark_with(
+                bytes.len() as u64,
+                64,
+                spec,
+                expected.record_offset,
+                |at, output| {
+                    let input = bytes[..end]
+                        .get(at as usize..at as usize + output.len())
+                        .ok_or(Error::UnexpectedEof)?;
+                    output.copy_from_slice(input);
+                    Ok(())
+                },
+            )
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
     let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
     for length in [0, 8, 64, 65, 256, 448, 449, 1024] {
