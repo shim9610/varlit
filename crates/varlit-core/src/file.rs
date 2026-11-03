@@ -6534,7 +6534,6 @@ impl VarlitFile {
         let entry = fault_record_entry_for_mark_with(
             self.snapshot.len(),
             self.index.len(),
-            self.index.small_frame_read_hint(record_offset),
             self.spec,
             record_offset,
             |at, bytes| self.snapshot.read_exact_at(at, bytes),
@@ -15193,14 +15192,11 @@ fn mark_prefers_header_only(snapshot_len: u64, records: usize) -> bool {
 fn fault_record_entry_for_mark_with(
     snapshot_len: u64,
     records: usize,
-    small_frame: bool,
     spec: FormatSpec,
     record_offset: u64,
     read: impl FnMut(u64, &mut [u8]) -> Result<()>,
 ) -> Result<RecordIndexEntry> {
-    if small_frame {
-        fault_record_entry_with::<128>(snapshot_len, spec, record_offset, false, read)
-    } else if mark_prefers_header_only(snapshot_len, records) {
+    if mark_prefers_header_only(snapshot_len, records) {
         fault_record_entry_with::<{ RECORD_HEADER_LEN as usize }>(
             snapshot_len,
             spec,
