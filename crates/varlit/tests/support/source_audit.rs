@@ -95,7 +95,12 @@ pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
     (
         "file.rs",
         "set_record_mutable_flags",
-        "fault_record_entry_prefixed",
+        "fault_record_entry_for_mark_with",
+    ),
+    (
+        "file.rs",
+        "fault_record_entry_for_mark_with",
+        "fault_record_entry_with",
     ),
     (
         "file.rs",
