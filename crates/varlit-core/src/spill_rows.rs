@@ -145,7 +145,15 @@ impl<const N: usize> SpillRows<N> {
             key: &impl Fn(&[u8]) -> u64,
         ) -> Option<[u8; N]> {
             let count = bytes.len() / N;
-            if count == 0 || wanted < key(&bytes[..N]) || wanted > key(&bytes[(count - 1) * N..]) {
+            if count == 0 {
+                return None;
+            }
+            let first = key(&bytes[..N]);
+            if wanted < first {
+                return None;
+            }
+            let last = key(&bytes[(count - 1) * N..]);
+            if wanted > last {
                 return None;
             }
             // Fixed-size records are common, with occasional large internal
@@ -153,7 +161,6 @@ impl<const N: usize> SpillRows<N> {
             // not the entire page span (whose last row can follow a large
             // checkpoint). Only exact equality proves membership; arbitrary
             // extents retain the binary search below.
-            let first = key(&bytes[..N]);
             if count > 1 {
                 let second = key(&bytes[N..2 * N]);
                 if second > first {
@@ -172,7 +179,46 @@ impl<const N: usize> SpillRows<N> {
             // It still compares real private rows, never an estimated boundary.
             let (rows, remainder) = bytes.as_chunks::<N>();
             debug_assert!(remainder.is_empty());
-            let end = rows.partition_point(|row| key(row) <= wanted);
+            let (mut low, mut high) = (0, count);
+            // Large resident directories otherwise incur a full binary search
+            // per mark. Two bounded estimates can locate a small real-key
+            // bracket, but never authorize a record boundary by themselves.
+            if count >= 1024 && last > first {
+                let span = u128::from(last - first);
+                let intervals = (count - 1) as u128;
+                let estimate = (u128::from(wanted - first) * intervals / span) as usize;
+                let observed = key(&rows[estimate]);
+                if observed == wanted {
+                    return Some(rows[estimate]);
+                }
+                // Near-uniform extents often put the estimate beside the
+                // answer. An actual adjacent-key bracket proves the floor.
+                if observed < wanted && estimate + 1 < count {
+                    let next = key(&rows[estimate + 1]);
+                    if wanted <= next {
+                        return Some(rows[estimate + usize::from(wanted == next)]);
+                    }
+                } else if observed > wanted && estimate > 0 && key(&rows[estimate - 1]) <= wanted {
+                    return Some(rows[estimate - 1]);
+                }
+                let correction = (u128::from(wanted.abs_diff(observed)) * intervals / span)
+                    .min(intervals) as usize;
+                let corrected = if wanted > observed {
+                    estimate.saturating_add(correction).min(count - 1)
+                } else {
+                    estimate.saturating_sub(correction)
+                };
+                let start = corrected.saturating_sub(16);
+                let end = corrected.saturating_add(17).min(count);
+                if key(&rows[start]) <= wanted && wanted <= key(&rows[end - 1]) {
+                    (low, high) = (start, end);
+                } else if observed < wanted {
+                    low = estimate + 1;
+                } else {
+                    high = estimate;
+                }
+            }
+            let end = low + rows[low..high].partition_point(|row| key(row) <= wanted);
             end.checked_sub(1).and_then(|at| rows.get(at)).copied()
         }
         search(&self.buffer, wanted, &key)
@@ -349,7 +395,7 @@ mod tests {
     use super::*;
     #[test]
     fn cached_floor_matches_ordered_rows_across_irregular_and_full_width_gaps() -> io::Result<()> {
-        for count in [1usize, 2, 63, 64, 65, 256] {
+        for count in [1usize, 2, 63, 64, 65, 256, 1024, 1025] {
             for shape in 0..3 {
                 let keys: Vec<u64> = (0..count)
                     .scan(0u64, |previous, i| {
@@ -370,7 +416,13 @@ mod tests {
                 for key in &keys {
                     rows.push(key.to_le_bytes())?;
                 }
-                for wanted in keys.iter().flat_map(|&key| {
+                // Keep all small cases and sample both ends plus about 64
+                // positions in large cases, including the prediction threshold.
+                let probes = keys
+                    .iter()
+                    .step_by(if count >= 1024 { 16 } else { 1 })
+                    .chain(keys.last());
+                for wanted in probes.flat_map(|&key| {
                     [Some(key), key.checked_sub(1), key.checked_add(1)]
                         .into_iter()
                         .flatten()
