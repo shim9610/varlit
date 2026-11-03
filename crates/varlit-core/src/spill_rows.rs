@@ -12,6 +12,21 @@ pub(crate) struct SpillRows<const N: usize> {
     capacity: usize,
     read_cache: RefCell<(usize, Vec<u8>)>,
 }
+// Most byte offsets and row counts fit a 64-bit product. Keep the exact
+// 128-bit computation for the full-width cases rather than paying for it on
+// every ordinary lookup.
+#[inline]
+pub(crate) fn scaled_position(delta: u64, intervals: usize, span: u64) -> u128 {
+    debug_assert_ne!(span, 0);
+    if let Ok(intervals) = u64::try_from(intervals)
+        && let Some(product) = delta.checked_mul(intervals)
+    {
+        u128::from(product / span)
+    } else {
+        u128::from(delta) * intervals as u128 / u128::from(span)
+    }
+}
+
 impl<const N: usize> SpillRows<N> {
     /// No heap buffering; used when a shared budget cannot spare one row.
     pub(crate) fn unbuffered() -> Self {
@@ -184,9 +199,9 @@ impl<const N: usize> SpillRows<N> {
             // per mark. Two bounded estimates can locate a small real-key
             // bracket, but never authorize a record boundary by themselves.
             if count >= 1024 && last > first {
-                let span = u128::from(last - first);
-                let intervals = (count - 1) as u128;
-                let estimate = (u128::from(wanted - first) * intervals / span) as usize;
+                let span = last - first;
+                let intervals = count - 1;
+                let estimate = scaled_position(wanted - first, intervals, span) as usize;
                 let observed = key(&rows[estimate]);
                 if observed == wanted {
                     return Some(rows[estimate]);
@@ -201,13 +216,53 @@ impl<const N: usize> SpillRows<N> {
                 } else if observed > wanted && estimate > 0 && key(&rows[estimate - 1]) <= wanted {
                     return Some(rows[estimate - 1]);
                 }
-                let correction = (u128::from(wanted.abs_diff(observed)) * intervals / span)
-                    .min(intervals) as usize;
-                let corrected = if wanted > observed {
+                let correction = scaled_position(wanted.abs_diff(observed), intervals, span)
+                    .min(intervals as u128) as usize;
+                let mut corrected = if wanted > observed {
                     estimate.saturating_add(correction).min(count - 1)
                 } else {
                     estimate.saturating_sub(correction)
                 };
+                // A large irregular directory can leave the first correction
+                // outside this small window. Refine only while observed error
+                // falls by at least half; every answer still comes from a row.
+                // The fixed iteration bound also covers hostile geometry.
+                let mut previous_distance = wanted.abs_diff(observed);
+                let mut last_probe = estimate;
+                for _ in 0..3 {
+                    if corrected == last_probe {
+                        break;
+                    }
+                    let at = key(&rows[corrected]);
+                    last_probe = corrected;
+                    if at == wanted {
+                        return Some(rows[corrected]);
+                    }
+                    if at < wanted && corrected + 1 < count {
+                        let next = key(&rows[corrected + 1]);
+                        if wanted <= next {
+                            return Some(rows[corrected + usize::from(wanted == next)]);
+                        }
+                    } else if at > wanted && corrected > 0 && key(&rows[corrected - 1]) <= wanted {
+                        return Some(rows[corrected - 1]);
+                    }
+                    let distance = wanted.abs_diff(at);
+                    if distance >= previous_distance / 2 {
+                        break;
+                    }
+                    previous_distance = distance;
+                    let step = (scaled_position(distance, intervals, span).min(intervals as u128)
+                        as usize)
+                        .max(1);
+                    corrected = if wanted > at {
+                        corrected.saturating_add(step).min(count - 1)
+                    } else {
+                        corrected.saturating_sub(step)
+                    };
+                }
+                if corrected != last_probe && key(&rows[corrected]) == wanted {
+                    return Some(rows[corrected]);
+                }
                 let start = corrected.saturating_sub(16);
                 let end = corrected.saturating_add(17).min(count);
                 if key(&rows[start]) <= wanted && wanted <= key(&rows[end - 1]) {
@@ -663,5 +718,72 @@ mod tests {
             assert!(rows.buffer.len() <= 16);
         }
         assert_eq!(rows.get(100).unwrap(), None);
+    }
+    #[test]
+    fn cached_floor_bounds_probes_on_periodically_varying_extents() -> io::Result<()> {
+        use std::cell::Cell;
+        let period = if cfg!(miri) { 4096 } else { 65536 };
+        let count = period * 2;
+        let stride = period / 8 - 1;
+        let mut rows = SpillRows::<8>::new(2 * 1024 * 1024);
+        let mut offsets = Vec::new();
+        let mut offset = 100u64;
+        for n in 0..count {
+            rows.push(offset.to_le_bytes())?;
+            offsets.push(offset);
+            offset += 72 + (n * stride % period) as u64;
+        }
+        for extent in [128, 96] {
+            rows.push(offset.to_le_bytes())?;
+            offsets.push(offset);
+            offset += extent;
+        }
+        let selector_calls = Cell::new(0usize);
+        let binary_calls = Cell::new(0usize);
+        let queries = count / 16;
+        for sample in 0..queries {
+            let at = 16 * (sample * 31337 % queries + 1) - 1;
+            let wanted = offsets[at];
+            for probe in [wanted - 1, wanted, wanted + 1] {
+                let end = offsets.partition_point(|&value| {
+                    if probe == wanted {
+                        binary_calls.set(binary_calls.get() + 1);
+                    }
+                    value <= probe
+                });
+                let expected = end.checked_sub(1).map(|at| offsets[at]);
+                let actual = rows
+                    .cached_floor(probe, |bytes| {
+                        if probe == wanted {
+                            selector_calls.set(selector_calls.get() + 1);
+                        }
+                        u64::from_le_bytes(bytes.try_into().unwrap())
+                    })
+                    .map(u64::from_le_bytes);
+                assert_eq!(actual, expected);
+            }
+        }
+        eprintln!(
+            "fixture selector calls={} binary calls={}",
+            selector_calls.get(),
+            binary_calls.get()
+        );
+        // A resident mark should not do more offset probes than the standard
+        // binary-search baseline on this irregular, recurring record layout.
+        assert!(selector_calls.get() <= binary_calls.get());
+        Ok(())
+    }
+    #[test]
+    fn scaled_positions_match_full_width_arithmetic() {
+        for delta in [0, 1, 2, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
+            for count in [0, 1, 2, 1023, usize::MAX / 2, usize::MAX] {
+                for span in [1, 2, 1024, u64::MAX / 2, u64::MAX] {
+                    assert_eq!(
+                        scaled_position(delta, count, span),
+                        u128::from(delta) * count as u128 / u128::from(span)
+                    );
+                }
+            }
+        }
     }
 }
