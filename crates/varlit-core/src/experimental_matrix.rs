@@ -433,22 +433,22 @@ struct Head {
     rows: u64,
     end: u64,
 }
-fn head_bytes(h: Head, nonce: [u8; 16]) -> [u8; PAGE as usize] {
+fn head_bytes(h: Head, creation_id: [u8; 16]) -> [u8; PAGE as usize] {
     let mut b = [0; PAGE as usize];
     b[..8].copy_from_slice(HEAD_MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     put(&mut b, 24, h.generation);
     put(&mut b, 32, h.rows);
     put(&mut b, 40, h.end);
     seal(&mut b);
     b
 }
-fn read_head(file: &File, nonce: [u8; 16]) -> Result<Head> {
+fn read_head(file: &File, creation_id: [u8; 16]) -> Result<Head> {
     let mut found = None;
     for slot in 0..2 {
         let mut b = [0; PAGE as usize];
         read_at(file, PAGE * (slot + 1), &mut b)?;
-        if &b[..8] == HEAD_MAGIC && b[8..24] == nonce && valid(&b) {
+        if &b[..8] == HEAD_MAGIC && b[8..24] == creation_id && valid(&b) {
             let h = Head {
                 generation: u64_at(&b, 24),
                 rows: u64_at(&b, 32),
@@ -492,14 +492,17 @@ fn parse_slot(b: &[u8], id: u64) -> Result<Option<(u64, u32, u64)>> {
 #[allow(clippy::type_complexity)]
 fn original_slot(
     journal: &File,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     h: Head,
     id: u64,
     slot: u64,
 ) -> Result<Option<Option<(u64, u32, u64)>>> {
     let mut b = [0; PAGE as usize];
     read_at(journal, 0, &mut b)?;
-    if &b[..8] != INTENT_MAGIC || b[8..24] != nonce || !valid(&b) || u64_at(&b, 24) != h.generation
+    if &b[..8] != INTENT_MAGIC
+        || b[8..24] != creation_id
+        || !valid(&b)
+        || u64_at(&b, 24) != h.generation
     {
         return Ok(None);
     }
@@ -566,8 +569,8 @@ fn selected_with_undo(
         let entry = match read {
             Ok(Some(v)) => Some(v),
             other => {
-                if let Some((journal, nonce)) = undo {
-                    match original_slot(journal, nonce, h, id, slot)? {
+                if let Some((journal, creation_id)) = undo {
+                    match original_slot(journal, creation_id, h, id, slot)? {
                         Some(v) => v,
                         None => other?,
                     }
@@ -609,10 +612,10 @@ fn payload(file: &File, g: &Geometry, h: Head, id: u64) -> Result<(Vec<u8>, Page
     };
     Ok((bytes, (target, original)))
 }
-fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
+fn metadata(g: &Geometry, creation_id: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
     let mut b = [0; PAGE as usize];
     b[..8].copy_from_slice(MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     put(&mut b, 24, g.hash);
     put(&mut b, 32, g.bytes);
     put(&mut b, 40, g.options.rows_per_chunk);
@@ -624,26 +627,26 @@ fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
 fn inspect(file: &File, g: &Geometry, path: &Path) -> Result<[u8; 16]> {
     let mut b = [0; PAGE as usize];
     read_at(file, 0, &mut b)?;
-    let nonce = b[8..24].try_into().unwrap();
-    if b != metadata(g, nonce, path) {
+    let creation_id = b[8..24].try_into().unwrap();
+    if b != metadata(g, creation_id, path) {
         return Err(invalid(
             "reuse mode, schema, geometry, pathname or metadata checksum mismatch",
         ));
     }
-    Ok(nonce)
+    Ok(creation_id)
 }
-fn sidecar(file: &File, nonce: [u8; 16]) -> Result<()> {
+fn sidecar(file: &File, creation_id: [u8; 16]) -> Result<()> {
     let mut b = [0; PAGE as usize];
     read_at(file, 0, &mut b)?;
-    if b != sidecar_header(nonce) {
+    if b != sidecar_header(creation_id) {
         return Err(invalid("sidecar identity"));
     }
     Ok(())
 }
-fn sidecar_header(nonce: [u8; 16]) -> [u8; PAGE as usize] {
+fn sidecar_header(creation_id: [u8; 16]) -> [u8; PAGE as usize] {
     let mut b = [0; PAGE as usize];
     b[..8].copy_from_slice(MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     seal(&mut b);
     b
 }
@@ -707,7 +710,7 @@ struct ReuseWriter {
     stage: File,
     journal: File,
     geometry: Geometry,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     head: Head,
     rows: u64,
     count: u64,
@@ -737,7 +740,7 @@ impl MatrixWriter {
             let geometry = Geometry::new(spec, &dims, options)?;
             let file = LockedFile::new(File::create_new(&path)?)?;
             let path = path.canonicalize()?;
-            let nonce = crate::file::fresh_stream_creation_nonce();
+            let creation_id = crate::file::fresh_stream_creation_nonce();
             let stage = File::create_new(companion(&path, ".reuse-work"))?;
             let journal = File::create_new(companion(&path, ".reuse-journal"))?;
             let head = Head {
@@ -745,11 +748,11 @@ impl MatrixWriter {
                 rows: 0,
                 end: HEADER,
             };
-            write_at(&file, 0, &metadata(&geometry, nonce, &path))?;
-            write_at(&file, PAGE, &head_bytes(head, nonce))?;
-            write_at(&file, 2 * PAGE, &head_bytes(head, nonce))?;
+            write_at(&file, 0, &metadata(&geometry, creation_id, &path))?;
+            write_at(&file, PAGE, &head_bytes(head, creation_id))?;
+            write_at(&file, 2 * PAGE, &head_bytes(head, creation_id))?;
             for f in [&stage, &journal] {
-                write_at(f, 0, &sidecar_header(nonce))?;
+                write_at(f, 0, &sidecar_header(creation_id))?;
                 f.sync_all()?;
             }
             file.sync_all()?;
@@ -759,7 +762,7 @@ impl MatrixWriter {
                 stage,
                 journal,
                 geometry,
-                nonce,
+                creation_id,
                 head,
                 rows: 0,
                 count: 0,
@@ -795,17 +798,17 @@ impl MatrixWriter {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.canonicalize()?;
             let file = LockedFile::new(OpenOptions::new().read(true).write(true).open(&path)?)?;
-            let nonce = inspect(&file, &geometry, &path)?;
-            let head = read_head(&file, nonce)?;
+            let creation_id = inspect(&file, &geometry, &path)?;
+            let head = read_head(&file, creation_id)?;
             let stage = open_sidecar(&companion(&path, ".reuse-work"))?;
             let journal = open_sidecar(&companion(&path, ".reuse-journal"))?;
-            sidecar(&stage, nonce)?;
+            sidecar(&stage, creation_id)?;
             let mut w = ReuseWriter {
                 file,
                 stage,
                 journal,
                 geometry,
-                nonce,
+                creation_id,
                 head,
                 rows: head.rows,
                 count: 0,
@@ -836,7 +839,7 @@ impl MatrixWriter {
         let mut r =
             MatrixReader::open(self.spec, &self.path, self.dims.try_clone()?, self.options)?;
         if let (WriterInner::Reuse(w), ReaderInner::Reuse(v)) = (&self.inner, &mut r.inner) {
-            if v.nonce != w.nonce {
+            if v.creation_id != w.creation_id {
                 return Err(invalid("writer pathname was replaced"));
             }
             v.notify = Some(w.notify.clone());
@@ -1229,7 +1232,7 @@ impl ReuseWriter {
     fn reset(&mut self) -> Result<()> {
         // The complete old intent stays durable until every rollback write (or
         // the new publication) is durable. A reset never precedes that barrier.
-        write_at(&self.journal, 0, &sidecar_header(self.nonce))?;
+        write_at(&self.journal, 0, &sidecar_header(self.creation_id))?;
         self.journal.sync_all()?;
         self.journal.set_len(PAGE)?;
         self.stage.set_len(PAGE)?;
@@ -1245,11 +1248,11 @@ impl ReuseWriter {
         let mut b = [0; PAGE as usize];
         read_at(&self.journal, 0, &mut b)?;
         if b[..8] == *MAGIC {
-            sidecar(&self.journal, self.nonce)?;
+            sidecar(&self.journal, self.creation_id)?;
             self.reset()?;
             return Ok(());
         }
-        if &b[..8] != INTENT_MAGIC || b[8..24] != self.nonce || !valid(&b) {
+        if &b[..8] != INTENT_MAGIC || b[8..24] != self.creation_id || !valid(&b) {
             return Err(invalid("recovery intent is corrupt; file left untouched"));
         }
         let base = u64_at(&b, 24);
@@ -1300,7 +1303,7 @@ impl ReuseWriter {
         let next = self.next()?;
         let mut intent = [0; PAGE as usize];
         intent[..8].copy_from_slice(INTENT_MAGIC);
-        intent[8..24].copy_from_slice(&self.nonce);
+        intent[8..24].copy_from_slice(&self.creation_id);
         put(&mut intent, 24, self.head.generation);
         put(&mut intent, 32, next);
         put(&mut intent, 40, self.count);
@@ -1360,7 +1363,7 @@ impl ReuseWriter {
             end: self.file.metadata()?.len(),
         };
         self.publishing = Some(next);
-        let head_bytes = head_bytes(head, self.nonce);
+        let head_bytes = head_bytes(head, self.creation_id);
         let head_at = PAGE * (1 + next % 2);
         write_at(&self.file, head_at, &head_bytes[..64])?;
         fault("matrix_reuse.head_prefix")?;
@@ -1396,7 +1399,7 @@ struct ReuseReader {
     file: File,
     journal: File,
     geometry: Geometry,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     notify: Option<Arc<AtomicU64>>,
     cache: RefCell<Option<CachedPages>>,
 }
@@ -1420,17 +1423,17 @@ impl MatrixReader {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.as_ref().canonicalize()?;
             let file = File::open(&path)?;
-            let nonce = inspect(&file, &geometry, &path)?;
+            let creation_id = inspect(&file, &geometry, &path)?;
             geometry
                 .spec
                 .read_limits
                 .check(ReadLimitKey::FileLen, file.metadata()?.len())?;
-            read_head(&file, nonce)?;
+            read_head(&file, creation_id)?;
             ReaderInner::Reuse(crate::fallible::try_box(ReuseReader {
                 journal: File::open(companion(&path, ".reuse-journal"))?,
                 file,
                 geometry,
-                nonce,
+                creation_id,
                 notify: None,
                 cache: RefCell::new(None),
             })?)
@@ -1485,7 +1488,7 @@ impl MatrixReader {
     pub fn follow(&mut self) -> Result<u64> {
         match &mut self.inner {
             ReaderInner::Native(r) => Ok(r.follow()?),
-            ReaderInner::Reuse(r) => Ok(read_head(&r.file, r.nonce)?.generation),
+            ReaderInner::Reuse(r) => Ok(read_head(&r.file, r.creation_id)?.generation),
         }
     }
 }
@@ -1539,7 +1542,7 @@ impl ReuseReader {
                 let parsed = parse_slot(header, id);
                 let entry = match parsed {
                     Ok(Some(v)) => Some(v),
-                    other => match original_slot(&self.journal, self.nonce, h, id, slot)? {
+                    other => match original_slot(&self.journal, self.creation_id, h, id, slot)? {
                         Some(v) => v,
                         None => other?,
                     },
@@ -1611,7 +1614,7 @@ impl ReuseReader {
         let mut last_error = None;
         for _ in 0..attempts {
             let signal = self.notify.as_ref().map(|s| s.load(Ordering::Acquire));
-            let before = read_head(&self.file, self.nonce)?;
+            let before = read_head(&self.file, self.creation_id)?;
             let result = (|| {
                 if end > mul(before.rows, b.cols)? {
                     return Err(MatrixReuseError::Missing);
@@ -1657,7 +1660,7 @@ impl ReuseReader {
                 Ok(())
             })();
             fault("matrix_reuse.read_copied")?;
-            let after = read_head(&self.file, self.nonce)?;
+            let after = read_head(&self.file, self.creation_id)?;
             let signal_after = self.notify.as_ref().map(|s| s.load(Ordering::Acquire));
             if before == after && signal == signal_after {
                 match result {

@@ -102,10 +102,10 @@ fn seal(bytes: &mut [u8; PAGE]) {
 fn authentic(bytes: &[u8; PAGE]) -> bool {
     checksum(&bytes[..PAGE - 4]) == u32_at(bytes, PAGE - 4)
 }
-pub(crate) fn path(primary: &Path, nonce: [u8; 16]) -> PathBuf {
+pub(crate) fn path(primary: &Path, creation_id: [u8; 16]) -> PathBuf {
     let mut name = primary.as_os_str().to_os_string();
     name.push(".");
-    for byte in nonce {
+    for byte in creation_id {
         name.push(format!("{byte:02x}"));
     }
     name.push(".vmg");
@@ -564,7 +564,7 @@ pub(crate) struct MatrixFile {
     writer: Option<File>,
     cursor: u64,
     path: PathBuf,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     max_pending: usize,
 }
 impl MatrixFile {
@@ -572,10 +572,10 @@ impl MatrixFile {
         primary: &Path,
         base: &File,
         len: u64,
-        nonce: [u8; 16],
+        creation_id: [u8; 16],
         max_pending: usize,
     ) -> io::Result<Self> {
-        let path = path(primary, nonce);
+        let path = path(primary, creation_id);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -583,7 +583,7 @@ impl MatrixFile {
             .open(&path)?;
         let mut header = [0; PAGE];
         header[..8].copy_from_slice(MAGIC);
-        header[8..24].copy_from_slice(&nonce);
+        header[8..24].copy_from_slice(&creation_id);
         header[24..32].copy_from_slice(&len.to_le_bytes());
         seal(&mut header);
         write_at(&file, 0, &header)?;
@@ -599,20 +599,20 @@ impl MatrixFile {
         };
         Self::write_head(&file, head)?;
         file.sync_all()?;
-        Self::open(primary, base, nonce, true, max_pending)
+        Self::open(primary, base, creation_id, true, max_pending)
     }
     pub(crate) fn open(
         primary: &Path,
         base: &File,
-        nonce: [u8; 16],
+        creation_id: [u8; 16],
         writable: bool,
         max_pending: usize,
     ) -> io::Result<Self> {
-        let path = path(primary, nonce);
+        let path = path(primary, creation_id);
         let log = crate::fallible::try_arc(File::open(&path)?)?;
         let mut header = [0; PAGE];
         read_at(&log, 0, &mut header)?;
-        if &header[..8] != MAGIC || header[8..24] != nonce || !authentic(&header) {
+        if &header[..8] != MAGIC || header[8..24] != creation_id || !authentic(&header) {
             return Err(bad("matrix generation identity mismatch"));
         }
         let len = u64_at(&header, 24);
@@ -652,7 +652,7 @@ impl MatrixFile {
             writer,
             cursor: 0,
             path,
-            nonce,
+            creation_id,
             max_pending,
         })
     }
@@ -912,7 +912,7 @@ impl MatrixFile {
         let mut header = [0; PAGE];
         read_at(&log, 0, &mut header)?;
         if &header[..8] != MAGIC
-            || header[8..24] != old.nonce
+            || header[8..24] != old.creation_id
             || !authentic(&header)
             || u64_at(&header, 24) != old.view.len
         {
@@ -931,7 +931,7 @@ impl MatrixFile {
                 .path
                 .try_clone()
                 .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?,
-            nonce: old.nonce,
+            creation_id: old.creation_id,
             max_pending: old.max_pending,
         })
     }
@@ -1119,7 +1119,7 @@ impl MatrixFile {
             writer: Some(temp.as_file().try_clone()?),
             cursor: 0,
             path: self.path.try_clone()?,
-            nonce: self.nonce,
+            creation_id: self.creation_id,
             max_pending: self.max_pending,
         };
         self.view.walk(

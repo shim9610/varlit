@@ -14741,13 +14741,13 @@ fn fresh_matrix_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
 
 fn write_matrix_creation_nonce_region(
     file: &mut File,
-    nonce: [u8; MATRIX_CREATION_NONCE_LEN],
+    creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
 ) -> Result<()> {
     let mut region = [0u8; MATRIX_CREATION_NONCE_REGION_LEN];
     region[0..4].copy_from_slice(MATRIX_CREATION_NONCE_MAGIC);
     region[4..6].copy_from_slice(&MATRIX_CREATION_NONCE_VERSION.to_le_bytes());
     // region[6..8] stays zero (reserved).
-    region[8..].copy_from_slice(&nonce);
+    region[8..].copy_from_slice(&creation_id);
     file.write_all(&region)?;
     Ok(())
 }
