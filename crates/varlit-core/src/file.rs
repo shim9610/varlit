@@ -11807,6 +11807,10 @@ impl VarlitFile {
                 self.file = RecordFile::new(file);
                 self.snapshot = snapshot;
                 let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                // Rebinding succeeded and the complete new directory is ready.
+                // Release the old private rows before optional compaction; an
+                // assignment alone would keep them alive throughout its RHS.
+                self.index = ResidentIndex::empty(self.snapshot.clone(), self.spec);
                 self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation (PERF2-02)
@@ -11879,6 +11883,10 @@ impl VarlitFile {
                 self.file = RecordFile::new(file);
                 self.snapshot = snapshot;
                 let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
+                // Rebinding succeeded and the complete new directory is ready.
+                // Release the old private rows before optional compaction; an
+                // assignment alone would keep them alive throughout its RHS.
+                self.index = ResidentIndex::empty(self.snapshot.clone(), self.spec);
                 self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation (PERF2-02)
