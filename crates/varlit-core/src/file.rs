@@ -6545,7 +6545,7 @@ impl VarlitFile {
     // next frame of a sequential recovery walk anchored at the commit end.
     // Recheck identity here before every write, including recovery.
     fn write_framed_record_flags(&mut self, entry: &RecordIndexEntry, set: u32) -> Result<()> {
-        validate_record_entry(self.spec, entry)?;
+        validate_record_entry(&self.spec, entry)?;
         if entry.block_id >= RESERVED_BLOCK_ID_START {
             return Err(Error::ReservedBlockId(entry.block_id));
         }
@@ -12471,7 +12471,7 @@ impl VarlitFile {
             if next <= offset || next > framed_end {
                 return Err(Error::CorruptTail { offset });
             }
-            validate_record_entry(self.spec, &entry)?;
+            validate_record_entry(&self.spec, &entry)?;
             if entry.block_id < RESERVED_BLOCK_ID_START {
                 self.write_framed_record_flags(&entry, RECORD_MUTABLE_FLAG_DEAD)?;
                 marked += 1;
@@ -13293,7 +13293,7 @@ pub(crate) fn read_record_entry_positional(
         mutable_flags: 0,
         committed: true,
     };
-    validate_record_entry(spec, &entry)?;
+    validate_record_entry(&spec, &entry)?;
     if spec.spec_needs_record_footer() {
         let mut footer = [0u8; RECORD_FOOTER_LEN as usize];
         snapshot.read_exact_at(payload_end, &mut footer)?;

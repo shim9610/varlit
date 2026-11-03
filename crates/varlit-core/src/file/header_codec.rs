@@ -821,7 +821,7 @@ pub(super) fn decode_record_payload(
     if !entry.is_compressed() {
         return Ok(physical_payload);
     }
-    validate_record_entry(spec, entry)?;
+    validate_record_entry(&spec, entry)?;
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     let (algorithm, expected_len, compressed_payload) = match compression.header_mode {
@@ -941,7 +941,7 @@ pub(super) fn uses_format_contract_compression(spec: FormatSpec) -> bool {
 }
 
 #[inline]
-pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
+pub(super) fn validate_record_entry(spec: &FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
     let unknown_flags = entry.flags & !RECORD_KNOWN_FLAGS;
     if unknown_flags != 0 {
         return Err(Error::UnknownRecordFlags(unknown_flags));
@@ -952,12 +952,12 @@ pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) 
     if !entry.is_compressed() {
         return Ok(());
     }
-    validate_compressed_record_entry(spec, entry)
+    validate_compressed_record_entry(*spec, entry)
 }
 
-// Ordinary records only need their flags checked. Keep descriptor lookup out
-// of that inline path so callers do not copy the entire FormatSpec for each
-// uncompressed record; compressed records retain every policy check below.
+// Borrow the policy through the common validator: taking FormatSpec by value
+// can copy the whole structure before the branch even when this cold helper is never
+// called. Compressed records retain every policy check below.
 #[cold]
 #[inline(never)]
 fn validate_compressed_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {

@@ -174,7 +174,7 @@ pub(super) fn read_record_entry_at(
     }
     file.seek(SeekFrom::Start(offset))?;
     let mut entry = read_record_header(file, spec, offset)?;
-    validate_record_entry(spec, &entry)?;
+    validate_record_entry(&spec, &entry)?;
     spec.read_limits
         .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
     if !entry.is_compressed() {
@@ -2619,7 +2619,7 @@ impl RecordIndexEntry {
         if !self.is_compressed() {
             return Ok(self.payload_len);
         }
-        validate_record_entry(spec, self)?;
+        validate_record_entry(&spec, self)?;
         let compression = variable_compression_for_block(spec, self.block_id)
             .ok_or(Error::InvalidCompressionHeader)?;
         let expected_len = match compression.header_mode {
@@ -2654,7 +2654,7 @@ impl RecordIndexEntry {
         spec: FormatSpec,
         snapshot: &SnapshotFile,
     ) -> Result<u64> {
-        validate_record_entry(spec, self)?;
+        validate_record_entry(&spec, self)?;
         let compression = variable_compression_for_block(spec, self.block_id)
             .ok_or(Error::InvalidCompressionHeader)?;
         let expected_len = match compression.header_mode {
