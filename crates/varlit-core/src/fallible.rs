@@ -90,9 +90,12 @@ impl<T: TryClone> TryClone for Vec<T> {
         T::try_clone_slice(self)
     }
 }
-#[inline]
 fn reserved_vec<T>(len: usize) -> Result<Vec<T>> {
-    reserved_vec_for(len, "vector clone")
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(len)
+        .map_err(|_| allocation("vector clone", len.saturating_mul(size_of::<T>())))?;
+    Ok(output)
 }
 
 // Only reserve empty storage here; Vec remains responsible for initializing
@@ -121,7 +124,6 @@ fn copy_slice<T: Copy>(source: &[T]) -> Result<Vec<T>> {
 }
 
 impl TryClone for String {
-    #[inline]
     fn try_clone(&self) -> Result<Self> {
         let mut bytes = reserved_vec_for(self.len(), "string clone")?;
         bytes.extend_from_slice(self.as_bytes());
@@ -315,25 +317,33 @@ mod tests {
         #[repr(align(512))]
         struct Zero;
         with_allocation_refusal(1, || {
-            assert!(reserved_vec::<u64>(0).unwrap().is_empty());
-            assert!(reserved_vec::<Zero>(usize::MAX).unwrap().is_empty());
+            assert!(
+                reserved_vec_for::<u64>(0, "vector clone")
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                reserved_vec_for::<Zero>(usize::MAX, "vector clone")
+                    .unwrap()
+                    .is_empty()
+            );
         });
         assert!(matches!(
-            reserved_vec::<u64>(usize::MAX),
+            reserved_vec_for::<u64>(usize::MAX, "vector clone"),
             Err(Error::AllocationFailed {
                 resource: "vector clone",
                 ..
             })
         ));
         assert!(matches!(
-            with_allocation_refusal(1, || reserved_vec::<u64>(3)),
+            with_allocation_refusal(1, || reserved_vec_for::<u64>(3, "vector clone")),
             Err(Error::AllocationFailed {
                 resource: "vector clone",
                 requested: 24
             })
         ));
         let drops = AtomicUsize::new(0);
-        let mut values = reserved_vec::<Aligned<'_>>(3).unwrap();
+        let mut values = reserved_vec_for::<Aligned<'_>>(3, "vector clone").unwrap();
         assert_eq!(values.capacity(), 3);
         assert_eq!((values.as_ptr() as usize) % 256, 0);
         assert!(values.is_empty());
