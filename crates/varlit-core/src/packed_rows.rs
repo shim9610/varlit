@@ -108,6 +108,47 @@ impl<const N: usize> PackedRows<N> {
             }),
         }
     }
+    pub(crate) const fn minimum_buffer_bytes() -> usize {
+        (READ_PAGES + 1) * (N + N.div_ceil(8) * 10 + N.div_ceil(64)) + 16
+    }
+
+    fn read_heap_bytes(&self) -> usize {
+        let mut bytes = self
+            .retained
+            .capacity()
+            .saturating_add(self.buffer.capacity().saturating_mul(N))
+            .saturating_add(self.encoded.capacity())
+            .saturating_add(self.pages.read_heap_bytes());
+        for page in &self.cache.borrow().pages {
+            bytes = bytes
+                .saturating_add(page.rows.capacity().max(self.page_rows).saturating_mul(N))
+                .saturating_add(page.encoded.capacity().max(self.encoded_bound()));
+        }
+        bytes
+    }
+
+    /// Reuse a released rewrite allowance for immutable compact rows. Peak
+    /// allocation includes both copies and every future decoded-page cache.
+    /// If it cannot fit, keep the existing spill representation unchanged.
+    pub(crate) fn try_retain_for_reads(&mut self, budget: usize) -> io::Result<()> {
+        let data_bytes = usize::try_from(self.file_end).map_err(|_| invalid())?;
+        if self.spilled_bytes != 0 && data_bytes <= budget.saturating_sub(self.read_heap_bytes()) {
+            let mut retained = Vec::new();
+            retained.try_reserve_exact(data_bytes).map_err(oom)?;
+            retained.resize(data_bytes, 0);
+            self.read_encoded(&mut retained, 0)?;
+            self.retained = retained;
+            self.spilled_bytes = 0;
+            self.file = None;
+        }
+        let other = self
+            .read_heap_bytes()
+            .saturating_sub(self.pages.read_heap_bytes());
+        self.pages
+            .try_retain_for_reads(budget.saturating_sub(other))?;
+        Ok(())
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.pages.len() * self.page_rows + self.buffer.len()
     }
@@ -418,6 +459,55 @@ fn read_exact_at(file: &File, mut bytes: &mut [u8], mut at: u64) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn packed_read_promotion_keeps_bytes_and_failure_state_within_budget() -> io::Result<()> {
+        let mut rows = PackedRows::<62>::with_page_rows(4096, 8);
+        let mut expected = Vec::new();
+        let mut state = 17u64;
+        for i in 0..128u64 {
+            let mut row = [0; 62];
+            for byte in &mut row {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = state as u8;
+            }
+            row[..8].copy_from_slice(&(i * 19).to_le_bytes());
+            rows.push(row)?;
+            expected.push(row);
+        }
+        let spilled = rows.spilled_bytes;
+        assert!(spilled > 0);
+        let retained = rows.retained.clone();
+        rows.try_retain_for_reads(0)?;
+        assert_eq!(rows.spilled_bytes, spilled);
+        let mut image = vec![0; rows.file_end as usize];
+        rows.read_encoded(&mut image, 0)?;
+        rows.file.as_ref().unwrap().set_len(spilled - 1)?;
+        assert_eq!(
+            rows.try_retain_for_reads(64 * 1024).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert_eq!(rows.spilled_bytes, spilled);
+        assert_eq!(rows.retained, retained);
+        let file = rows.file.as_mut().unwrap();
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&image[..spilled as usize])?;
+        rows.try_retain_for_reads(64 * 1024)?;
+        assert!(rows.file.is_none());
+        assert_eq!(rows.spilled_bytes, 0);
+        assert!(rows.read_heap_bytes() <= 64 * 1024);
+        for i in (0..128).rev() {
+            assert_eq!(rows.get(i)?, Some(expected[i]));
+            assert_eq!(
+                rows.find_sorted(i as u64 * 19, |r| word(r, 0))?,
+                Some(expected[i])
+            );
+            assert_eq!(rows.find_sorted(i as u64 * 19 + 1, |r| word(r, 0))?, None);
+        }
+        Ok(())
+    }
+
     #[test]
     fn retained_and_spilled_remaps_agree_when_chain_deltas_repeat() -> io::Result<()> {
         for budget in [0, 4096, 1024 * 1024] {
