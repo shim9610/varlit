@@ -268,6 +268,7 @@ impl ResidentIndex {
     /// Check actual membership. A serialized row is never a boundary witness.
     /// The slow path retains every discovered boundary within a borrowed
     /// directory budget, so earlier/random requests never restart the scan.
+    #[inline]
     pub(crate) fn has_verified_boundary(&mut self, offset: u64) -> Result<bool> {
         Ok(offset < self.snapshot.len()
             && (self

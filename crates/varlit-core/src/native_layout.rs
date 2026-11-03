@@ -764,6 +764,7 @@ const FOOTER_MAGIC_FIELD: (usize, &[u8]) = {
     }
 };
 
+#[inline]
 pub(crate) fn decode_native_record_footer(
     bytes: &[u8],
     footer_offset: u64,
