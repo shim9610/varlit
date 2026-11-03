@@ -108,9 +108,11 @@ pub(super) struct RewriteDirectory {
 impl RewriteDirectory {
     pub(super) fn new(spec: FormatSpec) -> Self {
         Self {
-            // Small pages keep arbitrary boundary probes from decoding hundreds
-            // of unrelated rows. All buffers still share the same budget.
-            rows: PackedRows::with_page_rows(resident_index::rewrite_buffer_bytes(spec), 16),
+            // Construction benefits from larger delta-coded pages. Published
+            // readers receive a separate compact directory with small pages;
+            // keeping construction pages small only repeats headers/offsets.
+            // Both representations remain within the existing shared budget.
+            rows: PackedRows::new(resident_index::rewrite_buffer_bytes(spec)),
             uniform: None,
             last: None,
             maximum_sequence: 0,
@@ -526,6 +528,52 @@ mod tests {
             assert!(ranges.proves_unique());
         }
     }
+    #[test]
+    fn rewrite_pages_preserve_entries_and_retry_across_refused_growth() -> Result<()> {
+        let mut directory = RewriteDirectory::new(spec().with_resource_limits(
+            crate::ReadLimits::STANDARD.with_max_index_bytes(2 * 1024 * 1024),
+        ));
+        let mut expected = Vec::new();
+        for i in 0..600u64 {
+            let mut entry = read_index_entry_payload(&[0; 73], 3);
+            entry.block_id = (i % 7 + 1) as u32;
+            entry.sequence = i + 1;
+            entry.record_offset = 4096 + i * 160;
+            entry.payload_offset = entry.record_offset + RECORD_HEADER_LEN;
+            entry.payload_len = 32 + i % 17;
+            entry.footer_offset = None;
+            entry.prev_same_block_offset = i.checked_sub(7).map(|j| 4096 + j * 160);
+            entry.prev_same_key_offset = i.checked_sub(11).map(|j| 4096 + j * 160);
+            entry.committed = i % 2 == 0;
+            if matches!(i, 256 | 512) {
+                let result =
+                    crate::pib_probe::with_allocation_refusal(1, || directory.push(entry.clone()));
+                assert!(matches!(result, Err(Error::Io(e))
+                    if e.kind() == std::io::ErrorKind::OutOfMemory));
+                assert_eq!(directory.len(), i as usize);
+                assert_eq!(
+                    directory.record_at(i as usize - 1)?,
+                    expected[i as usize - 1]
+                );
+            }
+            directory.push(entry.clone())?;
+            expected.push(entry);
+        }
+        for at in [0, 1, 254, 255, 256, 257, 510, 511, 512, 513, 598, 599] {
+            assert_eq!(directory.record_at(at)?, expected[at]);
+            assert_eq!(
+                directory.find_offset(expected[at].record_offset)?,
+                Some(expected[at].clone())
+            );
+            assert!(
+                directory
+                    .find_offset(expected[at].record_offset + 1)?
+                    .is_none()
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn digest_tail_cache_is_sorted_and_falls_back_when_full() -> Result<()> {
         let mut directory = RewriteDirectory::new(spec());
