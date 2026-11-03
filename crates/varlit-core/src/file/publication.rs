@@ -29,18 +29,16 @@ pub(super) fn native_object_fingerprint(spec: FormatSpec, file: &File) -> Result
 }
 
 #[cfg(unix)]
-pub(crate) fn opened_file_identity(file: &File) -> Result<Vec<u8>> {
+pub(super) fn opened_file_identity_array(file: &File) -> Result<[u8; 16]> {
     use std::os::unix::fs::MetadataExt;
-
     let metadata = file.metadata()?;
-    let mut bytes = Vec::with_capacity(16);
-    bytes.extend_from_slice(&metadata.dev().to_le_bytes());
-    bytes.extend_from_slice(&metadata.ino().to_le_bytes());
+    let mut bytes = [0; 16];
+    bytes[..8].copy_from_slice(&metadata.dev().to_le_bytes());
+    bytes[8..].copy_from_slice(&metadata.ino().to_le_bytes());
     Ok(bytes)
 }
-
 #[cfg(windows)]
-pub(crate) fn opened_file_identity(file: &File) -> Result<Vec<u8>> {
+pub(super) fn opened_file_identity_array(file: &File) -> Result<[u8; 16]> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
@@ -58,9 +56,17 @@ pub(crate) fn opened_file_identity(file: &File) -> Result<Vec<u8>> {
     let information = unsafe { information.assume_init() };
     let file_index =
         (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
-    let mut bytes = Vec::with_capacity(12);
-    bytes.extend_from_slice(&information.dwVolumeSerialNumber.to_le_bytes());
-    bytes.extend_from_slice(&file_index.to_le_bytes());
+    let mut bytes = [0; 16];
+    bytes[..4].copy_from_slice(&information.dwVolumeSerialNumber.to_le_bytes());
+    bytes[4..12].copy_from_slice(&file_index.to_le_bytes());
+    Ok(bytes)
+}
+#[cfg(any(unix, windows))]
+pub(crate) fn opened_file_identity(file: &File) -> Result<Vec<u8>> {
+    let identity = opened_file_identity_array(file)?;
+    let len = if cfg!(windows) { 12 } else { 16 };
+    let mut bytes = Vec::with_capacity(len);
+    bytes.extend_from_slice(&identity[..len]);
     Ok(bytes)
 }
 

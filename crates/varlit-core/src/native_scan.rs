@@ -72,6 +72,7 @@ impl ScanBuffer for Vec<RecordIndexEntry> {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct BufferedScan {
     rows: SpillRows<77>,
     spec: FormatSpec,
@@ -85,7 +86,7 @@ pub(super) struct BufferedScan {
 impl BufferedScan {
     pub(super) fn new(spec: FormatSpec) -> Self {
         Self {
-            rows: SpillRows::new(resident_index::buffer_bytes(spec)),
+            rows: SpillRows::new(resident_index::slot_budget(spec)),
             spec,
             committed: false,
             kept: 0,
@@ -225,5 +226,79 @@ impl ScanBuffer for BufferedScan {
             self.rows.push(Self::encode(&entry))?;
         }
         Ok(Some(scanned))
+    }
+}
+
+/// A private pending range. A resumed range is only a discovery hint: before
+/// publishing a commit found across calls, follow validates the current range
+/// again. No staged entry or checksum verdict is published from the cache.
+#[derive(Debug)]
+pub(super) struct FollowScan {
+    pub(super) progress: Option<ScanProgress>,
+    pub(super) rows: BufferedScan,
+    pub(super) observed_len: u64,
+    pub(super) observed_modified: Option<SystemTime>,
+    pub(super) writer_marker: Option<File>,
+    pub(super) writer_epoch: Option<WriterCacheEpoch>,
+    marker_path: PathBuf,
+}
+impl FollowScan {
+    pub(super) fn new(spec: FormatSpec, from: u64, path: &Path) -> Result<Self> {
+        let mut marker_path = OsString::new();
+        marker_path
+            .try_reserve_exact(path.as_os_str().len().saturating_add(5))
+            .map_err(|_| Error::AllocationFailed {
+                resource: "follow marker path",
+                requested: path.as_os_str().len().saturating_add(5) as u64,
+            })?;
+        marker_path.push(path.as_os_str());
+        marker_path.push(".lock");
+        let marker_path = PathBuf::from(marker_path);
+        let marker = open_follow_marker(&marker_path);
+        let writer_epoch = marker.as_ref().and_then(writer_cache_epoch);
+        Ok(Self {
+            progress: Some(ScanProgress::new(spec, from, 0, Some(from))?),
+            rows: BufferedScan::new(spec),
+            observed_len: from,
+            observed_modified: None,
+            writer_marker: marker,
+            writer_epoch,
+            marker_path,
+        })
+    }
+    pub(super) fn epoch(&mut self) -> Option<WriterCacheEpoch> {
+        // Open the current marker while retaining the previous object pin.
+        // Thus unlink/recreate cannot reuse the old object's identity.
+        let marker = open_follow_marker(&self.marker_path);
+        let epoch = marker.as_ref().and_then(writer_cache_epoch);
+        self.writer_marker = marker;
+        epoch
+    }
+}
+fn open_follow_marker(path: &Path) -> Option<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path).ok()?;
+        let metadata = file.metadata().ok()?;
+        return (metadata.is_file()
+            && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+            .then_some(file);
+    }
+    #[cfg(not(windows))]
+    {
+        let file = options.open(path).ok()?;
+        file.metadata().ok()?.is_file().then_some(file)
     }
 }

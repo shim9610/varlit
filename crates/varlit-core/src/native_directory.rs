@@ -20,6 +20,19 @@ pub(super) fn buffer_bytes(spec: FormatSpec) -> usize {
     }
 }
 
+// The boundary certificate shares the existing directory allowance. Half of
+// this small share is write buffering and half covers a future read cache.
+pub(super) fn boundary_budget(spec: FormatSpec) -> usize {
+    if spec.block_residency.iter().any(|block| !block.resident) {
+        (buffer_bytes(spec) / 2).min(16 * 1024) / 16 * 16
+    } else {
+        0
+    }
+}
+pub(super) fn slot_budget(spec: FormatSpec) -> usize {
+    buffer_bytes(spec).saturating_sub(boundary_budget(spec))
+}
+
 pub(super) fn rewrite_buffer_bytes(spec: FormatSpec) -> usize {
     let bytes = buffer_bytes(spec);
     bytes / 10 * 7 + bytes % 10 * 7 / 10
@@ -38,6 +51,8 @@ pub struct ResidentIndex {
     spec: FormatSpec,
     frames_verified: bool,
     boundary_proof: Option<BoundaryProof>,
+    boundary_cache_unavailable: bool,
+    boundary_allowance: usize,
     offset_hint: Option<(u64, u64)>,
     last_probe: usize,
     range_hint: Option<(usize, u64, u64)>,
@@ -128,15 +143,19 @@ impl ResidentIndex {
         snapshot: SnapshotFile,
         spec: FormatSpec,
     ) -> Self {
+        let remaining = buffer_bytes(spec).saturating_sub(rewrite_buffer_bytes(spec));
+        let boundary_allowance = boundary_budget(spec).min(remaining / 2 / 16 * 16);
         Self {
             rewritten_len: rows.len(),
             rewritten: Some(RewrittenRows::new(rows, spec)),
-            slots: SpillRows::new(buffer_bytes(spec) - rewrite_buffer_bytes(spec)),
+            slots: SpillRows::new(remaining.saturating_sub(boundary_allowance)),
             snapshot,
             spec,
             retained: true,
             frames_verified: true,
             boundary_proof: None,
+            boundary_cache_unavailable: false,
+            boundary_allowance,
             offset_hint: None,
             last_probe: usize::MAX,
             range_hint: None,
@@ -148,9 +167,14 @@ impl ResidentIndex {
         snapshot: SnapshotFile,
         spec: FormatSpec,
         frames_verified: bool,
+        boundaries: Option<BoundaryProof>,
     ) -> Result<Self> {
         let mut result = Self::empty(snapshot, spec);
         result.frames_verified = frames_verified;
+        result.boundary_cache_unavailable = frames_verified
+            && spec.block_residency.iter().any(|block| !block.resident)
+            && boundaries.is_none();
+        result.boundary_proof = boundaries;
         result.slots.reserve_rows_hint(entries.record_count())?;
         for at in 0..entries.record_count() {
             let entry = entries.record_at(at)?;
@@ -163,7 +187,7 @@ impl ResidentIndex {
     }
     pub(crate) fn empty(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
         Self {
-            slots: SpillRows::new(buffer_bytes(spec)),
+            slots: SpillRows::new(slot_budget(spec)),
             rewritten: None,
             rewritten_len: 0,
             snapshot,
@@ -171,6 +195,8 @@ impl ResidentIndex {
             retained: true,
             frames_verified: true,
             boundary_proof: None,
+            boundary_cache_unavailable: false,
+            boundary_allowance: boundary_budget(spec),
             offset_hint: None,
             last_probe: usize::MAX,
             range_hint: None,
@@ -199,7 +225,34 @@ impl ResidentIndex {
     ) -> Result<ReservedIndexSlot> {
         charge()?;
         self.slots.reserve_one()?;
+        if !self.boundary_cache_unavailable
+            && self.boundary_proof.is_none()
+            && self
+                .spec
+                .block_residency
+                .iter()
+                .any(|block| !block.resident)
+        {
+            self.boundary_proof = Some(BoundaryProof::new(
+                self.snapshot.len(),
+                self.boundary_allowance,
+            ));
+        }
+        if let Some(proof) = &mut self.boundary_proof {
+            // This certificate is an optional cache, not a condition for
+            // logging. A refused cache allocation/spill must not refuse data.
+            proof.rows.truncate(proof.verified_rows);
+            if proof.rows.push(self.snapshot.len().to_le_bytes()).is_err() {
+                self.boundary_proof = None;
+                self.boundary_cache_unavailable = true;
+            }
+        }
         Ok(ReservedIndexSlot(()))
+    }
+    pub(crate) fn install_verified_boundary(&mut self, offset: u64, end: u64) {
+        if let Some(proof) = &mut self.boundary_proof {
+            proof.publish_reserved(offset, end);
+        }
     }
     pub(crate) fn install(&mut self, slot: ReservedIndexSlot, entry: &RecordIndexEntry) {
         let ReservedIndexSlot(()) = slot;
@@ -282,26 +335,53 @@ impl ResidentIndex {
         if offset < append_start || offset >= self.snapshot.len() {
             return Err(invalid_boundary());
         }
-        self.extend_boundary_proof(append_start, offset)
+        if let Some(proof) = &self.boundary_proof
+            && proof.contains(offset)?
+        {
+            return Ok(());
+        }
+        self.extend_boundary_proof(append_start, offset)?;
+        self.boundary_cache_unavailable = false;
+        Ok(())
     }
 
     #[inline(never)]
     fn extend_boundary_proof(&mut self, append_start: u64, offset: u64) -> Result<()> {
         if self.boundary_proof.is_none() {
-            let budget = self.slots.lend_boundary_budget()?;
-            self.boundary_proof = Some(BoundaryProof {
-                rows: if budget == 0 {
-                    SpillRows::unbuffered()
-                } else {
-                    SpillRows::new(budget / 2)
-                },
-                next: append_start,
-                first: append_start,
-                last: append_start,
-                buffer_rows: budget / 2 / 8,
-            });
+            let budget = if self.boundary_allowance != 0
+                || self
+                    .spec
+                    .block_residency
+                    .iter()
+                    .any(|block| !block.resident)
+            {
+                self.boundary_allowance
+            } else {
+                let loan = self.slots.lend_boundary_budget()?;
+                self.boundary_allowance = loan;
+                loan
+            };
+            self.boundary_proof = Some(BoundaryProof::new(append_start, budget));
         }
         let proof = self.boundary_proof.as_mut().unwrap();
+        if offset < proof.first {
+            // A lazy writer may have a verified appended suffix but no older
+            // prefix. Discover the missing prefix once using the same storage.
+            proof.rows.truncate(0);
+            proof.verified_rows = 0;
+            proof.prefix_rows = 0;
+            proof.prefix_last = append_start;
+            proof.first = append_start;
+            proof.last = append_start;
+            proof.next = append_start;
+        }
+        // Appended suffix certificates may follow an undiscovered old gap.
+        // Only a miss needs the gap; keep the monotone scan frontier separate.
+        if proof.verified_rows > proof.prefix_rows {
+            proof.verified_rows = proof.prefix_rows;
+            proof.last = proof.prefix_last;
+        }
+        proof.rows.truncate(proof.verified_rows);
         if proof.next <= offset {
             // Reserve once, before any read cache exists. Growing this buffer
             // beside a live cache must not create a transient budget overlap.
@@ -327,6 +407,9 @@ impl ResidentIndex {
                 proof.rows.push(at.to_le_bytes())?;
                 proof.last = at;
                 proof.next = end;
+                proof.verified_rows += 1;
+                proof.prefix_rows = proof.verified_rows;
+                proof.prefix_last = at;
             }
         }
         if proof.contains(offset)? {
@@ -601,16 +684,81 @@ fn invalid_boundary() -> Error {
 }
 
 #[derive(Debug)]
-struct BoundaryProof {
+pub(crate) struct BoundaryProof {
     rows: SpillRows<8>,
     next: u64,
     first: u64,
     last: u64,
     buffer_rows: usize,
+    verified_rows: usize,
+    prefix_rows: usize,
+    prefix_last: u64,
 }
 impl BoundaryProof {
+    pub(super) fn new(from: u64, budget: usize) -> Self {
+        Self {
+            rows: if budget == 0 {
+                SpillRows::unbuffered()
+            } else {
+                SpillRows::new(budget / 2)
+            },
+            next: from,
+            first: from,
+            last: from,
+            buffer_rows: budget / 2 / 8,
+            verified_rows: 0,
+            prefix_rows: 0,
+            prefix_last: from,
+        }
+    }
+    fn publish_reserved(&mut self, offset: u64, end: u64) {
+        debug_assert_eq!(self.rows.len(), self.verified_rows + 1);
+        self.last = offset;
+        self.verified_rows += 1;
+        if self.next == offset {
+            self.next = end;
+            self.prefix_rows = self.verified_rows;
+            self.prefix_last = offset;
+        }
+    }
+    pub(super) fn start(&self) -> u64 {
+        self.first
+    }
+    pub(super) fn note(&mut self, offset: u64, end: u64) -> Result<()> {
+        self.rows.push(offset.to_le_bytes())?;
+        self.last = offset;
+        self.next = end;
+        self.verified_rows += 1;
+        self.prefix_rows = self.verified_rows;
+        self.prefix_last = offset;
+        Ok(())
+    }
+    pub(super) fn truncate_to(&mut self, end: u64) -> Result<()> {
+        let (mut low, mut high) = (0, self.verified_rows);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let at = u64::from_le_bytes(self.rows.get_direct(middle)?.ok_or(Error::UnexpectedEof)?);
+            if at < end {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        self.rows.truncate(low);
+        self.verified_rows = low;
+        self.next = end;
+        self.prefix_rows = low;
+        self.last = if low == 0 {
+            self.first
+        } else {
+            u64::from_le_bytes(self.rows.get_direct(low - 1)?.ok_or(Error::UnexpectedEof)?)
+        };
+        self.prefix_last = self.last;
+        Ok(())
+    }
+
     fn contains(&self, offset: u64) -> Result<bool> {
-        if offset < self.first || offset > self.last || self.rows.len() == 0 {
+        if offset < self.first || offset > self.last || self.verified_rows == 0 {
             return Ok(false);
         }
         if offset == self.first || offset == self.last {
@@ -711,6 +859,42 @@ impl<'a> FrameWindow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn boundary_certificates_do_not_publish_reservations_and_truncate_exactly() -> Result<()> {
+        let mut proof = BoundaryProof::new(100, 2048);
+        for at in [100u64, 180, 260] {
+            proof.note(at, at + 80)?;
+        }
+        proof.rows.push(340u64.to_le_bytes())?;
+        for at in 0..500 {
+            assert_eq!(proof.contains(at)?, [100, 180, 260].contains(&at));
+        }
+        proof.publish_reserved(340, 420);
+        for at in 0..500 {
+            assert_eq!(proof.contains(at)?, [100, 180, 260, 340].contains(&at));
+        }
+        proof.truncate_to(260)?;
+        for at in 0..500 {
+            assert_eq!(proof.contains(at)?, [100, 180].contains(&at));
+        }
+        assert_eq!((proof.next, proof.prefix_rows), (260, 2));
+        Ok(())
+    }
+    #[test]
+    fn appended_suffix_does_not_claim_an_unscanned_gap() -> Result<()> {
+        let mut proof = BoundaryProof::new(100, 2048);
+        proof.note(100, 180)?;
+        proof.rows.push(500u64.to_le_bytes())?;
+        proof.publish_reserved(500, 580);
+        for at in 0..600 {
+            assert_eq!(proof.contains(at)?, [100, 500].contains(&at));
+        }
+        assert_eq!(
+            (proof.next, proof.prefix_rows, proof.verified_rows),
+            (180, 1, 2)
+        );
+        Ok(())
+    }
     #[test]
     fn resident_rows_keep_the_boundary_working_set_within_the_same_allowance() -> Result<()> {
         // A scaled version of 131,072 data rows plus final internal rows at

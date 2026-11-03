@@ -392,6 +392,67 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
 
+error[E0277]: `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared between threads safely
+ --> tests/ui/fail_share_generated_matrix_reader.rs
+  |
+  |     std::thread::spawn(move || reader.thumbnail_aux_len());
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `varlit_core::file::native_scan::FollowScan`, the trait `Sync` is not implemented for `RefCell<varlit_core::disk_index::tree::Cache>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `varlit_core::disk_index::tree::Reader`
+ --> $WORKSPACE/crates/varlit-core/src/disk_index/tree.rs
+  |
+  | pub(super) struct Reader {
+  |                   ^^^^^^
+note: required because it appears within the type `varlit_core::disk_index::ScratchIndex`
+ --> $WORKSPACE/crates/varlit-core/src/disk_index.rs
+  |
+  | pub(crate) struct ScratchIndex {
+  |                   ^^^^^^^^^^^^
+note: required because it appears within the type `Option<varlit_core::disk_index::ScratchIndex>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `varlit_core::file::native_scan::BufferedScan`
+ --> $WORKSPACE/crates/varlit-core/src/native_scan.rs
+  |
+  | pub(super) struct BufferedScan {
+  |                   ^^^^^^^^^^^^
+note: required because it appears within the type `varlit_core::file::native_scan::FollowScan`
+ --> $WORKSPACE/crates/varlit-core/src/native_scan.rs
+  |
+  | pub(super) struct FollowScan {
+  |                   ^^^^^^^^^^
+  = note: required for `std::ptr::Unique<varlit_core::file::native_scan::FollowScan>` to implement `Sync`
+note: required because it appears within the type `Box<varlit_core::file::native_scan::FollowScan>`
+ --> $RUST/alloc/src/boxed.rs
+note: required because it appears within the type `Option<Box<varlit_core::file::native_scan::FollowScan>>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `VarlitFile`
+ --> $WORKSPACE/crates/varlit-core/src/file.rs
+  |
+  | pub struct VarlitFile {
+  |            ^^^^^^^^^^
+note: required because it appears within the type `VarlitReader`
+ --> $WORKSPACE/crates/varlit-core/src/file.rs
+  |
+  | pub struct VarlitReader {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `MatrixAuxFormatReader`
+ --> tests/ui/fail_share_generated_matrix_reader.rs
+  |
+  |     pub format MatrixAuxFormat {
+  |                ^^^^^^^^^^^^^^^
+  = note: required for `Arc<MatrixAuxFormatReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_generated_matrix_reader.rs
+  |
+  |     std::thread::spawn(move || reader.thumbnail_aux_len());
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+
 error[E0277]: `RefCell<varlit_core::matrix::matrix_directory::DirectoryCache>` cannot be shared between threads safely
  --> tests/ui/fail_share_generated_matrix_reader.rs
   |
@@ -432,68 +493,6 @@ note: required because it appears within the type `varlit_core::matrix::MatrixLa
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `Option<varlit_core::matrix::MatrixLayout>`
  --> $RUST/core/src/option.rs
-note: required because it appears within the type `VarlitFile`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | pub struct VarlitFile {
-  |            ^^^^^^^^^^
-note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | pub struct VarlitReader {
-  |            ^^^^^^^^^^^^
-note: required because it appears within the type `MatrixAuxFormatReader`
- --> tests/ui/fail_share_generated_matrix_reader.rs
-  |
-  |     pub format MatrixAuxFormat {
-  |                ^^^^^^^^^^^^^^^
-  = note: required for `Arc<MatrixAuxFormatReader>` to implement `Send`
-note: required because it's used within this closure
- --> tests/ui/fail_share_generated_matrix_reader.rs
-  |
-  |     std::thread::spawn(move || reader.thumbnail_aux_len());
-  |                        ^^^^^^^
-note: required by a bound in `spawn`
- --> $RUST/std/src/thread/functions.rs
-
-error[E0277]: `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared between threads safely
- --> tests/ui/fail_share_generated_matrix_reader.rs
-  |
-  |     std::thread::spawn(move || reader.thumbnail_aux_len());
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared between threads safely
-  |     |
-  |     required by a bound introduced by this call
-  |
-  = help: within `(u32, varlit_core::file::KeyedTailMap)`, the trait `Sync` is not implemented for `RefCell<varlit_core::disk_index::tree::Cache>`
-  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
-note: required because it appears within the type `varlit_core::disk_index::tree::Reader`
- --> $WORKSPACE/crates/varlit-core/src/disk_index/tree.rs
-  |
-  | pub(super) struct Reader {
-  |                   ^^^^^^
-note: required because it appears within the type `varlit_core::disk_index::ScratchIndex`
- --> $WORKSPACE/crates/varlit-core/src/disk_index.rs
-  |
-  | pub(crate) struct ScratchIndex {
-  |                   ^^^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::disk_index::ScratchIndex>`
- --> $RUST/core/src/option.rs
-note: required because it appears within the type `varlit_core::file::KeyedTailMap`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | struct KeyedTailMap {
-  |        ^^^^^^^^^^^^
-  = note: required because it appears within the type `(u32, varlit_core::file::KeyedTailMap)`
-  = note: required for `hashbrown::raw::RawTable<(u32, varlit_core::file::KeyedTailMap)>` to implement `Sync`
-note: required because it appears within the type `hashbrown::map::HashMap<u32, varlit_core::file::KeyedTailMap, RandomState>`
- --> /rust/deps/hashbrown-0.16.1/src/map.rs:185:11
-note: required because it appears within the type `HashMap<u32, varlit_core::file::KeyedTailMap>`
- --> $RUST/std/src/collections/hash/map.rs
-note: required because it appears within the type `varlit_core::file::KeyedTails`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | struct KeyedTails {
-  |        ^^^^^^^^^^
 note: required because it appears within the type `VarlitFile`
  --> $WORKSPACE/crates/varlit-core/src/file.rs
   |

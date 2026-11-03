@@ -886,6 +886,7 @@ pub(super) fn prepare_stream_record_into(
 #[derive(Debug)]
 pub(super) struct ScannedIndex {
     pub(super) frames_verified: bool,
+    pub(super) boundaries: Option<resident_index::BoundaryProof>,
     pub(super) minimum_sequence: Option<u64>,
     minimum_sequence_at_commit: Option<u64>,
     sequences_increasing: bool,
@@ -1099,6 +1100,14 @@ impl ScannedIndex {
                 },
             )?;
         }
+        if let Some(boundaries) = &mut self.boundaries
+            && boundaries.note(entry.record_offset, physical_end).is_err()
+        {
+            // Retaining a certificate is optional. Failure keeps the full
+            // source scan authoritative and uses the existing cold proof
+            // path only if a later mutation actually requires one.
+            self.boundaries = None;
+        }
         self.records = records;
         self.sequences_increasing &= self
             .sequence_high_water
@@ -1149,6 +1158,13 @@ impl ScannedIndex {
             (Some(at_commit), Some(resident)) => Some(at_commit.max(resident)),
             (at_commit, resident) => at_commit.or(resident),
         };
+        if let Some(boundaries) = &mut self.boundaries
+            && boundaries
+                .truncate_to(self.physical_end.unwrap_or(boundaries.start()))
+                .is_err()
+        {
+            self.boundaries = None;
+        }
         self.newest.rollback(self.commit_epoch);
         for entry in entries {
             self.newest.insert(
@@ -1783,6 +1799,7 @@ pub(super) fn walk_segment_chain(
 
     let mut scanned = ScannedIndex {
         frames_verified: false,
+        boundaries: None,
         minimum_sequence: None,
         minimum_sequence_at_commit: None,
         sequences_increasing: true,
@@ -2374,53 +2391,70 @@ pub(super) fn record_headers_match(left: &RecordIndexEntry, right: &RecordIndexE
 /// other half of resuming: a read-only handle's snapshot ends at a commit
 /// point, so the tail past it stands or falls on a marker of its own exactly
 /// as it would in a scan of the whole file.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
+/// Private progress for one range. Uncommitted state is never installed in a
+/// reader's published snapshot. Failure drops the range and permits a clean retry.
+#[derive(Debug)]
+pub(super) struct ScanProgress {
+    pub(super) from: u64,
+    pub(super) next: u64,
+    pub(super) scanned: ScannedIndex,
+    latest_commit_end: Option<u64>,
+    pub(super) all_sequences: Option<crate::disk_index::ScratchIndex>,
+    accounting: ScanAccounting,
+}
+impl ScanProgress {
+    pub(super) fn new(
+        spec: FormatSpec,
+        from: u64,
+        prefix_charge: u64,
+        resume_commit_end: Option<u64>,
+    ) -> Result<Self> {
+        let scanned = ScannedIndex {
+            frames_verified: true,
+            boundaries: None,
+            minimum_sequence: None,
+            minimum_sequence_at_commit: None,
+            sequences_increasing: true,
+            sequence_high_water: None,
+            sequence_high_water_at_commit: None,
+            newest: ScanTails::new(&spec),
+            commit_epoch: 0,
+            records: 0,
+            record_limit: spec.read_limits.require(ReadLimitKey::Records)?,
+            physical_end: None,
+            physical_end_at_commit: None,
+        };
+        let mut accounting = ScanAccounting::default();
+        accounting.advance(spec, prefix_charge)?;
+        Ok(Self {
+            from,
+            next: from,
+            scanned,
+            latest_commit_end: resume_commit_end,
+            all_sequences: None,
+            accounting,
+        })
+    }
+}
+
+pub(super) fn resume_record_scan<B: ScanBuffer>(
     spec: FormatSpec,
     file: &mut File,
-    from: u64,
-    prefix_charge: u64,
-    resume_commit_end: Option<u64>,
+    progress: ScanProgress,
     intent: ScanIntent,
     entries: &mut B,
     file_len: u64,
-) -> Result<ScannedIndex> {
+) -> Result<ScanProgress> {
+    let ScanProgress {
+        from,
+        next: mut offset,
+        mut scanned,
+        mut latest_commit_end,
+        mut all_sequences,
+        mut accounting,
+    } = progress;
     let header_len = from;
-    let mut offset = header_len;
-    entries.reset();
-    let mut scanned = ScannedIndex {
-        frames_verified: true,
-        minimum_sequence: None,
-        minimum_sequence_at_commit: None,
-        sequences_increasing: true,
-        sequence_high_water: None,
-        sequence_high_water_at_commit: None,
-        newest: ScanTails::new(&spec),
-        commit_epoch: 0,
-        records: 0,
-        record_limit: spec.read_limits.require(ReadLimitKey::Records)?,
-        physical_end: None,
-        physical_end_at_commit: None,
-    };
-    // A commit boundary the *caller* already knows about, because it is where
-    // this range begins.
-    //
-    // It decides `checksum_boundary`, and that decides whether a record whose
-    // checksum fails is a recoverable tail the walk stops at or a hard
-    // `ChecksumMismatch`. A scan of the whole file has seen the last marker by
-    // the time it reaches anything after it, so it stops cleanly; a range that
-    // *starts* after that marker had not, so it errored where the open it is
-    // supposed to agree with returned `Ok`. Measured under
-    // `IntegrityVerification::AtOpen`, on a file whose first uncommitted record
-    // was byte-flipped: open `Ok`, follow `Err(ChecksumMismatch { offset: 818 })`.
-    //
-    // `None` for a scan from the start of the append log, where no commit has
-    // happened yet and a failing checksum really is unrecoverable.
-    let mut latest_commit_end = resume_commit_end;
     let has_nonresident = spec.block_residency.iter().any(|block| !block.resident);
-    let mut all_sequences = None;
-    let mut accounting = ScanAccounting::default();
-    accounting.advance(spec, prefix_charge)?;
     while offset < file_len {
         let partial_boundary = match spec.commit_policy {
             CommitPolicy::None
@@ -2449,6 +2483,7 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
                 .resolve()
                 .effective_integrity_verification()
                 == IntegrityVerification::AtOpen;
+        let before_attempt = accounting;
         let entry = match read_record_entry_at(
             spec,
             file,
@@ -2462,19 +2497,24 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
             &mut accounting,
         )? {
             RecordRead::Entry(entry) => entry,
-            RecordRead::RecoverableTail(tail) => match intent {
-                ScanIntent::ReadOnly => break,
-                ScanIntent::Recover if spec.recovery_policy == RecoveryPolicy::TruncateTail => {
-                    file.set_len(tail.truncate_to)?;
-                    break;
+            RecordRead::RecoverableTail(tail) => {
+                // The cursor still names this incomplete/damaged frame. A
+                // later retry must not charge its extent for a second time.
+                accounting = before_attempt;
+                match intent {
+                    ScanIntent::ReadOnly => break,
+                    ScanIntent::Recover if spec.recovery_policy == RecoveryPolicy::TruncateTail => {
+                        file.set_len(tail.truncate_to)?;
+                        break;
+                    }
+                    ScanIntent::Writer if spec.commit_policy.is_transaction_marker() => break,
+                    ScanIntent::Writer | ScanIntent::Recover => {
+                        return Err(Error::CorruptTail {
+                            offset: tail.offset,
+                        });
+                    }
                 }
-                ScanIntent::Writer if spec.commit_policy.is_transaction_marker() => break,
-                ScanIntent::Writer | ScanIntent::Recover => {
-                    return Err(Error::CorruptTail {
-                        offset: tail.offset,
-                    });
-                }
-            },
+            }
         };
         if has_nonresident {
             if all_sequences.is_none()
@@ -2545,8 +2585,38 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
             entries.push_entry(entry)?;
         }
     }
-    entries.finish(spec, &mut scanned)?;
-    Ok(scanned)
+    Ok(ScanProgress {
+        from,
+        next: offset,
+        scanned,
+        latest_commit_end,
+        all_sequences,
+        accounting,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
+    spec: FormatSpec,
+    file: &mut File,
+    from: u64,
+    prefix_charge: u64,
+    resume_commit_end: Option<u64>,
+    intent: ScanIntent,
+    entries: &mut B,
+    file_len: u64,
+) -> Result<ScannedIndex> {
+    entries.reset();
+    let mut progress = ScanProgress::new(spec, from, prefix_charge, resume_commit_end)?;
+    if intent != ScanIntent::ReadOnly && spec.block_residency.iter().any(|block| !block.resident) {
+        progress.scanned.boundaries = Some(resident_index::BoundaryProof::new(
+            from,
+            resident_index::boundary_budget(spec),
+        ));
+    }
+    let mut progress = resume_record_scan(spec, file, progress, intent, entries, file_len)?;
+    entries.finish(spec, &mut progress.scanned)?;
+    Ok(progress.scanned)
 }
 
 impl RecordIndexEntry {

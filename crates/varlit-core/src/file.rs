@@ -757,7 +757,7 @@ pub(crate) mod resident_index;
 use resident_index::{ReservedIndexSlot, ResidentIndex};
 #[path = "native_scan.rs"]
 mod native_scan;
-use native_scan::{BufferedScan, ScanBuffer};
+use native_scan::{BufferedScan, FollowScan, ScanBuffer};
 #[path = "native_rewrite.rs"]
 mod native_rewrite;
 use native_rewrite::{IndexPayload, OffsetRemap, RewriteDirectory};
@@ -3088,6 +3088,9 @@ pub struct VarlitFile {
     opened_after_crash: bool,
     poison: PoisonFlag,
     _lock: Option<WriterLock>,
+    // Keep pending discovery private to this reader; committed state above
+    // remains usable after a failed follow or a discarded tentative scan.
+    follow_scan: Option<Box<FollowScan>>,
 }
 
 /// A reader with private caches: Send + !Sync. Move ownership to a worker
@@ -4449,6 +4452,7 @@ impl VarlitFile {
             index: ResidentIndex::empty(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
+            follow_scan: None,
             header_extensions,
             matrix: None,
             matrix_creation_nonce: None,
@@ -4596,6 +4600,7 @@ impl VarlitFile {
             index: ResidentIndex::empty(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
+            follow_scan: None,
             header_extensions,
             matrix: Some(matrix),
             matrix_creation_nonce: Some(creation_nonce),
@@ -4712,7 +4717,7 @@ impl VarlitFile {
             read_matrix_layout_if_needed(&path, true, spec, &mut file, header_len, captured_len)?,
         );
         let append_start = append_log_start(header_len, matrix.as_ref());
-        let index = load_generation_index(
+        let mut index = load_generation_index(
             spec,
             &mut file,
             append_start,
@@ -4726,6 +4731,7 @@ impl VarlitFile {
         let sequence_state = index.sequence_state();
         let block_tails = index.block_tails()?;
         let frames_verified = index.frames_verified;
+        let boundaries = index.boundaries.take();
         let index = &*scratch;
         // The crash verdict has to be read *before* the handle exists, because
         // truncation happens here and would destroy the evidence it decides
@@ -4753,9 +4759,16 @@ impl VarlitFile {
             spec,
             path,
             file: RecordFile::new(file).with_matrix(matrix_pages),
-            index: ResidentIndex::adopt_generation(index, snapshot.clone(), spec, frames_verified)?,
+            index: ResidentIndex::adopt_generation(
+                index,
+                snapshot.clone(),
+                spec,
+                frames_verified,
+                boundaries,
+            )?,
             snapshot,
             mode: OpenMode::ReadWrite,
+            follow_scan: None,
             header_extensions,
             matrix,
             matrix_creation_nonce,
@@ -4848,7 +4861,7 @@ impl VarlitFile {
             read_matrix_layout_if_needed(&path, false, spec, &mut file, header_len, captured_len)?,
         );
         let append_start = append_log_start(header_len, matrix.as_ref());
-        let scanned = load_generation_index(
+        let mut scanned = load_generation_index(
             spec,
             &mut file,
             append_start,
@@ -4859,6 +4872,7 @@ impl VarlitFile {
         let sequence_state = scanned.sequence_state();
         let block_tails = scanned.block_tails()?;
         let frames_verified = scanned.frames_verified;
+        let boundaries = scanned.boundaries.take();
         // The snapshot comes from the scan, not from the resident list. The
         // list is filtered — a non-resident block's records are on disk and not
         // in it, exactly as `open_locked`'s comment says — so binding the
@@ -4888,12 +4902,17 @@ impl VarlitFile {
                 // the largest thing an open would have taken, and the point of
                 // the option is that varlit does not take it.
                 DirectoryRetention::None => ResidentIndex::none_retained(snapshot.clone(), spec),
-                DirectoryRetention::Keep => {
-                    ResidentIndex::adopt_generation(index, snapshot.clone(), spec, frames_verified)?
-                }
+                DirectoryRetention::Keep => ResidentIndex::adopt_generation(
+                    index,
+                    snapshot.clone(),
+                    spec,
+                    frames_verified,
+                    boundaries,
+                )?,
             },
             snapshot,
             mode: OpenMode::ReadOnly,
+            follow_scan: None,
             header_extensions,
             matrix,
             matrix_creation_nonce,
@@ -5156,6 +5175,7 @@ impl VarlitFile {
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
+            follow_scan: None,
             header_extensions,
             matrix,
             matrix_creation_nonce,
@@ -5219,6 +5239,7 @@ impl VarlitFile {
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadOnly,
+            follow_scan: None,
             header_extensions,
             matrix,
             matrix_creation_nonce,
@@ -5295,7 +5316,7 @@ impl VarlitFile {
             read_matrix_layout_if_needed(&path, true, spec, &mut file, header_len, original_len)?,
         );
         let append_start = append_log_start(header_len, matrix.as_ref());
-        let index = load_generation_index(
+        let mut index = load_generation_index(
             spec,
             &mut file,
             append_start,
@@ -5306,6 +5327,7 @@ impl VarlitFile {
         let sequence_state = index.sequence_state();
         let block_tails = index.block_tails()?;
         let frames_verified = index.frames_verified;
+        let boundaries = index.boundaries.take();
         let index = &*scratch;
         // No mark here: this route reaches a file that already ended at a
         // commit point, so there is no tail. See the digest's frame check.
@@ -5331,9 +5353,11 @@ impl VarlitFile {
                     snapshot.clone(),
                     spec,
                     frames_verified,
+                    boundaries,
                 )?,
                 snapshot,
                 mode: OpenMode::ReadWrite,
+                follow_scan: None,
                 header_extensions,
                 matrix,
                 matrix_creation_nonce,
@@ -7809,10 +7833,10 @@ impl VarlitFile {
     /// five-record file grown to fifteen, the open handle went on reporting 6
     /// records while a fresh open of the same path reported 18.
     ///
-    /// This is how a handle catches up without reopening. It frames only the
-    /// bytes past the end it already holds, so following a growing file costs
-    /// `O(appended)` per call rather than `O(records)`, and charges only those
-    /// bytes against [`ReadLimits::max_scan_bytes`](crate::ReadLimits).
+    /// Follows the committed tail without reopening. With a cooperating current
+    /// writer, private pending progress visits only new complete frames; unchanged
+    /// polls do not reframe them. Publication revalidates a cached batch once.
+    /// Limits apply to that range; recovery or an unknown writer resets the cache.
     ///
     /// Matrix readers also adopt the confirmed page root, even if no record
     /// bytes were appended. Compare `matrix_generation()` to observe that case.
@@ -7930,9 +7954,10 @@ impl VarlitFile {
         // at the path, and framing *that* file's bytes at this handle's offsets
         // is the one thing this must never do.
         let mut file = self.snapshot.try_clone_file()?;
+        let physical_metadata = file.metadata()?;
         let file_len = matrix_next
             .as_ref()
-            .map_or(file.metadata()?.len(), |(_, p)| p.head().native_eof);
+            .map_or(physical_metadata.len(), |(_, p)| p.head().native_eof);
         if file_len < from {
             return Err(Error::InvalidMatrixLayout);
         }
@@ -7944,22 +7969,93 @@ impl VarlitFile {
             }
             return Ok(0);
         }
-        let mut framed = BufferedScan::new(self.spec);
-        let scanned = scan_records_range_at_len(
+        let modified = physical_metadata.modified().ok();
+        let mut pending = match self.follow_scan.take() {
+            Some(pending) => pending,
+            None => crate::try_box(FollowScan::new(self.spec, from, &self.path)?)?,
+        };
+        let mut progress = pending.progress.take().expect("pending scan owns progress");
+        let cached = progress.next > from;
+        let epoch = pending.epoch();
+        let unchanged_input = progress.from == from
+            && pending.observed_len > from
+            && file_len == pending.observed_len
+            && modified.is_some()
+            && modified == pending.observed_modified
+            && epoch == pending.writer_epoch;
+        if unchanged_input {
+            pending.progress = Some(progress);
+            self.follow_scan = Some(pending);
+            if let Some((layout, pages)) = matrix_next.take() {
+                layout.apply(&mut self.matrix);
+                self.file.adopt_matrix(pages);
+                self.chunk_directory = std::cell::OnceCell::new();
+            }
+            return Ok(0);
+        }
+        let reusable = progress.from == from
+            && file_len >= pending.observed_len
+            && (file_len != pending.observed_len || modified == pending.observed_modified)
+            && (!cached || (epoch.is_some() && epoch == pending.writer_epoch));
+        if !reusable {
+            pending.rows.reset();
+            progress = ScanProgress::new(self.spec, from, 0, Some(from))?;
+        }
+        let resumed = progress.next > from;
+        progress = resume_record_scan(
             self.spec,
             &mut file,
-            from,
-            // Nothing for the prefix: the bytes before `from` were charged to
-            // the open that framed them.
-            0,
-            // `from` is this handle's committed end — under a marker policy the
-            // snapshot is bound to exactly that — so the range resumes with the
-            // commit boundary the whole-file scan would already be holding.
-            Some(from),
+            progress,
             ScanIntent::ReadOnly,
-            &mut framed,
+            &mut pending.rows,
             file_len,
         )?;
+        // A pending prefix can change before it is committed (replacement or
+        // writer recovery). Cached parse state must never authorize publication.
+        // Replay once when a new commit is discovered, not on every idle poll.
+        if resumed
+            && progress
+                .scanned
+                .physical_end_at_commit
+                .is_some_and(|end| end > from)
+        {
+            pending.rows.reset();
+            drop(progress);
+            progress = resume_record_scan(
+                self.spec,
+                &mut file,
+                ScanProgress::new(self.spec, from, 0, Some(from))?,
+                ScanIntent::ReadOnly,
+                &mut pending.rows,
+                file_len,
+            )?;
+        }
+        pending.observed_len = file_len;
+        pending.observed_modified = modified;
+        pending.writer_epoch = epoch;
+        let has_commit = !self.spec.commit_policy.is_transaction_marker()
+            || progress
+                .scanned
+                .physical_end_at_commit
+                .is_some_and(|end| end > from);
+        if !has_commit {
+            pending.progress = Some(progress);
+            self.follow_scan = Some(pending);
+            if let Some((layout, pages)) = matrix_next.take() {
+                layout.apply(&mut self.matrix);
+                self.file.adopt_matrix(pages);
+                self.chunk_directory = std::cell::OnceCell::new();
+            }
+            return Ok(0);
+        }
+        pending.rows.finish(self.spec, &mut progress.scanned)?;
+        let ScanProgress {
+            scanned,
+            all_sequences,
+            ..
+        } = progress;
+        drop(all_sequences);
+        let framed = &pending.rows;
         let logical_len = scanned.physical_end(from);
         if logical_len <= from {
             // A matrix generation can advance without a record commit marker.
@@ -7987,6 +8083,7 @@ impl VarlitFile {
                 "followed records repeat a sequence this handle already holds",
             ));
         }
+        let next_progress = ScanProgress::new(self.spec, logical_len, 0, Some(logical_len))?;
         let snapshot = self.snapshot.with_len(logical_len)?;
         if self.index.is_retained() {
             let first = self.index.len();
@@ -8028,6 +8125,9 @@ impl VarlitFile {
         }
         // A record just adopted may be the newest of its key.
         self.keyed_tails.invalidate_all();
+        pending.rows.reset();
+        pending.progress = Some(next_progress);
+        self.follow_scan = Some(pending);
         // And a matrix chunk record is an ordinary append-log record, so a run
         // may have brought new chunks. The chunk directory is built once and
         // cached in a `OnceCell`, which was sound to keep forever only while a
@@ -16912,8 +17012,13 @@ mod tests {
         let outer = writer.push_info_for_test(10, bytes)?;
         let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
         // Model a serialized segment claiming the embedded header is a record.
-        writer.index =
-            ResidentIndex::adopt_generation(&vec![fake], writer.snapshot.clone(), spec, false)?;
+        writer.index = ResidentIndex::adopt_generation(
+            &vec![fake],
+            writer.snapshot.clone(),
+            spec,
+            false,
+            None,
+        )?;
         let before = std::fs::read(&path)?;
         assert!(matches!(
             writer.mark_record_dead(outer.payload_offset),
@@ -18765,6 +18870,8 @@ impl FileMutationPermit<'_> {
             committed,
         };
         let info = AppendInfo::from(&entry);
+        self.index
+            .install_verified_boundary(record_offset, prospective_len);
         // A non-resident block's record is written, sequenced, chained and
         // recoverable exactly as any other; it is simply not mirrored in
         // memory, which is what stops resident cost tracking record count.

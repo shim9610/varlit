@@ -171,6 +171,7 @@ pub(crate) struct WriterLock {
     /// Set by [`WriterLock::release`] so the drop that follows it does not
     /// repeat work that was already reported on.
     pub(super) released: bool,
+    cache_modified: Option<SystemTime>,
 }
 
 // An acquisition can fail before a WriterLock exists. Explicitly unlock on
@@ -296,15 +297,20 @@ impl WriterLock {
             process_id: std::process::id(),
             created_unix_ms: unix_time_ms(),
         };
-        if let Err(error) = write_writer_lock_info(&mut file, &info) {
-            let _ = clear_and_verify_writer_lock_marker(&mut file, &path);
-            return Err(error);
-        }
+        let previous = file.metadata()?.modified().ok();
+        let cache_modified = match write_writer_lock_info(&mut file, &info) {
+            Ok(modified) => modified,
+            Err(error) => {
+                let _ = clear_and_verify_writer_lock_marker(&mut file, &path, previous);
+                return Err(error);
+            }
+        };
         Ok(Self {
             file: file.into_inner(),
             marker_path: path,
             native_guard: native_guard.map(AcquiredWriterFile::into_inner),
             released: false,
+            cache_modified,
         })
     }
 
@@ -328,7 +334,11 @@ impl WriterLock {
     ///   window is refused by a lock that is already being given up.
     pub(crate) fn release(mut self) -> Result<()> {
         self.give_back_native_guard();
-        let result = clear_and_verify_writer_lock_marker(&mut self.file, &self.marker_path);
+        let result = clear_and_verify_writer_lock_marker(
+            &mut self.file,
+            &self.marker_path,
+            self.cache_modified,
+        );
         // Last, because clearing the marker is only safe while its own lock is
         // still held: see `clear_and_verify_writer_lock_marker`.
         let _ = unlock_writer_guard(&self.file);
@@ -632,13 +642,67 @@ pub(super) fn release_writer_lock_after_failure(lock: WriterLock, error: Error) 
     }
 }
 
-pub(super) fn write_writer_lock_info(file: &mut File, info: &WriterLockInfo) -> Result<()> {
+/// The optional cache lease changes strictly between acquisitions, even on
+/// coarse timestamp filesystems and when pid/creation milliseconds repeat.
+/// `pid=+N` is accepted by the original u32 parser and keeps the diagnostic
+/// record's fields/values unchanged. An unmarked/legacy owner is never used
+/// to resume a pending parse across growth. This is a hint, not authorization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct WriterCacheEpoch {
+    object: [u8; 16],
+    modified: SystemTime,
+}
+#[cfg(any(unix, windows))]
+pub(super) fn writer_cache_epoch(file: &File) -> Option<WriterCacheEpoch> {
+    let before = file.metadata().ok()?;
+    if !before.is_file() || before.len() == 0 {
+        return None;
+    }
+    let mut prefix = [0; 64];
+    let n = crate::snapshot::read_at(file, &mut prefix, 0).ok()?;
+    let magic = WRITER_LOCK_MAGIC.as_bytes();
+    if n < magic.len() + 6
+        || &prefix[..magic.len()] != magic
+        || &prefix[magic.len()..magic.len() + 6] != b"\npid=+"
+    {
+        return None;
+    }
+    let pid_start = magic.len() + 6;
+    let pid_end = prefix[pid_start..n]
+        .iter()
+        .position(|byte| *byte == b'\n')?
+        + pid_start;
+    let pid = std::str::from_utf8(&prefix[pid_start..pid_end])
+        .ok()?
+        .parse::<u32>()
+        .ok()?;
+    #[cfg(not(miri))]
+    if process_is_absent(pid) {
+        return None;
+    }
+    #[cfg(miri)]
+    let _ = pid;
+    let object = opened_file_identity_array(file).ok()?;
+    let after = file.metadata().ok()?;
+    let modified = before.modified().ok()?;
+    if before.len() != after.len() || Some(modified) != after.modified().ok() {
+        return None;
+    }
+    Some(WriterCacheEpoch { object, modified })
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn writer_cache_epoch(_file: &File) -> Option<WriterCacheEpoch> {
+    None
+}
+
+fn write_writer_lock_body(file: &mut File, info: &WriterLockInfo, leased: bool) -> Result<()> {
     let target = info.target_path.to_string_lossy();
+    let sign = if leased { "+" } else { "" };
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
     file.write_all(
         format!(
-            "{WRITER_LOCK_MAGIC}\npid={}\ncreated_unix_ms={}\ntarget={target}\n",
+            "{WRITER_LOCK_MAGIC}\npid={sign}{}\ncreated_unix_ms={}\ntarget={target}\n",
             info.process_id, info.created_unix_ms
         )
         .as_bytes(),
@@ -646,11 +710,46 @@ pub(super) fn write_writer_lock_info(file: &mut File, info: &WriterLockInfo) -> 
     file.flush()?;
     Ok(())
 }
+pub(super) fn write_writer_lock_info(
+    file: &mut File,
+    info: &WriterLockInfo,
+) -> Result<Option<SystemTime>> {
+    let previous = file.metadata()?.modified().ok();
+    // Withdraw the old capability before trying to establish the next lease.
+    write_writer_lock_body(file, info, false)?;
+    #[cfg(not(miri))]
+    if let Some(previous) = previous {
+        write_writer_lock_body(file, info, true)?;
+        // Read back every candidate; the filesystem may round timestamps.
+        for nanos in [1, 1_000, 1_000_000, 1_000_000_000, 2_000_000_000] {
+            let Some(next) = previous.checked_add(Duration::from_nanos(nanos)) else {
+                break;
+            };
+            if file.set_modified(next).is_err() {
+                break;
+            }
+            if let Some(at) = file.metadata().ok().and_then(|m| m.modified().ok())
+                && at > previous
+            {
+                return Ok(Some(at));
+            }
+        }
+        // Filesystems/permissions without an observable lease keep working;
+        // only the speculative cross-call acceleration is unavailable.
+        write_writer_lock_body(file, info, false)?;
+    }
+    #[cfg(miri)]
+    let _ = previous;
+    Ok(None)
+}
 
-pub(super) fn clear_writer_lock_info(file: &mut File) -> Result<()> {
+fn clear_writer_lock_info_at(file: &mut File, modified: Option<SystemTime>) -> Result<()> {
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
     file.flush()?;
+    if let Some(modified) = modified {
+        file.set_modified(modified)?;
+    }
     Ok(())
 }
 
@@ -673,15 +772,19 @@ pub(super) fn clear_writer_lock_info(file: &mut File) -> Result<()> {
 /// describe. Removal is a fallback, not the normal path - a marker file that
 /// truncates correctly is left in place, zero length, exactly as before - so
 /// nothing that depends on the marker surviving normal use changes.
-pub(super) fn clear_and_verify_writer_lock_marker(file: &mut File, path: &Path) -> Result<()> {
-    let cleared = clear_writer_lock_info(file);
+fn clear_and_verify_writer_lock_marker(
+    file: &mut File,
+    path: &Path,
+    modified: Option<SystemTime>,
+) -> Result<()> {
+    let cleared = clear_writer_lock_info_at(file, modified);
     // `u64::MAX` for an unreadable length: unprovable is treated as non-empty,
     // never as empty.
     let observed = file
         .metadata()
         .map(|metadata| metadata.len())
         .unwrap_or(u64::MAX);
-    if observed == 0 {
+    if observed == 0 && cleared.is_ok() {
         return Ok(());
     }
     remove_file(path)?;
@@ -895,7 +998,11 @@ impl Drop for WriterLock {
         // holds, and `fork` makes duplicates this process cannot see. See
         // `unlock_writer_guard`.
         self.give_back_native_guard();
-        let _ = clear_and_verify_writer_lock_marker(&mut self.file, &self.marker_path);
+        let _ = clear_and_verify_writer_lock_marker(
+            &mut self.file,
+            &self.marker_path,
+            self.cache_modified,
+        );
         let _ = unlock_writer_guard(&self.file);
     }
 }
@@ -904,4 +1011,49 @@ pub(super) fn lock_path(path: &Path) -> PathBuf {
     let mut lock_name: OsString = path.as_os_str().to_os_string();
     lock_name.push(".lock");
     PathBuf::from(lock_name)
+}
+
+#[cfg(test)]
+mod cache_epoch_tests {
+    use super::*;
+
+    #[test]
+    fn writer_cache_epochs_advance_and_keep_legacy_lock_values() -> Result<()> {
+        let mut file = tempfile::tempfile()?;
+        let path = Path::new("epoch-fixture.lock");
+        let info = WriterLockInfo {
+            path: path.into(),
+            target_path: PathBuf::from("epoch-fixture"),
+            process_id: std::process::id(),
+            created_unix_ms: 123,
+        };
+        let mut last = None;
+        for _ in 0..8 {
+            let modified = write_writer_lock_info(&mut file, &info)?;
+            let parsed = read_writer_lock_info_file(path, &mut file)?.unwrap();
+            assert_eq!(parsed.process_id, info.process_id);
+            assert_eq!(parsed.created_unix_ms, info.created_unix_ms);
+            assert_eq!(parsed.target_path, info.target_path);
+            #[cfg(not(miri))]
+            {
+                let epoch = writer_cache_epoch(&file).expect("test filesystem supports timestamps");
+                assert_eq!(modified, Some(epoch.modified));
+                if let Some(last) = last {
+                    assert!(epoch.modified > last);
+                }
+                last = Some(epoch.modified);
+            }
+            #[cfg(miri)]
+            {
+                let _ = &mut last as &mut Option<SystemTime>;
+                assert!(modified.is_none());
+            }
+            clear_writer_lock_info_at(&mut file, modified)?;
+            assert_eq!(file.metadata()?.len(), 0);
+            if let Some(modified) = modified {
+                assert_eq!(file.metadata()?.modified()?, modified);
+            }
+        }
+        Ok(())
+    }
 }
