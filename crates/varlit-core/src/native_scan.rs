@@ -292,9 +292,9 @@ fn open_follow_marker(path: &Path) -> Option<File> {
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         let file = options.open(path).ok()?;
         let metadata = file.metadata().ok()?;
-        return (metadata.is_file()
+        (metadata.is_file()
             && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
-            .then_some(file);
+            .then_some(file)
     }
     #[cfg(not(windows))]
     {
