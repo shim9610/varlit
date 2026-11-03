@@ -277,12 +277,6 @@ impl ResidentIndex {
                 || (self.frames_verified && self.offset_floor(offset)? == Some(offset))))
     }
 
-    pub(crate) fn small_frame_read_hint(&self, offset: u64) -> bool {
-        self.uniform
-            .as_ref()
-            .is_some_and(|run| run.small_frame_read_hint(offset))
-    }
-
     pub(crate) fn verify_boundary(&mut self, append_start: u64, offset: u64) -> Result<()> {
         if offset < append_start || offset >= self.snapshot.len() {
             return Err(invalid_boundary());
@@ -539,12 +533,6 @@ pub(super) struct UniformPrefix {
 #[path = "verification/uniform_prefix.rs"]
 mod uniform_prefix_proofs;
 impl UniformPrefix {
-    fn small_frame_read_hint(&self, offset: u64) -> bool {
-        // Only selects a read size after separate boundary authorization.
-        // Even an inaccurate hint must still decode the full header/footer.
-        self.count > 1 && self.step <= 128 && offset >= self.start && offset < self.last
-    }
-
     pub(super) fn observe(proof: &mut Option<Self>, row: usize, offset: u64) {
         match proof {
             Some(run) => run.push(row, offset),
@@ -829,27 +817,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn small_frame_hint_never_replaces_boundary_membership() {
-        for start in [0, u64::MAX - 256] {
-            let mut run = UniformPrefix {
-                first_row: 0,
-                count: 3,
-                start,
-                step: 72,
-                last: start + 144,
-                closed: true,
-            };
-            assert!(run.small_frame_read_hint(start));
-            assert!(run.small_frame_read_hint(start + 72));
-            assert!(!run.small_frame_read_hint(start + 144));
-            assert!(run.small_frame_read_hint(start + 1));
-            assert!(!run.contains(start + 1));
-            run.truncate(1);
-            assert!(!run.small_frame_read_hint(start));
-        }
     }
 
     #[test]
