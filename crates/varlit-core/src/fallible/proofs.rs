@@ -260,6 +260,46 @@ fn byte_clone_preserves_source_on_every_refusal() {
     assert_eq!(live(), 0);
 }
 
+#[kani::proof]
+#[kani::unwind(5)]
+#[kani::stub(std::alloc::alloc, model_alloc)]
+#[kani::stub(std::vec::Vec::<u8>::new, model_empty_vec)]
+#[kani::stub(std::alloc::alloc_zeroed, model_zeroed)]
+#[kani::stub(std::alloc::realloc, model_realloc)]
+#[kani::stub(std::alloc::dealloc, model_dealloc)]
+#[kani::stub(<std::alloc::Global as std::alloc::Allocator>::deallocate, model_global_dealloc)]
+#[kani::stub(<std::alloc::Global as std::alloc::Allocator>::grow, model_global_grow)]
+fn string_clone_preserves_source_on_every_refusal() {
+    let mut data: [u8; 4] = kani::any();
+    for byte in &mut data {
+        *byte &= 0x7f;
+    }
+    let len: usize = kani::any();
+    kani::assume(len <= data.len());
+    // The bounded formal case uses valid ASCII; native/Miri tests also cover
+    // multi-byte UTF-8 and embedded NUL. No arbitrary-size validity claim.
+    // SAFETY: Every initialized fixture byte was masked to ASCII above.
+    // Input validation is a precondition here, not the clone being verified.
+    let source = unsafe { String::from_utf8_unchecked(data[..len].to_vec()) };
+    let baseline = live();
+    let fail: usize = kani::any();
+    refuse_from(fail);
+    let result = source.try_clone();
+    assert_eq!(
+        result.is_ok(),
+        len == 0 || fail > 0,
+        "string clone refusal lost"
+    );
+    if let Ok(copy) = &result {
+        assert_eq!(copy.as_bytes(), &data[..len]);
+    }
+    drop(returned(result));
+    assert_eq!(source.as_bytes(), &data[..len]);
+    assert_eq!(live(), baseline, "string clone storage leaked");
+    drop(source);
+    assert_eq!(live(), 0);
+}
+
 fn nested_clone_case<const N: usize>() {
     struct Item {
         id: u8,
@@ -488,7 +528,7 @@ fn copy_on_write_refusal_preserves_shared_source() {
 fn full_width_clone_capacity_refuses_without_abort() {
     let len: usize = kani::any();
     refuse_from(0);
-    let result = reserved_vec::<u16>(len);
+    let result = reserved_vec_for::<u16>(len, "vector clone");
     assert_eq!(result.is_ok(), len == 0, "capacity refusal lost");
     drop(returned(result));
     assert_eq!(live(), 0);
