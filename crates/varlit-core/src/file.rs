@@ -6531,8 +6531,13 @@ impl VarlitFile {
             let append_start = append_log_start_for_file(self)?;
             self.index.verify_boundary(append_start, record_offset)?;
         }
-        let entry =
-            fault_record_entry_prefixed::<512>(&self.snapshot, self.spec, record_offset, false)?;
+        let entry = fault_record_entry_for_mark_with(
+            self.snapshot.len(),
+            self.index.len(),
+            self.spec,
+            record_offset,
+            |at, bytes| self.snapshot.read_exact_at(at, bytes),
+        )?;
         self.write_framed_record_flags(&entry, set)
     }
 
@@ -15173,6 +15178,35 @@ fn fault_record_entry_prefixed<const PREFIX: usize>(
         committed,
         |at, bytes| snapshot.read_exact_at(at, bytes),
     )
+}
+
+#[inline]
+fn mark_prefers_header_only(snapshot_len: u64, records: usize) -> bool {
+    // An I/O hint, never a boundary witness. Avoid copying an unused payload
+    // prefix when observed file geometry is dominated by larger records.
+    // Small directories keep the prefix because container metadata can dominate
+    // their average. Saturation only selects the existing wider read route.
+    records >= 32 && snapshot_len > (records as u64).saturating_mul(512)
+}
+
+fn fault_record_entry_for_mark_with(
+    snapshot_len: u64,
+    records: usize,
+    spec: FormatSpec,
+    record_offset: u64,
+    read: impl FnMut(u64, &mut [u8]) -> Result<()>,
+) -> Result<RecordIndexEntry> {
+    if mark_prefers_header_only(snapshot_len, records) {
+        fault_record_entry_with::<{ RECORD_HEADER_LEN as usize }>(
+            snapshot_len,
+            spec,
+            record_offset,
+            false,
+            read,
+        )
+    } else {
+        fault_record_entry_with::<512>(snapshot_len, spec, record_offset, false, read)
+    }
 }
 
 fn fault_record_entry_with<const PREFIX: usize>(
