@@ -416,7 +416,7 @@ impl ResidentIndex {
             && offset <= last
         {
             let guess =
-                ((offset - first) as u128 * (len - 1) as u128 / (last - first) as u128) as usize;
+                crate::spill_rows::scaled_position(offset - first, len - 1, last - first) as usize;
             if guess < self.rewritten_len {
                 let rows = self.rewritten.as_ref().unwrap();
                 if let Some(row) = rows.get(guess)?
@@ -444,9 +444,10 @@ impl ResidentIndex {
                 // without adding probes or memory. Exact membership still
                 // comes from a private row, with bounded binary fallback.
                 let at = u64::from_le_bytes(candidate[..8].try_into().unwrap());
-                let distance = ((offset.abs_diff(at) as u128 * (len - 1) as u128
-                    / (last - first) as u128) as usize)
-                    .max(1);
+                let distance =
+                    (crate::spill_rows::scaled_position(offset.abs_diff(at), len - 1, last - first)
+                        as usize)
+                        .max(1);
                 let nearby = if offset < at {
                     guess.saturating_sub(distance)
                 } else {
