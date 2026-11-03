@@ -1072,7 +1072,7 @@ fn the_resident_record_index_cannot_be_grown_or_outrun() {
          lines, and the reservation token then binds nothing"
     );
     assert!(
-        directory.contains("pub struct ResidentIndex {\n    slots: SpillRows<16>,"),
+        directory.contains("pub struct ResidentIndex {\n    slots: SpillRows<RESIDENT_ROW_BYTES>,"),
         "the bounded directory rows must stay private to ResidentIndex"
     );
     assert!(
@@ -1084,7 +1084,7 @@ fn the_resident_record_index_cannot_be_grown_or_outrun() {
         !directory.contains("impl DerefMut for ResidentIndex")
             && !directory.contains("fn slots_mut")
             && !directory.contains("fn entries_mut")
-            && !directory.contains("-> &mut SpillRows<16>")
+            && !directory.contains("-> &mut SpillRows<")
             && !directory.contains("-> &mut Vec<RecordIndexEntry>"),
         "`ResidentIndex` must not lend out its `Vec`: a `&mut Vec` is every growth operation \
          at once"
