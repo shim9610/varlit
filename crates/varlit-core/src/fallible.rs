@@ -90,12 +90,29 @@ impl<T: TryClone> TryClone for Vec<T> {
         T::try_clone_slice(self)
     }
 }
+#[inline]
 fn reserved_vec<T>(len: usize) -> Result<Vec<T>> {
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(len)
-        .map_err(|_| allocation("vector clone", len.saturating_mul(size_of::<T>())))?;
-    Ok(output)
+    reserved_vec_for(len, "vector clone")
+}
+
+// Only reserve empty storage here; Vec remains responsible for initializing
+// elements and dropping the initialized prefix on a subsequent clone failure.
+#[inline]
+fn reserved_vec_for<T>(len: usize, resource: &'static str) -> Result<Vec<T>> {
+    if len == 0 || size_of::<T>() == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<T>(len)
+        .map_err(|_| allocation(resource, len.saturating_mul(size_of::<T>())))?;
+    // SAFETY: Layout::array checked the size/alignment and this layout is nonzero.
+    let pointer = unsafe { std::alloc::alloc(layout) }.cast::<T>();
+    if pointer.is_null() {
+        return Err(allocation(resource, layout.size()));
+    }
+    // SAFETY: The global allocator allocated exactly len T slots with T's
+    // alignment. Vec uses that same allocator/layout for deallocation. Length
+    // zero exposes no uninitialized T; ownership of the allocation moves here.
+    Ok(unsafe { Vec::from_raw_parts(pointer, 0, len) })
 }
 fn copy_slice<T: Copy>(source: &[T]) -> Result<Vec<T>> {
     let mut output = reserved_vec(source.len())?;
@@ -106,12 +123,10 @@ fn copy_slice<T: Copy>(source: &[T]) -> Result<Vec<T>> {
 impl TryClone for String {
     #[inline]
     fn try_clone(&self) -> Result<Self> {
-        let mut output = String::new();
-        output
-            .try_reserve_exact(self.len())
-            .map_err(|_| allocation("string clone", self.len()))?;
-        output.push_str(self);
-        Ok(output)
+        let mut bytes = reserved_vec_for(self.len(), "string clone")?;
+        bytes.extend_from_slice(self.as_bytes());
+        // SAFETY: These initialized bytes are an exact copy of a valid String.
+        Ok(unsafe { String::from_utf8_unchecked(bytes) })
     }
 }
 impl TryClone for PathBuf {
@@ -287,6 +302,63 @@ mod tests {
     use super::*;
     use crate::pib_probe::with_allocation_refusal;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn empty_vector_reservation_checks_layout_and_owns_only_initialized_elements() {
+        #[repr(align(256))]
+        struct Aligned<'a>(&'a AtomicUsize);
+        impl Drop for Aligned<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        #[repr(align(512))]
+        struct Zero;
+        with_allocation_refusal(1, || {
+            assert!(reserved_vec::<u64>(0).unwrap().is_empty());
+            assert!(reserved_vec::<Zero>(usize::MAX).unwrap().is_empty());
+        });
+        assert!(matches!(
+            reserved_vec::<u64>(usize::MAX),
+            Err(Error::AllocationFailed {
+                resource: "vector clone",
+                ..
+            })
+        ));
+        assert!(matches!(
+            with_allocation_refusal(1, || reserved_vec::<u64>(3)),
+            Err(Error::AllocationFailed {
+                resource: "vector clone",
+                requested: 24
+            })
+        ));
+        let drops = AtomicUsize::new(0);
+        let mut values = reserved_vec::<Aligned<'_>>(3).unwrap();
+        assert_eq!(values.capacity(), 3);
+        assert_eq!((values.as_ptr() as usize) % 256, 0);
+        assert!(values.is_empty());
+        values.push(Aligned(&drops));
+        values.push(Aligned(&drops));
+        drop(values);
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn string_clone_preserves_utf8_and_reports_exact_refused_storage() {
+        for text in ["", "ascii", "한글\0🦀"] {
+            let source = text.to_owned();
+            assert_eq!(source.try_clone().unwrap(), source);
+            let result = with_allocation_refusal(1, || source.try_clone());
+            if text.is_empty() {
+                assert_eq!(result.unwrap(), source);
+            } else {
+                assert!(matches!(result, Err(Error::AllocationFailed {
+                    resource: "string clone", requested
+                }) if requested == source.len() as u64));
+            }
+            assert_eq!(source, text);
+        }
+    }
 
     #[test]
     fn boxed_storage_handles_alignment_zero_size_and_refusal() {
