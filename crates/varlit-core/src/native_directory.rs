@@ -62,7 +62,10 @@ impl RewrittenRows {
             return Self::Full(rows);
         }
         let compact = (|| -> std::io::Result<_> {
-            let mut compact = crate::packed_rows::PackedRows::with_page_rows(scratch, 16);
+            // Point membership probes should decode only a small neighborhood.
+            // Construction still uses its larger pages; both representations
+            // are charged to the same existing directory allowance.
+            let mut compact = crate::packed_rows::PackedRows::with_page_rows(scratch, 8);
             for at in 0..rows.len() {
                 let source = rows.get(at)?.ok_or(std::io::ErrorKind::UnexpectedEof)?;
                 compact.push(Self::project(&source))?;
@@ -415,7 +418,13 @@ impl ResidentIndex {
                 ((offset - first) as u128 * (len - 1) as u128 / (last - first) as u128) as usize;
             if guess < self.rewritten_len {
                 let rows = self.rewritten.as_ref().unwrap();
-                rows.get(guess)?;
+                if let Some(row) = rows.get(guess)?
+                    && u64::from_le_bytes(row[..8].try_into().unwrap()) == offset
+                {
+                    // Reuse the actual key just read while priming the page.
+                    // The estimate itself never proves membership.
+                    return Ok(Some(offset));
+                }
                 if rows.contains(offset)? {
                     return Ok(Some(offset));
                 }
@@ -767,6 +776,45 @@ mod tests {
                 assert!(!rows.contains(offset - 1)?);
             }
             assert_eq!(rows.get(128)?, None);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rewritten_membership_hints_preserve_gaps_and_truncated_prefixes() -> Result<()> {
+        for budget in [256, 65536] {
+            let spec = FormatSpec::builder()
+                .magic(b"VRWHINTS")
+                .build()?
+                .with_resource_limits(crate::ReadLimits::STANDARD.with_max_index_bytes(budget));
+            let mut rows = RewriteRows::new(rewrite_buffer_bytes(spec));
+            let mut offsets = Vec::new();
+            let mut offset = 100u64;
+            for i in 0..129u64 {
+                offset += 64 + i * 37 % 271 + if i == 64 { 4096 } else { 0 };
+                let mut row = [0; 62];
+                row[..4].copy_from_slice(&7u32.to_le_bytes());
+                row[16..24].copy_from_slice(&offset.to_le_bytes());
+                rows.push(row)?;
+                offsets.push(offset);
+            }
+            let file = tempfile::tempfile()?;
+            file.set_len(offset + 64)?;
+            let snapshot = SnapshotFile::new(file)?;
+            let mut index = ResidentIndex::from_rewrite_rows(rows, None, snapshot, spec);
+            for retained in [129, 65, 17, 1, 0] {
+                index.truncate(retained);
+                for probe in 0..129 {
+                    let at = offsets[probe * 73 % 129];
+                    for wanted in [at - 1, at, at + 1] {
+                        assert_eq!(
+                            index.has_verified_boundary(wanted)?,
+                            offsets[..retained].binary_search(&wanted).is_ok(),
+                            "budget={budget}, retained={retained}, wanted={wanted}"
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }
