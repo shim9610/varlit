@@ -8019,7 +8019,7 @@ impl VarlitFile {
                 .physical_end_at_commit
                 .is_some_and(|end| end > from)
         {
-            pending.rows.reset();
+            pending.rows.rewind_for_replay();
             drop(progress);
             progress = resume_record_scan(
                 self.spec,

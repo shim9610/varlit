@@ -96,6 +96,19 @@ impl BufferedScan {
             sequences: None,
         }
     }
+    /// A publication replay needs empty logical state, not a second allocation
+    /// of the same staging capacity. SpillRows truncation hides every old row
+    /// and clears cached reads; subsequent spills overwrite the abandoned tail.
+    /// The normal reset still releases all staging after publication/failure.
+    pub(super) fn rewind_for_replay(&mut self) {
+        self.rows.truncate(0);
+        self.committed = false;
+        self.kept = 0;
+        self.marker_seen = false;
+        self.suffix.clear();
+        self.previous = None;
+        self.sequences = None;
+    }
     pub(super) fn encode(entry: &RecordIndexEntry) -> [u8; 77] {
         let mut row = [0; 77];
         row[..4].copy_from_slice(&entry.block_id.to_le_bytes());
@@ -292,13 +305,56 @@ fn open_follow_marker(path: &Path) -> Option<File> {
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         let file = options.open(path).ok()?;
         let metadata = file.metadata().ok()?;
-        (metadata.is_file()
-            && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+        (metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
             .then_some(file)
     }
     #[cfg(not(windows))]
     {
         let file = options.open(path).ok()?;
         file.metadata().ok()?.is_file().then_some(file)
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+
+    #[test]
+    fn replay_rewinds_rows_and_commit_state_before_reusing_storage() -> Result<()> {
+        let spec = FormatSpec::builder()
+            .magic(b"VREPLAY1")
+            .build()?
+            .with_resource_limits(crate::ReadLimits::STANDARD);
+        let mut scan = BufferedScan::new(spec);
+        let mut entry = read_index_entry_payload(&[0; 73], 3);
+        entry.block_id = 1;
+        entry.sequence = 7;
+        entry.record_offset = 100;
+        scan.reserve_entry(spec)?;
+        scan.push_entry(entry.clone())?;
+        scan.committed = true;
+        scan.kept = 1;
+        scan.marker_seen = true;
+        scan.suffix.push(entry);
+        scan.rewind_for_replay();
+        assert_eq!(scan.record_count(), 0);
+        assert!(!scan.committed && !scan.marker_seen);
+        assert_eq!(scan.kept, 0);
+        assert!(scan.suffix.is_empty() && scan.previous.is_none() && scan.sequences.is_none());
+        let mut next = read_index_entry_payload(&[0; 73], 3);
+        next.block_id = 2;
+        next.sequence = 0;
+        next.record_offset = 1000;
+        scan.reserve_entry(spec)?;
+        scan.push_entry(next)?;
+        assert_eq!(scan.record_count(), 1);
+        let observed = scan.record_at(0)?;
+        assert_eq!(
+            (observed.block_id, observed.sequence, observed.record_offset),
+            (2, 0, 1000)
+        );
+        assert!(!observed.committed);
+        assert!(scan.record_at(1).is_err());
+        Ok(())
     }
 }
