@@ -952,6 +952,15 @@ pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) 
     if !entry.is_compressed() {
         return Ok(());
     }
+    validate_compressed_record_entry(spec, entry)
+}
+
+// Ordinary records only need their flags checked. Keep descriptor lookup out
+// of that inline path so callers do not copy the entire FormatSpec for each
+// uncompressed record; compressed records retain every policy check below.
+#[cold]
+#[inline(never)]
+fn validate_compressed_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
     if entry.flags & RECORD_FLAG_INTERNAL != 0 || entry.block_id >= RESERVED_BLOCK_ID_START {
         return Err(Error::InvalidCompressionHeader);
     }
