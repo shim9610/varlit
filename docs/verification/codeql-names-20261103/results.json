@@ -1,0 +1,664 @@
+{
+  "baseline": "6940af6a5e3a873db8645198e1d6aebc9dc823dd",
+  "native": [
+    {
+      "case": 0,
+      "pairs": 20,
+      "work": {
+        "mode": "writer",
+        "layout": "fixed",
+        "order": "forward",
+        "count": 2000000,
+        "marks": 200000,
+        "source_bytes": 144000230,
+        "frames": 200000,
+        "temporary_bytes": 31457280
+      },
+      "metrics": {
+        "operation_seconds": {
+          "before": 0.163772322,
+          "after": 0.163206756,
+          "change_percent": -0.34533674133288006,
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 3.9673105,
+          "after": 3.8743105,
+          "change_percent": -2.3441573327824927,
+          "status": "passed"
+        },
+        "rss_kib": {
+          "before": 5780,
+          "after": 5796,
+          "change_percent": 0.27681660899654403,
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 175464448.0,
+          "after": 175464448.0,
+          "change_percent": 0.0,
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "case": 4,
+      "pairs": 5,
+      "work": {
+        "mode": "writer",
+        "layout": "large",
+        "order": "reverse",
+        "count": 65536,
+        "marks": 4096,
+        "source_bytes": 4300734694,
+        "frames": 4096,
+        "temporary_bytes": 0
+      },
+      "metrics": {
+        "operation_seconds": {
+          "before": 0.01224455,
+          "after": 0.01136495,
+          "change_percent": -7.183604134084143,
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 1.593512,
+          "after": 1.58765,
+          "change_percent": -0.3678666994663349,
+          "status": "passed"
+        },
+        "rss_kib": {
+          "before": 3476,
+          "after": 3476,
+          "change_percent": 0.0,
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 4312363008,
+          "after": 4311851008,
+          "change_percent": -0.011872840923876637,
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "case": 7,
+      "pairs": 5,
+      "work": {
+        "mode": "complex",
+        "records": 65536,
+        "payload": 512,
+        "file_bytes": 47253552,
+        "dropped": 9362
+      },
+      "metrics": {
+        "operation_seconds": {
+          "before": 0.568708724,
+          "after": 0.592147348,
+          "change_percent": 4.121375848632125,
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 1.209761,
+          "after": 1.235763,
+          "change_percent": 2.1493501608995436,
+          "status": "passed"
+        },
+        "rss_kib": {
+          "before": 8592,
+          "after": 8648,
+          "change_percent": 0.6517690875232685,
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 100380672,
+          "after": 100380672,
+          "change_percent": 0.0,
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "case": 9,
+      "pairs": 5,
+      "work": {
+        "mode": "chunks",
+        "records": 67108864,
+        "payload": 1048576,
+        "work": 20
+      },
+      "metrics": {
+        "operation_seconds": {
+          "before": 0.212775706,
+          "after": 0.207896685,
+          "change_percent": -2.293034807272598,
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 0.320276,
+          "after": 0.318539,
+          "change_percent": -0.5423447276723836,
+          "status": "passed"
+        },
+        "rss_kib": {
+          "before": 67732,
+          "after": 67704,
+          "change_percent": -0.04133939644481721,
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 0,
+          "after": 0,
+          "change_percent": null,
+          "status": "passed"
+        }
+      }
+    },
+    {
+      "case": 10,
+      "pairs": 5,
+      "work": {
+        "mode": "decode",
+        "records": 67108864,
+        "payload": 1048576,
+        "work": 20
+      },
+      "metrics": {
+        "operation_seconds": {
+          "before": 0.350728527,
+          "after": 0.357188167,
+          "change_percent": 1.8417777576444472,
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 0.444929,
+          "after": 0.460952,
+          "change_percent": 3.601248738562779,
+          "status": "passed"
+        },
+        "rss_kib": {
+          "before": 133968,
+          "after": 134012,
+          "change_percent": 0.03284366415861051,
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 0,
+          "after": 0,
+          "change_percent": null,
+          "status": "passed"
+        }
+      }
+    }
+  ],
+  "timing_observations": 92,
+  "swmr": {
+    "1": {
+      "status": "passed",
+      "samples_per_version": 3,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "1073741824",
+          "--epoch-bytes": "16777216",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 1073741824,
+        "epoch": 16777216,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            12013369885672098846
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            11811335965011780335
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            6575331053473991156
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            15949282062931151593
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            6929931957242686864
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            9247543884215279603
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            14275219730953207679
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            3654627253138164260
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            14350256076685368
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 20.71653803299705,
+          "after": 20.707037897998816,
+          "change_percent": -0.04585773444917285,
+          "before_range": [
+            20.47128303500358,
+            21.525458147996687
+          ],
+          "after_range": [
+            20.067103990004398,
+            22.53913504999946
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 77.320333,
+          "after": 78.864038,
+          "change_percent": 1.996505886750377,
+          "before_range": [
+            76.111177,
+            82.20554999999999
+          ],
+          "after_range": [
+            75.125769,
+            83.446073
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 26128384,
+          "after": 26226688,
+          "change_percent": 0.37623451951716014,
+          "before_range": [
+            25997312,
+            26128384
+          ],
+          "after_range": [
+            26030080,
+            26226688
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 1142362112,
+          "after": 1142419456,
+          "change_percent": 0.005019774325298876,
+          "before_range": [
+            1142345728,
+            1142431744
+          ],
+          "after_range": [
+            1142292480,
+            1142439936
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    },
+    "4": {
+      "status": "passed",
+      "samples_per_version": 3,
+      "limit_percent": 5,
+      "workload": {
+        "config": {
+          "name": "indexed-r8-20g",
+          "mode": "indexed",
+          "readers": 8,
+          "checks_per_epoch": 16384
+        },
+        "effective_arguments": {
+          "--phase": "write",
+          "--mode": "indexed",
+          "--total-bytes": "4294967296",
+          "--epoch-bytes": "67108864",
+          "--record-bytes": "65536",
+          "--batch-bytes": "4194304",
+          "--index-batch-records": "16384",
+          "--cache-bytes": "8388608",
+          "--readers": "8",
+          "--pinned-readers": "1",
+          "--crc": "true",
+          "--reader-pause-us": "0",
+          "--seconds": "1",
+          "--reader-checks-per-epoch": "16384"
+        },
+        "payload": 4294967296,
+        "epoch": 67108864,
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "instrumentation": "none",
+        "readers": [
+          [
+            0,
+            1,
+            32,
+            524288,
+            3208747743188020222
+          ],
+          [
+            1,
+            32,
+            32,
+            524288,
+            15746876979075427631
+          ],
+          [
+            2,
+            32,
+            32,
+            524288,
+            9747968542438937268
+          ],
+          [
+            3,
+            32,
+            32,
+            524288,
+            9243847713027586313
+          ],
+          [
+            4,
+            32,
+            32,
+            524288,
+            4903863259750067952
+          ],
+          [
+            5,
+            32,
+            32,
+            524288,
+            5778843666330398067
+          ],
+          [
+            6,
+            32,
+            32,
+            524288,
+            8200585148807637375
+          ],
+          [
+            7,
+            32,
+            32,
+            524288,
+            1933305620900094980
+          ],
+          [
+            8,
+            32,
+            32,
+            524288,
+            12118611058152487384
+          ]
+        ]
+      },
+      "metrics": {
+        "wall_seconds": {
+          "before": 22.16576487000566,
+          "after": 22.384990705002565,
+          "change_percent": 0.9890289655357654,
+          "before_range": [
+            21.459868901991285,
+            23.19467318399984
+          ],
+          "after_range": [
+            21.315529671992408,
+            23.298877766996156
+          ],
+          "status": "passed"
+        },
+        "cpu_seconds": {
+          "before": 78.192867,
+          "after": 80.422706,
+          "change_percent": 2.851716640598423,
+          "before_range": [
+            76.45762200000001,
+            79.076184
+          ],
+          "after_range": [
+            74.991942,
+            82.164976
+          ],
+          "status": "passed"
+        },
+        "observed_peak_rss_bytes": {
+          "before": 51200000,
+          "after": 51273728,
+          "change_percent": 0.14400000000001079,
+          "before_range": [
+            51154944,
+            51200000
+          ],
+          "after_range": [
+            51122176,
+            51273728
+          ],
+          "status": "passed"
+        },
+        "write_bytes": {
+          "before": 4398391296,
+          "after": 4398391296,
+          "change_percent": 0.0,
+          "before_range": [
+            4398387200,
+            4398460928
+          ],
+          "after_range": [
+            4398387200,
+            4398501888
+          ],
+          "status": "passed"
+        }
+      },
+      "scope": "local equal-work resource gate; not a statistical or terabyte-scale guarantee"
+    }
+  },
+  "resources": {
+    "before": {
+      "command": [
+        "/workspace/scratch/codeql-fix/before-bin/oom_maintenance_load",
+        "complex",
+        "65536",
+        "512"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 345,
+      "peaks": {
+        "rss_bytes": 8790016,
+        "temporary_deleted_logical_bytes": 4194190,
+        "temporary_deleted_allocated_bytes": 4194304,
+        "deleted_regular_logical_bytes": 51447742,
+        "open_regular_allocated_bytes": 91955200,
+        "cgroup_current_bytes": 7803138048
+      },
+      "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.627891769}\n",
+      "stderr": ""
+    },
+    "after": {
+      "command": [
+        "/workspace/scratch/codeql-fix/after-bin/oom_maintenance_load",
+        "complex",
+        "65536",
+        "512"
+      ],
+      "exit": 0,
+      "sample_interval_seconds": 0.005,
+      "samples": 243,
+      "peaks": {
+        "rss_bytes": 8798208,
+        "temporary_deleted_logical_bytes": 4194190,
+        "temporary_deleted_allocated_bytes": 4194304,
+        "deleted_regular_logical_bytes": 51447742,
+        "open_regular_allocated_bytes": 91959296,
+        "cgroup_current_bytes": 7803121664
+      },
+      "stdout": "{\"mode\":\"complex\",\"records\":65536,\"payload\":512,\"file_bytes\":47253552,\"dropped\":9362,\"seconds\":0.594330015}\n",
+      "stderr": ""
+    }
+  },
+  "host": {
+    "cpu.max": "400000 100000\n",
+    "memory.max": "17179869184\n",
+    "memory.events": "low 0\nhigh 0\nmax 1188484\noom 6\noom_kill 3\noom_group_kill 0\n",
+    "memory.events_after": "low 0\nhigh 0\nmax 1188484\noom 6\noom_kill 3\noom_group_kill 0\n"
+  },
+  "sections": {
+    "record_mutation_load": {
+      "before": {
+        ".text": {
+          "size": 1474734,
+          "sha256": "276ac2e6357bea8d9da4c506307c5c8048c3502770b3c239c9127c39b34b78ff"
+        },
+        ".rodata": {
+          "size": 135028,
+          "sha256": "86d059be5cb2be121606743c179a8c9974970f9fd334d718b2be970d8d5caabf"
+        },
+        ".data.rel.ro": {
+          "size": 25688,
+          "sha256": "b169e556280d463499ea86edd70a43e60755a6d3687d17a1c3e541cd6f03effa"
+        },
+        "binary_sha256": "d46e715aad274006b5911bcd39626a7eafdf626ade6958b94d810919573cf4cd"
+      },
+      "after": {
+        ".text": {
+          "size": 1474734,
+          "sha256": "276ac2e6357bea8d9da4c506307c5c8048c3502770b3c239c9127c39b34b78ff"
+        },
+        ".rodata": {
+          "size": 135028,
+          "sha256": "86d059be5cb2be121606743c179a8c9974970f9fd334d718b2be970d8d5caabf"
+        },
+        ".data.rel.ro": {
+          "size": 25688,
+          "sha256": "b169e556280d463499ea86edd70a43e60755a6d3687d17a1c3e541cd6f03effa"
+        },
+        "binary_sha256": "ac7ad26a126d5a58c8509ba1b0eb5942b10f7c616d8a891704c44878b68b2c17"
+      }
+    },
+    "oom_maintenance_load": {
+      "before": {
+        ".text": {
+          "size": 1874686,
+          "sha256": "d7e8cfc3a8c3c4a40b8c6f71f62779c80eafdcfed61829183a42fbd22f51a0ff"
+        },
+        ".rodata": {
+          "size": 149204,
+          "sha256": "24d0142d009863900865a2bde35623b6c590d676f1ccae95744c1597cbe3a535"
+        },
+        ".data.rel.ro": {
+          "size": 26224,
+          "sha256": "cabd88245b3d460f1f5e9efa68fbce64d2bf52a5920b5e87271f0cf5eb0d05cc"
+        },
+        "binary_sha256": "a480988de36d45b9d1fef3af55ec92473f59b6129e02fc909b6bbf7040e4f72d"
+      },
+      "after": {
+        ".text": {
+          "size": 1874686,
+          "sha256": "d7e8cfc3a8c3c4a40b8c6f71f62779c80eafdcfed61829183a42fbd22f51a0ff"
+        },
+        ".rodata": {
+          "size": 149204,
+          "sha256": "24d0142d009863900865a2bde35623b6c590d676f1ccae95744c1597cbe3a535"
+        },
+        ".data.rel.ro": {
+          "size": 26224,
+          "sha256": "cabd88245b3d460f1f5e9efa68fbce64d2bf52a5920b5e87271f0cf5eb0d05cc"
+        },
+        "binary_sha256": "89ca5767445d8139bf63142ea19de9d5eb9197f088109c68e2d53602a41c9124"
+      }
+    },
+    "scalable_load": {
+      "before": {
+        ".text": {
+          "size": 1949379,
+          "sha256": "06432c4c99df38066d2e9cb4de9baea66e0a3187856a8acc93981b5fb608894f"
+        },
+        ".rodata": {
+          "size": 149164,
+          "sha256": "348c84f2bbe4fa5465411bd3dc12f7416925da45e7937fb1d6529ca6cb948160"
+        },
+        ".data.rel.ro": {
+          "size": 31736,
+          "sha256": "3bc2957706dfb81dbb904531726a25dfd62a1d2acb35a55275c38861db8e13f8"
+        },
+        "binary_sha256": "79d6219b4a5447f535516f3ee410fb28618005d13c8297bb9211fb4a131696c8"
+      },
+      "after": {
+        ".text": {
+          "size": 1949379,
+          "sha256": "06432c4c99df38066d2e9cb4de9baea66e0a3187856a8acc93981b5fb608894f"
+        },
+        ".rodata": {
+          "size": 149164,
+          "sha256": "348c84f2bbe4fa5465411bd3dc12f7416925da45e7937fb1d6529ca6cb948160"
+        },
+        ".data.rel.ro": {
+          "size": 31736,
+          "sha256": "3bc2957706dfb81dbb904531726a25dfd62a1d2acb35a55275c38861db8e13f8"
+        },
+        "binary_sha256": "3da6fe2fba7b44a0a0c757c87c20e5f6cb7980dbd10fc8c27bf95e05b00679f2"
+      }
+    }
+  },
+  "performance_status": "passed"
+}
