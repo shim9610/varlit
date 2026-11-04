@@ -82,19 +82,21 @@ not an invented exact commit timestamp or an individual item API latency. Reader
 and the entire item-query batch. These finite maximum-throughput runs do not
 establish fixed-rate acquisition deadlines or long-duration losslessness.
 
-See [measured grouped results](../../docs/performance/grouped-storage-20261104/README.md).
+The [canonical combined report](../../docs/performance/workload-storage-20261104/README.md) and existing dashboard integrate these measurements with the mixed/array/table cases. [Grouped cohort details](../../docs/performance/grouped-storage-20261104/README.md) are an appendix, not a separate comparison. The original `smoke`/`pilot`/`full` grids remain reproducibility/regression grids; do not publish their individual-record cases alone as the corrected grouped-item comparison.
 
 | Scenario | Logical work | Varlit candidates | SQLite | HDF5 |
 |---|---|---|---|---|
 | Mixed logging | Declared fixed Metadata and variable Frame blocks, varying payload lengths, durable batches, one producer/writer and one/eight followers | Batch stream and general composite-key disk index; persistent typed cursors and follow | Type-specific tables, sequence primary keys, composite Frame index only for keyed queries, prepared statements, WAL/FULL | Compound Frame headers and Metadata, a byte payload dataset, batched hyperslabs, SWMR |
-| High cardinality | 100,000/1,000,000 independent small objects; follow-only and arbitrary composite-key lookup are separate profiles | Bounded disk-index cache; stream for follow-only | Complete indexed schema for both writes and reads | Follow-only; arbitrary composite-key lookup explicitly unsupported |
+| Historical individual-record stress | 100,000/1,000,000 individually framed records; follow-only and arbitrary composite-key lookup are separate profiles | Bounded disk-index cache; stream for follow-only | Complete indexed schema for both writes and reads | Follow-only; arbitrary composite-key lookup explicitly unsupported |
 | Numerical arrays: HDF5-favorable | Regular dense time axis, 16 f64 channels/sample; write, scan, one-sample points and 4,096-sample windows | Native buffered/mapped block views, stream, disk-indexed chunks, bounded owned matrix reads and immutable mmap matrix | Typed 16-REAL-column table and large BLOB chunks with incremental BLOB reads | Native f64 two-dimensional contiguous/chunked datasets, bulk writes and hyperslab reads; optional Fletcher32 |
 | Transactional tables: SQLite-favorable | Independent 64-byte business rows, bounded dense IDs partitioned by producer, multirow insert transactions, full follow plus primary-key lookup of every row; one/four producers and eight followers | General-key index, row-cell matrix and transaction-aligned 100-row matrix candidates; multiple producers hand off to one writer | Typed columns, integer primary key, sequence index required for follow, independent writer connections, WAL/FULL | Compound dense-ID row axis, append-only sequence-ID dataset, SWMR; multiple producers hand off to one writer |
 
 One Frame is an application block, **not one numeric sample**. The array workload
-uses 64 KiB/1 MiB groups containing 512/8,192 complete samples. High-cardinality
-objects and business rows are independent application entities, not an alternative
-encoding of those samples. No dataset or table is created per object.
+uses 64 KiB/1 MiB groups containing 512/8,192 complete samples. The historical
+objects fixture uses individual records as an explicit stress
+control. It does not establish an optimal encoding of independent entities.
+The corrected grouped fixture preserves item IDs while amortizing framing and
+indexing. No dataset or table is created per item.
 
 This is an insert/append comparison. General SQL joins, secondary predicate
 queries, competing updates, deletion, update history and crash recovery are not
@@ -153,6 +155,10 @@ No ReadLimits are increased. Table matrix reserved capacity, COW files and index
 sidecars count toward storage. No live file is mapped under an immutability promise.
 
 ## Build and run
+
+For the current small-item comparison, use the grouped commands and integration
+step above. The original grids below remain historical reproduction/regression
+commands; their standalone output is not the corrected combined report.
 
 Linux, Rust 1.95+, a C compiler, Python 3, and native SQLite/HDF5 1.14 libraries
 are required. The build script finds versioned shared objects without modifying
@@ -295,3 +301,9 @@ some kernels omit proc task children files. PID birth times reject reused IDs.
 Both mixed/data and direct array file paths are counted. The resource-only
 reprobe.py tool checks frozen binary hashes and participant coverage; its telemetry
 qualification is separate from whether an engine operation succeeds.
+
+Build the integrated view after both cohort analyses (raw source exports remain unchanged):
+
+```sh
+python3 tools/storage-bench/integrate_report.py --original docs/performance/workload-storage-20261104/comparison.json --grouped docs/performance/grouped-storage-20261104/comparison.json --output docs/performance/workload-storage-20261104
+```
