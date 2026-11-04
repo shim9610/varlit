@@ -1,6 +1,6 @@
 # Mixed-block append and concurrent read comparison plan
 
-Status: **design only; the primary cross-engine comparison below has not been run.** Existing single-payload and numeric-array measurements do not substitute for these results. This work is also separate from runtime safety verification in the current PR.
+Status: **implemented candidate harness and [measured report](workload-storage-20261104/README.md): 122 configurations, 360 successful timing observations, 120 corrected resource probes and eight retained matrix-mmap limit refusals. The universal 2× target is not established.** Existing single-payload diagnostics remain auxiliary. This work is separate from runtime safety verification in the current PR.
 
 ## Performance target and logical model
 
@@ -60,3 +60,7 @@ HDF5 itself does not provide SQLite-style general composite-key SQL indexes. Use
 - Record writer and reader time/CPU, overall completion, accumulated lag, actual processed bytes, resident set size (RSS), proportional set size (PSS), storage, WAL, and deleted open files. Distinguish duplicate RSS accounting for mappings from physical memory use.
 - State whether each metric includes initialization, the validation oracle, input generation, checkpointing, and compaction. Account for preparation and copying that the application actually performs.
 - Preserve failures, limit refusals, interrupted attempts, original sources, settings, and binary hashes. Auxiliary results do not qualify the primary workloads.
+
+## Runnable scope
+
+The standalone harness includes mixed append/follow, independent high-cardinality objects, HDF5-favorable typed arrays and SQLite-favorable multi-producer typed tables. It includes bounded MPSC serialization for single-writer engines and independent SWMR reader processes. Its README distinguishes implemented insert/prefix checks from pending update-history, SQL-functionality and tuning studies. The measured report separates the fixed primary grid, optimized layout supplements, tuning and controls. Update history and broader SQL semantics remain outside the implemented contract. Smoke invocations are not performance samples.
