@@ -29,7 +29,7 @@ env:
   # This is deliberately NOT a claim that a CI run is reproducible. Two inputs
   # are rolling by design and are not pinned here:
   #
-  #   * the runner images `ubuntu-latest`, `windows-latest` and `macos-latest`, which GitHub
+  #   * the runner images `ubuntu-latest`, `windows-latest` and `macos-15-intel`, which GitHub
   #     rebuilds continuously (system libraries, linkers, preinstalled tools);
   #   * the `stable` toolchain requested by every job except `msrv`, which
   #     advances every six weeks.
@@ -221,7 +221,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest resolves to arm64. Hosted acquisition repeatedly failed
+        # before any step ran; use the established standard macOS 15 x64 pool.
+        # No test is skipped. macOS 26/ARM64 execution is not covered by this fallback.
+        # Evidence: docs/verification/macos-runner-capacity-20261104/
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
         features:
           - { name: default, flags: "--workspace" }
           - { name: all-features, flags: "--workspace --all-features" }
@@ -254,7 +258,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
