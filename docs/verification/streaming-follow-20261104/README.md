@@ -4,6 +4,8 @@ Runtime source: `5d8a852cc2690876e8ad52a680cce71d1707422f`. Pending reader progr
 
 **Performance qualification: not complete; failed or unqualified final comparisons remain below.** The earlier failed and partial candidates are preserved in the evidence archive.
 
+The owner has moved writer/reader timing investigation to [long-term issue #20](https://github.com/shim9610/varlit/issues/20) and prioritized stability verification for the next version. This does not convert failed performance gates into passes. Other retained findings and uncompleted final-head comparisons are also listed there. The subsequent [resource-inventory CI correction](../resource-inventory-20261104/README.md) records a stale auxiliary proof-count check separately from proof failures.
+
 ## Behavior and safety
 
 Unchanged pending tails frame zero old records. Growth resumes at the last complete frame. A commit discovered using cached state triggers one authoritative replay of that pending batch before publication. Writer/lease changes, truncate and incompatible file state invalidate progress; legacy/unknown owners use conservative growth handling. Cached progress cannot authorize publication.
@@ -45,6 +47,8 @@ The writer never waits for reader acknowledgments during ingestion. This series 
 | independent-1g-r1 | 12 | 0.661 | 0.373 | 1.116 | 3268 | pass |
 
 Independent cases use 1/4 GiB, 64 KiB payloads, 16 MiB epochs and 16 follows per reader per epoch. The complex varying case uses 256 MiB, eight readers and varying record sizes near 4 KiB. Every initial measurement is retained; no observed regression threshold or resource allowance is raised.
+
+The independent files contain 16,384 / 65,536 data records and 64 / 256 timed commits. Each reader decodes the complete data set; JSON `records` sums reader decodes and is not the physical data-record count. Each 64 KiB payload already groups samples, but the harness calls native `push_info` rather than stream/indexed batch APIs. `BatchOptions` groups encoded writes without coalescing logical records. These measurements do not establish the best application chunk size or representative performance for every acquisition shape.
 
 Final failed/unqualified comparisons:
 
