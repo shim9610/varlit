@@ -14,7 +14,8 @@ use crate::disk_index::{
 use crate::file::{
     NativeStreamScanner, ReplaceDurability, WriterLock, decode_stream_tombstone_key,
     prepare_stream_tombstone_record, prepare_stream_user_record_into, publish_temp_path_atomically,
-    read_file_header, read_record_entry_positional, read_stream_entry_at, read_trusted_index_entry,
+    read_file_header, read_index_entry_from_descriptor, read_record_entry_positional,
+    read_stream_entry_at,
 };
 use crate::scalable_extent::UntrustedRecordPointer;
 use crate::stream::{StreamCheckpoint, StreamTail, primary_generation, primary_identity};
@@ -359,7 +360,7 @@ impl VarlitIndexedReader {
             .read_validation
             .is_some_and(|p| !p.structure)
         {
-            return read_trusted_index_entry(
+            return read_index_entry_from_descriptor(
                 self.stream.spec(),
                 self.stream.snapshot(),
                 offset,
