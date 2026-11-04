@@ -76,7 +76,21 @@ pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
         "extend_boundary_proof",
         "validate_record_entry",
     ),
-    ("file.rs", "set_record_mutable_flags", "verify_boundary"),
+    (
+        "file.rs",
+        "set_record_mutable_flags",
+        "require_native_record_boundary",
+    ),
+    (
+        "file.rs",
+        "require_native_record_boundary",
+        "verify_boundary",
+    ),
+    (
+        "file.rs",
+        "set_record_mutable_flags",
+        "matches_sequence_hint",
+    ),
     (
         "file.rs",
         "set_record_mutable_flags",

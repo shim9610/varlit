@@ -14,10 +14,18 @@ fn observed_prefix_never_invents_membership() {
         UniformPrefix::observe(&mut proof, row, u64::from(*offset));
     }
     let proof = proof.as_mut().unwrap();
+    if let Some(row) = proof.row_for(wanted) {
+        assert!(row < offsets.len());
+        assert_eq!(u64::from(offsets[row]), wanted);
+    }
     if proof.contains(wanted) {
         assert!(offsets.iter().any(|&offset| u64::from(offset) == wanted));
     }
     proof.truncate(keep);
+    if let Some(row) = proof.row_for(wanted) {
+        assert!(row < keep);
+        assert_eq!(u64::from(offsets[row]), wanted);
+    }
     if proof.contains(wanted) {
         assert!(
             offsets[..keep]
@@ -60,6 +68,7 @@ fn full_width_prefix_initialization_establishes_invariant() {
     assert!(invariant(&p));
     assert!(p.contains(offset));
     assert_eq!(p.count, 1);
+    assert_eq!(p.row_for(offset), Some(row));
 }
 
 #[kani::proof]

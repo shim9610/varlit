@@ -6551,18 +6551,45 @@ impl VarlitFile {
                 "marking a record requires liveness: footer_flags",
             ));
         }
-        if !self.index.has_verified_boundary(record_offset)? {
-            let append_start = append_log_start_for_file(self)?;
-            self.index.verify_boundary(append_start, record_offset)?;
+        let use_sequence_hint =
+            self.index.has_sequence_hint() && !self.index.has_uniform_boundary(record_offset);
+        if !use_sequence_hint {
+            self.require_native_record_boundary(record_offset)?;
         }
-        let entry = fault_record_entry_for_mark_with(
+        let parsed = fault_record_entry_for_mark_with(
             self.snapshot.len(),
             self.index.len(),
             self.spec,
             record_offset,
             |at, bytes| self.snapshot.read_exact_at(at, bytes),
-        )?;
+        );
+        let entry = match parsed {
+            Ok(entry) => entry,
+            Err(error) => {
+                // Preserve the original boundary-error priority on malformed
+                // or interior offsets even when parsing was attempted first.
+                if use_sequence_hint {
+                    self.require_native_record_boundary(record_offset)?;
+                }
+                return Err(error);
+            }
+        };
+        if use_sequence_hint
+            && !self
+                .index
+                .matches_sequence_hint(record_offset, entry.sequence)?
+        {
+            self.require_native_record_boundary(record_offset)?;
+        }
         self.write_framed_record_flags(&entry, set)
+    }
+
+    fn require_native_record_boundary(&mut self, record_offset: u64) -> Result<()> {
+        if !self.index.has_verified_boundary(record_offset)? {
+            let append_start = append_log_start_for_file(self)?;
+            self.index.verify_boundary(append_start, record_offset)?;
+        }
+        Ok(())
     }
 
     // The caller must have a boundary witness: directory membership, or the
@@ -17011,6 +17038,20 @@ mod tests {
         let mut writer = VarlitFile::create(spec, &path)?;
         let outer = writer.push_info_for_test(10, bytes)?;
         let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
+        assert!(writer.index.has_sequence_hint());
+        assert_eq!(fake.sequence, outer.sequence);
+        // Even a matching sequence cannot authenticate an embedded frame.
+        assert!(
+            !writer
+                .index
+                .matches_sequence_hint(outer.payload_offset, fake.sequence)?
+        );
+        let before = std::fs::read(&path)?;
+        assert!(matches!(
+            writer.mark_record_dead(outer.payload_offset),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(std::fs::read(&path)?, before);
         // Model a serialized segment claiming the embedded header is a record.
         writer.index = ResidentIndex::adopt_generation(
             &vec![fake],
@@ -17019,6 +17060,7 @@ mod tests {
             false,
             None,
         )?;
+        assert!(!writer.index.has_sequence_hint());
         let before = std::fs::read(&path)?;
         assert!(matches!(
             writer.mark_record_dead(outer.payload_offset),
