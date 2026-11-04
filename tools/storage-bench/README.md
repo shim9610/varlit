@@ -13,6 +13,77 @@ there is no claim that every possible engine-specific optimization is exhausted.
 
 ## Scenarios and storage
 
+### Grouped items: physical layout and publication are separate
+
+Use `--suite grouped` for small logical items packed into application blocks.
+The old `objects-*` profiles deliberately retain one physical Frame and disk
+key per item; their `push_iter` calls coalesce writes but do not pack those
+items into one record. They are individual-record controls, not the default
+representation of grouped acquisition data. One million records does not imply
+one million transactions: the old full fixture published 1,000 records per sync.
+
+The grouped fixture uses 128-byte logical items with dense immutable u64 IDs.
+ID / items-per-block identifies the block; ID % items-per-block identifies the
+slot. A physical Frame contains 512 or 8,192 items (64 KiB or 1 MiB), with one
+disk key per block. The primary publication contains 131,072 logical items /
+16 MiB, independent of physical block size. The 128 MiB workload has 1,048,576 items, 2,048/128
+physical blocks and eight publications. The 1 GiB workload has 8,388,608 items,
+16,384/1,024 physical blocks and 64 publications. Producers partition whole
+blocks without reusing a published block ID.
+
+In runner configuration, `records` counts physical Frames, `group_items` counts
+logical items per Frame, `payload` counts encoded payload bytes per Frame and
+`per_tx` counts Frames per publication. Reports expose logical counts separately.
+
+Point work is **group-local batched item lookup**, not unrelated cold random
+gets: for each sequentially consumed block, execute a separate backend block
+lookup, then copy/verify each item in reverse slot order through a bounded
+block buffer. The scan's payload is not returned as the point result. Varlit
+uses its disk index; SQLite uses a keyed BLOB table; HDF5 persists a dense group
+directory carrying payload extents, and queries that directory for point reads.
+Every engine pays for block retrieval, checksums where configured, allocation,
+item extraction, caller-owned 128-byte copies and full validation. The returned
+block is retained only for its item batch. No million-key RAM map is built.
+This routing contract does not replace a general arbitrary-key index: an
+application lacking a derivable/persisted block route must build and charge one.
+A separate 1 GiB/four-producer/eight-reader contrast uses 8,192-item / 1 MiB
+publications with both block sizes and all three keyed engines. Block keys
+retain natural group-ID order rather than an artificial scattered hash.
+The individually framed control uses the same item bytes, publication size,
+reader count and logical IDs; its record/key granularity is intentionally different.
+
+Mixed Metadata and Head records are retained. Multiple producers use bounded
+MPSC for Varlit/HDF5 or independent SQLite connections; all engines still have
+one active file-writing transaction at a time. Reader buffers/caches remain
+private. No resource budget or ReadLimits is increased.
+
+```sh
+python3 tools/storage-bench/run.py --suite grouped-smoke --repeats 1 --probe --output /absolute/fresh/grouped-smoke
+python3 tools/storage-bench/run.py --suite grouped-tuning --repeats 3 --output /absolute/fresh/grouped-tuning
+python3 tools/storage-bench/run.py --suite grouped --repeats 3 --probe --tuning-results /absolute/fresh/grouped-tuning --output /absolute/fresh/grouped
+python3 tools/storage-bench/run.py --suite grouped-control --repeats 3 --probe --output /absolute/fresh/individual-controls
+cargo run --release --locked --manifest-path tools/storage-bench/Cargo.toml --example grouped
+python3 tools/storage-bench/analyze_grouped.py --evidence-root /absolute/fresh --grouped-cohort grouped --control-cohort individual-controls --output /absolute/fresh/report
+```
+
+Tuning freezes a complete SQLite page/mmap choice per block size using the
+128 MiB, one-producer/eight-reader fixture. Transfer to other sizes/concurrency
+is disclosed, not claimed optimal. Both Varlit block sizes and the HDF5 sealed
+chunk layout remain separate candidates. Individual controls use the explicitly
+recorded default page/mmap settings, rather than pretending the grouped BLOB
+tuning selects an optimal per-item SQL schema.
+
+`telemetry` records common-clock writer-active bounds, per-publication write
+call start/return bounds and reader consume intervals. A consume interval is
+classified as entirely during writing only when both endpoints fit the writer
+window; crossing intervals remain separate. Publication happens inside a write
+call, so consume-helper completion delay is reported as bounds using that call's endpoints,
+not an invented exact commit timestamp or an individual item API latency. Reader completion includes verification
+and the entire item-query batch. These finite maximum-throughput runs do not
+establish fixed-rate acquisition deadlines or long-duration losslessness.
+
+See [measured grouped results](../../docs/performance/grouped-storage-20261104/README.md).
+
 | Scenario | Logical work | Varlit candidates | SQLite | HDF5 |
 |---|---|---|---|---|
 | Mixed logging | Declared fixed Metadata and variable Frame blocks, varying payload lengths, durable batches, one producer/writer and one/eight followers | Batch stream and general composite-key disk index; persistent typed cursors and follow | Type-specific tables, sequence primary keys, composite Frame index only for keyed queries, prepared statements, WAL/FULL | Compound Frame headers and Metadata, a byte payload dataset, batched hyperslabs, SWMR |

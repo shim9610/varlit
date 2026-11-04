@@ -317,6 +317,7 @@ impl Sql {
                 assert_eq!(self.fp.step(), 100);
                 assert_eq!(self.fp.number(0), id);
                 assert_eq!(self.fp.bytes(1), p);
+                o.point_payload(id, self.fp.bytes(1));
                 self.fp.reset();
                 o.lookup_count += 1;
             }
