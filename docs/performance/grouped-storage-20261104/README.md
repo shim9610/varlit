@@ -1,3 +1,5 @@
+> Measurement appendix to the [canonical combined report](../workload-storage-20261104/README.md) and [integrated dashboard](../workload-storage-20261104/index.html). These results are integrated there; this page retains the detailed cohort methods and controls.
+
 # Grouped logical items: Varlit / SQLite / HDF5
 
 The grouped layout with packed items and ordered block keys reduces Varlit's individually

@@ -1,17 +1,17 @@
 # Mixed-block append and concurrent read comparison plan
 
-Status: **implemented candidate harness and [measured report](workload-storage-20261104/README.md): 122 configurations, 360 successful timing observations, 120 corrected resource probes and eight retained matrix-mmap limit refusals. The universal 2× target is not established.** Existing single-payload diagnostics remain auxiliary. This work is separate from runtime safety verification in the current PR.
+Status: **the [canonical combined report](workload-storage-20261104/README.md) integrates the corrected grouped-item model with the existing mixed/array/table cases. The grouped cohort has 47 configurations, 141 successful timings and 47 qualified resource probes; the original 122-configuration cohort remains separately identified. Individual-record stress cases are historical controls, not representative grouped logging. The universal 2× target is not established.**
 
 ## Performance target and logical model
 
 The target is at least twice SQLite's throughput for the same successful work, equivalent to at most half its elapsed time. Evaluate writes, following new data, and key lookups separately. An improvement in one operation does not offset a shortfall in another. Compare HDF5 using the same data and supported query semantics. Neither achievement nor feasibility of a twofold speedup is established before measurement.
 
-The representative model comes from [CardinalityFormat in the high-cardinality tests](../../crates/varlit/tests/high_cardinality.rs). It declares fixed Metadata(run) and variable Frame(scan, frame, payload) blocks together, with Frame's composite key stored in a disk index. The [declarative key tests](../../crates/varlit/tests/schema_key_kinds.rs) also distinguish finite and general key domains. The `high-cardinality-dev` feature was removed in 0.10.0; high-cardinality storage is provided by indexed APIs for blocks declaring `key_index = disk`.
+The API reference schema comes from [CardinalityFormat in the high-cardinality tests](../../crates/varlit/tests/high_cardinality.rs). It declares fixed Metadata(run) and variable Frame(scan, frame, payload) blocks together, with Frame's composite key stored in a disk index. The [declarative key tests](../../crates/varlit/tests/schema_key_kinds.rs) also distinguish finite and general key domains. That test schema exercises API/index behavior; it does not dictate one Frame per logical item. The `high-cardinality-dev` feature was removed in 0.10.0; high-cardinality storage is provided by indexed APIs for blocks declaring `key_index = disk`.
 
 - One logical Frame is an application-defined data block. Do not split individual numeric samples inside it into separate frames.
 - Append fixed metadata and variable data blocks into the same file. Distinguish versioned metadata, small independent objects, and large sample chunks.
 - Record block counts, payload bytes per block, samples per payload, key cardinality, and commit counts separately.
-- Do not equate independent objects in a high-cardinality workload with elements of a sample array.
+- Choose physical blocks and a separately declared publication size for logical items. Batched per-item Frames are not equivalent to packing items into one block; individual-key stress is a separate control, not a representative grouped-capture model.
 
 ## Primary workloads
 
@@ -20,7 +20,7 @@ The representative model comes from [CardinalityFormat in the high-cardinality t
 | Mixed sequential logging | Append fixed Metadata and variable 64 KiB / 1 MiB Frames together | Verify values, order within each type, and every payload byte |
 | Mixed sizes and types | Interleave small independent metadata objects with Frames of different sizes | Type filtering, selected ranges, and newly committed suffixes |
 | Concurrent sharing | One writer, one or eight readers, and a retained older snapshot | Follow new data, query keys, and verify that the older snapshot remains unchanged |
-| High cardinality | 100,000 / 1,000,000 general composite keys with a fixed cache budget | Key lookups, append/follow cost, and growth in RAM, indexes, and temporary storage |
+| Grouped logical items | 1,048,576 / 8,388,608 items in 512/8,192-item blocks; 16 MiB publications plus a 1 MiB contrast | Full follow, separately fetched group-local item queries, memory/storage and concurrent progress; unrelated general keys remain historical stress |
 | Update history | Append new versions of existing keys as a separate workload | Latest values at the publication boundary and values in older snapshots; assess separately from pure appends |
 | Long runs and idle polling | Add a small suffix to a long existing prefix, or add nothing | Repeated idle-follow cost and cost relative to newly added data |
 
@@ -63,4 +63,4 @@ HDF5 itself does not provide SQLite-style general composite-key SQL indexes. Use
 
 ## Runnable scope
 
-The standalone harness includes mixed append/follow, independent high-cardinality objects, HDF5-favorable typed arrays and SQLite-favorable multi-producer typed tables. It includes bounded MPSC serialization for single-writer engines and independent SWMR reader processes. Its README distinguishes implemented insert/prefix checks from pending update-history, SQL-functionality and tuning studies. The measured report separates the fixed primary grid, optimized layout supplements, tuning and controls. Update history and broader SQL semantics remain outside the implemented contract. Smoke invocations are not performance samples.
+The standalone harness includes mixed append/follow, grouped logical items and separately labeled individual-record stress controls, HDF5-favorable typed arrays and SQLite-favorable multi-producer typed tables. It includes bounded MPSC serialization for single-writer engines and independent SWMR reader processes. Its README distinguishes implemented insert/prefix checks from pending update-history, SQL-functionality and tuning studies. The measured report separates the fixed primary grid, optimized layout supplements, tuning and controls. Update history and broader SQL semantics remain outside the implemented contract. Smoke invocations are not performance samples.

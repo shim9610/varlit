@@ -1,35 +1,98 @@
-# Workload-specific Varlit / SQLite / HDF5 comparison
+# Varlit / SQLite / HDF5 workload comparison
 
-**Scope correction:** the `objects-*` results below encode one physical Frame
-and one general-index key per logical item. They use 1,000 items per publication,
-but do not pack items into application blocks. They must not be presented as
-Varlit's representative grouped-item storage cost. See the subsequent
-[grouped-layout comparison](../grouped-storage-20261104/README.md) for explicit
-item/block/publication counts, grouped routing and concurrent-reader telemetry.
-The original observations below are retained, not replaced or pooled.
+This is the canonical combined report. The corrected grouped-item results are integrated below with the existing mixed logging, numerical-array and table-oriented cases. The requested **at least 2× SQLite performance for every equivalent operation is not established**.
 
-The requested **at least 2× SQLite performance for every equivalent operation is not established**. Large mixed-block writes approach or exceed that target in some configurations; following new data, array scans/windows and many small objects do not consistently do so. Packing business rows improves Varlit's result, but the fastest tested table candidate remains slower than SQLite.
+The former individual-Frame million-item fixture is withdrawn as a representative grouped-storage model. Its claim that independent logical items should each be a separate physical Frame/index key was incorrect. Those measurements remain historical controls; their timings and storage sizes are not product-wide conclusions and are excluded from the dashboard's current view.
 
-This report contains **122 complete candidate configurations, 360 successful timing observations, 120 successful separate resource probes, and eight retained matrix-mmap limit refusals**. The refusals are six timing attempts and two resource attempts for two configurations. Three fixed repetitions are observational medians, not a 5% regression qualification or proof that these are globally optimal implementations. All original measurements, configuration/source identities and exclusions are retained.
+[Current integrated dashboard](index.html) · [Current integrated data and operation ratios](current-comparison.json) · [Grouping manual](../../scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size) · [Runnable harness](../../../tools/storage-bench/README.md)
 
-[Interactive comparison](index.html) · [Machine-readable results](comparison.json) · [Operation ratios](operations.md) · [Resource table](resources.csv) · [Runnable harness and full contracts](../../../tools/storage-bench/README.md)
+## Grouped logical items: corrected primary model
 
-No production Rust, public API or existing file format changes were made for this study. It does not replace the separate [main-versus-PR regression matrix](../../verification/full-performance-20261104/README.md).
+Each logical item contains 128 bytes and has a dense immutable ID. A block contains 512 or 8,192 items; the block route follows from the ID and the item is a bounded slot inside that block. This is one declared item layout, not a million block types. Arbitrary keys lacking such a route require a separately charged routing index.
 
-## Models and layouts
+At 128 MiB there are 1,048,576 logical items, 2,048 or 128 physical data blocks, and eight 16 MiB publications. At 1 GiB there are 8,388,608 items, 16,384 or 1,024 data blocks, and 64 publications. Block packing, buffered append batches and publication are separate units.
 
-| Scenario | Equal logical work | Workload-appropriate layouts |
-|---|---|---|
-| Varlit-oriented mixed logging | Fixed Metadata and variable Frame declarations; 64 KiB/1 MiB maximum payload; one writer and one/eight followers | Varlit batched stream/general-key disk index; SQLite type-specific sequence tables with only required indexes; HDF5 compound headers/metadata, byte heap and SWMR publication markers |
-| High cardinality | 1,000,000 independent 128-byte objects; follow-only and arbitrary composite-key gets measured separately | Varlit bounded disk index or stream; complete SQLite indexed/unindexed schemas as required; HDF5 follow-only, with unsupported arbitrary-key queries refused |
-| HDF5-oriented numerical arrays | Dense regular time axis; 16 finite f64 channels per sample; 16 MiB/256 MiB/1 GiB; full scans, points and 4,096-sample windows | Varlit buffered/mapped native blocks, indexed chunks, stream and owned/mapped matrix candidates; SQLite typed REAL columns and BLOB groups; HDF5 native f64 contiguous/chunked hyperslabs, with plain/Fletcher32 variants |
-| SQLite-oriented business tables | 100,000/1,000,000 independent 64-byte rows; 100-row insert transactions; one/four producers and eight followers; full follow plus a primary-key get of every consumed row | Varlit general-key index, dense row cells and 100-row cells; SQLite typed columns, integer primary key and sequence index; HDF5 dense-ID compound rows and sequence-ID dataset |
+Each independent reader follows every published block, validates all item bytes, separately fetches that block by its backend index/directory, and copies/verifies all its items in reverse slot order. The fetched block is retained only for that batch. These are full-follow plus group-local item queries, not unrelated cold random gets or latest-only reads. Reader-active time includes refresh, consumption and query verification, including tail work after writing.
 
-A 1 GiB array contains **8,388,608 logical samples / 134,217,728 scalar values**. It uses 1,024 Varlit blocks at 1 MiB, or 16,384 blocks at 64 KiB. SQLite may use sample rows or large BLOB groups; HDF5 uses a two-dimensional dataset. No numeric sample is forced into its own Varlit frame. The million-object and business-row cases are separate application entities.
+### 128 MiB, one producer and eight readers
 
-Single-writer engines receive transactions through a bounded multi-producer, single-consumer queue of capacity two. Producer staging, handoff/blocking, copying, validation and maintenance remain charged. Writers never wait for reader acknowledgments in timing runs. SQLite uses independent writer connections with explicit FULLMUTEX, compiled THREADSAFE=1; one active write transaction per database remains its limit. Mixed/table readers use separate processes, including HDF5 SWMR, avoiding its process-local global API lock.
+| Engine | Items/block | Full write s | Reader-active s | Complete s | CPU s | Final MiB | Aggregate PSS MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| varlit-indexed | 512 | 0.264 | 0.466 | 0.551 | 2.011 | 130.000 | 92.85 |
+| sqlite | 512 | 0.553 | 0.525 | 0.720 | 2.285 | 146.754 | 158.23 |
+| hdf5 | 512 | 0.406 | 0.843 | 0.945 | 3.454 | 128.203 | 170.99 |
+| varlit-indexed | 8,192 | 0.279 | 0.670 | 0.753 | 2.681 | 128.242 | 122.95 |
+| sqlite | 8,192 | 0.470 | 0.495 | 0.671 | 2.104 | 129.629 | 172.52 |
+| hdf5 | 8,192 | 0.377 | 0.775 | 0.863 | 3.278 | 128.027 | 179.41 |
 
-Readers clamp consumption to a captured application Head and validate every payload byte/field, duplicates/missing IDs, metadata and writer-derived within-type order checksums. These checksums are regression witnesses, not collision-free proofs. Values are immutable inserts; current queries use known published IDs. This does not establish negative-key behavior, update history, deletion, joins, secondary predicates or cross-call atomic roots. HDF5 publication is an application protocol, not SQLite MVCC/ACID.
+## Large concurrent workload
+
+Each of eight readers processes the entire 1 GiB workload; there are four
+producers feeding one active writer. All rows below include grouped item queries.
+
+| Layout | Full write s | Reader-active s | Complete s | CPU s | Final MiB | Aggregate PSS MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| varlit-indexed, 512/block | 2.567 | 3.970 | 4.072 | 15.375 | 1101.082 | 169.11 |
+| sqlite, 512/block | 4.744 | 4.082 | 4.837 | 16.926 | 1170.941 | 171.15 |
+| hdf5, 512/block | 2.860 | 5.803 | 5.933 | 23.273 | 1025.547 | 236.92 |
+| varlit-indexed, 8192/block | 1.958 | 5.032 | 5.166 | 19.556 | 1026.180 | 192.09 |
+| sqlite, 8192/block | 4.511 | 4.012 | 4.605 | 16.339 | 1033.629 | 197.91 |
+| hdf5, 8192/block | 2.775 | 5.999 | 6.123 | 23.924 | 1024.141 | 246.72 |
+
+Full write includes initialization, ingest, maintenance and final close/checkpoint.
+Reader-active is the maximum reader's consume+refresh work, excluding idle
+sleep but including tail work after the writer stops. Complete includes reader
+startup/drain. These counters overlap and must not be added. CPU is kernel
+wait4 user+system including waited-for child readers.
+
+## Reads completed while writing
+
+Both endpoints of a consume interval must fall inside the common-clock
+writer-active window to count as entirely concurrent. Intervals crossing the
+window edge are excluded, not proportionally assigned. This is a strict lower
+bound: an excluded crossing interval may have performed much of its work while
+the writer was active. During-write % below
+uses the least-advanced reader; its MiB/s divides those bytes by the full
+writer window, including waits. Each consume interval includes its item-query
+batch. Throughput normalizes progress by one logical payload pass, not all
+physical reads or the extra point-result copies. This separates observed
+concurrent progress from final drain.
+
+Publication occurs inside a backend write call. The p99 delay to completion of the benchmark consume helper
+uses call return/start as lower/upper bounds, respectively. SQLite
+lock waits can widen the upper bound. It is not an exact commit timestamp,
+first-byte latency, an individual item API latency or a fixed-rate real-time guarantee.
+
+| 1 GiB, four producers/eight readers | During-write % | Minimum reader MiB/s | Final drain s | p99 delay bounds ms |
+|---|---:|---:|---:|---:|
+| varlit-indexed, 512/block | 21.88 | 87.43 | 1.4701 | 2624.63–2657.52 |
+| sqlite, 512/block | 90.62 | 228.58 | 0.1986 | 503.61–2789.30 |
+| hdf5, 512/block | 18.75 | 53.89 | 3.0253 | 4377.67–4418.10 |
+| varlit-indexed, 8192/block | 6.25 | 37.40 | 3.1779 | 4207.47–4236.73 |
+| sqlite, 8192/block | 89.06 | 234.41 | 0.1933 | 872.23–2172.78 |
+| hdf5, 8192/block | 21.88 | 80.89 | 3.3138 | 4380.43–4414.56 |
+
+## Publication size with the physical layout held fixed
+
+The same 1 GiB, four-producer/eight-reader group layout is measured with
+1 MiB and 16 MiB publications. This isolates publication amortization from
+block packing and key order. Larger publications also retain more producer
+staging and delay visibility; memory and completion remain charged.
+
+| Engine | Items/block | Publication MiB | Full write s | Complete s | CPU s | Aggregate PSS MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| varlit-indexed | 512 | 1 | 7.221 | 7.268 | 22.822 | 36.31 |
+| varlit-indexed | 512 | 16 | 2.567 | 4.072 | 15.375 | 169.11 |
+| sqlite | 512 | 1 | 5.224 | 5.299 | 18.092 | 109.88 |
+| sqlite | 512 | 16 | 4.744 | 4.837 | 16.926 | 171.15 |
+| hdf5 | 512 | 1 | 6.388 | 6.733 | 25.958 | 110.34 |
+| hdf5 | 512 | 16 | 2.860 | 5.933 | 23.273 | 236.92 |
+| varlit-indexed | 8192 | 1 | 7.347 | 7.413 | 24.953 | 67.41 |
+| varlit-indexed | 8192 | 16 | 1.958 | 5.166 | 19.556 | 192.09 |
+| sqlite | 8192 | 1 | 5.167 | 5.322 | 18.828 | 117.30 |
+| sqlite | 8192 | 16 | 4.511 | 4.605 | 16.339 | 197.91 |
+| hdf5 | 8192 | 1 | 7.156 | 7.375 | 28.557 | 114.89 |
+| hdf5 | 8192 | 16 | 2.775 | 6.123 | 23.924 | 246.72 |
 
 ## Mixed-block logging
 
@@ -68,9 +131,9 @@ For the 1 MiB native payload mapping, conservative SQLite/Varlit ratios are abou
 
 HDF5 contiguous f64 storage remains a strong bulk candidate. Plain HDF5, Fletcher32, Varlit CRC32 and SQLite WAL/FULL have different integrity/recovery contracts; this report does not make them equivalent. Primary HDF5 contiguous 1 GiB observations include substantial timing variation (about 1.071–7.192 s for one grouping), retained rather than attributed to an intrinsic format cost. A later identical-binary six-run control has A/B medians 1.177481/1.127446 s, a 4.44% difference; that single control does not qualify the whole grid.
 
-## Business rows and many small objects
+## Table-oriented adverse case: 100-row publications
 
-The business-table result below uses 1,000,000 rows, four producer connections/queues, eight readers and 10,000 logical transactions. Varlit's 100-row candidate stores each complete transaction in a 6,400-byte cell with a declared row layout. Each point still calls the real matrix read and integrity path; no application result cache returns a just-scanned row.
+This separate table-oriented adverse case preserves 100-row publication and one backend point read per consumed row. It is not the grouped-item logging model above. The result below uses 1,000,000 rows, four producer connections/queues, eight readers and 10,000 logical transactions. Varlit's 100-row candidate stores each complete transaction in a 6,400-byte cell with a declared row layout. Each point still calls the real matrix read and integrity path; no application result cache returns a just-scanned row.
 
 | Profile | Full write s | Reader-active s | Completion s | CPU s | Final MiB |
 |---|---:|---:|---:|---:|---:|
@@ -82,51 +145,38 @@ The business-table result below uses 1,000,000 rows, four producer connections/q
 
 Packing reduces the Varlit completion from about 25.52 s for row cells to 18.53 s, but SQLite is about 11.82 s. The best tested Varlit table candidate is therefore still about **1.57× slower**, and has a larger final footprint. Whole-cell processing for a 64-byte point remains charged. This is an insert/follow/warm-primary-key workload, not every typical SQL workload.
 
-For 1,000,000 independent small objects, the following workloads remain separate from grouped signal acquisition:
+## Memory and temporary storage in the corrected concurrent model
 
-| Profile | Full write s | Completion s | CPU s | Final MiB |
-|---|---:|---:|---:|---:|
-| Follow-only / Varlit stream | 5.951 | 8.521 | 32.925 | 268.758 |
-| Follow-only / Varlit disk index | 45.928 | 45.963 | 104.262 | 529.773 |
-| Follow-only / SQLite, no unused key index | 2.154 | 2.197 | 5.220 | 148.895 |
-| Follow-only / HDF5 | 1.518 | 1.564 | 5.742 | 152.750 |
-| Follow + composite-key get / Varlit | 51.135 | 51.186 | 152.999 | 529.773 |
-| Follow + composite-key get / SQLite | 4.487 | 4.523 | 15.393 | 169.629 |
+The following are separate qualified resource runs for the 1 GiB, four-producer/eight-reader grouped query case. PSS includes the full writer/reader process tree; each reader processes the entire workload. Temporary bytes are included in visible bytes. Deleted-open bytes are reported separately; independent maxima must not be added as simultaneous peaks.
 
-The general-key route has substantial time/CPU/storage gaps. These observations do not prove an inherent lower bound or that further optimization is impossible. They do show that it would be incorrect to declare the requested target met, or to conceal these cases behind large-block throughput. Further attribution/optimization belongs with [issue #20](https://github.com/shim9610/varlit/issues/20).
-
-## CPU, memory and temporary storage
-
-The existing **4 CPU / 16 GiB / 32 GiB** limits were unchanged. Affinity uses four CPUs. CPU above is kernel wait4 user+system time including waited-for child readers. Per-thread phase counters overlap and are not summed to fabricate totals.
-
-| Profile | Kernel max individual RSS MiB | Sampled aggregate PSS MiB | Peak visible allocated MiB | Peak temporary MiB | Peak deleted-open MiB |
+| Engine | Items/block | Aggregate PSS MiB | Peak visible allocated MiB | Peak temporary MiB | Peak deleted-open MiB |
 |---|---:|---:|---:|---:|---:|
-| Mixed 64 KiB / Varlit stream | 59.97 | 75.14 | 770.49 | 0.00 | 0.00 |
-| Mixed 64 KiB / SQLite | 63.62 | 142.25 | 1795.54 | 907.71 | 0.00 |
-| Mixed 1 MiB / HDF5 fitted chunks | 84.74 | 164.94 | 767.62 | 0.00 | 0.00 |
-| 1M keyed objects / Varlit index | 25.41 | 95.88 | 851.40 | 77.20 | 515.09 |
-| 1M keyed objects / SQLite | 16.43 | 45.87 | 910.13 | 740.50 | 0.00 |
-| 1M rows, four producers / Varlit packed | 11.33 | 46.32 | 564.39 | 52.34 | 0.00 |
-| 1M rows, four producers / SQLite | 19.95 | 34.96 | 537.55 | 465.86 | 0.00 |
-| 1M rows, four producers / HDF5 | 13.41 | 40.50 | 70.16 | 0.00 | 0.00 |
-| 1 GiB two scans / Varlit payload mmap | 1036.10 | 1035.94 | 1024.13 | 0.00 | 0.00 |
-| 1 GiB two scans / SQLite BLOB | 1044.14 | 1036.34 | 1051.75 | 65.50 | 0.00 |
-| 1 GiB one scan / HDF5 contiguous | 40.71 | 40.65 | 1024.01 | 0.00 | 0.00 |
+| varlit-indexed | 512 | 169.11 | 1102.14 | 0.00 | 0.00 |
+| sqlite | 512 | 171.15 | 2366.73 | 1195.79 | 0.00 |
+| hdf5 | 512 | 236.92 | 1025.55 | 0.00 | 0.00 |
+| varlit-indexed | 8,192 | 192.09 | 1026.19 | 0.00 | 0.00 |
+| sqlite | 8,192 | 197.91 | 2091.49 | 1057.86 | 0.00 |
+| hdf5 | 8,192 | 246.72 | 1024.14 | 0.00 | 0.00 |
 
-Memory/storage values come from separate resource runs using each timing cohort's exact frozen benchmark binaries. RSS above is the median kernel maximum for one process, not an aggregate. PSS is a sampled aggregate across wrapper/writer/readers and is a lower bound on a potentially shorter peak. Most probes sample at 50 ms; fast cases use 5 ms and discovery retries. Samples can miss brief peaks; kernel max RSS remains available. The observer validates expected process coverage: ten processes for eight followers plus writer and wrapper, or two for a static array.
+Process memory is sampled and can miss short peaks. Mapped file pages contribute to RSS/PSS; unmapped OS file cache does not. Shared-environment cgroup file/anonymous memory and pre-run baselines remain in the data; they are not attributed wholly to one engine. The existing **4 CPU / 16 GiB / 32 GiB** limits and ReadLimits remain unchanged. Larger publication buffers consume more memory, as the publication-size table shows.
 
-Mapped file pages contribute to process RSS/PSS; unmapped HDF5/buffered-I/O file cache does not. Cgroup memory.current and file/anonymous memory, with pre-run baselines, are retained to expose that distinction. They include the rest of this shared environment and cannot be attributed wholly to one engine. Do not infer a 25× physical-RAM disadvantage from a mapped profile versus HDF5's process RSS alone.
+## Cohorts, methods and evidence
 
-Temporary bytes are already part of visible allocated bytes. Deleted-open old generations are deduplicated by inode and reported separately. These are independent maxima, not a simultaneous total; adding them can overstate the true peak. Index/matrix compaction triggers at max(512 MiB, twice the previous compacted size), and all time/CPU and old-reader retention are included. This harness maintenance policy is not a new library cap. SQLite WAL/checkpoint costs are likewise retained.
+| Retained cohort | Configurations | Successful timing observations | Qualified resource probes | Refused attempts |
+|---|---:|---:|---:|---:|
+| Initial mixed/array/table/control measurements | 122 | 360 | 120 | 8 |
+| Corrected grouped/control measurements | 47 | 141 | 47 | 0 |
 
-## Refusals, corrections and evidence
+The integrated dashboard shows corrected grouped results alongside the still-applicable mixed/array cases and explicitly labeled table-oriented adverse cases. Six original individual-record stress configurations and five newer individual-record controls are historical and hidden by default. Limit refusals remain visible. Source medians are never pooled across cohorts or query contracts; three observations per condition do not establish a 5% regression qualification or globally optimal layouts.
 
-- Two matrix-mmap 1 GiB configurations refuse their default 1 GiB materialization budget, producing six timing and two resource refusals. The 64 KiB case requests 1,073,815,552 bytes; the 1 MiB case also includes metadata above the limit. No limit is raised. Bounded owned matrix reads and native payload mmap successfully process the file through their different existing resource paths. These are allocation-limit refusals, not OOM-kill reproductions.
-- The first unmaintained million-key index run exhausted available space in the existing shared 32 GiB filesystem. Its sidecar reached 10,601,758,720 bytes while other workspace data already occupied much of the volume. The append-only immutable index has an existing explicit compaction API; the final candidate invokes it and charges its cost. The failed sidecar is locally preserved as a 1,740,515,569-byte gzip with verified original SHA-256 b5084b20991b7932f8e5927888d6cb55d46c9e7bdda8aca74223314165d52ffc. It is not committed as a multi-gigabyte Git object; its failure/source/log/hash evidence is included.
-- An initial HDF5 prototype rewrote published checksum chunks and failed concurrent reads. Transaction-aligned compound/ID chunks and sealed payload chunks corrected that publication protocol; padding is charged where needed. Forced unpublished-prefix and concurrent tests pass. Partial runs before the common idle-poll optimization were retained and not pooled into the final timing set. A later review corrected matrix maintenance to inspect its generation companion rather than the primary file; compaction does not checkpoint COW pages into the primary.
-- The first resource observer silently saw only the wrapper because this kernel omits proc task children files, and missed array files stored directly in the workload root. Its sampler results are excluded. A corrected PPid/start-time observer and path accounting were checked against actual process/storage counts, then all 122 resource attempts were repeated with frozen binaries. A too-short 16 MiB mapping probe failed coverage qualification and was retained/repeated with faster sampling. CPU/timing observations were not rerun into different results to hide this correction.
-- The first SQLite tuning schema carried an unused follow-only key index. Its 162 observations are retained but excluded from selection. The corrected 54-configuration grid has three successful observations each; complete page/mmap/layout winners are frozen before the cross-engine runs. Transfers from the 256 MiB/64 KiB tuning workload are disclosed in the harness documentation, not presented as global optimality.
+Varlit/HDF5 use bounded MPSC with one writer and one/four producers. SQLite uses independent writer connections with FULLMUTEX but one active write transaction per database. Eight-reader cases use independent processes, including HDF5 SWMR. Writer ingestion never waits for per-publication reader acknowledgments. HDF5 application publication, Varlit CRC/checkpoint and SQLite WAL/FULL retain their different integrity/recovery contracts.
 
-Cgroup OOM/kill counters did not increase; historical counts were already six/three. This is an observation within this workload, not an OOM-impossibility proof. No merge or release is performed.
+Write-phase time includes initialization, ingest, maintenance and final close/checkpoint work. Complete includes reader startup/drain; counters overlap and must not be added. CPU is kernel user+system including waited-for reader processes. Detailed [corrected methods and evidence](../grouped-storage-20261104/README.md), [per-operation data](current-comparison.json), [resource CSV](../grouped-storage-20261104/metrics.csv) and [local validation](../grouped-storage-20261104/validation.json) are part of this same comparison.
 
-The evidence archive retains original sources, configuration manifests, binary identities, commands, stdout/stderr, successful/refused observations, corrected and excluded resource traces, tuning/control runs and prototype/interruption records. Full local engine databases are omitted from the Git archive; the locally retained failed index's hashes and round-trip verification remain recorded. See [evidence manifest](evidence-manifest.json) and [compressed evidence](evidence.tar.gz).
+No production Rust, public API or existing library file format was changed by the benchmark correction. This comparison does not replace the separate [main-versus-PR regression matrix](../../verification/full-performance-20261104/README.md). No merge or release is performed.
+
+## Historical diagnostics and original evidence
+
+The old individual-Frame tables and conclusions are removed from this report's representative results. For audit/reproduction only, the [original frozen report](https://github.com/shim9610/varlit/blob/1e770ce3a73d2f317e32f34d250bc44cd9c4a421/docs/performance/workload-storage-20261104/README.md), [original raw cohort JSON](comparison.json), [original operation-ratio export](operations.md), [original resource export](resources.csv), [evidence manifest](evidence-manifest.json) and [evidence archive](evidence.tar.gz) retain the observations and failure history. Those raw exports are historical, not the current representative view.
+
+The corrected cohort's [measurement appendix](../grouped-storage-20261104/README.md) retains the before/after controls and rejected/interrupted candidates, including HDF5 header-chunk/cache geometry correction. Both archives preserve failures instead of rewriting them into successful measurements.

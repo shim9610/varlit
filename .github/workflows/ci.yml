@@ -154,6 +154,7 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests
           python3 -m unittest discover -s tools/storage-bench -p 'test_grouped.py'
+          node tools/storage-bench/check_report.cjs
       - run: cargo fmt --all -- --check
       - run: cargo fmt --manifest-path tools/storage-bench/Cargo.toml -- --check
       # cargo fmt does not traverse include! source files.
