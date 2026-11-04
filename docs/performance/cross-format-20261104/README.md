@@ -1,30 +1,30 @@
-# 외부 바이너리 형식과 실용 성능 비교 — 2026-11-04
+# Performance comparison with other binary formats — 2026-11-04
 
-측정한 PR head는 `291a6aa79fbb888a3d74e61e013395a77c66a5a1`이다. 제품 Rust는 앞서 검증한 `1e59239`와 같다. HDF5 1.14.5, SQLite 3.46.1 및 raw 파일 기준선과 Varlit native·stream·indexed를 비교했다. **35개 조건 × 3회 = 105건**, 별도 자원 프로브 10건을 완료했다. 최종 선택한 비교에는 실행 실패나 데이터 불일치가 없다.
+The measured PR head is `291a6aa79fbb888a3d74e61e013395a77c66a5a1`; its production Rust matches verified runtime `1e59239`. Varlit native, stream, and indexed paths were compared with HDF5 1.14.5, SQLite 3.46.1, and a raw-file baseline. **35 conditions × three repetitions = 105 observations**, plus ten separate resource probes. The final selected comparisons have no execution failures or data mismatches.
 
-## 판단 범위 정정
+## Scope correction
 
-이 보고서는 한 종류의 payload와 작은 프레임 진단을 비교한 보조 측정이다. **다종 블록·메타데이터를 섞어 append하고, 여러 reader가 커밋된 새 레코드를 따라가며, 고카디널리티 키를 조회하는 Varlit의 주 사용 모델을 대표하지 않는다.** 이 자료만으로 라이브러리 전체의 실용성이나 SQLite 대비 2배 목표의 충족 여부를 판정한 해석은 철회한다. 아래 측정값 자체와 모든 실패 기록은 보존한다.
+This report contains auxiliary single-payload and small-frame diagnostics. **It does not represent Varlit's primary use case: mixed declared blocks and metadata, concurrent readers following newly committed records, and high-cardinality key lookup.** Any inference about whole-library practicality or satisfaction of the 2× SQLite target from these measurements alone is withdrawn. Measurements and all failure records remain preserved below.
 
-특히 128 B × 131,072개 조건은 각각을 개별 Varlit 프레임으로 만든 시험이다. 논리 샘플 131,072개를 배열·청크로 묶는 정상 데이터 로깅의 결과가 아니다. 그 조건의 SQLite 30.5 ms를 절반으로 줄인 15.3 ms를 정상 샘플 로깅의 목표 시간으로 삼지 않는다.
+In particular, the 128 B × 131,072 condition stores every item as a separate Varlit frame. It does not measure ordinary logging that groups 131,072 logical samples into arrays or chunks. Half that condition's SQLite time, 15.3 ms from 30.5 ms, is not the acceptance target for ordinary grouped sample logging.
 
-물리 프레임 수와 논리 데이터 수는 다르다. 예를 들어 128 B 논리 항목 131,072개(16 MiB)는 64 KiB 묶음이면 데이터 프레임 256개, 1 MiB 묶음이면 16개다. 이 계산은 배치 예시이며 실제로 그 논리 배열을 측정했다는 뜻은 아니다. 반대로 고카디널리티의 독립된 메타데이터 객체 131,072개는 각 객체가 실제 레코드일 수 있다. 두 경우의 의미를 구분해야 한다.
+Physical frame counts and logical item counts differ. For example, grouping 131,072 logical 128 B items (16 MiB) into 64 KiB payloads would produce 256 data frames; 1 MiB groups would produce 16. This is an illustrative calculation, not a measured logical-array workload. In contrast, 131,072 independent high-cardinality metadata objects may each be actual records. These cases have different meanings.
 
-주 평가와 비교 스키마는 [혼합 append 비교 설계](../mixed-append-comparison-plan-20261104.md)에 명시했다. 그 설계의 실행 결과는 아직 이 보고서에 포함되지 않았다.
+The primary evaluation and comparison schemas are specified in the [mixed-append comparison plan](../mixed-append-comparison-plan-20261104.md). Results from executing that plan are not included in this report.
 
-다음 영역은 주의가 필요하다.
+The following diagnostics require careful interpretation.
 
-- **개별 작은 프레임 진단**: 128 B × 131,072 프레임의 순차 디코딩·파일 공간은 이 시험의 SQLite 스키마보다 불리하다. 관측값은 보존하되 정상 샘플 묶음의 실용성 판정으로 사용하지 않는다.
-- **native 레코드 색인 준비**: 레코드 수에 따른 한 번의 준비 비용이 크다. 같은 핸들을 유지하는 읽기와 구분해야 한다. 빠른 열기가 필요한 경우에는 이미 제공하는 stream/indexed 경로가 다르다.
-- **8개 reader가 모두 전체 데이터를 소비**: 특히 4 GiB/4 MiB에서 이 벤치의 전체 바이트 검증을 포함한 4 CPU 조건의 reader당 처리량은 64-bit 100 MS/s의 payload 목표에 못 미친다. 다른 묶음·경로의 수치는 표에서 구분한다. 동시 수집 실패를 재현한 것은 아니며, 무제한 실시간 소비를 보장할 결과도 아니다.
+- **Individual small frames:** sequential decoding and file space for 128 B × 131,072 frames are worse than the SQLite schema used here. Preserve the observation without treating it as a practicality verdict for ordinary grouped samples.
+- **Native record-index preparation:** one-time preparation grows with record count. Separate it from reads through a persistent handle. Stream/indexed paths provide different fast-open behavior.
+- **Eight readers each consuming everything:** particularly for 4 GiB / 4 MiB, per-reader throughput under four CPUs, including full-byte validation, is below the payload target for 64-bit 100 MS/s. Other group sizes and paths are shown separately. This is not a reproduced concurrent-ingestion failure or an unlimited real-time consumption guarantee.
 
-기존 전체 성능 보고서의 큰 indexed 배치 저하는 **후반부 기존 키 갱신·삭제가 포함된 작업**이다. 이번 벤치는 고유한 키/행을 순차 추가한다. `scalable_load.rs`의 `key_at`은 절반 이후 키를 재사용하고 `finish_epoch`은 일부 키를 삭제한다. 그 이전 저하를 이번 결과로 해결됐다고 처리하지 않는다.
+The large indexed batch regression in the earlier full performance report includes **updates to existing keys and deletions in the second half**. This benchmark appends unique keys/rows. In `scalable_load.rs`, `key_at` reuses keys after halfway and `finish_epoch` deletes some keys. These append-only results do not resolve that earlier regression.
 
-## 정상 묶음 데이터의 처리량
+## Grouped-payload throughput
 
-모두 MiB/s. 쓰기는 16 MiB마다 동기화를 포함한다. 8-reader는 각 스레드가 파일을 열고 전체를 한 번 읽고 검증하는 시간으로 계산한 **reader당** 처리량이다. 동시 쓰기는 없다. 읽기는 OS 캐시가 따뜻한 상태다.
+All rates are MiB/s. Writes include synchronization every 16 MiB. The eight-reader rate is **per reader**, calculated from the time for each thread to open, read the entire file once, and validate it. Writing is not concurrent. Reads use a warm operating-system file cache.
 
-| payload/파일 | 경로 | 쓰기 | 순차 읽기 | 8-reader 각자 | 열기·조회 준비(ms) |
+| Payload/file | Path | Write | Sequential read | Each of 8 readers | Open/query preparation (ms) |
 |---|---|---:|---:|---:|---:|
 | 64 KiB / 1 GiB | raw | 1406.4 | 2495.0 | 976.5 | 0.013 |
 | 64 KiB / 1 GiB | hdf5 | 1017.4 | 1688.3 | 298.8 | 0.354 |
@@ -48,13 +48,13 @@
 | 4096 KiB / 4 GiB | varlit-stream | 996.9 | 1987.2 | 648.2 | 0.073 |
 | 4096 KiB / 4 GiB | varlit-indexed | 1033.7 | 2004.5 | 598.5 | 0.074 |
 
-100,000,000 samples/s는 샘플당 16/32/64 bit에 따라 각각 **190.7 / 381.5 / 762.9 MiB/s**다. 이는 payload만의 목표이며 프레이밍·애플리케이션 처리·장치 대역폭은 별도다. 이 실험의 전체 바이트 패턴 검사도 애플리케이션 작업이므로 처리량을 순수 라이브러리 한계로 해석하면 안 된다. 수집 중 writer+reader 비교는 이전 Varlit-only 보고서와 별개이며, 외부 엔진까지 같은 SWMR 실험을 수행한 것은 아니다.
+At 100,000,000 samples/s, 16/32/64-bit samples require **190.7 / 381.5 / 762.9 MiB/s** of payload respectively. Framing, application processing, and device bandwidth are additional. Full-byte pattern validation is application work in this experiment, so these rates are not pure library limits. Concurrent writer/reader results from the earlier Varlit-only report are separate; this study does not run the same SWMR comparison across external engines.
 
-## 작은 레코드와 임의 접근
+## Small records and random access
 
-시간은 전체 작업 합계다. 임의 접근은 같은 seed의 행/키를 선택해 payload 전체를 읽고 같은 Rust 함수로 검증한다. Stream에는 같은 point API가 없어 임의 접근을 측정하지 않았다. native는 열기 타이머에 block entry 캐시 추출을 포함하고 이후 이를 재사용하며 indexed/SQLite는 키 조회, raw/HDF5는 밀집 ordinal 계산이다. 서로 같은 범용 키 색인의 비용은 아니다.
+Times cover each complete operation. Random access uses the same seed to choose rows/keys, reads the complete payload, and validates it with the same Rust function. Stream lacks the same point API and has no random-access measurement. Native open timing includes extracting a reusable block-entry cache. Indexed/SQLite perform key lookup; raw/HDF5 calculate dense ordinals. These are not equivalent general-purpose key-index operations.
 
-| 조건 | 경로 | 쓰기(ms) | 열기·조회 준비(ms) | 순차 읽기(ms) | 임의 접근 평균(µs) | 파일 합계(MiB) |
+| Condition | Path | Write(ms) | Open/query preparation (ms) | Sequential read(ms) | Mean random access (µs) | Allocated files (MiB) |
 |---|---|---:|---:|---:|---:|---:|
 | small-64m-4k | raw | 47.358 | 0.010 | 26.523 | 2.088 | 64.004 |
 | small-64m-4k | hdf5 | 224.961 | 0.234 | 76.243 | 5.535 | 64.742 |
@@ -71,11 +71,11 @@
 | tiny-16m-128 | varlit-stream | 113.222 | 0.069 | 208.388 | — | 30.035 |
 | tiny-16m-128 | varlit-indexed | 344.402 | 0.079 | 193.594 | 4.923 | 58.785 |
 
-## CPU·메모리·쓰기량
+## CPU, memory, and writes
 
-CPU는 해당 단계 전체 프로세스의 CPU 초다. 8-reader CPU는 여덟 스레드 합계다. RSS는 각 조건 3회 중 최대값이며 준비·읽기 단계도 포함한다. OS 쓰기량에는 WAL·사이드카·파일시스템이 계상한 블록과 로그가 포함된다.
+CPU values are process CPU seconds for the named stage. Eight-reader CPU sums all eight threads. RSS (resident set size) is the maximum across three repetitions and includes preparation and read stages. Operating-system write accounting includes WAL, sidecars, filesystem-accounted blocks, and logs.
 
-| 조건 | 경로 | 쓰기 CPU(s) | 순차 읽기 CPU(s) | 8-reader CPU(s) | 최대 RSS(MiB) | OS 쓰기량(MiB) | 최종 파일(MiB) |
+| Condition | Path | Write CPU (s) | Sequential-read CPU (s) | 8-reader CPU (s) | Peak RSS (MiB) | OS writes (MiB) | Final files (MiB) |
 |---|---|---:|---:|---:|---:|---:|---:|
 | bulk-1g-64k | raw | 0.252 | 0.410 | 4.098 | 10.34 | 1024.01 | 1024.00 |
 | bulk-1g-64k | hdf5 | 0.518 | 0.606 | 7.762 | 36.01 | 1027.05 | 1024.74 |
@@ -113,9 +113,9 @@ CPU는 해당 단계 전체 프로세스의 CPU 초다. 8-reader CPU는 여덟 �
 | tiny-16m-128 | varlit-stream | 0.097 | 0.208 | 2.100 | 12.33 | 30.15 | 30.04 |
 | tiny-16m-128 | varlit-indexed | 0.317 | 0.194 | 2.386 | 22.56 | 58.90 | 58.79 |
 
-별도 프로브는 공식 타이밍 뒤 5 ms 간격으로 파일과 열린 삭제 파일을 관측했다. 짧은 최대값을 놓칠 수 있는 비원자적 관측이다. 아래 프로브의 실행 시간은 타이밍 결과에 합산하지 않았다.
+Separate probes sampled files and deleted open files every 5 ms after official timings. These non-atomic observations may miss brief peaks. Probe elapsed times are not pooled into benchmark timings.
 
-| 조건 | 경로 | 최대 관측 파일+삭제 파일(MiB) | 삭제된 열린 파일(MiB) |
+| Condition | Path | Peak observed files + deleted files (MiB) | Deleted open files (MiB) |
 |---|---|---:|---:|
 | 1g-64k | raw | 1024.00 | 0.00 |
 | 1g-64k | hdf5 | 1024.74 | 0.00 |
@@ -128,22 +128,22 @@ CPU는 해당 단계 전체 프로세스의 CPU 초다. 8-reader CPU는 여덟 �
 | 4g-4m | varlit-indexed | 4099.31 | 0.00 |
 | 4g-4m | hdf5-fletcher | 4096.06 | 0.00 |
 
-## 조건·해석 범위
+## Conditions and interpretation
 
-- 4 CPU quota·동일 네 논리 CPU affinity, 16 GiB 메모리, 32 GiB 파일시스템을 유지했다. 동기화 간격 16 MiB, Varlit 배치 4 MiB, 엔진 cache 설정 8 MiB다. native resident 디렉터리는 별도 기본 정책이며 cache 옵션이 같은 실제 RSS를 뜻하지 않는다.
-- 단일 바이너리의 Rust 코드에서 공식 HDF5/SQLite C API를 직접 호출했다. Python 바인딩·다른 언어의 루프 속도를 비교하지 않았다. 입력 생성과 같은 전체 payload 검증을 모든 경로에 포함했다.
-- Varlit은 CRC32, HDF5는 무필터/Fletcher32 두 조건, raw와 SQLite payload에는 같은 CRC32 계약이 없다. CRC 알고리즘과 복구·게시 의미도 다르다. raw는 구조·복구 기능이 없는 기준선이며 물리적 성능 한계를 증명하는 값은 아니다. 모든 엔진에 같은 장애 내성을 증명한 비교가 아니다.
-- HDF5는 extendable 2D uint8 dataset, 한 레코드당 한 chunk, 8 MiB chunk cache다. SQLite는 INTEGER PRIMARY KEY+BLOB, WAL, synchronous=FULL, 8 MiB page cache, 5 s busy timeout이다. Varlit은 typed Vec payload를 반환하고 SQLite는 C의 결과 버퍼를 직접 검증하므로 재사용·복사 비용도 각 API의 결과에 포함한다.
-- HDF5는 thread-safe 빌드이며 reader는 한 프로세스의 여덟 스레드다. 멀티프로세스 HDF5, mmap/zero-copy 전용 경로, 압축, 열 선택 분석, Arrow/Parquet/TDMS 전체 성능을 대표하지 않는다.
-- 각 조건 3회 고정 반복이다. 기본 비교 순서는 회전·역전했고, 보정한 SQLite 15건은 그 뒤 별도로 실행해 다른 경로와의 시간상 교차 순서는 유지하지 못했다. 중앙값과 모든 min/max는 results.json에 있다. 이전의 5% 회귀 판정과 같은 통계적 통과 인증이 아니며, 근접한 차이에 확정적인 순위를 매기지 않는다. 빌드·압축·자원 프로브를 공식 측정과 겹치지 않았다.
-- 1 GiB/64 KiB는 16,384개, 1 GiB/1 MiB와 4 GiB/4 MiB는 각각 1,024개 레코드다. 작은 진단은 64 MiB/4 KiB 16,384개 및 16 MiB/128 B 131,072개다.
-- 초기 하네스의 native policy/게으른 RecordMap 오용은 시운전 중 고쳤고, 중단한 초기 시도도 보존했다. 본 측정의 SQLite는 기본 zero busy timeout에서 reader 시작 BUSY 3건이 발생했다. 표준 busy handler와 STATIC 바인딩 해제를 적용한 별도 바이너리로 **성공했던 조건까지 포함한 SQLite 15건 전체**를 재측정했다. 초기 105건은 별도로 보존하며 두 버전의 SQLite 표본을 혼합하지 않았다.
-- 제품 코드·API·파일 형식은 수정하지 않았다. 기존 회귀와 최적화 과제는 이슈 #20에 유지한다.
+- Budgets remained a four-CPU quota with the same four logical CPUs in the affinity set, 16 GiB memory, and a 32 GiB filesystem. Synchronization occurs every 16 MiB, Varlit batches are 4 MiB, and engine cache settings are 8 MiB. The native resident directory has a separate default policy; equal cache options do not imply equal RSS.
+- One Rust binary calls the official HDF5/SQLite C APIs directly. The comparison does not pit Python bindings or different-language loops against each other. Input generation and the same full-payload validation are included for every path.
+- Varlit uses CRC32; HDF5 has unfiltered and Fletcher32 conditions. Raw and SQLite payloads do not have the same CRC32 contract. Checksum algorithms, recovery, and publication semantics differ. Raw is a baseline without structural/recovery features, not a proof of a physical performance limit. These engines are not established to have equal failure tolerance.
+- HDF5 uses an extendable 2D uint8 dataset, one chunk per record, and an 8 MiB chunk cache. SQLite uses INTEGER PRIMARY KEY+BLOB, write-ahead logging (WAL), synchronous=FULL, an 8 MiB page cache, and a 5 s busy timeout. Varlit returns typed Vec payloads; SQLite's C result buffer is validated directly. Each API's reuse and copy costs are therefore included.
+- HDF5 is a thread-safe build, with eight reader threads in one process. This does not represent multiprocess HDF5, dedicated mmap/zero-copy paths, compression, column projection, or all Arrow/Parquet/TDMS workloads.
+- Each condition has three fixed repetitions. Primary order was rotated/reversed; the 15 corrected SQLite observations ran afterward, so interleaving with other engines was not preserved. Medians and all minima/maxima are in results.json. This is not the earlier 5% regression certification; small differences do not establish a definitive ranking. Builds, compression, and resource probes did not overlap official timings.
+- 1 GiB / 64 KiB contains 16,384 records; 1 GiB / 1 MiB and 4 GiB / 4 MiB each contain 1,024. The smaller diagnostics contain 16,384 records for 64 MiB / 4 KiB and 131,072 for 16 MiB / 128 B.
+- Initial native-policy and lazy RecordMap misuse in the harness were corrected during smoke checks; the interrupted attempt remains preserved. During primary measurements, SQLite's default zero busy timeout caused three reader-startup BUSY failures. A separate binary with a standard busy handler and correct STATIC-binding release reran **all 15 SQLite observations, including previously successful ones**. The original 105 attempts remain separately preserved; SQLite samples from the two versions are not pooled.
+- Product code, APIs, and file formats are unchanged. Existing regressions and optimization work remain tracked in issue #20.
 
-[전체 수치·원시 표본](results.json), [소스와 모든 시도](evidence.tar.gz), [파일별 hash](evidence-manifest.json), [압축 파일 checksum](evidence.sha256).
+[Complete numbers and raw observations](results.json), [sources and all attempts](evidence.tar.gz), [per-file hashes](evidence-manifest.json), and [archive checksum](evidence.sha256).
 
-## 재현
+## Reproduction
 
-원본 압축 파일에는 독립 벤치 crate와 C 측정기, 실행 계획 및 모든 stdout/stderr가 있다. `original-harness/main.rs`는 기본 비교 소스이고 `src/main.rs`는 SQLite 대기 설정·바인딩 해제를 보완한 소스다. 각 소스와 바이너리 hash를 해당 계획에 기록했다.
+The evidence archive contains the standalone benchmark crate, C measurement parent, execution plans, and all stdout/stderr. `original-harness/main.rs` is the primary source; `src/main.rs` adds the corrected SQLite busy handling and binding release. Source and binary hashes are recorded in the corresponding plans.
 
-시스템 HDF5·SQLite 라이브러리를 준비하고 `Cargo.toml`의 Varlit 경로와 `build.rs`의 라이브러리 검색 경로를 현지 경로로 맞춰 빌드한다. `measure.c`는 C 컴파일러로 빌드한다. 개별 실행 인자는 `모드 /비어있는/작업디렉터리 총payload바이트 레코드payload바이트 reader수 임의조회payload바이트` 순서이며, 정확한 값은 `plan.json`과 각 표본 command에 있다. 제품 빌드에는 이 Linux 전용 진단 crate가 포함되지 않는다.
+Provide the system HDF5/SQLite libraries, adjust the Varlit dependency path in `Cargo.toml` and the native library search path in `build.rs`, and build the crate. Compile `measure.c` with a C compiler. Individual runs take arguments in this order: `mode /empty/work/directory total-payload-bytes record-payload-bytes reader-count random-query-payload-bytes`. Exact values are in `plan.json` and each observation's command. The product build does not include this Linux-only diagnostic crate.

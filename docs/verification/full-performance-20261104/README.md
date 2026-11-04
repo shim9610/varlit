@@ -1,134 +1,134 @@
-# 전체 성능 비교 — 2026-11-04
+# Full performance comparison — 2026-11-04
 
-main ba541cc3082cecdf7f385d06897a58a3889e1294와 PR #18 런타임 1e592397d34f4f576111f1107fb29303b9d472b0를 비교했다. 기본 64개에 lazy 최초/반복 검증 2개와 기본 feature·체크섬 비활성 8개를 추가해 74개 조건을 측정했다. 최초 배치 7개는 아래의 공통 벤치 소스 수정 후 전체를 재측정했다.
+Compared main ba541cc3082cecdf7f385d06897a58a3889e1294 with PR #18 runtime 1e592397d34f4f576111f1107fb29303b9d472b0. The 64 primary conditions, two lazy first/repeated-validation conditions, and eight default-feature/checksum-disabled conditions total 74. All seven initial batch conditions were rerun after the common benchmark-source correction described below.
 
-상태: 관측 기준 통과 34개, 대조군 편차 초과 18개, 관측 기준 초과 22개. 조건별 실패·편차와 절대량은 아래에 남겼다. 5%는 허용 성능 저하 기준이며 측정 오차의 정의가 아니다. 유효한 시간 측정 2,160건과 별도 자원 프로브 148건을 수집했으며, 최종 비교에 실행 실패·작업량 불일치는 없다. 최초 실패·중단 기록은 삭제하지 않았다. 초과 22개가 모두 실행 시간 저하를 뜻하지는 않는다. 일부는 RSS·임시 저장 또는 몇 KiB의 OS 쓰기 증가다.
+Status: 34 conditions meet the observed gates, 18 remain unqualified because control variation exceeds the limit, and 22 exceed an observed gate. Per-condition failures, variation, and absolute values are retained below. The 5% threshold is a regression allowance, not a definition of measurement error. There are 2,160 valid timing observations and 148 separate resource probes, with no execution failures or work mismatches in the final comparisons. Initial failures and interrupted attempts remain preserved. The 22 exceedances are not all elapsed-time regressions: some concern resident set size (RSS), temporary storage, or a few KiB of operating-system-accounted writes.
 
-이번 범위는 Linux의 주요 작업군과 기본 feature 8개 조건이다. 모든 플랫폼·입력·feature 조합의 성능을 보장하지 않는다.
+The scope is a Linux workload matrix covering the main operation families and eight default-feature conditions. It does not qualify every platform, input, or feature combination.
 
-## 주요 결과
+## Main findings
 
-- reader 없는 indexed 배치의 4 MiB 레코드·4 GiB 쓰기: 시간 +51.97%/+58.30%, 전체 CPU +76.04%/+92.97%. 쓰기 바이트 수보다 커널 CPU와 minor page fault 증가가 두드러졌다. 시스템 CPU 중앙값은 main 약 1.05–1.13 s, PR 약 3.03 s였고 minor fault는 약 25.6만→213만 회였다. 정확한 할당 호출 경로는 별도 프로파일링하지 않았다. 쓰기 시간 대조군 차이는 3.99%, CPU는 8.77%였고 다른 단계도 편차를 넘어 조건 전체는 판정 보류다. 이 편차와 훨씬 큰 관측 증가를 함께 남긴다.
-- 일반 행렬 갱신: 시간 +7.20%/+7.09%, 전체 CPU +8.34%/+7.11%. 대형 셀 mmap은 읽기 타이머와 준비를 포함한 전체 CPU를 구분해야 한다. 전체 CPU 증가는 초기 생성·쓰기 비용도 포함한다.
-- 고정 map 디코딩: 루프 시간 +9.73%/+7.71%. 작은 고정/가변 값 인코딩·디코딩도 개별 지표에서 기준을 넘었다. 전체 CPU의 입력 준비 비용 감소가 이 루프 시간 증가를 가리지 않도록 별도 표시했다.
-- 공유 소유자 생성·복제·취소 100만 회: 시간 +21.48%/+22.59% (0.013906/0.013781 → 0.016894 s). 큰 byte/nested clone 결과와 이 제어 경로를 같은 비용으로 취급하면 안 된다.
-- 비상주 검증 후 마킹: 0.029251/0.028319 → 0.040209 s. lazy 첫 마킹: 0.000018/0.000018 → 0.071943 s; 검증 후 4,096회 마킹: 0.013022/0.013735 → 0.014767 s. 최초 검증 비용과 반복 비용을 구분한다. warm lazy의 대조군 차이는 5.47%로 판정 보류이며, 비상주 warm 마킹의 증가는 기준 초과로 남는다.
-- 독립 writer·8-reader·4 GiB: 1 MiB 레코드는 관측 기준 통과, 4 MiB 레코드는 writer CPU +5.61%/+6.25%. 후자는 시간 대조군 편차로 조건 전체 판정은 보류지만, writer CPU 대조군 차이는 0.60%이므로 CPU 증가를 단순한 시간 잡음으로 처리하지 않는다. 묶음이 커지면 항상 빨라진다고 결론낼 수 없다.
-- 고정 200만 레코드 마킹과 미커밋 follow, 다수 유지보수·clone 조건은 개선 또는 관측 기준 안이었다. 예를 들어 작은 pending follow 시간은 9.716026/9.874273 → 1.702707 s였다. 이 개선을 다른 항목의 초과와 상쇄해 전체 통과로 계산하지 않았다.
+- Indexed batch with no readers, 4 MiB records and 4 GiB written: elapsed time +51.97%/+58.30%, process CPU +76.04%/+92.97%. Kernel CPU and minor page faults increased more prominently than bytes written. Median system CPU was about 1.05–1.13 s on main and 3.03 s on the PR; minor faults rose from about 256,000 to 2,130,000. Exact allocation call paths were not profiled. Write-time control variation was 3.99%, CPU variation was 8.77%, and other stages also exceeded calibration limits, so the condition remains unqualified. Both the control variation and the much larger observed increases are retained.
+- Ordinary matrix updates: elapsed time +7.20%/+7.09%, process CPU +8.34%/+7.11%. For large-cell mmap workloads, distinguish the read timer from total CPU including preparation. The process CPU increase also includes initial matrix creation and writes.
+- Fixed-map decoding: loop time +9.73%/+7.71%. Small fixed/variable value encode/decode stages also exceeded individual gates. Lower input-preparation CPU does not cancel the decoding-loop increase; the stages are reported separately.
+- One million shared-owner construction/clone/cancel sequences: elapsed time +21.48%/+22.59% (0.013906/0.013781 → 0.016894 s). This control path has a different cost profile from large byte/nested clones.
+- Nonresident marking after validation: 0.029251/0.028319 → 0.040209 s. First lazy mark: 0.000018/0.000018 → 0.071943 s; 4,096 marks after validation: 0.013022/0.013735 → 0.014767 s. Initial validation and repeated work are distinct. Warm lazy control variation is 5.47%, leaving that condition unqualified; the nonresident warm-mark increase remains an observed gate exceedance.
+- Independent writer, eight readers, 4 GiB: the 1 MiB record condition meets the observed gates; 4 MiB records increase writer CPU by +5.61%/+6.25%. The latter condition remains unqualified because of time-control variation, but writer CPU control variation is only 0.60%, so the CPU increase is not dismissed as wall-time noise. Larger payload groups are not uniformly faster.
+- Fixed two-million-record marking, pending follow, and several maintenance/clone conditions improved or remained within the observed gates. For example, small pending-follow time was 9.716026/9.874273 → 1.702707 s. Improvements do not offset other exceedances to produce an overall pass.
 
-측정한 런타임은 [CI #112의 71개 검사](https://github.com/shim9610/varlit/actions/runs/41786692443)와 [Sanitizers #87의 3개 검사](https://github.com/shim9610/varlit/actions/runs/41786692417)를 통과했다. 이번 작업은 벤치 도구와 보고서만 추가하며 제품 런타임은 변경하지 않았다.
+The measured runtime passes all [71 checks in CI #112](https://github.com/shim9610/varlit/actions/runs/41786692443) and [three checks in Sanitizers #87](https://github.com/shim9610/varlit/actions/runs/41786692417). This work adds benchmark tooling and reports without changing the product runtime.
 
-[검색·정렬 가능한 HTML 표](report.html)에서 시간·CPU·RSS·독립 writer CPU를 선택할 수 있다.
+The [searchable, sortable HTML table](report.html) supports time, CPU, RSS, and independent writer CPU metrics.
 
-## 측정 방법
+## Method
 
-4 CPU / 16 GiB / 32 GiB를 유지했다. 단일 프로세스 작업은 같은 논리 CPU 하나, 다중 스레드는 같은 논리 CPU 네 개에 고정했다. main A/B는 동일 바이너리다. 6개 실행 순열로 첫 6그룹을 균형 있게 실행하고, 관측 지표나 대조군이 5%를 넘으면 정해 둔 6그룹을 한 번만 추가해 모두 합산했다. 실패한 항목 뒤에도 나머지를 계속 측정했다. 공식 타이밍에 빌드·검사·프로파일링·압축을 겹치지 않았다.
+Budgets remained 4 CPU / 16 GiB / 32 GiB. Single-process workloads used the same one logical CPU; multithreaded workloads used the same four logical CPUs. Main A/B are the same binary. Six execution permutations balanced the initial six groups. If an observed metric or control exceeded 5%, one predetermined six-group extension was added and all observations were pooled. Remaining conditions continued after failures. No builds, checks, profiling, or compression ran concurrently with official timing.
 
-시간·CPU·출력 블록은 중앙값, 최대 상주 메모리(RSS)는 최대값이다. C 부모가 실제 실행 바이너리를 자식으로 만들어 wait4로 측정하므로 Python의 실행 전 메모리 최고값을 포함하지 않는다. 함수 타이머와 전체 프로세스 CPU의 범위는 다르다. Map 디코딩 CPU에는 입력 인코딩 준비가, mmap CPU에는 행렬 생성·초기 쓰기가 포함된다. 배치 write_cpu에는 writer와 reader 전체가 들어간다. 독립 writer의 writer_cpu_seconds만 writer 스레드 단독 CPU다.
+Time, CPU, and output-block values use medians; peak RSS uses the maximum. A C parent forks the native executable and collects wait4 usage, avoiding Python's pre-exec memory high-water mark. Function timers and process CPU have different scopes. Map-decode CPU includes input encoding; mmap CPU includes matrix creation and initial writes. Batch write_cpu includes the writer and all readers. Only independent writer_cpu_seconds isolates the writer thread.
 
-cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우기를 뜻하지 않는다. 마킹 벤치는 경계 검증·삭제 표시 작업이며 일반 payload 읽기와 구분한다. 독립 writer는 reader 응답을 기다리지 않는다. 배치 indexed의 reader는 정해진 작업량을 마칠 때 기다리는 별도 조건이다. indexed/matrix의 reader 8개에는 고정 스냅샷 reader 1개가 추가된다. Native 마커 게시와 배치 sync의 내구성 경계도 같지 않으므로 서로 다른 행의 절대 처리량을 그대로 비교하면 안 된다. 배치 벤치는 후반부에 기존 키를 다시 쓰고 indexed에서는 일부 키를 삭제한다. 고유 키를 계속 추가하는 로깅과는 다른 작업이다.
+Cold/warm describes validation metadata, not forced eviction of the operating-system file cache. Marking measures boundary validation and deletion marking, not ordinary payload reads. Independent writers do not wait for reader acknowledgments. Batch indexed readers instead complete fixed work before acknowledgment. Indexed/matrix conditions with eight followers also include one pinned snapshot reader. Native marker publication and batch sync have different durability boundaries, so absolute throughput is not directly comparable between those families. Batch workloads reuse existing keys in the second half and delete some keys in indexed mode; they differ from logging that continually appends unique keys.
 
-새 TryClone·try_box·공유 소유자 API는 마스터의 기존 Clone·Box·생성 API와 성공 결과를 비교한다. 범위 스트리밍은 마스터에서 전체 디코딩 후 같은 구간을 전달하는 경로와 비교한다. 결과는 같지만 내부 처리량·실패 의미까지 동일한 API라는 뜻은 아니다.
+New TryClone, try_box, and shared-owner APIs are compared with main's existing Clone, Box, and construction APIs for successful results. Range streaming is compared with main's full decode followed by delivery of the same range. Equal results do not imply identical internal work or failure semantics.
 
-마스터의 기존 scalable_load CLI에는 고정 reader 작업량·writer-open 옵션이 없어 최초 배치 비교가 실행되지 않았다. 공통 소스를 복사한 첫 재시도에서도 보존된 예전 수정시각 때문에 Cargo가 기존 바이너리를 재사용했다. 기존/재사용 바이너리의 같은 hash와 실패·중단 기록을 보존했다. 소스 수정시각을 갱신해 강제로 재빌드하고 다른 hash 및 write/verify/open 동작을 확인한 뒤 배치 7개 전체를 다시 측정했다. 아래 배치 결과는 마지막 수정된 비교다.
+Main's original scalable_load CLI lacked fixed-reader-work and writer-open options, so the initial batch comparisons could not execute. The first common-source retry also reused an old Cargo binary because the copied source retained an earlier modification time. Identical original/reused binary hashes, failures, and interruptions remain preserved. Updating the source timestamp forced a rebuild; different hashes and write/verify/open behavior were checked before rerunning all seven batch conditions. The batch results below are from the corrected comparison.
 
-## 전체 조건
+## All conditions
 
-시간은 주 타이머, CPU·RSS는 전체 작업 프로세스다. 배치의 주 타이머는 write이며 scan/point/open/compact 단계도 각각 판정했다. 변화율은 두 대조군 중 더 불리한 값이다. 상태는 등록된 모든 지표와 대조군을 함께 판정한다. 따라서 상태가 초과여도 주 타이머 자체는 기준 안일 수 있다.
+Time is the primary operation timer; CPU and RSS cover the entire workload process. Batch conditions use write time as the primary timer, with scan/point/open/compact stages assessed individually. Changes show the less favorable comparison against the two controls. Status combines all registered metrics and controls, so a condition can exceed a gate while its primary timer remains within the threshold.
 
-| 조건 | 그룹 | main A/B 시간(s) | PR 시간(s) | 시간 변화 | CPU 변화 | RSS 변화 | 상태 |
+| Condition | Groups | main A/B time (s) | PR time (s) | Time change | CPU change | RSS change | Status |
 |---|---:|---:|---:|---:|---:|---:|---|
-| native-fixed-2m | 6 | 0.275647/0.270712 | 0.146401 | -45.92% | -4.84% | +2.16% | 관측 기준 통과 |
-| native-variable-random | 6 | 0.042354/0.043760 | 0.043489 | +2.68% | -3.38% | +2.86% | 관측 기준 통과 |
-| native-epochs | 12 | 0.029644/0.027691 | 0.028072 | +1.38% | -0.11% | +4.27% | 대조군 편차 초과 |
-| native-rewrite-variable | 12 | 0.039452/0.038173 | 0.039167 | +2.61% | -36.34% | -81.95% | 관측 기준 통과 |
-| native-rewrite-all-marks | 6 | 0.336539/0.337423 | 0.295580 | -12.17% | -31.52% | -78.65% | 관측 기준 통과 |
-| native-recovery | 6 | 0.539694/0.533478 | 0.329332 | -38.27% | -22.50% | -23.40% | 관측 기준 통과 |
-| native-large-4g | 6 | 0.014304/0.014350 | 0.011972 | -16.30% | -2.88% | -3.84% | 관측 기준 통과 |
-| native-lazy-4g | 12 | 0.012661/0.012702 | 0.083013 | +555.66% | +5.16% | -5.85% | 관측 기준 초과 |
-| native-mixed-4g | 12 | 0.035978/0.038360 | 0.036009 | +0.09% | -0.22% | -5.66% | 대조군 편차 초과 |
-| nonresident-live | 12 | 0.043155/0.044344 | 0.054312 | +25.85% | +0.68% | +4.87% | 관측 기준 초과 |
-| nonresident-open-cold | 12 | 0.029554/0.029506 | 0.040698 | +37.93% | +0.67% | +7.38% | 관측 기준 초과 |
-| nonresident-open-warm | 12 | 0.029251/0.028319 | 0.040209 | +41.99% | +1.80% | +2.30% | 관측 기준 초과 |
-| maintenance-replace | 6 | 5.551626/5.752475 | 3.352498 | -39.61% | -29.61% | -86.58% | 관측 기준 통과 |
-| maintenance-defragment | 12 | 5.082675/4.984373 | 2.715357 | -45.52% | -32.81% | -90.98% | 관측 기준 통과 |
-| maintenance-complex | 6 | 0.562378/0.580768 | 0.413935 | -26.40% | -16.83% | -52.44% | 관측 기준 통과 |
-| maintenance-checkpoint | 6 | 1.754133/1.716920 | 1.258835 | -26.68% | -17.44% | -76.43% | 관측 기준 통과 |
-| maintenance-replace-4g | 6 | 4.435119/4.442255 | 3.972880 | -10.42% | -8.24% | -37.87% | 관측 기준 통과 |
-| map-encode-million | 6 | 6.628233/6.772711 | 3.586630 | -45.89% | -45.09% | -5.69% | 관측 기준 통과 |
-| chunk-compress-64m | 6 | 0.293604/0.295916 | 0.212960 | -27.47% | -20.27% | -8.96% | 관측 기준 통과 |
-| chunk-decode-64m | 6 | 0.668535/0.696741 | 0.378885 | -43.33% | -37.61% | +0.07% | 관측 기준 통과 |
-| decode-map-fixed | 12 | 0.989585/1.008166 | 1.085899 | +9.73% | -6.25% | -0.02% | 관측 기준 초과 |
-| decode-map-strings | 12 | 0.035841/0.033606 | 0.037272 | +10.91% | +10.04% | -1.42% | 대조군 편차 초과 |
-| decode-map-nested | 6 | 0.069444/0.066383 | 0.058233 | -12.28% | -10.80% | -0.07% | 관측 기준 통과 |
-| owner-bytes-64m | 12 | 0.501810/0.519103 | 0.514949 | +2.62% | +2.70% | -0.11% | 관측 기준 통과 |
-| owner-bytes-1g | 6 | 0.973795/0.971090 | 0.962707 | -0.86% | +0.75% | -0.01% | 관측 기준 통과 |
-| owner-nested | 12 | 0.061892/0.061506 | 0.060544 | -1.57% | -1.67% | -1.09% | 관측 기준 통과 |
-| owner-box | 12 | 0.009273/0.009065 | 0.009577 | +5.65% | +4.89% | -10.93% | 관측 기준 초과 |
-| owner-shared-owner | 12 | 0.013906/0.013781 | 0.016894 | +22.59% | +22.41% | +0.33% | 관측 기준 초과 |
-| owner-boxed-nested | 6 | 0.051142/0.051235 | 0.051015 | -0.25% | -0.29% | -9.88% | 관측 기준 통과 |
-| native-zstd-write-r1 | 12 | 0.022335/0.021653 | 0.022434 | +3.61% | +2.68% | +0.00% | 관측 기준 초과 |
-| native-zstd-read-r1 | 12 | 0.030026/0.029137 | 0.027779 | -4.66% | -0.28% | +0.00% | 관측 기준 초과 |
-| native-zstd-read-r8 | 12 | 0.076295/0.075901 | 0.079382 | +4.59% | -0.80% | -3.13% | 관측 기준 초과 |
-| chunk-range-full-67108864-r1 | 6 | 0.137860/0.134452 | 0.072330 | -46.20% | -25.20% | +0.05% | 관측 기준 통과 |
-| chunk-range-stream-67108864-r1 | 6 | 0.130725/0.133476 | 0.040603 | -68.94% | -39.62% | -49.06% | 관측 기준 통과 |
-| chunk-range-stream-4k-67108864-r1 | 6 | 0.140297/0.138372 | 0.044574 | -67.79% | -39.68% | -49.03% | 관측 기준 통과 |
-| chunk-range-full-1048576-r8 | 12 | 0.357350/0.337037 | 0.193238 | -42.67% | -40.46% | +10.26% | 대조군 편차 초과 |
-| chunk-range-stream-4k-1048576-r8 | 12 | 0.331904/0.338041 | 0.004104 | -98.76% | -96.91% | -85.50% | 관측 기준 통과 |
-| scan-open-false | 6 | 1.681199/1.674256 | 1.343104 | -19.78% | -15.97% | -20.83% | 관측 기준 통과 |
-| scan-open-true | 12 | 1.484968/1.469806 | 0.078928 | -94.63% | -93.39% | +16.85% | 관측 기준 초과 |
-| codec-merge-compact | 12 | 3.348148/3.361434 | 3.222706 | -3.75% | -4.90% | -10.94% | 관측 기준 초과 |
-| matrix-ordinary | 12 | 1.275921/1.277195 | 1.367747 | +7.20% | +8.34% | +0.04% | 관측 기준 초과 |
-| matrix-durable | 12 | 6.117033/6.170495 | 6.436833 | +5.23% | +8.44% | -0.29% | 관측 기준 초과 |
-| mmap-small-whole | 6 | 0.058229/0.057603 | 0.034021 | -40.94% | -7.78% | +1.95% | 관측 기준 통과 |
-| mmap-small-cell | 6 | 1.370311/1.330565 | 1.334760 | +0.32% | +0.26% | +0.50% | 관측 기준 통과 |
-| mmap-large-whole | 12 | 0.021156/0.020679 | 0.018533 | -10.38% | +59.69% | +0.18% | 관측 기준 초과 |
-| mmap-large-cell | 12 | 0.285362/0.281159 | 0.294345 | +4.69% | +35.62% | +0.33% | 관측 기준 초과 |
-| independent-1g-64k-r1 | 6 | 0.780190/0.792821 | 0.759812 | -2.61% | -1.27% | -2.30% | 관측 기준 통과 |
-| independent-1g-64k-r8 | 6 | 1.670692/1.720519 | 1.547675 | -7.36% | -10.61% | +3.46% | 관측 기준 통과 |
-| independent-4g-64k-r8 | 6 | 6.544542/6.482650 | 6.037066 | -6.87% | -7.08% | -3.78% | 관측 기준 통과 |
-| independent-1g-1024k-r8 | 12 | 1.429322/1.271107 | 1.337420 | +5.22% | +2.43% | +3.72% | 대조군 편차 초과 |
-| independent-4g-1024k-r8 | 12 | 5.190846/5.022264 | 4.960879 | -1.22% | +1.31% | +2.05% | 관측 기준 통과 |
-| independent-1g-4096k-r8 | 12 | 1.652753/1.618574 | 1.623090 | +0.28% | -0.32% | +4.96% | 대조군 편차 초과 |
-| independent-4g-4096k-r8 | 12 | 6.351363/6.867676 | 6.786216 | +6.85% | +7.30% | +0.08% | 대조군 편차 초과 |
-| pending-small | 6 | 9.716026/9.874273 | 1.702707 | -82.48% | -84.63% | -3.44% | 관측 기준 통과 |
-| pending-large | 12 | 4.245919/4.455797 | 2.257971 | -46.82% | -53.09% | +3.67% | 대조군 편차 초과 |
-| pending-complex | 12 | 5.695757/5.535034 | 1.490615 | -73.07% | -77.45% | -10.47% | 대조군 편차 초과 |
-| pending-nonresident | 12 | 4.354647/4.375747 | 2.305895 | -47.05% | -52.29% | +3.31% | 관측 기준 초과 |
-| batch-stream-1g-64k-r0 | 12 | 0.817601/0.851170 | 0.839813 | +2.72% | +6.76% | +0.74% | 관측 기준 초과 |
-| batch-stream-4g-4096k-r0 | 12 | 4.082524/4.216046 | 4.398438 | +7.74% | +8.36% | +0.02% | 관측 기준 초과 |
-| batch-indexed-1g-64k-r0 | 12 | 0.890266/0.860364 | 0.859253 | -0.13% | -1.29% | -22.06% | 대조군 편차 초과 |
-| batch-indexed-1g-1024k-r0 | 12 | 0.906686/0.895503 | 0.934896 | +4.40% | +5.38% | -1.26% | 대조군 편차 초과 |
-| batch-indexed-4g-4096k-r0 | 12 | 4.134429/3.969303 | 6.283264 | +58.30% | +92.97% | +0.00% | 대조군 편차 초과 |
-| batch-indexed-1g-64k-r8 | 12 | 0.913145/0.927977 | 0.896897 | -1.78% | -3.57% | -11.31% | 대조군 편차 초과 |
-| batch-indexed-4g-4096k-r8 | 12 | 38.095546/38.935229 | 36.424150 | -4.39% | -5.27% | +0.01% | 대조군 편차 초과 |
-| lazy-first-mark-4g | 12 | 0.000018/0.000018 | 0.071943 | +393407.80% | +5.92% | -0.72% | 관측 기준 초과 |
-| lazy-warm-marks-4g | 12 | 0.013022/0.013735 | 0.014767 | +13.40% | +4.49% | -4.20% | 대조군 편차 초과 |
-| default-fixed-2m | 6 | 0.282942/0.280648 | 0.144546 | -48.50% | +0.85% | +1.93% | 관측 기준 통과 |
-| default-variable | 6 | 0.038832/0.039280 | 0.033980 | -12.49% | -2.59% | +3.26% | 관측 기준 통과 |
-| default-mixed-4g | 12 | 0.032720/0.038958 | 0.034022 | +3.98% | +1.62% | -6.20% | 대조군 편차 초과 |
-| default-codec-merge | 12 | 3.549935/3.546182 | 3.408579 | -3.88% | -4.64% | -11.86% | 관측 기준 초과 |
-| default-map-decode | 12 | 1.033840/0.997349 | 1.087336 | +9.02% | -6.27% | -0.02% | 관측 기준 초과 |
-| default-owner-64m | 6 | 0.511551/0.491560 | 0.493088 | +0.31% | +0.26% | -0.09% | 관측 기준 통과 |
-| default-independent-4g-4m-r8 | 12 | 6.410026/6.896268 | 6.630141 | +3.43% | +4.65% | +0.18% | 대조군 편차 초과 |
-| default-batch-indexed-1g-1m-r8 | 12 | 1.946340/1.889460 | 1.909761 | +1.07% | +0.37% | -0.08% | 대조군 편차 초과 |
+| native-fixed-2m | 6 | 0.275647/0.270712 | 0.146401 | -45.92% | -4.84% | +2.16% | Observed gates passed |
+| native-variable-random | 6 | 0.042354/0.043760 | 0.043489 | +2.68% | -3.38% | +2.86% | Observed gates passed |
+| native-epochs | 12 | 0.029644/0.027691 | 0.028072 | +1.38% | -0.11% | +4.27% | Unqualified: control variation |
+| native-rewrite-variable | 12 | 0.039452/0.038173 | 0.039167 | +2.61% | -36.34% | -81.95% | Observed gates passed |
+| native-rewrite-all-marks | 6 | 0.336539/0.337423 | 0.295580 | -12.17% | -31.52% | -78.65% | Observed gates passed |
+| native-recovery | 6 | 0.539694/0.533478 | 0.329332 | -38.27% | -22.50% | -23.40% | Observed gates passed |
+| native-large-4g | 6 | 0.014304/0.014350 | 0.011972 | -16.30% | -2.88% | -3.84% | Observed gates passed |
+| native-lazy-4g | 12 | 0.012661/0.012702 | 0.083013 | +555.66% | +5.16% | -5.85% | Observed gate exceeded |
+| native-mixed-4g | 12 | 0.035978/0.038360 | 0.036009 | +0.09% | -0.22% | -5.66% | Unqualified: control variation |
+| nonresident-live | 12 | 0.043155/0.044344 | 0.054312 | +25.85% | +0.68% | +4.87% | Observed gate exceeded |
+| nonresident-open-cold | 12 | 0.029554/0.029506 | 0.040698 | +37.93% | +0.67% | +7.38% | Observed gate exceeded |
+| nonresident-open-warm | 12 | 0.029251/0.028319 | 0.040209 | +41.99% | +1.80% | +2.30% | Observed gate exceeded |
+| maintenance-replace | 6 | 5.551626/5.752475 | 3.352498 | -39.61% | -29.61% | -86.58% | Observed gates passed |
+| maintenance-defragment | 12 | 5.082675/4.984373 | 2.715357 | -45.52% | -32.81% | -90.98% | Observed gates passed |
+| maintenance-complex | 6 | 0.562378/0.580768 | 0.413935 | -26.40% | -16.83% | -52.44% | Observed gates passed |
+| maintenance-checkpoint | 6 | 1.754133/1.716920 | 1.258835 | -26.68% | -17.44% | -76.43% | Observed gates passed |
+| maintenance-replace-4g | 6 | 4.435119/4.442255 | 3.972880 | -10.42% | -8.24% | -37.87% | Observed gates passed |
+| map-encode-million | 6 | 6.628233/6.772711 | 3.586630 | -45.89% | -45.09% | -5.69% | Observed gates passed |
+| chunk-compress-64m | 6 | 0.293604/0.295916 | 0.212960 | -27.47% | -20.27% | -8.96% | Observed gates passed |
+| chunk-decode-64m | 6 | 0.668535/0.696741 | 0.378885 | -43.33% | -37.61% | +0.07% | Observed gates passed |
+| decode-map-fixed | 12 | 0.989585/1.008166 | 1.085899 | +9.73% | -6.25% | -0.02% | Observed gate exceeded |
+| decode-map-strings | 12 | 0.035841/0.033606 | 0.037272 | +10.91% | +10.04% | -1.42% | Unqualified: control variation |
+| decode-map-nested | 6 | 0.069444/0.066383 | 0.058233 | -12.28% | -10.80% | -0.07% | Observed gates passed |
+| owner-bytes-64m | 12 | 0.501810/0.519103 | 0.514949 | +2.62% | +2.70% | -0.11% | Observed gates passed |
+| owner-bytes-1g | 6 | 0.973795/0.971090 | 0.962707 | -0.86% | +0.75% | -0.01% | Observed gates passed |
+| owner-nested | 12 | 0.061892/0.061506 | 0.060544 | -1.57% | -1.67% | -1.09% | Observed gates passed |
+| owner-box | 12 | 0.009273/0.009065 | 0.009577 | +5.65% | +4.89% | -10.93% | Observed gate exceeded |
+| owner-shared-owner | 12 | 0.013906/0.013781 | 0.016894 | +22.59% | +22.41% | +0.33% | Observed gate exceeded |
+| owner-boxed-nested | 6 | 0.051142/0.051235 | 0.051015 | -0.25% | -0.29% | -9.88% | Observed gates passed |
+| native-zstd-write-r1 | 12 | 0.022335/0.021653 | 0.022434 | +3.61% | +2.68% | +0.00% | Observed gate exceeded |
+| native-zstd-read-r1 | 12 | 0.030026/0.029137 | 0.027779 | -4.66% | -0.28% | +0.00% | Observed gate exceeded |
+| native-zstd-read-r8 | 12 | 0.076295/0.075901 | 0.079382 | +4.59% | -0.80% | -3.13% | Observed gate exceeded |
+| chunk-range-full-67108864-r1 | 6 | 0.137860/0.134452 | 0.072330 | -46.20% | -25.20% | +0.05% | Observed gates passed |
+| chunk-range-stream-67108864-r1 | 6 | 0.130725/0.133476 | 0.040603 | -68.94% | -39.62% | -49.06% | Observed gates passed |
+| chunk-range-stream-4k-67108864-r1 | 6 | 0.140297/0.138372 | 0.044574 | -67.79% | -39.68% | -49.03% | Observed gates passed |
+| chunk-range-full-1048576-r8 | 12 | 0.357350/0.337037 | 0.193238 | -42.67% | -40.46% | +10.26% | Unqualified: control variation |
+| chunk-range-stream-4k-1048576-r8 | 12 | 0.331904/0.338041 | 0.004104 | -98.76% | -96.91% | -85.50% | Observed gates passed |
+| scan-open-false | 6 | 1.681199/1.674256 | 1.343104 | -19.78% | -15.97% | -20.83% | Observed gates passed |
+| scan-open-true | 12 | 1.484968/1.469806 | 0.078928 | -94.63% | -93.39% | +16.85% | Observed gate exceeded |
+| codec-merge-compact | 12 | 3.348148/3.361434 | 3.222706 | -3.75% | -4.90% | -10.94% | Observed gate exceeded |
+| matrix-ordinary | 12 | 1.275921/1.277195 | 1.367747 | +7.20% | +8.34% | +0.04% | Observed gate exceeded |
+| matrix-durable | 12 | 6.117033/6.170495 | 6.436833 | +5.23% | +8.44% | -0.29% | Observed gate exceeded |
+| mmap-small-whole | 6 | 0.058229/0.057603 | 0.034021 | -40.94% | -7.78% | +1.95% | Observed gates passed |
+| mmap-small-cell | 6 | 1.370311/1.330565 | 1.334760 | +0.32% | +0.26% | +0.50% | Observed gates passed |
+| mmap-large-whole | 12 | 0.021156/0.020679 | 0.018533 | -10.38% | +59.69% | +0.18% | Observed gate exceeded |
+| mmap-large-cell | 12 | 0.285362/0.281159 | 0.294345 | +4.69% | +35.62% | +0.33% | Observed gate exceeded |
+| independent-1g-64k-r1 | 6 | 0.780190/0.792821 | 0.759812 | -2.61% | -1.27% | -2.30% | Observed gates passed |
+| independent-1g-64k-r8 | 6 | 1.670692/1.720519 | 1.547675 | -7.36% | -10.61% | +3.46% | Observed gates passed |
+| independent-4g-64k-r8 | 6 | 6.544542/6.482650 | 6.037066 | -6.87% | -7.08% | -3.78% | Observed gates passed |
+| independent-1g-1024k-r8 | 12 | 1.429322/1.271107 | 1.337420 | +5.22% | +2.43% | +3.72% | Unqualified: control variation |
+| independent-4g-1024k-r8 | 12 | 5.190846/5.022264 | 4.960879 | -1.22% | +1.31% | +2.05% | Observed gates passed |
+| independent-1g-4096k-r8 | 12 | 1.652753/1.618574 | 1.623090 | +0.28% | -0.32% | +4.96% | Unqualified: control variation |
+| independent-4g-4096k-r8 | 12 | 6.351363/6.867676 | 6.786216 | +6.85% | +7.30% | +0.08% | Unqualified: control variation |
+| pending-small | 6 | 9.716026/9.874273 | 1.702707 | -82.48% | -84.63% | -3.44% | Observed gates passed |
+| pending-large | 12 | 4.245919/4.455797 | 2.257971 | -46.82% | -53.09% | +3.67% | Unqualified: control variation |
+| pending-complex | 12 | 5.695757/5.535034 | 1.490615 | -73.07% | -77.45% | -10.47% | Unqualified: control variation |
+| pending-nonresident | 12 | 4.354647/4.375747 | 2.305895 | -47.05% | -52.29% | +3.31% | Observed gate exceeded |
+| batch-stream-1g-64k-r0 | 12 | 0.817601/0.851170 | 0.839813 | +2.72% | +6.76% | +0.74% | Observed gate exceeded |
+| batch-stream-4g-4096k-r0 | 12 | 4.082524/4.216046 | 4.398438 | +7.74% | +8.36% | +0.02% | Observed gate exceeded |
+| batch-indexed-1g-64k-r0 | 12 | 0.890266/0.860364 | 0.859253 | -0.13% | -1.29% | -22.06% | Unqualified: control variation |
+| batch-indexed-1g-1024k-r0 | 12 | 0.906686/0.895503 | 0.934896 | +4.40% | +5.38% | -1.26% | Unqualified: control variation |
+| batch-indexed-4g-4096k-r0 | 12 | 4.134429/3.969303 | 6.283264 | +58.30% | +92.97% | +0.00% | Unqualified: control variation |
+| batch-indexed-1g-64k-r8 | 12 | 0.913145/0.927977 | 0.896897 | -1.78% | -3.57% | -11.31% | Unqualified: control variation |
+| batch-indexed-4g-4096k-r8 | 12 | 38.095546/38.935229 | 36.424150 | -4.39% | -5.27% | +0.01% | Unqualified: control variation |
+| lazy-first-mark-4g | 12 | 0.000018/0.000018 | 0.071943 | +393407.80% | +5.92% | -0.72% | Observed gate exceeded |
+| lazy-warm-marks-4g | 12 | 0.013022/0.013735 | 0.014767 | +13.40% | +4.49% | -4.20% | Unqualified: control variation |
+| default-fixed-2m | 6 | 0.282942/0.280648 | 0.144546 | -48.50% | +0.85% | +1.93% | Observed gates passed |
+| default-variable | 6 | 0.038832/0.039280 | 0.033980 | -12.49% | -2.59% | +3.26% | Observed gates passed |
+| default-mixed-4g | 12 | 0.032720/0.038958 | 0.034022 | +3.98% | +1.62% | -6.20% | Unqualified: control variation |
+| default-codec-merge | 12 | 3.549935/3.546182 | 3.408579 | -3.88% | -4.64% | -11.86% | Observed gate exceeded |
+| default-map-decode | 12 | 1.033840/0.997349 | 1.087336 | +9.02% | -6.27% | -0.02% | Observed gate exceeded |
+| default-owner-64m | 6 | 0.511551/0.491560 | 0.493088 | +0.31% | +0.26% | -0.09% | Observed gates passed |
+| default-independent-4g-4m-r8 | 12 | 6.410026/6.896268 | 6.630141 | +3.43% | +4.65% | +0.18% | Unqualified: control variation |
+| default-batch-indexed-1g-1m-r8 | 12 | 1.946340/1.889460 | 1.909761 | +1.07% | +0.37% | -0.08% | Unqualified: control variation |
 
-## 지표별 관측 기준 초과
+## Observed exceedances by metric
 
-합계가 개별 단계의 증가를 가리지 않도록 각 단계도 판정했다. 시간·CPU 지표의 단위는 초, RSS는 KiB, 쓰기·임시 저장은 bytes다. 0→양수의 증가는 비율을 계산할 수 없다. 출력 블록은 OS에 계상된 쓰기이며 준비·검증·로그를 포함한다. 작은 압축 파일의 몇 KiB 증가를 처리시간 증가와 혼동하면 안 된다.
+Individual stages are assessed so that aggregate improvements cannot hide increases. Time and CPU are in seconds, RSS in KiB, and writes/temporary storage in bytes. A change from zero to a positive value has no finite percentage. Output blocks are operating-system-accounted writes and include preparation, validation, and logs. A few KiB of extra writes for small compressed files are not an elapsed-time increase.
 
-| 조건 | 지표 | main A/B | PR | A/B 대비 |
+| Condition | Metric | main A/B | PR | vs A/B |
 |---|---|---:|---:|---:|
 | native-lazy-4g | seconds | 0.012661/0.012702 | 0.083013 | +555.66%/+553.54% |
 | native-lazy-4g | cpu | 1.713142/1.775616 | 1.801609 | +5.16%/+1.46% |
-| native-lazy-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | 추가됨/추가됨 |
+| native-lazy-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | Added/Added |
 | nonresident-live | seconds | 0.043155/0.044344 | 0.054312 | +25.85%/+22.48% |
-| nonresident-live | private_bytes | 0.000000/0.000000 | 524288.000000 | 추가됨/추가됨 |
+| nonresident-live | private_bytes | 0.000000/0.000000 | 524288.000000 | Added/Added |
 | nonresident-open-cold | seconds | 0.029554/0.029506 | 0.040698 | +37.71%/+37.93% |
 | nonresident-open-cold | rss_kib | 2548.000000/2612.000000 | 2736.000000 | +7.38%/+4.75% |
-| nonresident-open-cold | private_bytes | 0.000000/0.000000 | 524288.000000 | 추가됨/추가됨 |
+| nonresident-open-cold | private_bytes | 0.000000/0.000000 | 524288.000000 | Added/Added |
 | nonresident-open-warm | seconds | 0.029251/0.028319 | 0.040209 | +37.46%/+41.99% |
-| nonresident-open-warm | private_bytes | 0.000000/0.000000 | 524288.000000 | 추가됨/추가됨 |
+| nonresident-open-warm | private_bytes | 0.000000/0.000000 | 524288.000000 | Added/Added |
 | decode-map-fixed | seconds | 0.989585/1.008166 | 1.085899 | +9.73%/+7.71% |
 | decode-map-strings | seconds | 0.035841/0.033606 | 0.037272 | +3.99%/+10.91% |
 | decode-map-strings | cpu | 0.045262/0.042136 | 0.046365 | +2.44%/+10.04% |
@@ -155,7 +155,7 @@ cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우�
 | independent-4g-4096k-r8 | cpu | 24.597430/26.599675 | 26.394239 | +7.30%/-0.77% |
 | independent-4g-4096k-r8 | writer_seconds | 3.960280/3.702244 | 4.350410 | +9.85%/+17.51% |
 | independent-4g-4096k-r8 | writer_cpu_seconds | 1.941319/1.929754 | 2.050295 | +5.61%/+6.25% |
-| pending-nonresident | private_bytes | 0.000000/0.000000 | 131072.000000 | 추가됨/추가됨 |
+| pending-nonresident | private_bytes | 0.000000/0.000000 | 131072.000000 | Added/Added |
 | batch-stream-1g-64k-r0 | write_cpu | 0.403319/0.407197 | 0.430582 | +6.76%/+5.74% |
 | batch-stream-4g-4096k-r0 | write_seconds | 4.082524/4.216046 | 4.398438 | +7.74%/+4.33% |
 | batch-stream-4g-4096k-r0 | write_cpu | 2.691000/2.757665 | 2.915910 | +8.36%/+5.74% |
@@ -180,9 +180,9 @@ cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우�
 | batch-indexed-4g-4096k-r8 | compact_cpu | 0.196008/0.190927 | 0.202012 | +3.06%/+5.81% |
 | lazy-first-mark-4g | seconds | 0.000018/0.000018 | 0.071943 | +391150.07%/+393407.80% |
 | lazy-first-mark-4g | cpu | 1.714028/1.665049 | 1.763573 | +2.89%/+5.92% |
-| lazy-first-mark-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | 추가됨/추가됨 |
+| lazy-first-mark-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | Added/Added |
 | lazy-warm-marks-4g | seconds | 0.013022/0.013735 | 0.014767 | +13.40%/+7.52% |
-| lazy-warm-marks-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | 추가됨/추가됨 |
+| lazy-warm-marks-4g | private_bytes | 0.000000/0.000000 | 523776.000000 | Added/Added |
 | default-codec-merge | encode/decode fixed_seconds | 0.005267/0.005470 | 0.005821 | +10.51%/+6.41% |
 | default-map-decode | seconds | 1.033840/0.997349 | 1.087336 | +5.17%/+9.02% |
 | default-independent-4g-4m-r8 | writer_seconds | 3.614014/3.885680 | 3.885099 | +7.50%/-0.01% |
@@ -192,91 +192,91 @@ cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우�
 | default-batch-indexed-1g-1m-r8 | compact_seconds | 0.002660/0.002443 | 0.002565 | -3.54%/+5.03% |
 | default-batch-indexed-1g-1m-r8 | compact_cpu | 0.049301/0.049792 | 0.053870 | +9.27%/+8.19% |
 
-## 별도 저장 공간 관측
+## Separate storage observations
 
-공식 타이밍 뒤 각 조건·버전에 별도 프로브를 실행했다. 5 ms 간격의 경로·FD 관측은 원자적 스냅샷이 아니며 짧은 최대값을 놓칠 수 있다. 입력용 고정 fixture와 로그는 작업 데이터 합계에서 제외했다. cgroup 메모리는 페이지 캐시·작업 공간·관측기를 포함하므로 라이브러리 heap과 같지 않다.
+Separate probes ran after official timings for every condition and version. Path/file-descriptor sampling at 5 ms intervals is non-atomic and may miss brief peaks. Fixed input fixtures and logs are excluded from workload data totals. Cgroup memory includes page cache, workspace, and the observer; it is not library heap usage.
 
-| 조건 | main/PR 최대 관측 할당량(MiB) | main/PR 삭제된 열린 파일(MiB) | 상태 |
+| Condition | main/PR peak observed file allocation (MiB) | main/PR deleted open files (MiB) | Status |
 |---|---:|---:|---|
-| native-fixed-2m | 167.340/161.340 | 30.000/24.000 | 관측 완료 |
-| native-variable-random | 44.543/44.543 | 2.000/2.000 | 관측 완료 |
-| native-epochs | 15.777/15.777 | 2.000/2.000 | 관측 완료 |
-| native-rewrite-variable | 87.078/88.777 | 2.000/3.699 | 관측 완료 |
-| native-rewrite-all-marks | 87.078/88.777 | 44.535/45.730 | 관측 완료 |
-| native-recovery | 27.738/27.738 | 14.000/14.000 | 관측 완료 |
-| native-large-4g | 4101.512/4101.512 | 0.000/0.000 | 관측 완료 |
-| native-lazy-4g | 4101.512/4102.012 | 0.000/0.500 | 관측 완료 |
-| native-mixed-4g | 4108.949/4106.949 | 2.000/0.000 | 관측 완료 |
-| nonresident-live | 2053.480/2053.980 | 0.000/0.500 | 관측 완료 |
-| nonresident-open-cold | 2053.480/2053.980 | 0.000/0.500 | 관측 완료 |
-| nonresident-open-warm | 2053.480/2053.980 | 0.000/0.500 | 관측 완료 |
-| maintenance-replace | 299.781/297.781 | 173.891/171.891 | 관측 완료 |
-| maintenance-defragment | 299.781/297.781 | 173.891/171.891 | 관측 완료 |
-| maintenance-complex | 87.699/87.699 | 49.070/49.070 | 관측 완료 |
-| maintenance-checkpoint | 209.172/207.168 | 120.016/118.012 | 관측 완료 |
-| maintenance-replace-4g | 8213.027/8213.027 | 4108.508/4108.508 | 관측 완료 |
-| map-encode-million | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-compress-64m | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-decode-64m | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| decode-map-fixed | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| decode-map-strings | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| decode-map-nested | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-bytes-64m | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-bytes-1g | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-nested | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-box | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-shared-owner | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| owner-boxed-nested | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| native-zstd-write-r1 | 0.031/0.027 | 0.000/0.000 | 관측 완료 |
-| native-zstd-read-r1 | 0.031/0.027 | 0.000/0.000 | 관측 완료 |
-| native-zstd-read-r8 | 0.031/0.031 | 0.000/0.000 | 관측 완료 |
-| chunk-range-full-67108864-r1 | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-range-stream-67108864-r1 | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-range-stream-4k-67108864-r1 | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-range-full-1048576-r8 | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| chunk-range-stream-4k-1048576-r8 | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| scan-open-false | 29.734/29.734 | 16.000/16.000 | 관측 완료 |
-| scan-open-true | 0.668/0.668 | 0.000/0.000 | 관측 완료 |
-| codec-merge-compact | 114.031/114.031 | 0.000/0.000 | 관측 완료 |
-| matrix-ordinary | 106.070/106.066 | 73.754/73.754 | 관측 완료 |
-| matrix-durable | 173.871/173.871 | 141.555/141.555 | 관측 완료 |
-| mmap-small-whole | 0.551/0.551 | 0.000/0.000 | 관측 완료 |
-| mmap-small-cell | 0.551/0.551 | 0.000/0.000 | 관측 완료 |
-| mmap-large-whole | 32.316/32.316 | 0.000/0.000 | 관측 완료 |
-| mmap-large-cell | 32.316/32.316 | 0.000/0.000 | 관측 완료 |
-| independent-1g-64k-r1 | 1025.391/1025.391 | 0.000/0.000 | 관측 완료 |
-| independent-1g-64k-r8 | 1025.391/1025.391 | 0.000/0.000 | 관측 완료 |
-| independent-4g-64k-r8 | 4101.527/4101.527 | 0.000/0.000 | 관측 완료 |
-| independent-1g-1024k-r8 | 1024.102/1024.102 | 0.000/0.000 | 관측 완료 |
-| independent-4g-1024k-r8 | 4096.371/4096.371 | 0.000/0.000 | 관측 완료 |
-| independent-1g-4096k-r8 | 1024.035/1024.035 | 0.000/0.000 | 관측 완료 |
-| independent-4g-4096k-r8 | 4096.113/4096.113 | 0.000/0.000 | 관측 완료 |
-| pending-small | 45.008/27.008 | 18.000/0.000 | 관측 완료 |
-| pending-large | 1025.387/1025.387 | 0.000/0.000 | 관측 완료 |
-| pending-complex | 261.512/261.512 | 0.000/0.000 | 관측 완료 |
-| pending-nonresident | 1025.387/1025.512 | 0.000/0.125 | 관측 완료 |
-| batch-stream-1g-64k-r0 | 1026.184/1026.180 | 0.000/0.000 | 관측 완료 |
-| batch-stream-4g-4096k-r0 | 4096.258/4096.258 | 0.000/0.000 | 관측 완료 |
-| batch-indexed-1g-64k-r0 | 1039.305/1039.961 | 0.000/0.000 | 관측 완료 |
-| batch-indexed-1g-1024k-r0 | 1024.695/1024.621 | 0.000/0.000 | 관측 완료 |
-| batch-indexed-4g-4096k-r0 | 4097.512/4097.590 | 0.000/0.000 | 관측 완료 |
-| batch-indexed-1g-64k-r8 | 1039.305/1039.965 | 0.000/0.000 | 관측 완료 |
-| batch-indexed-4g-4096k-r8 | 4097.516/4097.582 | 0.000/0.000 | 관측 완료 |
-| lazy-first-mark-4g | 4101.512/4101.996 | 0.000/0.484 | 관측 완료 |
-| lazy-warm-marks-4g | 4101.512/4102.012 | 0.000/0.500 | 관측 완료 |
-| default-fixed-2m | 167.340/161.340 | 30.000/24.000 | 관측 완료 |
-| default-variable | 44.543/44.543 | 2.000/2.000 | 관측 완료 |
-| default-mixed-4g | 4108.949/4106.949 | 2.000/0.000 | 관측 완료 |
-| default-codec-merge | 114.031/114.031 | 0.000/0.000 | 관측 완료 |
-| default-map-decode | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| default-owner-64m | 0.000/0.000 | 0.000/0.000 | 관측 완료 |
-| default-independent-4g-4m-r8 | 4096.113/4096.113 | 0.000/0.000 | 관측 완료 |
-| default-batch-indexed-1g-1m-r8 | 1024.621/1024.625 | 0.000/0.000 | 관측 완료 |
+| native-fixed-2m | 167.340/161.340 | 30.000/24.000 | Observed |
+| native-variable-random | 44.543/44.543 | 2.000/2.000 | Observed |
+| native-epochs | 15.777/15.777 | 2.000/2.000 | Observed |
+| native-rewrite-variable | 87.078/88.777 | 2.000/3.699 | Observed |
+| native-rewrite-all-marks | 87.078/88.777 | 44.535/45.730 | Observed |
+| native-recovery | 27.738/27.738 | 14.000/14.000 | Observed |
+| native-large-4g | 4101.512/4101.512 | 0.000/0.000 | Observed |
+| native-lazy-4g | 4101.512/4102.012 | 0.000/0.500 | Observed |
+| native-mixed-4g | 4108.949/4106.949 | 2.000/0.000 | Observed |
+| nonresident-live | 2053.480/2053.980 | 0.000/0.500 | Observed |
+| nonresident-open-cold | 2053.480/2053.980 | 0.000/0.500 | Observed |
+| nonresident-open-warm | 2053.480/2053.980 | 0.000/0.500 | Observed |
+| maintenance-replace | 299.781/297.781 | 173.891/171.891 | Observed |
+| maintenance-defragment | 299.781/297.781 | 173.891/171.891 | Observed |
+| maintenance-complex | 87.699/87.699 | 49.070/49.070 | Observed |
+| maintenance-checkpoint | 209.172/207.168 | 120.016/118.012 | Observed |
+| maintenance-replace-4g | 8213.027/8213.027 | 4108.508/4108.508 | Observed |
+| map-encode-million | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-compress-64m | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-decode-64m | 0.000/0.000 | 0.000/0.000 | Observed |
+| decode-map-fixed | 0.000/0.000 | 0.000/0.000 | Observed |
+| decode-map-strings | 0.000/0.000 | 0.000/0.000 | Observed |
+| decode-map-nested | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-bytes-64m | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-bytes-1g | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-nested | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-box | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-shared-owner | 0.000/0.000 | 0.000/0.000 | Observed |
+| owner-boxed-nested | 0.000/0.000 | 0.000/0.000 | Observed |
+| native-zstd-write-r1 | 0.031/0.027 | 0.000/0.000 | Observed |
+| native-zstd-read-r1 | 0.031/0.027 | 0.000/0.000 | Observed |
+| native-zstd-read-r8 | 0.031/0.031 | 0.000/0.000 | Observed |
+| chunk-range-full-67108864-r1 | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-range-stream-67108864-r1 | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-range-stream-4k-67108864-r1 | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-range-full-1048576-r8 | 0.000/0.000 | 0.000/0.000 | Observed |
+| chunk-range-stream-4k-1048576-r8 | 0.000/0.000 | 0.000/0.000 | Observed |
+| scan-open-false | 29.734/29.734 | 16.000/16.000 | Observed |
+| scan-open-true | 0.668/0.668 | 0.000/0.000 | Observed |
+| codec-merge-compact | 114.031/114.031 | 0.000/0.000 | Observed |
+| matrix-ordinary | 106.070/106.066 | 73.754/73.754 | Observed |
+| matrix-durable | 173.871/173.871 | 141.555/141.555 | Observed |
+| mmap-small-whole | 0.551/0.551 | 0.000/0.000 | Observed |
+| mmap-small-cell | 0.551/0.551 | 0.000/0.000 | Observed |
+| mmap-large-whole | 32.316/32.316 | 0.000/0.000 | Observed |
+| mmap-large-cell | 32.316/32.316 | 0.000/0.000 | Observed |
+| independent-1g-64k-r1 | 1025.391/1025.391 | 0.000/0.000 | Observed |
+| independent-1g-64k-r8 | 1025.391/1025.391 | 0.000/0.000 | Observed |
+| independent-4g-64k-r8 | 4101.527/4101.527 | 0.000/0.000 | Observed |
+| independent-1g-1024k-r8 | 1024.102/1024.102 | 0.000/0.000 | Observed |
+| independent-4g-1024k-r8 | 4096.371/4096.371 | 0.000/0.000 | Observed |
+| independent-1g-4096k-r8 | 1024.035/1024.035 | 0.000/0.000 | Observed |
+| independent-4g-4096k-r8 | 4096.113/4096.113 | 0.000/0.000 | Observed |
+| pending-small | 45.008/27.008 | 18.000/0.000 | Observed |
+| pending-large | 1025.387/1025.387 | 0.000/0.000 | Observed |
+| pending-complex | 261.512/261.512 | 0.000/0.000 | Observed |
+| pending-nonresident | 1025.387/1025.512 | 0.000/0.125 | Observed |
+| batch-stream-1g-64k-r0 | 1026.184/1026.180 | 0.000/0.000 | Observed |
+| batch-stream-4g-4096k-r0 | 4096.258/4096.258 | 0.000/0.000 | Observed |
+| batch-indexed-1g-64k-r0 | 1039.305/1039.961 | 0.000/0.000 | Observed |
+| batch-indexed-1g-1024k-r0 | 1024.695/1024.621 | 0.000/0.000 | Observed |
+| batch-indexed-4g-4096k-r0 | 4097.512/4097.590 | 0.000/0.000 | Observed |
+| batch-indexed-1g-64k-r8 | 1039.305/1039.965 | 0.000/0.000 | Observed |
+| batch-indexed-4g-4096k-r8 | 4097.516/4097.582 | 0.000/0.000 | Observed |
+| lazy-first-mark-4g | 4101.512/4101.996 | 0.000/0.484 | Observed |
+| lazy-warm-marks-4g | 4101.512/4102.012 | 0.000/0.500 | Observed |
+| default-fixed-2m | 167.340/161.340 | 30.000/24.000 | Observed |
+| default-variable | 44.543/44.543 | 2.000/2.000 | Observed |
+| default-mixed-4g | 4108.949/4106.949 | 2.000/0.000 | Observed |
+| default-codec-merge | 114.031/114.031 | 0.000/0.000 | Observed |
+| default-map-decode | 0.000/0.000 | 0.000/0.000 | Observed |
+| default-owner-64m | 0.000/0.000 | 0.000/0.000 | Observed |
+| default-independent-4g-4m-r8 | 4096.113/4096.113 | 0.000/0.000 | Observed |
+| default-batch-indexed-1g-1m-r8 | 1024.621/1024.625 | 0.000/0.000 | Observed |
 
-## 해석과 원본
+## Interpretation and evidence
 
-실제 저하와 대조군 편차를 구분하고 초과값을 그대로 보존했다. 검사나 자원 상한을 제거해 통과시키지 않았고, 이번 비교를 실행하면서 제품 코드를 최적화하지 않았다. 최적화 추적은 [이슈 #20](https://github.com/shim9610/varlit/issues/20)에 남긴다.
+Observed regressions and control variation are distinguished, with exceedances retained. Validation and resource limits were not removed to obtain passes, and product code was not optimized during this comparison. Optimization follow-up remains in [issue #20](https://github.com/shim9610/varlit/issues/20).
 
-물리 데이터 레코드 수와 reader 합산 읽기 수는 다르다. Native independent의 4 GiB에서는 64 KiB가 65,536개, 1 MiB가 4,096개, 4 MiB가 1,024개이며 reader별로 전체를 읽는다. BatchOptions는 여러 논리 레코드의 I/O를 묶고 레코드 자체를 합치지는 않는다.
+Physical data-record counts differ from aggregate reader decodes. For native independent 4 GiB cases, 64 KiB payloads produce 65,536 records, 1 MiB produces 4,096, and 4 MiB produces 1,024; every reader consumes the whole file. BatchOptions coalesces I/O across logical records without merging the records themselves.
 
-상세 작업량·대조군·부가적인 그룹 부트스트랩 95% 범위는 [results.json](results.json), 모든 시도·소스·도구·바이너리 hash는 [원본 증거](evidence.tar.gz), [파일별 hash](evidence-manifest.json), [압축 파일 checksum](evidence.sha256)에 있다. 부트스트랩은 관측 5% 기준을 바꾸지 않는다.
+Detailed work counts, controls, and supplementary 95% matched-group bootstrap intervals are in [results.json](results.json). All attempts, sources, tools, and binary hashes are retained in the [raw evidence](evidence.tar.gz), [per-file hashes](evidence-manifest.json), and [archive checksum](evidence.sha256). Bootstrap intervals do not replace the observed 5% gates.
