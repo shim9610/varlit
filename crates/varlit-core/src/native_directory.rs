@@ -50,6 +50,7 @@ pub struct ResidentIndex {
     snapshot: SnapshotFile,
     spec: FormatSpec,
     frames_verified: bool,
+    sequence_hints_allowed: bool,
     boundary_proof: Option<BoundaryProof>,
     boundary_cache_unavailable: bool,
     boundary_allowance: usize,
@@ -57,6 +58,7 @@ pub struct ResidentIndex {
     last_probe: usize,
     range_hint: Option<(usize, u64, u64)>,
     uniform: Option<UniformPrefix>,
+    sequence_run: Option<UniformPrefix>,
     retained: bool,
 }
 // Full rewrite rows are needed while constructing and validating a new
@@ -153,6 +155,7 @@ impl ResidentIndex {
             spec,
             retained: true,
             frames_verified: true,
+            sequence_hints_allowed: !spec.block_residency.iter().any(|block| !block.resident),
             boundary_proof: None,
             boundary_cache_unavailable: false,
             boundary_allowance,
@@ -160,6 +163,7 @@ impl ResidentIndex {
             last_probe: usize::MAX,
             range_hint: None,
             uniform,
+            sequence_run: None,
         }
     }
     pub(crate) fn adopt_generation<D: RecordDirectory + ?Sized>(
@@ -180,7 +184,7 @@ impl ResidentIndex {
             let entry = entries.record_at(at)?;
             result.slots.push(encode(&entry))?;
             if frames_verified {
-                result.note_verified_offset(at, entry.record_offset);
+                result.note_verified_entry(at, &entry);
             }
         }
         Ok(result)
@@ -194,6 +198,7 @@ impl ResidentIndex {
             spec,
             retained: true,
             frames_verified: true,
+            sequence_hints_allowed: !spec.block_residency.iter().any(|block| !block.resident),
             boundary_proof: None,
             boundary_cache_unavailable: false,
             boundary_allowance: boundary_budget(spec),
@@ -201,6 +206,7 @@ impl ResidentIndex {
             last_probe: usize::MAX,
             range_hint: None,
             uniform: None,
+            sequence_run: None,
         }
     }
     pub(crate) fn none_retained(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
@@ -257,7 +263,7 @@ impl ResidentIndex {
     pub(crate) fn install(&mut self, slot: ReservedIndexSlot, entry: &RecordIndexEntry) {
         let ReservedIndexSlot(()) = slot;
         self.slots.push_reserved(encode(entry));
-        self.note_verified_offset(self.len() - 1, entry.record_offset);
+        self.note_verified_entry(self.len() - 1, entry);
     }
     /// A failed follow cannot leave a partially adopted directory. All old
     /// rows remain readable even if a spill succeeded before a later error.
@@ -292,6 +298,9 @@ impl ResidentIndex {
         if let Some(run) = &mut self.uniform {
             run.truncate(len);
         }
+        if let Some(run) = &mut self.sequence_run {
+            run.truncate(len);
+        }
         self.slots.truncate(len.saturating_sub(self.rewritten_len));
         self.rewritten_len = self.rewritten_len.min(len);
     }
@@ -311,11 +320,45 @@ impl ResidentIndex {
             row[12] != 0,
         )
     }
-    fn note_verified_offset(&mut self, row: usize, offset: u64) {
+    fn note_verified_entry(&mut self, row: usize, entry: &RecordIndexEntry) {
+        let offset = entry.record_offset;
         UniformPrefix::observe(&mut self.uniform, row, offset);
+        UniformPrefix::observe(&mut self.sequence_run, row, entry.sequence);
         if let Some((_, first, _)) = self.range_hint {
             self.range_hint = Some((self.len(), first, offset));
         }
+    }
+
+    pub(crate) fn has_sequence_hint(&self) -> bool {
+        self.frames_verified
+            && self.sequence_hints_allowed
+            && self.sequence_run.as_ref().is_some_and(|run| run.count != 0)
+    }
+
+    /// An untrusted header sequence only selects a candidate private row. Its
+    /// actual offset must match; arithmetic alone never authenticates a frame.
+    pub(crate) fn matches_sequence_hint(&self, offset: u64, sequence: u64) -> Result<bool> {
+        if !self.frames_verified || offset >= self.snapshot.len() {
+            return Ok(false);
+        }
+        let Some(row) = self
+            .sequence_run
+            .as_ref()
+            .and_then(|run| run.row_for(sequence))
+        else {
+            return Ok(false);
+        };
+        Ok(self
+            .row_direct(row)?
+            .is_some_and(|row| u64::from_le_bytes(row[..8].try_into().unwrap()) == offset))
+    }
+
+    pub(crate) fn has_uniform_boundary(&self, offset: u64) -> bool {
+        offset < self.snapshot.len()
+            && self
+                .uniform
+                .as_ref()
+                .is_some_and(|run| run.contains(offset))
     }
 
     /// Check actual membership. A serialized row is never a boundary witness.
@@ -669,6 +712,20 @@ impl UniformPrefix {
             && (offset == self.start
                 || (self.step != 0 && (offset - self.start).is_multiple_of(self.step)))
     }
+    fn row_for(&self, value: u64) -> Option<usize> {
+        if !self.contains(value) {
+            return None;
+        }
+        let relative = if value == self.start {
+            0
+        } else {
+            usize::try_from((value - self.start) / self.step).ok()?
+        };
+        if relative >= self.count {
+            return None;
+        }
+        self.first_row.checked_add(relative)
+    }
     fn truncate(&mut self, len: usize) {
         let count = self.count.min(len.saturating_sub(self.first_row));
         if count < self.count || len == self.first_row + self.count {
@@ -1006,6 +1063,31 @@ mod tests {
     }
 
     #[test]
+    fn sequence_rows_preserve_full_width_gaps_and_truncation() {
+        for (first_row, start, step) in [(7, 100, 3), (usize::MAX - 4, u64::MAX - 12, 4)] {
+            let mut run = None;
+            for row in 0..4 {
+                UniformPrefix::observe(&mut run, first_row + row, start + row as u64 * step);
+            }
+            let run = run.as_mut().unwrap();
+            for row in 0..4 {
+                assert_eq!(
+                    run.row_for(start + row as u64 * step),
+                    Some(first_row + row)
+                );
+                assert_eq!(run.row_for(start + row as u64 * step - 1), None);
+            }
+            run.truncate(first_row + 2);
+            assert_eq!(run.row_for(start + step), Some(first_row + 1));
+            assert_eq!(run.row_for(start + 2 * step), None);
+            run.push(first_row + 2, start + 2 * step + 1);
+            assert_eq!(run.row_for(start + 2 * step + 1), None);
+            run.truncate(first_row);
+            assert_eq!(run.row_for(start), None);
+        }
+    }
+
+    #[test]
     fn uniform_prefix_never_authorizes_unobserved_or_truncated_offsets() {
         for break_at in 1..24 {
             let mut run = UniformPrefix {
@@ -1026,6 +1108,9 @@ mod tests {
                     if run.contains(probe) {
                         assert!(observed.contains(&probe));
                     }
+                    if let Some(row) = run.row_for(probe) {
+                        assert_eq!(observed[row - 7], probe);
+                    }
                 }
             }
             for retained in (0..=32).rev() {
@@ -1033,6 +1118,10 @@ mod tests {
                 for probe in 0..2400 {
                     if run.contains(probe) {
                         assert!(observed[..retained].contains(&probe));
+                    }
+                    if let Some(row) = run.row_for(probe) {
+                        assert!(row < 7 + retained);
+                        assert_eq!(observed[row - 7], probe);
                     }
                 }
             }
