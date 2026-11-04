@@ -372,3 +372,30 @@ pub fn ordered_hash(state: u64, value: u64) -> u64 {
         .wrapping_mul(0x9e3779b97f4a7c15)
         .wrapping_add(value.wrapping_add(1))
 }
+
+/// Read-only benchmark selection; write schema/checksums and resource ceilings
+/// are identical in every mode. Child reader processes inherit this selection.
+#[cfg(feature = "read-validation")]
+pub fn selected_read_limits() -> crate::Result<ReadLimits> {
+    let mode = std::env::var("VARLIT_BENCH_READ_VALIDATION").unwrap_or_else(|_| "legacy".into());
+    let policy = match mode.as_str() {
+        "legacy" => return Ok(ReadLimits::MISSING),
+        "full" => ReadValidation::FULL,
+        "crc-only" => ReadValidation::CRC_ONLY,
+        "structure-only" => ReadValidation::STRUCTURE_ONLY,
+        "trusted" => ReadValidation::TRUSTED,
+        _ => return Err(format!("unknown read validation mode: {mode}").into()),
+    };
+    Ok(ReadLimits::MISSING.with_read_validation(policy))
+}
+#[cfg(not(feature = "read-validation"))]
+pub fn selected_read_limits() -> crate::Result<ReadLimits> {
+    let mode = std::env::var("VARLIT_BENCH_READ_VALIDATION").unwrap_or_else(|_| "legacy".into());
+    if mode != "legacy" {
+        return Err("old runtime supports only legacy read checking".into());
+    }
+    Ok(ReadLimits::MISSING)
+}
+pub fn selected_read_spec(spec: FormatSpec) -> crate::Result<FormatSpec> {
+    Ok(spec.with_resource_limits(selected_read_limits()?))
+}

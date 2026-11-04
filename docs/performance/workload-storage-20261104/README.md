@@ -6,6 +6,14 @@ The former individual-Frame million-item fixture is withdrawn as a representativ
 
 [Current integrated dashboard](index.html) · [Current integrated data and operation ratios](current-comparison.json) · [Grouping manual](../../scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size) · [Runnable harness](../../../tools/storage-bench/README.md)
 
+## Independent read-check modes: added comparison
+
+The same report now includes [69 before/after/read-mode configurations](../read-validation-20261104/README.md) (207 timing observations, 69 separate resource probes, 48 publication gates), plus separately retained payload API, writer-only, range and memory diagnostics. Select **Independent read checks** in the dashboard. These medians form a separate cohort and do not replace or pool the cross-engine observations below.
+
+CRC and additional structure checks are independently selectable, with the compatibility default preserved. TRUSTED uses captured metadata and skips frame rereads/data CRC while retaining bounds, allocation/decoder limits, finite traversal and publication guards. Direct captured-payload API observations are about 18% / 24% faster than FULL at 64 KiB / 1 MiB; this is not a universal speed claim. Optional record/cell CRC does not include required generation/commit checksums.
+
+Five initial median-based alerts remain explicit, including a concurrent writer wall-time increase and native-owned range variation. Stronger repeat calibration leaves 79 of 88 metric comparisons unqualified and nine within the observed 5% threshold; it does not turn those alerts into passes. The appendix gives complete mode tables, CPU/memory/temp results, control ranges, failures and supplemental attribution. The cross-engine 2× goal remains unestablished.
+
 ## Grouped logical items: corrected primary model
 
 Each logical item contains 128 bytes and has a dense immutable ID. A block contains 512 or 8,192 items; the block route follows from the ID and the item is a bounded slot inside that block. This is one declared item layout, not a million block types. Arbitrary keys lacking such a route require a separately charged routing index.

@@ -307,3 +307,48 @@ Build the integrated view after both cohort analyses (raw source exports remain 
 ```sh
 python3 tools/storage-bench/integrate_report.py --original docs/performance/workload-storage-20261104/comparison.json --grouped docs/performance/grouped-storage-20261104/comparison.json --output docs/performance/workload-storage-20261104
 ```
+
+
+## Independent read-validation comparison
+
+`compare_read_validation.py` runs the same grouped/mixed/array workloads against
+frozen pre-change and new binaries, all four read modes, and a pre-security main
+snapshot. It includes identical-binary A/A controls, unpublished-prefix gates,
+three balanced timing repetitions, and separate process-tree resource probes.
+Builds/tests must finish before timing. Resource caps remain 4 CPU / 16 GiB /
+32 GiB. `--smoke` is only an operation/visibility check, never a timing sample.
+
+The new harness selects **reader-only** policy through
+`VARLIT_BENCH_READ_VALIDATION=legacy|full|crc-only|structure-only|trusted`.
+Writers, stored CRCs, grouping, queries and application byte oracles remain
+identical. Unknown selections fail. The driver records the selection and binary
+hash on every row; pre-change binaries run only their legacy policy.
+
+```sh
+python3 tools/storage-bench/compare_read_validation.py --before /path/to/before-binaries --after /path/to/after-binaries --pre-security /path/to/pre-security-mixed --output /path/to/new-results
+```
+
+The `read-validation` feature belongs only to this diagnostic harness and is
+on by default. Disable it when building the same harness against a pre-policy
+runtime; the compatibility helper accepts only `legacy`. Build the pre-PR main
+snapshot's `mixed` binary only, since its payload mapping API predates the array
+adapter's newer indexed block accessor. Production dependency features remain
+`integrity,mmap` in every build.
+
+Visibility gates use the **actual previous publication count**, not a producer's
+transaction ID. A bounded MPSC can deliver source 1 before source 0, so ID zero
+is not evidence that nothing has been published. The gate pauses the first
+actual publication and still requires all readers to observe the empty prefix.
+It is disabled for timing and resource observations.
+
+The canonical dashboard also accepts `--read-validation docs/performance/read-validation-20261104/comparison.json` in the `integrate_report.py` command. This keeps the 69 mode configurations in the existing report as a separate cohort; it never pools their timings or invents new SQLite ratios.
+
+After freezing `payload` and `writer` diagnostic binaries from the same harness for each supported snapshot:
+
+```sh
+python3 tools/storage-bench/analyze_read_validation.py /path/to/primary-results --output docs/performance/read-validation-20261104
+python3 tools/storage-bench/diagnose_read_validation.py --before /path/to/before-binaries --after /path/to/after-binaries --output /path/to/new-diagnostics
+python3 tools/storage-bench/analyze_read_validation_diagnostics.py /path/to/new-diagnostics --output docs/performance/read-validation-20261104/diagnostics.json
+```
+
+The diagnostic cohorts contain six balanced timing repeats, separate probes, a captured-payload API timer with the full byte oracle charged separately, a writer-only phase with checked post-write readback, and a longer 2,048-window range control. Primary and diagnostic cohorts stay separate. The final calibration rejects a 5% qualification if either baseline's repeat spread exceeds 5%; single resource probes cannot qualify memory/storage regressions. A/A-only statuses and every observed exceedance remain exported. See the linked measurement appendix for instrumented stage attribution; those tracer/timer observations do not replace the original timings.

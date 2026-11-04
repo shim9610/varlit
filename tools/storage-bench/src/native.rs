@@ -62,7 +62,7 @@ impl Writer {
                 Self::Stream(f) => f.sync()?,
             }
         }
-        crate::before_publish(t.txid);
+        crate::before_publish(h.txns);
         h.txns += 1;
         h.frames += t.frames.len() as u64;
         h.rows += t.rows.len() as u64;
@@ -111,18 +111,22 @@ pub struct Reader {
 }
 impl Reader {
     pub fn open(p: &Path, c: &Config, indexed: bool) -> Result<Self> {
+        let mut indexed_options = options(c.cache);
+        indexed_options.limits = indexed_options.limits.overlay(selected_read_limits()?);
+        let mut sequential_options = stream_options(c.cache);
+        sequential_options.limits = sequential_options.limits.overlay(selected_read_limits()?);
         let f = if indexed {
             File::Indexed(VarlitIndexedReader::open(
                 spec(true),
                 p,
-                options(c.cache),
+                indexed_options,
                 plan(),
             )?)
         } else {
             File::Stream(VarlitStreamReader::open(
                 spec(false),
                 p,
-                stream_options(c.cache),
+                sequential_options,
             )?)
         };
         macro_rules! blocks {

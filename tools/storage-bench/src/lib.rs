@@ -58,8 +58,8 @@ impl Stopwatch {
 }
 /// Optional conformance gate, disabled in timing runs. Readers must observe the
 /// previous application prefix while a complete new transaction is still staged.
-pub fn before_publish(txid: u64) {
-    if txid != 0 {
+pub fn before_publish(previous_publications: u64) {
+    if previous_publications != 0 {
         return;
     }
     let Some(root) = std::env::var_os("VARLIT_BENCH_VISIBILITY_GATE") else {

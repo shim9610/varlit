@@ -287,7 +287,7 @@ impl Sql {
             self.set.integer(i as i32 + 1, *v);
         }
         self.set.done();
-        crate::before_publish(t.txid);
+        crate::before_publish(h.txns - 1);
         self.exec("COMMIT");
         h
     }

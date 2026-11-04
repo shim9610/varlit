@@ -1,0 +1,4290 @@
+{
+  "profiles": {
+    "payload-g65536--before-a": {
+      "profile": {
+        "name": "payload-g65536--before-a",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.5590912699999978,
+          0.5883997220000043,
+          0.6079932049999999,
+          0.5458711560000032,
+          0.5671193730000064,
+          0.5449674339999967
+        ],
+        "api_cpu_seconds": [
+          0.5706811919999775,
+          0.6010306789999804,
+          0.6217936119999925,
+          0.5572047269999988,
+          0.5798967490000313,
+          0.5557289300000028
+        ],
+        "oracle_seconds": [
+          1.2502346100000494,
+          1.3683407050000986,
+          1.3969513700000977,
+          1.245796340000069,
+          1.2798481830000614,
+          1.2288828310000546
+        ],
+        "open_seconds": [
+          0.051871015,
+          0.053925458,
+          0.053418148,
+          0.052334848,
+          0.046634663,
+          0.059344951
+        ],
+        "write_seconds": [
+          1.407532005,
+          1.259250222,
+          1.2978381589999999,
+          1.172669481,
+          1.15892766,
+          1.272556752
+        ],
+        "completion": [
+          3.294513157,
+          3.299342046,
+          3.385812976,
+          3.045242958,
+          3.082301054,
+          3.131858245
+        ],
+        "cpu": [
+          3.00859,
+          3.020149,
+          3.102118,
+          2.761517,
+          2.797889,
+          2.832676
+        ],
+        "pss_sum_mib": [
+          4.474609375
+        ],
+        "rss_sum_mib": [
+          5.453125
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.5631053215000021,
+        "api_cpu_seconds": 0.5752889705000044,
+        "oracle_seconds": 1.2650413965000555,
+        "open_seconds": 0.052876498,
+        "write_seconds": 1.265903487,
+        "completion": 3.213185701,
+        "cpu": 2.920633,
+        "pss_sum_mib": 4.474609375,
+        "rss_sum_mib": 5.453125,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.5449674339999967,
+          0.6079932049999999
+        ],
+        "api_cpu_seconds": [
+          0.5557289300000028,
+          0.6217936119999925
+        ],
+        "oracle_seconds": [
+          1.2288828310000546,
+          1.3969513700000977
+        ],
+        "open_seconds": [
+          0.046634663,
+          0.059344951
+        ],
+        "write_seconds": [
+          1.15892766,
+          1.407532005
+        ],
+        "completion": [
+          3.045242958,
+          3.385812976
+        ],
+        "cpu": [
+          2.761517,
+          3.102118
+        ],
+        "pss_sum_mib": [
+          4.474609375,
+          4.474609375
+        ],
+        "rss_sum_mib": [
+          5.453125,
+          5.453125
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--before-a": {
+      "profile": {
+        "name": "payload-g1048576--before-a",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.33405249699999956,
+          0.33530467,
+          0.3471220650000008,
+          0.29994548600000065,
+          0.2986623759999995,
+          0.32564059500000014
+        ],
+        "api_cpu_seconds": [
+          0.33576735399999746,
+          0.3373817419999927,
+          0.34915992299999976,
+          0.3017707450000022,
+          0.30056211499999463,
+          0.328762180999991
+        ],
+        "oracle_seconds": [
+          1.3053005890000016,
+          1.3129512569999944,
+          1.3712587059999994,
+          1.2202426889999987,
+          1.1933910250000002,
+          1.2740227150000019
+        ],
+        "open_seconds": [
+          0.003209257,
+          0.003844702,
+          0.002880935,
+          0.002544724,
+          0.003015673,
+          0.002882481
+        ],
+        "write_seconds": [
+          1.555237973,
+          1.7080929070000002,
+          1.738555074,
+          1.550247543,
+          1.582117301,
+          1.596081264
+        ],
+        "completion": [
+          3.204218358,
+          3.366638902,
+          3.466418016,
+          3.078267967,
+          3.082193453,
+          3.20622698
+        ],
+        "cpu": [
+          2.900015,
+          3.062056,
+          3.169599,
+          2.764356,
+          2.782031,
+          2.880142
+        ],
+        "pss_sum_mib": [
+          6.5068359375
+        ],
+        "rss_sum_mib": [
+          7.48046875
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.32984654599999985,
+        "api_cpu_seconds": 0.33226476749999423,
+        "oracle_seconds": 1.2896616520000017,
+        "open_seconds": 0.002949077,
+        "write_seconds": 1.5890992824999999,
+        "completion": 3.205222669,
+        "cpu": 2.8900785,
+        "pss_sum_mib": 6.5068359375,
+        "rss_sum_mib": 7.48046875,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.2986623759999995,
+          0.3471220650000008
+        ],
+        "api_cpu_seconds": [
+          0.30056211499999463,
+          0.34915992299999976
+        ],
+        "oracle_seconds": [
+          1.1933910250000002,
+          1.3712587059999994
+        ],
+        "open_seconds": [
+          0.002544724,
+          0.003844702
+        ],
+        "write_seconds": [
+          1.550247543,
+          1.738555074
+        ],
+        "completion": [
+          3.078267967,
+          3.466418016
+        ],
+        "cpu": [
+          2.764356,
+          3.169599
+        ],
+        "pss_sum_mib": [
+          6.5068359375,
+          6.5068359375
+        ],
+        "rss_sum_mib": [
+          7.48046875,
+          7.48046875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--after-default": {
+      "profile": {
+        "name": "payload-g65536--after-default",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.5228963550000013,
+          0.5724580610000011,
+          0.646246781999998,
+          0.5641607309999991,
+          0.5367325480000019,
+          0.5642582569999968
+        ],
+        "api_cpu_seconds": [
+          0.5327328219999807,
+          0.5844095960000625,
+          0.6590500019999679,
+          0.5756383790000265,
+          0.5486159949999907,
+          0.5752110360000279
+        ],
+        "oracle_seconds": [
+          1.283879627000608,
+          1.4488523900008408,
+          1.6045756770009583,
+          1.430848262001146,
+          1.34744068300083,
+          1.377382565000772
+        ],
+        "open_seconds": [
+          0.045403289,
+          0.060926477,
+          0.056522129,
+          0.045201086,
+          0.050304345,
+          0.045704015
+        ],
+        "write_seconds": [
+          1.146885898,
+          1.160853602,
+          1.347535796,
+          1.165172533,
+          1.161442132,
+          1.197937533
+        ],
+        "completion": [
+          3.023018091,
+          3.271410608,
+          3.687598123,
+          3.230347181,
+          3.121507541,
+          3.212848886
+        ],
+        "cpu": [
+          2.732607,
+          2.99464,
+          3.434175,
+          2.943508,
+          2.836232,
+          2.920354
+        ],
+        "pss_sum_mib": [
+          4.349609375
+        ],
+        "rss_sum_mib": [
+          5.328125
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.564209493999998,
+        "api_cpu_seconds": 0.5754247075000272,
+        "oracle_seconds": 1.404115413500959,
+        "open_seconds": 0.04800418,
+        "write_seconds": 1.1633073325,
+        "completion": 3.2215980335000003,
+        "cpu": 2.931931,
+        "pss_sum_mib": 4.349609375,
+        "rss_sum_mib": 5.328125,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.5228963550000013,
+          0.646246781999998
+        ],
+        "api_cpu_seconds": [
+          0.5327328219999807,
+          0.6590500019999679
+        ],
+        "oracle_seconds": [
+          1.283879627000608,
+          1.6045756770009583
+        ],
+        "open_seconds": [
+          0.045201086,
+          0.060926477
+        ],
+        "write_seconds": [
+          1.146885898,
+          1.347535796
+        ],
+        "completion": [
+          3.023018091,
+          3.687598123
+        ],
+        "cpu": [
+          2.732607,
+          3.434175
+        ],
+        "pss_sum_mib": [
+          4.349609375,
+          4.349609375
+        ],
+        "rss_sum_mib": [
+          5.328125,
+          5.328125
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--after-default": {
+      "profile": {
+        "name": "payload-g1048576--after-default",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.32620217399999984,
+          0.343938766,
+          0.34248275799999983,
+          0.31572088100000045,
+          0.3039999100000002,
+          0.36747731000000056
+        ],
+        "api_cpu_seconds": [
+          0.32849631400001345,
+          0.3460799570000128,
+          0.34436631700000686,
+          0.3177028390000043,
+          0.30571191000001385,
+          0.3691441139999958
+        ],
+        "oracle_seconds": [
+          1.4080581879999994,
+          1.4844336499999973,
+          1.4556104620000025,
+          1.3538726259999998,
+          1.3397922989999949,
+          1.5363785849999978
+        ],
+        "open_seconds": [
+          0.002945268,
+          0.003170693,
+          0.003336824,
+          0.002786926,
+          0.00317861,
+          0.003369788
+        ],
+        "write_seconds": [
+          1.5822299480000002,
+          1.610655623,
+          1.733477588,
+          1.499487866,
+          1.604488252,
+          1.618531367
+        ],
+        "completion": [
+          3.325710984,
+          3.45133674,
+          3.543339933,
+          3.177813595,
+          3.257248815,
+          3.533871701
+        ],
+        "cpu": [
+          3.01566,
+          3.143295,
+          3.244504,
+          2.871245,
+          2.949434,
+          3.226792
+        ],
+        "pss_sum_mib": [
+          6.5693359375
+        ],
+        "rss_sum_mib": [
+          7.54296875
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.33434246599999984,
+        "api_cpu_seconds": 0.33643131550001015,
+        "oracle_seconds": 1.431834325000001,
+        "open_seconds": 0.0031746515000000003,
+        "write_seconds": 1.6075719375,
+        "completion": 3.388523862,
+        "cpu": 3.0794775000000003,
+        "pss_sum_mib": 6.5693359375,
+        "rss_sum_mib": 7.54296875,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.3039999100000002,
+          0.36747731000000056
+        ],
+        "api_cpu_seconds": [
+          0.30571191000001385,
+          0.3691441139999958
+        ],
+        "oracle_seconds": [
+          1.3397922989999949,
+          1.5363785849999978
+        ],
+        "open_seconds": [
+          0.002786926,
+          0.003369788
+        ],
+        "write_seconds": [
+          1.499487866,
+          1.733477588
+        ],
+        "completion": [
+          3.177813595,
+          3.543339933
+        ],
+        "cpu": [
+          2.871245,
+          3.244504
+        ],
+        "pss_sum_mib": [
+          6.5693359375,
+          6.5693359375
+        ],
+        "rss_sum_mib": [
+          7.54296875,
+          7.54296875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--full": {
+      "profile": {
+        "name": "payload-g65536--full",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.5565840930000056,
+          0.9450462979999906,
+          0.5563664539999973,
+          0.5479096670000032,
+          0.535361142000002,
+          0.554564119000003
+        ],
+        "api_cpu_seconds": [
+          0.5677294309999696,
+          0.9572785060000297,
+          0.5683652940000469,
+          0.5595609369999522,
+          0.5468519899999598,
+          0.5664483649999332
+        ],
+        "oracle_seconds": [
+          1.3638990850009838,
+          1.370125476000839,
+          1.393690149000837,
+          1.3637026470007638,
+          1.3421466890008873,
+          1.4023867590007764
+        ],
+        "open_seconds": [
+          0.049776278,
+          0.049872156,
+          0.054301031,
+          0.048128814,
+          0.048316941,
+          0.046081306
+        ],
+        "write_seconds": [
+          1.204347818,
+          1.311742861,
+          1.205423457,
+          1.170409788,
+          1.1518336,
+          1.182035811
+        ],
+        "completion": [
+          3.200099901,
+          3.706205727,
+          3.237323,
+          3.155567565,
+          3.102364669,
+          3.210930132
+        ],
+        "cpu": [
+          2.874667,
+          3.431085,
+          2.948102,
+          2.868218,
+          2.816603,
+          2.921483
+        ],
+        "pss_sum_mib": [
+          4.349609375
+        ],
+        "rss_sum_mib": [
+          5.328125
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.5554652865000002,
+        "api_cpu_seconds": 0.5670888979999514,
+        "oracle_seconds": 1.3670122805009113,
+        "open_seconds": 0.049046609500000005,
+        "write_seconds": 1.1931918145,
+        "completion": 3.2055150165,
+        "cpu": 2.898075,
+        "pss_sum_mib": 4.349609375,
+        "rss_sum_mib": 5.328125,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.535361142000002,
+          0.9450462979999906
+        ],
+        "api_cpu_seconds": [
+          0.5468519899999598,
+          0.9572785060000297
+        ],
+        "oracle_seconds": [
+          1.3421466890008873,
+          1.4023867590007764
+        ],
+        "open_seconds": [
+          0.046081306,
+          0.054301031
+        ],
+        "write_seconds": [
+          1.1518336,
+          1.311742861
+        ],
+        "completion": [
+          3.102364669,
+          3.706205727
+        ],
+        "cpu": [
+          2.816603,
+          3.431085
+        ],
+        "pss_sum_mib": [
+          4.349609375,
+          4.349609375
+        ],
+        "rss_sum_mib": [
+          5.328125,
+          5.328125
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--full": {
+      "profile": {
+        "name": "payload-g1048576--full",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.3328450459999992,
+          0.36662653899999964,
+          0.30553298799999995,
+          0.3215827080000005,
+          0.3243132430000007,
+          0.30281011899999905
+        ],
+        "api_cpu_seconds": [
+          0.33560793399998046,
+          0.36914503599998927,
+          0.3069303669999992,
+          0.3234603420000053,
+          0.3261017950000118,
+          0.304678322000008
+        ],
+        "oracle_seconds": [
+          1.4568518059999964,
+          1.5373766879999984,
+          1.3226332430000016,
+          1.4134819689999993,
+          1.3944720950000014,
+          1.3104444640000024
+        ],
+        "open_seconds": [
+          0.002678104,
+          0.006161424,
+          0.002720633,
+          0.004272834,
+          0.007228702,
+          0.00315975
+        ],
+        "write_seconds": [
+          1.538795641,
+          1.983840692,
+          1.685991954,
+          1.469979406,
+          1.636315215,
+          1.560454761
+        ],
+        "completion": [
+          3.338147936,
+          3.902978363,
+          3.323394742,
+          3.214857141,
+          3.368313899,
+          3.182268673
+        ],
+        "cpu": [
+          3.029195,
+          3.602386,
+          3.014131,
+          2.908758,
+          3.063391,
+          2.873608
+        ],
+        "pss_sum_mib": [
+          6.6318359375
+        ],
+        "rss_sum_mib": [
+          7.60546875
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.3229479755000006,
+        "api_cpu_seconds": 0.32478106850000854,
+        "oracle_seconds": 1.4039770320000002,
+        "open_seconds": 0.0037162919999999995,
+        "write_seconds": 1.5983849879999998,
+        "completion": 3.330771339,
+        "cpu": 3.021663,
+        "pss_sum_mib": 6.6318359375,
+        "rss_sum_mib": 7.60546875,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.30281011899999905,
+          0.36662653899999964
+        ],
+        "api_cpu_seconds": [
+          0.304678322000008,
+          0.36914503599998927
+        ],
+        "oracle_seconds": [
+          1.3104444640000024,
+          1.5373766879999984
+        ],
+        "open_seconds": [
+          0.002678104,
+          0.007228702
+        ],
+        "write_seconds": [
+          1.469979406,
+          1.983840692
+        ],
+        "completion": [
+          3.182268673,
+          3.902978363
+        ],
+        "cpu": [
+          2.873608,
+          3.602386
+        ],
+        "pss_sum_mib": [
+          6.6318359375,
+          6.6318359375
+        ],
+        "rss_sum_mib": [
+          7.60546875,
+          7.60546875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--crc-only": {
+      "profile": {
+        "name": "payload-g65536--crc-only",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "crc-only",
+        "read_validation": "crc-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.5309820830000049,
+          0.639551663999998,
+          0.5321817000000023,
+          0.5228521910000036,
+          0.5347899579999964,
+          0.5175708980000001
+        ],
+        "api_cpu_seconds": [
+          0.5420585929999835,
+          0.6548693489999515,
+          0.5437977069999789,
+          0.5337640510000083,
+          0.5469681859999875,
+          0.52896391000005
+        ],
+        "oracle_seconds": [
+          1.3751861570008679,
+          1.695058949000879,
+          1.3644695610008226,
+          1.3467353450008026,
+          1.3753311940007045,
+          1.3409805020006544
+        ],
+        "open_seconds": [
+          0.045275457,
+          0.076253047,
+          0.051935275,
+          0.054910507,
+          0.048049834,
+          0.043801196
+        ],
+        "write_seconds": [
+          1.232797748,
+          1.288652415,
+          1.178388175,
+          1.2830934250000001,
+          1.208008654,
+          1.167035843
+        ],
+        "completion": [
+          3.212087552,
+          3.733789289,
+          3.155153577,
+          3.233420508,
+          3.193649212,
+          3.09698526
+        ],
+        "cpu": [
+          2.92138,
+          3.461218,
+          2.866485,
+          2.945508,
+          2.911181,
+          2.805612
+        ],
+        "pss_sum_mib": [
+          4.408203125
+        ],
+        "rss_sum_mib": [
+          5.38671875
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.5315818915000037,
+        "api_cpu_seconds": 0.5429281499999812,
+        "oracle_seconds": 1.3698278590008452,
+        "open_seconds": 0.0499925545,
+        "write_seconds": 1.2204032009999999,
+        "completion": 3.202868382,
+        "cpu": 2.9162805,
+        "pss_sum_mib": 4.408203125,
+        "rss_sum_mib": 5.38671875,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.5175708980000001,
+          0.639551663999998
+        ],
+        "api_cpu_seconds": [
+          0.52896391000005,
+          0.6548693489999515
+        ],
+        "oracle_seconds": [
+          1.3409805020006544,
+          1.695058949000879
+        ],
+        "open_seconds": [
+          0.043801196,
+          0.076253047
+        ],
+        "write_seconds": [
+          1.167035843,
+          1.288652415
+        ],
+        "completion": [
+          3.09698526,
+          3.733789289
+        ],
+        "cpu": [
+          2.805612,
+          3.461218
+        ],
+        "pss_sum_mib": [
+          4.408203125,
+          4.408203125
+        ],
+        "rss_sum_mib": [
+          5.38671875,
+          5.38671875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--crc-only": {
+      "profile": {
+        "name": "payload-g1048576--crc-only",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "crc-only",
+        "read_validation": "crc-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.32141356700000034,
+          0.39198904800000006,
+          0.3350151130000001,
+          0.32867047200000005,
+          0.29404651100000134,
+          0.34935970000000016
+        ],
+        "api_cpu_seconds": [
+          0.323439889000007,
+          0.39499400899999015,
+          0.3367362590000187,
+          0.330880507999993,
+          0.29508160299999564,
+          0.3514844539999922
+        ],
+        "oracle_seconds": [
+          1.3726882300000005,
+          1.595347422000003,
+          1.4679224399999968,
+          1.42808379,
+          1.294328581000005,
+          1.4418006099999998
+        ],
+        "open_seconds": [
+          0.003098019,
+          0.004313371,
+          0.003675948,
+          0.003493194,
+          0.0029774,
+          0.002912267
+        ],
+        "write_seconds": [
+          1.502329439,
+          1.7040739679999999,
+          1.7991368840000002,
+          1.6404171939999999,
+          1.5222809499999999,
+          1.577187498
+        ],
+        "completion": [
+          3.205589615,
+          3.710853652,
+          3.613747776,
+          3.407814159,
+          3.11927721,
+          3.377763519
+        ],
+        "cpu": [
+          2.903458,
+          3.401265,
+          3.301866,
+          3.110631,
+          2.805934,
+          3.067955
+        ],
+        "pss_sum_mib": [
+          6.5029296875
+        ],
+        "rss_sum_mib": [
+          7.4765625
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.33184279250000004,
+        "api_cpu_seconds": 0.33380838350000586,
+        "oracle_seconds": 1.4349422,
+        "open_seconds": 0.0032956065,
+        "write_seconds": 1.608802346,
+        "completion": 3.392788839,
+        "cpu": 3.089293,
+        "pss_sum_mib": 6.5029296875,
+        "rss_sum_mib": 7.4765625,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.29404651100000134,
+          0.39198904800000006
+        ],
+        "api_cpu_seconds": [
+          0.29508160299999564,
+          0.39499400899999015
+        ],
+        "oracle_seconds": [
+          1.294328581000005,
+          1.595347422000003
+        ],
+        "open_seconds": [
+          0.002912267,
+          0.004313371
+        ],
+        "write_seconds": [
+          1.502329439,
+          1.7991368840000002
+        ],
+        "completion": [
+          3.11927721,
+          3.710853652
+        ],
+        "cpu": [
+          2.805934,
+          3.401265
+        ],
+        "pss_sum_mib": [
+          6.5029296875,
+          6.5029296875
+        ],
+        "rss_sum_mib": [
+          7.4765625,
+          7.4765625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--structure-only": {
+      "profile": {
+        "name": "payload-g65536--structure-only",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "structure-only",
+        "read_validation": "structure-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.4849848610000041,
+          0.9788814660000051,
+          0.49374682900000205,
+          0.5503592149999955,
+          0.46512615899999743,
+          0.503620396999998
+        ],
+        "api_cpu_seconds": [
+          0.49683100100002753,
+          0.9988163399999768,
+          0.5063549129999737,
+          0.5657788190000107,
+          0.47665208400000203,
+          0.5167679920000163
+        ],
+        "oracle_seconds": [
+          1.2769503970000813,
+          1.4148792150001144,
+          1.2689057940000332,
+          1.4414641410001108,
+          1.2211530900000545,
+          1.3063673480001383
+        ],
+        "open_seconds": [
+          0.05423024,
+          0.057503157,
+          0.047248483,
+          0.060807657,
+          0.049425404,
+          0.055104058
+        ],
+        "write_seconds": [
+          1.200452064,
+          1.341025626,
+          1.283658248,
+          1.216803778,
+          1.160380784,
+          1.280053791
+        ],
+        "completion": [
+          3.04467207,
+          3.836444968,
+          3.122485777,
+          3.303166493,
+          2.921168032,
+          3.172188721
+        ],
+        "cpu": [
+          2.756988,
+          3.558721,
+          2.787105,
+          3.017032,
+          2.636501,
+          2.881168
+        ],
+        "pss_sum_mib": [
+          4.474609375
+        ],
+        "rss_sum_mib": [
+          5.453125
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.4986836130000001,
+        "api_cpu_seconds": 0.511561452499995,
+        "oracle_seconds": 1.29165887250011,
+        "open_seconds": 0.054667149,
+        "write_seconds": 1.2484287845000002,
+        "completion": 3.147337249,
+        "cpu": 2.8341365,
+        "pss_sum_mib": 4.474609375,
+        "rss_sum_mib": 5.453125,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.46512615899999743,
+          0.9788814660000051
+        ],
+        "api_cpu_seconds": [
+          0.47665208400000203,
+          0.9988163399999768
+        ],
+        "oracle_seconds": [
+          1.2211530900000545,
+          1.4414641410001108
+        ],
+        "open_seconds": [
+          0.047248483,
+          0.060807657
+        ],
+        "write_seconds": [
+          1.160380784,
+          1.341025626
+        ],
+        "completion": [
+          2.921168032,
+          3.836444968
+        ],
+        "cpu": [
+          2.636501,
+          3.558721
+        ],
+        "pss_sum_mib": [
+          4.474609375,
+          4.474609375
+        ],
+        "rss_sum_mib": [
+          5.453125,
+          5.453125
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--structure-only": {
+      "profile": {
+        "name": "payload-g1048576--structure-only",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "structure-only",
+        "read_validation": "structure-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.2567131039999997,
+          0.2699547460000006,
+          0.24057727199999968,
+          0.2658928850000002,
+          0.23987977399999963,
+          0.25340451699999966
+        ],
+        "api_cpu_seconds": [
+          0.25824168499998956,
+          0.2721625489999959,
+          0.24238206099999693,
+          0.26808755400000406,
+          0.2416229470000153,
+          0.25508075500002003
+        ],
+        "oracle_seconds": [
+          1.3227936699999976,
+          1.3651435159999978,
+          1.2618082989999984,
+          1.3452992459999986,
+          1.234558781999997,
+          1.2939994089999975
+        ],
+        "open_seconds": [
+          0.002520033,
+          0.003023436,
+          0.002575053,
+          0.002959496,
+          0.002811312,
+          0.002652313
+        ],
+        "write_seconds": [
+          1.669956842,
+          1.617659929,
+          1.588744978,
+          1.5783866149999999,
+          1.48748711,
+          1.584963699
+        ],
+        "completion": [
+          3.259406401,
+          3.262386752,
+          3.100482827,
+          3.198581955,
+          2.970032365,
+          3.140504937
+        ],
+        "cpu": [
+          2.947954,
+          2.960047,
+          2.792821,
+          2.89418,
+          2.66523,
+          2.830153
+        ],
+        "pss_sum_mib": [
+          6.6318359375
+        ],
+        "rss_sum_mib": [
+          7.60546875
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.2550588104999997,
+        "api_cpu_seconds": 0.2566612200000048,
+        "oracle_seconds": 1.3083965394999977,
+        "open_seconds": 0.0027318125,
+        "write_seconds": 1.5868543385,
+        "completion": 3.169543446,
+        "cpu": 2.8621665,
+        "pss_sum_mib": 6.6318359375,
+        "rss_sum_mib": 7.60546875,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.23987977399999963,
+          0.2699547460000006
+        ],
+        "api_cpu_seconds": [
+          0.2416229470000153,
+          0.2721625489999959
+        ],
+        "oracle_seconds": [
+          1.234558781999997,
+          1.3651435159999978
+        ],
+        "open_seconds": [
+          0.002520033,
+          0.003023436
+        ],
+        "write_seconds": [
+          1.48748711,
+          1.669956842
+        ],
+        "completion": [
+          2.970032365,
+          3.262386752
+        ],
+        "cpu": [
+          2.66523,
+          2.960047
+        ],
+        "pss_sum_mib": [
+          6.6318359375,
+          6.6318359375
+        ],
+        "rss_sum_mib": [
+          7.60546875,
+          7.60546875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--trusted": {
+      "profile": {
+        "name": "payload-g65536--trusted",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.44860907100000025,
+          0.5039498039999932,
+          0.451770698000001,
+          0.4929912759999973,
+          0.43632112800000133,
+          0.46465422699999837
+        ],
+        "api_cpu_seconds": [
+          0.46197697799999526,
+          0.5158509600000103,
+          0.4653543749999405,
+          0.5066585849999896,
+          0.4475745940000101,
+          0.4799841279999746
+        ],
+        "oracle_seconds": [
+          1.2605131310001119,
+          1.352327108000125,
+          1.2557412780001647,
+          1.3546377690000777,
+          1.196954686000104,
+          1.2762106830001083
+        ],
+        "open_seconds": [
+          0.049935489,
+          0.047043043,
+          0.045203984,
+          0.054058679,
+          0.047470075,
+          0.045390973
+        ],
+        "write_seconds": [
+          1.1855764739999999,
+          1.239423007,
+          1.252374633,
+          1.261277586,
+          1.1417230250000001,
+          1.214192013
+        ],
+        "completion": [
+          2.971382624,
+          3.173175069,
+          3.032384576,
+          3.191613127,
+          2.849696471,
+          3.030270297
+        ],
+        "cpu": [
+          2.683555,
+          2.885081,
+          2.744391,
+          2.907232,
+          2.560153,
+          2.744671
+        ],
+        "pss_sum_mib": [
+          4.412109375
+        ],
+        "rss_sum_mib": [
+          5.390625
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.4582124624999997,
+        "api_cpu_seconds": 0.47266925149995753,
+        "oracle_seconds": 1.2683619070001102,
+        "open_seconds": 0.047256559000000004,
+        "write_seconds": 1.22680751,
+        "completion": 3.0313274365,
+        "cpu": 2.744531,
+        "pss_sum_mib": 4.412109375,
+        "rss_sum_mib": 5.390625,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.43632112800000133,
+          0.5039498039999932
+        ],
+        "api_cpu_seconds": [
+          0.4475745940000101,
+          0.5158509600000103
+        ],
+        "oracle_seconds": [
+          1.196954686000104,
+          1.3546377690000777
+        ],
+        "open_seconds": [
+          0.045203984,
+          0.054058679
+        ],
+        "write_seconds": [
+          1.1417230250000001,
+          1.261277586
+        ],
+        "completion": [
+          2.849696471,
+          3.191613127
+        ],
+        "cpu": [
+          2.560153,
+          2.907232
+        ],
+        "pss_sum_mib": [
+          4.412109375,
+          4.412109375
+        ],
+        "rss_sum_mib": [
+          5.390625,
+          5.390625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--trusted": {
+      "profile": {
+        "name": "payload-g1048576--trusted",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.26663160100000016,
+          0.2347388549999996,
+          0.2514609720000004,
+          0.26981905200000017,
+          0.24116167499999963,
+          0.23127603700000007
+        ],
+        "api_cpu_seconds": [
+          0.26832032299999553,
+          0.23632617000001144,
+          0.2532596140000076,
+          0.27186939100000607,
+          0.24288325300000846,
+          0.23244596099998738
+        ],
+        "oracle_seconds": [
+          1.3577086509999996,
+          1.217604644999996,
+          1.2892246929999986,
+          1.347251471999995,
+          1.2577259479999983,
+          1.2079570219999975
+        ],
+        "open_seconds": [
+          0.002471652,
+          0.002587685,
+          0.002515949,
+          0.00245273,
+          0.002921579,
+          0.002883172
+        ],
+        "write_seconds": [
+          1.623526005,
+          1.477213742,
+          1.646401403,
+          1.545395099,
+          1.604372254,
+          1.512592802
+        ],
+        "completion": [
+          3.255826411,
+          2.937197673,
+          3.195020833,
+          3.174159042,
+          3.111845073,
+          2.962146721
+        ],
+        "cpu": [
+          2.9567,
+          2.628451,
+          2.888428,
+          2.872737,
+          2.803638,
+          2.654255
+        ],
+        "pss_sum_mib": [
+          6.5654296875
+        ],
+        "rss_sum_mib": [
+          7.5390625
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.2463113235,
+        "api_cpu_seconds": 0.24807143350000804,
+        "oracle_seconds": 1.2734753204999985,
+        "open_seconds": 0.002551817,
+        "write_seconds": 1.5748836765,
+        "completion": 3.1430020575,
+        "cpu": 2.8381875,
+        "pss_sum_mib": 6.5654296875,
+        "rss_sum_mib": 7.5390625,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.23127603700000007,
+          0.26981905200000017
+        ],
+        "api_cpu_seconds": [
+          0.23244596099998738,
+          0.27186939100000607
+        ],
+        "oracle_seconds": [
+          1.2079570219999975,
+          1.3577086509999996
+        ],
+        "open_seconds": [
+          0.00245273,
+          0.002921579
+        ],
+        "write_seconds": [
+          1.477213742,
+          1.646401403
+        ],
+        "completion": [
+          2.937197673,
+          3.255826411
+        ],
+        "cpu": [
+          2.628451,
+          2.9567
+        ],
+        "pss_sum_mib": [
+          6.5654296875,
+          6.5654296875
+        ],
+        "rss_sum_mib": [
+          7.5390625,
+          7.5390625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g65536--before-b": {
+      "profile": {
+        "name": "payload-g65536--before-b",
+        "workload": "payload-g65536",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 65536,
+        "passes": 3,
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.580569606000001,
+          0.5347055480000006,
+          0.558381294999998,
+          0.5748419779999994,
+          0.5442147790000024,
+          0.5241436480000058
+        ],
+        "api_cpu_seconds": [
+          0.594235127999993,
+          0.545785639999955,
+          0.5697909959999848,
+          0.5874282049999779,
+          0.5554102759999966,
+          0.5353105179999988
+        ],
+        "oracle_seconds": [
+          1.310831978000039,
+          1.205169668000072,
+          1.2309111570000688,
+          1.2656526420000183,
+          1.2380789160000336,
+          1.1830507350000234
+        ],
+        "open_seconds": [
+          0.045227657,
+          0.049032464,
+          0.046995525,
+          0.053332492,
+          0.047940486,
+          0.056263736
+        ],
+        "write_seconds": [
+          1.21820344,
+          1.148808004,
+          1.179808552,
+          1.350477999,
+          1.147334284,
+          1.237031079
+        ],
+        "completion": [
+          3.185907669,
+          2.964539978,
+          3.041987592,
+          3.272447745,
+          3.003729189,
+          3.027023678
+        ],
+        "cpu": [
+          2.896793,
+          2.675632,
+          2.75926,
+          2.991032,
+          2.712623,
+          2.749397
+        ],
+        "pss_sum_mib": [
+          4.412109375
+        ],
+        "rss_sum_mib": [
+          5.390625
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.5512980370000002,
+        "api_cpu_seconds": 0.5626006359999907,
+        "oracle_seconds": 1.2344950365000513,
+        "open_seconds": 0.048486475,
+        "write_seconds": 1.199005996,
+        "completion": 3.034505635,
+        "cpu": 2.7543284999999997,
+        "pss_sum_mib": 4.412109375,
+        "rss_sum_mib": 5.390625,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.5241436480000058,
+          0.580569606000001
+        ],
+        "api_cpu_seconds": [
+          0.5353105179999988,
+          0.594235127999993
+        ],
+        "oracle_seconds": [
+          1.1830507350000234,
+          1.310831978000039
+        ],
+        "open_seconds": [
+          0.045227657,
+          0.056263736
+        ],
+        "write_seconds": [
+          1.147334284,
+          1.350477999
+        ],
+        "completion": [
+          2.964539978,
+          3.272447745
+        ],
+        "cpu": [
+          2.675632,
+          2.991032
+        ],
+        "pss_sum_mib": [
+          4.412109375,
+          4.412109375
+        ],
+        "rss_sum_mib": [
+          5.390625,
+          5.390625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "payload-g1048576--before-b": {
+      "profile": {
+        "name": "payload-g1048576--before-b",
+        "workload": "payload-g1048576",
+        "kind": "payload",
+        "total": 1073741824,
+        "group": 1048576,
+        "passes": 3,
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/payload"
+      },
+      "timing_observations": 6,
+      "resource_probes": 1,
+      "values": {
+        "api_wall_seconds": [
+          0.3204806360000007,
+          0.3157211149999994,
+          0.31448465800000003,
+          0.4075902010000007,
+          0.3263142370000002,
+          0.3321649360000008
+        ],
+        "api_cpu_seconds": [
+          0.3222219409999936,
+          0.31743572300000555,
+          0.3162459129999895,
+          0.41249335499999473,
+          0.32985116199998865,
+          0.3340278239999952
+        ],
+        "oracle_seconds": [
+          1.2460626340000032,
+          1.2320243379999958,
+          1.269320928999999,
+          1.5743613040000008,
+          1.267560496999996,
+          1.236764006999996
+        ],
+        "open_seconds": [
+          0.00502871,
+          0.002587251,
+          0.003177094,
+          0.004143477,
+          0.003098189,
+          0.003330859
+        ],
+        "write_seconds": [
+          1.7013772710000001,
+          1.51105351,
+          1.5519826829999999,
+          1.972602381,
+          1.6255143840000001,
+          1.5243270930000001
+        ],
+        "completion": [
+          3.27935054,
+          3.066689896,
+          3.144395364,
+          3.968516975,
+          3.229965324,
+          3.10221915
+        ],
+        "cpu": [
+          2.976851,
+          2.73909,
+          2.838657,
+          3.650228,
+          2.918506,
+          2.801013
+        ],
+        "pss_sum_mib": [
+          6.6279296875
+        ],
+        "rss_sum_mib": [
+          7.6015625
+        ],
+        "temporary_allocated_mib": [
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0
+        ]
+      },
+      "medians": {
+        "api_wall_seconds": 0.3233974365000004,
+        "api_cpu_seconds": 0.3260365514999911,
+        "oracle_seconds": 1.2568115654999996,
+        "open_seconds": 0.0032539765,
+        "write_seconds": 1.5887485335,
+        "completion": 3.187180344,
+        "cpu": 2.8785815,
+        "pss_sum_mib": 6.6279296875,
+        "rss_sum_mib": 7.6015625,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 0.0
+      },
+      "ranges": {
+        "api_wall_seconds": [
+          0.31448465800000003,
+          0.4075902010000007
+        ],
+        "api_cpu_seconds": [
+          0.3162459129999895,
+          0.41249335499999473
+        ],
+        "oracle_seconds": [
+          1.2320243379999958,
+          1.5743613040000008
+        ],
+        "open_seconds": [
+          0.002587251,
+          0.00502871
+        ],
+        "write_seconds": [
+          1.51105351,
+          1.972602381
+        ],
+        "completion": [
+          3.066689896,
+          3.968516975
+        ],
+        "cpu": [
+          2.73909,
+          3.650228
+        ],
+        "pss_sum_mib": [
+          6.6279296875,
+          6.6279296875
+        ],
+        "rss_sum_mib": [
+          7.6015625,
+          7.6015625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "writer-only--before-a": {
+      "profile": {
+        "name": "writer-only--before-a",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 0,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "writer-only",
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/writer"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "initialization_seconds": [
+          0.006260863,
+          0.0050688,
+          0.005069097,
+          0.00442255,
+          0.006518634,
+          0.004187395
+        ],
+        "writer_seconds": [
+          1.369335572,
+          1.247655579,
+          1.256588098,
+          1.356527542,
+          1.302275179,
+          1.317384594
+        ],
+        "finalize_seconds": [
+          5.4172e-05,
+          4.4487e-05,
+          4.9985e-05,
+          5.0516e-05,
+          6.5109e-05,
+          4.6e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.764263898,
+          0.642907038,
+          0.663148336,
+          0.733230061,
+          0.70221479,
+          0.704331431
+        ],
+        "producer_thread_cpu_seconds": [
+          0.176911085,
+          0.144610293,
+          0.15994413899999999,
+          0.158794241,
+          0.166524962,
+          0.148271123
+        ],
+        "readback_seconds": [
+          0.993984445,
+          0.963799841,
+          0.98521578,
+          0.971590703,
+          0.977360527,
+          0.928943826
+        ],
+        "readback_cpu_seconds": [
+          0.9938506589999999,
+          0.9635128709999999,
+          0.98503122,
+          0.971507479,
+          0.9758336719999999,
+          0.927734745
+        ],
+        "completion": [
+          2.372054762,
+          2.219085216,
+          2.249507043,
+          2.334859151,
+          2.28867256,
+          2.252923056
+        ],
+        "cpu": [
+          1.937721,
+          1.753878,
+          1.811074,
+          1.867315,
+          1.847316,
+          1.782999
+        ]
+      },
+      "medians": {
+        "initialization_seconds": 0.0050689485,
+        "writer_seconds": 1.3098298865,
+        "finalize_seconds": 5.02505e-05,
+        "writer_thread_cpu_seconds": 0.7032731105,
+        "producer_thread_cpu_seconds": 0.15936919,
+        "readback_seconds": 0.974475615,
+        "readback_cpu_seconds": 0.9736705754999999,
+        "completion": 2.270797808,
+        "cpu": 1.829195
+      },
+      "ranges": {
+        "initialization_seconds": [
+          0.004187395,
+          0.006518634
+        ],
+        "writer_seconds": [
+          1.247655579,
+          1.369335572
+        ],
+        "finalize_seconds": [
+          4.4487e-05,
+          6.5109e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.642907038,
+          0.764263898
+        ],
+        "producer_thread_cpu_seconds": [
+          0.144610293,
+          0.176911085
+        ],
+        "readback_seconds": [
+          0.928943826,
+          0.993984445
+        ],
+        "readback_cpu_seconds": [
+          0.927734745,
+          0.9938506589999999
+        ],
+        "completion": [
+          2.219085216,
+          2.372054762
+        ],
+        "cpu": [
+          1.753878,
+          1.937721
+        ]
+      }
+    },
+    "writer-only--after-default": {
+      "profile": {
+        "name": "writer-only--after-default",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 0,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "writer-only",
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/writer"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "initialization_seconds": [
+          0.006524843,
+          0.004093566,
+          0.004798994,
+          0.003827249,
+          0.004306104,
+          0.004475319
+        ],
+        "writer_seconds": [
+          1.385087569,
+          1.266533029,
+          1.285212948,
+          1.283267995,
+          1.318376218,
+          1.264801634
+        ],
+        "finalize_seconds": [
+          4.8664e-05,
+          4.9475e-05,
+          0.000149276,
+          4.685e-05,
+          4.3706e-05,
+          5.29e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.7627520600000001,
+          0.663567398,
+          0.660460403,
+          0.690007438,
+          0.711931002,
+          0.6383736699999999
+        ],
+        "producer_thread_cpu_seconds": [
+          0.16639462800000002,
+          0.189972379,
+          0.199387978,
+          0.159550159,
+          0.16278921600000001,
+          0.156846467
+        ],
+        "readback_seconds": [
+          1.285582139,
+          1.337381622,
+          1.350500971,
+          1.223531893,
+          1.248706153,
+          1.203019671
+        ],
+        "readback_cpu_seconds": [
+          1.284449514,
+          1.337057502,
+          1.3501354669999999,
+          1.223424622,
+          1.248085485,
+          1.202852093
+        ],
+        "completion": [
+          2.680392562,
+          2.610969277,
+          2.644104063,
+          2.512970272,
+          2.575472859,
+          2.4749513
+        ],
+        "cpu": [
+          2.217282,
+          2.193758,
+          2.213708,
+          2.075634,
+          2.127113,
+          2.00095
+        ]
+      },
+      "medians": {
+        "initialization_seconds": 0.0043907115,
+        "writer_seconds": 1.2842404715,
+        "finalize_seconds": 4.90695e-05,
+        "writer_thread_cpu_seconds": 0.676787418,
+        "producer_thread_cpu_seconds": 0.164591922,
+        "readback_seconds": 1.2671441460000001,
+        "readback_cpu_seconds": 1.2662674995,
+        "completion": 2.593221068,
+        "cpu": 2.1604355
+      },
+      "ranges": {
+        "initialization_seconds": [
+          0.003827249,
+          0.006524843
+        ],
+        "writer_seconds": [
+          1.264801634,
+          1.385087569
+        ],
+        "finalize_seconds": [
+          4.3706e-05,
+          0.000149276
+        ],
+        "writer_thread_cpu_seconds": [
+          0.6383736699999999,
+          0.7627520600000001
+        ],
+        "producer_thread_cpu_seconds": [
+          0.156846467,
+          0.199387978
+        ],
+        "readback_seconds": [
+          1.203019671,
+          1.350500971
+        ],
+        "readback_cpu_seconds": [
+          1.202852093,
+          1.3501354669999999
+        ],
+        "completion": [
+          2.4749513,
+          2.680392562
+        ],
+        "cpu": [
+          2.00095,
+          2.217282
+        ]
+      }
+    },
+    "writer-only--full": {
+      "profile": {
+        "name": "writer-only--full",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 0,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "writer-only",
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/writer"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "initialization_seconds": [
+          0.00358625,
+          0.003535934,
+          0.004286508,
+          0.004344947,
+          0.005085424,
+          0.004848108
+        ],
+        "writer_seconds": [
+          1.353086598,
+          1.239976216,
+          1.256414904,
+          1.340244443,
+          1.301932448,
+          1.233530191
+        ],
+        "finalize_seconds": [
+          4.6981e-05,
+          4.5459e-05,
+          6.8884e-05,
+          5.3781e-05,
+          5.0897e-05,
+          7.5394e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.7317973369999999,
+          0.658575323,
+          0.6711164780000001,
+          0.713915718,
+          0.660883096,
+          0.615529468
+        ],
+        "producer_thread_cpu_seconds": [
+          0.167600138,
+          0.19728416699999998,
+          0.16635990099999998,
+          0.18543776899999997,
+          0.153067689,
+          0.148146211
+        ],
+        "readback_seconds": [
+          1.226085337,
+          1.233489593,
+          1.185343553,
+          1.191932415,
+          1.270654684,
+          1.184803238
+        ],
+        "readback_cpu_seconds": [
+          1.2259784260000002,
+          1.232828506,
+          1.1852662919999999,
+          1.1917458870000002,
+          1.2704564889999999,
+          1.184683759
+        ],
+        "completion": [
+          2.585597306,
+          2.479765209,
+          2.448367182,
+          2.539322773,
+          2.580587861,
+          2.425693737
+        ],
+        "cpu": [
+          2.128699,
+          2.091699,
+          2.025281,
+          2.094472,
+          2.087436,
+          1.951114
+        ]
+      },
+      "medians": {
+        "initialization_seconds": 0.0043157275,
+        "writer_seconds": 1.279173676,
+        "finalize_seconds": 5.2339e-05,
+        "writer_thread_cpu_seconds": 0.6659997870000001,
+        "producer_thread_cpu_seconds": 0.1669800195,
+        "readback_seconds": 1.209008876,
+        "readback_cpu_seconds": 1.2088621565000002,
+        "completion": 2.509543991,
+        "cpu": 2.0895675000000002
+      },
+      "ranges": {
+        "initialization_seconds": [
+          0.003535934,
+          0.005085424
+        ],
+        "writer_seconds": [
+          1.233530191,
+          1.353086598
+        ],
+        "finalize_seconds": [
+          4.5459e-05,
+          7.5394e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.615529468,
+          0.7317973369999999
+        ],
+        "producer_thread_cpu_seconds": [
+          0.148146211,
+          0.19728416699999998
+        ],
+        "readback_seconds": [
+          1.184803238,
+          1.270654684
+        ],
+        "readback_cpu_seconds": [
+          1.184683759,
+          1.2704564889999999
+        ],
+        "completion": [
+          2.425693737,
+          2.585597306
+        ],
+        "cpu": [
+          1.951114,
+          2.128699
+        ]
+      }
+    },
+    "writer-only--trusted": {
+      "profile": {
+        "name": "writer-only--trusted",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 0,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "writer-only",
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/writer"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "initialization_seconds": [
+          0.005212797,
+          0.004423014,
+          0.003887855,
+          0.006771355,
+          0.005423024,
+          0.004111238
+        ],
+        "writer_seconds": [
+          1.377149782,
+          1.244909286,
+          1.27246604,
+          1.424840641,
+          1.3855849359999999,
+          1.342834253
+        ],
+        "finalize_seconds": [
+          0.000111839,
+          5.5124e-05,
+          4.8453e-05,
+          6.6931e-05,
+          4.4547e-05,
+          5.0897e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.756339523,
+          0.658784713,
+          0.671114562,
+          0.793970371,
+          0.7622428219999999,
+          0.7009654409999999
+        ],
+        "producer_thread_cpu_seconds": [
+          0.215997473,
+          0.161736677,
+          0.157580634,
+          0.24248758599999998,
+          0.18439694100000004,
+          0.16772677
+        ],
+        "readback_seconds": [
+          1.212241718,
+          1.148149739,
+          1.175194494,
+          1.203000552,
+          1.128822541,
+          1.177188134
+        ],
+        "readback_cpu_seconds": [
+          1.211160428,
+          1.1469226780000001,
+          1.175051094,
+          1.202463484,
+          1.128283305,
+          1.1770811179999998
+        ],
+        "completion": [
+          2.597845329,
+          2.40003031,
+          2.45384784,
+          2.637867466,
+          2.522629426,
+          2.526686442
+        ],
+        "cpu": [
+          2.186807,
+          1.970132,
+          2.006465,
+          2.243344,
+          2.078022,
+          2.048497
+        ]
+      },
+      "medians": {
+        "initialization_seconds": 0.0048179055000000005,
+        "writer_seconds": 1.3599920175,
+        "finalize_seconds": 5.3010500000000003e-05,
+        "writer_thread_cpu_seconds": 0.728652482,
+        "producer_thread_cpu_seconds": 0.17606185550000003,
+        "readback_seconds": 1.176191314,
+        "readback_cpu_seconds": 1.176066106,
+        "completion": 2.524657934,
+        "cpu": 2.0632595
+      },
+      "ranges": {
+        "initialization_seconds": [
+          0.003887855,
+          0.006771355
+        ],
+        "writer_seconds": [
+          1.244909286,
+          1.424840641
+        ],
+        "finalize_seconds": [
+          4.4547e-05,
+          0.000111839
+        ],
+        "writer_thread_cpu_seconds": [
+          0.658784713,
+          0.793970371
+        ],
+        "producer_thread_cpu_seconds": [
+          0.157580634,
+          0.24248758599999998
+        ],
+        "readback_seconds": [
+          1.128822541,
+          1.212241718
+        ],
+        "readback_cpu_seconds": [
+          1.128283305,
+          1.211160428
+        ],
+        "completion": [
+          2.40003031,
+          2.637867466
+        ],
+        "cpu": [
+          1.970132,
+          2.243344
+        ]
+      }
+    },
+    "writer-only--before-b": {
+      "profile": {
+        "name": "writer-only--before-b",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 0,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "writer-only",
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/writer"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "initialization_seconds": [
+          0.004413696,
+          0.004139873,
+          0.003787988,
+          0.009869663,
+          0.004759847,
+          0.004327572
+        ],
+        "writer_seconds": [
+          1.3258704350000001,
+          1.287986072,
+          1.247880106,
+          1.391995161,
+          1.318061113,
+          1.280099677
+        ],
+        "finalize_seconds": [
+          5.1688e-05,
+          4.8464e-05,
+          5.1688e-05,
+          5.2319e-05,
+          7.0868e-05,
+          5.0837e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.706109646,
+          0.674477938,
+          0.656681936,
+          0.769780596,
+          0.714157421,
+          0.6803977529999999
+        ],
+        "producer_thread_cpu_seconds": [
+          0.15475930400000001,
+          0.147934498,
+          0.153534084,
+          0.180211003,
+          0.162135506,
+          0.15302818299999998
+        ],
+        "readback_seconds": [
+          0.988964493,
+          0.926581527,
+          1.006331015,
+          1.138017324,
+          0.936696567,
+          0.981433641
+        ],
+        "readback_cpu_seconds": [
+          0.9884698319999999,
+          0.926478268,
+          1.004835613,
+          1.1343491129999999,
+          0.936408348,
+          0.981338579
+        ],
+        "completion": [
+          2.321822137,
+          2.221707244,
+          2.260565896,
+          2.543730418,
+          2.262383879,
+          2.268535706
+        ],
+        "cpu": [
+          1.852081,
+          1.752094,
+          1.818543,
+          2.088408,
+          1.815781,
+          1.817629
+        ]
+      },
+      "medians": {
+        "initialization_seconds": 0.004370634,
+        "writer_seconds": 1.3030235925,
+        "finalize_seconds": 5.1688e-05,
+        "writer_thread_cpu_seconds": 0.6932536995,
+        "producer_thread_cpu_seconds": 0.154146694,
+        "readback_seconds": 0.9851990669999999,
+        "readback_cpu_seconds": 0.9849042054999999,
+        "completion": 2.2654597925,
+        "cpu": 1.818086
+      },
+      "ranges": {
+        "initialization_seconds": [
+          0.003787988,
+          0.009869663
+        ],
+        "writer_seconds": [
+          1.247880106,
+          1.391995161
+        ],
+        "finalize_seconds": [
+          4.8464e-05,
+          7.0868e-05
+        ],
+        "writer_thread_cpu_seconds": [
+          0.656681936,
+          0.769780596
+        ],
+        "producer_thread_cpu_seconds": [
+          0.147934498,
+          0.180211003
+        ],
+        "readback_seconds": [
+          0.926581527,
+          1.138017324
+        ],
+        "readback_cpu_seconds": [
+          0.926478268,
+          1.1343491129999999
+        ],
+        "completion": [
+          2.221707244,
+          2.543730418
+        ],
+        "cpu": [
+          1.752094,
+          2.088408
+        ]
+      }
+    },
+    "range-repeated--before-a": {
+      "profile": {
+        "name": "range-repeated--before-a",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 2048,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "range-repeated",
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/arrays"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "range_seconds": [
+          0.4638643109999997,
+          0.4310699040000002,
+          0.4115783100000002,
+          0.4794439569999997,
+          0.40659322699999906,
+          0.43670743700000003
+        ],
+        "point_seconds": [
+          0.6643763110000016,
+          0.5341872879999993,
+          0.520249440000001,
+          0.5736184039999993,
+          0.5748866520000016,
+          0.4903969939999995
+        ],
+        "scan_seconds": [
+          0.24556660599999974,
+          0.17205004,
+          0.17586266199999995,
+          0.18553672000000007,
+          0.16590653300000002,
+          0.1522197509999999
+        ],
+        "completion": [
+          2.600202209,
+          2.110927296,
+          2.181366728,
+          2.307188849,
+          2.126623667,
+          2.138216327
+        ],
+        "cpu": [
+          2.085251,
+          1.638836,
+          1.70623,
+          1.834875,
+          1.6589,
+          1.66076
+        ]
+      },
+      "medians": {
+        "range_seconds": 0.43388867050000013,
+        "point_seconds": 0.5539028459999993,
+        "scan_seconds": 0.17395635099999995,
+        "completion": 2.1597915275,
+        "cpu": 1.683495
+      },
+      "ranges": {
+        "range_seconds": [
+          0.40659322699999906,
+          0.4794439569999997
+        ],
+        "point_seconds": [
+          0.4903969939999995,
+          0.6643763110000016
+        ],
+        "scan_seconds": [
+          0.1522197509999999,
+          0.24556660599999974
+        ],
+        "completion": [
+          2.110927296,
+          2.600202209
+        ],
+        "cpu": [
+          1.638836,
+          2.085251
+        ]
+      }
+    },
+    "range-repeated--after-default": {
+      "profile": {
+        "name": "range-repeated--after-default",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 2048,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "range-repeated",
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/arrays"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "range_seconds": [
+          0.44330187700000034,
+          0.411966825,
+          0.42503117199999924,
+          0.4208539739999994,
+          0.4397290650000001,
+          0.4483462440000004
+        ],
+        "point_seconds": [
+          0.5545671509999989,
+          0.5092085640000003,
+          0.554626677,
+          0.633468215000001,
+          0.5421754930000017,
+          0.4876609059999996
+        ],
+        "scan_seconds": [
+          0.17666855600000006,
+          0.16459747900000002,
+          0.16429171900000014,
+          0.25615360299999995,
+          0.16360678099999998,
+          0.14980125299999986
+        ],
+        "completion": [
+          2.319143335,
+          2.205056853,
+          2.182531085,
+          2.425649772,
+          2.138872317,
+          2.045151828
+        ],
+        "cpu": [
+          1.812575,
+          1.697982,
+          1.690236,
+          1.924883,
+          1.660274,
+          1.582161
+        ]
+      },
+      "medians": {
+        "range_seconds": 0.4323801184999997,
+        "point_seconds": 0.5483713220000003,
+        "scan_seconds": 0.16444459900000008,
+        "completion": 2.1937939689999997,
+        "cpu": 1.694109
+      },
+      "ranges": {
+        "range_seconds": [
+          0.411966825,
+          0.4483462440000004
+        ],
+        "point_seconds": [
+          0.4876609059999996,
+          0.633468215000001
+        ],
+        "scan_seconds": [
+          0.14980125299999986,
+          0.25615360299999995
+        ],
+        "completion": [
+          2.045151828,
+          2.425649772
+        ],
+        "cpu": [
+          1.582161,
+          1.924883
+        ]
+      }
+    },
+    "range-repeated--full": {
+      "profile": {
+        "name": "range-repeated--full",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 2048,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "range-repeated",
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/arrays"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "range_seconds": [
+          0.4953890920000003,
+          0.45880900899999966,
+          0.4264323569999987,
+          0.4080348249999997,
+          0.39502054899999933,
+          0.4038342860000008
+        ],
+        "point_seconds": [
+          0.5869437259999992,
+          0.5625068239999997,
+          0.5102511250000002,
+          0.5275538940000001,
+          0.4996907440000003,
+          0.5297986099999991
+        ],
+        "scan_seconds": [
+          0.1757384509999999,
+          0.16864725700000002,
+          0.153723971,
+          0.17705924199999992,
+          0.15804309499999997,
+          0.17238866899999997
+        ],
+        "completion": [
+          2.313585229,
+          2.202737093,
+          2.12020127,
+          2.271921804,
+          2.01979974,
+          2.142600027
+        ],
+        "cpu": [
+          1.829875,
+          1.728947,
+          1.630087,
+          1.760808,
+          1.551754,
+          1.631072
+        ]
+      },
+      "medians": {
+        "range_seconds": 0.41723359099999924,
+        "point_seconds": 0.5286762519999996,
+        "scan_seconds": 0.170517963,
+        "completion": 2.17266856,
+        "cpu": 1.6800095000000002
+      },
+      "ranges": {
+        "range_seconds": [
+          0.39502054899999933,
+          0.4953890920000003
+        ],
+        "point_seconds": [
+          0.4996907440000003,
+          0.5869437259999992
+        ],
+        "scan_seconds": [
+          0.153723971,
+          0.17705924199999992
+        ],
+        "completion": [
+          2.01979974,
+          2.313585229
+        ],
+        "cpu": [
+          1.551754,
+          1.829875
+        ]
+      }
+    },
+    "range-repeated--trusted": {
+      "profile": {
+        "name": "range-repeated--trusted",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 2048,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "range-repeated",
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/arrays"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "range_seconds": [
+          0.3783095090000009,
+          0.3466104490000008,
+          0.4173462569999996,
+          0.3488216500000002,
+          0.3301456059999998,
+          0.3422674090000003
+        ],
+        "point_seconds": [
+          0.4319299369999994,
+          0.4489928779999993,
+          0.4297268499999992,
+          0.4693364189999992,
+          0.4015454980000008,
+          0.4498086569999992
+        ],
+        "scan_seconds": [
+          0.1505860409999999,
+          0.13977558099999995,
+          0.14471406800000003,
+          0.145885545,
+          0.13414144400000005,
+          0.129055077
+        ],
+        "completion": [
+          2.040173382,
+          1.915316084,
+          1.948663938,
+          1.967834552,
+          1.838280349,
+          1.932615518
+        ],
+        "cpu": [
+          1.557483,
+          1.445524,
+          1.477436,
+          1.500955,
+          1.370394,
+          1.425951
+        ]
+      },
+      "medians": {
+        "range_seconds": 0.3477160495000005,
+        "point_seconds": 0.44046140749999935,
+        "scan_seconds": 0.14224482449999998,
+        "completion": 1.9406397279999998,
+        "cpu": 1.46148
+      },
+      "ranges": {
+        "range_seconds": [
+          0.3301456059999998,
+          0.4173462569999996
+        ],
+        "point_seconds": [
+          0.4015454980000008,
+          0.4693364189999992
+        ],
+        "scan_seconds": [
+          0.129055077,
+          0.1505860409999999
+        ],
+        "completion": [
+          1.838280349,
+          2.040173382
+        ],
+        "cpu": [
+          1.370394,
+          1.557483
+        ]
+      }
+    },
+    "range-repeated--before-b": {
+      "profile": {
+        "name": "range-repeated--before-b",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 2048,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "range-repeated",
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/arrays"
+      },
+      "timing_observations": 6,
+      "resource_probes": 0,
+      "values": {
+        "range_seconds": [
+          0.4112303169999998,
+          0.3996885880000006,
+          0.4062072990000003,
+          0.4424667200000002,
+          0.44115461999999933,
+          0.3888724959999997
+        ],
+        "point_seconds": [
+          0.5197998920000001,
+          0.5010633379999989,
+          0.5135913029999996,
+          0.5181514989999997,
+          0.5420428249999995,
+          0.5145687919999998
+        ],
+        "scan_seconds": [
+          0.17112029800000006,
+          0.15538078600000005,
+          0.16763788800000004,
+          0.17223564299999997,
+          0.18277127199999993,
+          0.16081178800000007
+        ],
+        "completion": [
+          2.143553915,
+          2.057767026,
+          2.439675451,
+          2.185212242,
+          2.517728906,
+          2.09790904
+        ],
+        "cpu": [
+          1.615971,
+          1.585873,
+          1.922655,
+          1.709415,
+          2.052645,
+          1.61602
+        ]
+      },
+      "medians": {
+        "range_seconds": 0.40871880800000004,
+        "point_seconds": 0.5163601454999998,
+        "scan_seconds": 0.16937909300000004,
+        "completion": 2.1643830785000002,
+        "cpu": 1.6627174999999998
+      },
+      "ranges": {
+        "range_seconds": [
+          0.3888724959999997,
+          0.4424667200000002
+        ],
+        "point_seconds": [
+          0.5010633379999989,
+          0.5420428249999995
+        ],
+        "scan_seconds": [
+          0.15538078600000005,
+          0.18277127199999993
+        ],
+        "completion": [
+          2.057767026,
+          2.517728906
+        ],
+        "cpu": [
+          1.585873,
+          2.052645
+        ]
+      }
+    },
+    "memory-replication--before-a": {
+      "profile": {
+        "name": "memory-replication--before-a",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "memory-replication",
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/before/mixed"
+      },
+      "timing_observations": 0,
+      "resource_probes": 3,
+      "values": {
+        "pss_sum_mib": [
+          167.5185546875,
+          168.8017578125,
+          166.896484375
+        ],
+        "rss_sum_mib": [
+          217.18359375,
+          218.56640625,
+          216.6640625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.07421875,
+          1101.16796875,
+          1102.265625
+        ]
+      },
+      "medians": {
+        "pss_sum_mib": 167.5185546875,
+        "rss_sum_mib": 217.18359375,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 1101.16796875
+      },
+      "ranges": {
+        "pss_sum_mib": [
+          166.896484375,
+          168.8017578125
+        ],
+        "rss_sum_mib": [
+          216.6640625,
+          218.56640625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.07421875,
+          1102.265625
+        ]
+      }
+    },
+    "memory-replication--after-default": {
+      "profile": {
+        "name": "memory-replication--after-default",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "memory-replication",
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/mixed"
+      },
+      "timing_observations": 0,
+      "resource_probes": 3,
+      "values": {
+        "pss_sum_mib": [
+          173.23046875,
+          176.8486328125,
+          168.8779296875
+        ],
+        "rss_sum_mib": [
+          222.65234375,
+          226.40625,
+          218.47265625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1103.23828125,
+          1101.234375,
+          1102.18359375
+        ]
+      },
+      "medians": {
+        "pss_sum_mib": 173.23046875,
+        "rss_sum_mib": 222.65234375,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 1102.18359375
+      },
+      "ranges": {
+        "pss_sum_mib": [
+          168.8779296875,
+          176.8486328125
+        ],
+        "rss_sum_mib": [
+          218.47265625,
+          226.40625
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.234375,
+          1103.23828125
+        ]
+      }
+    },
+    "memory-replication--full": {
+      "profile": {
+        "name": "memory-replication--full",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "memory-replication",
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/mixed"
+      },
+      "timing_observations": 0,
+      "resource_probes": 3,
+      "values": {
+        "pss_sum_mib": [
+          168.58203125,
+          173.005859375,
+          173.34765625
+        ],
+        "rss_sum_mib": [
+          218.1953125,
+          222.33984375,
+          222.79296875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.16015625,
+          1101.8671875,
+          1103.171875
+        ]
+      },
+      "medians": {
+        "pss_sum_mib": 173.005859375,
+        "rss_sum_mib": 222.33984375,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 1101.8671875
+      },
+      "ranges": {
+        "pss_sum_mib": [
+          168.58203125,
+          173.34765625
+        ],
+        "rss_sum_mib": [
+          218.1953125,
+          222.79296875
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.16015625,
+          1103.171875
+        ]
+      }
+    },
+    "memory-replication--trusted": {
+      "profile": {
+        "name": "memory-replication--trusted",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "memory-replication",
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/mixed"
+      },
+      "timing_observations": 0,
+      "resource_probes": 3,
+      "values": {
+        "pss_sum_mib": [
+          168.2685546875,
+          169.2138671875,
+          189.3447265625
+        ],
+        "rss_sum_mib": [
+          217.6875,
+          218.62109375,
+          238.77734375
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.4375,
+          1101.0234375,
+          1103.81640625
+        ]
+      },
+      "medians": {
+        "pss_sum_mib": 169.2138671875,
+        "rss_sum_mib": 218.62109375,
+        "temporary_allocated_mib": 0.0,
+        "deleted_open_allocated_mib": 0.0,
+        "visible_allocated_mib": 1101.4375
+      },
+      "ranges": {
+        "pss_sum_mib": [
+          168.2685546875,
+          189.3447265625
+        ],
+        "rss_sum_mib": [
+          217.6875,
+          238.77734375
+        ],
+        "temporary_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "deleted_open_allocated_mib": [
+          0.0,
+          0.0
+        ],
+        "visible_allocated_mib": [
+          1101.0234375,
+          1103.81640625
+        ]
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "workload": "payload-g65536",
+      "metric": "api_wall_seconds",
+      "control_variation": 0.02096816359069309,
+      "after_over_before": [
+        1.0019608631952803,
+        1.0234201033442056
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.11192536918691316,
+        0.1023510954384101
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "crc-only": 1.0449289100736727,
+        "structure-only": 1.1138631228694496,
+        "trusted": 1.2122439522255477
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "api_cpu_seconds",
+      "control_variation": 0.022055584498666514,
+      "after_over_before": [
+        1.0002359457715742,
+        1.0227942712457878
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.11483738675290528,
+        0.10473612404518351
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "crc-only": 1.0445008202281851,
+        "structure-only": 1.1085450149314309,
+        "trusted": 1.1997583853833622
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "oracle_seconds",
+      "control_variation": 0.02414652997484168,
+      "after_over_before": [
+        1.1099363367757566,
+        1.1374006148147853
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.13285615748625484,
+        0.10350891597125532
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "crc-only": 0.9979445749468202,
+        "structure-only": 1.0583384743488415,
+        "trusted": 1.0777777801086172
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "open_seconds",
+      "control_variation": 0.08302408756343882,
+      "after_over_before": [
+        0.9078547524081493,
+        0.9900529993157886
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.24037688728932086,
+        0.22761149372067166
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9810782823670273,
+        "structure-only": 0.8971861601928428,
+        "trusted": 1.0378794084435983
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "write_seconds",
+      "control_variation": 0.05284564872993369,
+      "after_over_before": [
+        0.918954204997778,
+        0.9702264512278553
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.19638491208295403,
+        0.16942677157387623
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9777029538453333,
+        "structure-only": 0.9557548090161004,
+        "trusted": 0.9725990465284974
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "completion",
+      "control_variation": 0.05560838452143979,
+      "after_over_before": [
+        1.0026180660823252,
+        1.0616549847006629
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.10599138975814823,
+        0.10146884008010752
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.00082633258203,
+        "structure-only": 1.0184847580342669,
+        "trusted": 1.0574624759775602
+      }
+    },
+    {
+      "workload": "payload-g65536",
+      "metric": "cpu",
+      "control_variation": 0.056941252118975716,
+      "after_over_before": [
+        1.0038683395003754,
+        1.0644812338107092
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.11661889734177486,
+        0.11451066929743507
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9937572877506125,
+        "structure-only": 1.0225601342772304,
+        "trusted": 1.0559454420445606
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "api_wall_seconds",
+      "control_variation": 0.019551847906873143,
+      "after_over_before": [
+        1.013630338272513,
+        1.0338438969042336
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.14691586007998195,
+        0.2878982097311726
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "crc-only": 0.9731956902454061,
+        "structure-only": 1.2661706328313682,
+        "trusted": 1.31113734809679
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "api_cpu_seconds",
+      "control_variation": 0.018744737959624946,
+      "after_over_before": [
+        1.0125398429432215,
+        1.031882204471235
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.14626229667882548,
+        0.29520445347983587
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "crc-only": 0.9729565959208536,
+        "structure-only": 1.265407639299784,
+        "trusted": 1.3092239760044682
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "oracle_seconds",
+      "control_variation": 0.02547186422815495,
+      "after_over_before": [
+        1.110240288822668,
+        1.1392593482622606
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.13791809714134157,
+        0.27238527667734547
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "crc-only": 0.9784206165237876,
+        "structure-only": 1.073051624346644,
+        "trusted": 1.1024768280933497
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "open_seconds",
+      "control_variation": 0.10338811092419764,
+      "after_over_before": [
+        1.076489864455896,
+        0.9756221349478092
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.44080842921361507,
+        0.7503001327760048
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.1276504036510424,
+        "structure-only": 1.3603759408817404,
+        "trusted": 1.4563317040367705
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "write_seconds",
+      "control_variation": 0.00022072189186828073,
+      "after_over_before": [
+        1.0116246072246275,
+        1.0118479442171582
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.11849953811806595,
+        0.2905109658752676
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "crc-only": 0.9935247744846338,
+        "structure-only": 1.0072663566026478,
+        "trusted": 1.014922569743201
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "completion",
+      "control_variation": 0.005629039496849897,
+      "after_over_before": [
+        1.0571882867211808,
+        1.0631729291312422
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.12109924616285686,
+        0.2829545183088641
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "crc-only": 0.9817207899038364,
+        "structure-only": 1.0508678602287251,
+        "trusted": 1.0597420167294944
+      }
+    },
+    {
+      "workload": "payload-g1048576",
+      "metric": "cpu",
+      "control_variation": 0.003978092636583996,
+      "after_over_before": [
+        1.0655342060777935,
+        1.0697899295191051
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.14021868264131926,
+        0.3165232598069569
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "crc-only": 0.9781082597215609,
+        "structure-only": 1.0557257937300295,
+        "trusted": 1.0646453062033427
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "initialization_seconds",
+      "control_variation": 0.13776318698049506,
+      "after_over_before": [
+        0.8661976936636859,
+        1.0045937271343242
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.45990583648660066,
+        1.3914857661382767
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "trusted": 0.8957683997745493
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "writer_seconds",
+      "control_variation": 0.005196319056505194,
+      "after_over_before": [
+        0.9804635584637807,
+        0.9855849724378647
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.09289755429626173,
+        0.11060049551635429
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 0.9405744000993742
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "finalize_seconds",
+      "control_variation": 0.028606680530541828,
+      "after_over_before": [
+        0.9764977462910817,
+        0.9493402724036528
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.410383976278843,
+        0.4334468348552855
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 0.987332698239028
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "writer_thread_cpu_seconds",
+      "control_variation": 0.014246827939826234,
+      "after_over_before": [
+        0.9623393926135329,
+        0.9762478274376666
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.172560074014091,
+        0.16314180520287294
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 0.9140156706417423
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "producer_thread_cpu_seconds",
+      "control_variation": 0.03276979697267701,
+      "after_over_before": [
+        1.0327712778109748,
+        1.0677616089515354
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.20267902472240712,
+        0.20938824026936323
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "trusted": 0.9484167880986576
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "readback_seconds",
+      "control_variation": 0.01100433077537799,
+      "after_over_before": [
+        1.300334381379056,
+        1.2861808221748958
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.0667442242769718,
+        0.2146122586614265
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "trusted": 1.0279015510566847
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "readback_cpu_seconds",
+      "control_variation": 0.011537403186114847,
+      "after_over_before": [
+        1.3005091571651384,
+        1.2856757971270538
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.06790378148795147,
+        0.21105691684448785
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "trusted": 1.0278862304871152
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "completion",
+      "control_variation": 0.002350722499904756,
+      "after_over_before": [
+        1.1419867761295637,
+        1.1446775955084623
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.06736378970469747,
+        0.14214473153135862
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "trusted": 0.9940134689945684
+      }
+    },
+    {
+      "workload": "writer-only",
+      "metric": "cpu",
+      "control_variation": 0.006073163331410725,
+      "after_over_before": [
+        1.1810853954881795,
+        1.1883021485232272
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.10050486689500025,
+        0.1849824485750398
+      ],
+      "aa_median_status": "exceeds",
+      "full_over_mode": {
+        "trusted": 1.012750698591234
+      }
+    },
+    {
+      "workload": "range-repeated",
+      "metric": "range_seconds",
+      "control_variation": 0.058009955574537364,
+      "after_over_before": [
+        0.9965231818607708,
+        1.0578914158998027
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.1679018950092651,
+        0.1311273740062398
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "trusted": 1.1999261799964704
+      }
+    },
+    {
+      "workload": "range-repeated",
+      "metric": "point_seconds",
+      "control_variation": 0.06777849359524613,
+      "after_over_before": [
+        0.9900135483326276,
+        1.0619938947243954
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.3140971711129326,
+        0.0793622190967497
+      ],
+      "aa_median_status": "unqualified",
+      "full_over_mode": {
+        "trusted": 1.2002782604739335
+      }
+    },
+    {
+      "workload": "range-repeated",
+      "metric": "scan_seconds",
+      "control_variation": 0.02631268116218377,
+      "after_over_before": [
+        0.9453210420584192,
+        0.9708671600927751
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.5366107903700501,
+        0.16171113869407647
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 1.1987639170661004
+      }
+    },
+    {
+      "workload": "range-repeated",
+      "metric": "completion",
+      "control_variation": 0.0021259232391355187,
+      "after_over_before": [
+        1.0157433905388815,
+        1.0135885790238124
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.2265380277541625,
+        0.21251408060294524
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 1.1195630640000998
+      }
+    },
+    {
+      "workload": "range-repeated",
+      "metric": "cpu",
+      "control_variation": 0.012341883997279535,
+      "after_over_before": [
+        1.006304741029822,
+        1.0188796352958336
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "baseline_repeat_spread": [
+        0.26517156273110404,
+        0.2807283859104147
+      ],
+      "aa_median_status": "within",
+      "full_over_mode": {
+        "trusted": 1.1495261652571367
+      }
+    }
+  ],
+  "timing_observations": 144,
+  "resource_probes": 26,
+  "resource_caps": {
+    "cpu": 4,
+    "memory_gib": 16,
+    "disk_gib": 32
+  },
+  "memory_events_unchanged": true,
+  "qualification": "Supplemental cohorts, never pooled with primary. Six balanced timing repeats. Single payload probes and three memory probes are observations, not 5% certification."
+}

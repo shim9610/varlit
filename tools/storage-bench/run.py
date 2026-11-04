@@ -254,6 +254,8 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
     work = output / (stem + ".work")
     config = output / (stem + ".config.json")
     env = dict(os.environ)
+    if "read_validation" in profile:
+        env["VARLIT_BENCH_READ_VALIDATION"] = profile["read_validation"]
     # The mixed binary creates its own fresh output root; its TMPDIR must exist separately.
     tmp = output / (stem + ".tmp")
     tmp.mkdir()
@@ -264,6 +266,9 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
         if gate:
             env.update(VARLIT_BENCH_VISIBILITY_GATE=str(work),
                        VARLIT_BENCH_GATE_READERS=str(profile["config"]["readers"]))
+    elif profile["kind"] == "payload":
+        work.mkdir()
+        command = [profile["binary_override"], str(work), *map(str, [profile[k] for k in ["total", "group", "passes"]])]
     else:
         work.mkdir()
         command = [profile.get("binary_override",str(HERE / "target/release/arrays")), profile["mode"], str(work),
@@ -355,6 +360,9 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
         if profile["kind"] == "mixed":
             assert len(result["readers"]) == profile["config"]["readers"]
             assert all(r["records"] == profile["config"]["records"] and r["verified"] for r in result["readers"])
+        elif profile["kind"] == "payload":
+            assert result["payload_bytes"] == profile["total"] and result["records"] == profile["total"] // profile["group"]
+            assert result["passes"] == profile["passes"]
         else:
             assert result["payload_bytes"] == profile["total"] and result["logical_samples"] == profile["total"] // 128
             if profile.get("warm_scan"):

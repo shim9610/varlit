@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 [workspace]
+[features]
+default = ["read-validation"]
+read-validation = []
 [dependencies]
 varlit = { path = "../../crates/varlit", features = ["integrity", "mmap"] }
 serde = { version = "1", features = ["derive"] }

@@ -584,7 +584,10 @@ impl Reader {
                 } else {
                     Matrix1m::spec()
                 };
-                Self::MatrixOwned(VarlitFile::open_readonly(sp, p)?)
+                Self::MatrixOwned(VarlitFile::open_readonly(
+                    varlit_storage_bench::model::selected_read_spec(sp)?,
+                    p,
+                )?)
             }
             "matrix-mmap" => {
                 let sp = if g == 65536 {
@@ -592,32 +595,50 @@ impl Reader {
                 } else {
                     Matrix1m::spec()
                 };
-                let f = VarlitFile::open_readonly(sp, p)?;
+                let f = VarlitFile::open_readonly(
+                    varlit_storage_bench::model::selected_read_spec(sp)?,
+                    p,
+                )?;
                 // SAFETY: every writer is closed before constructing this read-only mapping;
                 // the backing files remain immutable until all reader threads and mappings end.
                 Self::Matrix(unsafe { f.mmap_matrix()? })
             }
             "native-mmap" => {
-                let f = VarlitFile::open_readonly(spec(false, true), p)?;
+                let f = VarlitFile::open_readonly(
+                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    p,
+                )?;
                 // SAFETY: all writers are closed before opening this mapping;
                 // its private workload files are immutable until every reader exits.
                 Self::NativeMap(unsafe { f.mmap_payloads()? })
             }
             "native-view" | "native-owned" => {
-                let f = VarlitFile::open_readonly(spec(false, true), p)?;
+                let f = VarlitFile::open_readonly(
+                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    p,
+                )?;
                 let mut entries = Vec::new();
                 f.block_entries_into::<Chunk>(&mut entries)?;
                 Self::Native(f, entries, mode == "native-view")
             }
             "stream" => {
-                let f = VarlitStreamReader::open(spec(false, false), p, sopts())?;
+                let f = VarlitStreamReader::open(
+                    varlit_storage_bench::model::selected_read_spec(spec(false, false))?,
+                    p,
+                    sopts(),
+                )?;
                 {
                     let iter = f.blocks::<Chunk>()?;
                     Self::Stream(f, iter)
                 }
             }
             "indexed" => Self::Index(
-                VarlitIndexedReader::open(spec(true, false), p, opts(), plan())?,
+                VarlitIndexedReader::open(
+                    varlit_storage_bench::model::selected_read_spec(spec(true, false))?,
+                    p,
+                    opts(),
+                    plan(),
+                )?,
                 None,
             ),
             "sql-columns" | "sql-chunks" => {

@@ -31,7 +31,7 @@ impl Matrix {
                 MatrixDimensions::from_pairs([("entry", c.records as u64), ("slot", 1)]),
             )?
         } else {
-            VarlitFile::open_readonly(TableMatrix::spec(), p)?
+            VarlitFile::open_readonly(crate::model::selected_read_spec(TableMatrix::spec())?, p)?
         };
         let mut r = Self { f };
         if create {
@@ -86,7 +86,7 @@ impl Matrix {
         if std::env::var_os("VARLIT_BENCH_VISIBILITY_GATE").is_some() {
             self.f.sync()?;
         }
-        crate::before_publish(t.txid);
+        crate::before_publish(h.txns);
         h.txns += 1;
         h.rows += t.rows.len() as u64;
         h.metas += 2;

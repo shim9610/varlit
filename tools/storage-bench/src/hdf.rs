@@ -408,7 +408,7 @@ impl Hdf {
         h.rows += t.rows.len() as u64;
         h.metas += 2;
         self.flush(false);
-        crate::before_publish(t.txid);
+        crate::before_publish(h.txns - 1);
         self.publish(h);
     }
     pub fn refresh(&mut self) -> Head {

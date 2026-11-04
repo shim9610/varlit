@@ -44,3 +44,16 @@ for (const ratio of data.comparisons.filter(row => row.profile.startsWith('group
   assert.equal(ratio.ratio, data.profiles[ratio.sqlite].metrics[ratio.metric] / data.profiles[ratio.profile].metrics[ratio.metric]);
 }
 console.log('Integrated dashboard defaults, controls, refusals, filters and grouped ratios pass');
+
+controls.scope.value = 'validation'; controls.family.value = ''; controls.engine.value = ''; context.render();
+const validation = Object.keys(data.profiles).filter(name => name.startsWith('readcheck-'));
+assert.equal(validation.length, 69);
+assert.deepEqual(new Set(names()), new Set(validation));
+for (const row of controls.rows.children) {
+  const name = row.children[0].textContent;
+  const selected = data.profiles[name];
+  const full = Object.values(data.profiles).find(x => x.presentation === 'validation' && x.profile.workload === selected.profile.workload && x.profile.variant === 'full');
+  assert.equal(row.children[10].textContent, '—', 'Do not invent cross-cohort SQLite ratios');
+  assert.equal(row.children[11].textContent, (full.metrics.write / selected.metrics.write).toFixed(3));
+}
+console.log('Independent read-check scope, separate ratios and 69 measured profiles pass');
