@@ -26,7 +26,7 @@ main ba541cc3082cecdf7f385d06897a58a3889e1294와 PR #18 런타임 1e592397d34f4f
 
 시간·CPU·출력 블록은 중앙값, 최대 상주 메모리(RSS)는 최대값이다. C 부모가 실제 실행 바이너리를 자식으로 만들어 wait4로 측정하므로 Python의 실행 전 메모리 최고값을 포함하지 않는다. 함수 타이머와 전체 프로세스 CPU의 범위는 다르다. Map 디코딩 CPU에는 입력 인코딩 준비가, mmap CPU에는 행렬 생성·초기 쓰기가 포함된다. 배치 write_cpu에는 writer와 reader 전체가 들어간다. 독립 writer의 writer_cpu_seconds만 writer 스레드 단독 CPU다.
 
-cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우기를 뜻하지 않는다. 마킹 벤치는 경계 검증·삭제 표시 작업이며 일반 payload 읽기와 구분한다. 독립 writer는 reader 응답을 기다리지 않는다. 배치 indexed의 reader는 정해진 작업량을 마칠 때 기다리는 별도 조건이다. indexed/matrix의 reader 8개에는 고정 스냅샷 reader 1개가 추가된다. Native 마커 게시와 배치 sync의 내구성 경계도 같지 않으므로 서로 다른 행의 절대 처리량을 그대로 비교하면 안 된다.
+cold/warm은 검증 메타데이터 상태이며 OS 파일 캐시 강제 비우기를 뜻하지 않는다. 마킹 벤치는 경계 검증·삭제 표시 작업이며 일반 payload 읽기와 구분한다. 독립 writer는 reader 응답을 기다리지 않는다. 배치 indexed의 reader는 정해진 작업량을 마칠 때 기다리는 별도 조건이다. indexed/matrix의 reader 8개에는 고정 스냅샷 reader 1개가 추가된다. Native 마커 게시와 배치 sync의 내구성 경계도 같지 않으므로 서로 다른 행의 절대 처리량을 그대로 비교하면 안 된다. 배치 벤치는 후반부에 기존 키를 다시 쓰고 indexed에서는 일부 키를 삭제한다. 고유 키를 계속 추가하는 로깅과는 다른 작업이다.
 
 새 TryClone·try_box·공유 소유자 API는 마스터의 기존 Clone·Box·생성 API와 성공 결과를 비교한다. 범위 스트리밍은 마스터에서 전체 디코딩 후 같은 구간을 전달하는 경로와 비교한다. 결과는 같지만 내부 처리량·실패 의미까지 동일한 API라는 뜻은 아니다.
 
