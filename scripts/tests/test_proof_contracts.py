@@ -17,6 +17,20 @@ class ProofContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.validate('Complete - 0 successfully verified harnesses, 0 failures, 0 total.\n', [])
 
+    def test_parallel_workers_require_the_same_complete_unique_proof_set(self):
+        valid = ('Thread 1: Checking harness b...\n'
+                 'Thread 0: Checking harness a...\n'
+                 'Complete - 2 successfully verified harnesses, 0 failures, 2 total.\n')
+        self.assertEqual(gate.validate(valid, ['a', 'b']), ['b', 'a'])
+        for invalid in [valid.replace('Thread 0: Checking harness a...\n', ''),
+                        valid.replace('harness b...', 'harness a...'),
+                        valid.replace('0 failures', '1 failures'),
+                        valid.split('Complete')[0],
+                        valid + 'Thread 1: Failed Checks: unwinding assertion\n',
+                        valid + 'VERIFICATION:- FAILED\n']:
+            with self.subTest(evidence=invalid), self.assertRaises(ValueError):
+                gate.validate(invalid, ['a', 'b'])
+
     def test_contradictory_or_repeated_evidence_is_not_a_proof(self):
         log = 'Checking harness a...\nComplete - 1 successfully verified harnesses, 0 failures, 1 total.\n'
         for evidence, expected in [

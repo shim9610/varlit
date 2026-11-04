@@ -78,7 +78,7 @@ jobs:
           python3 scripts/check_proof_contracts.py --capture target/verification/source-before.json
           features=()
           if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
-          cargo kani -p varlit-core "${features[@]}" --default-unwind 5 -Z stubbing -Z unstable-options --harness-timeout 300 2>&1 | tee target/verification/kani.log
+          cargo kani -p varlit-core "${features[@]}" --jobs 2 --output-format terse --default-unwind 5 -Z stubbing -Z unstable-options --harness-timeout 300 2>&1 | tee target/verification/kani.log
           python3 scripts/check_proof_contracts.py --source-before target/verification/source-before.json --log target/verification/kani.log --features '${{ matrix.features }}' --output target/verification/contracts.json
           git diff --exit-code -- Cargo.lock
       - name: Qualify scoped scalar memory checks (not whole-owner initialization)

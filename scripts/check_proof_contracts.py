@@ -15,14 +15,16 @@ def validate(log, expected):
     log = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", log)
     if not expected or len(expected) != len(set(expected)):
         raise ValueError("empty or duplicate proof contract manifest")
-    checked = re.findall(r'^Checking harness (\S+)\.\.\.$', log, re.M)
+    # Parallel Kani prefixes each harness with its worker ID. Keep the same
+    # exact names, uniqueness and final-completion requirements in both modes.
+    checked = re.findall(r'^(?:Thread \d+: )?Checking harness (\S+)\.\.\.$', log, re.M)
     if len(checked) != len(set(checked)) or set(checked) != set(expected):
         raise ValueError(f'proof selection mismatch: missing={sorted(set(expected)-set(checked))}, unexpected={sorted(set(checked)-set(expected))}')
     summaries = re.findall(r'^Complete - (\d+) successfully verified harnesses, (\d+) failures, (\d+) total\.$', log, re.M)
     if summaries != [(str(len(expected)), '0', str(len(expected)))]:
         raise ValueError('missing or inconsistent successful completion')
     if ('Status: FAILURE' in log or 'VERIFICATION:- FAILED' in log
-            or re.search(r'^Failed Checks:', log, re.M)):
+            or re.search(r'^(?:Thread \d+: )?Failed Checks:', log, re.M)):
         raise ValueError('failed property in allegedly successful log')
     return checked
 
