@@ -24,7 +24,7 @@
         "crates/varlit-core/src/verification/uniform_prefix.rs",
         "crates/varlit-core/src/native_directory.rs"
       ],
-      "scope": "full-width inductive range/observation transition; truncation up to four rows; four-row u16 membership and exact row mapping",
+      "scope": "full-width inductive range/observation transition; truncation up to four rows; four-row u16 membership",
       "limits": "General count*stride representation induction timed out and is not proved; internal row indices must be representable. No whole-caller refinement."
     },
     {
@@ -187,6 +187,30 @@
       ],
       "scope": "Actual u32 Box construction and boxed TryClone success; complete allocator refusal before callback.",
       "limits": "No arbitrary-T, Arc, partial multi-allocation failure or global OOM claim. Extra validity checks cover both harnesses; extra uninit checks cover refusal only. Successful Box::write is unsupported by uninit instrumentation (raw pointer/union). Success uses normal Kani allocation models; refusal returns null. Heap-free error is forgotten at caller boundary."
+    },
+    {
+      "id": "buffered-private-row",
+      "harnesses": [
+        "spill_rows::buffered_row_proofs::full_width_buffered_rows_match_the_actual_window"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/buffered_row.rs",
+        "crates/varlit-core/src/spill_rows.rs"
+      ],
+      "scope": "full-width indices and arbitrary first row, up to39 backing bytes and13-byte rows",
+      "limits": "No filesystem, allocation or whole-owner initialization model"
+    },
+    {
+      "id": "untrusted-sequence-candidate",
+      "harnesses": [
+        "file::resident_index::uniform_prefix_proofs::full_width_sequence_candidate_matches_wide_subtraction"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/uniform_prefix.rs",
+        "crates/varlit-core/src/native_directory.rs"
+      ],
+      "scope": "full-width u64 sequence subtraction and usize candidate conversion",
+      "limits": "Candidate arithmetic only. Membership requires the actual private offset comparison. No filesystem/allocation model."
     }
   ]
 }

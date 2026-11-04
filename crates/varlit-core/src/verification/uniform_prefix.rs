@@ -1,6 +1,6 @@
 //! Bounded state-machine proof: four observed rows, 16-bit offsets, arbitrary
 //! truncation. This does not prove arbitrary-length sequences or all u64 offsets.
-use super::UniformPrefix;
+use super::{UniformPrefix, sequence_candidate_row};
 
 #[kani::proof]
 #[kani::unwind(5)]
@@ -14,18 +14,10 @@ fn observed_prefix_never_invents_membership() {
         UniformPrefix::observe(&mut proof, row, u64::from(*offset));
     }
     let proof = proof.as_mut().unwrap();
-    if let Some(row) = proof.row_for(wanted) {
-        assert!(row < offsets.len());
-        assert_eq!(u64::from(offsets[row]), wanted);
-    }
     if proof.contains(wanted) {
         assert!(offsets.iter().any(|&offset| u64::from(offset) == wanted));
     }
     proof.truncate(keep);
-    if let Some(row) = proof.row_for(wanted) {
-        assert!(row < keep);
-        assert_eq!(u64::from(offsets[row]), wanted);
-    }
     if proof.contains(wanted) {
         assert!(
             offsets[..keep]
@@ -68,7 +60,6 @@ fn full_width_prefix_initialization_establishes_invariant() {
     assert!(invariant(&p));
     assert!(p.contains(offset));
     assert_eq!(p.count, 1);
-    assert_eq!(p.row_for(offset), Some(row));
 }
 
 #[kani::proof]
@@ -126,4 +117,17 @@ fn full_width_bounded_prefix_truncation_only_removes_rows() {
     assert_eq!(p.start, start);
     assert_eq!(p.step, step);
     assert!(p.last as u128 <= last, "truncation extended the prefix");
+}
+
+// This does not establish membership. Even an arithmetically valid candidate
+// must match an actual private offset before the mark may write anything.
+#[kani::proof]
+fn full_width_sequence_candidate_matches_wide_subtraction() {
+    let sequence: u64 = kani::any();
+    let first: u64 = kani::any();
+    let expected = (sequence as u128)
+        .checked_sub(first as u128)
+        .filter(|&row| row <= usize::MAX as u128)
+        .map(|row| row as usize);
+    assert_eq!(sequence_candidate_row(sequence, first), expected);
 }

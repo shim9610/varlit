@@ -84,6 +84,11 @@ pub(crate) const REQUIRED_EDGES: &[(&str, &str, &str)] = &[
     (
         "file.rs",
         "require_native_record_boundary",
+        "require_uncached_native_boundary",
+    ),
+    (
+        "file.rs",
+        "require_uncached_native_boundary",
         "verify_boundary",
     ),
     (
