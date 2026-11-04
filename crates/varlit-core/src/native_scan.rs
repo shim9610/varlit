@@ -75,7 +75,7 @@ impl ScanBuffer for Vec<RecordIndexEntry> {
 #[derive(Debug)]
 pub(super) struct BufferedScan {
     rows: SpillRows<77>,
-    spec: FormatSpec,
+    budget: usize,
     committed: bool,
     kept: usize,
     marker_seen: bool,
@@ -85,9 +85,12 @@ pub(super) struct BufferedScan {
 }
 impl BufferedScan {
     pub(super) fn new(spec: FormatSpec) -> Self {
+        Self::with_budget(resident_index::slot_budget(spec))
+    }
+    fn with_budget(budget: usize) -> Self {
         Self {
-            rows: SpillRows::new(resident_index::slot_budget(spec)),
-            spec,
+            rows: SpillRows::new(budget),
+            budget,
             committed: false,
             kept: 0,
             marker_seen: false,
@@ -164,7 +167,7 @@ impl RecordDirectory for BufferedScan {
 }
 impl ScanBuffer for BufferedScan {
     fn reset(&mut self) {
-        *self = Self::new(self.spec);
+        *self = Self::with_budget(self.budget);
     }
     fn reserve_entry(&mut self, spec: FormatSpec) -> Result<()> {
         spec.read_limits
