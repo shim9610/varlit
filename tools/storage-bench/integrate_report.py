@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 
-def build_current(original, grouped):
+def build_current(original, grouped, read_validation=None):
     data = copy.deepcopy(original)
     for name, row in data["profiles"].items():
         row["presentation"] = "historical" if name.startswith("objects-") else "adverse" if name.startswith("table-") else "primary"
@@ -41,6 +41,16 @@ def build_current(original, grouped):
              timing_observations=3 * len(grouped["profiles"]), resource_probes=len(grouped["profiles"]),
              refused_attempts=0),
     ]
+    if read_validation is not None:
+        for name, row in read_validation["profiles"].items():
+            assert name not in data["profiles"]
+            data["profiles"][name] = copy.deepcopy(row)
+        data["read_validation_comparisons"] = copy.deepcopy(read_validation["read_validation_comparisons"])
+        data["cohorts"].append(dict(name="Independent read checks (separate cohort)",
+            configurations=len(read_validation["profiles"]),
+            timing_observations=read_validation["timing_observations"],
+            resource_probes=read_validation["resource_probes"], refused_attempts=0,
+            prefix_gates=read_validation["prefix_gates"]))
     active = [r for r in data["comparisons"]
               if data["profiles"][r["profile"]]["presentation"] != "historical"]
     data["timing_observations"] = sum(c["timing_observations"] for c in data["cohorts"])
@@ -56,9 +66,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--original", type=Path, required=True)
     ap.add_argument("--grouped", type=Path, required=True)
+    ap.add_argument("--read-validation", type=Path)
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
-    current = build_current(json.loads(args.original.read_text()), json.loads(args.grouped.read_text()))
+    current = build_current(json.loads(args.original.read_text()), json.loads(args.grouped.read_text()),
+                            json.loads(args.read_validation.read_text()) if args.read_validation else None)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "current-comparison.json").write_text(json.dumps(current, indent=2) + "\n")
     template = Path(__file__).with_name("report.html").read_text()

@@ -14,11 +14,11 @@ def percentile(values, p):
     return sorted(values)[max(0, math.ceil(len(values) * p) - 1)]
 
 
-def telemetry(result):
+def telemetry(result, logical_bytes=None):
     begin, end = result["writer_active_start_ns"], result["writer_active_end_ns"]
     publications = {seq: (start, stop) for seq, start, stop in result["publication_spans"]}
     assert len(publications) == result["config"]["records"] // result["config"]["per_tx"]
-    total = result["config"]["records"] * result["config"]["payload"]
+    total = result["config"]["records"] * result["config"]["payload"] if logical_bytes is None else logical_bytes
     before, crossing, after, lower, upper = [], [], [], [], []
     for reader in result["readers"]:
         a = b = c = 0
