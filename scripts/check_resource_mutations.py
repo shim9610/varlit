@@ -9,9 +9,36 @@ from pathlib import Path
 import subprocess
 import tempfile
 from check_publication_protocol import detected
+from check_proof_contracts import MANIFEST, validate
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'crates/varlit-core/src'
+
+
+def baseline_harnesses(manifest):
+    """Rebase registered production proofs onto the extracted scratch modules."""
+    registered = [h for contract in manifest['contracts'] for h in contract['harnesses']]
+    prefixes = [
+        ('file::resident_index::uniform_prefix_proofs::', 'uniform::uniform_prefix_proofs::'),
+        ('compression_buffers::resource_steps::proofs::', 'compression_steps::proofs::'),
+        ('spill_file::proofs::', 'spill_file::proofs::'),
+        ('disk_index::tree::resource_proofs::', 'tree::resource_proofs::'),
+        ('codec::resource_proofs::', 'decoder::resource_proofs::'),
+    ]
+    expected = []
+    for production, scratch in prefixes:
+        matches = [scratch + h[len(production):] for h in registered if h.startswith(production)]
+        if not matches:
+            raise ValueError('missing resource proof family: ' + production)
+        expected.extend(matches)
+    # The chunk fixture extracts only this production helper and its proof.
+    chunk = 'chunks::resource_proofs::full_width_chunk_table_bounds_iteration_by_real_input'
+    if registered.count(chunk) != 1:
+        raise ValueError('missing or duplicate chunk-table proof')
+    expected.append(chunk.replace('::resource_proofs::', '::proofs::'))
+    if len(expected) != len(set(expected)):
+        raise ValueError('duplicate resource proof contract')
+    return expected
 
 
 def function(source, name):
@@ -120,6 +147,7 @@ def main():
     args = p.parse_args()
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=True)
     report = dict(bindings=bindings(), mutations=[], sources={})
+    expected = baseline_harnesses(json.loads(MANIFEST.read_text()))
     spill = (SRC/'spill_file.rs').read_text()
     directory = (SRC/'native_directory.rs').read_text()
     prefix_start = directory.rfind('#[derive(Debug)]', 0, directory.index('pub(super) struct UniformPrefix'))
@@ -148,8 +176,9 @@ def main():
                 code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
             return code, (out/(name+'.log')).read_text()
         code, log = run('baseline',cmd)
-        if code or 'Complete - 18 successfully verified harnesses, 0 failures, 18 total.' not in log:
+        if code:
             raise RuntimeError('unmodified resource proofs failed')
+        report['baseline_harnesses'] = validate(log, expected)
         for name,path,before,after,harness,assertion in MUTATIONS:
             original = originals[path]
             if original.count(before) != 1: raise ValueError('stale mutation '+name)
