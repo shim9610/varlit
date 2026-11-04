@@ -6580,16 +6580,27 @@ impl VarlitFile {
                 .matches_sequence_hint(record_offset, entry.sequence)?
         {
             self.require_native_record_boundary(record_offset)?;
+            // A genuine row with a sequence gap does not fit this hint. Keep
+            // later marks on the established lookup path for this generation.
+            self.index.disable_sequence_hint();
         }
         self.write_framed_record_flags(&entry, set)
     }
 
+    #[inline]
     fn require_native_record_boundary(&mut self, record_offset: u64) -> Result<()> {
-        if !self.index.has_verified_boundary(record_offset)? {
-            let append_start = append_log_start_for_file(self)?;
-            self.index.verify_boundary(append_start, record_offset)?;
+        if self.index.has_verified_boundary(record_offset)? {
+            Ok(())
+        } else {
+            self.require_uncached_native_boundary(record_offset)
         }
-        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn require_uncached_native_boundary(&mut self, record_offset: u64) -> Result<()> {
+        let append_start = append_log_start_for_file(self)?;
+        self.index.verify_boundary(append_start, record_offset)
     }
 
     // The caller must have a boundary witness: directory membership, or the
@@ -17025,55 +17036,62 @@ mod tests {
 
     #[test]
     fn serialized_directory_cannot_authorize_marking_an_embedded_record() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let spec = test_spec()
-            .with_index_policy(IndexPolicy::BlockOffsetChain)
-            .with_liveness_policy(LivenessPolicy::FooterFlags);
-        let donor_path = directory.path().join("donor");
-        let mut donor = VarlitFile::create(spec, &donor_path)?;
-        let embedded = donor.push_info_for_test(10, b"value")?;
-        let bytes = std::fs::read(&donor_path)?;
-        let bytes = &bytes[embedded.record_offset as usize..];
-        let path = directory.path().join("outer");
-        let mut writer = VarlitFile::create(spec, &path)?;
-        let outer = writer.push_info_for_test(10, bytes)?;
-        let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
-        assert!(writer.index.has_sequence_hint());
-        assert_eq!(fake.sequence, outer.sequence);
-        // Even a matching sequence cannot authenticate an embedded frame.
-        assert!(
-            !writer
-                .index
-                .matches_sequence_hint(outer.payload_offset, fake.sequence)?
-        );
-        let before = std::fs::read(&path)?;
-        assert!(matches!(
-            writer.mark_record_dead(outer.payload_offset),
-            Err(Error::InvalidCanonicalEncoding(_))
-        ));
-        assert_eq!(std::fs::read(&path)?, before);
-        // Model a serialized segment claiming the embedded header is a record.
-        writer.index = ResidentIndex::adopt_generation(
-            &vec![fake],
-            writer.snapshot.clone(),
-            spec,
-            false,
-            None,
-        )?;
-        assert!(!writer.index.has_sequence_hint());
-        let before = std::fs::read(&path)?;
-        assert!(matches!(
-            writer.mark_record_dead(outer.payload_offset),
-            Err(Error::InvalidCanonicalEncoding(_))
-        ));
-        assert_eq!(std::fs::read(&path)?, before);
-        assert!(matches!(
-            writer.defragment(),
-            Err(Error::InvalidCanonicalEncoding(_))
-        ));
-        assert_eq!(std::fs::read(&path)?, before);
-        writer.mark_record_dead(outer.record_offset)?;
-        assert!(writer.record_is_dead(outer.record_offset)?);
+        for budget in [26, 2 * 1024 * 1024] {
+            let directory = tempfile::tempdir()?;
+            let spec = test_spec()
+                .with_index_policy(IndexPolicy::BlockOffsetChain)
+                .with_liveness_policy(LivenessPolicy::FooterFlags)
+                .with_resource_limits(crate::ReadLimits::STANDARD.with_max_index_bytes(budget));
+            let donor_path = directory.path().join("donor");
+            let mut donor = VarlitFile::create(spec, &donor_path)?;
+            let embedded = donor.push_info_for_test(10, b"value")?;
+            let bytes = std::fs::read(&donor_path)?;
+            let bytes = &bytes[embedded.record_offset as usize..];
+            let path = directory.path().join("outer");
+            let mut writer = VarlitFile::create(spec, &path)?;
+            let outer = writer.push_info_for_test(10, bytes)?;
+            // Two more rows force the first private row to spill at the small
+            // budget, and break the unrelated uniform-offset shortcut.
+            let _ = writer.push_info_for_test(10, b"pad-one")?;
+            let _ = writer.push_info_for_test(10, b"pad-two")?;
+            let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
+            assert!(writer.index.has_sequence_hint());
+            assert_eq!(fake.sequence, outer.sequence);
+            // Even a matching sequence cannot authenticate an embedded frame.
+            assert!(
+                !writer
+                    .index
+                    .matches_sequence_hint(outer.payload_offset, fake.sequence)?
+            );
+            let before = std::fs::read(&path)?;
+            assert!(matches!(
+                writer.mark_record_dead(outer.payload_offset),
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+            assert_eq!(std::fs::read(&path)?, before);
+            // Model a serialized segment claiming the embedded header is a record.
+            writer.index = ResidentIndex::adopt_generation(
+                &vec![fake],
+                writer.snapshot.clone(),
+                spec,
+                false,
+                None,
+            )?;
+            assert!(!writer.index.has_sequence_hint());
+            let before = std::fs::read(&path)?;
+            assert!(matches!(
+                writer.mark_record_dead(outer.payload_offset),
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+            assert_eq!(std::fs::read(&path)?, before);
+            assert!(matches!(
+                writer.defragment(),
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+            assert_eq!(std::fs::read(&path)?, before);
+            writer.mark_record_dead(outer.record_offset)?;
+            assert!(writer.record_is_dead(outer.record_offset)?);
+        }
         Ok(())
     }
 

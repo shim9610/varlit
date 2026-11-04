@@ -414,6 +414,13 @@ impl<const N: usize> SpillRows<N> {
         Ok(Some(row))
     }
 
+    /// Borrow only the append window. A point query must not populate a read
+    /// page merely to inspect one already resident key.
+    #[inline]
+    pub(crate) fn buffered_row(&self, index: usize) -> Option<&[u8; N]> {
+        buffered_row_at(&self.buffer, self.spilled, index)
+    }
+
     /// Point probes must not fill a 64 KiB page for every binary-search step.
     /// This path borrows the append buffer and otherwise reads one stack row.
     pub(crate) fn get_direct(&self, index: usize) -> io::Result<Option<[u8; N]>> {
@@ -445,9 +452,51 @@ impl<const N: usize> SpillRows<N> {
     }
 }
 
+#[inline]
+fn buffered_row_at<const N: usize>(
+    bytes: &[u8],
+    first_row: usize,
+    index: usize,
+) -> Option<&[u8; N]> {
+    let start = index.checked_sub(first_row)?.checked_mul(N)?;
+    bytes.get(start..start.checked_add(N)?)?.try_into().ok()
+}
+
+#[cfg(kani)]
+#[path = "verification/buffered_row.rs"]
+mod buffered_row_proofs;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_window_uses_actual_rows_and_rejects_wrapped_indices() {
+        let bytes: Vec<u8> = (0..39).collect();
+        for len in [0, 12, 13, 25, 26, 38, 39] {
+            for first in [0, 7, usize::MAX - 3] {
+                for index in [
+                    0,
+                    6,
+                    7,
+                    8,
+                    9,
+                    usize::MAX - 3,
+                    usize::MAX - 2,
+                    usize::MAX - 1,
+                    usize::MAX,
+                ] {
+                    let expected = index.checked_sub(first).filter(|&row| row < len / 13);
+                    let actual = buffered_row_at::<13>(&bytes[..len], first, index);
+                    match (actual, expected) {
+                        (Some(row), Some(at)) => assert_eq!(row, &bytes[at * 13..at * 13 + 13]),
+                        (None, None) => {}
+                        other => panic!("first={first} index={index} len={len}: {other:?}"),
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn cached_floor_matches_ordered_rows_across_irregular_and_full_width_gaps() -> io::Result<()> {
         for count in [1usize, 2, 63, 64, 65, 256, 1024, 1025] {
