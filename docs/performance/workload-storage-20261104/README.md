@@ -1,5 +1,13 @@
 # Workload-specific Varlit / SQLite / HDF5 comparison
 
+**Scope correction:** the `objects-*` results below encode one physical Frame
+and one general-index key per logical item. They use 1,000 items per publication,
+but do not pack items into application blocks. They must not be presented as
+Varlit's representative grouped-item storage cost. See the subsequent
+[grouped-layout comparison](../grouped-storage-20261104/README.md) for explicit
+item/block/publication counts, grouped routing and concurrent-reader telemetry.
+The original observations below are retained, not replaced or pooled.
+
 The requested **at least 2× SQLite performance for every equivalent operation is not established**. Large mixed-block writes approach or exceed that target in some configurations; following new data, array scans/windows and many small objects do not consistently do so. Packing business rows improves Varlit's result, but the fastest tested table candidate remains slower than SQLite.
 
 This report contains **122 complete candidate configurations, 360 successful timing observations, 120 successful separate resource probes, and eight retained matrix-mmap limit refusals**. The refusals are six timing attempts and two resource attempts for two configurations. Three fixed repetitions are observational medians, not a 5% regression qualification or proof that these are globally optimal implementations. All original measurements, configuration/source identities and exclusions are retained.

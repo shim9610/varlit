@@ -153,6 +153,12 @@ compact spill state and values to temporary files. Use `*_with_key_limit` for an
 explicit cardinality/work ceiling; `estimate_keyed_merge` reports counts and a
 hypothetical fully resident size, not the current external implementation's peak.
 
+Choose the physical block separately from the append/publication batch. For
+small items consumed together, one block can contain hundreds or thousands of
+items; batching many individually keyed records does not remove their framing
+or index entries. See [grouping and batch costs](docs/scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size)
+for routing requirements, item lookup costs and concurrent-reader memory.
+
 Matrix runs can read consecutive cells into caller-owned buffers with
 `read_matrix_run_into`, `read_matrix_run_bytes_into`, or `read_matrix_row_into`.
 For a segment in the opposite direction, use `read_matrix_column_into` or

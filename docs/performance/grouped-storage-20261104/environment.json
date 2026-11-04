@@ -1,0 +1,16 @@
+{
+  "kernel": "6.18.57",
+  "architecture": "x86_64",
+  "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+  "cpu_max": "400000 100000",
+  "memory_max": "17179869184",
+  "filesystem_total_bytes": 33770192896,
+  "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+  "runtime_base": "1e770ce3a73d2f317e32f34d250bc44cd9c4a421",
+  "production_rust_modified": false,
+  "memory_events_at_export": "low 0\nhigh 0\nmax 1234720\noom 6\noom_kill 3\noom_group_kill 0\n",
+  "native_libraries": {
+    "/lib/x86_64-linux-gnu/libsqlite3.so.0": "14c4418a06c5c2e30f5fb57bc8add93762236ae17898c6708984cf15e680ca71",
+    "/lib/x86_64-linux-gnu/libhdf5_serial.so.310": "a544be0de301b91dcca21095442ff03e18f07d8ca8cd7a8150bbd08790d9e7bf"
+  }
+}

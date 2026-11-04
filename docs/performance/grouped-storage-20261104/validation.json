@@ -1,0 +1,26 @@
+{
+  "legacy-final": {
+    "successful_attempts": 58,
+    "unpublished_prefix_gates": 10
+  },
+  "grouped-final": {
+    "successful_attempts": 18,
+    "unpublished_prefix_gates": 6
+  },
+  "full-v2": {
+    "binary_manifest_identities_verified": true
+  },
+  "control-v3": {
+    "binary_manifest_identities_verified": true
+  },
+  "python_ci_helper_tests": 59,
+  "grouped_helper_tests": 3,
+  "clippy_all_targets": "pass",
+  "rustfmt_workspace_and_harness": "pass",
+  "runtime_dependency_policy": "pass",
+  "actionlint": "pass",
+  "manual_example": "pass",
+  "production_rust_changed": false,
+  "resource_limits_changed": false,
+  "ci_117": "macOS jobs cancelled before runner assignment; aggregate rejected abandoned jobs; retry queued, not passed"
+}
