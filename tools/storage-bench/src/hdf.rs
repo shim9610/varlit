@@ -160,7 +160,16 @@ impl Dataset {
                 let chunk = match name {
                     "commits" => 1,
                     "metadata" => 2,
-                    "rows" | "ids" | "frames" => c.per_tx as u64,
+                    "rows" | "ids" | "frames" => {
+                        // Seal complete chunks at publication without making a
+                        // large transaction's header chunk exceed its raw cache.
+                        // A divisor preserves the no-rewrite SWMR invariant.
+                        let mut rows = c.per_tx.min(4096);
+                        while !c.per_tx.is_multiple_of(rows) {
+                            rows -= 1;
+                        }
+                        rows as u64
+                    }
                     "payload" => payload_chunk(c) as u64,
                     _ => unreachable!(),
                 };
@@ -275,13 +284,14 @@ pub struct Hdf {
     write: bool,
     payload_len: u64,
     payload_chunk: usize,
+    grouped: bool,
 }
 impl Hdf {
     pub fn open(p: &Path, c: &Config, create: bool) -> Result<Self> {
         if !(c.records / c.producers).is_multiple_of(c.per_tx) {
             return Err("HDF5 sealed-chunk profile requires complete transaction batches".into());
         }
-        if c.lookups && c.scenario == "mixed" {
+        if c.lookups && c.scenario == "mixed" && c.group_items == 0 {
             return Err("HDF5 arbitrary composite-key index is not implemented; equal-work comparison refused".into());
         }
         unsafe {
@@ -307,6 +317,7 @@ impl Hdf {
                 write: create,
                 payload_len: 0,
                 payload_chunk: payload_chunk(c),
+                grouped: c.group_items != 0 && c.lookups,
             };
             if create {
                 h.publish(&Head::default());
@@ -344,6 +355,25 @@ impl Hdf {
             headers.extend((f.payload.len() as u64).to_le_bytes());
             payload.extend_from_slice(&f.payload);
             offset += f.payload.len() as u64;
+        }
+        if self.grouped && !t.frames.is_empty() {
+            // Dense group IDs are this workload's declared routing directory.
+            // Persist it: do not use a sequential scan's known offset for point gets.
+            let ids = t.frames.iter().map(|f| f.id).collect::<Vec<_>>();
+            let mut index = Vec::with_capacity(ids.len() * 64);
+            for b in headers.chunks_exact(32) {
+                index.extend(encode_row(&Row {
+                    id: u64_at(b, 0),
+                    tenant: u32_at(b, 8),
+                    status: u32_at(b, 12),
+                    created: u64_at(b, 16),
+                    amount: u64_at(b, 24) as i64,
+                    body: [0; 32],
+                }));
+            }
+            // Old non-grouped profiles retain their original storage contract.
+            self.rows
+                .transfer(0, ids.len(), Some(&ids), index.as_mut_ptr(), true);
         }
         // Seal payload chunks at publication: readers must never race an in-place
         // rewrite of an already published compressed/checksummed chunk. Padding is charged.
@@ -435,6 +465,17 @@ impl Hdf {
                     u32_at(b, 12),
                     &data[start..start + len],
                 );
+                if c.lookups && c.group_items != 0 {
+                    let id = u64_at(b, 0);
+                    let point = self.rows.read(id, 1);
+                    let point = decode_row(&point);
+                    assert_eq!(point.id, id);
+                    assert_eq!((point.tenant, point.status), c.frame_key(id));
+                    let bytes = self.payload.read(point.created, point.amount as usize);
+                    assert_eq!(bytes, data[start..start + len]);
+                    o.point_payload(id, &bytes);
+                    o.lookup_count += 1;
+                }
             }
             first += n as u64;
         }

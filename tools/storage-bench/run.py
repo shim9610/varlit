@@ -22,6 +22,53 @@ BASE = dict(scenario="mixed", records=256, payload=65536, variable=True,
 
 def profiles(suite):
     """Return complete configurations; never splice unindexed writes into indexed reads."""
+    if suite.startswith("grouped"):
+        out = []
+        shapes = [(1 << 20, 1, 1), (1 << 20, 1, 8), (1 << 20, 4, 8),
+                  (8 << 20, 1, 8), (8 << 20, 4, 8)]
+        if suite in ["grouped-smoke", "grouped-tuning"]:
+            shapes = [(32768 if suite == "grouped-smoke" else 1 << 20, 1, 2 if suite == "grouped-smoke" else 8)]
+        for items, producers, readers in shapes:
+            for group in [512, 8192]:
+                publication = 8192 if suite == "grouped-smoke" else 131072
+                c = dict(BASE, records=items//group, payload=group*128,
+                         group_items=group, per_tx=publication//group, variable=False,
+                         producers=producers, readers=readers, lookups=True, telemetry=True)
+                for engine in ["varlit-indexed", "sqlite", "hdf5"]:
+                    p = dict(name=f"grouped-n{items}-g{group}-t{publication}-w{producers}-r{readers}-{engine}",
+                             kind="mixed", engine=engine, config=c)
+                    if suite == "grouped-tuning":
+                        if engine != "sqlite": continue
+                        for page in [4096, 16384, 65536]:
+                            for mmap in [0, 1 << 30]:
+                                out.append(dict(p, name=p["name"]+f"-p{page}-m{mmap}",
+                                                config=dict(c, page=page, mmap=mmap),
+                                                tuning_family=f"grouped-g{group}"))
+                    else:
+                        out.append(p)
+        if suite == "grouped":
+            for group in [512, 8192]:
+                c = dict(BASE, records=(8<<20)//group, payload=group*128, group_items=group,
+                         per_tx=131072//group, variable=False, producers=4, readers=8,
+                         lookups=False, telemetry=True)
+                for engine in ["varlit-stream", "sqlite", "hdf5"]:
+                    out.append(dict(name=f"grouped-follow-n{8<<20}-g{group}-t131072-w4-r8-{engine}",
+                                    kind="mixed", engine=engine, config=c))
+        if suite == "grouped":
+            for group in [512,8192]:
+                c=dict(BASE,records=(8<<20)//group,payload=group*128,group_items=group,
+                       per_tx=8192//group,variable=False,producers=4,readers=8,lookups=True,telemetry=True)
+                for engine in ["varlit-indexed","sqlite","hdf5"]:
+                    out.append(dict(name=f"grouped-n{8<<20}-g{group}-t8192-w4-r8-{engine}",kind="mixed",engine=engine,config=c))
+        if suite == "grouped-control":
+            out=[]
+            for engine, lookups in [("varlit-indexed",True),("sqlite",True),
+                                    ("varlit-stream",False),("sqlite",False),("hdf5",False)]:
+                c=dict(BASE,records=1<<20,payload=128,variable=False,per_tx=131072,
+                       readers=8,lookups=lookups,telemetry=True)
+                out.append(dict(name=f"individual-n{1<<20}-t131072-q{int(lookups)}-{engine}",
+                                kind="mixed",engine=engine,config=c))
+        return out
     if suite == "mapped-arrays":
         return [dict(name=f"array-mapped-n{total}-g{group}-{mode}",kind="array",mode=mode,total=total,
                      group=group,page=4096,mmap=0,points=4096,ranges=128,readers=0,warm_scan=True)
@@ -314,7 +361,17 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
                 assert result["scan_passes"]==2 and result["warm_scan_seconds"] is not None
         row["result"] = result
         if probe:
+            # A final flush may grow files after the last periodic sample.
+            # Observe quiescent storage before deleting successful work files.
+            final_storage = sample(work, p.pid, set(), profile["kind"])
+            for key in ["visible_logical", "visible_allocated", "temporary_allocated"]:
+                peaks[key] = max(peaks.get(key, 0), final_storage[key])
+            row["final_storage"] = final_storage
             row["sampled_peaks"] = peaks
+            expected = profile["config"]["readers"] + 2 if profile["kind"] == "mixed" else 2
+            if profile["name"].startswith(("grouped-", "individual-")):
+                assert peaks.get("sampled_processes", 0) >= expected, "incomplete process-tree coverage"
+                assert peaks.get("visible_allocated", 0) >= result["allocated_bytes"], "data files missing from probe"
         if not keep:
             shutil.rmtree(work)
             shutil.rmtree(tmp)
@@ -348,7 +405,7 @@ def summarize(rows, output):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--suite", choices=["smoke", "pilot", "full", "tuning", "packed", "hdf-mixed", "mapped-arrays"], default="smoke")
+    ap.add_argument("--suite", choices=["smoke", "pilot", "full", "tuning", "packed", "hdf-mixed", "mapped-arrays", "grouped-smoke", "grouped-tuning", "grouped-control", "grouped"], default="smoke")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--resume",action="store_true",help="Continue an interrupted frozen run with identical benchmark binaries")
     ap.add_argument("--repeats", type=int, default=3)
@@ -387,7 +444,7 @@ def main():
             winners[family] = winner[0]["profile"]
         for p in selected:
             if p.get("engine") == "sqlite":
-                family = p["name"]
+                family = (f"grouped-g{p['config']['group_items']}" if args.suite == "grouped" else p["name"])
                 if p["config"]["scenario"] == "mixed" and p["name"].startswith("mixed-"):
                     family = p["name"].replace("p1048576", "p65536")
                 if args.suite=="packed":
@@ -444,7 +501,7 @@ def main():
     if args.probe:
         phases.append(("probe", 0))
     # Smoke gates are conformance tests with forced synchronization, not timing results.
-    if args.suite == "smoke":
+    if args.suite in ["smoke", "grouped-smoke"]:
         phases.insert(0, ("visibility", 0))
     for phase, rep in phases:
         order = chosen[rep % len(chosen):] + chosen[:rep % len(chosen)]

@@ -19,6 +19,11 @@ pub fn thread_cpu() -> f64 {
     assert_eq!(unsafe { clock_gettime(3, &mut t) }, 0);
     t.sec as f64 + t.nsec as f64 / 1e9
 }
+pub fn monotonic_ns() -> u64 {
+    let mut t = Timespec { sec: 0, nsec: 0 };
+    assert_eq!(unsafe { clock_gettime(1, &mut t) }, 0);
+    t.sec as u64 * 1_000_000_000 + t.nsec as u64
+}
 pub fn file_usage(root: &Path) -> Result<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
     let (mut len, mut allocated) = (0, 0);

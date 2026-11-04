@@ -194,6 +194,7 @@ impl Reader {
                     let found = r.get::<Frame>(&k)?.ok_or("missing key")?;
                     assert_eq!(found.id, v.id);
                     assert_eq!(found.payload, v.payload);
+                    o.point_payload(v.id, &found.payload);
                     o.lookup_count += 1;
                 } else {
                     return Err("stream has no arbitrary-key lookup".into());

@@ -140,8 +140,20 @@ pub struct Config {
     pub compact_bytes: u64,
     #[serde(default)]
     pub hdf_chunk: usize,
+    /// Logical 128-byte items per physical Frame; zero preserves the old fixture.
+    #[serde(default)]
+    pub group_items: usize,
+    #[serde(default)]
+    pub telemetry: bool,
 }
 impl Config {
+    pub fn frame_key(&self, id: u64) -> (u32, u32) {
+        if self.group_items == 0 {
+            key(id)
+        } else {
+            ((id >> 32) as u32, id as u32)
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         if !["mixed", "table"].contains(&self.scenario.as_str())
             || self.records == 0
@@ -153,6 +165,10 @@ impl Config {
             || self.producers > 64
             || self.readers > 64
             || self.cache < 65536
+            || (self.group_items != 0
+                && (self.scenario != "mixed"
+                    || self.variable
+                    || self.group_items.checked_mul(128) != Some(self.payload)))
         {
             return Err("invalid benchmark configuration".into());
         }
@@ -180,7 +196,14 @@ impl Config {
                 };
                 let mut data = vec![(id % 251) as u8; size];
                 data[..8].copy_from_slice(&id.to_le_bytes());
-                let (scan, frame) = key(id);
+                if self.group_items != 0 {
+                    for (slot, bytes) in data.chunks_exact_mut(128).enumerate() {
+                        let item = id * self.group_items as u64 + slot as u64;
+                        bytes.fill((item % 251) as u8);
+                        bytes[..8].copy_from_slice(&item.to_le_bytes());
+                    }
+                }
+                let (scan, frame) = self.frame_key(id);
                 frames.push(Frame {
                     scan,
                     frame,
@@ -255,6 +278,7 @@ pub struct Oracle {
     pub meta_count: usize,
     pub bytes: u64,
     pub lookup_count: usize,
+    pub point_items: usize,
     pub order_hash: u64,
     pub metadata_hash: u64,
 }
@@ -268,6 +292,7 @@ impl Oracle {
             meta_count: 0,
             bytes: 0,
             lookup_count: 0,
+            point_items: 0,
             order_hash: 0,
             metadata_hash: 0,
         }
@@ -284,10 +309,15 @@ impl Oracle {
         self.frame_view(f.id, f.scan, f.frame, &f.payload);
     }
     pub fn frame_view(&mut self, id: u64, scan: u32, frame: u32, p: &[u8]) {
-        assert_eq!(key(id), (scan, frame));
+        assert_eq!(self.cfg.frame_key(id), (scan, frame));
         assert_eq!(p.len(), self.cfg.expected_payload(id));
-        assert_eq!(&p[..8], &id.to_le_bytes());
-        assert!(p[8..].iter().all(|&x| x == (id % 251) as u8));
+        if self.cfg.group_items == 0 {
+            check_item(id, p);
+        } else {
+            for (slot, bytes) in p.chunks_exact(128).enumerate() {
+                check_item(id * self.cfg.group_items as u64 + slot as u64, bytes);
+            }
+        }
         self.id(id);
         self.bytes += p.len() as u64;
     }
@@ -311,6 +341,30 @@ impl Oracle {
         assert_eq!(self.meta_count, self.cfg.transactions() * 2);
         assert!(self.meta.iter().all(|&m| m == 3));
     }
+    /// A batch of individual (group-key, slot) gets against one fetched block.
+    /// The block is fetched by each backend separately from the sequential scan.
+    /// Every get copies its caller-owned 128 bytes and checks its logical ID/value.
+    pub fn point_payload(&mut self, group: u64, bytes: &[u8]) {
+        let count = self.cfg.group_items;
+        if count == 0 {
+            return;
+        }
+        assert_eq!(bytes.len(), count * 128);
+        for slot in (0..count).rev() {
+            let mut out = [0u8; 128];
+            out.copy_from_slice(&bytes[slot * 128..(slot + 1) * 128]);
+            check_item(
+                group * count as u64 + slot as u64,
+                std::hint::black_box(&out),
+            );
+            self.point_items += 1;
+        }
+    }
+}
+
+fn check_item(id: u64, bytes: &[u8]) {
+    assert_eq!(&bytes[..8], &id.to_le_bytes());
+    assert!(bytes[8..].iter().all(|&x| x == (id % 251) as u8));
 }
 
 pub fn ordered_hash(state: u64, value: u64) -> u64 {

@@ -7,10 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 use varlit_storage_bench::{
-    Result, Stopwatch, file_usage, hdf, matrix_table, model::*, native, packed_table, sqlite,
-    thread_cpu,
+    Result, Stopwatch, file_usage, hdf, matrix_table, model::*, monotonic_ns, native, packed_table,
+    sqlite, thread_cpu,
 };
-type ProducerMetrics = (f64, f64, f64, Vec<(u64, u64)>);
+type ProducerMetrics = (f64, f64, f64, Vec<(u64, u64)>, Vec<(u64, u64, u64)>);
 enum Writer {
     Packed(packed_table::Matrix),
     Matrix(matrix_table::Matrix),
@@ -135,6 +135,7 @@ fn read(e: &str, root: &Path, c: &Config, id: usize) -> Result<()> {
     let mut old = r.refresh()?;
     assert_eq!(old.txns, 0, "writer began before readers opened");
     let mut oracle = Oracle::new(c);
+    let mut consume_intervals = Vec::new();
     std::fs::write(root.join(format!("ready-{id}")), b"ready")?;
     let (mut refresh, mut consume, mut polls, mut max_pending) = (0.0, 0.0, 0u64, 0u64);
     let deadline = Instant::now() + Duration::from_secs(1800);
@@ -142,6 +143,7 @@ fn read(e: &str, root: &Path, c: &Config, id: usize) -> Result<()> {
         if Instant::now() > deadline {
             return Err("reader timeout".into());
         }
+        let interval_start = if c.telemetry { monotonic_ns() } else { 0 };
         let t = Instant::now();
         let h = r.refresh()?;
         refresh += t.elapsed().as_secs_f64();
@@ -163,7 +165,17 @@ fn read(e: &str, root: &Path, c: &Config, id: usize) -> Result<()> {
         max_pending = max_pending.max(h.frames + h.rows - old.frames - old.rows);
         let t = Instant::now();
         if h.txns > old.txns {
+            let before_bytes = oracle.bytes;
             r.consume(&old, &h, &mut oracle, c)?;
+            if c.telemetry {
+                consume_intervals.push((
+                    interval_start,
+                    monotonic_ns(),
+                    old.txns,
+                    h.txns,
+                    oracle.bytes - before_bytes,
+                ));
+            }
         } else {
             assert_eq!(
                 (h.frames, h.rows, h.metas),
@@ -178,6 +190,9 @@ fn read(e: &str, root: &Path, c: &Config, id: usize) -> Result<()> {
         std::thread::sleep(Duration::from_micros(100));
     }
     oracle.finish();
+    if c.lookups && c.group_items != 0 {
+        assert_eq!(oracle.point_items, c.records * c.group_items);
+    }
     if c.lookups {
         assert_eq!(oracle.lookup_count, c.records);
     }
@@ -185,7 +200,7 @@ fn read(e: &str, root: &Path, c: &Config, id: usize) -> Result<()> {
     std::fs::write(
         root.join(format!("reader-{id}.json")),
         serde_json::to_vec(
-            &serde_json::json!({"id":id,"seconds":seconds,"cpu_seconds":cpu,"open_seconds":open,"refresh_seconds":refresh,"consume_seconds":consume,"polls":polls,"max_observed_pending_records":max_pending,"records":oracle.data_count,"metadata":oracle.meta_count,"payload_bytes":oracle.bytes,"lookups":oracle.lookup_count,"order_hash":oracle.order_hash,"metadata_hash":oracle.metadata_hash,"verified":true}),
+            &serde_json::json!({"id":id,"seconds":seconds,"cpu_seconds":cpu,"open_seconds":open,"refresh_seconds":refresh,"consume_seconds":consume,"polls":polls,"max_observed_pending_records":max_pending,"records":oracle.data_count,"logical_records":oracle.data_count*c.group_items.max(1),"point_items":oracle.point_items,"consume_intervals":consume_intervals,"metadata":oracle.meta_count,"payload_bytes":oracle.bytes,"lookups":oracle.lookup_count,"order_hash":oracle.order_hash,"metadata_hash":oracle.metadata_hash,"verified":true}),
         )?,
     )?;
     Ok(())
@@ -205,7 +220,9 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
             "output directory already exists; use a fresh path to retain failed attempts".into(),
         );
     }
-    if c.lookups && (e == "varlit-stream" || (e == "hdf5" && c.scenario == "mixed")) {
+    if c.lookups
+        && (e == "varlit-stream" || (e == "hdf5" && c.scenario == "mixed" && c.group_items == 0))
+    {
         return Err("requested lookup semantics are unsupported by this adapter".into());
     }
     c.validate()?;
@@ -248,6 +265,8 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
     let (mut compact_count, mut compact_wall, mut compact_cpu, mut compact_after) =
         (0u64, 0.0, 0.0, 0u64);
     let mut commits = Vec::with_capacity(c.transactions());
+    let mut publication_spans = Vec::new();
+    let writer_active_start_ns = monotonic_ns();
     if e == "sqlite" && c.producers > 1 {
         // Each producer owns a separate native connection. SQLite serializes transactions.
         std::thread::scope(|s| -> Result<()> {
@@ -259,22 +278,28 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
                     let cpu = thread_cpu();
                     let mut generation = 0.0;
                     let mut order = Vec::new();
+                    let mut spans = Vec::new();
                     for local in 0..c.txns_per_producer() {
                         let t = Instant::now();
                         let tx = c.transaction(source, local);
                         generation += t.elapsed().as_secs_f64();
                         let t = Instant::now();
+                        let start_ns = if c.telemetry { monotonic_ns() } else { 0 };
                         let h = w.append(&tx);
+                        if c.telemetry {
+                            spans.push((h.txns, start_ns, monotonic_ns()));
+                        }
                         order.push((h.txns, tx.txid));
                         b += t.elapsed().as_secs_f64();
                     }
-                    Ok((b, thread_cpu() - cpu, generation, order))
+                    Ok((b, thread_cpu() - cpu, generation, order, spans))
                 }));
             }
             for j in joins {
-                let (b, cpu, generation, order) =
+                let (b, cpu, generation, order, spans) =
                     j.join().map_err(|_| "SQLite producer panicked")??;
                 commits.extend(order);
+                publication_spans.extend(spans);
                 backend += b;
                 producer_cpu += cpu;
                 queue_send += generation;
@@ -303,7 +328,11 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
             drop(tx);
             for t in rx {
                 let start = Stopwatch::start();
+                let start_ns = if c.telemetry { monotonic_ns() } else { 0 };
                 writer.append(&t, &mut head, c)?;
+                if c.telemetry {
+                    publication_spans.push((head.txns, start_ns, monotonic_ns()));
+                }
                 let maintenance = Stopwatch::start();
                 if writer
                     .maintain(&root.join("data/store"), c, &mut compact_after)?
@@ -328,6 +357,7 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
         })?;
     }
     let writer_seconds = t.elapsed().as_secs_f64();
+    let writer_active_end_ns = monotonic_ns();
     let readers_start = Instant::now();
     for ch in &mut children.0 {
         let status = ch.wait()?;
@@ -347,6 +377,13 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
     let finalize = t.elapsed().as_secs_f64();
 
     let (logical, allocated) = file_usage(&root.join("data"))?;
+    let mut final_files = Vec::new();
+    for entry in std::fs::read_dir(root.join("data"))? {
+        use std::os::unix::fs::MetadataExt;
+        let entry = entry?;
+        let m = entry.metadata()?;
+        final_files.push(serde_json::json!({"name":entry.file_name().to_string_lossy(),"logical_bytes":m.len(),"allocated_bytes":m.blocks()*512}));
+    }
     let readers = (0..c.readers)
         .map(|i| -> Result<serde_json::Value> {
             Ok(serde_json::from_slice(&std::fs::read(
@@ -378,7 +415,7 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
         assert_eq!(r["metadata_hash"].as_u64(), Some(expected_metadata));
     }
     let (seconds, coordinator_cpu) = all.stop();
-    let result = serde_json::json!({"schema":1,"scenario":c.scenario,"engine":e,"config":c,"initialization_seconds":initialize,"writer_seconds":writer_seconds,"writer_backend_sum_seconds":backend,"storage_compactions":compact_count,"storage_compaction_seconds":compact_wall,"storage_compaction_cpu_seconds":compact_cpu,"writer_thread_cpu_seconds":writer_cpu,"producer_thread_cpu_seconds":producer_cpu,"mpsc_send_blocked_and_handoff_sum_seconds":if e=="sqlite"&&c.producers>1{None}else{Some(queue_send)},"sqlite_multiwriter_input_generation_sum_seconds":if e=="sqlite"&&c.producers>1{Some(queue_send)}else{None},"reader_drain_seconds":drain,"finalize_seconds":finalize,"seconds":seconds,"coordinator_thread_cpu_seconds":coordinator_cpu,"file_bytes":logical,"allocated_bytes":allocated,"readers":readers,"sqlite":sqlite::facts(),"sqlite_settings":actual_sqlite_settings,"hdf5":hdf::facts(),"verified":true});
+    let result = serde_json::json!({"schema":1,"scenario":c.scenario,"engine":e,"config":c,"writer_active_start_ns":writer_active_start_ns,"writer_active_end_ns":writer_active_end_ns,"publication_spans":publication_spans,"initialization_seconds":initialize,"writer_seconds":writer_seconds,"writer_backend_sum_seconds":backend,"storage_compactions":compact_count,"storage_compaction_seconds":compact_wall,"storage_compaction_cpu_seconds":compact_cpu,"writer_thread_cpu_seconds":writer_cpu,"producer_thread_cpu_seconds":producer_cpu,"mpsc_send_blocked_and_handoff_sum_seconds":if e=="sqlite"&&c.producers>1{None}else{Some(queue_send)},"sqlite_multiwriter_input_generation_sum_seconds":if e=="sqlite"&&c.producers>1{Some(queue_send)}else{None},"reader_drain_seconds":drain,"finalize_seconds":finalize,"seconds":seconds,"coordinator_thread_cpu_seconds":coordinator_cpu,"file_bytes":logical,"allocated_bytes":allocated,"final_files":final_files,"readers":readers,"sqlite":sqlite::facts(),"sqlite_settings":actual_sqlite_settings,"hdf5":hdf::facts(),"verified":true});
     println!("{}", result);
     Ok(())
 }
