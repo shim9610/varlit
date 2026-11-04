@@ -2,7 +2,10 @@
 
 This guide covers the default stream/indexed public API. It is the
 Varlit path intended for very large append logs. Its normal open and append
-costs do not grow with native file size or record count.
+paths do not rescan the complete native prefix. Resident buffers are bounded;
+this is not a constant-total-cost claim for an unrestricted disk index. Its
+tree height, changed pages, key locality and publication frequency still affect
+lookup/update work and companion growth.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
 APIs can still scan the complete file at open. Their 16-byte directory rows use
@@ -273,6 +276,80 @@ The stream writer does not expose `push_frame` for this declaration because
 `Frame` requires a previous-key chain backed by the disk index.
 
 ## Batch Cost And Memory
+
+### Choose the physical block before choosing the batch size
+
+An application item, an encoded Varlit record, a buffered append batch, and a
+durable publication are different units. `push_frames(items, BatchOptions)`
+coalesces writes, but still encodes one Frame per input item. If each Frame has
+a distinct disk key, it still creates one latest-key index entry per Frame.
+`sync()` publishes the accumulated work; calling it less often does not remove
+the individual framing or key entries.
+
+For small samples/items normally consumed together, declare a block containing
+hundreds or thousands of items. Index the block and locate an item inside its
+payload. For example, 1,048,576 128-byte items can be stored as 2,048 blocks of
+512 items (64 KiB payload each), or 128 blocks of 8,192 items (1 MiB each).
+These are still 1,048,576 logical items, not that many physical records or
+durability boundaries. The block size controls framing/index amortization and
+the bytes fetched on a cache miss. The publication size independently controls
+durability cost, reader visibility latency and producer buffering.
+The disk index counts distinct block keys in this layout; it does not
+automatically index every logical item inside a payload. Packing is an explicit
+application schema choice, not something `BatchOptions` performs implicitly.
+
+Use this layout when the application can identify an item's block: a declared
+`(block_key, slot)` key, fixed-size dense IDs, or a persisted routing directory.
+For unrelated arbitrary keys, grouping alone does not provide a lookup index.
+Store and measure the routing/secondary index too; do not silently replace
+arbitrary-key lookup with a known block offset or an uncharged RAM map.
+Finite `key_domain`/`key_values` describes a bounded set of key values; it is
+not a switch that packs an unbounded number of individually framed records.
+
+A minimal declaration for application-owned packed bytes is:
+
+```rust
+use varlit::varlit_format;
+varlit_format! {
+    pub format PackedCapture {
+        magic: b"PACK";
+        version: 1;
+        index: keyed_offset_chain;
+        blocks {
+            variable ItemBlock(id = 1, key = [group], key_index = disk) {
+                group: u64,
+                data: Vec<u8>,
+            }
+        }
+    }
+}
+```
+
+Define and version the item encoding inside `data`, including item width/count,
+byte order and key-to-slot mapping. A library block checksum protects those
+bytes; the application must still validate its internal layout and slot bounds.
+The benchmark's executable example is
+[`tools/storage-bench/examples/grouped.rs`](../tools/storage-bench/examples/grouped.rs).
+
+For immutable published groups, a reader can fetch/verify one block and satisfy
+a batch of item queries from that bounded buffer. Charge block lookup, decoding,
+cache misses, item extraction and copies. This is a locality-dependent workload;
+it is not equivalent to a million unrelated cold random block reads. Reusing a
+just-scanned payload without a separate point fetch must also be disclosed.
+Choose grouping and publication sizes against the application's latency target,
+not throughput alone. Incomplete tail groups need an explicit count or a separate
+publication policy; do not expose padding as valid items.
+
+Keep one writer owner and use a bounded MPSC queue for multiple producers.
+Open an independent reader handle per worker and use `follow()` plus persistent
+cursors to consume new published data. Reader block buffers and caches add
+across readers; include producer staging, queue contents and the active writer
+when sizing memory. Do not mmap an actively modified backing file under the
+immutable-file API contract.
+
+See the [grouped-item benchmark](performance/grouped-storage-20261104/README.md)
+for separately counted items, blocks and publications, concurrent-reader
+measurements and the comparison with individually framed controls.
 
 `BatchOptions` bounds transient native buffering:
 
