@@ -60,3 +60,28 @@ Sanitizers [#95](https://github.com/shim9610/varlit/actions/runs/41873065866) al
 completed successfully. These precede the new read-policy implementation. This
 confirms the pool can execute jobs and that the earlier loss occurred before
 project code ran; it does not establish the provider's internal root cause.
+
+## Read-policy follow-up: stale evidence counts
+
+The implementation head `aded59a` acquired its macOS runner and executed native
+steps. A separate [storage-contract job](https://github.com/shim9610/varlit/actions/runs/41890417612/job/126786014419)
+failed for a project-side integration mistake: the hostile/compound index tests
+were doubled to execute both strict and trusted metadata policies, but
+`check_storage_contracts.py` still required the old exact output counts
+(80 compound trials and 795 hostile shapes). Both native tests passed and
+reported 160 trials/retries and 1,590 shapes; the strict evidence classifier
+correctly rejected the stale markers. The marker expectations now require the
+expanded counts, including the compound test's explicit strict/trusted evidence.
+No assertion, empty-suite detection or classifier rule is relaxed. This failure
+is distinct from the earlier provider-side acquisition errors.
+
+The same run's Rust CodeQL job found six `rust/cleartext-logging` paths rooted
+at the new private helper `read_trusted_index_entry`. CodeQL 2.27.2's
+[`SensitiveDataCall`](https://github.com/github/codeql/blob/codeql-cli/v2.27.2/rust/ql/lib/codeql/rust/security/SensitiveData.qll)
+uses name heuristics; its shared `maybeSecret` pattern classifies `trusted` as
+secret data. The six sinks are fixture diagnostics and numeric allocation/heap
+measurements, not credential output. The helper is now named for its actual
+operation, `read_index_entry_from_descriptor`; its signature and body are
+unchanged. No query/path/severity exclusion, suppression, or diagnostic removal
+is added. The original SARIF and exact paths are retained with the performance
+appendix's CI follow-up evidence. New-head CodeQL must confirm the correction.

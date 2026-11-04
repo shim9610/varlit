@@ -13417,7 +13417,7 @@ impl KeyedChain<'_> {
 }
 
 /// Frames one record through the snapshot, without touching the resident index.
-pub(crate) fn read_trusted_index_entry(
+pub(crate) fn read_index_entry_from_descriptor(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
     record_offset: u64,

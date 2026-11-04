@@ -740,8 +740,13 @@ fn read_validation_combinations_separate_damage_detection_and_frame_io() -> Resu
                 };
                 if !policy.structure {
                     crate::snapshot::take_read_requests();
-                    let captured =
-                        read_trusted_index_entry(spec, &original, 0, entry.sequence, physical)?;
+                    let captured = read_index_entry_from_descriptor(
+                        spec,
+                        &original,
+                        0,
+                        entry.sequence,
+                        physical,
+                    )?;
                     assert_eq!(captured.read_payload_snapshot(spec, &original)?, b"payload");
                     assert_eq!(
                         crate::snapshot::take_read_requests().0,
