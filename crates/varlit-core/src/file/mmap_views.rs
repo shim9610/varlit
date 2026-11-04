@@ -34,7 +34,7 @@ pub struct MmapPayloads {
     // of every entry (PERF2-07).
     pub(super) index: Vec<RecordIndexEntry>,
     pub(super) by_block: HashMap<u32, Vec<usize>>,
-    // One byte per record only when integrity is enabled. The mapping is
+    // One byte per record only when an optional read check is selected. The mapping is
     // immutable by contract, so a successful check remains valid. Relaxed
     // atomics retain Send + Sync without locks or publishing mutable data;
     // racing first readers may both verify the same immutable bytes.
@@ -129,6 +129,9 @@ impl MmapPayloads {
     // Keep framing decode and CRC scratch off the already-verified read path.
     #[cold]
     fn verify_payload(&self, entry: &RecordIndexEntry, payload: &[u8]) -> Result<()> {
+        if !self.spec.read_validation().structure {
+            return entry.verify_captured_payload(self.spec, payload);
+        }
         let header = self.window(entry.record_offset, RECORD_HEADER_LEN)?;
         let footer = match entry.footer_offset {
             Some(offset) => self.window(offset, RECORD_FOOTER_LEN)?,

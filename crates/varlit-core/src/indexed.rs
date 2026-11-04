@@ -14,7 +14,7 @@ use crate::disk_index::{
 use crate::file::{
     NativeStreamScanner, ReplaceDurability, WriterLock, decode_stream_tombstone_key,
     prepare_stream_tombstone_record, prepare_stream_user_record_into, publish_temp_path_atomically,
-    read_file_header, read_record_entry_positional, read_stream_entry_at,
+    read_file_header, read_record_entry_positional, read_stream_entry_at, read_trusted_index_entry,
 };
 use crate::scalable_extent::UntrustedRecordPointer;
 use crate::stream::{StreamCheckpoint, StreamTail, primary_generation, primary_identity};
@@ -159,6 +159,8 @@ impl VarlitIndexedReader {
             },
         )?;
         let identity = primary_identity(stream.spec(), stream.snapshot())?;
+        let mut options = options;
+        options.limits.read_validation = stream.spec().read_limits.read_validation;
         let store = DiskIndexStore::open(sidecar_path(&path), options).map_err(index_error)?;
         let index = store
             .begin_committed_snapshot(identity, plan.mode())
@@ -344,7 +346,28 @@ impl VarlitIndexedReader {
     /// second time. In that case read only the frame here: each caller feeds
     /// the entry into `read_logical_payload_snapshot`, which verifies the full
     /// record checksum against this entry with a single payload read.
-    fn candidate_entry(&self, offset: u64, physical_len: u64) -> Result<RecordIndexEntry> {
+    fn candidate_entry(
+        &self,
+        offset: u64,
+        sequence: u64,
+        physical: DiskIndexPhysicalRecord,
+    ) -> Result<RecordIndexEntry> {
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_some_and(|p| !p.structure)
+        {
+            return read_trusted_index_entry(
+                self.stream.spec(),
+                self.stream.snapshot(),
+                offset,
+                sequence,
+                physical,
+            );
+        }
+        let physical_len = physical.physical_len;
         if self.stream.spec().integrity_policy == crate::IntegrityPolicy::None {
             read_stream_entry_at(
                 self.stream.spec(),
@@ -384,12 +407,32 @@ impl VarlitIndexedReader {
             } => (record_offset, sequence),
         };
         let physical = pointer.physical.ok_or(Error::InvalidIndexCheckpoint)?;
-        let entry = self.candidate_entry(offset, physical.physical_len)?;
+        let entry = self.candidate_entry(offset, expected_sequence, physical)?;
         validate_physical_candidate(self.stream.spec(), &entry, physical)?;
         if entry.sequence != expected_sequence {
             return Err(index_invariant(
                 "candidate sequence does not match native record",
             ));
+        }
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_some_and(|p| !p.structure && !p.data_crc)
+        {
+            let valid_type = match pointer.entry {
+                DiskIndexEntry::Put { .. } => {
+                    entry.block_id == T::ID && entry.block_version == T::VERSION
+                }
+                DiskIndexEntry::Tombstone { .. } => entry.block_id == TOMBSTONE_BLOCK_ID,
+                DiskIndexEntry::Missing => true,
+            };
+            return if valid_type {
+                Ok(())
+            } else {
+                Err(Error::InvalidIndexCheckpoint)
+            };
         }
         match pointer.entry {
             DiskIndexEntry::Put { .. } => {
@@ -426,7 +469,7 @@ impl VarlitIndexedReader {
             _ => return Err(Error::InvalidIndexCheckpoint),
         };
         let physical = pointer.physical.ok_or(Error::InvalidIndexCheckpoint)?;
-        let entry = self.candidate_entry(offset, physical.physical_len)?;
+        let entry = self.candidate_entry(offset, expected_sequence, physical)?;
         validate_physical_candidate(self.stream.spec(), &entry, physical)?;
         if entry.sequence != expected_sequence {
             return Err(index_invariant(
@@ -451,7 +494,14 @@ impl VarlitIndexedReader {
         let payload =
             entry.read_logical_payload_snapshot(self.stream.spec(), self.stream.snapshot())?;
         let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(self.stream.spec().endian))?;
-        if !value.key_eq(key) {
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_none_or(|p| p.structure)
+            && !value.key_eq(key)
+        {
             return Err(index_invariant("put candidate key mismatch"));
         }
         Ok(value)

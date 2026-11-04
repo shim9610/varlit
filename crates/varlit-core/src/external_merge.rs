@@ -358,7 +358,11 @@ where
                     let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(spec.endian))?;
                     (value.key(), Some(value), None)
                 } else if entry.block_id == TOMBSTONE_BLOCK_ID {
-                    entry.read_payload_snapshot_into(spec, &input.snapshot, &mut payload)?;
+                    entry.read_payload_snapshot_into(
+                        spec.with_strict_read_validation(),
+                        &input.snapshot,
+                        &mut payload,
+                    )?;
                     let Some(key) =
                         decode_internal_key_payload::<T>(spec.endian, &payload, &mut budget)?
                     else {
@@ -366,7 +370,11 @@ where
                     };
                     (key, None, None)
                 } else {
-                    entry.read_payload_snapshot_into(spec, &input.snapshot, &mut payload)?;
+                    entry.read_payload_snapshot_into(
+                        spec.with_strict_read_validation(),
+                        &input.snapshot,
+                        &mut payload,
+                    )?;
                     let Some((key, op)) =
                         decode_internal_op_payload::<T>(spec.endian, &payload, &mut budget)?
                     else {

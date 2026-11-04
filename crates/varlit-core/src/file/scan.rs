@@ -314,7 +314,7 @@ impl NativeStreamScanner {
         STREAM_SCANNER_CONSTRUCTIONS.set(STREAM_SCANNER_CONSTRUCTIONS.get() + 1);
         Ok(Self {
             spec,
-            verify_checksums: true,
+            verify_checksums: spec.read_limits.read_validation.is_none_or(|p| p.data_crc),
             file,
             snapshot,
             offset: header_len,
@@ -1239,11 +1239,12 @@ impl ScannedIndex {
 pub(super) fn segment_chain_open_is_allowed(spec: FormatSpec, intent: ScanIntent) -> bool {
     let _ = spec.index_policy.segment_on_flush;
     intent != ScanIntent::Recover
-        && spec
-            .read_limits
-            .resolve()
-            .effective_integrity_verification()
-            != IntegrityVerification::AtOpen
+        && (spec.read_limits.read_validation == Some(crate::ReadValidation::TRUSTED)
+            || spec
+                .read_limits
+                .resolve()
+                .effective_integrity_verification()
+                != IntegrityVerification::AtOpen)
 }
 
 pub(super) fn load_generation_index<B: ScanBuffer>(
@@ -1650,11 +1651,12 @@ pub(super) fn read_lazy_block_tails(
     extensions: &[u8],
     source: LazyOpenSource,
 ) -> Result<OpenDigest> {
-    if spec
-        .read_limits
-        .resolve()
-        .effective_integrity_verification()
-        == IntegrityVerification::AtOpen
+    if spec.read_limits.read_validation != Some(crate::ReadValidation::TRUSTED)
+        && spec
+            .read_limits
+            .resolve()
+            .effective_integrity_verification()
+            == IntegrityVerification::AtOpen
     {
         // A digest cannot discharge the caller's full-payload verification policy.
         return Err(Error::InvalidIndexSegment);
@@ -2478,11 +2480,12 @@ pub(super) fn resume_record_scan<B: ScanBuffer>(
         // Dropping it here would turn a recoverable tail into a silently
         // accepted one, which is the failure this whole policy must not create.
         let verify_checksums = intent == ScanIntent::Recover
-            || spec
-                .read_limits
-                .resolve()
-                .effective_integrity_verification()
-                == IntegrityVerification::AtOpen;
+            || (spec.read_validation().data_crc
+                && spec
+                    .read_limits
+                    .resolve()
+                    .effective_integrity_verification()
+                    == IntegrityVerification::AtOpen);
         let before_attempt = accounting;
         let entry = match read_record_entry_at(
             spec,
@@ -2759,8 +2762,8 @@ impl RecordIndexEntry {
         snapshot: &SnapshotFile,
         payload: &[u8],
     ) -> Result<()> {
-        if spec.integrity_policy == IntegrityPolicy::None {
-            return Ok(());
+        if !spec.read_validation().structure {
+            return self.verify_captured_payload(spec, payload);
         }
 
         let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
@@ -2784,26 +2787,51 @@ impl RecordIndexEntry {
         payload: &[u8],
         footer: &[u8],
     ) -> Result<()> {
-        if spec.integrity_policy == IntegrityPolicy::None {
-            return Ok(());
-        }
-        let mut header_reader = header_bytes;
-        let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
-        if !record_header_describes(&actual, self) {
-            return Err(Error::ChecksumMismatch {
-                offset: self.record_offset,
-            });
-        }
-
-        if let Some(footer_offset) = self.footer_offset {
-            let decoded = decode_record_footer(spec, footer, footer_offset, self.record_offset)?;
-            if decoded.prev_same_block_offset != self.prev_same_block_offset
-                || decoded.prev_same_key_offset != self.prev_same_key_offset
-            {
+        if spec.read_validation().structure {
+            let mut header_reader = header_bytes;
+            let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
+            if !record_header_describes(&actual, self) {
                 return Err(Error::ChecksumMismatch {
                     offset: self.record_offset,
                 });
             }
+
+            if let Some(footer_offset) = self.footer_offset {
+                let decoded =
+                    decode_record_footer(spec, footer, footer_offset, self.record_offset)?;
+                if decoded.prev_same_block_offset != self.prev_same_block_offset
+                    || decoded.prev_same_key_offset != self.prev_same_key_offset
+                {
+                    return Err(Error::ChecksumMismatch {
+                        offset: self.record_offset,
+                    });
+                }
+            }
+        }
+        self.verify_payload_crc(spec, payload, footer)
+    }
+
+    /// Check bytes against captured framing without rereading file metadata.
+    /// In CRC-only mode the captured header/footer supply the checksum input.
+    pub(super) fn verify_captured_payload(&self, spec: FormatSpec, payload: &[u8]) -> Result<()> {
+        if !spec.read_validation().data_crc {
+            return Ok(());
+        }
+        let footer = if self.footer_offset.is_some() {
+            Some(encode_record_footer(RecordFooterFields {
+                prev_same_block_offset: self.prev_same_block_offset,
+                prev_same_key_offset: self.prev_same_key_offset,
+                mutable_flags: self.mutable_flags,
+            })?)
+        } else {
+            None
+        };
+        self.verify_payload_crc(spec, payload, footer.as_ref().map_or(&[], |f| &f[..]))
+    }
+
+    fn verify_payload_crc(&self, spec: FormatSpec, payload: &[u8], footer: &[u8]) -> Result<()> {
+        if !spec.read_validation().data_crc {
+            return Ok(());
         }
         let header = RecordHeaderFields {
             block_id: self.block_id,

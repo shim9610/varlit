@@ -371,6 +371,12 @@ const _: () = assert!(
 /// everything a caller actually reads, and it is what makes open read the whole
 /// file instead of its framing.
 ///
+/// These scheduling descriptions assume the compatibility default for
+/// [`ReadLimits::read_validation`]. An explicit [`ReadValidation`] override
+/// independently chooses which optional checks run; with both off, `AtOpen`
+/// does not force an otherwise unnecessary verification scan. Recovery and
+/// explicit verification still use their strict contracts.
+///
 /// Measured on Linux x86_64, cold cache, one 2,052 MB file of 50,000 records:
 /// open took 7,096 ms verifying at open and 3,621 ms not verifying at open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -440,6 +446,43 @@ const _: () = assert!(
     ),
     "IntegrityVerification::DEFAULT must be a resolved policy"
 );
+
+/// Optional checks on returned data, independent of the checksums stored in
+/// the file. Configure with [`ReadLimits::with_read_validation`].
+///
+/// Bounds, resource limits, decoder validity, finite traversal and committed
+/// publication checks always apply. Trusting metadata may return incorrect but
+/// well-formed data if the file violates that trust; skipped damage cannot be
+/// promised an error. Protocol/publication checksums remain enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadValidation {
+    /// Recompute stored record/cell checksums. Requires a CRC-bearing format.
+    pub data_crc: bool,
+    /// Additional record/index metadata consistency checks and eager matrix
+    /// metadata reporting. Required parsing and publication guards remain.
+    pub structure: bool,
+}
+
+impl ReadValidation {
+    pub const FULL: Self = Self {
+        data_crc: true,
+        structure: true,
+    };
+    pub const CRC_ONLY: Self = Self {
+        data_crc: true,
+        structure: false,
+    };
+    pub const STRUCTURE_ONLY: Self = Self {
+        data_crc: false,
+        structure: true,
+    };
+    /// Trust captured framing; read payload without rereading its frame or CRC.
+    /// Does not relax resource limits or authorize unsafe memory accesses.
+    pub const TRUSTED: Self = Self {
+        data_crc: false,
+        structure: false,
+    };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -518,6 +561,9 @@ pub struct ReadLimits {
     /// one open and not of the file: it changes no byte, so it is neither
     /// hashed nor persisted.
     pub integrity_verification: IntegrityVerification,
+    /// Optional read-side override. `None` preserves legacy checking according
+    /// to the stored integrity policy. Does not alter file bytes or write CRCs.
+    pub read_validation: Option<ReadValidation>,
     // Authorization state, not a secret payload. Keep the boolean name explicit.
     is_trusted_api: bool,
 }
@@ -569,6 +615,7 @@ impl ReadLimits {
         // would win over a format's declaration through `overlay`.
         matrix_metadata_verification: MatrixMetadataVerification::Missing,
         integrity_verification: IntegrityVerification::Missing,
+        read_validation: None,
         is_trusted_api: false,
     };
     /// Finite companion to [`Self::STANDARD`] for input from untrusted
@@ -616,6 +663,7 @@ impl ReadLimits {
             matrix_directory_cache_bytes: ReadLimit::Missing,
             matrix_metadata_verification: MatrixMetadataVerification::Missing,
             integrity_verification: IntegrityVerification::Missing,
+            read_validation: None,
             is_trusted_api: false,
         }
     }
@@ -717,6 +765,28 @@ impl ReadLimits {
         self
     }
 
+    /// Select optional read checks without changing allocation ceilings,
+    /// publication checks or the file's stored integrity policy.
+    pub const fn with_read_validation(mut self, validation: ReadValidation) -> Self {
+        self.read_validation = Some(validation);
+        self
+    }
+
+    /// Resolve an unset override for record payload CRC/framing checks.
+    /// Other backend admission checks retain their legacy behavior when unset.
+    pub const fn effective_read_validation(self, integrity: IntegrityPolicy) -> ReadValidation {
+        match self.read_validation {
+            Some(policy) => policy,
+            None => {
+                let enabled = !matches!(integrity, IntegrityPolicy::None);
+                ReadValidation {
+                    data_crc: enabled,
+                    structure: enabled,
+                }
+            }
+        }
+    }
+
     /// The file-header extension ceiling in force, in bytes.
     ///
     /// Unset — which is what every format that never wrote
@@ -812,6 +882,9 @@ impl ReadLimits {
     /// demand cache already has — so this admits rather than checks, and states
     /// that fact in one place instead of at each call site.
     pub(crate) fn admit_matrix_metadata_verification(self) -> bool {
+        if self.read_validation.is_some_and(|p| !p.structure) {
+            return false;
+        }
         match self.effective_matrix_metadata_verification() {
             MatrixMetadataVerification::AtOpen => true,
             MatrixMetadataVerification::OnDemand => false,
@@ -885,6 +958,10 @@ impl ReadLimits {
             integrity_verification: self
                 .integrity_verification
                 .tighten(runtime.integrity_verification),
+            read_validation: match self.read_validation {
+                Some(declared) => Some(declared),
+                None => runtime.read_validation,
+            },
             max_file_len: self.max_file_len.tighten(runtime.max_file_len),
             max_records: self.max_records.tighten(runtime.max_records),
             max_index_bytes: self.max_index_bytes.tighten(runtime.max_index_bytes),
@@ -955,6 +1032,10 @@ impl ReadLimits {
             integrity_verification: self
                 .integrity_verification
                 .overlay(runtime.integrity_verification),
+            read_validation: match runtime.read_validation {
+                Some(declared) => Some(declared),
+                None => self.read_validation,
+            },
             max_file_len: self.max_file_len.overlay(runtime.max_file_len),
             max_records: self.max_records.overlay(runtime.max_records),
             max_index_bytes: self.max_index_bytes.overlay(runtime.max_index_bytes),
@@ -3233,7 +3314,29 @@ impl FormatSpec {
             .find(|identity| identity.0 == id)
     }
 
+    pub(crate) const fn read_validation(self) -> ReadValidation {
+        self.read_limits
+            .effective_read_validation(self.integrity_policy)
+    }
+
+    /// Explicit verification, recovery and rewrite admission must never inherit
+    /// a caller's trusted payload-read policy.
+    pub(crate) const fn with_strict_read_validation(mut self) -> Self {
+        self.read_limits.read_validation = Some(ReadValidation {
+            data_crc: !matches!(self.integrity_policy, IntegrityPolicy::None),
+            structure: true,
+        });
+        self
+    }
+
     pub fn validate(self) -> Result<()> {
+        if self.read_limits.read_validation.is_some_and(|p| p.data_crc)
+            && self.integrity_policy == IntegrityPolicy::None
+        {
+            return Err(Error::InvalidFormatSpec(
+                "data CRC verification requires stored checksums",
+            ));
+        }
         if self.magic.is_empty() {
             return Err(Error::InvalidFormatSpec("magic must not be empty"));
         }
