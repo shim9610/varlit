@@ -1344,6 +1344,7 @@ pub(crate) fn extract_plan_update(
     entry: &RecordIndexEntry,
     max_key_bytes: usize,
 ) -> crate::Result<Option<DiskIndexUpdate>> {
+    let spec = spec.with_strict_read_validation();
     if entry.block_id == TOMBSTONE_BLOCK_ID {
         // Same shape gate as `file::decode_stream_tombstone_key`: reject any
         // tombstone that does not carry version 1 and exactly the internal flag.

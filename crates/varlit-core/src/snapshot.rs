@@ -40,6 +40,15 @@ impl WrittenThrough {
     }
 }
 
+#[cfg(all(test, feature = "integrity"))]
+std::thread_local! {
+    static READ_REQUESTS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(all(test, feature = "integrity"))]
+pub(crate) fn take_read_requests() -> (u64, u64) {
+    READ_REQUESTS.with(|s| s.replace((0, 0)))
+}
+
 impl SnapshotFile {
     pub(crate) fn new(file: File) -> Result<Self> {
         Self::from_file(file)
@@ -159,6 +168,12 @@ impl SnapshotFile {
         let len =
             u64::try_from(buffer.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
         self.check_range(offset, len)?;
+
+        #[cfg(all(test, feature = "integrity"))]
+        READ_REQUESTS.with(|s| {
+            let (calls, bytes) = s.get();
+            s.set((calls + 1, bytes + len));
+        });
 
         let mut consumed = 0usize;
         while consumed < buffer.len() {

@@ -708,6 +708,33 @@ Native data is synced before a durable confirmed root is published.
 Old redb sidecars require rebuild/bootstrap;
 there is deliberately no compatibility decoder.
 
+## Independent optional read checks
+
+Choose read checks explicitly when the application controls its input files:
+
+```rust
+let options = varlit::DiskIndexOptions {
+    limits: varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::TRUSTED),
+    ..varlit::DiskIndexOptions::default()
+};
+// VarlitIndexedReader::open(spec, path, options, plan)?;
+```
+
+`FULL`, `CRC_ONLY`, `STRUCTURE_ONLY` and `TRUSTED` select the four combinations
+of additional structure checks and data CRC. Leaving the override unset retains
+existing behavior. `TRUSTED` uses confirmed metadata directly for uncompressed
+indexed payload reads; it does not reread the native frame or checksum the
+payload. Bounds, resource limits, decoder validity, traversal termination and
+publication guards remain. A well-formed wrong value need not produce an error
+when its detecting check is disabled. Stored checksum policy and write behavior
+remain unchanged, and CRC-on requires a format that stores CRCs.
+
+This does not remove the initial framing needed by a stream/demand directory,
+compression metadata absent from an index, or protocol/generation checksums.
+There is no unbounded cache or larger resource allowance behind the option.
+See the [complete contract and baseline review](design/read-validation-policy-review.md)
+for exact I/O scope, explicit verification, recovery and mmap restrictions.
+
 ## Checked I/O Boundary
 
 Sidecar offsets and lengths are untrusted. They become private-field

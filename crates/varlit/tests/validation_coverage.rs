@@ -192,7 +192,66 @@ fn probe(
     Ok((directory, reader, record.record_offset))
 }
 
+fn read_policy_probe(
+    policy: varlit::ReadValidation,
+    damaged: bool,
+    limited: bool,
+) -> Result<varlit::Result<Probe>, Box<dyn std::error::Error>> {
+    let (directory, _original, offset) = probe(damaged)?;
+    let mut limits = varlit::ReadLimits::STANDARD.with_read_validation(policy);
+    if limited {
+        limits = limits.with_max_record_payload_len(0);
+    }
+    Ok(ProbeFormat::spec()
+        .open_readonly_with_limits(directory.path().join("contract.varlit"), limits)
+        .and_then(|reader| reader.read_block_at::<Probe>(offset)))
+}
+
 const CONTRACTS: &[Contract] = &[
+    contract!("core/format.rs::format::ReadValidation::const:FULL@65630b1aec77469e",
+        valid { assert_eq!(read_policy_probe(varlit::ReadValidation::FULL, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let result = read_policy_probe(varlit::ReadValidation::FULL, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadValidation::const:CRC_ONLY@df8c023edf7c9919",
+        valid { assert_eq!(read_policy_probe(varlit::ReadValidation::CRC_ONLY, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let result = read_policy_probe(varlit::ReadValidation::CRC_ONLY, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadValidation::const:STRUCTURE_ONLY@209e08687f0843d8",
+        valid { assert_eq!(read_policy_probe(varlit::ReadValidation::STRUCTURE_ONLY, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let result = read_policy_probe(varlit::ReadValidation::STRUCTURE_ONLY, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadValidation::const:TRUSTED@6311c0c4b06413e8",
+        valid { assert_eq!(read_policy_probe(varlit::ReadValidation::TRUSTED, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let result = read_policy_probe(varlit::ReadValidation::TRUSTED, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::struct:ReadValidation@cbf29ce484222325",
+        valid { let policy = varlit::ReadValidation { data_crc: false, structure: false }; assert_eq!(read_policy_probe(policy, true, false)??, Probe { value: 127 }); Ok(()) },
+        invalid { let policy = varlit::ReadValidation { data_crc: true, structure: true }; assert!(matches!(read_policy_probe(policy, true, false)?, Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:ReadValidation@5132be33be37925b",
+        valid { let policy = varlit::ReadValidation { data_crc: false, structure: false }; assert_eq!(read_policy_probe(policy, true, false)??, Probe { value: 127 }); Ok(()) },
+        invalid { let policy = varlit::ReadValidation { data_crc: true, structure: true }; assert!(matches!(read_policy_probe(policy, true, false)?, Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadValidation::field:data_crc@cd2fd49bc6b014bd",
+        valid { let mut policy = varlit::ReadValidation::FULL; policy.data_crc = false; assert_eq!(read_policy_probe(policy, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let mut policy = varlit::ReadValidation::FULL; policy.data_crc = false; assert!(matches!(read_policy_probe(policy, false, true)?, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadValidation::field:structure@cd2fd49bc6b014bd",
+        valid { let mut policy = varlit::ReadValidation::FULL; policy.structure = false; assert_eq!(read_policy_probe(policy, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let mut policy = varlit::ReadValidation::FULL; policy.structure = false; assert!(matches!(read_policy_probe(policy, false, true)?, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadLimits::field:read_validation@55eeb0f6e20f3ad1",
+        valid { let mut limits = varlit::ReadLimits::STANDARD; limits.read_validation = Some(varlit::ReadValidation::TRUSTED); assert_eq!(read_policy_probe(limits.read_validation.unwrap(), true, false)??, Probe { value: 127 }); Ok(()) },
+        invalid { let mut limits = varlit::ReadLimits::STANDARD; limits.read_validation = Some(varlit::ReadValidation::TRUSTED); assert!(matches!(read_policy_probe(limits.read_validation.unwrap(), false, true)?, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadLimits::fn:with_read_validation@cefa6f5f700ab26f",
+        valid { let limits = varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::CRC_ONLY); assert_eq!(read_policy_probe(limits.read_validation.unwrap(), false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let limits = varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::CRC_ONLY); assert!(matches!(read_policy_probe(limits.read_validation.unwrap(), true, false)?, Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
+    ),
+    contract!("core/format.rs::format::ReadLimits::fn:effective_read_validation@b2c35212607618ef",
+        valid { let policy = varlit::ReadLimits::MISSING.effective_read_validation(varlit::IntegrityPolicy::None); assert_eq!(policy, varlit::ReadValidation::TRUSTED); assert_eq!(read_policy_probe(policy, false, false)??, Probe { value: 19 }); Ok(()) },
+        invalid { let policy = varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::FULL).effective_read_validation(varlit::IntegrityPolicy::None); let spec = ProbeFormat::spec().with_integrity_policy(varlit::IntegrityPolicy::None).with_read_limits(varlit::ReadLimits::STANDARD.with_read_validation(policy)); assert!(matches!(spec.validate(), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
     contract!("core/file.rs::file::VarlitFile::fn:read_block_at@8e571d1498d213bf",
         valid {
             let (_directory, reader, offset) = probe(false)?;
@@ -205,7 +264,7 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
-    contract!("core/format.rs::format::ReadLimits::const:STANDARD@b1db10fa579da382",
+    contract!("core/format.rs::format::ReadLimits::const:STANDARD@7b34437e092b5a48",
         valid {
             let (directory, _reader, offset) = probe(false)?;
             let reader = ProbeFormat::spec().open_readonly_with_limits(

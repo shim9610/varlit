@@ -653,3 +653,180 @@ fn verified_copy_checks_crc_and_retries_repaired_sources_at_buffer_edges() -> Re
     }
     Ok(())
 }
+
+#[cfg(feature = "integrity")]
+#[test]
+fn read_validation_combinations_separate_damage_detection_and_frame_io() -> Result<()> {
+    use crate::{ReadLimits, ReadValidation};
+    for integrity in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
+        for footer in [false, true] {
+            let base = spec()
+                .with_integrity_policy(integrity)
+                .with_commit_policy(if footer {
+                    CommitPolicy::RecordFooter
+                } else {
+                    CommitPolicy::None
+                });
+            let mut bytes = Vec::new();
+            let entry = append_frame(
+                base,
+                &mut bytes,
+                0,
+                b"payload",
+                RecordFooterFields {
+                    prev_same_block_offset: None,
+                    prev_same_key_offset: None,
+                    mutable_flags: 0,
+                },
+            )?;
+            for declared in [
+                None,
+                Some(ReadValidation::FULL),
+                Some(ReadValidation::CRC_ONLY),
+                Some(ReadValidation::STRUCTURE_ONLY),
+                Some(ReadValidation::TRUSTED),
+            ] {
+                let policy = declared.unwrap_or(ReadValidation::FULL);
+                let mut limits = ReadLimits::STANDARD;
+                limits.read_validation = declared;
+                let spec = base.with_read_limits(limits);
+                let original = snapshot(&bytes)?;
+                crate::snapshot::take_read_requests();
+                let mut out = Vec::new();
+                entry.read_payload_snapshot_into(spec, &original, &mut out)?;
+                assert_eq!(out, b"payload");
+                let requests = crate::snapshot::take_read_requests();
+                assert_eq!(
+                    requests.0,
+                    if policy.structure {
+                        2 + u64::from(footer)
+                    } else {
+                        1
+                    }
+                );
+                assert_eq!(
+                    requests.1,
+                    7 + if policy.structure {
+                        RECORD_HEADER_LEN + if footer { RECORD_FOOTER_LEN } else { 0 }
+                    } else {
+                        0
+                    }
+                );
+
+                let mut damaged = bytes.clone();
+                damaged[entry.payload_offset as usize] ^= 1;
+                assert_eq!(
+                    entry
+                        .read_payload_snapshot(spec, &snapshot(&damaged)?)
+                        .is_err(),
+                    policy.data_crc
+                );
+                let mut damaged = bytes.clone();
+                damaged[0] ^= 1;
+                // Metadata is deliberately trusted after capture in CRC-only mode.
+                assert_eq!(
+                    entry
+                        .read_payload_snapshot(spec, &snapshot(&damaged)?)
+                        .is_err(),
+                    policy.structure
+                );
+
+                let physical = crate::disk_index::DiskIndexPhysicalRecord {
+                    physical_len: bytes.len() as u64,
+                    block_id: entry.block_id,
+                    block_version: entry.block_version,
+                    flags: entry.flags,
+                    native_crc: Some(entry.checksum),
+                };
+                if !policy.structure {
+                    crate::snapshot::take_read_requests();
+                    let captured =
+                        read_trusted_index_entry(spec, &original, 0, entry.sequence, physical)?;
+                    assert_eq!(captured.read_payload_snapshot(spec, &original)?, b"payload");
+                    assert_eq!(
+                        crate::snapshot::take_read_requests().0,
+                        1 + u64::from(policy.data_crc && footer)
+                    );
+                }
+
+                // Limits/overflow and actual short reads survive all trust choices.
+                let limited = spec.with_read_limits(
+                    ReadLimits::STANDARD
+                        .with_read_validation(policy)
+                        .with_max_record_payload_len(3),
+                );
+                crate::snapshot::take_read_requests();
+                assert!(matches!(
+                    entry.read_payload_snapshot(limited, &original),
+                    Err(Error::LimitExceeded { .. })
+                ));
+                assert_eq!(crate::snapshot::take_read_requests(), (0, 0));
+                let mut hostile = entry.clone();
+                hostile.payload_len = u64::MAX;
+                assert!(hostile.read_payload_snapshot(spec, &original).is_err());
+                let short = snapshot(&bytes)?;
+                short.try_clone_file()?.set_len(entry.payload_offset + 1)?;
+                assert!(entry.read_payload_snapshot(spec, &short).is_err());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_read_validation_preserves_declarations_and_format_identity() -> Result<()> {
+    use crate::{ReadLimits, ReadValidation};
+    let base = spec();
+    for policy in [ReadValidation::STRUCTURE_ONLY, ReadValidation::TRUSTED] {
+        let selected = ReadLimits::STANDARD.with_read_validation(policy);
+        assert_eq!(
+            selected.overlay(ReadLimits::MISSING).read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            selected
+                .tighten(ReadLimits::STANDARD.with_read_validation(ReadValidation::FULL))
+                .read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            ReadLimits::MISSING.overlay(selected).read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            base.with_read_limits(selected).computed_schema_hash(),
+            base.computed_schema_hash()
+        );
+    }
+    assert!(
+        base.with_read_limits(ReadLimits::STANDARD.with_read_validation(ReadValidation::FULL))
+            .validate()
+            .is_err()
+    );
+    assert!(
+        base.with_read_limits(ReadLimits::STANDARD.with_read_validation(ReadValidation::CRC_ONLY))
+            .validate()
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_no_crc_at_open_keeps_its_scan_unless_trust_is_explicit() {
+    use crate::{ReadLimits, ReadValidation};
+    let base = spec().with_read_limits(
+        ReadLimits::STANDARD.with_integrity_verification(IntegrityVerification::AtOpen),
+    );
+    assert!(!segment_chain_open_is_allowed(base, ScanIntent::ReadOnly));
+    for policy in [ReadValidation::STRUCTURE_ONLY, ReadValidation::TRUSTED] {
+        let selected = base.with_resource_limits(ReadLimits::MISSING.with_read_validation(policy));
+        assert_eq!(
+            segment_chain_open_is_allowed(selected, ScanIntent::ReadOnly),
+            !policy.structure
+        );
+        assert!(!segment_chain_open_is_allowed(
+            selected,
+            ScanIntent::Recover
+        ));
+    }
+}

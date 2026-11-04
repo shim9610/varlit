@@ -3944,7 +3944,9 @@ pub(crate) fn read_run_payload<T: VarlitMatrixBlock>(
         return Err(Error::MatrixNotCommitted);
     }
     reader.read_exact_at(layout.slot_offset(block_index, first)?, out)?;
-    if let Some(base) = block.crc_offset {
+    if spec.read_validation().data_crc
+        && let Some(base) = block.crc_offset
+    {
         let mut crcs = [0u8; 4096];
         reader.read_exact_at(
             indexed_crc_offset(base, first)?,
@@ -4085,7 +4087,9 @@ pub(crate) fn read_column_payload<T: VarlitMatrixBlock>(
         stride,
         out,
     )?;
-    if let Some(base) = block.crc_offset {
+    if spec.read_validation().data_crc
+        && let Some(base) = block.crc_offset
+    {
         let mut crcs = [0u8; 4096];
         read_strided_bytes(
             |at, bytes| reader.read_exact_at(at, bytes),
@@ -4485,6 +4489,7 @@ pub(crate) fn cell_payload_parts<'a, T: VarlitMatrixBlock>(
     let block = &layout.blocks[block_index];
     let crc = block
         .crc_offset
+        .filter(|_| spec.read_validation().data_crc)
         .map(|base| {
             Ok::<_, Error>(CellCrc {
                 offset: indexed_crc_offset(base, ordinal)?,
@@ -5805,6 +5810,13 @@ fn verify_cell_crc(
     ordinal: u64,
     payload: &[u8],
 ) -> Result<()> {
+    if layout
+        .read_limits
+        .read_validation
+        .is_some_and(|p| !p.data_crc)
+    {
+        return Ok(());
+    }
     let Some(crc_offset) = layout.blocks[block_index].crc_offset else {
         return Ok(());
     };

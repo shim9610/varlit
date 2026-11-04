@@ -570,7 +570,10 @@ impl VarlitStreamReader {
         let header_eof = read_file_header(self.spec, &mut header_file)?;
         let mut progress = ScanProgressDriver::new(scan, header_eof, self.snapshot.len());
         progress.start(&mut observer).map_err(scan_cancelled)?;
-        let mut scanner = NativeStreamScanner::from_snapshot(self.spec, self.snapshot.clone())?;
+        let mut scanner = NativeStreamScanner::from_snapshot(
+            self.spec.with_strict_read_validation(),
+            self.snapshot.clone(),
+        )?;
         let mut records = 0u64;
         while scanner.next_entry()?.is_some() {
             records = records

@@ -297,6 +297,7 @@ pub(super) struct Reader {
     end: u64,
     minimum_offset: u64,
     max_key: usize,
+    verify_metadata: bool,
     budget: usize,
     cache: RefCell<Cache>,
     #[cfg(test)]
@@ -312,6 +313,7 @@ impl Reader {
             end,
             minimum_offset: PAGE as u64,
             max_key,
+            verify_metadata: true,
             budget,
             cache: RefCell::new(Cache::default()),
             #[cfg(test)]
@@ -319,6 +321,10 @@ impl Reader {
             #[cfg(test)]
             key_reads: std::cell::Cell::new(0),
         }
+    }
+    pub(super) fn with_metadata_verification(mut self, enabled: bool) -> Self {
+        self.verify_metadata = enabled;
+        self
     }
     pub(super) fn with_minimum_offset(mut self, minimum_offset: u64) -> Self {
         self.minimum_offset = minimum_offset;
@@ -351,7 +357,7 @@ impl Reader {
         }
         let checksum = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
         bytes[16..20].fill(0);
-        if crc32fast::hash(&bytes) != checksum {
+        if self.verify_metadata && crc32fast::hash(&bytes) != checksum {
             return Err(corrupt("index page checksum mismatch"));
         }
         let height = bytes[8];
@@ -359,9 +365,10 @@ impl Reader {
         if height > 31 || len == 0 || len > fanout(height) || bytes[12..16] != [0; 4] {
             return Err(corrupt("invalid index page shape"));
         }
-        if bytes[HEADER + len * entry_size(height)..]
-            .iter()
-            .any(|x| *x != 0)
+        if self.verify_metadata
+            && bytes[HEADER + len * entry_size(height)..]
+                .iter()
+                .any(|x| *x != 0)
         {
             return Err(corrupt("nonzero index page padding"));
         }
@@ -474,8 +481,9 @@ impl Reader {
                 let key = &entry.key;
                 let checksum =
                     u32::from_le_bytes(bytes[at + key.len..at + key.len + 4].try_into().unwrap());
-                if crc32fast::hash(&bytes[at..at + key.len]) != checksum
-                    || bytes[at..at + 16] != key.prefix
+                if self.verify_metadata
+                    && (crc32fast::hash(&bytes[at..at + key.len]) != checksum
+                        || bytes[at..at + 16] != key.prefix)
                 {
                     return Err(corrupt("index key checksum mismatch"));
                 }
@@ -621,7 +629,9 @@ impl Reader {
         let mut bytes = buffer(len)?;
         self.read_key_bytes(key.offset, &mut bytes)?;
         let checksum = u32::from_le_bytes(bytes[key.len..].try_into().unwrap());
-        if crc32fast::hash(&bytes[..key.len]) != checksum || bytes[..16] != key.prefix {
+        if self.verify_metadata
+            && (crc32fast::hash(&bytes[..key.len]) != checksum || bytes[..16] != key.prefix)
+        {
             return Err(corrupt("index key checksum mismatch"));
         }
         bytes.truncate(key.len);
@@ -1406,49 +1416,54 @@ mod corruption_guards {
         let mut trials = 0;
         let mut io_errors = 0;
         let mut allocation_errors = 0;
-        for chunk in [31, 4096] {
-            // Fail before reading, inside the root, and inside the bad child;
-            // MAX lets the CRC-valid hostile shape itself cause rejection.
-            let root_calls = PAGE.div_ceil(chunk);
-            for fail_at in [1, 2, root_calls + 2, usize::MAX] {
-                for kind in [ErrorKind::UnexpectedEof, ErrorKind::PermissionDenied] {
-                    for allocation in [1, 2, 3, 4, usize::MAX] {
-                        write_at(&file, PAGE as u64, &hostile).unwrap();
-                        let read = Reader::new(file.clone(), end, 4096, 8192);
-                        let (result, calls) = with_read_fault(chunk, fail_at, kind, || {
-                            crate::pib_probe::with_allocation_refusal(allocation, || {
-                                read.get(root, &1u64.to_be_bytes())
-                            })
-                        });
-                        assert!(result.is_err(), "hostile child accepted");
-                        // A native syscall may return LESS than the supplied chunk
-                        // (Miri exercises this). Each non-interrupted success
-                        // advances at least one byte; at most one terminal error.
-                        assert!(calls <= 2 * PAGE + 1, "unbounded read work: {calls}");
-                        if let Err(DiskIndexError::Io(error)) = &result {
-                            io_errors += usize::from(error.kind() == kind);
-                            allocation_errors +=
-                                usize::from(error.kind() == ErrorKind::OutOfMemory);
+        for verify_metadata in [true, false] {
+            for chunk in [31, 4096] {
+                // Fail before reading, inside the root, and inside the bad child;
+                // MAX lets the CRC-valid hostile shape itself cause rejection.
+                let root_calls = PAGE.div_ceil(chunk);
+                for fail_at in [1, 2, root_calls + 2, usize::MAX] {
+                    for kind in [ErrorKind::UnexpectedEof, ErrorKind::PermissionDenied] {
+                        for allocation in [1, 2, 3, 4, usize::MAX] {
+                            write_at(&file, PAGE as u64, &hostile).unwrap();
+                            let read = Reader::new(file.clone(), end, 4096, 8192)
+                                .with_metadata_verification(verify_metadata);
+                            let (result, calls) = with_read_fault(chunk, fail_at, kind, || {
+                                crate::pib_probe::with_allocation_refusal(allocation, || {
+                                    read.get(root, &1u64.to_be_bytes())
+                                })
+                            });
+                            assert!(result.is_err(), "hostile child accepted");
+                            // A native syscall may return LESS than the supplied chunk
+                            // (Miri exercises this). Each non-interrupted success
+                            // advances at least one byte; at most one terminal error.
+                            assert!(calls <= 2 * PAGE + 1, "unbounded read work: {calls}");
+                            if let Err(DiskIndexError::Io(error)) = &result {
+                                io_errors += usize::from(error.kind() == kind);
+                                allocation_errors +=
+                                    usize::from(error.kind() == ErrorKind::OutOfMemory);
+                            }
+                            // Repair only the rejected child. Retry on the SAME
+                            // reader, including any partially warmed root cache.
+                            write_at(&file, PAGE as u64, &valid).unwrap();
+                            assert!(read.get(root, &1u64.to_be_bytes()).unwrap().is_some());
+                            let cache = read.cache.borrow();
+                            assert!(cache.pages.values().all(Option::is_some));
+                            assert!(cache.keys.values().all(Option::is_some));
+                            assert!(cache.bytes <= read.budget);
+                            drop(cache);
+                            drop(read);
+                            assert_eq!(Arc::strong_count(&file), 1);
+                            trials += 1;
                         }
-                        // Repair only the rejected child. Retry on the SAME
-                        // reader, including any partially warmed root cache.
-                        write_at(&file, PAGE as u64, &valid).unwrap();
-                        assert!(read.get(root, &1u64.to_be_bytes()).unwrap().is_some());
-                        let cache = read.cache.borrow();
-                        assert!(cache.pages.values().all(Option::is_some));
-                        assert!(cache.keys.values().all(Option::is_some));
-                        assert!(cache.bytes <= read.budget);
-                        drop(cache);
-                        drop(read);
-                        assert_eq!(Arc::strong_count(&file), 1);
-                        trials += 1;
                     }
                 }
             }
         }
         assert!(io_errors > 0 && allocation_errors > 0);
-        assert_eq!(trials, 80);
-        println!("COMPOUND_READ trials=80 retries=80 bounded=true");
+        assert_eq!(trials, 160);
+        println!(
+            "COMPOUND_READ trials={trials} retries={trials} bounded=true strict_and_trusted=true"
+        );
     }
 
     #[test]
@@ -1492,17 +1507,47 @@ mod corruption_guards {
     #[test]
     fn checksummed_hostile_heights_and_counts_terminate() {
         let mut cases = 0;
-        for height in 1..=u8::MAX {
-            for count in [1, u64::MAX / 2, u64::MAX] {
-                let file = Arc::new(tempfile::tempfile().unwrap());
+        for verify_metadata in [true, false] {
+            for height in 1..=u8::MAX {
+                for count in [1, u64::MAX / 2, u64::MAX] {
+                    let file = Arc::new(tempfile::tempfile().unwrap());
+                    let root = Root {
+                        offset: PAGE as u64,
+                        count,
+                    };
+                    // Self-references with freshly recomputed, valid CRCs.
+                    write_at(&file, root.offset, &page(height, root)).unwrap();
+                    let read = Reader::new(file, 2 * PAGE as u64, 4096, 0)
+                        .with_metadata_verification(verify_metadata);
+                    assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+                    let mut delivered = 0;
+                    assert!(
+                        read.visit(root, &mut |_, _| {
+                            delivered += 1;
+                            Ok(())
+                        })
+                        .is_err()
+                    );
+                    assert_eq!(delivered, 0);
+                    cases += 1;
+                }
+            }
+            // Valid, backward child extents reach the height check (cycles above
+            // can be rejected earlier by the extent/shape checks).
+            for height in 2..=31 {
+                let (file, leaf) = image(0);
                 let root = Root {
-                    offset: PAGE as u64,
-                    count,
+                    offset: 2 * PAGE as u64,
+                    count: 2,
                 };
-                // Self-references with freshly recomputed, valid CRCs.
-                write_at(&file, root.offset, &page(height, root)).unwrap();
-                let read = Reader::new(file, 2 * PAGE as u64, 4096, 0);
+                write_at(&file, root.offset, &page(height, leaf)).unwrap();
+                let read = Reader::new(file, 3 * PAGE as u64, 4096, 0)
+                    .with_metadata_verification(verify_metadata);
                 assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+                assert!(
+                    read.page_reads.get() >= 2,
+                    "child height check was not reached"
+                );
                 let mut delivered = 0;
                 assert!(
                     read.visit(root, &mut |_, _| {
@@ -1514,32 +1559,6 @@ mod corruption_guards {
                 assert_eq!(delivered, 0);
                 cases += 1;
             }
-        }
-        // Valid, backward child extents reach the height check (cycles above
-        // can be rejected earlier by the extent/shape checks).
-        for height in 2..=31 {
-            let (file, leaf) = image(0);
-            let root = Root {
-                offset: 2 * PAGE as u64,
-                count: 2,
-            };
-            write_at(&file, root.offset, &page(height, leaf)).unwrap();
-            let read = Reader::new(file, 3 * PAGE as u64, 4096, 0);
-            assert!(read.get(root, &1u64.to_be_bytes()).is_err());
-            assert!(
-                read.page_reads.get() >= 2,
-                "child height check was not reached"
-            );
-            let mut delivered = 0;
-            assert!(
-                read.visit(root, &mut |_, _| {
-                    delivered += 1;
-                    Ok(())
-                })
-                .is_err()
-            );
-            assert_eq!(delivered, 0);
-            cases += 1;
         }
         println!("HOSTILE_INDEX valid_crc_cases={cases} delivered=0");
     }

@@ -187,7 +187,15 @@ impl Store {
                     .saturating_add(DiskIndexKeyTag::ENCODED_LEN),
                 budget,
             )
-            .with_minimum_offset(FILE_HEADER as u64),
+            .with_minimum_offset(FILE_HEADER as u64)
+            .with_metadata_verification(
+                self.writer.is_some()
+                    || self
+                        .options
+                        .limits
+                        .read_validation
+                        .is_none_or(|p| p.structure),
+            ),
             slots: slots::Reader::new(
                 self.file.clone(),
                 checkpoint.offset,

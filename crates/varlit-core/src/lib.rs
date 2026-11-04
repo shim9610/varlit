@@ -134,8 +134,8 @@ pub use format::{
     LivenessPolicy, ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor,
     MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor, MatrixMetadataResidency,
     MatrixMetadataVerification, MetadataDescriptor, RawRegionDescriptor, ReadLimit, ReadLimits,
-    RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat, TransactionMarkerMode,
-    VariableCompression,
+    ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat,
+    TransactionMarkerMode, VariableCompression,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 

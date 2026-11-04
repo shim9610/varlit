@@ -1430,7 +1430,7 @@ impl RecordIndexEntry {
         Ok(payload)
     }
 
-    /// Reads this record's stored bytes into the caller's buffer, verified.
+    /// Reads stored bytes into the caller's buffer, applying selected read checks.
     ///
     /// `out` ends exactly `payload_len` bytes long; see
     /// [`SnapshotFile::read_into_at`] for why that matters to the checksum.
@@ -5308,6 +5308,7 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
+        let spec = spec.with_strict_read_validation();
         let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
         lock.bind_native(&file, &path)?;
         let original_len = file.metadata()?.len();
@@ -7537,8 +7538,10 @@ impl VarlitFile {
     /// read through it into your buffer as often as you like, both bound to
     /// this open handle.
     ///
-    /// `out` ends exactly the record's stored length, and the checksum is
-    /// verified over it, identically to every internal read.
+    /// `out` ends exactly the record's stored length. Optional frame/CRC checks
+    /// follow [`crate::ReadValidation`], identically to internal payload reads.
+    /// `TRUSTED` accepts the supplied metadata while retaining extent and
+    /// allocation limits.
     ///
     /// **The entry is not trusted.** It is the caller's, so it may name
     /// anything: an extent past the end of the snapshot is refused, and bytes
@@ -8752,7 +8755,11 @@ impl VarlitFile {
             // which is exactly the point: there is one verification in the
             // crate, and this method chooses when it runs rather than adding a
             // second copy of it.
-            entry.read_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
+            entry.read_payload_snapshot_into(
+                self.spec.with_strict_read_validation(),
+                &self.snapshot,
+                &mut payload,
+            )?;
             verified += 1;
         }
         // A non-resident block's records are never in `self.index` (a
@@ -8769,7 +8776,11 @@ impl VarlitFile {
             // than asserted away.
             for entry in self.block_chain(descriptor.block_id)? {
                 let entry = entry?;
-                entry.read_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
+                entry.read_payload_snapshot_into(
+                    self.spec.with_strict_read_validation(),
+                    &self.snapshot,
+                    &mut payload,
+                )?;
                 verified += 1;
             }
         }
@@ -10333,7 +10344,9 @@ impl VarlitFile {
             let (payload, stored) = self.read_compressed_chunk_cell(location, ordinal)?;
             // The checksum came out of the same decode as the cell, so a
             // damaged sub-block cannot produce a matching pair.
-            if let Some(expected) = stored {
+            if self.spec.read_validation().data_crc
+                && let Some(expected) = stored
+            {
                 let actual = crc32_bytes(&payload)?;
                 if actual != expected {
                     return Err(Error::MatrixChecksumMismatch {
@@ -10507,6 +10520,9 @@ impl VarlitFile {
         ordinal: u64,
         payload: &[u8],
     ) -> Result<()> {
+        if !self.spec.read_validation().data_crc {
+            return Ok(());
+        }
         let Some(crc_offset) = location.crc_offset else {
             return Ok(());
         };
@@ -11566,14 +11582,21 @@ impl VarlitFile {
             return Err(Error::MmapEntryNotInSnapshot);
         }
         validate_mmap_index_entry(entry, self.snapshot.len())?;
-        let actual = fault_record_entry(
-            &self.snapshot,
-            self.spec,
-            entry.record_offset,
-            entry.committed,
-        )?;
-        if actual != *entry {
-            return Err(Error::MmapEntryNotInSnapshot);
+        if self
+            .spec
+            .read_limits
+            .read_validation
+            .is_none_or(|p| p.structure)
+        {
+            let actual = fault_record_entry(
+                &self.snapshot,
+                self.spec,
+                entry.record_offset,
+                entry.committed,
+            )?;
+            if actual != *entry {
+                return Err(Error::MmapEntryNotInSnapshot);
+            }
         }
         self.spec
             .read_limits
@@ -11656,7 +11679,7 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::Records, record_count)?;
-        let verify = self.spec.integrity_policy != IntegrityPolicy::None;
+        let verify = self.spec.read_validation().data_crc || self.spec.read_validation().structure;
         let mmap_index_bytes = mmap_index_bytes_for_count(self.index.len(), verify)?;
         self.spec
             .read_limits
@@ -13394,6 +13417,64 @@ impl KeyedChain<'_> {
 }
 
 /// Frames one record through the snapshot, without touching the resident index.
+pub(crate) fn read_trusted_index_entry(
+    spec: FormatSpec,
+    snapshot: &SnapshotFile,
+    record_offset: u64,
+    sequence: u64,
+    physical: crate::disk_index::DiskIndexPhysicalRecord,
+) -> Result<RecordIndexEntry> {
+    // The sidecar lacks the compression-length hint. Read the native frame once
+    // for compressed records; payload access still avoids a second frame read.
+    if physical.flags & RECORD_FLAG_COMPRESSED != 0 {
+        return read_record_entry_positional(spec, snapshot, record_offset);
+    }
+    let pointer = snapshot.validate(
+        crate::scalable_extent::UntrustedRecordPointer::new(record_offset, physical.physical_len),
+        spec.spec_needs_record_footer(),
+    )?;
+    let span = pointer.span();
+    let mut entry = RecordIndexEntry {
+        block_id: physical.block_id,
+        block_version: physical.block_version,
+        flags: physical.flags,
+        sequence,
+        record_offset,
+        payload_offset: span.payload_offset().get(),
+        payload_len: span.payload_len().get(),
+        checksum: physical.native_crc.unwrap_or(0),
+        uncompressed_len_hint: 0,
+        footer_offset: spec
+            .spec_needs_record_footer()
+            .then_some(span.footer_offset().get()),
+        prev_same_block_offset: None,
+        prev_same_key_offset: None,
+        mutable_flags: 0,
+        committed: true,
+    };
+    validate_record_entry(&spec, &entry)?;
+    spec.read_limits
+        .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
+    spec.read_limits
+        .check(ReadLimitKey::LogicalPayloadLen, entry.payload_len)?;
+    if spec.read_validation().data_crc {
+        if physical.native_crc.is_none() {
+            return Err(Error::InvalidIndexCheckpoint);
+        }
+        // Footer bytes participate in data CRC. The sidecar does not store
+        // chain links, so CRC-only mode still needs this one footer read.
+        if let Some(at) = entry.footer_offset {
+            let mut bytes = [0; RECORD_FOOTER_LEN as usize];
+            snapshot.read_exact_at(at, &mut bytes)?;
+            let footer = decode_record_footer(spec, &bytes, at, record_offset)?;
+            entry.prev_same_block_offset = footer.prev_same_block_offset;
+            entry.prev_same_key_offset = footer.prev_same_key_offset;
+            entry.mutable_flags = footer.mutable_flags;
+        }
+    }
+    Ok(entry)
+}
+
 pub(crate) fn read_record_entry_positional(
     spec: FormatSpec,
     snapshot: &SnapshotFile,

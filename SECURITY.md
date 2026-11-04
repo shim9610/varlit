@@ -32,6 +32,19 @@ Format declarations and user-provided codecs are trusted application code.
 Documented mmap mutation exclusions and experimental feature limitations still
 apply; see [known limitations](docs/known-limitations.md).
 
+## Explicit trusted read policy
+
+`ReadLimits::with_read_validation` independently selects optional data CRC and
+additional structural consistency checks. Ordinary opens retain their existing
+checks. `ReadValidation::TRUSTED` trusts captured file metadata and skips those
+optional checks; wrong but well-formed data may then be returned if that trust
+is violated. Retained checks return errors, but skipped damage is not guaranteed
+to be detected. Snapshot bounds, checked arithmetic, resource/decoder limits,
+finite traversal and committed-publication guards remain in force. This is not a
+process-wide OOM guarantee. Protocol/generation checksums and standalone container
+checks are distinct from optional record/cell CRCs. See the
+[read-policy contract](docs/design/read-validation-policy-review.md).
+
 ## Mapped files and external modification
 
 Memory mapping (`mmap`) is not isolation from another handle or process that
