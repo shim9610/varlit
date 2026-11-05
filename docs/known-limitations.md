@@ -1,7 +1,8 @@
 # Known Limitations
 
-This describes Varlit 0.12.1, based on the 0.12.0 implementation. Historical measurements
-below identify their original platform and are not new performance claims.
+This describes the current repository, including
+[unreleased additions after 0.12.1](api-changes.md#unreleased). Historical measurements
+below identify their original revision/platform and are not new performance claims.
 Private spill files bound retained directories; they do not remove initial
 scans, temporary disk requirements, per-record workspace or filesystem limits.
 
@@ -13,6 +14,11 @@ used to record the opposite, now record what is left. What remains is I/O: the
 default open **authenticates the whole commit map**, and that read is
 `O(candidate pages)`. It is a declared policy with an off switch, and the numbers
 below are what it costs.
+
+An explicit `ReadValidation` selection can also omit eager metadata reporting
+and/or data CRC checks. The defaults described here remain unchanged when that
+override is unset. Commit/generation authentication, bounds and publication
+guards remain required; see [read validation](api-reference.md#read-validation).
 
 ### 1.1 Open cost is proportional to candidate pages, not to the working set
 
@@ -1105,9 +1111,18 @@ These results qualify that recorded source tree. The 0.12.1 product tree
 (`43308ff`) subsequently passed all 46 jobs in
 [its own CI](https://github.com/shim9610/varlit/actions/runs/38590083518) and all
 three [sanitizer jobs](https://github.com/shim9610/varlit/actions/runs/38590083701).
-Miri exercised 160 portable core tests and six codec-array tests, with 47 documented
+In that historical run, Miri exercised 160 portable core tests and six codec-array tests, with 47 documented
 exclusions and three ignored tests; fuzz smoke completed all 13 declared targets.
 These checks do not establish whole-library Miri coverage or a long fuzz campaign.
+
+The unreleased runtime at `851836e` subsequently passed all 69
+[CI jobs](https://github.com/shim9610/varlit/actions/runs/41892694910) and all three
+[Sanitizers jobs](https://github.com/shim9610/varlit/actions/runs/41892694877).
+The current Miri exclusion inventory contains 55 tests with explicit alternative
+coverage and gaps. Kani default/all each run 55 registered contracts, and native
+failure tests combine hostile metadata with allocation/short-read/I/O failure.
+See the [verification guide](verification.md) for scopes and commands; these
+results do not establish whole-library memory or filesystem proofs.
 
 | Target | Status |
 | --- | --- |
@@ -1118,11 +1133,14 @@ These checks do not establish whole-library Miri coverage or a long fuzz campaig
 
 ### 6.9 CI reproducibility is bounded
 
-Actions and cargo tools are pinned. `ubuntu-latest`, `windows-latest` and
-`stable` are rolling by design; `msrv (1.95.0)` is the only fixed-toolchain job.
-The Clippy feature matrix is a fixed list — no-default-features, default, each
-optional feature alone, all-features — so a defect requiring a specific *pair* or
-*triple* of features is not covered.
+Actions and installed cargo tools are pinned. `ubuntu-latest`, `windows-latest`
+and `stable` are rolling by design; MSRV/coverage use Rust 1.95.0 and memory
+verification uses separately pinned tools. macOS native checks currently run on
+`macos-15-intel`, not ARM64. Native platform tests, discovered feature singletons,
+pairwise interactions and all-feature runs cover different configurations.
+They do not enumerate every higher-order feature subset or every filesystem.
+Extractor limitations, Miri exclusions and bounded fuzz/proof scopes remain
+visible in their manifests and retained evidence.
 
 ---
 

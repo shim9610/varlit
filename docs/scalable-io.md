@@ -8,7 +8,7 @@ tree height, changed pages, key locality and publication frequency still affect
 lookup/update work and companion growth.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
-APIs can still scan the complete file at open. Their 16-byte directory rows use
+APIs can still scan the complete file at open. Their ordinary 13-byte private rows use
 bounded private buffers (2 MiB by default, or the declared finite index budget)
 and spill excess rows to temporary storage. Bounded RAM does not make that scan
 independent of file size.
@@ -27,7 +27,7 @@ keyed lookup. Stream/indexed handles keep primary open/append work independent
 of the complete native directory; choose a digest when native open scans are
 the immediate cost to reduce.
 
-> **Status (0.12.1).** Stream/indexed handles, disk-index
+> **API availability.** Stream/indexed handles, disk-index
 > plans, finite keys and scan control are part of the default public API, also
 > with `--no-default-features`. Remove `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.
@@ -37,6 +37,27 @@ the immediate cost to reduce.
 > sparse-offset measurements apply to their recorded revisions and filesystems.
 > See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
+
+This guide includes the [unreleased additions](api-changes.md#unreleased),
+including read-check selection and fallible token construction. Published
+0.12.1 does not include those additions.
+
+## Private spill policy
+
+Set `VARLIT_SPILL_DIR` to an existing writable directory to choose the volume
+for disposable directory, merge and index scratch files. Otherwise the platform
+temporary directory is used. Invalid explicit paths return an error without
+falling back to another location. Set process configuration before opening
+handles or starting worker threads; each new spill captures the current policy.
+
+`VARLIT_SPILL_MAX_BYTES` is an optional unsigned decimal ceiling on the logical
+length of **each** private spill file. Unset adds no cap; `0` refuses nonempty
+spills. It is not a database-size limit, total directory quota, free-space
+reservation or process-memory limit. Filesystem-full and partial-write errors
+still propagate. Use a filesystem quota if an aggregate limit is required.
+Files used for atomic replacement stay beside their destination. On `tmpfs`,
+temporary storage consumes memory outside ordinary process resident set size
+(RSS) accounting.
 
 The [self-check guide](self-check-guide.md#scalable-io-validation) gives commands
 for model histories, concurrent snapshots, external-kill recovery, memory budgets
@@ -560,12 +581,13 @@ and the pending state is a durability warning, not a rollback.
 `rebuild_disk_index_with_progress` use the same scan-control types:
 
 ```rust
+# fn scan(reader: &varlit::VarlitStreamReader) -> varlit::Result<()> {
 use std::num::NonZeroU64;
 use varlit::{
     ScanCancellationToken, ScanOptions, ScanProgressOptions, ScanProgressPhase,
 };
 
-let cancellation = ScanCancellationToken::new();
+let cancellation = ScanCancellationToken::try_new()?;
 let scan = ScanOptions {
     progress: ScanProgressOptions {
         every_records: NonZeroU64::new(100_000),
@@ -585,6 +607,7 @@ let records = reader.verify_all_with_progress(scan, |progress| {
     }
 })?;
 # Ok::<(), varlit::Error>(())
+# }
 ```
 
 The default callback cadence is every 16,384 records or 16 MiB, whichever is
@@ -594,6 +617,9 @@ reached first. Setting both cadence fields to `None` emits only `Started` and
 run on the scanning thread. Display absolute completion with
 `current_offset / snapshot_len`; use `scanned_bytes` for scan-throughput
 accounting rather than mixing the two coordinate systems.
+
+`try_new` reports token allocation refusal. Existing `new`/`default` and token
+cloning remain available; all clones share the same cancellation flag.
 
 Cancellation is checked before scanning, after every completed record, after
 every callback, and after the final `Complete` callback. It returns
@@ -735,20 +761,42 @@ There is no unbounded cache or larger resource allowance behind the option.
 See the [complete contract and baseline review](design/read-validation-policy-review.md)
 for exact I/O scope, explicit verification, recovery and mmap restrictions.
 
+## Native follow and boundary-cache reuse
+
+Native handles retain the last complete pending frame and staging storage.
+With a cooperating current writer, unchanged polls frame no old records, and
+growth frames only newly complete records. A commit discovered from cached
+progress causes one authoritative replay of that pending batch before the
+reader publishes its new view. Cached progress alone cannot expose pending data.
+
+Writer/lease changes, truncation and incompatible state invalidate progress.
+Legacy or unknown writers use conservative growth handling. Initial opens,
+explicit verification and invalidated state can still require scans; this is
+not a constant-time guarantee for every follow or mark.
+
+Full scans and successful appends can retain validated nonresident record
+offsets, eight bytes each. Their buffers share at most 16 KiB of the existing
+directory allowance, with larger metadata spilled to private storage. Failure
+to allocate or spill this optional acceleration falls back to checked traversal.
+Sequence hints only select a candidate; its actual offset must match before a
+native mutation is authorized. Full record metadata remains nonresident.
+
 ## Checked I/O Boundary
 
 Sidecar offsets and lengths are untrusted. They become private-field
 `FileOffset`, `ByteLength`, `SnapshotBounds`, and validated record-pointer
 types before positional I/O or allocation. Validation uses checked `u64`
-arithmetic and rejects overflow, ranges past the pinned EOF, impossible
-framing, block/version/sequence mismatch, noncanonical flags, and checksum
-mismatch where the format declares integrity.
+arithmetic and always rejects overflow and extents beyond the pinned EOF.
+Required parsing, traversal budgets and publication checks remain in every
+read mode. Additional framing/identity comparisons and data CRC verification
+follow the selected read policy described above. Index writers, recovery and
+reconstruction keep strict metadata admission.
 
 This prevents a malicious file from turning a claimed extent into an unchecked
 slice or claim-sized allocation. It does not authenticate a file. CRC is an
 integrity/error-detection policy, not a cryptographic authenticity mechanism.
 
-## Current Regression Baseline
+## Historical Regression Baseline
 
 On the Windows development host on 2026-07-17, the release-mode million unique
 composite-key probe reported:

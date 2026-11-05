@@ -3,6 +3,50 @@
 This is a practical public API map for application authors. It is not a
 rustdoc replacement; it explains which API to reach for and what it means.
 
+This page follows the current repository. Read validation selection, range
+streaming and fallible ownership additions are **unreleased**, after 0.12.1;
+see [API changes](api-changes.md#unreleased).
+
+## Read validation
+
+`ReadLimits::with_read_validation` selects optional read-side checks independently
+of the checksum policy stored in the format. Data checksums use cyclic redundancy
+checks (CRCs).
+
+| Selection | Data CRC | Additional structure checks |
+| --- | --- | --- |
+| Unset (`None`) | Existing format behavior | Existing backend behavior |
+| `ReadValidation::FULL` | On | On |
+| `ReadValidation::CRC_ONLY` | On | Off |
+| `ReadValidation::STRUCTURE_ONLY` | Off | On |
+| `ReadValidation::TRUSTED` | Off | Off |
+
+For a runtime override that preserves the format's other resource settings:
+
+```rust,no_run
+# fn open(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<varlit::VarlitReader> {
+use varlit::{ReadLimits, ReadValidation};
+let limits = ReadLimits::MISSING.with_read_validation(ReadValidation::TRUSTED);
+spec.open_reader_with_resource_limits(path, limits)
+# }
+```
+
+For indexed handles, set `DiskIndexOptions::limits` to that same `limits` value.
+`overlay` replaces an existing selection only when the new one is explicit;
+`tighten` keeps an existing declaration. `effective_read_validation(integrity)`
+resolves record-payload checks; backend admission also distinguishes the unset
+compatibility case. An explicit CRC-on selection rejects a checksum-free format
+with `InvalidFormatSpec`; reading stored CRCs requires the `integrity` feature.
+
+Every mode retains extent/overflow checks, resource and decoder limits, finite
+traversal and committed-publication guards. Protocol/generation checksums remain.
+`TRUSTED` neither authorizes `TrustedUnbounded` nor expands a resource budget.
+Skipped checks may allow wrong but well-formed data to be returned. Explicit
+`verify_all`, recovery and index reconstruction retain their strict admission
+contracts; standalone `ChunkedBytes` checks remain independent. See the
+[read-policy contract](design/read-validation-policy-review.md) for framing I/O
+and the [mmap contract](#mmap-and-zero-copy) for backing-file requirements.
+
 ## Fallible ownership
 
 `TryClone::try_clone(&self) -> Result<Self>` creates an owned copy using fallible
@@ -16,6 +60,10 @@ Supported values include `Vec`, `String`, `PathBuf`, `HashMap`, `VecDeque`, `Box
 `MatrixLayout`, `ChunkedBytes`, `PackedBitmap`, `MatrixDimensions` and
 `LayoutValue`. Shared owners clone their reference count without allocating.
 `BTreeMap` has no `TryClone` implementation in this change.
+
+`ScanCancellationToken::try_new() -> Result<ScanCancellationToken>` reports
+shared-owner allocation refusal. Token `TryClone` shares the existing flag;
+it does not reset cancellation. `new` and `default` remain infallible APIs.
 
 `try_box(value) -> Result<Box<T>>` reports storage refusal. It consumes the input
 and drops it normally on failure; clone the source fallibly first if the source
@@ -40,10 +88,8 @@ no retry policy. Initializers, user `TryClone` implementations and destructors
 must themselves return normally. A `Result` signature cannot convert their
 panics, aborts or nontermination into an allocation error.
 
-`ScanCancellationToken::try_new()` is the fallible
-alternative to its existing `new` and `default` constructors. Internal shared
-file/page owners use fallible allocation without changing public `std::sync::Arc`
-types or persisted file formats.
+Internal shared file/page owners use fallible allocation without changing public
+`std::sync::Arc` types or persisted file formats.
 
 Direct buffer/box refusal uses `Error::AllocationFailed`; internal shared-owner
 refusal can surface as `Error::Io` with `std::io::ErrorKind::OutOfMemory`.
@@ -378,8 +424,10 @@ without the resident input directory or the per-block priming scans.
 Native handles may scan records at open, but directory and scan buffers are
 bounded by an explicit finite `max_index_bytes`; the unbounded default uses
 2 MiB per buffer. Excess rows use private
-temporary files. A directory row is 16 bytes on scratch storage; full entries
-are reconstructed from record headers/footers on demand. Fixed row/page workspace
+temporary files. An ordinary private directory row is 13 bytes: an offset,
+block ID and committed-state byte. Eligible rewritten directories use compressed
+private rows within the existing allowance; full entries are reconstructed from
+record headers/footers on demand. Fixed row/page workspace
 is additional. Open I/O still scales with records when no usable fast metadata
 route applies. Reordered sequences use a temporary uniqueness index.
 
@@ -1613,11 +1661,13 @@ owns that mapping; `as_bytes()` borrows its bytes and `offset()` reports the
 payload's logical file offset. The record route validates the supplied entry
 against its captured snapshot and exposes stored bytes, including compression.
 The matrix route checks cell visibility and optional CRC from the held generation.
-Record windows also verify the declared CRC before exposing bytes, including with
-`IntegrityVerification::OnDemand`. Whole-file mappings verify each record on its
-first access and retain a one-byte success flag per record under the index budget;
-repeated reads require no payload hashing or copying. Individual windows verify
-once at construction. CRC detects corruption; it does not authenticate a sender.
+Record windows apply the selected read checks before exposing bytes, including
+with `IntegrityVerification::OnDemand`. Unset policy preserves the declared CRC
+checks. Whole-file mappings verify a record on first access and retain a one-byte
+success flag per record when optional checks are selected; `TRUSTED` omits that
+certificate allocation. Repeated checked reads reuse successful verification for
+the immutable mapping's lifetime. Individual windows perform selected checks once
+at construction. CRC detects corruption; it does not authenticate a sender.
 `MmapLen` bounds that cell's bytes; `MaterializedBytes` bounds intersecting COW
 pages, charged at 4096 bytes each. COW patches are copied before the window is
 returned, so modified matrix cells do not promise zero-copy construction.
@@ -1639,7 +1689,7 @@ safe window APIs stay memory-safe through these enforced invariants:
    validated against the actual mapped length before exposure.
 3. `MmapPayloads` owns a copied snapshot index and rejects any
    `RecordIndexEntry` that is not exactly in that snapshot.
-4. Safe accessors perform checked slicing; configured matrix CRCs are verified
+4. Safe accessors perform checked slicing; selected matrix CRCs are verified
    before committed slot bytes are returned.
 5. The mmap owner holds the mapping for its full RAII lifetime, and returned
    slices borrow that owner, so Rust prevents them from outliving the mapping.
@@ -1670,6 +1720,13 @@ mmap.
 Compression requires the `compression-zstd` feature when records are actually
 compressed or decompressed. `ChunkedBytes` additionally requires `integrity` for
 per-chunk CRC creation/verification.
+
+Whole-output decoding checks frame/chunk hints against complete encoded-block
+output bounds before reserving output. The decoded-output limit is separate from
+encoded input, native decoder workspace and caller-retained data. Range streaming
+never grows its caller scratch, but zstd still owns its context/history workspace;
+it is not an API for supplying all decoder storage externally. See
+[range selection and retry](chunk-streaming.md).
 
 ## Update, Merge, Compact
 
@@ -1796,7 +1853,7 @@ minor-version policy as the rest of the library.
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |
 | `BlockSchemaFingerprintMismatch` | a block impl disagrees with the format's declared identity for that block id, or two impls share an id with different `SCHEMA_FINGERPRINT` |
 | `BlockKeyednessMismatch` | two block impls share an id but disagree on keyedness |
-| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by redb sidecar create/bootstrap/rebuild |
+| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by sidecar create/bootstrap/rebuild |
 | `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed and synced the cell, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
 | `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` put the commit bit in the file and the durability request after it failed. Not a rollback: the cell is committed and readable after a clean exit, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |
 | `CommittedButDurabilityUnproven { sequence, source }` | `commit_durable` appended the transaction's commit marker and the `flush`/`sync_all` after it failed. Not a rollback: the transaction is committed and `sequence` names the marker. Retry `sync`, not the transaction — re-running it appends a second marker |
@@ -1806,6 +1863,9 @@ minor-version policy as the rest of the library.
 | `WriterLockHeld` | another writer or stale lock exists |
 | `WriterLockBreakRefused` | the explicit lock policy did not prove removal was allowed |
 | `ScanCancelled { progress }` | an explicit scalable scan stopped cooperatively at the reported boundary |
+| `BufferTooSmall { resource, required, provided }` | caller scratch is insufficient; provide a suitable buffer and retry. A nonempty chunk range requires at least one byte |
+| `InvalidChunkedRange { start, end, len }` | decoded range is reversed or exceeds the declared decoded length |
+| `ErrorContextAllocationFailed { context }` | detailed error storage was refused; inspect `AllocationFailureContext` for completed or uncertain publication before retrying |
 
 ## Matrix storage environment
 

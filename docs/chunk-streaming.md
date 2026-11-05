@@ -1,5 +1,7 @@
 # Reading a range from ChunkedBytes
 
+This API is unreleased, after 0.12.1. See [API changes](api-changes.md#unreleased).
+
 `ChunkedBytes::stream_range` reads a decoded byte range without allocating its
 complete output or a decoded chunk. It is an explicit alternative when
 `decode_to_vec_limited` refuses whole-output materialization. Existing decoding
@@ -52,6 +54,12 @@ buffer byte; `BufferTooSmall` reports that requirement before any callback.
 Increasing the buffer is optional and improves batching; it is never expanded
 by the library.
 
+After `BufferTooSmall`, the caller can provide a nonempty buffer and retry.
+For whole-output admission failure, choose `stream_range` explicitly; changing
+scratch size does not change `ReadLimits`. A decoder-window refusal needs a
+separate window-policy decision, and a malformed frame is not repaired by a
+larger output buffer. Each retry starts the selected range from its beginning.
+
 Only chunks overlapping the range are decompressed. Their prefixes and suffixes
 are still decoded to validate complete lengths and CRCs. Corruption in the
 unselected chunks' contents is not checked. Seeking scans table entries before
@@ -74,7 +82,9 @@ streaming adapters bypass the modern window check. zstd does not support
 streaming v0.1–v0.3 frames; whole-output decoding of older versions keeps its
 existing compatibility behavior. The window ceiling is not a process memory
 cap: zstd also allocates its context and block buffers. Those
-native allocations can fail and are reported as errors. The encoded input is
+native allocations can fail and are reported as errors. Caller scratch covers
+streamed output; the API does not accept externally supplied zstd context/history
+storage. The encoded input is
 already held by `ChunkedBytes`; this API does not stream that input from disk.
 The callback also controls any memory it retains.
 

@@ -34,6 +34,9 @@ apply; see [known limitations](docs/known-limitations.md).
 
 ## Explicit trusted read policy
 
+The read-policy and fallible-ownership additions below are unreleased after
+0.12.1; see the [upgrade notes](docs/api-changes.md#unreleased).
+
 `ReadLimits::with_read_validation` independently selects optional data CRC and
 additional structural consistency checks. Ordinary opens retain their existing
 checks. `ReadValidation::TRUSTED` trusts captured file metadata and skips those

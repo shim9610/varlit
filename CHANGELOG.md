@@ -6,6 +6,33 @@ increment the minor version.
 
 ## Unreleased
 
+Existing public method signatures, schema fingerprints and file formats are
+preserved. The additions below are not part of the published 0.12.1 packages.
+See the [upgrade notes](docs/api-changes.md#unreleased) for API selection and
+error-handling changes.
+
+- Add `ReadValidation::{FULL, CRC_ONLY, STRUCTURE_ONLY, TRUSTED}` through
+  `ReadLimits::with_read_validation`. An unset override preserves existing
+  behavior. Explicit choices separate data CRC from additional structure
+  checks without changing stored checksums or resource ceilings. Bounds,
+  finite traversal and committed-publication guards remain in every mode;
+  explicit verification, recovery and index reconstruction retain strict checks.
+- Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
+  through caller-owned scratch. The scratch never grows; overlapping chunks
+  are checked completely, and callback output is provisional until success.
+- Add `TryClone`, `try_box`, `try_box_uninit`, `try_box_with` and
+  `ScanCancellationToken::try_new`. Supported allocation refusals return errors
+  with partial-output cleanup. Existing infallible APIs remain available.
+  `ErrorContextAllocationFailed` retains allocation-free publication facts in
+  `AllocationFailureContext`; callers must inspect them before retrying writes.
+- Retain native follow progress across unchanged polls and incremental growth.
+  A newly discovered commit replays its pending batch before publication.
+  Writer changes and incompatible file state invalidate cached progress.
+  Cache validated nonresident offsets within the existing directory budget,
+  spilling when needed; acceleration failure falls back to checked traversal.
+- Reduce ordinary native private directory rows to 13 bytes and compact eligible
+  rewritten directories within the existing working allowance. These are private
+  in-memory/scratch representations, not file-format changes.
 - Screen zstd frame and chunk-container allocation hints against complete block
   output bounds, including legacy frames, before reserving output buffers.
 - Audit vendored package identities separately from lockfiles and document mmap
@@ -34,6 +61,14 @@ increment the minor version.
 - Bound matrix generation directory traversal by both checkpoint size and the
   declared scan budget, including empty aliased subtrees. Propagate malformed
   COW allocation-directory errors instead of silently omitting their evidence.
+- Validate native mutation boundaries and rewrite sources, and bound disk-index
+  descent using checked child metadata and finite visit budgets. Compound tests
+  cover hostile metadata, allocation refusal, short reads, I/O failure, cleanup,
+  retry and independent readers around publication.
+- Add required Kani contracts and deliberate-defect controls, Loom cancellation
+  models, coverage reports and dependency inventories. Audit all existing Miri
+  exclusions against their native/ASan coverage and remaining gaps. See the
+  [verification guide](docs/verification.md) for exact scopes and commands.
 
 ## 0.12.1 - 2026-10-15
 

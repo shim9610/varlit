@@ -4,7 +4,12 @@ This guide is for application developers who need to decide whether a failure is
 caused by a Varlit library bug, a bad format declaration, a wrong API call, a
 feature flag mismatch, or damaged file bytes.
 
-## Static Format Diagnostics
+## Repository verification
+
+See the [verification guide](verification.md) for native tests, public API
+contracts, Kani, Loom, dependency checks and exact recorded CI results. New
+read-validation, range-streaming and fallible-ownership APIs are
+[unreleased after 0.12.1](api-changes.md#unreleased).
 
 For the repository's portable memory-safety gate, install the qualified Miri
 toolchain and run:
@@ -12,16 +17,21 @@ toolchain and run:
 ```sh
 rustup toolchain install nightly-2026-10-12 --profile minimal --component miri
 python3 scripts/check_miri.py
+python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
 ```
 
 The gate records its toolchain, exact selected tests and complete output in
 `target/miri-report/`. Exclusions and reasons are in
 `scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
+All 55 exclusions also have alternatives and remaining gaps in
+`scripts/miri-exclusion-audit.json`. Alternatives are not equivalent Miri proofs.
 Directory `fsync`, native pathname cleanup and the real-file redb oracle require
 native tests and ASan. Miri does not establish filesystem durability or cover
 the mmap/Windows surface. Default alias and validity checks remain enabled.
 CI also runs the six `codec_array_allocation` integration tests under the same
 interpreter, covering partial drops, array framing and the custom-codec path.
+
+## Static Format Diagnostics
 
 Run diagnostics before creating long-lived files:
 
