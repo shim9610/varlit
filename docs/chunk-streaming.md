@@ -1,6 +1,6 @@
 # Reading a range from ChunkedBytes
 
-This API is unreleased, after 0.12.1. See [API changes](api-changes.md#unreleased).
+This API is available in Varlit 0.13.0. See [API changes](api-changes.md#0130).
 
 `ChunkedBytes::stream_range` reads a decoded byte range without allocating its
 complete output or a decoded chunk. It is an explicit alternative when

@@ -1,12 +1,11 @@
 # Varlit
 
-Current release: **[0.12.1](https://github.com/shim9610/varlit/releases/tag/v0.12.1)**.
+Version: **0.13.0**.
 
-This branch also contains **unreleased** storage hardening, independent read
-validation options, chunk-range streaming and fallible ownership APIs. See the
-[changelog](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md#unreleased)
-and [upgrade notes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#unreleased).
-These additions are not yet available in the 0.12.1 registry packages.
+Varlit 0.13.0 adds storage hardening, independent read validation options,
+chunk-range streaming and fallible ownership APIs. See the
+[changelog](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md#0130---2026-11-05)
+and [upgrade notes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#0130).
 
 Formerly Varve. The project was renamed to Varlit in 0.12.0, changing the Rust API
 and package names. Existing versioned file markers remain unchanged.
@@ -250,7 +249,7 @@ confidence in it:**
 | macOS | native default/all-feature and bounded-I/O checks executed. `SEEK_DATA`/`SEEK_HOLE` and `F_PUNCHHOLE` paths are implemented; actual mounted-volume support is reported by storage diagnostics. |
 | Other targets | native allocation-map and hole-punch support may be unavailable. Persisted-index opens remain bounded; clearing can stream zeros. These targets are not qualified by the three-platform CI. |
 
-The unreleased runtime at `851836e` passed
+The runtime revision `851836e` used in 0.13.0 passed
 [CI](https://github.com/shim9610/varlit/actions/runs/41892694910) and
 [Sanitizers](https://github.com/shim9610/varlit/actions/runs/41892694877).
 Verification scopes and reproduction commands are in the
@@ -299,18 +298,18 @@ the assurance those notes record — together with its limits — is summarised 
 
 ## Add It To Your Project
 
-Install the latest published facade crate, **Varlit 0.12.1**, from crates.io:
+Install the facade crate, **Varlit 0.13.0**, from crates.io:
 
 ```toml
 [dependencies]
-varlit = "0.12.1"
+varlit = "0.13.0"
 ```
 
 For a Git dependency, use the versioned repository release:
 
 ```toml
 [dependencies]
-varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.12.1" }
+varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.13.0" }
 ```
 
 For local development, use a checkout:

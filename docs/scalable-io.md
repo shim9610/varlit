@@ -38,9 +38,8 @@ the immediate cost to reduce.
 > See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
 
-This guide includes the [unreleased additions](api-changes.md#unreleased),
-including read-check selection and fallible token construction. Published
-0.12.1 does not include those additions.
+This guide describes Varlit 0.13.0, including read-check selection and fallible
+token construction. See [API changes](api-changes.md#0130).
 
 ## Private spill policy
 

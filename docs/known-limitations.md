@@ -1,8 +1,7 @@
 # Known Limitations
 
-This describes the current repository, including
-[unreleased additions after 0.12.1](api-changes.md#unreleased). Historical measurements
-below identify their original revision/platform and are not new performance claims.
+This describes Varlit 0.13.0; see [API changes](api-changes.md#0130). Historical
+measurements below identify their original revision/platform and are not new performance claims.
 Private spill files bound retained directories; they do not remove initial
 scans, temporary disk requirements, per-record workspace or filesystem limits.
 
@@ -1115,7 +1114,7 @@ In that historical run, Miri exercised 160 portable core tests and six codec-arr
 exclusions and three ignored tests; fuzz smoke completed all 13 declared targets.
 These checks do not establish whole-library Miri coverage or a long fuzz campaign.
 
-The unreleased runtime at `851836e` subsequently passed all 69
+The runtime revision `851836e` used in 0.13.0 subsequently passed all 69
 [CI jobs](https://github.com/shim9610/varlit/actions/runs/41892694910) and all three
 [Sanitizers jobs](https://github.com/shim9610/varlit/actions/runs/41892694877).
 The current Miri exclusion inventory contains 55 tests with explicit alternative

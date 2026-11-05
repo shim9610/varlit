@@ -347,8 +347,8 @@ compression `max_len`, or caller validation.
 For caller-managed compressed blobs, prefer
 `ChunkedBytes::decode_to_vec_limited(limit)` when a domain ceiling should replace
 the standard decoded-output ceiling. If whole-output materialization is refused,
-the caller can choose the unreleased `stream_range` API with a fixed buffer and
-explicit decoder-window policy. That requires an already available `ChunkedBytes`
+the caller can choose the `stream_range` API (available in 0.13.0) with a fixed
+buffer and explicit decoder-window policy. That requires an already available `ChunkedBytes`
 and does not override the enclosing record's limits. Callback output remains
 provisional until success; see [range streaming](chunk-streaming.md).
 
@@ -362,7 +362,7 @@ a global domain ceiling.
 
 ## Integrity Policy
 
-The declarations below specify stored checksums. The unreleased
+The declarations below specify stored checksums. The 0.13.0
 `ReadLimits::with_read_validation` API independently selects optional read checks;
 it does not change these declarations or their schema fingerprints. An unset
 override preserves existing behavior. CRC-on choices require a checksum-bearing

@@ -4,6 +4,19 @@ Varlit migrations are explicit. Normal typed reads reject block version
 mismatches; migration code names both the source and target block types and
 performs semantic conversion in Rust.
 
+## Upgrading from 0.12.1 to 0.13.0
+
+Set the Cargo dependency requirement to `varlit = "0.13.0"`. Cargo treats
+pre-1.0 minor versions as separate compatibility ranges, so `"0.12.1"` does not
+select this release. Existing public signatures, schema fingerprints and valid
+file formats remain compatible; no file conversion is needed for this upgrade.
+Damaged metadata accepted by older readers may now return an error.
+
+New read-policy, range-streaming and fallible ownership APIs are optional.
+Ordinary opens retain their existing validation policy. Review the
+[0.13.0 API changes](api-changes.md#0130) before selecting read checks or adding
+allocation-failure retries, particularly after a write may have been published.
+
 <a id="060-pre-10-wire-changes"></a>
 
 ## Pre-1.0 Wire Changes Since 0.6.0

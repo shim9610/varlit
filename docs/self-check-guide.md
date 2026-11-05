@@ -7,9 +7,9 @@ feature flag mismatch, or damaged file bytes.
 ## Repository verification
 
 See the [verification guide](verification.md) for native tests, public API
-contracts, Kani, Loom, dependency checks and exact recorded CI results. New
-read-validation, range-streaming and fallible-ownership APIs are
-[unreleased after 0.12.1](api-changes.md#unreleased).
+contracts, Kani, Loom, dependency checks and exact recorded CI results. The
+read-validation, range-streaming and fallible-ownership APIs are available in
+[0.13.0](api-changes.md#0130).
 
 For the repository's portable memory-safety gate, install the qualified Miri
 toolchain and run:

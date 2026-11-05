@@ -1,7 +1,6 @@
 # Varlit Implementation Spec
 
-This specification follows the current repository, including
-[unreleased additions after 0.12.1](api-changes.md#unreleased). Dated sections
+This specification describes [Varlit 0.13.0](api-changes.md#0130). Dated sections
 and versioned wire markers retain their stated compatibility scope.
 
 ## Goal

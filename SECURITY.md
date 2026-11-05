@@ -3,8 +3,8 @@
 ## Supported versions
 
 Reports are accepted for the current `main` branch and the latest repository
-release. Older releases are not actively maintained. Code on `main` can be
-unreleased; use the release notes and known limitations when evaluating it.
+release. Older releases are not actively maintained. Use the release notes and
+known limitations for the version or commit being evaluated.
 Varlit is published on [crates.io](https://crates.io/crates/varlit). Fixes on
 `main` reach registry users only after a new crate version is published.
 
@@ -34,8 +34,8 @@ apply; see [known limitations](docs/known-limitations.md).
 
 ## Explicit trusted read policy
 
-The read-policy and fallible-ownership additions below are unreleased after
-0.12.1; see the [upgrade notes](docs/api-changes.md#unreleased).
+The read-policy and fallible-ownership APIs below are available in 0.13.0;
+see the [upgrade notes](docs/api-changes.md#0130).
 
 `ReadLimits::with_read_validation` independently selects optional data CRC and
 additional structural consistency checks. Ordinary opens retain their existing
