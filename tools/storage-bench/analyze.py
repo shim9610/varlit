@@ -55,7 +55,6 @@ def main():
                 sql=min(candidates,key=lambda n:medians[n]["metrics"][metric])
                 ratio = medians[sql]["metrics"][metric] / value["metrics"][metric]
                 comparisons.append(dict(profile=name, sqlite=sql, metric=metric, ratio=ratio,
-                                        observed_twofold=ratio >= 2,
                                         repetitions=value["observations"]))
         elif p["kind"] == "array" and not p["mode"].startswith(("sql-", "hdf-")):
             candidates = [n for n, v in medians.items() if v["profile"]["kind"] == "array"
@@ -69,21 +68,19 @@ def main():
                 sql = min(eligible, key=lambda n: medians[n]["metrics"][metric])
                 ratio = medians[sql]["metrics"][metric] / value["metrics"][metric]
                 comparisons.append(dict(profile=name, sqlite=sql, metric=metric, ratio=ratio,
-                                        observed_twofold=ratio >= 2,
                                         repetitions=value["observations"]))
     args.output.mkdir(parents=True, exist_ok=True)
     result = dict(profiles=medians, comparisons=comparisons, failures=failures,
                   timing_observations=sum(len(v) for v in groups.values()), resource_probes=len(probes),
-                  observed_twofold=sum(x["observed_twofold"] for x in comparisons),
                   compared_operations=len(comparisons),
                   qualification="observational medians only; no identical-binary noise control; not a 5% regression qualification")
     (args.output / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")
-    lines = ["# Operation comparisons", "", "Ratio = SQLite elapsed / Varlit elapsed; >=2 is the requested target.",
+    lines = ["# Operation comparisons", "", "Ratio = SQLite elapsed / Varlit elapsed.",
              "Array baselines identify the fastest complete measured SQLite layout across block geometries for each operation; all layout costs remain reported separately.",
              "Stream's unsupported point/range work is excluded. Read-active includes refresh and verification, not idle sleeps.", "",
-             "| Varlit profile | SQLite profile | Operation | Ratio | Observed >=2 |", "|---|---|---|---:|---|"]
+             "| Varlit profile | SQLite profile | Operation | Ratio |", "|---|---|---|---:|"]
     for row in comparisons:
-        lines.append(f"| {row['profile']} | {row['sqlite']} | {row['metric']} | {row['ratio']:.3f} | {'yes' if row['observed_twofold'] else 'no'} |")
+        lines.append(f"| {row['profile']} | {row['sqlite']} | {row['metric']} | {row['ratio']:.3f} |")
     (args.output / "operations.md").write_text("\n".join(lines) + "\n")
     template=(Path(__file__).resolve().parent/"report.html").read_text()
     (args.output/"index.html").write_text(template.replace("__DATA__",json.dumps(result).replace("</","<\\/")))

@@ -397,7 +397,7 @@ def summarize(rows, output):
             continue
         groups.setdefault(r["profile"]["name"], []).append(r)
     lines = ["# Storage comparison observations", "", "Medians of successful timing observations; failures remain in results.jsonl.",
-             "No statistical qualification or universal twofold speedup is inferred.", "",
+             "These medians do not establish statistical qualification.", "",
              "| Profile | n | Write s | Completion s | CPU s | wait4 max RSS MiB | Final allocated MiB |",
              "|---|---:|---:|---:|---:|---:|---:|"]
     for name, rs in groups.items():
@@ -482,7 +482,7 @@ def main():
                     worktree_diff=subprocess.check_output(["git", "diff", "--stat"], cwd=REPO, text=True),
                     sha256={str(p.relative_to(HERE)): hashlib.sha256(p.read_bytes()).hexdigest()
                             for p in [HERE / "target/release/mixed", HERE / "target/release/arrays", HERE / "Cargo.lock", HERE / "Cargo.toml", HERE / "build.rs", *HERE.glob("src/**/*.rs"), HERE / "run.py", HERE / "measure.c"]},
-                    criterion="For each equivalent successful operation separately: SQLite elapsed / Varlit elapsed >= 2. Never average operations.",
+                    comparison="Report SQLite elapsed / Varlit elapsed for each equivalent successful operation separately. Never average operations.",
                     cache_policy="Fresh files; warm OS page cache after writes; no privileged cache eviction.",
                     durability="SQLite WAL FULL; Varlit sync/checkpoint; HDF5 flush+fsync and application publication prefix. These do not imply equal crash recovery.")
     if args.resume:

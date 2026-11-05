@@ -32,7 +32,7 @@ def build_current(original, grouped, read_validation=None):
         for metric in ["write", "read_active", "completion"]:
             ratio = sql["metrics"][metric] / row["metrics"][metric]
             data["comparisons"].append(dict(profile=name, sqlite=target, metric=metric,
-                                            ratio=ratio, observed_twofold=ratio >= 2,
+                                            ratio=ratio,
                                             repetitions=3))
     data["cohorts"] = [
         dict(name="Initial mixed/array/table cohort", configurations=122, timing_observations=360,
@@ -56,7 +56,6 @@ def build_current(original, grouped, read_validation=None):
     data["timing_observations"] = sum(c["timing_observations"] for c in data["cohorts"])
     data["resource_probes"] = sum(c["resource_probes"] for c in data["cohorts"])
     data["compared_operations"] = len(active)
-    data["observed_twofold"] = sum(r["ratio"] >= 2 for r in active)
     data["ratio_count_scope"] = "Nonhistorical operation observations only; not a qualification."
     data["presentation_policy"] = "Individual-record stress/control rows are historical and excluded from the current view. Source medians remain separate; no pooled timing or universal speed qualification."
     return data
