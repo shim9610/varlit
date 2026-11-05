@@ -1,6 +1,6 @@
 //! Runtime coverage for the manual `VarlitBlock` trait invariants driven by
-//! review findings API-02 (schema fingerprint), API-03 (keyedness), and the
-//! 2026-07-20 review's API-01 (authoritative block endian) and API-02
+//! review findings  (schema fingerprint),  (keyedness), and the
+//! 2026-07-20 review's  (authoritative block endian) and
 //! (contract-cache identity).
 //!
 //! Typed access always requires a declared immutable block identity. These
@@ -249,7 +249,7 @@ varlit_format! {
     }
 }
 
-/// DEF-01 probe: same block id/version/kind, same dimensions, category, and
+///  probe: same block id/version/kind, same dimensions, category, and
 /// slot stride as the generated matrix cell — but different decode semantics
 /// (i32 vs u32) and therefore an honest different fingerprint. Without the
 /// common registration gate this type passed every shape check.
@@ -482,7 +482,7 @@ fn assert_matrix_impostor_rejected(result: Result<(), Error>) {
     }
 }
 
-/// DEF-01: a same-stride manual matrix type with a different fingerprint is
+/// a same-stride manual matrix type with a different fingerprint is
 /// rejected by the common registration gate on the cell read path.
 #[test]
 fn matrix_impostor_same_stride_read_is_rejected() -> varlit::Result<()> {
@@ -505,7 +505,7 @@ fn matrix_impostor_same_stride_read_is_rejected() -> varlit::Result<()> {
     Ok(())
 }
 
-/// DEF-01: the same gate guards the cell write path.
+/// the same gate guards the cell write path.
 #[test]
 fn matrix_impostor_same_stride_write_is_rejected() -> varlit::Result<()> {
     let path = temp_path("matrix_impostor_write");
@@ -524,7 +524,7 @@ fn matrix_impostor_same_stride_write_is_rejected() -> varlit::Result<()> {
     Ok(())
 }
 
-/// DEF-01: the same gate guards the mmap cell window path.
+/// the same gate guards the mmap cell window path.
 #[cfg(feature = "mmap")]
 #[test]
 fn matrix_impostor_same_stride_mmap_is_rejected() -> varlit::Result<()> {
@@ -585,7 +585,7 @@ varlit_format! {
     }
 }
 
-/// API-01 impostor: same id/version/kind as `Ordered`, different schema, and
+///  impostor: same id/version/kind as `Ordered`, different schema, and
 /// used before the generated type ever registers block 63.
 #[derive(Clone, Debug, PartialEq)]
 struct OrderedImpostor {
@@ -621,7 +621,7 @@ impl VarlitBlock for OrderedImpostor {
     const SCHEMA_FINGERPRINT: u64 = 0x0BAD_0001_0BAD_0001;
 }
 
-/// API-01: the format's immutable identity decides which type owns a block
+/// the format's immutable identity decides which type owns a block
 /// id, not whichever generic `T` happened to reach the registry first. Block
 /// 63 is touched by this test alone, so the impostor genuinely registers
 /// first — and is still rejected on both the write and the read path, after
@@ -672,7 +672,7 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
 }
 
 // ---------------------------------------------------------------------------
-// API-01: the authoritative block endian is part of the registration contract
+// the authoritative block endian is part of the registration contract
 // ---------------------------------------------------------------------------
 
 /// Generated block that overrides the format endian. The format below is
@@ -717,7 +717,7 @@ varlit_format! {
 /// [`BigCell`]. It differs only in declaring no endian override, which
 /// resolves to the format's little endian.
 ///
-/// Before API-01 this registered successfully and decoded `BigCell` payloads
+/// Before  this registered successfully and decoded `BigCell` payloads
 /// with the wrong byte order.
 #[derive(Clone, Debug, PartialEq)]
 struct BigCellInheritedEndian {
@@ -786,7 +786,7 @@ impl VarlitBlock for BigCellExplicitLittle {
 }
 
 /// The legitimate mirror: agrees with the authoritative override, so it keeps
-/// working. This is the control that proves API-01 rejects byte-order
+/// working. This is the control that proves  rejects byte-order
 /// disagreement rather than manual mirrors in general.
 #[derive(Clone, Debug, PartialEq)]
 struct BigCellAgreeingMirror {
@@ -830,7 +830,7 @@ fn assert_endian_rejected(result: varlit::Result<()>) {
     }
 }
 
-/// API-01: a manual type whose resolved byte order disagrees with the
+/// a manual type whose resolved byte order disagrees with the
 /// format's authoritative block identity is rejected at registration, on both
 /// the read and the write path, and never byte-swaps a value.
 #[test]
@@ -965,7 +965,7 @@ fn hand_built_spec(
     .with_block_identities(identities)
 }
 
-/// API-02: an empty view and the full view of one static identity array are
+/// an empty view and the full view of one static identity array are
 /// different declarations; a missing identity is never inferred from a type.
 #[test]
 fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varlit::Result<()> {
@@ -1077,7 +1077,7 @@ prefix_probe!(PrefixProbeShort, 0x0011_0011_0011_0011);
 prefix_probe!(PrefixProbeLong, 0x0022_0022_0022_0022);
 prefix_probe!(PrefixProbeIntruder, 0x0033_0033_0033_0033);
 
-/// API-02, descriptor-table half: a one-block prefix view and the full
+/// descriptor-table half: a one-block prefix view and the full
 /// two-block view of one static descriptor array share a start address but are
 /// different formats. Each declares its own immutable contract and still
 /// enforces it against a third type.

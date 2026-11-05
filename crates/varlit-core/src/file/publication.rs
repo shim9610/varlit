@@ -71,7 +71,7 @@ pub(crate) fn opened_file_identity(file: &File) -> Result<Vec<u8>> {
 }
 
 /// A file object held open, together with the OS identity read from that open
-/// handle (F-05 follow-up).
+/// handle ( follow-up).
 ///
 /// [`opened_file_identity`] is `(st_dev, st_ino)` on Unix and
 /// `(volume serial, file index)` on Windows. Neither is a durable name for a
@@ -186,7 +186,7 @@ pub(super) fn open_pin_handle(path: &Path) -> Result<File> {
 /// after a successful rename the pathname is already consumed, and after
 /// [`Error::ReplacePublicationIndeterminate`] the temp may be the only
 /// surviving copy of the new generation and must be preserved for out-of-band
-/// reconciliation (DUR2-01). [`RewriteTemp::cleanup_now`] deletes eagerly for
+/// reconciliation . [`RewriteTemp::cleanup_now`] deletes eagerly for
 /// callers whose follow-up work (lock-marker removal) is only correct once the
 /// temp is gone.
 pub(super) struct RewriteTemp {
@@ -312,7 +312,7 @@ pub(crate) fn create_rewrite_temp_file(path: &Path) -> Result<(PathBuf, File)> {
     .into())
 }
 
-/// Classification of a failed Windows `ReplaceFileW` call (DUR2-01).
+/// Classification of a failed Windows `ReplaceFileW` call .
 ///
 /// Derived from the documented contract
 /// (<https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew>):
@@ -361,7 +361,7 @@ pub fn classify_replace_publication_error(raw_os_error: i32) -> ReplacePublicati
 /// [`Error::ReplacePublicationIndeterminate`], after which the pathname state
 /// is unknown, the replacement temp file must be preserved for reconciliation
 /// and any writer bound to the target must be poisoned instead of retrying
-/// (DUR2-01). Once the rename has happened the target is already the new
+/// Once the rename has happened the target is already the new
 /// generation, so a later durability failure must not be reported as a plain
 /// error: callers must keep operating on the published generation (rebind or
 /// poison the writer) and surface [`Error::PublishedButParentSyncPending`]
@@ -384,7 +384,7 @@ pub(crate) enum ReplaceDurability {
 /// After [`Error::ReplacePublicationIndeterminate`] the replacement temp may
 /// be the only surviving copy of the new generation and must be preserved for
 /// out-of-band reconciliation, so the guard is disarmed before the error
-/// propagates (DUR2-01). Every other `Err` is a documented pre-publication
+/// propagates . Every other `Err` is a documented pre-publication
 /// failure ??the target pathname is untouched ??so dropping the guard deletes
 /// the unpublished temp as usual; on `Ok` the rename already consumed the temp
 /// pathname and the guard's drop is a no-op.
@@ -617,7 +617,7 @@ pub(crate) fn replace_path_atomically(
                 } else {
                     // Unreconciled: names may be partially moved. The caller
                     // must preserve the replacement temp file and poison any
-                    // writer bound to the target (DUR2-01).
+                    // writer bound to the target .
                     Err(Error::ReplacePublicationIndeterminate {
                         path: target.display().to_string(),
                         replacement: replacement.display().to_string(),
@@ -685,7 +685,7 @@ pub(crate) fn sync_parent_directory(path: &Path) -> Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    // DUR2-02: FlushFileBuffers requires GENERIC_WRITE on the handle
+    // FlushFileBuffers requires GENERIC_WRITE on the handle
     // (https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers),
     // so the directory must be opened with write access; a read-only directory
     // handle fails the flush with ERROR_ACCESS_DENIED on NTFS and the earlier

@@ -1,4 +1,4 @@
-//! F-12 — asking a record "is this your key?" built the key to answer.
+//!  — asking a record "is this your key?" built the key to answer.
 //!
 //! `VarlitKeyedBlock::key` clones every key field, and the disk-index verify
 //! path called it purely to compare: `if &value.key() != key`. For a `String`

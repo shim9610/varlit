@@ -31,7 +31,7 @@ pub struct MmapPayloads {
     pub(super) base: u64,
     // Sorted by `record_offset` (append-log order), so snapshot membership is
     // a binary search on this one copy instead of a second full HashSet copy
-    // of every entry (PERF2-07).
+    // of every entry .
     pub(super) index: Vec<RecordIndexEntry>,
     pub(super) by_block: HashMap<u32, Vec<usize>>,
     // One byte per record only when an optional read check is selected. The mapping is
@@ -78,7 +78,7 @@ impl MmapPayloads {
         // Entries occupy disjoint physical extents, so `record_offset` is
         // unique within the snapshot: binary search finds the only candidate
         // and the full equality compare keeps the exact-match contract that
-        // the former per-entry hash-set copy provided (PERF2-07).
+        // the former per-entry hash-set copy provided .
         let position = self
             .index
             .binary_search_by_key(&entry.record_offset, |candidate| candidate.record_offset)

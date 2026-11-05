@@ -30,7 +30,7 @@ use crate::{
 
 const STREAM_WRITER_POISON_CONTEXT: &str = "stream";
 
-// Mechanical enforcement of the writer poison check (round 12, F-05) lives in
+// Mechanical enforcement of the writer poison check (round 12, ) lives in
 // `crate::writer_permit`, which round 12's enforcement pass promoted out of
 // this file so that `file.rs` and `layout.rs` hold the same type rather than
 // three independent hand-written conventions. See that module's documentation
@@ -63,11 +63,11 @@ thread_local! {
     };
 }
 
-/// Consumes one armed write-plus-rollback append failure (round 12, F-05).
+/// Consumes one armed write-plus-rollback append failure (round 12, ).
 ///
 /// Returns `true` when the caller must behave as though the native chunk write
 /// failed *and* the truncate-or-seek rollback that follows it failed too. That
-/// is the pair F-05 names: it is the shortest route to
+/// is the pair  names: it is the shortest route to
 /// `Error::WriteRollbackFailed`, and it is not reachable from outside the
 /// crate on demand, because it needs two consecutive I/O failures on the same
 /// open handle. (The snapshot-rebind failure further down the same function
@@ -217,7 +217,7 @@ pub struct StreamBootstrapReport {
 
 /// Scans a native stream file and publishes a clean state sidecar for it.
 ///
-/// # Non-cooperating writers (F-09)
+/// # Non-cooperating writers
 ///
 /// Cooperating writers are serialized by the writer lock this call holds. A
 /// process that replaces the primary *pathname* without taking that lock is
@@ -315,7 +315,7 @@ where
     // snapshot scanned. Re-resolve the pathname immediately before publishing
     // and refuse to publish for a swapped-in generation.
     let snapshot_identity = opened_file_identity(&reader.snapshot.try_clone_file()?)?;
-    // F-09: the verified handle is kept open across publication. Cooperating
+    // the verified handle is kept open across publication. Cooperating
     // writers are already excluded by the `WriterLock` held above; against a
     // pathname mutator that ignores that protocol, holding the object open is
     // what stops the operating system from recycling its identity behind an
@@ -336,7 +336,7 @@ where
     )?;
     #[cfg(test)]
     interpose_after_state_publication(&path);
-    // F-09: publication is not a single syscall with the check above, so
+    // publication is not a single syscall with the check above, so
     // re-resolve once more now that the sidecar is visible. If the primary was
     // replaced in that interval the sidecar just published describes a file
     // object that no longer holds the pathname, and leaving it there would
@@ -927,10 +927,10 @@ impl VarlitStreamWriter {
         // Bind the authoritative object lock onto the freshly created file. The
         // acquire-time probe cannot lock a file that did not exist yet, so
         // without this a hard-link alias opened after creation would win a
-        // second writer role (DUR-02). Mirrors VarlitFile::create_impl and
+        // second writer role . Mirrors VarlitFile::create_impl and
         // VarlitLayoutWriter::create_inner.
         //
-        // DUR2-05: the bind must happen before any destructive initialization.
+        // the bind must happen before any destructive initialization.
         // Opening with `.truncate(true)` would clear the object inside the
         // pre-bind window, so a losing concurrent creator could truncate the
         // winner's freshly initialized file before its own bind fails. Open
@@ -953,7 +953,7 @@ impl VarlitStreamWriter {
             immediate_state: Default::default(),
             _lock: lock,
         };
-        // STO-01: stamp the per-create nonce as the very first record of the
+        // stamp the per-create nonce as the very first record of the
         // log, before anything else can be appended. It has to live inside the
         // primary because an equal-length in-place rewrite preserves the OS
         // object, the schema hash and every header byte a witness looks at —
@@ -1035,7 +1035,7 @@ impl VarlitStreamWriter {
         let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
         let identity = primary_identity(spec, &physical_snapshot)?;
         let (checkpoint, generation, loaded) = load_checkpoint(identity, physical_len)?;
-        // STO-01: the sidecar must belong to this generation of the primary,
+        // the sidecar must belong to this generation of the primary,
         // not merely to the same file object with the same header bytes — of
         // which a declared `header_tails` region's payload is no longer one,
         // since a commit rewrites it in place and `primary_generation` blanks
@@ -1227,7 +1227,7 @@ impl VarlitStreamWriter {
         key: &T::Key,
         previous: Option<u64>,
     ) -> Result<AppendInfo> {
-        // API2-03: every public keyed generic entry point evaluates the
+        // every public keyed generic entry point evaluates the
         // compile-time keyedness contract post-monomorphization; the
         // registration below stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
@@ -1523,7 +1523,7 @@ impl VarlitStreamWriter {
     }
 
     fn commit_state_chunk_inner(&mut self) -> Result<()> {
-        // STO-01: re-stamp the generation witness while its window is still
+        // re-stamp the generation witness while its window is still
         // filling. Once the window is full it is frozen for the file's life,
         // so steady-state appends pay nothing here.
         let pending = match self
@@ -1589,13 +1589,13 @@ impl VarlitStreamWriter {
     }
 
     /// Arms `count` injected native-append failures whose rollback also fails
-    /// (round 12, F-05).
+    /// (round 12, ).
     ///
     /// Fault-testing hook only. Each armed failure makes the next prepared
     /// chunk append - on either the stream or the indexed writer - behave as
     /// though the native write failed *and* the truncate-or-seek that rolls it
     /// back failed too. That pair is the one path into
-    /// `Error::WriteRollbackFailed`, and it is what F-05 proved was not
+    /// `Error::WriteRollbackFailed`, and it is what  proved was not
     /// enforced: the stream poisoned itself, the indexed writer kept a second
     /// flag that stayed clear, and the next single-record put or delete was
     /// accepted.
@@ -1624,7 +1624,7 @@ impl VarlitStreamWriter {
     /// [`crate::VarlitIndexedWriter`] — reaches the stream's mutating entry
     /// points: it must observe the one authoritative poison flag to obtain a
     /// permit, but names itself in the error so the caller is told which
-    /// writer refused. F-05 was exactly the absence of this: the layered
+    /// writer refused.  was exactly the absence of this: the layered
     /// writer kept a *second* flag and the two could disagree.
     pub(crate) fn mutation_permit(
         &mut self,
@@ -1798,11 +1798,11 @@ fn state_chunk_records(spec: FormatSpec, batch: DiskIndexBatchOptions) -> usize 
 }
 
 /// Test-only interposition point between sidecar publication and the
-/// post-publication identity re-check (F-09), where a non-cooperating pathname
+/// post-publication identity re-check , where a non-cooperating pathname
 /// mutator would have to land to make the published sidecar stale.
 ///
 /// Armed hooks are held in a path-keyed table, and consumption removes **only**
-/// the entry whose primary matches (F-04). An earlier single-slot cell let one
+/// the entry whose primary matches . An earlier single-slot cell let one
 /// test's registration silently replace another still-armed test's hook, which
 /// made the parallel library run nondeterministic.
 #[cfg(test)]
@@ -1848,7 +1848,7 @@ pub(crate) fn set_publication_interposition(primary: &Path, hook: Box<dyn FnOnce
 
 /// Retires a sidecar that was published for a primary the pathname stopped
 /// naming during publication, and reports which of the two outcomes happened
-/// (F-09).
+///
 ///
 /// The removal is identity-checked and directory-confined, exactly like the
 /// self-test's destructive cleanup, so this can never delete a sidecar some
@@ -1985,7 +1985,7 @@ fn create_state_store(
     crate::scalable_fault_point("create.sidecar_complete");
     let store = store?;
     drop(store);
-    // DUR2-01: the temp guard is handed to publication so an indeterminate
+    // the temp guard is handed to publication so an indeterminate
     // outcome preserves the replacement for reconciliation.
     match publish_temp_path_atomically(temporary, &sidecar)? {
         ReplaceDurability::Durable => {}
@@ -2007,7 +2007,7 @@ fn create_state_store(
         .map_err(state_error)
 }
 
-/// Computes the primary generation witness for `snapshot` (STO-01).
+/// Computes the primary generation witness for `snapshot` .
 ///
 /// The witness has two independent parts:
 ///
@@ -2225,7 +2225,7 @@ impl StreamMutationPermit<'_> {
     ///
     /// `permit` is consumed rather than borrowed: this method is the mutating
     /// entry point `indexed.rs` reaches for single-record puts and deletes, and
-    /// F-05 was that it performed the mutation without consulting the stream's
+    ///  was that it performed the mutation without consulting the stream's
     /// poison flag at all. The witness cannot be produced without that check.
     /// See [`writer_permit`].
     pub(crate) fn append_prepared_chunk(
@@ -2267,7 +2267,7 @@ impl StreamMutationPermit<'_> {
         // native file, and the other one does not move this handle's offset.
         // The records landed 16 bytes early and the file came out short.
         self.file.seek(SeekFrom::Start(eof))?;
-        // Round 12, F-05: an armed fault makes the write fail *and* its
+        // Round 12, : an armed fault makes the write fail *and* its
         // rollback fail, which is the pair that poisons the writer below.
         // Nothing is written and nothing is truncated, so the file is exactly
         // what a real rolled-back write leaves behind.
@@ -2651,7 +2651,7 @@ mod tests {
             let stream_path = directory.path().join("stream.varlit");
             let spec = spec(index_policy, commit_policy).with_integrity_policy(integrity_policy);
             let mut resident = crate::VarlitFile::create(spec, &resident_path)?;
-            // STO-01: a stream primary opens with an internal creation-nonce
+            // a stream primary opens with an internal creation-nonce
             // record, so the resident file gets an equally shaped leading
             // record. Sequences and record offsets then line up exactly and the
             // user-record region must still match byte for byte.
@@ -2722,7 +2722,7 @@ mod tests {
         batch.sync()?;
 
         assert_eq!(info.records, 100);
-        // Sequence 0 belongs to the internal creation-nonce record (STO-01).
+        // Sequence 0 belongs to the internal creation-nonce record .
         assert_eq!(info.first_sequence, Some(1));
         assert_eq!(info.last_sequence, Some(100));
         assert_eq!(info.write_calls, 7);
@@ -2851,7 +2851,7 @@ mod tests {
         Ok(())
     }
 
-    /// F-09. A pathname mutator that ignores `WriterLock` can replace the
+    /// A pathname mutator that ignores `WriterLock` can replace the
     /// primary after the pre-publication identity check and before the state
     /// sidecar is visible. The published sidecar then describes a file object
     /// the pathname no longer names, and leaving it there would displace the
@@ -2973,7 +2973,7 @@ mod tests {
         let path = directory.path().join("keyed-bypass.varlit");
         let mut writer = VarlitStreamWriter::create(keyed_spec(), &path, StreamOptions::default())?;
         // Baseline rather than a literal: a fresh primary already holds its
-        // internal creation-nonce record (STO-01). The contract under test is
+        // internal creation-nonce record . The contract under test is
         // that the rejected calls append nothing on top of it.
         let baseline = writer.checkpoint().record_count;
         assert!(matches!(
@@ -3066,7 +3066,7 @@ mod tests {
         {
             let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
             // Sequence 0 belongs to the internal creation-nonce record, so the
-            // 129th user append carries sequence 129 (STO-01).
+            // 129th user append carries sequence 129 .
             assert_eq!(writer.push_info(&TestBlock(128))?.sequence, 129);
             writer.sync()?;
         }

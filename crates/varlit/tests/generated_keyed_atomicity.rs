@@ -1,4 +1,4 @@
-// F-01 (round 9): no user-defined trait may run after a generated keyed
+// no user-defined trait may run after a generated keyed
 // mutation is authoritative.
 //
 // Round 8 fixed one instance of this: the generated `delete_*` cloned the

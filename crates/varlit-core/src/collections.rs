@@ -327,7 +327,7 @@ struct BlockContract {
     keyed: bool,
     /// Declared endian **override**, exactly as
     /// [`crate::VarlitBlock::ENDIAN`] and
-    /// [`FormatSpec::block_identities`] spell it (API-01).
+    /// [`FormatSpec::block_identities`] spell it .
     ///
     /// `None` is not "unknown": it is the positive declaration *"no override —
     /// inherit the format endian"*, which is why it is compared after
@@ -351,7 +351,7 @@ fn check_block_contract<T: VarlitBlock>(spec: FormatSpec, recorded: BlockContrac
             declared: T::SCHEMA_FINGERPRINT,
         });
     }
-    // API-01: every typed encode/decode path resolves the block's byte order
+    // every typed encode/decode path resolves the block's byte order
     // as `T::ENDIAN.unwrap_or(spec.endian)`. Comparing the *resolved* byte
     // order is what makes this total and exact:
     //

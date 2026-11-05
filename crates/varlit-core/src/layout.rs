@@ -841,7 +841,7 @@ impl LayoutWriter {
                 .create(true)
                 .truncate(false)
                 .open(&path)?;
-            // DUR2-05: bind the single-writer object lock before any
+            // bind the single-writer object lock before any
             // destructive initialization. Opening with `.truncate(true)`
             // would clear the new object inside the pre-bind window where a
             // losing concurrent creator could still hold an unbound handle
@@ -1005,7 +1005,7 @@ impl LayoutWriter {
         let (segment_count_index, original_segment_count, next_segment_count) =
             self.segment_count_checkpoint(descriptor.name)?;
 
-        // Shape B, mechanical enforcement (round 12). This writer's flag is not
+        // Shape B, mechanical enforcement . This writer's flag is not
         // a one-way poison: it marks the segment write *in flight*, so a
         // `LayoutWriter` observed part-way through a body refuses every
         // operation, and only a failed rollback leaves it refusing for good.
@@ -1162,7 +1162,7 @@ impl LayoutWriter {
     /// The one poison check for this writer, and the only source of the
     /// witness its guarded operations demand.
     ///
-    /// Shape B, mechanical enforcement (round 12). `PoisonFlag` owns the state
+    /// Shape B, mechanical enforcement . `PoisonFlag` owns the state
     /// and lives in `crate::writer_permit`, so nothing in this file can read or
     /// assign it; the only way to reach [`Self::write_segment_body`] — which
     /// holds every byte this writer puts on disk after creation — is to hold

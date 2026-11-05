@@ -1,4 +1,4 @@
-// F-16/F-17 — what byte range a read-only handle may look at.
+// / — what byte range a read-only handle may look at.
 //
 // `open_readonly` used to bind its snapshot to the last entry of the *resident*
 // index (`validated_snapshot_len`). The resident index is filtered — a

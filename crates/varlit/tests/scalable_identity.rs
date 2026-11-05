@@ -1,4 +1,4 @@
-//! Scalable primary/sidecar identity contracts (STO-01, API-03).
+//! Scalable primary/sidecar identity contracts (, ).
 //!
 //! A stream or indexed sidecar must belong to the exact logical generation of
 //! the primary it was published against. Schema hash, OS object identity and
@@ -316,7 +316,7 @@ fn stream_state_sidecar_refuses_a_rewritten_primary() -> Result<()> {
     Ok(())
 }
 
-/// F-09, consumer half. Sidecar publication cannot be made atomic against a
+/// consumer half. Sidecar publication cannot be made atomic against a
 /// process that replaces the primary *pathname* without taking the writer lock,
 /// so the library narrows the interval and retires a sidecar it published for a
 /// replaced primary. What keeps that a rebuild-cost problem rather than a
@@ -360,7 +360,7 @@ fn stream_state_sidecar_refuses_a_wholesale_primary_replacement() -> Result<()> 
     Ok(())
 }
 
-/// The residual half of STO-01 an adversarial re-verification found: a
+/// The residual half of  an adversarial re-verification found: a
 /// generation witness computed over a bounded leading window only separates two
 /// primaries that diverge *inside* that window.
 ///

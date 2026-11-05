@@ -1,10 +1,5 @@
 #![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires main-agent scalable-fault-injection feature and hook wiring"]
-fn scalable_crash_faults_require_feature_wiring() {}
-
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
 

@@ -32,6 +32,7 @@ For a code change, start with:
 ```sh
 export CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4
 cargo fmt --all -- --check
+rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs
 cargo run --locked -p varlit-test-runner -- test --locked --workspace
 cargo run --locked -p varlit-test-runner -- test --locked --workspace --all-features
 cargo clippy --locked --all-targets --workspace --all-features -- -D warnings
@@ -71,3 +72,27 @@ required checks before merging. CodeQL findings remain visible in the Security
 tab. Repository protection settings are enforced by GitHub after they are enabled.
 
 Contributions are provided under the project's existing MIT OR Apache-2.0 license.
+
+## Maintaining code and documentation
+
+Keep native file operations in the focused implementation files under
+`crates/varlit-core/src/file/`: lifecycle, append/publication, directory reads,
+follow, mutation/rewrite, matrix access, mapped access and header slots. Keep
+unit tests beside their owning module. The implementation files share the native
+file module through literal includes, preserving its private boundary and compiler
+partitioning. The source auditors resolve those includes recursively; dynamic,
+missing or out-of-crate paths cannot bypass validation. Preserve public signatures
+and the frozen API inventory when reorganizing implementations.
+
+Extend a shared fixture or parameter table when a regression adds a case to an
+existing contract. Separate tests are appropriate for different failure oracles,
+platform behavior, ownership lifetimes and feature selections. Empty placeholder
+tests and duplicated assertions do not add coverage. New failure tests should
+check recovery/retry and retained-reader state where relevant.
+
+Keep the root README and quickstart focused on recommended application patterns.
+Maintain current contracts in the reference guides and current measurements in
+the combined performance report. Historical release notes, audit narratives and
+superseded raw evidence belong in Git history. Link the original revision when
+historical evidence is needed. `scripts/check_docs.py --quickstart` checks local
+links and executes the example taken directly from the guide.

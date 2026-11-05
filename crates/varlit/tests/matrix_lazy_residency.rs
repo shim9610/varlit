@@ -587,7 +587,7 @@ fn a_lazily_opened_matrix_answers_exactly_what_a_verified_one_does() -> varlit::
     Ok(())
 }
 
-/// F-06 under the demand path, which is where it becomes reachable.
+///  under the demand path, which is where it becomes reachable.
 ///
 /// "Not cached" and "not published" must stay distinct. The persisted page
 /// index is loaded in full at open under both policies and is what answers the

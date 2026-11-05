@@ -345,7 +345,7 @@ fn writing_a_fresh_cell_stores_no_bitmap_byte_and_committing_it_stores_every_one
 /// The skip that landed with `write_bitmap_byte` saved the cheapest half of a
 /// redundant mutation — one `seek` and one byte — and left the dear half in
 /// place. Under a checksum policy the same no-op mutation still read a whole
-/// 4096-byte page, ran CRC-32 over all of it, and wrote the 8-byte digest, so a
+/// 4096-byte page, ran  over all of it, and wrote the 8-byte digest, so a
 /// first cell write cost a page hash to store a commit bit that was already
 /// clear. The write phase below is exactly that case: the companion test pins
 /// its bitmap-byte stores at zero, which is what makes every one of these

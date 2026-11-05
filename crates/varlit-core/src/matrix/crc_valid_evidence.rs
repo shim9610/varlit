@@ -31,7 +31,7 @@ impl CrcValidEvidence {
     ///
     /// Round 14 spelled this `new(bits, complete: bool)` with `pub(super)`
     /// visibility, so any line in `matrix.rs` could declare a bitmap
-    /// complete and immediately mint the F-04 witness from it. The
+    /// complete and immediately mint the  witness from it. The
     /// completeness argument is now a [`PageIndexEnumeration`], whose
     /// constructors are private to `mod page_index_enumeration` and are
     /// reached only by the enumerator itself. There is no signature in the
@@ -71,7 +71,7 @@ impl CrcValidEvidence {
 
     /// Proves the evidence complete, or refuses.
     ///
-    /// This is the F-04 refusal, and it is deliberately unconditional —
+    /// This is the  refusal, and it is deliberately unconditional —
     /// exactly like `poison_interrupted_rebuild`. `matrix_fatal_forensics`
     /// relaxes *reading* fatal state; consuming absent evidence as proof is
     /// a destructive republication, not a read. Discarding unverifiable
@@ -236,7 +236,7 @@ impl CrcValidEvidence {
         self.bits.commit_byte_write(prepared)
     }
 
-    /// The one named escape, narrowed to a compiler refusal (round 16).
+    /// The one named escape, narrowed to a compiler refusal .
     ///
     /// It used to return `&mut SparseBitmap`, held to one call site by a
     /// source gate. That is not the same thing as holding it to one
@@ -246,7 +246,7 @@ impl CrcValidEvidence {
     /// `CompleteCrcValidEvidence::get` then reports bits no enumeration
     /// produced — and `.page_index_mirror_mut().set(ordinal, true)` in
     /// place, both from inside this file, and ran the first one to a bit
-    /// read back through the F-04 witness.
+    /// read back through the  witness.
     ///
     /// The return type is now [`PageIndexMirror`](super::page_index::PageIndexMirror),
     /// whose borrow is private to `mod page_index`. Assignment through it

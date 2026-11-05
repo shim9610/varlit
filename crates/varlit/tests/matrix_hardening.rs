@@ -256,7 +256,7 @@ fn fresh_reader_rejects_uncommitted_matrix_overwrite() {
 
 fn read_vmat_header(path: &Path, spec: FormatSpec) -> VmatHeader {
     // Native file header, then the 24-byte matrix creation-nonce region
-    // (DUR2-03), then the VMAT layout header.
+    // then the VMAT layout header.
     let offset = u64::try_from(spec.magic.len()).expect("magic length") + 18 + 24;
     let mut file = OpenOptions::new()
         .read(true)
@@ -987,7 +987,7 @@ fn packed_bitmap_decode_failures_are_codec_errors() {
     ));
 }
 
-/// F-02: the interrupted-rebuild marker in a persisted page-index occupancy
+/// the interrupted-rebuild marker in a persisted page-index occupancy
 /// header must be refused, with a route out named.
 ///
 /// A whole-map republication empties the persisted index and refills it. It

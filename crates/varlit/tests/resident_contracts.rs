@@ -1,7 +1,7 @@
 // These keys are synthetic fixture identifiers, never real user identities.
 // Resident-facade contract regressions for the 2026-07-19 adversarial review.
 //
-// API2-05 (report finding API-02): `VarlitFile::push_info` and
+// `VarlitFile::push_info` and
 // `VarlitWriter::push_info` used to write `prev_same_key_offset = None` for a
 // second record with an equal key while the generated keyed writer linked it
 // correctly, leaving a silently truncated physical keyed chain. `T: VarlitBlock`
@@ -9,7 +9,7 @@
 // keyed-chaining formats and the maintaining `push_keyed`/`delete` paths carry
 // the chain.
 //
-// PERF2-05 (report finding PERF-05): resident block-offset chaining resolved
+// resident block-offset chaining resolved
 // the predecessor with `index.iter().rev().find(...)`, costing Theta(g) per
 // append and O(N*B) overall. The predecessor now comes from a maintained tail
 // table that never reads the resident index on the append path.
@@ -40,7 +40,7 @@ varlit_format! {
     }
 }
 
-// API3-02, updated round 9 (F-01): the generated keyed writer no longer owns a
+// updated round 9 : the generated keyed writer no longer owns a
 // `HashMap<T::Key, u64>` of its own. It routes through the same byte-keyed
 // resident tail cache the generic keyed API uses, so its per-entry charge is
 // identical to `ResidentTailBudgetFormat`'s below - inline `(Vec<u8>, u64)`
@@ -64,7 +64,7 @@ varlit_format! {
     }
 }
 
-// API3-02: a keyed-chaining format with a deliberately tiny keyed-tail budget,
+// a keyed-chaining format with a deliberately tiny keyed-tail budget,
 // so the resident and generated keyed writers must both refuse growth of the
 // resident tail cache at a typed boundary.
 varlit_format! {
@@ -389,7 +389,7 @@ fn interleaved_block_ids_chain_correctly_across_reopen() -> varlit::Result<()> {
     Ok(())
 }
 
-/// PERF2-05: the append-time predecessor lookup must not scale with the
+/// the append-time predecessor lookup must not scale with the
 /// resident index. The counter records resident index entries examined by the
 /// block-tail machinery; wholesale index loads pay one pass, appends must pay
 /// nothing at all, so the delta over an append window is zero for any record
@@ -443,14 +443,14 @@ fn append_time_predecessor_lookup_never_reads_the_resident_index() -> varlit::Re
     Ok(())
 }
 
-// PERF3-03 (report finding PERF-03): `BlockTails::from_index` claimed
+// `BlockTails::from_index` claimed
 // `O(N log B)` but inserted every first-seen block id into a sorted vector, so
 // an index whose first appearances descend by id moved `0 + 1 + ... + (B - 1)`
 // tuples - a real `O(N log B + B^2)`. The previous test could not see this
 // because it counted resident *index visits*, which the insertion cost does
 // not touch. Construction now orders the distinct ids once.
 //
-// PERF3-05 (report finding PERF-05): every resident input open could copy all
+// every resident input open could copy all
 // `N` sequences into an `8N` temporary and sort it, and `KeyedMergeEstimate`
 // charged neither the temporary nor the sort. The estimate is the published
 // way to size this resident-only family, so an estimate that omits a live
@@ -514,7 +514,7 @@ varlit_format! {
     }
 }
 
-/// PERF3-03: wholesale block-tail construction must move no tuples at all, in
+/// wholesale block-tail construction must move no tuples at all, in
 /// the exact worst case that used to be quadratic. This counter observes
 /// vector movement, which is the cost the index-visit counter cannot see.
 #[cfg(feature = "scalable-fault-injection")]
@@ -619,7 +619,7 @@ varlit_format! {
     }
 }
 
-/// PERF3-05: the pre-flight estimate must charge the transient an input open
+/// the pre-flight estimate must charge the transient an input open
 /// allocates alongside its resident index, so
 /// `peak_resident_structural_bytes` does not ignore a live allocation it can
 /// actually see.
@@ -697,7 +697,7 @@ fn resident_merge_estimate_includes_the_open_time_transient() -> varlit::Result<
     Ok(())
 }
 
-// API3-01 (report finding F-01): the generic keyed mutation paths appended the
+// the generic keyed mutation paths appended the
 // record first and only then grew the resident keyed-tail cache. A failing
 // cache reservation therefore returned `Err` *after* the record was written,
 // indexed and published in writer state, and the superseded predecessor stayed
@@ -858,7 +858,7 @@ fn keyed_tail_commit_loss_never_links_around_the_committed_record() -> varlit::R
     Ok(())
 }
 
-// PERF4-04 (report finding F-04): `KeyedMergeEstimate::peak_resident_bytes()`
+// `KeyedMergeEstimate::peak_resident_bytes()`
 // was published as an *upper bound* while its state term counted only
 // `count * size_of::<(Key, (MergeOrder, Option<T>))>()`. That omits HashMap
 // bucket slack and control bytes, the output vector reserved while the map is
@@ -943,7 +943,7 @@ mod peak_allocations {
 #[global_allocator]
 static PEAK_TRACKING_ALLOCATOR: peak_allocations::PeakTracking = peak_allocations::PeakTracking;
 
-/// PERF4-04: the estimate is a structural count model. Its documented identity
+/// the estimate is a structural count model. Its documented identity
 /// must hold exactly, and - for heap-owning `Key`/`T` - the real allocated
 /// peak must exceed it, which is precisely why the old "upper bound" wording
 /// was a defect rather than a rounding error.
@@ -1105,7 +1105,7 @@ fn generated_keyed_writer_spills_tails_for_puts_and_tombstones() -> varlit::Resu
     Ok(())
 }
 
-// API3-05: twins of the two budgeted formats above. They share their magic,
+// twins of the two budgeted formats above. They share their magic,
 // version, index policy and block layout but declare no keyed-tail ceiling, so
 // they can author a file holding more distinct keys than the budgeted format's
 // ceiling admits. Neither side declares `schema_hash: computed`, so the
@@ -1263,7 +1263,7 @@ fn the_generated_into_twins_exist_on_both_routes() -> varlit::Result<()> {
         let mut writer = ResidentChainFormat::create(&path)?;
         writer.push(&Marker { tag: 7 })?;
         // Keyed blocks on a keyed-chaining format must go through the
-        // maintaining path; `push` refuses them (API2-05, asserted above).
+        // maintaining path; `push` refuses them (, asserted above).
         writer.push_keyed(&Item { id: 1, value: 10 })?;
         writer.push_keyed(&Item { id: 2, value: 20 })?;
         writer.flush()?;

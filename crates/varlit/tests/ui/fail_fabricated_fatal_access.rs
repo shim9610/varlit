@@ -1,4 +1,4 @@
-// SHAPE B (round 14): the matrix's fail-closed gate for `Fatal` recovery
+// SHAPE B the matrix's fail-closed gate for `Fatal` recovery
 // findings.
 //
 // `FatalAccessAllowed` is the witness that no fatal finding blocks access to

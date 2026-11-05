@@ -252,6 +252,7 @@ pub(crate) struct Audit {
     pub(crate) crate_name: String,
     pub(crate) generator_crate: bool,
     pub(crate) inventory_only: bool,
+    pub(crate) include_owner: Option<PathBuf>,
     pub(crate) inventory: BTreeMap<String, Surface>,
     pub(crate) seen_files: BTreeSet<PathBuf>,
     pub(crate) edges: BTreeSet<(String, String, String)>,
@@ -259,12 +260,20 @@ pub(crate) struct Audit {
 }
 
 impl Audit {
+    fn logical_file(&self) -> String {
+        self.include_owner
+            .as_ref()
+            .unwrap_or(&self.file)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
     fn surface(&mut self, kind: &str, name: &str, tokens: impl ToTokens) {
         let scope = self.scope.join("::");
         let id = format!(
             "{}/{}::{scope}::{kind}:{name}",
             self.crate_name,
-            self.file.to_string_lossy().replace('\\', "/")
+            self.logical_file()
         );
         let signature = fingerprint(&tokens.to_token_stream().to_string());
         // The same method can be declared separately for different platforms.
@@ -287,10 +296,15 @@ impl Audit {
     }
 
     fn format_owner(&self) -> bool {
-        self.file == Path::new("format.rs")
+        self.logical_file() == "format.rs"
     }
 
     pub(crate) fn inspect_file(&mut self, path: &Path) {
+        let path = path.canonicalize().expect("source path exists");
+        if self.seen_files.is_empty() {
+            self.root = self.root.canonicalize().expect("source root exists");
+        }
+        let path = path.as_path();
         let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let parsed = syn::parse_file(&source).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let old_file = std::mem::replace(
@@ -320,7 +334,7 @@ impl Audit {
 
     fn reference(&mut self, name: &str) {
         // Normalise only filesystem separators, not Rust identifiers.
-        let file = self.file.to_string_lossy().replace('\\', "/");
+        let file = self.logical_file();
         let edge = (file, self.function.clone(), name.to_owned());
         if !self.inventory_only
             && raw_decoder(name)
@@ -411,7 +425,9 @@ impl<'ast> Visit<'ast> for Audit {
                 );
                 if simple.exists() { simple } else { nested }
             };
+            let owner = self.include_owner.take();
             self.inspect_file(&path);
+            self.include_owner = owner;
         }
         self.scope.pop();
     }
@@ -610,6 +626,34 @@ impl<'ast> Visit<'ast> for Audit {
     }
 
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        if item.mac.path.is_ident("include") {
+            let Ok(literal) = syn::parse2::<syn::LitStr>(item.mac.tokens.clone()) else {
+                self.error("source inclusion needs one literal path");
+                return;
+            };
+            let physical = self.root.join(&self.file);
+            let path = physical.parent().unwrap().join(literal.value());
+            let Ok(path) = path.canonicalize() else {
+                self.error("included source is missing");
+                return;
+            };
+            let Ok(root) = self.root.canonicalize() else {
+                self.error("source inclusion has no filesystem root");
+                return;
+            };
+            if !path.starts_with(root) {
+                self.error("included source escapes its crate root");
+                return;
+            }
+            let owner = self
+                .include_owner
+                .clone()
+                .unwrap_or_else(|| self.file.clone());
+            let previous = self.include_owner.replace(owner);
+            self.inspect_file(&path);
+            self.include_owner = previous;
+            return;
+        }
         let name = item
             .ident
             .as_ref()

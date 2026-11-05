@@ -66,7 +66,7 @@ impl DiskIndexRebuildReport {
 /// already published at its pathname and only the parent-directory entry's
 /// durability is unconfirmed; the published sidecar is preserved.
 ///
-/// # Non-cooperating writers (F-09)
+/// # Non-cooperating writers
 ///
 /// Cooperating writers are serialized by the writer lock this call holds. A
 /// process that replaces the primary *pathname* without taking that lock is
@@ -281,7 +281,7 @@ impl VarlitIndexedReader {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: every public keyed generic entry point evaluates the
+        // every public keyed generic entry point evaluates the
         // compile-time keyedness contract post-monomorphization; the
         // registration in `ensure_indexed` stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
@@ -296,7 +296,7 @@ impl VarlitIndexedReader {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_indexed::<T>()?;
         let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
@@ -648,7 +648,7 @@ impl VarlitIndexedWriter {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_writable::<T>()?;
         let key = value.key();
@@ -733,7 +733,7 @@ impl VarlitIndexedWriter {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_writable::<T>()?;
         let mandatory = T::IMMEDIATE;
@@ -802,7 +802,7 @@ impl VarlitIndexedWriter {
         I: IntoIterator,
         I::Item: Borrow<T>,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         let start = self.stream.snapshot().len();
         let mut written = BatchAppendInfo {
@@ -880,7 +880,7 @@ impl VarlitIndexedWriter {
         &mut self,
         key: &T::Key,
     ) -> Result<AppendInfo> {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
@@ -1380,7 +1380,7 @@ impl VarlitIndexedWriter {
     }
 
     fn commit_pending_batch_inner(&mut self) -> Result<()> {
-        // STO-01: see VarlitStreamWriter::commit_state_chunk. The witness stops
+        // see VarlitStreamWriter::commit_state_chunk. The witness stops
         // being recomputed once its bounded window is full.
         if let Some(batch) = self.index.batch.as_ref()
             && batch.primary_generation().len < PRIMARY_GENERATION_WINDOW
@@ -1596,7 +1596,7 @@ impl VarlitIndexedWriter {
     /// The writer's poison guard, and the only source of the witness the
     /// stream's mutating entry points demand.
     ///
-    /// Round 12, F-05: this used to read a *second* poison flag owned by this
+    /// Round 12, : this used to read a *second* poison flag owned by this
     /// struct, which could and did disagree with the stream's own. When a
     /// native append failed and its truncate-or-seek rollback failed too, the
     /// stream poisoned itself and this flag stayed clear, so a later
@@ -1755,7 +1755,7 @@ where
     // while the rebuild scans its retained snapshot. Re-resolve the pathname
     // just before publication and refuse to publish a sidecar for a primary
     // object the scan never observed.
-    // F-09: the verified primary is held open across publication. It excludes
+    // the verified primary is held open across publication. It excludes
     // nothing a `WriterLock` does not already exclude, but it does stop the
     // operating system from handing the scanned object's identity to a
     // different file while the sidecar is published, so the post-publication
@@ -1764,13 +1764,13 @@ where
     if primary_identity(spec, &current)? != identity {
         return Err(index_error(DiskIndexError::IdentityMismatch));
     }
-    // DUR2-01: publication takes ownership of the temp guard so an
+    // publication takes ownership of the temp guard so an
     // indeterminate outcome preserves the replacement for out-of-band
     // reconciliation instead of the guard blind-deleting it by pathname.
     let durability = publish_temp_path_atomically(temporary, &path)?;
     #[cfg(test)]
     crate::stream::interpose_after_state_publication(native_path);
-    // F-09: publication is not one syscall with the identity check above. If
+    // publication is not one syscall with the identity check above. If
     // the primary was replaced in between, the sidecar now at `path` was built
     // for a file object the pathname no longer names, and leaving it there
     // would displace whatever newer sidecar arrived with the replacement.
@@ -1895,7 +1895,7 @@ fn create_index_store(
     crate::scalable_fault_point("create.sidecar_complete");
     let store = store?;
     drop(store);
-    // DUR2-01: the temp guard is handed to publication so an indeterminate
+    // the temp guard is handed to publication so an indeterminate
     // outcome preserves the replacement for reconciliation.
     match publish_temp_path_atomically(temporary, &sidecar)? {
         ReplaceDurability::Durable => {}
@@ -2280,7 +2280,7 @@ mod tests {
             Err(Error::DiskIndex(_))
         ));
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
+        // Three user records plus the internal creation-nonce record .
         assert_eq!(report.records, 4);
         assert!(report.scanned_bytes > 0);
         let mut writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
@@ -2546,7 +2546,7 @@ mod tests {
         Ok(())
     }
 
-    /// F-09, rebuild half. Same contract as the stream bootstrap test: a
+    /// rebuild half. Same contract as the stream bootstrap test: a
     /// primary replaced between the pre-publication identity check and the
     /// sidecar becoming visible must produce a typed mismatch, and the sidecar
     /// this call published must not be left standing in place of whatever
@@ -2625,7 +2625,7 @@ mod tests {
             ..DiskIndexOptions::default()
         };
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Five user records plus the internal creation-nonce record (STO-01).
+        // Five user records plus the internal creation-nonce record .
         assert_eq!(report.records, 6);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(reader.get::<Item>(&4)?.unwrap().value, "value-4");
@@ -2709,7 +2709,7 @@ mod tests {
         fs::remove_file(sidecar_path(&path))?;
         crate::disk_index::reset_tombstone_key_decode_calls();
         let report = rebuild_disk_index(spec_multi(), &path, options, plan_multi())?;
-        // Four user records plus the internal creation-nonce record (STO-01).
+        // Four user records plus the internal creation-nonce record .
         assert_eq!(report.records, 5);
         // One decode per tombstone record, not one per plan descriptor.
         assert_eq!(crate::disk_index::tombstone_key_decode_calls(), 2);
@@ -2721,7 +2721,7 @@ mod tests {
         Ok(())
     }
 
-    /// PERF2-03: a CRC rebuild must traverse each indexed payload exactly
+    /// a CRC rebuild must traverse each indexed payload exactly
     /// once. The scanner reads frames only with the original format contract,
     /// and `extract_plan_update` owns the single checksum-verified
     /// payload read; payloads of records outside the plan are never
@@ -2817,7 +2817,7 @@ mod tests {
 
         crate::disk_index::reset_plan_payload_reads();
         let report = rebuild_disk_index(spec_crc(), &path, options, plan_crc())?;
-        // Four user records plus the internal creation-nonce record (STO-01).
+        // Four user records plus the internal creation-nonce record .
         assert_eq!(report.records, 5);
         // Two indexed puts and one tombstone: three payload materializations,
         // never a scanner checksum pre-pass on top and never the unindexed

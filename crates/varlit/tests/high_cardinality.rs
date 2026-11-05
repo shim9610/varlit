@@ -296,7 +296,7 @@ fn explicit_scan_progress_and_cancellation_are_exact() -> varlit::Result<()> {
         reader.verify_all_with_progress(every_record_scan(None), |progress| {
             phases.push(progress.phase);
         })?,
-        // Three user records plus the internal creation-nonce record (STO-01).
+        // Three user records plus the internal creation-nonce record .
         5
     );
     assert_eq!(phases.first(), Some(&ScanProgressPhase::Started));
@@ -460,7 +460,7 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
     Ok(peak)
 }
 
-// PERF2-03 (report finding PERF-03): the resident keyed merge/compact family
+// the resident keyed merge/compact family
 // retains one map entry per distinct key ever seen, including tombstoned keys,
 // so its memory is O(K-ever) and it is deliberately not a PB-scale operation.
 // These tests pin the published contract: the cost is predictable up front via
@@ -707,7 +707,7 @@ fn resident_single_input_compact_fails_typed_at_the_key_ceiling() -> varlit::Res
     Ok(())
 }
 
-// F-01 (round 9): the generated keyed writers used to hold their own
+// the generated keyed writers used to hold their own
 // `HashMap<T::Key, u64>` tail map. Two consequences of that design are asserted
 // here, both of which the byte-keyed resident cache changes.
 //

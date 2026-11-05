@@ -367,7 +367,7 @@ across readers; include producer staging, queue contents and the active writer
 when sizing memory. Do not mmap an actively modified backing file under the
 immutable-file API contract.
 
-See the [grouped-item benchmark](performance/grouped-storage-20261104/README.md)
+See the [grouped-item benchmark](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md)
 for separately counted items, blocks and publications, concurrent-reader
 measurements and the comparison with individually framed controls.
 
