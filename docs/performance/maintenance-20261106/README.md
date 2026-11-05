@@ -4,8 +4,10 @@ This is the before/after maintenance cohort in the [combined workload report](..
 The baseline is `9343ea1`. The accepted implementation keeps native file methods in
 focused source files under their original Rust module. The frozen API inventory
 is unchanged; normalized signature/body comparison covers all 261 `VarlitFile`
-methods, including trait methods. Formatting after measurement produces the same
-machine-code `.text` bytes in the mixed workload executable.
+methods, including trait methods. Formatting and final comment polish preserve
+the machine-code `.text` bytes in all four benchmark executables: mixed, arrays,
+writer and payload. All non-documentation Rust tokens remain identical across
+the 49 files whose comments were polished.
 
 ## Work and controls
 
@@ -100,4 +102,13 @@ regardless of correctness success. See [comparison data](comparison.json),
 [raw observations and build receipts](evidence.tar.xz) and [checksums](SHA256SUMS).
 The archive includes the rejected variant's source snapshot, fixed run scripts,
 binary hashes and every stdout/stderr/usage/configuration observation. The accepted
-source is identified by per-file hashes in the comparison data and this Git tree.
+timed source is identified by per-file hashes in the comparison data and the
+[`cf44f67` Git tree](https://github.com/shim9610/varlit/tree/cf44f6747ded17d348379e4608ab07904848b334).
+The subsequent comment-only rebuild preserves these `.text` SHA-256 values:
+
+```text
+mixed    8b6ee7e167a01d571cf85d5d7988b2cc8e300d2a782f97d87f15d3d63f927437
+arrays   bc311ce56ef606ce7648d7cf399ccde06742c9ebc1a8d4aeda816c9bf767f497
+writer   8de91b3c35f872269ecbcaeb20a7fd9727cfb8abf0a0585ff11401506e68bb45
+payload  f85d27062fc00ccf15af10bd7494eef13887e960ff2da7b21992cff37c17ebdf
+```

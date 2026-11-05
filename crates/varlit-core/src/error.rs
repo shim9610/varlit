@@ -278,7 +278,7 @@ pub enum Error {
     WriterLockBreakRefused(String),
 
     /// The diagnostic `<target>.lock` marker path does not name a dedicated,
-    /// unaliased regular file, so Varlit refuses to truncate or write it .
+    /// unaliased regular file, so Varlit refuses to truncate or write it.
     ///
     /// The marker carries pid/timestamp diagnostics and the break-policy
     /// machinery; acquiring it truncates and rewrites the object it names.
@@ -340,7 +340,7 @@ pub enum Error {
     /// rebind to it and was poisoned.
     ///
     /// `parent_sync` carries the *second* durability fact when two independent
-    /// failures happen in the same publication . The parent-directory
+    /// failures happen in the same publication. The parent-directory
     /// sync runs first, immediately after the atomic rename; when it fails the
     /// publication is still real, so the writer rebinds anyway and the caller
     /// normally learns about the pending sync through
@@ -475,7 +475,7 @@ pub enum Error {
     MatrixFatalCorruption,
 
     /// The durable matrix write completed and the cell is committed and synced;
-    /// only the caller's post-commit notification hook failed .
+    /// only the caller's post-commit notification hook failed.
     ///
     /// This is a *published* outcome in the same family as
     /// [`Error::PublishedButParentSyncPending`] and
@@ -727,7 +727,7 @@ pub enum Error {
 
 impl Error {
     /// Folds an already-known parent-directory sync failure into a published
-    /// outcome that would otherwise drop it .
+    /// outcome that would otherwise drop it.
     ///
     /// A replacement publication learns two independent durability facts in a
     /// fixed order: whether the parent-directory sync succeeded, and whether

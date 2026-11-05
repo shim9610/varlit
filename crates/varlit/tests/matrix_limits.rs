@@ -324,7 +324,7 @@ fn hostile_dimension_is_rejected_before_derived_bitmap_or_slot_work() -> varlit:
             .create_with_dims(fixture.path(), dimensions)?,
     );
 
-    // Native file header + 24-byte matrix creation-nonce region .
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(b"MLIM".len()).expect("magic length");
     let dimension_value_offset = header_offset + VMAT_HEADER_LEN + 2 + 4;
     let mut file = OpenOptions::new().write(true).open(fixture.path())?;
@@ -401,7 +401,7 @@ fn nonzero_vmat_flags_are_rejected_as_noncanonical() -> varlit::Result<()> {
     let dimensions = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
     drop(spec.create_with_dims(fixture.path(), dimensions)?);
 
-    // Native file header + 24-byte matrix creation-nonce region .
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(spec.magic.len()).expect("magic length");
     let mut file = OpenOptions::new().write(true).open(fixture.path())?;
     file.seek(SeekFrom::Start(header_offset + 6))?;
@@ -423,7 +423,7 @@ fn a_quarantined_commit_map_is_reported_without_being_retained() -> varlit::Resu
     let dimensions = MatrixDimensions::from_pairs([("scan", 4), ("ch", 4)]);
     drop(spec.create_with_dims(fixture.path(), dimensions)?);
 
-    // Native file header + 24-byte matrix creation-nonce region .
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(spec.magic.len()).expect("magic length");
     let mut file = OpenOptions::new()
         .read(true)

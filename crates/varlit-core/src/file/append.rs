@@ -160,7 +160,7 @@ impl VarlitFile {
     }
 
     /// Resolves `key`'s current predecessor *and* reserves the tail-cache slot
-    /// the append that follows will occupy .
+    /// the append that follows will occupy.
     ///
     /// The generic keyed mutation paths used to append first and only then
     /// grow the resident tail cache. That ordering could return `Err` from a
@@ -331,7 +331,7 @@ impl VarlitFile {
     }
 
     /// Builds the keyed tail map for `T` now rather than on first keyed
-    /// mutation .
+    /// mutation.
     ///
     /// Generated keyed writers call this at construction. The cache spills to
     /// a private temporary index when `max_keyed_tail_bytes` is reached; key
@@ -607,7 +607,7 @@ impl VarlitFile {
     /// Requests durable persistence of everything written so far.
     ///
     /// This syncs the file's contents and, for a pathname this handle created,
-    /// its parent directory entry exactly once . Without the second
+    /// its parent directory entry exactly once. Without the second
     /// step a power loss could leave a fully synced object with no name on
     /// platforms that require an explicit directory sync, which would not be
     /// "durably persisted" in any useful sense; the atomic replacement path
@@ -724,7 +724,7 @@ impl VarlitFile {
     ///
     /// Diagnostic scaffolding captures this at creation time so cleanup can
     /// refuse to delete a file that another process has since swapped in at
-    /// the same pathname .
+    /// the same pathname.
     pub(crate) fn native_object_identity(&self) -> Result<Vec<u8>> {
         self.file.object_identity()
     }
@@ -740,7 +740,7 @@ impl VarlitFile {
         INJECTED_PARENT_SYNC_FAILURES.store(count, std::sync::atomic::Ordering::Release);
     }
 
-    /// Arms `count` injected indeterminate replacement failures .
+    /// Arms `count` injected indeterminate replacement failures.
     ///
     /// Fault-testing hook only: each armed failure makes the next atomic
     /// pathname publication fail with
@@ -766,7 +766,7 @@ impl VarlitFile {
         INJECTED_REWRITE_TEMP_PREPARATION_FAILURES.with(|armed| armed.set(count));
     }
 
-    /// Arms `count` injected generic keyed-tail reservation failures .
+    /// Arms `count` injected generic keyed-tail reservation failures.
     ///
     /// Fault-testing hook only: each armed failure makes the next generic
     /// keyed push/delete fail its pre-append tail-cache reservation with
@@ -794,7 +794,7 @@ impl VarlitFile {
         INJECTED_KEYED_TAIL_COMMIT_LOSSES.with(|armed| armed.set(count));
     }
 
-    /// Arms `count` injected post-commit-marker durability failures .
+    /// Arms `count` injected post-commit-marker durability failures.
     ///
     /// Fault-testing hook only: each armed failure makes the next
     /// [`Self::commit_durable`] fail its `flush`/`sync_all` *after* the commit
@@ -810,7 +810,7 @@ impl VarlitFile {
     }
 
     /// Returns the cumulative number of resident index entries this thread's
-    /// checkpoint flush-cadence machinery has examined .
+    /// checkpoint flush-cadence machinery has examined.
     ///
     /// Fault-testing hook only: regression tests delta-measure this around a
     /// flush-per-record workload to pin the cadence work at O(1) per flush
@@ -824,7 +824,7 @@ impl VarlitFile {
     }
 
     /// Returns the cumulative number of resident index entries this thread's
-    /// block-offset-chain predecessor machinery has examined .
+    /// block-offset-chain predecessor machinery has examined.
     ///
     /// Fault-testing hook only. The append path resolves predecessors from the
     /// maintained tail table and must never advance this counter, so a
@@ -838,7 +838,7 @@ impl VarlitFile {
     }
 
     /// Returns the cumulative number of block-tail tuples this thread has
-    /// displaced by inserting into the sorted tail vector .
+    /// displaced by inserting into the sorted tail vector.
     ///
     /// Fault-testing hook only. Wholesale tail construction must not advance
     /// this counter at all: it orders the distinct block ids once instead of
@@ -977,7 +977,7 @@ impl VarlitFile {
     /// The one poison check for this writer, and the only source of the
     /// witness its guarded operations demand.
     ///
-    /// Shape B, mechanical enforcement . `PoisonFlag` owns the state
+    /// Shape B, mechanical enforcement. `PoisonFlag` owns the state
     /// and lives in `crate::writer_permit`, so nothing in this ~12000-line file
     /// can read or assign it. Every function that puts bytes into an already
     /// published generation — the append core, and the one in-place record
@@ -995,7 +995,7 @@ impl VarlitFile {
     /// ([`Error::ReplacePublicationIndeterminate`]) means the pathname state
     /// is unknown: the temp file is preserved for out-of-band reconciliation
     /// and the writer is poisoned so a blind retry cannot publish over an
-    /// unknown generation .
+    /// unknown generation.
     fn fail_publication(&mut self, temp_path: &Path, error: Error) -> Error {
         if matches!(error, Error::ReplacePublicationIndeterminate { .. }) {
             self.poison.poison();
@@ -1088,7 +1088,7 @@ impl VarlitFile {
     fn rollback_append(&mut self, snapshot: AppendSnapshot, operation_error: Error) -> Error {
         // The tail states are advanced only after the record is fully written,
         // so this normally truncates nothing; rebuilding when it does keeps
-        // the `BlockTails::from_index` invariant unconditional .
+        // the `BlockTails::from_index` invariant unconditional.
         let truncated = self.index.len() > snapshot.index_len;
         self.index.truncate(snapshot.index_len);
         // Restore the one tail this append moved rather than rebuilding the

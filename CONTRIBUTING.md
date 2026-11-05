@@ -94,5 +94,6 @@ Keep the root README and quickstart focused on recommended application patterns.
 Maintain current contracts in the reference guides and current measurements in
 the combined performance report. Historical release notes, audit narratives and
 superseded raw evidence belong in Git history. Link the original revision when
-historical evidence is needed. `scripts/check_docs.py --quickstart` checks local
-links and executes the example taken directly from the guide.
+historical evidence is needed. `scripts/check_docs.py --quickstart` rejects repeated
+report sections, checks local links and executes the example taken directly from
+the guide.

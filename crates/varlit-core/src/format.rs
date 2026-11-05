@@ -2287,7 +2287,7 @@ pub struct FormatSpec {
     pub chunk_compression: Option<VariableCompression>,
     /// Per-block schema identity of the implementations backing
     /// [`FormatSpec::blocks`], as `(block_id, declared endian override,
-    /// keyedness, generated schema fingerprint)` tuples .
+    /// keyedness, generated schema fingerprint)` tuples.
     ///
     /// `varlit_format!` fills this from the registered block types so
     /// [`FormatSpec::computed_schema_hash`] covers the per-block encoding

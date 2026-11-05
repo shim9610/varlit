@@ -1,4 +1,4 @@
-// / — what byte range a read-only handle may look at.
+// Captured byte extent of a read-only handle.
 //
 // `open_readonly` used to bind its snapshot to the last entry of the *resident*
 // index (`validated_snapshot_len`). The resident index is filtered — a

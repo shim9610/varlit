@@ -23,40 +23,6 @@ The rejected Rust-module split and its 16–22% regression remain in the evidenc
 | 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
 | 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
 
-## Maintenance before/after comparison
-
-The [maintenance qualification](../maintenance-20261106/README.md) compares the
-0.13.0 cleanup with `9343ea1`, using matched release builds, unchanged budgets,
-complete concurrent reader/query work and separate resource probes. Five-round
-primary observations and fixed 30-round calibration are kept as separate cohorts.
-The rejected Rust-module split and its 16–22% regression remain in the evidence.
-
-| Workload | n | Completion change | CPU change |
-| --- | ---: | ---: | ---: |
-| 128 MiB, 1 producer / 1 reader, 1 MiB blocks | 5 | -2.74% | -3.89% |
-| 128 MiB, 1 producer / 8 readers, 64 KiB blocks | 30 | -0.48% | +1.86% |
-| 1 GiB, 4 producers / 8 readers, 1 MiB blocks | 30 | -1.46% | -1.19% |
-| 1 GiB, 4 producers / 8 readers, 64 KiB blocks | 5 | -7.35% | -6.78% |
-| 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
-| 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
-
-## Maintenance before/after comparison
-
-The [maintenance qualification](../maintenance-20261106/README.md) compares the
-0.13.0 cleanup with `9343ea1`, using matched release builds, unchanged budgets,
-complete concurrent reader/query work and separate resource probes. Five-round
-primary observations and fixed 30-round calibration are kept as separate cohorts.
-The rejected Rust-module split and its 16–22% regression remain in the evidence.
-
-| Workload | n | Completion change | CPU change |
-| --- | ---: | ---: | ---: |
-| 128 MiB, 1 producer / 1 reader, 1 MiB blocks | 5 | -2.74% | -3.89% |
-| 128 MiB, 1 producer / 8 readers, 64 KiB blocks | 30 | -0.48% | +1.86% |
-| 1 GiB, 4 producers / 8 readers, 1 MiB blocks | 30 | -1.46% | -1.19% |
-| 1 GiB, 4 producers / 8 readers, 64 KiB blocks | 5 | -7.35% | -6.78% |
-| 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
-| 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
-
 ## Independent read-check modes: added comparison
 
 The same report now includes [69 before/after/read-mode configurations](../read-validation-20261104/README.md) (207 timing observations, 69 separate resource probes, 48 publication gates), plus separately retained payload API, writer-only, range and memory diagnostics. Select **Independent read checks** in the dashboard. These medians form a separate cohort and do not replace or pool the cross-engine observations below.

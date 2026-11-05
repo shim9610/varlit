@@ -1,4 +1,4 @@
-// / — the payload copy every append paid, on every default spec.
+// Allocation contract for borrowed append payloads.
 //
 // `prepare_user_record_payload` returned an owned `StoredPayload { bytes:
 // Vec<u8> }`, and `uncompressed_user_payload` filled it with

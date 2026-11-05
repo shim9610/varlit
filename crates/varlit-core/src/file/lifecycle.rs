@@ -105,7 +105,7 @@ impl VarlitFile {
     /// and the same handle is kept locked from that claim through the complete
     /// matrix initialization. Diagnostic scaffolding (the format self-test)
     /// must use this instead of claiming the pathname with a separate handle
-    /// and then re-opening it by name .
+    /// and then re-opening it by name.
     pub fn create_new_with_dims<P: AsRef<Path>>(
         spec: FormatSpec,
         path: P,

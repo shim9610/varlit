@@ -142,7 +142,7 @@ impl VarlitFile {
     /// H2. The entry point of the block offset chain, and the only way to reach
     /// a non-resident block: from here each record's footer names its
     /// predecessor. `&self`, answered from the maintained tail table without
-    /// touching the resident index .
+    /// touching the resident index.
     pub fn block_tail_offset(&self, block_id: u32) -> Option<u64> {
         self.block_tails.tail(block_id)
     }

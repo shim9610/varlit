@@ -601,7 +601,7 @@ fn hash_map_budget_still_admits_honest_maps() {
 }
 
 /// The exact charge the decoder must apply to a `HashMap<(), ()>` at any
-/// declared count in the small-table classes (/).
+/// declared count in the small-table classes.
 ///
 /// 32 buckets (the modelled control-group floor) times one control byte per
 /// zero-sized entry, plus one trailing control group, plus the control-array
@@ -617,7 +617,7 @@ const ONE_BYTE_SMALL_TABLE_BYTES: u64 = 128;
 /// reports capacity 14, i.e. a 16-bucket table.
 const SMALL_TABLE_CAPACITIES: std::ops::RangeInclusive<u64> = 1..=14;
 
-/// /. The old model charged one entry as two buckets, so
+/// The old model charged one entry as two buckets, so
 /// `HashMap<(), ()>` cost 19 bytes at every count in `1..=14` while
 /// `HashMap::<(), ()>::try_reserve(1)` really allocates a 16-bucket table whose
 /// control storage alone is 32 bytes. The charge is now pinned exactly at every

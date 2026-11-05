@@ -1,4 +1,4 @@
-//! Scalable primary/sidecar identity contracts (, ).
+//! Scalable primary/sidecar identity contracts.
 //!
 //! A stream or indexed sidecar must belong to the exact logical generation of
 //! the primary it was published against. Schema hash, OS object identity and

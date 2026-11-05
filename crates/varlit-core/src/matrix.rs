@@ -19,12 +19,12 @@ use fatal_access::{FatalAccessAllowed, FatalAccessGate};
 use page_index_enumeration::PageIndexEnumeration;
 
 const VMAT_MAGIC: &[u8; 4] = b"VMAT";
-// /: layout version 2 replaces the whole-bitmap commit checksum
+// Layout version 2 replaces the whole-bitmap commit checksum
 // with per-page digests and stops explicitly initialising the per-cell CRC and
 // validity regions at create. Version 1 artifacts describe a different physical
 // representation, so they are rejected as stale-regenerable rather than being
 // reinterpreted under the new rules.
-// layout version 3 adds the persisted page-index region. Open used to
+// Layout version 3 adds the persisted page-index region. Open used to
 // visit `0..page_count` of every commit map and validity bitmap, which is
 // `Theta(cell_count / 8)` of loop iterations even when the filesystem proved
 // every page a hole, and degraded to that much *I/O* whenever the allocation
@@ -74,7 +74,7 @@ const PAGE_INDEX_MAX_ENTRIES: u64 = (1u64 << 48) - 1;
 /// digest array.
 const PAGE_INDEX_HEADER_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Occupancy-header encoding published while a whole-map page-index
-/// republication is in flight .
+/// republication is in flight.
 ///
 /// It is never a resting state: [`write_commit_map_pages`] writes it, makes it
 /// durable, and only replaces it with a real count once every entry, digest and
@@ -366,7 +366,7 @@ std::thread_local! {
     };
 }
 
-/// Always-compiled observation of the sparse-zeroing fallback (/).
+/// Always-compiled observation of the sparse-zeroing fallback.
 ///
 /// Whole-category clear and whole-map rebuild ask the filesystem to *remove* a
 /// byte range. Where that is unavailable the range has to be streamed as zero
@@ -562,7 +562,7 @@ fn allocation_map_forced_unavailable() -> bool {
 }
 
 /// Consumes one step of an injected-failure countdown, reporting whether this
-/// call is the selected one .
+/// call is the selected one.
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 fn take_injected_failure(cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>) -> bool {
     let remaining = scaling_counters::get_always(cell);
@@ -574,7 +574,7 @@ fn take_injected_failure(cell: &'static std::thread::LocalKey<std::cell::Cell<u6
 }
 
 /// Aborts the process at a named boundary inside a whole-map page-index
-/// republication .
+/// republication.
 ///
 /// Interruption between emptying the persisted index and republishing it is the
 /// only way to observe the state [`PAGE_INDEX_REBUILD_MARKER`] exists to make
@@ -1002,7 +1002,7 @@ pub struct MatrixRecoveryReport {
     pub recommended_actions: Vec<MatrixRecoveryAction>,
 }
 
-/// Always-available cost qualification for whole-range zeroing .
+/// Always-available cost qualification for whole-range zeroing.
 ///
 /// Whole-category clear, whole-map rebuild, and page-index rebuild all ask the
 /// filesystem to remove a byte range. Where removal is unavailable the range is
@@ -1070,7 +1070,7 @@ impl MatrixRecoveryReport {
         scaling_counters::get(&scaling_counters::CREATE_METADATA_BYTES_WRITTEN)
     }
 
-    /// Mandatory non-cache residency charged for page-index tracking .
+    /// Mandatory non-cache residency charged for page-index tracking.
     /// The spillable representation has no mandatory per-entry charge. This
     /// excludes the optional `matrix_directory_cache_bytes` working cache,
     /// COW staging and fixed tree-page workspace; it is not total heap usage.
@@ -1303,7 +1303,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::FORCE_NO_ALLOCATION_MAP, u64::from(force));
     }
 
-    /// Fails the `after`-th persisted page-index *entry* write from now .
+    /// Fails the `after`-th persisted page-index *entry* write from now.
     ///
     /// Zero disarms. This is the boundary a whole-map republication crosses once
     /// per materialised page, so it is how a test reaches the window between
@@ -1312,7 +1312,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::PAGE_INDEX_ENTRY_WRITE_FAILURE, after);
     }
 
-    /// Fails the `after`-th persisted page-index *header* write from now .
+    /// Fails the `after`-th persisted page-index *header* write from now.
     ///
     /// Zero disarms. During a whole-map republication the header is written
     /// exactly twice: the rebuild marker first and the published occupancy count
@@ -1321,7 +1321,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::PAGE_INDEX_HEADER_WRITE_FAILURE, after);
     }
 
-    /// Fails the `after`-th first-touch bitmap page allocation from now .
+    /// Fails the `after`-th first-touch bitmap page allocation from now.
     ///
     /// Zero disarms. This is the allocation that used to run *after* the bitmap
     /// byte was durable, so a typed `AllocationFailed` there left disk holding a
@@ -1345,7 +1345,7 @@ impl MatrixRecoveryReport {
     }
 
     /// Aborts the calling process at one stage of a whole-map page-index
-    /// republication . Zero disarms.
+    /// republication. Zero disarms.
     ///
     /// The stages are `1` once the rebuild marker is durable and before the
     /// entry region is cleared, `2` once it is cleared and before any entry is
@@ -1389,7 +1389,7 @@ impl MatrixRecoveryReport {
 struct BitmapPage {
     bytes: Arc<Vec<u8>>,
     /// Set bits held by this page, maintained on every mutation so that
-    /// "this page is now all zero" is an `O(1)` question .
+    /// "this page is now all zero" is an `O(1)` question.
     ones: u64,
     /// True when this page is held by the demand cache
     /// ([`MatrixMetadataResidency::Lazy`]) rather than admitted through
@@ -1714,7 +1714,7 @@ impl std::ops::Deref for PagePayload {
     }
 }
 
-/// One bitmap byte write whose fallible work is already done .
+/// One bitmap byte write whose fallible work is already done.
 ///
 /// Produced by [`SparseBitmap::prepare_byte_write`] and consumed by
 /// [`SparseBitmap::commit_byte_write`]. Holding one of these is the statement
@@ -2404,10 +2404,10 @@ impl SparseBitmap {
     /// and the map slot reserved by [`Self::prepare_byte_write`], the payload is
     /// uniquely owned, and every count was computed there. This is the step a
     /// caller runs *after* its disk mutation is durable, which is what keeps
-    /// disk and memory in agreement whatever the allocator does .
+    /// disk and memory in agreement whatever the allocator does.
     ///
     /// The first write to a page materialises it; the write that clears the
-    /// page's final set bit releases it again . The zero check is the
+    /// page's final set bit releases it again. The zero check is the
     /// page's maintained set-bit count, so neither the page nor the map is ever
     /// scanned on the hot path.
     fn commit_byte_write(&mut self, prepared: PreparedByteWrite) -> PageResidencyDelta {
@@ -2476,7 +2476,7 @@ impl SparseBitmap {
     /// Prepare-then-commit in one step.
     ///
     /// `#[cfg(test)]` deliberately: every production mutation has a disk write
-    /// to order against, so it must hold the two halves apart . Only the
+    /// to order against, so it must hold the two halves apart. Only the
     /// bitmap's own unit tests, which have no file at all, use the shorthand.
     #[cfg(test)]
     fn set_byte(&mut self, index: u64, value: u8) -> Result<PageResidencyDelta> {
@@ -2631,7 +2631,7 @@ impl SparseBitmap {
         self.store().cached_bytes
     }
 
-    /// Modelled resident cost of this bitmap's page-index tracking .
+    /// Modelled resident cost of this bitmap's page-index tracking.
     fn resident_index_bytes(&self) -> u64 {
         // No mandatory per-entry residency. The optional directory cache is
         // bounded separately by matrix_directory_cache_bytes, like payload
@@ -2654,7 +2654,7 @@ impl SparseBitmap {
 ///
 /// A recovery path that reads a clear bit as *proof of absence* and republishes
 /// the result — `rebuild_commit_map_from_crc` — therefore erases committed cells
-/// using evidence the file never supplied. That was .
+/// using evidence the file never supplied. That was.
 ///
 /// Round 12 fixed it with a `crc_valid_complete: bool` beside the bitmap and one
 /// added call to a checking function. Re-verification found that fix *partial*,
@@ -3085,7 +3085,7 @@ struct MatrixCommitLayout {
     /// `rebuild_commit_map_from_crc` — clear this one field.
     quarantine_finding: Option<MatrixRecoveryFinding>,
     digest_offset: Option<u64>,
-    /// Base offset of this category's persisted page index .
+    /// Base offset of this category's persisted page index.
     index_offset: u64,
 }
 
@@ -3098,9 +3098,9 @@ struct MatrixBlockLayout {
     cell_count: u64,
     crc_offset: Option<u64>,
     crc_valid_offset: Option<u64>,
-    /// Base offset of the validity bitmap's persisted page index .
+    /// Base offset of the validity bitmap's persisted page index.
     crc_valid_index_offset: Option<u64>,
-    /// The CRC-validity bitmap *and* whether it is complete evidence .
+    /// The CRC-validity bitmap *and* whether it is complete evidence.
     ///
     /// This is not a `SparseBitmap`: the bitmap is unnameable outside
     /// [`mod crc_valid_evidence`](crc_valid_evidence), so no path can read a
@@ -3118,7 +3118,7 @@ struct MatrixAuxLayout {
     byte_len: u64,
 }
 
-/// Where each paged bitmap's persisted page index lives .
+/// Where each paged bitmap's persisted page index lives.
 ///
 /// Region layout: one entry array per commit category, in category order, then
 /// — when checksums are enabled, because that is when the validity bitmaps
@@ -3189,7 +3189,7 @@ impl MatrixLayout {
     }
 
     /// Gives back residency a mutation released, so a set/clear cycle returns
-    /// to the budget it started from .
+    /// to the budget it started from.
     fn release_resident_bitmap(&mut self, bytes: u64) {
         if bytes == 0 {
             return;
@@ -4843,7 +4843,7 @@ fn report_from(
 }
 
 /// Fails this layout closed after a whole-map page-index republication was
-/// interrupted past the point where it published the rebuild marker .
+/// interrupted past the point where it published the rebuild marker.
 ///
 /// The persisted index no longer describes the published set, and the in-memory
 /// mirror still describes the *previous* one, so any later mutation would write
@@ -5368,7 +5368,7 @@ fn record_mutated_page_index(
 }
 
 /// Drops the persisted page index entry for the page holding `byte_index` now
-/// that the page is empty .
+/// that the page is empty.
 fn release_mutated_page_index(
     layout: &mut MatrixLayout,
     file: &mut impl MatrixIo,
@@ -5438,7 +5438,7 @@ fn apply_commit_bit(
         BitmapRead::new(file),
     )?;
     layout.charge_resident_bitmap(cost)?;
-    // Invariant 3 . Every step that can fail — the budget charge, the page
+    // Invariant 3. Every step that can fail — the budget charge, the page
     // allocation and map reservation, the page-index publication, the digest
     // write and the bitmap-byte write — happens *before* the memory update that
     // makes the mutation visible, and that update is
@@ -6244,7 +6244,7 @@ fn zero_crc_valid_bitmaps(
             .get(&block.block_id)
             .ok_or(Error::MatrixBlockMissing(block.block_id))?;
         // A freshly created matrix has published nothing, so its empty
-        // validity bitmap is complete evidence by construction .
+        // validity bitmap is complete evidence by construction.
         bitmaps.insert(block.block_id, CrcValidEvidence::newly_created(cell_count)?);
     }
     Ok(bitmaps)
@@ -6336,7 +6336,7 @@ fn layout_from_parts(
         return Err(Error::InvalidMatrixLayout);
     }
     // A `FatalAccessGate` no longer comes into existence here, and no longer
-    // comes into existence anywhere this function can name . The
+    // comes into existence anywhere this function can name. The
     // layout is assembled by `fatal_access::assemble_layout` at the end of this
     // function, which derives the gate from the findings the layout is built
     // with: this file scope holds no expression of the gate's type, so it can
@@ -6882,7 +6882,7 @@ pub(crate) mod page_index_enumeration;
 /// allocation map reports as holding bytes. The first term keeps the pass bounded
 /// when no allocation map exists; the second is what makes a stray byte written
 /// into a page the matrix never published detectable, and it exists only where
-/// the platform supplies a usable map . Neither term is derived from the
+/// the platform supplies a usable map. Neither term is derived from the
 /// logical page count. **Preserving the union is not optional**: without its
 /// second term a page nothing ever published is never examined at all, rather
 /// than examined late.
@@ -7203,7 +7203,7 @@ fn load_commit_bitmaps(
 }
 
 /// Loads every block's CRC-validity bitmap, together with whether each one is
-/// complete evidence .
+/// complete evidence.
 ///
 /// A validity bitmap is loaded with `digest_base: None`, so its *pages* are
 /// unauthenticated by design, but its persisted page index is checked exactly

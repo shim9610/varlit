@@ -54,7 +54,7 @@ impl WireType {
     }
 }
 
-/// FNV-1a 64 state for structural codec identities .
+/// FNV-1a 64 state for structural codec identities.
 ///
 /// The derive expands the same folding inline so a generated
 /// `SCHEMA_FINGERPRINT` is a const expression over its fields' real
@@ -119,7 +119,7 @@ pub(crate) const fn container_schema_id_with_arity(
 pub trait VarlitEncode {
     const WIRE_TYPE: WireType;
 
-    /// Structural identity of the bytes this codec emits .
+    /// Structural identity of the bytes this codec emits.
     ///
     /// [`WireType`] is far too coarse to separate two custom codecs that both
     /// encode as [`WireType::Nested`] but disagree on layout, and a derived
@@ -284,7 +284,7 @@ impl Encoder {
     }
 
     /// Encodes a nested value into its own buffer while inheriting this
-    /// encoder's remaining output budget .
+    /// encoder's remaining output budget.
     ///
     /// A nested field encoded through this method can never buffer past the
     /// limit its parent writer entry point imposed: the child encoder is
@@ -1430,7 +1430,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// tables of fewer than fifteen entries. Charging more than hashbrown allocates
 /// is always sound here; charging less is the defect this constant exists to
 /// prevent.
-/// Entry-slot multiplier for the `BTreeMap` materialization model .
+/// Entry-slot multiplier for the `BTreeMap` materialization model.
 ///
 /// A std B-tree node allocates a fixed array of `2B - 1 = 11` entry slots
 /// whatever its fill, and is only guaranteed to hold `B - 1 = 5` of them, so
@@ -1440,7 +1440,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// library cannot silently turn the model into an under-charge.
 const BTREE_ENTRY_SLOT_FACTOR: usize = 3;
 
-/// Per-entry allowance for B-tree node headers and child pointers .
+/// Per-entry allowance for B-tree node headers and child pointers.
 ///
 /// A leaf node header is a parent pointer, a parent index and a length; an
 /// internal node adds `2B = 12` child pointers. Amortised over the guaranteed
@@ -1491,7 +1491,7 @@ fn hash_map_decode_reservation_bytes<T>(len: usize) -> Option<u64> {
 ///   comment here — that "small-table specializations only ever allocate less"
 ///   — was false, and why the old two-bucket model undercharged
 ///   `HashMap<(), ()>` by charging 19 bytes for a table that really costs 32
-///   bytes of control storage alone (/).
+///   bytes of control storage alone.
 /// * Every bucket owns one `T` *and* one control byte — the true floor is never
 ///   one byte per entry, not even for a zero-sized `T`.
 /// * The allocation additionally carries one trailing duplicated control group,
@@ -1675,7 +1675,7 @@ mod tests {
         buckets * (size_of::<(K, V)>() as u64 + 1) + 16
     }
 
-    /// /. The reservation model must never charge less than the
+    /// The reservation model must never charge less than the
     /// table `try_reserve` really allocates, at *every* capacity — including
     /// the small-table classes `1..=14`, where the previous two-bucket model
     /// charged `HashMap<(), ()>` 19 bytes for a 16-bucket table.

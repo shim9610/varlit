@@ -236,7 +236,7 @@ impl CrcValidEvidence {
         self.bits.commit_byte_write(prepared)
     }
 
-    /// The one named escape, narrowed to a compiler refusal .
+    /// The one named escape, narrowed to a compiler refusal.
     ///
     /// It used to return `&mut SparseBitmap`, held to one call site by a
     /// source gate. That is not the same thing as holding it to one

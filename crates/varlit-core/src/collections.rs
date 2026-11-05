@@ -327,7 +327,7 @@ struct BlockContract {
     keyed: bool,
     /// Declared endian **override**, exactly as
     /// [`crate::VarlitBlock::ENDIAN`] and
-    /// [`FormatSpec::block_identities`] spell it .
+    /// [`FormatSpec::block_identities`] spell it.
     ///
     /// `None` is not "unknown": it is the positive declaration *"no override —
     /// inherit the format endian"*, which is why it is compared after

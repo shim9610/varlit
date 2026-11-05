@@ -650,7 +650,7 @@ impl VarlitFile {
                  a chunk becomes durable when it is written",
             ));
         }
-        // INVARIANT 3 . The commit event is pure layout geometry - block
+        // INVARIANT 3. The commit event is pure layout geometry - block
         // index, ordinal, slot offset and stride - so it is derived *before*
         // the authoritative commit rather than after it. Previously
         // `commit_event` ran after the commit was durable and could return a

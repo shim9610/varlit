@@ -1177,8 +1177,8 @@ impl VarlitFile {
                 self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation
-                // and the O(1) block tails with it . Record offsets
-                // moved, so every cached generic keyed tail is stale .
+                // and the O(1) block tails with it. Record offsets
+                // moved, so every cached generic keyed tail is stale.
                 let derived = derive_index_state(self.index.iter(), true)?;
                 self.checkpoint_cadence = derived.checkpoint_cadence;
                 self.block_tails = derived.block_tails.expect("tails were requested");
@@ -1253,8 +1253,8 @@ impl VarlitFile {
                 self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
                 // The resident index was replaced wholesale; recover the O(1)
                 // flush-cadence state once for the new generation
-                // and the O(1) block tails with it . Record offsets
-                // moved, so every cached generic keyed tail is stale .
+                // and the O(1) block tails with it. Record offsets
+                // moved, so every cached generic keyed tail is stale.
                 let derived = derive_index_state(self.index.iter(), true)?;
                 self.checkpoint_cadence = derived.checkpoint_cadence;
                 self.block_tails = derived.block_tails.expect("tails were requested");

@@ -12,7 +12,7 @@
 //! sidecar publication surfaces the pending parent-directory
 //! durability state instead of discarding it , and an indeterminate
 //! sidecar publication preserves the replacement temp for reconciliation
-//! instead of blind-deleting it .
+//! instead of blind-deleting it.
 
 use std::fs;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -279,7 +279,7 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     }
     let records = u64::from(PUTS + TOMBSTONES);
     // A rebuild also scans the internal creation-nonce record every
-    // stream/indexed primary carries as its first record .
+    // stream/indexed primary carries as its first record.
     let scanned_records = records + 1;
 
     fs::remove_file(disk_index_sidecar_path(&path))?;
@@ -361,7 +361,7 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
     // does not shrink without a native compaction.
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
-    // 64 user records plus the internal creation-nonce record .
+    // 64 user records plus the internal creation-nonce record.
     assert_eq!(report.records, 65);
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
@@ -477,7 +477,7 @@ mod crc_single_traversal {
         // Baseline: the clean CRC file rebuilds.
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record .
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
 
         // Corrupt the payload of the record outside the plan. A rebuild that
@@ -486,7 +486,7 @@ mod crc_single_traversal {
         let corrupted = flip_marker_byte(&path, blob_marker)?;
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record .
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
         let reader = VarlitIndexedReader::open(crc_spec(), &path, options, crc_plan())?;
         assert_eq!(
@@ -632,7 +632,7 @@ mod publication_state {
 
     /// Destructures an indeterminate publication error, asserting it names
     /// `expected_target` and that the replacement temp it reports survives on
-    /// disk for out-of-band reconciliation . Returns the preserved
+    /// disk for out-of-band reconciliation. Returns the preserved
     /// temp path.
     fn assert_preserved_replacement(
         error: Error,

@@ -927,7 +927,7 @@ impl VarlitStreamWriter {
         // Bind the authoritative object lock onto the freshly created file. The
         // acquire-time probe cannot lock a file that did not exist yet, so
         // without this a hard-link alias opened after creation would win a
-        // second writer role . Mirrors VarlitFile::create_impl and
+        // second writer role. Mirrors VarlitFile::create_impl and
         // VarlitLayoutWriter::create_inner.
         //
         // the bind must happen before any destructive initialization.
@@ -1802,7 +1802,7 @@ fn state_chunk_records(spec: FormatSpec, batch: DiskIndexBatchOptions) -> usize 
 /// mutator would have to land to make the published sidecar stale.
 ///
 /// Armed hooks are held in a path-keyed table, and consumption removes **only**
-/// the entry whose primary matches . An earlier single-slot cell let one
+/// the entry whose primary matches. An earlier single-slot cell let one
 /// test's registration silently replace another still-armed test's hook, which
 /// made the parallel library run nondeterministic.
 #[cfg(test)]
@@ -2722,7 +2722,7 @@ mod tests {
         batch.sync()?;
 
         assert_eq!(info.records, 100);
-        // Sequence 0 belongs to the internal creation-nonce record .
+        // Sequence 0 belongs to the internal creation-nonce record.
         assert_eq!(info.first_sequence, Some(1));
         assert_eq!(info.last_sequence, Some(100));
         assert_eq!(info.write_calls, 7);
@@ -2973,7 +2973,7 @@ mod tests {
         let path = directory.path().join("keyed-bypass.varlit");
         let mut writer = VarlitStreamWriter::create(keyed_spec(), &path, StreamOptions::default())?;
         // Baseline rather than a literal: a fresh primary already holds its
-        // internal creation-nonce record . The contract under test is
+        // internal creation-nonce record. The contract under test is
         // that the rejected calls append nothing on top of it.
         let baseline = writer.checkpoint().record_count;
         assert!(matches!(
@@ -3066,7 +3066,7 @@ mod tests {
         {
             let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
             // Sequence 0 belongs to the internal creation-nonce record, so the
-            // 129th user append carries sequence 129 .
+            // 129th user append carries sequence 129.
             assert_eq!(writer.push_info(&TestBlock(128))?.sequence, 129);
             writer.sync()?;
         }

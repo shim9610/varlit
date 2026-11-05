@@ -287,7 +287,7 @@ fn timed(operation: impl FnOnce() -> varlit::Result<()>) -> varlit::Result<Durat
     Ok(start.elapsed())
 }
 
-/// What a throughput number is actually per .
+/// Unit and denominator for each reported throughput rate.
 ///
 /// The merge and compact operations do not process `records` items: their input
 /// is the base file *plus* every delta record (updates, deletes, and inserts),

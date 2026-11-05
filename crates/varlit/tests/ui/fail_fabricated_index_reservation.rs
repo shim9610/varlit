@@ -1,4 +1,4 @@
-// SHAPE A, mechanical enforcement .
+// SHAPE A, mechanical enforcement.
 //
 // `ReservedIndexSlot` is the proof that the resident record index — the
 // in-memory mirror of the records on disk — has capacity for one more entry.
