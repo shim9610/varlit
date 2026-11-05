@@ -2769,7 +2769,7 @@ pub(super) fn high_cardinality_api_tokens(
     )
 }
 
-/// Rustdoc for a generated typed writer .
+/// Rustdoc for a generated typed writer.
 ///
 /// The resident writer is the convenient default, and for a format whose
 /// distinct key count is large it is the wrong tool. The published pages are

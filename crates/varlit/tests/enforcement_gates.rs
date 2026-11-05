@@ -316,7 +316,7 @@ fn no_writer_keeps_its_own_poison_boolean() {
     );
 }
 
-/// SHAPE B, the level above . Round 12's permit proved that *a* poison flag
+/// Writer-bound mutation permits. An unbound permit proved that *a* poison flag
 /// had been checked, not that *the writer being mutated* had been:
 /// `PoisonFlag::healthy()` is a `const fn` and the permit constructor was
 /// `pub(crate)`, so re-verification compiled a three-line bypass —
@@ -699,7 +699,7 @@ fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
     assert!(!module.contains("Mutex<"));
 }
 
-/// /, `file.rs`. The two enforcement types keep their private fields and
+/// Wiring in `file.rs`. The two enforcement types keep their private fields and
 /// their single constructors, and the in-place writer keeps taking the
 /// version-checked token rather than a caller-supplied offset. The compile-fail
 /// fixtures assert the fields; this asserts the wiring they are pointless
@@ -1226,7 +1226,7 @@ fn matrix_state_is_only_addressed_through_the_fatal_access_witness() {
     }
 }
 
-/// the **minting** half .
+/// the **minting** half.
 ///
 /// Round 14 made `CompleteCrcValidEvidence` unforgeable and left
 /// `CrcValidEvidence::new(bits, complete: bool)` `pub(super)`, so one line

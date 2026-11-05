@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check current documentation links and optionally execute the actual quickstart."""
+"""Check documentation structure, links, evidence and the actual quickstart."""
 import argparse
 import hashlib
 from html import unescape
@@ -31,11 +31,38 @@ def anchors(text):
     return found
 
 
+def duplicate_sections(raw):
+    stack, seen, duplicates = [], set(), set()
+
+    def finish(end):
+        start, _, title = stack.pop()
+        section = raw[start:end].strip()
+        if len(section) >= 160 and section.count("\n") >= 4:
+            if section in seen:
+                duplicates.add(title)
+            seen.add(section)
+
+    fenced, offset = False, 0
+    for line in raw.splitlines(keepends=True):
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and (match := re.match(r"^(#{1,6})\s+(.+?)\s*$", line)):
+            depth = len(match[1])
+            while stack and stack[-1][1] >= depth:
+                finish(offset)
+            stack.append((offset, depth, match[2]))
+        offset += len(line)
+    while stack:
+        finish(len(raw))
+    return sorted(duplicates)
+
+
 def check_file(path, root=ROOT):
     raw = path.read_text()
     errors = []
     if len(re.findall(r"^```", raw, re.M)) % 2:
         errors.append("unclosed code fence")
+    errors.extend(f"duplicated section: {title}" for title in duplicate_sections(raw))
     links = re.findall(r"!?\[[^\]\n]*\]\(([^\s)]+)\)", prose(raw))
     checked = 0
     for target in links:

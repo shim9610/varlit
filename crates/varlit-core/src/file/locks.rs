@@ -2,7 +2,7 @@
 use super::*;
 
 /// Opens the diagnostic `<target>.lock` marker for mutation, refusing any
-/// object that is not a dedicated, unaliased regular file .
+/// object that is not a dedicated, unaliased regular file.
 ///
 /// Acquiring the marker truncates it and writes pid/target metadata through
 /// the handle, and dropping the lock truncates it again. Those writes must

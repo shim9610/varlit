@@ -1,4 +1,4 @@
-// SHAPE B, mechanical enforcement .
+// SHAPE B, mechanical enforcement.
 //
 // `MutationPermit` is the witness that a writer's poison flag was observed
 // clear. Its only constructor is `PoisonFlag::issue`, which performs the check

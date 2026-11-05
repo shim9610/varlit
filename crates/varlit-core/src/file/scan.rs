@@ -679,7 +679,7 @@ pub(crate) fn fresh_stream_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     fresh_matrix_creation_nonce()
 }
 
-/// Frames the creation-nonce record .
+/// Frames the creation-nonce record.
 ///
 /// The nonce lives *inside the primary* because that is the only place an
 /// equal-length in-place rewrite cannot preserve: a nonce in the sidecar, the
@@ -1179,7 +1179,7 @@ impl ScannedIndex {
         Ok(())
     }
 
-    /// Orders the collected tails exactly once .
+    /// Orders the collected tails exactly once.
     pub(super) fn block_tails(&self) -> Result<BlockTails> {
         let mut tails = Vec::new();
         tails

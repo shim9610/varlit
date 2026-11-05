@@ -1548,7 +1548,7 @@ pub(super) fn validate_matrix_format(
     Ok(())
 }
 
-/// Permissive syntactic shape check for matrix field types (, ).
+/// Permissive syntactic shape check for matrix field types.
 ///
 /// A matrix slot needs a stride the compiler knows. Deciding *which* types have
 /// one is a question about types, and a proc macro sees only spellings, so this
@@ -1587,7 +1587,7 @@ pub(super) fn matrix_field_is_fixed_width(ty: &Type) -> bool {
     }
 }
 
-/// The compile-time slot stride of an inline matrix block .
+/// The compile-time slot stride of an inline matrix block.
 ///
 /// Every field contributes the encoded width of its own codec, resolved through
 /// `VarlitEncode::WIRE_TYPE` rather than taken from `size_of`. The two disagree

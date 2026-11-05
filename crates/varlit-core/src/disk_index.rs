@@ -29,7 +29,7 @@ const DEFAULT_BATCH_RECORDS: usize = 16_384;
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
 
 const META_MAGIC: [u8; 8] = *b"VARVEVKI";
-// v3 adds the primary generation witness . A v2 sidecar is 260 bytes
+// v3 adds the primary generation witness. A v2 sidecar is 260 bytes
 // where this record is 300, so it is refused with the typed `MetadataLength`
 // error before the version field is read, and is stale-regenerable by rebuild.
 const META_VERSION: u16 = 3;
@@ -300,7 +300,7 @@ pub enum DiskIndexError {
     IdentityMismatch,
     /// The primary no longer matches the generation the sidecar was published
     /// against: the leading bytes of the file changed underneath it, outside a
-    /// declared header tail region, which is excluded from the witness .
+    /// declared header tail region, which is excluded from the witness.
     PrimaryGenerationMismatch,
     ModeMismatch {
         expected: DiskIndexMode,
@@ -629,7 +629,7 @@ pub struct DiskIndexIdentity {
     pub primary_fingerprint: [u8; 32],
 }
 
-/// Bytes of the primary covered by the generation witness .
+/// Bytes of the primary covered by the generation witness.
 ///
 /// The window is a small constant: the witness must catch a rewrite of the
 /// primary's leading records, and verifying it costs one bounded read at open
@@ -2442,7 +2442,7 @@ impl DiskIndexWriteBatch {
         Ok(self.metadata)
     }
 
-    /// Re-stamps the primary generation witness for this batch .
+    /// Re-stamps the primary generation witness for this batch.
     ///
     /// Only called while the witness window is still growing — once it covers
     /// [`PRIMARY_GENERATION_WINDOW`] bytes it is frozen for the file's life, so

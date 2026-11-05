@@ -405,7 +405,7 @@ impl VarlitDecode for SwapProbe {
         if let Some(target) = SWAP_ON_DECODE.lock().unwrap().take() {
             // The self-test reader still holds the original file object open,
             // so this models a hostile pathname swap between the run's last
-            // probe and its identity-checked cleanup .
+            // probe and its identity-checked cleanup.
             let _ = remove_file(&target);
             let _ = write(&target, IMPOSTOR_BYTES);
         }

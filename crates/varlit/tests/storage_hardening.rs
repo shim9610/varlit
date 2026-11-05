@@ -670,7 +670,7 @@ fn rewrite_temp_is_removed_when_preparation_fails_after_creation() -> varlit::Re
 }
 
 /// STO4-P2: the guard must not touch the one temp whose retention is the
-/// documented contract .
+/// documented contract.
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
 fn indeterminate_merge_publication_still_retains_its_rewrite_temp() -> varlit::Result<()> {

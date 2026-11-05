@@ -202,7 +202,7 @@ impl VarlitFile {
         //
         // Records occupy contiguous ascending physical extents, so the copied
         // index is strictly offset-ordered; `payload_window` relies on that for
-        // its binary-search membership check .
+        // its binary-search membership check.
         let mut previous_offset: Option<u64> = None;
         for (position, entry) in self.index.iter().enumerate() {
             let entry = entry?;

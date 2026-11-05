@@ -304,7 +304,7 @@ fn entry_bytes(page: u64) -> Result<[u8; 8]> {
         .to_le_bytes())
 }
 
-/// The occupancy count that publishes a republished generation .
+/// The occupancy count that publishes a republished generation.
 #[must_use = "a prepared page-index publication must be committed"]
 pub(super) struct PreparedPublication {
     header: [u8; 8],
@@ -326,7 +326,7 @@ impl PreparedPublication {
     }
 }
 
-/// Publishes [`PAGE_INDEX_REBUILD_MARKER`] into the occupancy slot .
+/// Publishes [`PAGE_INDEX_REBUILD_MARKER`] into the occupancy slot.
 ///
 /// This is not a mirror mutation and takes no prepared value: it destroys
 /// nothing on its own and is the step that makes everything after it

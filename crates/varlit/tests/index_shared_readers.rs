@@ -1,4 +1,4 @@
-//! Shared indexed-handle contracts (/).
+//! Shared indexed-handle contracts.
 //!
 //! Independent in-process indexed handles must share one sidecar database per
 //! native file identity: two readers — or a reader beside a synced writer —
@@ -193,7 +193,7 @@ fn rebuild_replaces_the_sidecar_for_fresh_handles() -> Result<()> {
     // open the replacement database, not a stale shared entry for the
     // replaced file object.
     let report = rebuild_disk_index(spec, &path, options, plan)?;
-    // Three user records plus the internal creation-nonce record .
+    // Three user records plus the internal creation-nonce record.
     assert_eq!(report.records, 4);
     let first = VarlitIndexedReader::open(spec, &path, options, plan)?;
     let second = VarlitIndexedReader::open(spec, &path, options, plan)?;

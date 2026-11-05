@@ -2280,7 +2280,7 @@ mod tests {
             Err(Error::DiskIndex(_))
         ));
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Three user records plus the internal creation-nonce record .
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
         assert!(report.scanned_bytes > 0);
         let mut writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
@@ -2625,7 +2625,7 @@ mod tests {
             ..DiskIndexOptions::default()
         };
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Five user records plus the internal creation-nonce record .
+        // Five user records plus the internal creation-nonce record.
         assert_eq!(report.records, 6);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(reader.get::<Item>(&4)?.unwrap().value, "value-4");
@@ -2709,7 +2709,7 @@ mod tests {
         fs::remove_file(sidecar_path(&path))?;
         crate::disk_index::reset_tombstone_key_decode_calls();
         let report = rebuild_disk_index(spec_multi(), &path, options, plan_multi())?;
-        // Four user records plus the internal creation-nonce record .
+        // Four user records plus the internal creation-nonce record.
         assert_eq!(report.records, 5);
         // One decode per tombstone record, not one per plan descriptor.
         assert_eq!(crate::disk_index::tombstone_key_decode_calls(), 2);
@@ -2817,7 +2817,7 @@ mod tests {
 
         crate::disk_index::reset_plan_payload_reads();
         let report = rebuild_disk_index(spec_crc(), &path, options, plan_crc())?;
-        // Four user records plus the internal creation-nonce record .
+        // Four user records plus the internal creation-nonce record.
         assert_eq!(report.records, 5);
         // Two indexed puts and one tombstone: three payload materializations,
         // never a scanner checksum pre-pass on top and never the unindexed

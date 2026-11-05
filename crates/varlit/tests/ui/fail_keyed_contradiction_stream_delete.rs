@@ -46,6 +46,6 @@ fn low_level_delete(writer: &mut VarlitStreamWriter) -> Result<AppendInfo> {
 fn main() {
     // Reify the low-level stream delete path exactly like a real caller
     // would; the KeyedBlockContract const inside delete_with_prev_key_info
-    // then fails to evaluate at monomorphization time .
+    // then fails to evaluate at monomorphization time.
     let _ = low_level_delete as fn(&mut VarlitStreamWriter) -> Result<AppendInfo>;
 }

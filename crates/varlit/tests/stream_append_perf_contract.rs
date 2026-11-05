@@ -241,7 +241,7 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-    // 20 user records plus the internal creation-nonce record .
+    // 20 user records plus the internal creation-nonce record.
     assert_eq!(reader.verify_all()?, 21);
     let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
     assert_eq!(values, (0..20).map(Value).collect::<Vec<_>>());

@@ -58,6 +58,6 @@ fn compact_probe(spec: FormatSpec, input: &Path, output: &Path) -> Result<()> {
 fn main() {
     // Reify the merge/compaction keyed entry point exactly like a real
     // caller would; the KeyedBlockContract const inside compact_keyed_file
-    // then fails to evaluate at monomorphization time .
+    // then fails to evaluate at monomorphization time.
     let _ = compact_probe as fn(FormatSpec, &Path, &Path) -> Result<()>;
 }

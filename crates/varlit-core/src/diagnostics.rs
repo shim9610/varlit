@@ -396,7 +396,7 @@ impl FormatSelfTest {
             return report;
         }
 
-        // /: the self-test must never truncate or delete a
+        // The self-test must never truncate or delete a
         // pre-existing caller file. Both paths rely on atomic
         // exclusive-create constructors that keep the exclusively created
         // handle locked from the claim through complete initialization, so
@@ -912,7 +912,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         // operating system was asked for failed.
         | Error::CommittedButDurabilityUnproven { .. }
         // The commit bit is in the file; only the durability request the
-        // operating system was asked for failed .
+        // operating system was asked for failed.
         | Error::MatrixPublicationUncertain { .. }
         | Error::MatrixCommittedButDurabilityUnproven { .. }
         | Error::ReplacePublicationIndeterminate { .. } => DiagnosticDomain::Environment,
@@ -984,7 +984,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
 
 pub fn error_hint(error: &Error) -> &'static str {
     // A stale or foreign sidecar has one documented recovery, so it earns a
-    // variant-specific hint instead of the generic file-data one .
+    // variant-specific hint instead of the generic file-data one.
 
     if let Error::DiskIndex(disk_index) = error
         && matches!(
@@ -1117,7 +1117,7 @@ where
     }
 }
 
-/// Outcome of an identity-checked destructive removal (, ).
+/// Outcome of an identity-checked destructive removal.
 ///
 /// Cleanup is a destructive operation performed on behalf of a caller who
 /// asked for tidiness, never for correctness, so every way it can decline is a
@@ -1142,7 +1142,7 @@ pub(crate) enum ObjectRemoval {
 }
 
 /// Removes the artifacts this self-test run created, verifying identity
-/// before every deletion (, ).
+/// before every deletion.
 ///
 /// The native target is only removed while the pathname still resolves to the
 /// file object this run created; a file another process has since swapped in
@@ -1251,7 +1251,7 @@ pub(crate) fn remove_path_if_same_object(
 }
 
 /// Deletes `path` only while the file object bound to the pathname is still the
-/// one `pinned` holds open .
+/// one `pinned` holds open.
 ///
 /// POSIX has no unlink-by-handle: `unlink` names a *pathname*, so an identity
 /// check on an open handle followed by an unlink of the same name is two
@@ -1434,7 +1434,7 @@ fn set_interposition(hook: Box<dyn FnOnce()>) {
 }
 
 /// Removes the pathname's writer-lock marker only when this process can
-/// re-acquire it through the standard writer-lock protocol .
+/// re-acquire it through the standard writer-lock protocol.
 ///
 /// Acquisition with the default refuse policy fails while another writer
 /// holds the marker guard lock or has populated the marker with its own run

@@ -1,8 +1,8 @@
 # Verification tools and recorded results
 
-This guide follows the current repository. The documentation gate checks local
-links and executes the grouped-block quickstart from its actual Markdown source.
- Historical reports identify the
+This guide follows the current repository. The documentation gate rejects repeated
+report sections, checks local links and executes the grouped-block quickstart from
+its actual Markdown source. Historical reports identify the
 revision they tested; a successful older run is not a result for a newer commit.
 The production runtime at `851836e` passed all **69 CI jobs** and all **three
 Sanitizers jobs**:

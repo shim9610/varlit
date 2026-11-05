@@ -27,7 +27,7 @@ use varlit::{
 
 /// Commit-map page size used by the paged integrity representation.
 const PAGE_BYTES: u64 = 4096;
-/// Native file header, then the 24-byte matrix creation-nonce region .
+/// Native file header, then the 24-byte matrix creation-nonce region.
 const NATIVE_PREFIX_LEN: u64 = 18 + 24;
 /// Current on-disk matrix layout version (v4 gives the persisted page index a
 /// validated occupancy header and makes it the live set, not the history).

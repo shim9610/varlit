@@ -10,6 +10,23 @@ spec.loader.exec_module(docs)
 
 
 class DocumentationContracts(unittest.TestCase):
+    def test_repeated_report_sections_fail(self):
+        section = '## Maintenance comparison\n\n' + 'A matched workload and its complete measurement.\n' * 5
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'README.md'
+            path.write_text('# Report\n\n' + section * 3)
+            self.assertEqual(docs.check_file(path)[1], ['duplicated section: Maintenance comparison'])
+
+    def test_repeated_headings_with_different_examples_are_valid(self):
+        intro = '## Example\n\n' + 'The complete application follows.\n' * 5
+        text = '# Guide\n' + intro + '```rust\nfn first() {}\n```\n'
+        text += intro + '```rust\nfn second() {}\n```\n'
+        self.assertEqual(docs.duplicate_sections(text), [])
+
+    def test_headings_inside_fences_do_not_create_sections(self):
+        example = '```markdown\n## Inner heading\n' + 'Sample content.\n' * 12 + '```\n'
+        self.assertEqual(docs.duplicate_sections('# Guide\n' + example * 2), [])
+
     def test_fences_do_not_invent_links_or_anchors(self):
         text = '# Real\n```rust\n# Fake\n[bad](missing.md)\n```\n# Real\n<a id="stable"></a>\n'
         self.assertEqual(docs.anchors(text), {"real", "real-1", "stable"})

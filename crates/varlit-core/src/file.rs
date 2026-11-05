@@ -39,7 +39,7 @@ pub const METADATA_BLOCK_ID: u32 = 0xFFFF_FFFC;
 pub const INDEX_BLOCK_ID: u32 = 0xFFFF_FFFB;
 pub const MANIFEST_BLOCK_ID: u32 = 0xFFFF_FFFA;
 pub const COMMIT_BLOCK_ID: u32 = 0xFFFF_FFF9;
-/// Carries the per-create nonce of a stream/indexed primary .
+/// Carries the per-create nonce of a stream/indexed primary.
 pub const CREATION_NONCE_BLOCK_ID: u32 = 0xFFFF_FFF8;
 /// Carries one internal segment: the records a single commit point added.
 ///
@@ -462,7 +462,7 @@ const MATRIX_SIDECAR_MAGIC: &[u8; 4] = b"VSID";
 // v2 bound the sidecar to the native file's OS-object identity and matrix
 // layout generation (/05). v3 additionally binds it to the per-create
 // creation nonce stamped into the native matrix file, so recreating a matrix
-// on the same OS file object invalidates every earlier sidecar .
+// on the same OS file object invalidates every earlier sidecar.
 // v1/v2 envelopes are refused as stale/regenerable.
 const MATRIX_SIDECAR_VERSION: u16 = 3;
 // Fixed header: 48-byte v1 prefix + 32-byte native fingerprint + 8-byte matrix
@@ -472,7 +472,7 @@ const MATRIX_SIDECAR_FINGERPRINT_OFFSET: usize = 48;
 const MATRIX_SIDECAR_LAYOUT_GENERATION_OFFSET: usize = 80;
 const MATRIX_SIDECAR_CREATION_NONCE_OFFSET: usize = 88;
 // Per-create identity region stamped between the native file header and the
-// matrix layout header of every matrix file . `create_with_dims`
+// matrix layout header of every matrix file. `create_with_dims`
 // reuses the OS file object when the pathname already exists, so OS identity,
 // schema hash and layout offsets are all stable across a same-dims recreate;
 // the nonce is the only value that distinguishes the new logical matrix from
@@ -534,7 +534,7 @@ pub struct MatrixSidecarManifest {
     /// Fingerprint of the native matrix file's OS object (volume + file ID on
     /// Windows, device + inode on Unix) folded with the schema hash. Binds the
     /// sidecar to one specific native file so a same-spec sibling cannot adopt
-    /// it .
+    /// it.
     pub native_fingerprint: [u8; 32],
     /// The matrix layout generation the sidecar was published against, so a
     /// reader whose native layout has changed rejects the stale sidecar.
@@ -542,7 +542,7 @@ pub struct MatrixSidecarManifest {
     /// The per-create creation nonce of the native matrix file the sidecar was
     /// published against. Recreating a matrix on the same OS file object keeps
     /// the OS identity and layout offsets stable, so this nonce is what makes
-    /// every pre-recreate sidecar refusable as stale .
+    /// every pre-recreate sidecar refusable as stale.
     pub matrix_creation_nonce: [u8; MATRIX_CREATION_NONCE_LEN],
 }
 
@@ -698,7 +698,7 @@ use replacement_target::{RecordOverwrite, ReplacementTarget};
 /// record" — true of the code as written, and unenforced: a new
 /// `self.file.seek(..)` / `self.file.write_all(..)` pair anywhere in this
 /// ~12,000-line file compiled and skipped both the version refusal  and
-/// the keyed-tail invalidation . That is the same "correct today,
+/// the keyed-tail invalidation. That is the same "correct today,
 /// described in prose" configuration that  was in.
 ///
 /// [`RecordFile`] owns the handle in a module that keeps the field unnameable,
@@ -2396,7 +2396,7 @@ impl SegmentCursor {
     }
 }
 
-/// O(1)-append / O(log B) resident block-offset tails .
+/// O(1)-append / O(log B) resident block-offset tails.
 ///
 /// The append path used to reverse-scan the resident index for the newest
 /// record of the same block, costing `Theta(g)` per append (`g` = distance
@@ -2435,7 +2435,7 @@ impl BlockTails {
     /// id into the sorted vector, and an index whose first appearances are in
     /// descending id order moves `0 + 1 + ... + (B - 1)` tuples. That made the
     /// real bound `O(N log B + B^2)`, not the `O(N log B)` the comment here
-    /// used to claim . The append path keeps the sorted-vector
+    /// used to claim. The append path keeps the sorted-vector
     /// insertion: it pays at most one insertion per distinct id over the whole
     /// life of the file and buys `O(log B)` lookups with no hashing on the hot
     /// path.
@@ -2455,7 +2455,7 @@ impl BlockTails {
     /// The scan collects into a map rather than replaying `note_appended`, for
     /// the reason `from_index` does: replaying inserts every first-seen id into
     /// the sorted vector, and an index whose first appearances are in descending
-    /// id order moves `0 + 1 + ... + (B - 1)` tuples .
+    /// id order moves `0 + 1 + ... + (B - 1)` tuples.
     /// Adopts a table a digest already ordered.
     ///
     /// `decode_digest_payload` rejects a non-ascending id, so this cannot adopt
@@ -2517,7 +2517,7 @@ impl BlockTails {
             Err(position) => {
                 // Every insertion shifts the tuples above it; counting them is
                 // what makes the historical quadratic construction term
-                // observable to a regression test .
+                // observable to a regression test.
                 note_block_tail_entries_moved((self.tails.len() - position) as u64);
                 self.tails.insert(position, (block_id, record_offset));
             }
@@ -2581,7 +2581,7 @@ struct KeyedTails {
 }
 
 /// One block id's tail map plus the running total of the key payload bytes it
-/// owns .
+/// owns.
 ///
 /// The total is maintained incrementally - one addition on the append that
 /// introduces a key, nothing at all when an existing key is overwritten - so
@@ -2703,7 +2703,7 @@ std::thread_local! {
     };
 }
 
-/// Consumes one armed keyed-tail reservation failure .
+/// Consumes one armed keyed-tail reservation failure.
 ///
 /// Inert without the `scalable-fault-injection` feature. Thread-local so
 /// concurrently running tests cannot arm each other's writers.
@@ -2730,7 +2730,7 @@ fn take_injected_keyed_tail_reservation_failure(requested: u64) -> Result<()> {
     Ok(())
 }
 
-/// Consumes one armed post-append keyed-tail reservation loss .
+/// Consumes one armed post-append keyed-tail reservation loss.
 ///
 /// Models the otherwise unreachable state in which the slot reserved before
 /// the append is no longer usable afterwards, so the infallible commit's
@@ -2754,7 +2754,7 @@ fn take_injected_keyed_tail_commit_loss() -> bool {
     }
 }
 
-/// Consumes one armed post-commit-marker durability failure .
+/// Consumes one armed post-commit-marker durability failure.
 ///
 /// Models a `flush`/`fsync` that fails *after* the commit marker has been
 /// appended, which a real filesystem will not produce on demand. Inert without
@@ -2989,14 +2989,14 @@ pub struct VarlitFile {
     header_extensions: Vec<u8>,
     matrix: Option<crate::matrix::MatrixLayout>,
     // Present exactly when `matrix` is present: read once at open/create time
-    // so sidecar identity checks never touch the file per operation .
+    // so sidecar identity checks never touch the file per operation.
     matrix_creation_nonce: Option<[u8; MATRIX_CREATION_NONCE_LEN]>,
     sequence_state: SequenceState,
     // O(1) flush-cadence state for `needs_index_checkpoint`; must equal
-    // `CheckpointCadence::from_index(&index)` at all times .
+    // `CheckpointCadence::from_index(&index)` at all times.
     checkpoint_cadence: CheckpointCadence,
     // O(1) append-side block-offset-chain predecessors; must equal
-    // `BlockTails::from_index(&index)` at all times .
+    // `BlockTails::from_index(&index)` at all times.
     block_tails: BlockTails,
     // The matrix chunk being filled, when a growing dimension is declared. See
     // `OpenChunk`; `None` until a write lands past the declared extent.
@@ -3050,12 +3050,12 @@ pub struct VarlitFile {
     /// without a read, and both predicates run on the append path.
     last_resident_block_id: Option<u32>,
     // Lazily built keyed-offset-chain predecessors for the generic keyed
-    // append path; a cached map is either absent or exact .
+    // append path; a cached map is either absent or exact.
     keyed_tails: KeyedTails,
     // True while this handle has created a pathname whose directory entry has
     // not been made durable yet. Cleared by the first successful durability
     // request, so the parent sync happens once per created file and never on
-    // the append path .
+    // the append path.
     pending_pathname_parent_sync: bool,
     /// Whether the file's liveness block said `DIRTY` when this handle opened
     /// it — i.e. whether the previous writer died without releasing.
@@ -4010,7 +4010,7 @@ impl VarlitWriter {
     ///
     /// See [`VarlitFile::replace_fixed_in_place_exclusive`] for the full
     /// contract, including the requirement that a keyed record's key must not
-    /// change .
+    /// change.
     ///
     /// The caller must exclude every reader, writer, mapping, raw reference,
     /// handle, thread, and process for this operation and for the lifetime of
@@ -5256,7 +5256,7 @@ pub struct KeyedMergeEstimate {
     /// Transient bytes the largest single input's open can allocate *on top of*
     /// its resident index, and which are live at the same time as that index:
     /// the sequence-uniqueness witness copies one `u64` per record when the
-    /// file's sequences are not already ascending in offset order .
+    /// file's sequences are not already ascending in offset order.
     pub largest_input_open_transient_bytes: u64,
     /// Structural bytes of the merge-state map's entries at
     /// [`Self::max_distinct_keys`] keys:
@@ -5545,7 +5545,7 @@ fn remove_rewrite_temp_lock_marker(temp_path: &Path) {
 /// Deletes a publication temp file after a pre-publication failure, but
 /// preserves it after [`Error::ReplacePublicationIndeterminate`]: in that
 /// state the temp may be the only surviving copy of the new generation and is
-/// required for out-of-band reconciliation .
+/// required for out-of-band reconciliation.
 fn preserve_temp_on_indeterminate(temp_path: &Path, error: Error) -> Error {
     if !matches!(error, Error::ReplacePublicationIndeterminate { .. }) {
         let _ = remove_file(temp_path);
@@ -5735,7 +5735,7 @@ fn split_metadata_payload(payload: &[u8], endian: Endian) -> Result<(&str, &[u8]
 }
 
 /// Encodes a writer-supplied value with the format's logical-payload limit as
-/// the encode hard bound .
+/// the encode hard bound.
 ///
 /// Every resident writer entry point routes its value encoding through this
 /// bound so an oversized value fails with the typed limit error while the
@@ -6053,7 +6053,7 @@ fn append_log_start(header_len: u64, matrix: Option<&crate::matrix::MatrixLayout
     matrix.map_or(header_len, crate::matrix::MatrixLayout::append_log_start)
 }
 
-/// Produces a fresh 128-bit matrix creation nonce .
+/// Produces a fresh 128-bit matrix creation nonce.
 ///
 /// This is a uniqueness value, not a cryptographic secret: it only has to
 /// differ between two `create_with_dims` calls that reuse the same OS file
@@ -6258,7 +6258,7 @@ fn mmap_index_bytes_for_count(count: usize, verify: bool) -> Result<u64> {
 /// Bytes the sequence-uniqueness witness allocates for `records` entries.
 ///
 /// This is the transient every resident input open can pay on top of its
-/// resident index, so [`KeyedMergeEstimate`] has to charge it .
+/// resident index, so [`KeyedMergeEstimate`] has to charge it.
 fn sequence_uniqueness_transient_bytes(records: usize) -> Result<u64> {
     u64::try_from(records)
         .map_err(|_| Error::ResourceArithmeticOverflow {
@@ -6892,7 +6892,7 @@ fn write_matrix_sidecar_file<P: AsRef<Path>>(
     // into a private temp, fsync it, then atomically replace the destination and
     // sync the parent directory. A crash before the replace leaves the previous
     // sidecar untouched; the old in-place `File::create` truncated it eagerly
-    // and could expose a partial sidecar .
+    // and could expose a partial sidecar.
     let sidecar_path = sidecar_path.as_ref();
     let (temp_path, mut temp_file) = create_rewrite_temp_file(sidecar_path)?;
     let write_result = (|| -> Result<()> {
@@ -7106,7 +7106,7 @@ fn validate_matrix_sidecar_manifest(
     }
     // Bind to a specific native file and its matrix layout: a same-spec,
     // same-generation sibling produces a different OS-object fingerprint and is
-    // rejected .
+    // rejected.
     if manifest.native_fingerprint != identity.fingerprint {
         return Err(Error::MatrixSidecarMismatch("native identity"));
     }
@@ -7116,7 +7116,7 @@ fn validate_matrix_sidecar_manifest(
     // Same OS object, schema and layout offsets are not enough: a matrix
     // recreated in the same file object gets a fresh creation nonce, so every
     // sidecar published against the previous logical matrix is refused as
-    // stale and regenerable .
+    // stale and regenerable.
     if manifest.matrix_creation_nonce != identity.creation_nonce {
         return Err(Error::MatrixSidecarMismatch("creation nonce"));
     }
@@ -7292,7 +7292,7 @@ impl FileMutationPermit<'_> {
     }
     /// The crate's single record-append core.
     ///
-    /// Shape B, mechanical enforcement . It used to call
+    /// Shape B, mechanical enforcement. It used to call
     /// [`VarlitFile::ensure_write`] itself, which is a convention: a sibling append
     /// helper written next month could seek and `write_all` without one, which
     /// is precisely the defect  was in `stream.rs`. It now demands the
@@ -7337,7 +7337,7 @@ impl FileMutationPermit<'_> {
                 resource: "record count",
             })?,
         )?;
-        // Shape A, mechanical enforcement . The limit charge and the
+        // Shape A, mechanical enforcement. The limit charge and the
         // mirror reservation are a precondition of the write below, and the
         // token they produce is the only thing that can install the entry
         // afterwards. See `mod reserved_index_slot`.
@@ -7519,7 +7519,7 @@ impl FileMutationPermit<'_> {
             self.last_resident_block_id = Some(block_id);
             self.index.install(index_slot, &entry);
             // Single index append site: keep the O(1) flush-cadence state in
-            // lockstep with the resident index . It counts resident
+            // lockstep with the resident index. It counts resident
             // entries, so a non-resident record must not advance it.
             let ordinal = self.index.len() - 1;
             self.checkpoint_cadence.note_appended(ordinal, block_id);
