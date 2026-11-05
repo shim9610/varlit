@@ -1,4 +1,71 @@
-# API Changes — 0.3.0 through 0.12.1
+# API Changes
+
+## Unreleased
+
+These changes follow the published 0.12.1 release. Existing public signatures,
+schema fingerprints, native/sidecar bytes, VCHK, VMAT v5 and experimental
+STREUSE2 formats are preserved. Rust 1.95 remains the minimum supported version.
+Existing valid files need no format migration. Stricter validation can reject
+damaged metadata that an older reader accepted.
+
+| Addition | Application use |
+| --- | --- |
+| `ReadValidation` and `ReadLimits::with_read_validation` | Select data CRC and additional structure checks independently; leave unset to retain existing behavior |
+| `ReadLimits::read_validation` and `effective_read_validation` | Inspect the optional override and resolve record-payload checks against the stored integrity policy |
+| `ChunkedBytes::decoded_len` and `stream_range` | Read a selected decoded range with a fixed caller buffer after whole-output admission/refusal |
+| `TryClone::{try_clone, try_clone_slice}` | Clone supported owned values with allocation refusal and partial-output cleanup |
+| `try_box`, `try_box_uninit`, `try_box_with` | Return Box allocation refusal; optionally reserve before initialization |
+| `ScanCancellationToken::try_new` | Create a cancellation token with a fallible shared allocation |
+| `Error::BufferTooSmall`, `InvalidChunkedRange` | Distinguish empty streaming scratch from an invalid decoded range |
+| `Error::ErrorContextAllocationFailed`, `AllocationFailureContext` | Preserve completed or uncertain publication facts when detailed error storage is refused |
+
+`ReadLimits` and `Error` were already non-exhaustive. Existing `Clone`, token
+`new`/`default` and convenience builders keep their original contracts. Internal
+shared owners now use fallible allocation through a private `triomphe` dependency;
+no dependency-specific owner type is exposed in place of a public std `Arc`.
+
+### Selecting read checks
+
+Use `ReadLimits::MISSING.with_read_validation(policy)` with a runtime resource
+override to change only the check selection. Passing `STANDARD` also supplies
+standard resource values, which can replace a format's declared values. Ordinary
+opens preserve the unset compatibility behavior; they do not implicitly select
+`TRUSTED`. `FULL` and `CRC_ONLY` require stored CRCs and the `integrity` feature.
+
+The option changes read-side consistency work, not wire identity, writer CRCs,
+allocation ceilings or publication boundaries. `TRUSTED` does not authorize
+`TrustedUnbounded`. Explicit verification, recovery and index reconstruction do
+not inherit an unchecked payload-read choice. See the
+[API selection table](api-reference.md#read-validation) and
+[I/O contract](design/read-validation-policy-review.md).
+
+### Retrying after an error
+
+For whole-output chunk refusal, the caller can choose a range and a smaller
+buffer using [range streaming](chunk-streaming.md). This requires an already
+available `ChunkedBytes`; it does not bypass the enclosing record's limits.
+Callbacks may receive bytes before a later checksum error, so discard staged
+output on failure and restart the requested range on retry.
+
+For writes, inspect the operation result before retrying. In particular,
+`ErrorContextAllocationFailed` can describe an append that completed, a durable
+generation, or uncertain publication. It does not mean that no mutation occurred.
+Existing writer-poisoning and recovery rules still apply; see
+[error interpretation](api-reference.md#common-error-interpretation).
+
+### Temporary storage and repeated reads
+
+`VARLIT_SPILL_DIR` selects an existing writable directory for disposable spills.
+`VARLIT_SPILL_MAX_BYTES` optionally limits each spill file's logical length;
+unset remains uncapped. Database size is not capped, and atomic replacement
+files still live beside their destination. Configure these variables before
+starting handles or worker threads. See [spill policy](scalable-io.md#private-spill-policy).
+
+Native follow retains checked scan progress, and native marks reuse validated
+boundary metadata where available. Initial admission and invalidated caches can
+still require a scan. Ordinary directory rows are now 13 bytes; eligible rewritten
+directories can use a compressed private representation. These changes do not
+alter persistent user-file formats or increase configured budgets.
 
 ## 0.12.1 release preparation
 
@@ -1629,7 +1696,7 @@ let limits = ReadLimits::STANDARD
 There is no `varve_format!` DSL key for residency (`limits { }` takes a fixed
 list of integer keys and nothing else), so this is the only route to
 `Lazy` at an entry point that also takes limits. See
-[Known Limitations §1.6](known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varve_format-dsl-key).
+[Known Limitations §1.6](known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varlit_format-dsl-key).
 
 ---
 

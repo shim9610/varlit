@@ -1,127 +1,177 @@
-# Verification tools
+# Verification tools and recorded results
 
-`ci / required` depends on the reusable `verification.yml` workflow. Its coverage,
-Kani, Loom and software bill of materials (SBOM) jobs must succeed. Existing
-Miri, AddressSanitizer and fuzz smoke jobs remain in `sanitizers.yml`; existing
-property tests remain in the ordinary test suite. This change does not promote
-the separate sanitizer workflow into the `ci / required` aggregate.
+This guide follows the current repository. Historical reports identify the
+revision they tested; a successful older run is not a result for a newer commit.
+The production runtime at `851836e` passed all **69 CI jobs** and all **three
+Sanitizers jobs**:
+
+- [CI, including the strict required gate](https://github.com/shim9610/varlit/actions/runs/41892694910)
+- [Miri, AddressSanitizer/leaks and fuzz smoke](https://github.com/shim9610/varlit/actions/runs/41892694877)
+
+`ci / required` includes native tests, feature interactions, executable API
+contracts, storage/resource contracts, package/docs checks, CodeQL, dependency
+checks and the reusable `verification.yml` jobs. Sanitizers is a separate
+workflow, not a dependency of that aggregate. Check both workflows on the exact
+candidate commit. See [contributor checks](../CONTRIBUTING.md#local-checks).
+
+## Native tests, API contracts and failure recovery
+
+CI tests default and all features on Linux, Windows and macOS, with bounded-I/O
+checks on each platform. macOS currently uses one `macos-15-intel` runner with
+separate required steps for those checks; this is not ARM64 coverage. Linux also
+runs discovered single features and pairwise feature interactions. Pairwise and
+all-feature runs do not enumerate every possible higher-order feature subset.
+
+New or changed public interfaces require executable valid/invalid contracts in
+[the frozen-inventory gate](validation-contracts.md). Independent consumer,
+renamed-dependency, Rust 1.95 minimum-version and verified crate-archive jobs
+exercise the distributed API and package contents.
+
+`scripts/check_storage_contracts.py` currently runs 62 exact cases, including
+hostile metadata combined with allocation refusal, short/zero reads and
+intermediate I/O failure. Tests check finite traversal, cleanup, repair/retry,
+writer poisoning, pinned snapshots and independent-reader publication. Expanded
+index controls run 160 compound trials and 1,590 hostile-metadata cases across
+checked and trusted read policies. These counts are checked evidence, not an
+exhaustive input-space claim.
+
+The read-policy suite exercises unset compatibility and four explicit modes,
+CRC/structure selection, positional-read counts, decoder/resource refusal,
+compression headers, native/indexed/mmap/matrix routes and pending/confirmed
+visibility. Explicit verification remains strict when ordinary reads trust
+captured metadata. The [policy contract](design/read-validation-policy-review.md)
+defines which checks can be omitted.
+
+```sh
+python3 -m unittest discover -s scripts/tests
+python3 scripts/check_storage_contracts.py --output target/storage-contracts
+```
 
 ## Coverage
 
-Install `cargo-llvm-cov 0.9.1` and Rust 1.95.0's `llvm-tools-preview` component.
-The workflow instruments workspace unit and integration tests with all features,
-and retains JSON, HTML and uncovered-line reports. Vendor, integration-test,
-example, tool and proof-only files are excluded from the report. Inline unit-test
-code inside library source files is still counted. Compile-fail snapshots are
-checked by ordinary CI, not by the instrumented run. Doctests and ignored tests
-are not included in this coverage measurement.
+CI uses Rust 1.95.0 with `llvm-tools-preview` and `cargo-llvm-cov 0.9.1`.
+Workspace unit/integration tests run with all features. Vendor, integration-test,
+example, tool and proof-only paths are excluded from the report; inline unit-test
+code inside library source files is still counted. Doctests, ignored tests and
+compile-fail snapshots are outside this instrumented measurement. Ordinary CI
+checks doctests and compile-fail snapshots separately.
 
-This first integration reports line/region coverage; it does not impose an
-arbitrary percentage floor or claim branch coverage. A successful job requires
-the tests and report generation to succeed, not every line to be covered.
-New unit/integration tests join the command automatically.
-
-Initial local qualification on Linux x86-64, 2026-11-01: 1,304 unit/integration tests passed,
-26 ignored; measured source-line coverage was 46,272/52,574 (88.01%) and region
-coverage 72,641/84,742 (85.72%). The exclusions and inline-test caveat above
-apply. Both Kani harnesses and Loom models passed; warnings-denied Clippy,
-33 Python tests and actionlint also passed. Remote CI results are separate.
+The recorded `851836e` run covers **49,464 / 56,065 lines (88.23%)** and
+**78,186 / 90,888 regions (86.02%)**. The report does not measure branch coverage
+or enforce a coverage-percentage floor. The job requires successful tests and
+report generation; it does not certify every source path.
 
 ```sh
-VARLIT_SKIP_UI_SNAPSHOTS=1 cargo llvm-cov --workspace --all-features --lib --tests --locked --no-report
-cargo llvm-cov report --show-missing-lines
+cargo install cargo-llvm-cov --locked --version 0.9.1
+rustup component add llvm-tools-preview --toolchain 1.95.0
+VARLIT_SKIP_UI_SNAPSHOTS=1 cargo +1.95.0 llvm-cov --workspace --all-features --lib --tests --locked --no-report
+cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|tools)/|/src/verification/' --show-missing-lines
 ```
 
 ## Kani
 
-Install `kani-verifier 0.68.0`, run `cargo kani setup`, then:
+The [contract manifest](verification/proof-contracts.json) currently registers
+**55 harnesses in 14 contract groups**. Both default and all-feature builds must
+complete their registered set. Equal counts do not make these configurations
+interchangeable: feature selection changes compiled implementations.
+`scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
+unfinished harnesses and verifies source fingerprints before and after the run.
+A zero-harness run fails.
+
+| Contract group | Harnesses | Main scope |
+| --- | ---: | --- |
+| Record extent | 1 | Full-width checked address arithmetic |
+| Observed prefix | 4 | Prefix transitions; bounded membership/truncation models |
+| Publication metadata | 4 | Typed frontier/checkpoint validation |
+| Publication protocol | 9 | Abstract I/O effects and inductive frontier invariants |
+| Compression steps | 3 | Block progress and output reservation bounds |
+| Limited spill | 2 | Checked extents and bounded partial-write/retry model |
+| Chunk parser | 3 | Header/entry parsing and table extent |
+| Materialization | 1 | Budget transition |
+| Index visits | 2 | Decreasing traversal fuel and child height |
+| Decoder memory | 6 | Charge/transfer, bounded input and HashMap reservation accounting |
+| Fallible ownership | 16 | Refusal, partial cleanup and bounded clone/owner models |
+| Scalar owner memory | 2 | Selected scalar Box validity and refusal-before-initialization |
+| Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
+| Untrusted sequence candidate | 1 | Full-width sequence subtraction and candidate conversion |
+
+Full-width arithmetic proofs and bounded container/I/O models have different
+scopes. Bounds, allocator/callback assumptions and exclusions are recorded per
+contract. Unwinding assertions remain enabled; an unwind limit is a proof bound,
+not a file-size limit. The tests and models do not establish whole-library
+out-of-memory (OOM) freedom, arbitrary callback termination or all filesystem
+crash schedules.
+
+CI installs Kani 0.68.0 for its C Bounded Model Checker (CBMC) and goto tools,
+then builds the pinned upstream
+crash fixes at `947fcec757d9b6a2d07283a0952aaa088e1d8df1`. The source still reports
+0.68.0, so the version string alone does not identify the qualified verifier.
+Use the same setup and strict runner commands from Bash:
 
 ```sh
-cargo kani -p varlit-core --default-unwind 5
-cargo kani -p varlit-core --all-features --default-unwind 5
+cargo install kani-verifier --locked --version 0.68.0
+cargo kani setup
+varlit_kani_checkout="${TMPDIR:-/tmp}/varlit-kani-947fcec"
+bash scripts/build_memory_kani.sh "$varlit_kani_checkout"
+export PATH="$varlit_kani_checkout/scripts:$HOME/.kani/kani-0.68.0/bin:$PATH"
+export CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
+set -euo pipefail
+cargo metadata --locked --format-version 1 > /dev/null
+for varlit_features in default all; do
+    varlit_flags=()
+    if [[ "$varlit_features" == all ]]; then varlit_flags+=(--all-features); fi
+    varlit_output="target/verification/$varlit_features"
+    mkdir -p "$varlit_output"
+    python3 scripts/check_proof_contracts.py --capture "$varlit_output/source-before.json"
+    cargo kani -p varlit-core "${varlit_flags[@]}" --jobs 2 --output-format terse --default-unwind 5 -Z stubbing -Z unstable-options --harness-timeout 300 2>&1 | tee "$varlit_output/kani.log"
+    python3 scripts/check_proof_contracts.py --source-before "$varlit_output/source-before.json" --log "$varlit_output/kani.log" --features "$varlit_features" --output "$varlit_output/contracts.json"
+    python3 scripts/check_memory_proofs.py --kani-checkout "$varlit_kani_checkout" --features "$varlit_features" --output "$varlit_output/memory-checks"
+done
+git diff --exit-code -- Cargo.lock
 ```
 
-The harnesses call production implementations directly, under `cfg(kani)`:
+The scalar memory checks qualify two validity harnesses and one
+refusal-before-initialization harness, with positive/negative controls.
+Whole-owner initialization/value-validity proofs remain in the separately planned
+library; they are not counted as a completed Varlit guarantee.
 
-- `checked_extent_matches_wide_arithmetic`: arbitrary full-width `u64` offset
-  and payload length, with and without a footer. Compare checked and saturating
-  physical ends against independent `u128` arithmetic. Recursive destruction of
-  unrelated error variants is outside this arithmetic proof; the result is
-  forgotten only in the harness, and the actual overflow variant owns no heap.
-- `observed_prefix_never_invents_membership`: four arbitrary 16-bit offsets,
-  a 16-bit query and every truncation length from zero to four. Every accepted
-  offset must correspond to an observed row that survives truncation.
+## Deliberate-defect controls
 
-The second proof is bounded and does not establish arbitrary-length or full-u64
-prefix correctness. Five unwind steps cover these four-row loops; unwinding
-assertions stay enabled. This is a proof bound, not a limit on accepted files.
-Ordinary tests and large-file resource/performance qualification still apply.
-CI checks both feature configurations against
-[the contract manifest](verification/proof-contracts.json), currently 34 harnesses.
-`scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
-unfinished proofs and verifies source hashes captured before and after each run.
-A zero-harness result fails.
+The required default Kani job also checks production bindings and deliberately
+broken implementations. The unmodified helpers must pass first. Compile errors,
+timeouts and unrelated failures do not count as detecting the expected defect.
 
-Four publication harnesses additionally call the production metadata and
-checkpoint validators. They establish accepted-frontier consistency and
-preservation of the confirmed frontier during checkpoint validation, and check
-that consistent clean/restore examples are accepted. Offsets, counts, generations,
-sequence options and digest bytes use their full symbolic widths. Their local
-unwind bound is 35 for fixed-size 32-byte comparisons; the original harnesses
-retain the default bound of five. Unwinding assertions remain enabled. As in the
-arithmetic harness, error destruction is excluded, not validation. These are
-validator proofs, not proofs of all filesystem operations or crash schedules.
+| Runner | Current controls |
+| --- | --- |
+| `check_publication_protocol.py` | 11 publication-ordering mutations |
+| `check_ownership_mutations.py` | 5 ownership-allocation mutations |
+| `check_resource_mutations.py` | 19 registered baseline harnesses and 17 resource/traversal mutations |
 
-## Hostile metadata and resource contracts
+```sh
+python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
+python3 scripts/check_ownership_mutations.py --output target/verification/ownership-mutations
+python3 scripts/check_resource_mutations.py --output target/verification/resource-mutations
+```
 
-[Scope and retained evidence](verification/hostile-metadata-20261102/README.md)
-describes thirteen additional harnesses for complete zstd block progress/output
-reservations, actual chunk header/entry parsing and table bounds, limited spill
-writes/retries, cumulative materialization, index visit fuel/height, and native
-prefix transitions. These mix full-width arithmetic/transition proofs with
-explicitly bounded I/O and prefix models. General prefix geometry induction and
-whole-parser models did not complete within their trial bounds; they are not
-counted as proofs. The existing 16-bit membership proof remains bounded.
+Counts and bindings come from the runners and manifest. Add a new operation's
+model and oracle explicitly; source discovery alone does not specify its behavior.
+See the [resource inventory correction](verification/resource-inventory-20261104/README.md)
+and [protocol evidence](verification/protocol-verifier-20261102/README.md).
 
-The required default-feature job also runs `scripts/check_resource_mutations.py`:
-ten broken variants of exact production helpers must fail their designated
-assertions after the original helpers pass. Allocation refusal, CRC-valid hostile
-files, actual reader preservation/retry, and concurrent live-buffer tests connect
-the modeled contracts to native execution. These checks do not establish a
-process-wide OOM guarantee or termination of arbitrary user callbacks/OS calls.
+## Publication, recovery and concurrent owners
 
-## Shared publication control flow
+[Publication qualification](verification/publication-20261102/README.md) retains
+8,450 torn-head images, all 512 length-three histories over eight stated operations,
+16 longer seeded histories and fault-hook interruption with readers held open.
+The oracle checks whole confirmed generations, pinned-reader stability, failed
+adoption and subsequent recovery/publication. Later compound tests add allocation
+refusal, I/O failures and last-owner release.
 
-[Protocol verifier and negative controls](verification/protocol-verifier-20261102/README.md)
-adds nine harnesses that call the same generic commit, checkpoint, restore, resume
-and follow drivers used by production. They explore before/partial/after-effect I/O
-errors, uncertain publication, poisoned-writer reuse, durable acknowledgement and
-failed reader adoption. Initialization plus an arbitrary-state transition proof
-establishes an abstract frontier invariant without a history-length bound.
-The OS durability, immutable-prefix and callback-validation assumptions are
-explicit; this is not a refinement proof of the whole library.
-
-The required Kani job also runs `scripts/check_publication_protocol.py`. Eleven
-independent mutations of the production driver must compile and fail their
-expected assertions. Compiler errors, timeouts and unrelated failures do not
-count as detection. All five production bindings and the clean-open reconciliation call are checked; the unmodified
-protocol must pass first. New registered harnesses join the run automatically.
-
-## Publication and recovery
-
-[Publication qualification](verification/publication-20261102/README.md) defines
-the observable contract and its assumptions. Required release tests now include
-8,450 independently torn publication-head images, all 512 length-three histories
-over a stated eight-operation alphabet, 16 longer seeded histories, and a mixed
-history interrupted at every discovered fault-hook occurrence while readers stay
-open. Recovery and subsequent publication must also work.
-
-The oracle checks complete confirmed generations, pinned-reader stability and
-failed-follow handle preservation. It does not equate `flush()` with publication,
-or a returned write error with proof that publication did not occur. Native
-process termination does not simulate loss of the operating system's page cache.
-New tests join discovery automatically, but new API operations need an explicit
-operation model and expected result; they do not automatically enter this alphabet.
+These checks do not equate `flush()` with publication, a returned write error with
+rollback, or process termination with power loss of the OS page cache. Native
+commit/checkpoint/resume/follow entry points share statically dispatched protocol
+drivers with the proofs. The OS durability, immutable-prefix and callback premises
+remain explicit in the linked evidence.
 
 ## Loom
 
@@ -129,58 +179,62 @@ operation model and expected result; they do not automatically enter this alphab
 RUSTFLAGS='--cfg varlit_loom -D warnings' cargo run --locked --manifest-path tools/verification/Cargo.toml
 ```
 
-The isolated runner imports the actual `scan_control.rs` module. Only its
-`Arc`/atomic imports switch to Loom; normal builds use the same std types and
-method bodies. Two models explore cancellation publication/monotonicity and
-the progress driver's cancellation checks. No preemption bound is configured;
-the finite models avoid unbounded spinning and fairness assumptions.
+The isolated runner imports production `scan_control.rs`. Normal builds use a
+private triomphe owner and std atomics; the model substitutes Loom ownership and
+atomics while retaining the cancellation/progress method bodies. Two finite
+models explore cancellation publication/monotonicity and progress-driver checks,
+without unbounded spinning or a configured preemption bound. They do not model
+triomphe allocation/refcount internals, every single-writer/multiple-reader
+protocol or filesystem durability.
 
-The runner refuses to compile without `varlit_loom`. Its dependency workspace
-has its own lockfile, audit job and Dependabot directory. Loom does not enter
-the published library dependency graph. A negative qualification with the
-actual release store changed to relaxed in a separate source copy fails the
-publication assertion (observed payload 0 instead of 17).
+The runner refuses a build without `varlit_loom`. Its dependencies have their own
+lockfile and advisory audit and are not library runtime dependencies. A retained
+negative control changes the release store to relaxed and fails the publication
+assertion.
 
-These models cover cancellation, not all SWMR protocols or filesystem durability.
-New concurrency protocols need their own model and oracle. Filesystem, mmap,
-partial-write and crash/recovery tests continue to exercise real OS behavior.
+## Miri, ASan and fuzzing
 
-## Dependency inventory
+The [self-check guide](self-check-guide.md) gives Miri reproduction commands.
+The exact 55 portable-core exclusions have reasons and alternative-coverage gaps
+in `scripts/miri-exclusions.json` and `scripts/miri-exclusion-audit.json`.
+Supported pure-memory logic is checked separately where possible. Native/ASan
+coverage does not provide Miri's interpreter guarantees for excluded OS paths.
 
-Install `cargo-cyclonedx 0.5.9`, then:
+Sanitizers also runs fallible-ownership and codec-array Miri tests, ASan with leak
+detection, and a 90-second smoke run for every declared fuzz target (currently 13).
+The bounded smoke run is not a sustained fuzz campaign. mmap immutability and
+external-truncate hazards remain documented in [SECURITY.md](../SECURITY.md).
+
+## Dependency and CodeQL checks
+
+Required jobs run cargo-audit/cargo-deny and
+`scripts/check_vendored_advisories.py`, including its synthetic affected/patched
+control. The vendored check covers package identities that lockfile auditing
+omits for path dependencies. redb 4.4.0 is a development-only oracle. Registry
+advisories do not certify local patches or dependency source correctness.
+
+CodeQL runs Rust, Python and Actions queries with a strict Static Analysis
+Results Interchange Format (SARIF) result gate.
+Extraction/macro limitations remain visible; behavioral and generated-API tests
+are still necessary. See [the retained CodeQL follow-up](performance/read-validation-20261104/README.md#ci-evidence-follow-up).
+
+Six CycloneDX 1.5 JSON inventories cover the three publishable crates with default
+and all-feature resolution across Cargo targets. Build dependencies are included;
+dev dependencies are omitted by the inventory tool. Provenance includes the Git
+revision and lockfile hash. These describe dependency configurations, not a
+particular compiled binary or a security certification.
 
 ```sh
+cargo install cargo-cyclonedx --locked --version 0.5.9
 cargo fetch --locked
 python3 scripts/generate_sbom.py
 ```
 
-Six CycloneDX 1.5 JSON inventories cover the three publishable crates, with
-default and all-feature resolution, across all Cargo targets. Build dependencies
-are included; dev dependencies are omitted by the tool. Provenance includes
-the Git revision and lockfile SHA-256. The script verifies locked resolution,
-runs generation offline and rejects any lockfile rewrite. These inventories
-describe dependency configurations, not a particular compiled binary.
+## Performance evidence
 
-Known-advisory checking remains cargo-audit/cargo-deny. SBOM generation does not
-establish that dependency source is benign. See the dated dependency review for
-upstream fixes not reported by the advisory database at the time of inspection.
-
-## Runtime and maintenance
-
-Proofs and negative controls execute in CI or explicitly selected verification
-builds. Five production entry points now delegate ordering to statically
-dispatched generic drivers shared with the proofs. Public signatures, persisted
-format, dependency resolution and configured budgets are unchanged. There are
-no new production allocations or locks. Uncertain clean writer resumes now sync
-the sidecar; matching confirmed heads avoid that extra sync. Instrumented timings are not performance
-benchmarks; the protocol follow-up includes large-file equal-work qualification.
-
-Miri and fuzzing keep their existing limitations and manifests; adding these
-tools does not make all input combinations verified. Properties, model setup
-and expected outcomes still need to be specified by maintainers. Verus and
-Ferrocene are not introduced in this change.
-
-[Conditional memory contract excluding BTreeMap](verification/conditional-memory-20261102/README.md)
-adds decoder charge/transfer and rehash-overlap obligations. Its whole-library
-acceptance target remains open; passing the registered harnesses is not a global
-OOM-free claim.
+Use the [combined workload report](performance/workload-storage-20261104/README.md)
+for grouped items, mixed logging, arrays, table-oriented cases and read-policy
+comparisons. Reports retain CPU, memory, temporary storage, failed measurements
+and calibration limits under unchanged budgets. Instrumented verification runs
+are not performance measurements; a CI pass does not turn an unqualified timing
+comparison into a pass.

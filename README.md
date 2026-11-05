@@ -2,6 +2,12 @@
 
 Current release: **[0.12.1](https://github.com/shim9610/varlit/releases/tag/v0.12.1)**.
 
+This branch also contains **unreleased** storage hardening, independent read
+validation options, chunk-range streaming and fallible ownership APIs. See the
+[changelog](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md#unreleased)
+and [upgrade notes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#unreleased).
+These additions are not yet available in the 0.12.1 registry packages.
+
 Formerly Varve. The project was renamed to Varlit in 0.12.0, changing the Rust API
 and package names. Existing versioned file markers remain unchanged.
 
@@ -24,8 +30,9 @@ The workspace contains:
 ## What This Is And Is Not Ready For
 
 Read this before adopting. The detail behind every line is in
-**[Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md)**; upgrading from 0.4.0 or 0.3.0
-is covered in **[API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md)**.
+**[Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md)**;
+current upgrade notes and historical migrations are in
+**[API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md)**.
 
 For contributions, see [CONTRIBUTING](https://github.com/shim9610/varlit/blob/main/CONTRIBUTING.md)
 and the [Code of Conduct](https://github.com/shim9610/varlit/blob/main/CODE_OF_CONDUCT.md).
@@ -36,9 +43,11 @@ Potential security problems follow the
 
 - Declaring a custom binary format and getting typed readers and writers for it.
 - Native append-log files with bounded directory buffers and private spills.
-  Directory entries cost **16 bytes per record** — the record's offset and its
-  committed bit — retained in RAM up to the configured budget and spilled beyond
-  it. Everything else is rebuilt from the record when a read asks. By default open
+  Ordinary private directory rows use **13 bytes per record** — offset, block ID
+  and committed state — buffered within the configured allowance and spilled
+  beyond it. Eligible rewritten directories use compressed private rows; fixed
+  workspace and allocation overhead are additional. Other record fields are
+  reconstructed when needed. By default open
   scans the whole file to build it, and opt-in policies change that:
   `segment_on_flush` makes the open walk one record per commit point, and
   `open_digest_on_flush` plus `open_readonly_lazy` makes it frame one record and
@@ -70,9 +79,9 @@ Potential security problems follow the
 
 - **Universal performance or filesystem guarantees.** Measurements include
   Windows and Linux workloads; each result applies to its recorded source,
-  hardware, cache state and filesystem. Source `772f381` passed native
+  hardware, cache state and filesystem. Recorded source `851836e` passed native
   Linux, Windows and macOS default/all-feature and bounded-I/O checks in
-  [CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
+  [CI](https://github.com/shim9610/varlit/actions/runs/41892694910).
   Those checks do not establish filesystem-wide performance or power-loss guarantees.
 - **Matrices on a filesystem that cannot represent holes.** Sparseness is
   requested best-effort. `matrix_storage_diagnostics()` and `diagnose_file`
@@ -241,9 +250,11 @@ confidence in it:**
 | macOS | native default/all-feature and bounded-I/O checks executed. `SEEK_DATA`/`SEEK_HOLE` and `F_PUNCHHOLE` paths are implemented; actual mounted-volume support is reported by storage diagnostics. |
 | Other targets | native allocation-map and hole-punch support may be unavailable. Persisted-index opens remain bounded; clearing can stream zeros. These targets are not qualified by the three-platform CI. |
 
-The executed 0.12.1 product tree (`43308ff`) is recorded in
-[CI](https://github.com/shim9610/varlit/actions/runs/38590083518) and
-[Sanitizers](https://github.com/shim9610/varlit/actions/runs/38590083701).
+The unreleased runtime at `851836e` passed
+[CI](https://github.com/shim9610/varlit/actions/runs/41892694910) and
+[Sanitizers](https://github.com/shim9610/varlit/actions/runs/41892694877).
+Verification scopes and reproduction commands are in the
+[verification guide](https://github.com/shim9610/varlit/blob/main/docs/verification.md).
 This is behavioral qualification on hosted runners, not a benchmark or a promise
 that every filesystem supports sparse allocation and hole punching.
 
@@ -288,7 +299,7 @@ the assurance those notes record — together with its limits — is summarised 
 
 ## Add It To Your Project
 
-This checkout contains **Varlit 0.12.1**. Install the facade crate from crates.io:
+Install the latest published facade crate, **Varlit 0.12.1**, from crates.io:
 
 ```toml
 [dependencies]

@@ -249,6 +249,15 @@ For variable blocks, the derive macro wraps each field payload with field id,
 wire type, and length. Unknown field ids with known wire types are skipped.
 Unknown wire type values are malformed data.
 
+## Fallible ownership in custom codecs
+
+The unreleased [fallible ownership helpers](api-reference.md#fallible-ownership)
+can be used by custom codecs, but do not replace decoder budget accounting.
+`TryClone` implementations must use fallible allocation for newly owned fields,
+clean up partial output and preserve their source on refusal. Existing `Clone`
+does not inherit that contract. Read-check selection also does not disable a
+custom codec's required bounds or Rust value-validity checks.
+
 ## Raw Mmap And Zero-Copy
 
 Custom codecs are still owned canonical decoding. Raw zero-copy is a separate

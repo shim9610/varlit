@@ -1,5 +1,8 @@
 # Independent read checks
 
+This API is unreleased after 0.12.1. The [public API reference](../api-reference.md#read-validation)
+and [upgrade notes](../api-changes.md#unreleased) cover application setup.
+
 `ReadValidation` selects optional data CRC and additional metadata consistency
 checks independently. This is an explicit read-side policy. Ordinary opens retain
 their previous behavior, and write-time checksums, schema fingerprints and file
@@ -10,7 +13,7 @@ bytes are unchanged.
 ```rust
 use varlit::{DiskIndexOptions, ReadLimits, ReadValidation};
 
-let limits = ReadLimits::STANDARD.with_read_validation(ReadValidation::TRUSTED);
+let limits = ReadLimits::MISSING.with_read_validation(ReadValidation::TRUSTED);
 // Given a declared `spec` and input `path`:
 // let reader = spec.open_reader_with_resource_limits(path, limits)?;
 

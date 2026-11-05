@@ -39,7 +39,15 @@ cargo clippy --locked --all-targets --workspace --all-features -- -D warnings
 
 Run targeted tests while iterating. See the [self-check guide](docs/self-check-guide.md)
 for fuzzing, Miri, fault injection and native I/O qualification. Documentation-only
-changes need valid links, accurate API examples and agreement with shipped behavior.
+changes need valid links, compilable API examples and agreement with the documented
+revision. Mark additions after the latest published version as `Unreleased` in
+the changelog and API changes; do not describe them as available in an existing
+registry release. Keep public documentation in English and preserve the source,
+workload and uncertainty attached to recorded measurements.
+
+The [verification guide](docs/verification.md) contains the current Kani/Loom,
+coverage, mutation-control and advisory commands. Read-check policy changes must
+preserve required bounds and publication guards across every optional mode.
 
 New APIs, policy variants and Cargo features must join the executable
 [validation contracts](docs/validation-contracts.md). The gate reports missing

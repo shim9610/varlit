@@ -345,8 +345,12 @@ format authors should still enforce domain limits in custom codecs, adapters,
 compression `max_len`, or caller validation.
 
 For caller-managed compressed blobs, prefer
-`ChunkedBytes::decode_to_vec_limited(limit)` over unbounded decoding when the
-limit is part of the format contract.
+`ChunkedBytes::decode_to_vec_limited(limit)` when a domain ceiling should replace
+the standard decoded-output ceiling. If whole-output materialization is refused,
+the caller can choose the unreleased `stream_range` API with a fixed buffer and
+explicit decoder-window policy. That requires an already available `ChunkedBytes`
+and does not override the enclosing record's limits. Callback output remains
+provisional until success; see [range streaming](chunk-streaming.md).
 
 For physical records, use
 `RecordIndexEntry::read_payload_limited(path, physical_limit)` to cap stored
@@ -357,6 +361,14 @@ before either allocation. These are caller policy controls; Varlit does not gues
 a global domain ceiling.
 
 ## Integrity Policy
+
+The declarations below specify stored checksums. The unreleased
+`ReadLimits::with_read_validation` API independently selects optional read checks;
+it does not change these declarations or their schema fingerprints. An unset
+override preserves existing behavior. CRC-on choices require a checksum-bearing
+format; all choices retain bounds, decoder limits and publication guards. Use
+the [read-validation table](api-reference.md#read-validation) to configure a
+runtime override rather than changing the format's stored integrity policy.
 
 `integrity: none` performs structural parsing only. It does not detect payload
 bit flips unless decoding happens to fail.
