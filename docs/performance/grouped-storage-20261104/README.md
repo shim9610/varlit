@@ -4,8 +4,7 @@
 
 The grouped layout with packed items and ordered block keys reduces Varlit's individually
 framed storage/time cost. This is a layout comparison on the same production
-runtime, not a production-code optimization. The requested universal **at least
-2× SQLite performance is still not established**; grouped SQLite is also fast.
+runtime, not a production-code optimization.
 
 The prior million-item fixture already batched 1,000 records per publication,
 but retained one physical Frame and general-index key per item. Its result

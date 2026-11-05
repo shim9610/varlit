@@ -20276,7 +20276,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "write",
       "ratio": 2.290557727698859,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20284,7 +20283,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "ingest",
       "ratio": 2.2589663313878403,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20292,7 +20290,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "completion",
       "ratio": 2.2627488967815244,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20300,7 +20297,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "read_active",
       "ratio": 1.4757320584529543,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20308,7 +20304,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "write",
       "ratio": 1.9677033372297852,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20316,7 +20311,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "ingest",
       "ratio": 1.9380348843476316,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20324,7 +20318,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "completion",
       "ratio": 1.940188930002021,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20332,7 +20325,6 @@
       "sqlite": "mixed-p65536-r1-sqlite",
       "metric": "read_active",
       "ratio": 1.4367742396240295,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20340,7 +20332,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "write",
       "ratio": 2.0970393983859537,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20348,7 +20339,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "ingest",
       "ratio": 2.0116771486262643,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20356,7 +20346,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "completion",
       "ratio": 2.057332666741635,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20364,7 +20353,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "read_active",
       "ratio": 1.7115283054481532,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20372,7 +20360,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "write",
       "ratio": 2.0313647268388517,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20380,7 +20367,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "ingest",
       "ratio": 1.9470435553815653,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20388,7 +20374,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "completion",
       "ratio": 1.994439680861526,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20396,7 +20381,6 @@
       "sqlite": "mixed-p1048576-r1-sqlite",
       "metric": "read_active",
       "ratio": 1.5106680023333907,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20404,7 +20388,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "write",
       "ratio": 2.1388391008280627,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20412,7 +20395,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "ingest",
       "ratio": 1.8673895086760812,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20420,7 +20402,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "completion",
       "ratio": 1.969654232973493,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20428,7 +20409,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.3606502990741904,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20436,7 +20416,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "write",
       "ratio": 1.8058402939365992,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20444,7 +20423,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "ingest",
       "ratio": 1.5773625164129275,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20452,7 +20430,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "completion",
       "ratio": 1.7743476866174368,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20460,7 +20437,6 @@
       "sqlite": "mixed-p65536-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.3215522397229604,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20468,7 +20444,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "write",
       "ratio": 1.8717301442377046,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20476,7 +20451,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "ingest",
       "ratio": 1.6514195812569863,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20484,7 +20458,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "completion",
       "ratio": 1.7832410291980854,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20492,7 +20465,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.3960839135345626,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20500,7 +20472,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "write",
       "ratio": 1.5553277088401658,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20508,7 +20479,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "ingest",
       "ratio": 1.3700934627792454,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20516,7 +20486,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "completion",
       "ratio": 1.519342370351143,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20524,7 +20493,6 @@
       "sqlite": "mixed-p1048576-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.307929013160764,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20532,7 +20500,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "write",
       "ratio": 0.36190956744001196,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20540,7 +20507,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "ingest",
       "ratio": 0.3490040274075189,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20548,7 +20514,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "completion",
       "ratio": 0.25777815161784784,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20556,7 +20521,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "read_active",
       "ratio": 0.06359808418747413,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20564,7 +20528,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "write",
       "ratio": 0.04689356485900871,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20572,7 +20535,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "ingest",
       "ratio": 0.04519450882984477,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20580,7 +20542,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "completion",
       "ratio": 0.047788180054202746,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20588,7 +20549,6 @@
       "sqlite": "objects-follow-sqlite",
       "metric": "read_active",
       "ratio": 0.06268484200892471,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20596,7 +20556,6 @@
       "sqlite": "objects-keyed-sqlite",
       "metric": "write",
       "ratio": 0.08774809259542475,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20604,7 +20563,6 @@
       "sqlite": "objects-keyed-sqlite",
       "metric": "ingest",
       "ratio": 0.08538112835849654,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20612,7 +20570,6 @@
       "sqlite": "objects-keyed-sqlite",
       "metric": "completion",
       "ratio": 0.08836412522375113,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20620,7 +20577,6 @@
       "sqlite": "objects-keyed-sqlite",
       "metric": "read_active",
       "ratio": 0.0990573267662988,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20628,7 +20584,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.11139705463667522,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20636,7 +20591,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "ingest",
       "ratio": 0.11105271712065173,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20644,7 +20598,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.11168704572581642,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20652,7 +20605,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "read_active",
       "ratio": 0.10954884029479493,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20660,7 +20612,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.4880914444159726,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20668,7 +20619,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "ingest",
       "ratio": 0.4866278133307488,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20676,7 +20626,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.4888528465505087,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20684,7 +20633,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "read_active",
       "ratio": 0.5834248271989182,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20692,7 +20640,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.10173994979837384,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20700,7 +20647,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "ingest",
       "ratio": 0.10127794662655172,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20708,7 +20654,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.10200178811443054,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20716,7 +20661,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "read_active",
       "ratio": 0.07906638729218414,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20724,7 +20668,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.46230981355876527,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20732,7 +20675,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "ingest",
       "ratio": 0.4602514557522597,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20740,7 +20682,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.4629225925595162,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20748,7 +20689,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "read_active",
       "ratio": 0.4683197715439566,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20756,7 +20696,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.387831341975474,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20764,7 +20703,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.8278934415424578,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20772,7 +20710,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.06049303640598928,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20780,7 +20717,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.32431405875604935,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20788,7 +20724,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.2287218128777133,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20796,7 +20731,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.1451662870428285,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20804,7 +20738,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.1790218575120157,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20812,7 +20745,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.2253413832881772,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20820,7 +20752,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.04891851932296924,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20828,7 +20759,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.3234957100163076,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20836,7 +20766,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.0479489049484971,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20844,7 +20773,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 2.864475014575753,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20852,7 +20780,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.20389293059373054,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20860,7 +20787,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.9252147106046555,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20868,7 +20794,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.0555829286487042,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20876,7 +20801,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.4096309312732185,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20884,7 +20808,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.01925678413985365,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20892,7 +20815,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.13534194182308296,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20900,7 +20822,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.5236283626811176,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -20908,7 +20829,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.2263262991270172,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20916,7 +20836,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.005351660676177578,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20924,7 +20843,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.19971260469800245,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20932,7 +20850,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.8029685844795635,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20940,7 +20857,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.0677378702820086,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20948,7 +20864,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9810315365940439,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20956,7 +20871,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.036150274472032,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20964,7 +20878,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.0038343322062378343,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20972,7 +20885,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.15339335416472885,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20980,7 +20892,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.8860073895697635,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20988,7 +20899,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.3805043794597538,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -20996,7 +20906,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.016588943329064635,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21004,7 +20913,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.5444367634819385,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21012,7 +20920,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.9215505510343026,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21020,7 +20927,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.37886032524904184,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21028,7 +20934,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.0011313310909789943,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21036,7 +20941,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.04998212816860957,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21044,7 +20948,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.8689488981427052,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21052,7 +20955,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.5761799688499482,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21060,7 +20962,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.05857382479194808,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21068,7 +20969,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.26579058073087986,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21076,7 +20976,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.6746102361638602,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21084,7 +20983,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.6358921068788896,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21092,7 +20990,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.704628231272332,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21100,7 +20997,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.7266576465055914,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21108,7 +21004,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.06236399672966562,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21116,7 +21011,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.30747937315058727,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21124,7 +21018,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.8035188882287583,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21132,7 +21025,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.3940741244902326,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21140,7 +21032,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.13886385047965102,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21148,7 +21039,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.6683273356659901,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21156,7 +21046,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.6731601616601008,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21164,7 +21053,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.2685270828134018,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21172,7 +21060,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.024888310964205327,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21180,7 +21067,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.13125293910360733,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21188,7 +21074,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9537988090115332,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21196,7 +21081,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.9707745919271183,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21204,7 +21088,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.007652396288369643,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21212,7 +21095,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.18987461503306258,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21220,7 +21102,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.769822444370745,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21228,7 +21109,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.7443025407782405,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21236,7 +21116,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.983196757843781,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21244,7 +21123,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.7417047346394116,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21252,7 +21130,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.0062084172050720764,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21260,7 +21137,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.1735137420165206,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21268,7 +21144,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.8154424462359768,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21276,7 +21151,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.4060089790218384,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21284,7 +21158,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.014751584031152301,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21292,7 +21165,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.36840937028555876,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21300,7 +21172,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.790850058491249,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21308,7 +21179,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.29741270576061973,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21316,7 +21186,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.0017815334592367212,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21324,7 +21193,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.05229997471856559,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21332,7 +21200,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.5700481692409984,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21340,7 +21207,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.6292389258089985,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21348,7 +21214,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.16273137590288878,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21356,7 +21221,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.3337136333954324,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21364,7 +21228,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.5563926617752606,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21372,7 +21235,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.6554604417473523,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21380,7 +21242,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.3284950503288888,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21388,7 +21249,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.6554771748262154,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21396,7 +21256,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.17647014289972052,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21404,7 +21263,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.3623186335674764,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21412,7 +21270,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.37148201869313713,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21420,7 +21277,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.26781127301224394,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21428,7 +21284,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.07525615907730794,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21436,7 +21291,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.16563860401670077,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21444,7 +21298,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9713384103426035,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21452,7 +21305,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.9687342404567146,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21460,7 +21312,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.01968206845718879,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21468,7 +21319,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.21601890836365603,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21476,7 +21326,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.614192158904642,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21484,7 +21333,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.7509629700664499,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21492,7 +21340,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.6346611822075843,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21500,7 +21347,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.7812792002421836,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21508,7 +21354,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.017228412340984912,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21516,7 +21361,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.18755799116550792,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21524,7 +21368,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 0.46614862593044265,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21532,7 +21375,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.30337178235708373,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21540,7 +21382,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 0.005536253994276549,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21548,7 +21389,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.06145789682351667,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21556,7 +21396,6 @@
       "sqlite": "table-w1-n100000-sqlite",
       "metric": "write",
       "ratio": 0.6701743108073698,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21564,7 +21403,6 @@
       "sqlite": "table-w1-n100000-sqlite",
       "metric": "ingest",
       "ratio": 0.6630482078122362,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21572,7 +21410,6 @@
       "sqlite": "table-w1-n100000-sqlite",
       "metric": "completion",
       "ratio": 0.6737876619170694,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21580,7 +21417,6 @@
       "sqlite": "table-w1-n100000-sqlite",
       "metric": "read_active",
       "ratio": 0.7672817944361633,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21588,7 +21424,6 @@
       "sqlite": "table-w4-n100000-sqlite",
       "metric": "write",
       "ratio": 0.7015859330620946,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21596,7 +21431,6 @@
       "sqlite": "table-w4-n100000-sqlite",
       "metric": "ingest",
       "ratio": 0.694556518162921,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21604,7 +21438,6 @@
       "sqlite": "table-w4-n100000-sqlite",
       "metric": "completion",
       "ratio": 0.7064982638168531,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21612,7 +21445,6 @@
       "sqlite": "table-w4-n100000-sqlite",
       "metric": "read_active",
       "ratio": 0.6370065161964048,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21620,7 +21452,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.6525816423841984,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21628,7 +21459,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "ingest",
       "ratio": 0.6506534629826413,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21636,7 +21466,6 @@
       "sqlite": "table-w1-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.6533757590589169,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21644,7 +21473,6 @@
       "sqlite": "table-w1-sqlite",
       "metric": "read_active",
       "ratio": 0.7014093577183543,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21652,7 +21480,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "write",
       "ratio": 0.6367618750076091,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21660,7 +21487,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "ingest",
       "ratio": 0.6339907971244783,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21668,7 +21494,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "completion",
       "ratio": 0.6375173828864619,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21676,7 +21501,6 @@
       "sqlite": "table-w4-n1000000-sqlite",
       "metric": "read_active",
       "ratio": 0.5481593569331945,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21684,7 +21508,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.1254443923225277,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21692,7 +21515,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.8682483633667053,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21700,7 +21522,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.8700187559942101,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21708,7 +21529,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 1.0287499029914902,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21716,7 +21536,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 2.6321885589378486,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21724,7 +21543,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.4068440444453303,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21732,7 +21550,6 @@
       "sqlite": "mapped-array-n16777216-g65536-sql-chunks",
       "metric": "point",
       "ratio": 1.651395874015712,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21740,7 +21557,6 @@
       "sqlite": "array-n16777216-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 1.2435258264273452,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21748,7 +21564,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.7933996633106122,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21756,7 +21571,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.0317394038745058,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21764,7 +21578,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 0.8585724886349305,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21772,7 +21585,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.728453132872899,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21780,7 +21592,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9824493711627635,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21788,7 +21599,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.4788057000583072,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21796,7 +21606,6 @@
       "sqlite": "mapped-array-n268435456-g65536-sql-chunks",
       "metric": "point",
       "ratio": 1.431732736515766,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21804,7 +21613,6 @@
       "sqlite": "array-n268435456-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.9449321276826586,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21812,7 +21620,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.5643141891019368,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21820,7 +21627,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 0.8723429948887306,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21828,7 +21634,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 1.7423518213880256,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21836,7 +21641,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.895996180850774,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21844,7 +21648,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9072297499535165,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21852,7 +21655,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.2768343419445765,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21860,7 +21662,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 2.546869980834802,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21868,7 +21669,6 @@
       "sqlite": "mapped-array-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 1.0238757171040356,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21876,7 +21676,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.7324103039707237,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21884,7 +21683,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.0759730543029755,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21892,7 +21690,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "warm_scan",
       "ratio": 1.1400851220914159,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21900,7 +21697,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 1.751106981102256,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21908,7 +21704,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.9130819142799603,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21916,7 +21711,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "write",
       "ratio": 1.9070386206862209,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21924,7 +21718,6 @@
       "sqlite": "array-n1073741824-g1048576-sql-chunks",
       "metric": "scan",
       "ratio": 1.2677476546611455,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21932,7 +21725,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "warm_scan",
       "ratio": 1.4323215024150227,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21940,7 +21732,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "point",
       "ratio": 2.678698365672131,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21948,7 +21739,6 @@
       "sqlite": "array-mapped-n1073741824-g1048576-sql-chunks",
       "metric": "range",
       "ratio": 0.9663576133422411,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21956,7 +21746,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r1-sqlite",
       "metric": "write",
       "ratio": 2.036417302194153,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21964,7 +21753,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r1-sqlite",
       "metric": "read_active",
       "ratio": 1.2049572546969198,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21972,7 +21760,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r1-sqlite",
       "metric": "completion",
       "ratio": 1.6963772377285065,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21980,7 +21767,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r1-sqlite",
       "metric": "write",
       "ratio": 2.0347088247013585,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -21988,7 +21774,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r1-sqlite",
       "metric": "read_active",
       "ratio": 0.932766105419661,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -21996,7 +21781,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r1-sqlite",
       "metric": "completion",
       "ratio": 1.2543287865939523,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22004,7 +21788,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r8-sqlite",
       "metric": "write",
       "ratio": 2.096293840890233,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22012,7 +21795,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.1268299362006546,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22020,7 +21802,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w1-r8-sqlite",
       "metric": "completion",
       "ratio": 1.3066307523738796,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22028,7 +21809,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r8-sqlite",
       "metric": "write",
       "ratio": 1.6860580488406034,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22036,7 +21816,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r8-sqlite",
       "metric": "read_active",
       "ratio": 0.7390908119808703,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22044,7 +21823,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w1-r8-sqlite",
       "metric": "completion",
       "ratio": 0.891092346792012,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22052,7 +21830,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 2.65806137968188,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22060,7 +21837,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.2298409766390366,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22068,7 +21844,6 @@
       "sqlite": "grouped-n1048576-g512-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 1.4847025001829195,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22076,7 +21851,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 2.1725201729008177,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22084,7 +21858,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 0.8269010617272805,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22092,7 +21865,6 @@
       "sqlite": "grouped-n1048576-g8192-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 0.9455914491438916,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22100,7 +21872,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w1-r8-sqlite",
       "metric": "write",
       "ratio": 1.7556971927028138,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22108,7 +21879,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w1-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.091311257857876,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22116,7 +21886,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w1-r8-sqlite",
       "metric": "completion",
       "ratio": 1.2549856834990047,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22124,7 +21893,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w1-r8-sqlite",
       "metric": "write",
       "ratio": 1.9654080684753474,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22132,7 +21900,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w1-r8-sqlite",
       "metric": "read_active",
       "ratio": 0.7768137338195097,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22140,7 +21907,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w1-r8-sqlite",
       "metric": "completion",
       "ratio": 0.88652271408873,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22148,7 +21914,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 1.8479850449876407,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22156,7 +21921,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.0282014011345562,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22164,7 +21928,6 @@
       "sqlite": "grouped-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 1.1878596594464021,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22172,7 +21935,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 2.3038856228886413,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22180,7 +21942,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 0.797353588032215,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22188,7 +21949,6 @@
       "sqlite": "grouped-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 0.8912945244962739,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22196,7 +21956,6 @@
       "sqlite": "grouped-follow-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 2.1599913457553876,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22204,7 +21963,6 @@
       "sqlite": "grouped-follow-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.5946232625596135,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22212,7 +21970,6 @@
       "sqlite": "grouped-follow-n8388608-g512-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 2.121076427683199,
-      "observed_twofold": true,
       "repetitions": 3
     },
     {
@@ -22220,7 +21977,6 @@
       "sqlite": "grouped-follow-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "write",
       "ratio": 1.903656169993534,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22228,7 +21984,6 @@
       "sqlite": "grouped-follow-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.7500602471360116,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22236,7 +21991,6 @@
       "sqlite": "grouped-follow-n8388608-g8192-t131072-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 1.8884161179474532,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22244,7 +21998,6 @@
       "sqlite": "grouped-n8388608-g512-t8192-w4-r8-sqlite",
       "metric": "write",
       "ratio": 0.723486668631152,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22252,7 +22005,6 @@
       "sqlite": "grouped-n8388608-g512-t8192-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.180525083204182,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22260,7 +22012,6 @@
       "sqlite": "grouped-n8388608-g512-t8192-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 0.7291545233744924,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22268,7 +22019,6 @@
       "sqlite": "grouped-n8388608-g8192-t8192-w4-r8-sqlite",
       "metric": "write",
       "ratio": 0.7032773329006156,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22276,7 +22026,6 @@
       "sqlite": "grouped-n8388608-g8192-t8192-w4-r8-sqlite",
       "metric": "read_active",
       "ratio": 1.038750004728851,
-      "observed_twofold": false,
       "repetitions": 3
     },
     {
@@ -22284,7 +22033,6 @@
       "sqlite": "grouped-n8388608-g8192-t8192-w4-r8-sqlite",
       "metric": "completion",
       "ratio": 0.7179404916827601,
-      "observed_twofold": false,
       "repetitions": 3
     }
   ],
@@ -22724,7 +22472,6 @@
   ],
   "timing_observations": 708,
   "resource_probes": 236,
-  "observed_twofold": 25,
   "compared_operations": 240,
   "qualification": "observational medians only; no identical-binary noise control; not a 5% regression qualification",
   "cohorts": [

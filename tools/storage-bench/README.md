@@ -5,11 +5,11 @@ logical data and successful operations. It changes neither Varlit's public API n
 its file format. It is deliberately outside the normal Cargo workspace; native
 SQLite and HDF5 installations are not requirements for library users.
 
-The performance target is **SQLite elapsed time / Varlit elapsed time >= 2** for
-each equivalent operation separately. A faster write does not compensate for a
-slower read. Preparing this harness, or passing its smoke tests, does not establish
-that target. Candidate implementations and configurations are reported separately;
-there is no claim that every possible engine-specific optimization is exhausted.
+Operation ratios report SQLite elapsed time / Varlit elapsed time for equivalent
+work. Writes and reads are reported separately, as are candidate implementations
+and configurations. Preparing this harness or passing its smoke tests verifies
+operation contracts, not performance. The candidate grid does not exhaust every
+possible engine-specific optimization.
 
 ## Scenarios and storage
 

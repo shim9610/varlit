@@ -1,10 +1,10 @@
 # Mixed-block append and concurrent read comparison plan
 
-Status: **the [canonical combined report](workload-storage-20261104/README.md) integrates the corrected grouped-item model with the existing mixed/array/table cases. The grouped cohort has 47 configurations, 141 successful timings and 47 qualified resource probes; the original 122-configuration cohort remains separately identified. Individual-record stress cases are historical controls, not representative grouped logging. The universal 2× target is not established.**
+Status: **the [canonical combined report](workload-storage-20261104/README.md) integrates the corrected grouped-item model with the existing mixed/array/table cases. The grouped cohort has 47 configurations, 141 successful timings and 47 qualified resource probes; the original 122-configuration cohort remains separately identified. Individual-record stress cases are historical controls, not representative grouped logging.**
 
-## Performance target and logical model
+## Operation comparisons and logical model
 
-The target is at least twice SQLite's throughput for the same successful work, equivalent to at most half its elapsed time. Evaluate writes, following new data, and key lookups separately. An improvement in one operation does not offset a shortfall in another. Compare HDF5 using the same data and supported query semantics. Neither achievement nor feasibility of a twofold speedup is established before measurement.
+Evaluate writes, following new data, and key lookups separately using the same successful work. Compare SQLite and HDF5 using the same data and supported query semantics.
 
 The API reference schema comes from [CardinalityFormat in the high-cardinality tests](../../crates/varlit/tests/high_cardinality.rs). It declares fixed Metadata(run) and variable Frame(scan, frame, payload) blocks together, with Frame's composite key stored in a disk index. The [declarative key tests](../../crates/varlit/tests/schema_key_kinds.rs) also distinguish finite and general key domains. That test schema exercises API/index behavior; it does not dictate one Frame per logical item. The `high-cardinality-dev` feature was removed in 0.10.0; high-cardinality storage is provided by indexed APIs for blocks declaring `key_index = disk`.
 

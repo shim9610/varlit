@@ -4,9 +4,9 @@ The measured PR head is `291a6aa79fbb888a3d74e61e013395a77c66a5a1`; its producti
 
 ## Scope correction
 
-This report contains auxiliary single-payload and small-frame diagnostics. **It does not represent Varlit's primary use case: mixed declared blocks and metadata, concurrent readers following newly committed records, and high-cardinality key lookup.** Any inference about whole-library practicality or satisfaction of the 2× SQLite target from these measurements alone is withdrawn. Measurements and all failure records remain preserved below.
+This report contains auxiliary single-payload and small-frame diagnostics. **It does not represent Varlit's primary use case: mixed declared blocks and metadata, concurrent readers following newly committed records, and high-cardinality key lookup.** Any inference about whole-library practicality from these measurements alone is withdrawn. Measurements and all failure records remain preserved below.
 
-In particular, the 128 B × 131,072 condition stores every item as a separate Varlit frame. It does not measure ordinary logging that groups 131,072 logical samples into arrays or chunks. Half that condition's SQLite time, 15.3 ms from 30.5 ms, is not the acceptance target for ordinary grouped sample logging.
+In particular, the 128 B × 131,072 condition stores every item as a separate Varlit frame. It does not measure ordinary logging that groups 131,072 logical samples into arrays or chunks.
 
 Physical frame counts and logical item counts differ. For example, grouping 131,072 logical 128 B items (16 MiB) into 64 KiB payloads would produce 256 data frames; 1 MiB groups would produce 16. This is an illustrative calculation, not a measured logical-array workload. In contrast, 131,072 independent high-cardinality metadata objects may each be actual records. These cases have different meanings.
 

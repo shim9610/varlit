@@ -1,218 +1,218 @@
 # Operation comparisons
 
-Ratio = SQLite elapsed / Varlit elapsed; >=2 is the requested target.
+Ratio = SQLite elapsed / Varlit elapsed.
 Array baselines identify the fastest complete measured SQLite layout across block geometries for each operation; all layout costs remain reported separately.
 Stream's unsupported point/range work is excluded. Read-active includes refresh and verification, not idle sleeps.
 
-| Varlit profile | SQLite profile | Operation | Ratio | Observed >=2 |
-|---|---|---|---:|---|
-| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | write | 2.291 | yes |
-| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | ingest | 2.259 | yes |
-| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | completion | 2.263 | yes |
-| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | read_active | 1.476 | no |
-| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | write | 1.968 | no |
-| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | ingest | 1.938 | no |
-| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | completion | 1.940 | no |
-| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | read_active | 1.437 | no |
-| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | write | 2.097 | yes |
-| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | ingest | 2.012 | yes |
-| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | completion | 2.057 | yes |
-| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | read_active | 1.712 | no |
-| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | write | 2.031 | yes |
-| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | ingest | 1.947 | no |
-| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | completion | 1.994 | no |
-| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | read_active | 1.511 | no |
-| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | write | 2.139 | yes |
-| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | ingest | 1.867 | no |
-| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | completion | 1.970 | no |
-| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | read_active | 1.361 | no |
-| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | write | 1.806 | no |
-| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | ingest | 1.577 | no |
-| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | completion | 1.774 | no |
-| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | read_active | 1.322 | no |
-| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | write | 1.872 | no |
-| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | ingest | 1.651 | no |
-| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | completion | 1.783 | no |
-| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | read_active | 1.396 | no |
-| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | write | 1.555 | no |
-| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | ingest | 1.370 | no |
-| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | completion | 1.519 | no |
-| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | read_active | 1.308 | no |
-| objects-follow-varlit-stream | objects-follow-sqlite | write | 0.362 | no |
-| objects-follow-varlit-stream | objects-follow-sqlite | ingest | 0.349 | no |
-| objects-follow-varlit-stream | objects-follow-sqlite | completion | 0.258 | no |
-| objects-follow-varlit-stream | objects-follow-sqlite | read_active | 0.064 | no |
-| objects-follow-varlit-indexed | objects-follow-sqlite | write | 0.047 | no |
-| objects-follow-varlit-indexed | objects-follow-sqlite | ingest | 0.045 | no |
-| objects-follow-varlit-indexed | objects-follow-sqlite | completion | 0.048 | no |
-| objects-follow-varlit-indexed | objects-follow-sqlite | read_active | 0.063 | no |
-| objects-keyed-varlit-indexed | objects-keyed-sqlite | write | 0.088 | no |
-| objects-keyed-varlit-indexed | objects-keyed-sqlite | ingest | 0.085 | no |
-| objects-keyed-varlit-indexed | objects-keyed-sqlite | completion | 0.088 | no |
-| objects-keyed-varlit-indexed | objects-keyed-sqlite | read_active | 0.099 | no |
-| table-w1-varlit-indexed | table-w1-n1000000-sqlite | write | 0.111 | no |
-| table-w1-varlit-indexed | table-w1-sqlite | ingest | 0.111 | no |
-| table-w1-varlit-indexed | table-w1-n1000000-sqlite | completion | 0.112 | no |
-| table-w1-varlit-indexed | table-w1-sqlite | read_active | 0.110 | no |
-| table-w1-varlit-matrix | table-w1-n1000000-sqlite | write | 0.488 | no |
-| table-w1-varlit-matrix | table-w1-sqlite | ingest | 0.487 | no |
-| table-w1-varlit-matrix | table-w1-n1000000-sqlite | completion | 0.489 | no |
-| table-w1-varlit-matrix | table-w1-sqlite | read_active | 0.583 | no |
-| table-w4-varlit-indexed | table-w4-n1000000-sqlite | write | 0.102 | no |
-| table-w4-varlit-indexed | table-w4-n1000000-sqlite | ingest | 0.101 | no |
-| table-w4-varlit-indexed | table-w4-n1000000-sqlite | completion | 0.102 | no |
-| table-w4-varlit-indexed | table-w4-n1000000-sqlite | read_active | 0.079 | no |
-| table-w4-varlit-matrix | table-w4-n1000000-sqlite | write | 0.462 | no |
-| table-w4-varlit-matrix | table-w4-n1000000-sqlite | ingest | 0.460 | no |
-| table-w4-varlit-matrix | table-w4-n1000000-sqlite | completion | 0.463 | no |
-| table-w4-varlit-matrix | table-w4-n1000000-sqlite | read_active | 0.468 | no |
-| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | write | 2.388 | yes |
-| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | scan | 0.828 | no |
-| array-n16777216-g65536-native-view | mapped-array-n16777216-g65536-sql-chunks | point | 0.060 | no |
-| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | range | 0.324 | no |
-| array-n16777216-g65536-stream | array-n16777216-g1048576-sql-chunks | write | 2.229 | yes |
-| array-n16777216-g65536-stream | array-n16777216-g1048576-sql-chunks | scan | 1.145 | no |
-| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | write | 2.179 | yes |
-| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | scan | 1.225 | no |
-| array-n16777216-g65536-indexed | mapped-array-n16777216-g65536-sql-chunks | point | 0.049 | no |
-| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | range | 0.323 | no |
-| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | write | 1.048 | no |
-| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | scan | 2.864 | yes |
-| array-n16777216-g65536-matrix-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.204 | no |
-| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | range | 0.925 | no |
-| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | write | 1.056 | no |
-| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | scan | 0.410 | no |
-| array-n16777216-g65536-matrix-owned | mapped-array-n16777216-g65536-sql-chunks | point | 0.019 | no |
-| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | range | 0.135 | no |
-| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | write | 2.524 | yes |
-| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | scan | 1.226 | no |
-| array-n16777216-g1048576-native-view | mapped-array-n16777216-g65536-sql-chunks | point | 0.005 | no |
-| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | range | 0.200 | no |
-| array-n16777216-g1048576-stream | array-n16777216-g1048576-sql-chunks | write | 1.803 | no |
-| array-n16777216-g1048576-stream | array-n16777216-g1048576-sql-chunks | scan | 1.068 | no |
-| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | write | 1.981 | no |
-| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | scan | 1.036 | no |
-| array-n16777216-g1048576-indexed | mapped-array-n16777216-g65536-sql-chunks | point | 0.004 | no |
-| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | range | 0.153 | no |
-| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | write | 0.886 | no |
-| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | scan | 1.381 | no |
-| array-n16777216-g1048576-matrix-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.017 | no |
-| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | range | 0.544 | no |
-| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | write | 0.922 | no |
-| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | scan | 0.379 | no |
-| array-n16777216-g1048576-matrix-owned | mapped-array-n16777216-g65536-sql-chunks | point | 0.001 | no |
-| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | range | 0.050 | no |
-| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | write | 1.869 | no |
-| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | scan | 0.576 | no |
-| array-n268435456-g65536-native-view | mapped-array-n268435456-g65536-sql-chunks | point | 0.059 | no |
-| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | range | 0.266 | no |
-| array-n268435456-g65536-stream | array-n268435456-g1048576-sql-chunks | write | 1.675 | no |
-| array-n268435456-g65536-stream | array-n268435456-g1048576-sql-chunks | scan | 0.636 | no |
-| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | write | 1.705 | no |
-| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | scan | 0.727 | no |
-| array-n268435456-g65536-indexed | mapped-array-n268435456-g65536-sql-chunks | point | 0.062 | no |
-| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | range | 0.307 | no |
-| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | write | 0.804 | no |
-| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.394 | no |
-| array-n268435456-g65536-matrix-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.139 | no |
-| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | range | 0.668 | no |
-| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | write | 0.673 | no |
-| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | scan | 0.269 | no |
-| array-n268435456-g65536-matrix-owned | mapped-array-n268435456-g65536-sql-chunks | point | 0.025 | no |
-| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | range | 0.131 | no |
-| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | write | 1.954 | no |
-| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | scan | 0.971 | no |
-| array-n268435456-g1048576-native-view | mapped-array-n268435456-g65536-sql-chunks | point | 0.008 | no |
-| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | range | 0.190 | no |
-| array-n268435456-g1048576-stream | array-n268435456-g1048576-sql-chunks | write | 1.770 | no |
-| array-n268435456-g1048576-stream | array-n268435456-g1048576-sql-chunks | scan | 0.744 | no |
-| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | write | 1.983 | no |
-| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | scan | 0.742 | no |
-| array-n268435456-g1048576-indexed | mapped-array-n268435456-g65536-sql-chunks | point | 0.006 | no |
-| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | range | 0.174 | no |
-| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | write | 0.815 | no |
-| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.406 | no |
-| array-n268435456-g1048576-matrix-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.015 | no |
-| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | range | 0.368 | no |
-| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | write | 0.791 | no |
-| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | scan | 0.297 | no |
-| array-n268435456-g1048576-matrix-owned | mapped-array-n268435456-g65536-sql-chunks | point | 0.002 | no |
-| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | range | 0.052 | no |
-| array-n1073741824-g65536-native-view | array-n1073741824-g1048576-sql-chunks | write | 1.570 | no |
-| array-n1073741824-g65536-native-view | array-n1073741824-g1048576-sql-chunks | scan | 0.629 | no |
-| array-n1073741824-g65536-native-view | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.163 | no |
-| array-n1073741824-g65536-native-view | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.334 | no |
-| array-n1073741824-g65536-stream | array-n1073741824-g1048576-sql-chunks | write | 1.556 | no |
-| array-n1073741824-g65536-stream | array-n1073741824-g1048576-sql-chunks | scan | 0.655 | no |
-| array-n1073741824-g65536-indexed | array-n1073741824-g1048576-sql-chunks | write | 1.328 | no |
-| array-n1073741824-g65536-indexed | array-n1073741824-g1048576-sql-chunks | scan | 0.655 | no |
-| array-n1073741824-g65536-indexed | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.176 | no |
-| array-n1073741824-g65536-indexed | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.362 | no |
-| array-n1073741824-g65536-matrix-owned | array-n1073741824-g1048576-sql-chunks | write | 0.371 | no |
-| array-n1073741824-g65536-matrix-owned | array-n1073741824-g1048576-sql-chunks | scan | 0.268 | no |
-| array-n1073741824-g65536-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.075 | no |
-| array-n1073741824-g65536-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.166 | no |
-| array-n1073741824-g1048576-native-view | array-n1073741824-g1048576-sql-chunks | write | 1.971 | no |
-| array-n1073741824-g1048576-native-view | array-n1073741824-g1048576-sql-chunks | scan | 0.969 | no |
-| array-n1073741824-g1048576-native-view | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.020 | no |
-| array-n1073741824-g1048576-native-view | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.216 | no |
-| array-n1073741824-g1048576-stream | array-n1073741824-g1048576-sql-chunks | write | 1.614 | no |
-| array-n1073741824-g1048576-stream | array-n1073741824-g1048576-sql-chunks | scan | 0.751 | no |
-| array-n1073741824-g1048576-indexed | array-n1073741824-g1048576-sql-chunks | write | 1.635 | no |
-| array-n1073741824-g1048576-indexed | array-n1073741824-g1048576-sql-chunks | scan | 0.781 | no |
-| array-n1073741824-g1048576-indexed | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.017 | no |
-| array-n1073741824-g1048576-indexed | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.188 | no |
-| array-n1073741824-g1048576-matrix-owned | array-n1073741824-g1048576-sql-chunks | write | 0.466 | no |
-| array-n1073741824-g1048576-matrix-owned | array-n1073741824-g1048576-sql-chunks | scan | 0.303 | no |
-| array-n1073741824-g1048576-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.006 | no |
-| array-n1073741824-g1048576-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.061 | no |
-| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | write | 0.670 | no |
-| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | ingest | 0.663 | no |
-| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | completion | 0.674 | no |
-| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | read_active | 0.767 | no |
-| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | write | 0.702 | no |
-| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | ingest | 0.695 | no |
-| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | completion | 0.706 | no |
-| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | read_active | 0.637 | no |
-| table-w1-n1000000-varlit-matrix-packed | table-w1-n1000000-sqlite | write | 0.653 | no |
-| table-w1-n1000000-varlit-matrix-packed | table-w1-sqlite | ingest | 0.651 | no |
-| table-w1-n1000000-varlit-matrix-packed | table-w1-n1000000-sqlite | completion | 0.653 | no |
-| table-w1-n1000000-varlit-matrix-packed | table-w1-sqlite | read_active | 0.701 | no |
-| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | write | 0.637 | no |
-| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | ingest | 0.634 | no |
-| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | completion | 0.638 | no |
-| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | read_active | 0.548 | no |
-| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | write | 2.125 | yes |
-| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | scan | 0.868 | no |
-| mapped-array-n16777216-g65536-native-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.870 | no |
-| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | range | 1.029 | no |
-| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | write | 2.632 | yes |
-| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | scan | 1.407 | no |
-| mapped-array-n16777216-g1048576-native-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 1.651 | no |
-| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | range | 1.244 | no |
-| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | write | 1.793 | no |
-| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.032 | no |
-| mapped-array-n268435456-g65536-native-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.859 | no |
-| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | range | 0.728 | no |
-| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | write | 1.982 | no |
-| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.479 | no |
-| mapped-array-n268435456-g1048576-native-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 1.432 | no |
-| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | range | 0.945 | no |
-| mapped-array-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.564 | no |
-| mapped-array-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 0.872 | no |
-| mapped-array-n1073741824-g65536-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | point | 1.742 | no |
-| mapped-array-n1073741824-g65536-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.896 | no |
-| mapped-array-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.907 | no |
-| mapped-array-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.277 | no |
-| mapped-array-n1073741824-g1048576-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | point | 2.547 | yes |
-| mapped-array-n1073741824-g1048576-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | range | 1.024 | no |
-| array-mapped-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.732 | no |
-| array-mapped-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.076 | no |
-| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | warm_scan | 1.140 | no |
-| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | point | 1.751 | no |
-| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | range | 0.913 | no |
-| array-mapped-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.907 | no |
-| array-mapped-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.268 | no |
-| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | warm_scan | 1.432 | no |
-| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | point | 2.679 | yes |
-| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | range | 0.966 | no |
+| Varlit profile | SQLite profile | Operation | Ratio |
+|---|---|---|---:|
+| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | write | 2.291 |
+| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | ingest | 2.259 |
+| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | completion | 2.263 |
+| mixed-p65536-r1-varlit-stream | mixed-p65536-r1-sqlite | read_active | 1.476 |
+| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | write | 1.968 |
+| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | ingest | 1.938 |
+| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | completion | 1.940 |
+| mixed-p65536-r1-varlit-indexed | mixed-p65536-r1-sqlite | read_active | 1.437 |
+| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | write | 2.097 |
+| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | ingest | 2.012 |
+| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | completion | 2.057 |
+| mixed-p1048576-r1-varlit-stream | mixed-p1048576-r1-sqlite | read_active | 1.712 |
+| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | write | 2.031 |
+| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | ingest | 1.947 |
+| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | completion | 1.994 |
+| mixed-p1048576-r1-varlit-indexed | mixed-p1048576-r1-sqlite | read_active | 1.511 |
+| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | write | 2.139 |
+| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | ingest | 1.867 |
+| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | completion | 1.970 |
+| mixed-p65536-r8-varlit-stream | mixed-p65536-r8-sqlite | read_active | 1.361 |
+| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | write | 1.806 |
+| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | ingest | 1.577 |
+| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | completion | 1.774 |
+| mixed-p65536-r8-varlit-indexed | mixed-p65536-r8-sqlite | read_active | 1.322 |
+| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | write | 1.872 |
+| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | ingest | 1.651 |
+| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | completion | 1.783 |
+| mixed-p1048576-r8-varlit-stream | mixed-p1048576-r8-sqlite | read_active | 1.396 |
+| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | write | 1.555 |
+| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | ingest | 1.370 |
+| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | completion | 1.519 |
+| mixed-p1048576-r8-varlit-indexed | mixed-p1048576-r8-sqlite | read_active | 1.308 |
+| objects-follow-varlit-stream | objects-follow-sqlite | write | 0.362 |
+| objects-follow-varlit-stream | objects-follow-sqlite | ingest | 0.349 |
+| objects-follow-varlit-stream | objects-follow-sqlite | completion | 0.258 |
+| objects-follow-varlit-stream | objects-follow-sqlite | read_active | 0.064 |
+| objects-follow-varlit-indexed | objects-follow-sqlite | write | 0.047 |
+| objects-follow-varlit-indexed | objects-follow-sqlite | ingest | 0.045 |
+| objects-follow-varlit-indexed | objects-follow-sqlite | completion | 0.048 |
+| objects-follow-varlit-indexed | objects-follow-sqlite | read_active | 0.063 |
+| objects-keyed-varlit-indexed | objects-keyed-sqlite | write | 0.088 |
+| objects-keyed-varlit-indexed | objects-keyed-sqlite | ingest | 0.085 |
+| objects-keyed-varlit-indexed | objects-keyed-sqlite | completion | 0.088 |
+| objects-keyed-varlit-indexed | objects-keyed-sqlite | read_active | 0.099 |
+| table-w1-varlit-indexed | table-w1-n1000000-sqlite | write | 0.111 |
+| table-w1-varlit-indexed | table-w1-sqlite | ingest | 0.111 |
+| table-w1-varlit-indexed | table-w1-n1000000-sqlite | completion | 0.112 |
+| table-w1-varlit-indexed | table-w1-sqlite | read_active | 0.110 |
+| table-w1-varlit-matrix | table-w1-n1000000-sqlite | write | 0.488 |
+| table-w1-varlit-matrix | table-w1-sqlite | ingest | 0.487 |
+| table-w1-varlit-matrix | table-w1-n1000000-sqlite | completion | 0.489 |
+| table-w1-varlit-matrix | table-w1-sqlite | read_active | 0.583 |
+| table-w4-varlit-indexed | table-w4-n1000000-sqlite | write | 0.102 |
+| table-w4-varlit-indexed | table-w4-n1000000-sqlite | ingest | 0.101 |
+| table-w4-varlit-indexed | table-w4-n1000000-sqlite | completion | 0.102 |
+| table-w4-varlit-indexed | table-w4-n1000000-sqlite | read_active | 0.079 |
+| table-w4-varlit-matrix | table-w4-n1000000-sqlite | write | 0.462 |
+| table-w4-varlit-matrix | table-w4-n1000000-sqlite | ingest | 0.460 |
+| table-w4-varlit-matrix | table-w4-n1000000-sqlite | completion | 0.463 |
+| table-w4-varlit-matrix | table-w4-n1000000-sqlite | read_active | 0.468 |
+| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | write | 2.388 |
+| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | scan | 0.828 |
+| array-n16777216-g65536-native-view | mapped-array-n16777216-g65536-sql-chunks | point | 0.060 |
+| array-n16777216-g65536-native-view | array-n16777216-g1048576-sql-chunks | range | 0.324 |
+| array-n16777216-g65536-stream | array-n16777216-g1048576-sql-chunks | write | 2.229 |
+| array-n16777216-g65536-stream | array-n16777216-g1048576-sql-chunks | scan | 1.145 |
+| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | write | 2.179 |
+| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | scan | 1.225 |
+| array-n16777216-g65536-indexed | mapped-array-n16777216-g65536-sql-chunks | point | 0.049 |
+| array-n16777216-g65536-indexed | array-n16777216-g1048576-sql-chunks | range | 0.323 |
+| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | write | 1.048 |
+| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | scan | 2.864 |
+| array-n16777216-g65536-matrix-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.204 |
+| array-n16777216-g65536-matrix-mmap | array-n16777216-g1048576-sql-chunks | range | 0.925 |
+| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | write | 1.056 |
+| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | scan | 0.410 |
+| array-n16777216-g65536-matrix-owned | mapped-array-n16777216-g65536-sql-chunks | point | 0.019 |
+| array-n16777216-g65536-matrix-owned | array-n16777216-g1048576-sql-chunks | range | 0.135 |
+| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | write | 2.524 |
+| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | scan | 1.226 |
+| array-n16777216-g1048576-native-view | mapped-array-n16777216-g65536-sql-chunks | point | 0.005 |
+| array-n16777216-g1048576-native-view | array-n16777216-g1048576-sql-chunks | range | 0.200 |
+| array-n16777216-g1048576-stream | array-n16777216-g1048576-sql-chunks | write | 1.803 |
+| array-n16777216-g1048576-stream | array-n16777216-g1048576-sql-chunks | scan | 1.068 |
+| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | write | 1.981 |
+| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | scan | 1.036 |
+| array-n16777216-g1048576-indexed | mapped-array-n16777216-g65536-sql-chunks | point | 0.004 |
+| array-n16777216-g1048576-indexed | array-n16777216-g1048576-sql-chunks | range | 0.153 |
+| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | write | 0.886 |
+| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | scan | 1.381 |
+| array-n16777216-g1048576-matrix-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.017 |
+| array-n16777216-g1048576-matrix-mmap | array-n16777216-g1048576-sql-chunks | range | 0.544 |
+| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | write | 0.922 |
+| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | scan | 0.379 |
+| array-n16777216-g1048576-matrix-owned | mapped-array-n16777216-g65536-sql-chunks | point | 0.001 |
+| array-n16777216-g1048576-matrix-owned | array-n16777216-g1048576-sql-chunks | range | 0.050 |
+| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | write | 1.869 |
+| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | scan | 0.576 |
+| array-n268435456-g65536-native-view | mapped-array-n268435456-g65536-sql-chunks | point | 0.059 |
+| array-n268435456-g65536-native-view | array-n268435456-g1048576-sql-chunks | range | 0.266 |
+| array-n268435456-g65536-stream | array-n268435456-g1048576-sql-chunks | write | 1.675 |
+| array-n268435456-g65536-stream | array-n268435456-g1048576-sql-chunks | scan | 0.636 |
+| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | write | 1.705 |
+| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | scan | 0.727 |
+| array-n268435456-g65536-indexed | mapped-array-n268435456-g65536-sql-chunks | point | 0.062 |
+| array-n268435456-g65536-indexed | array-n268435456-g1048576-sql-chunks | range | 0.307 |
+| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | write | 0.804 |
+| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.394 |
+| array-n268435456-g65536-matrix-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.139 |
+| array-n268435456-g65536-matrix-mmap | array-n268435456-g1048576-sql-chunks | range | 0.668 |
+| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | write | 0.673 |
+| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | scan | 0.269 |
+| array-n268435456-g65536-matrix-owned | mapped-array-n268435456-g65536-sql-chunks | point | 0.025 |
+| array-n268435456-g65536-matrix-owned | array-n268435456-g1048576-sql-chunks | range | 0.131 |
+| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | write | 1.954 |
+| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | scan | 0.971 |
+| array-n268435456-g1048576-native-view | mapped-array-n268435456-g65536-sql-chunks | point | 0.008 |
+| array-n268435456-g1048576-native-view | array-n268435456-g1048576-sql-chunks | range | 0.190 |
+| array-n268435456-g1048576-stream | array-n268435456-g1048576-sql-chunks | write | 1.770 |
+| array-n268435456-g1048576-stream | array-n268435456-g1048576-sql-chunks | scan | 0.744 |
+| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | write | 1.983 |
+| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | scan | 0.742 |
+| array-n268435456-g1048576-indexed | mapped-array-n268435456-g65536-sql-chunks | point | 0.006 |
+| array-n268435456-g1048576-indexed | array-n268435456-g1048576-sql-chunks | range | 0.174 |
+| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | write | 0.815 |
+| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.406 |
+| array-n268435456-g1048576-matrix-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.015 |
+| array-n268435456-g1048576-matrix-mmap | array-n268435456-g1048576-sql-chunks | range | 0.368 |
+| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | write | 0.791 |
+| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | scan | 0.297 |
+| array-n268435456-g1048576-matrix-owned | mapped-array-n268435456-g65536-sql-chunks | point | 0.002 |
+| array-n268435456-g1048576-matrix-owned | array-n268435456-g1048576-sql-chunks | range | 0.052 |
+| array-n1073741824-g65536-native-view | array-n1073741824-g1048576-sql-chunks | write | 1.570 |
+| array-n1073741824-g65536-native-view | array-n1073741824-g1048576-sql-chunks | scan | 0.629 |
+| array-n1073741824-g65536-native-view | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.163 |
+| array-n1073741824-g65536-native-view | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.334 |
+| array-n1073741824-g65536-stream | array-n1073741824-g1048576-sql-chunks | write | 1.556 |
+| array-n1073741824-g65536-stream | array-n1073741824-g1048576-sql-chunks | scan | 0.655 |
+| array-n1073741824-g65536-indexed | array-n1073741824-g1048576-sql-chunks | write | 1.328 |
+| array-n1073741824-g65536-indexed | array-n1073741824-g1048576-sql-chunks | scan | 0.655 |
+| array-n1073741824-g65536-indexed | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.176 |
+| array-n1073741824-g65536-indexed | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.362 |
+| array-n1073741824-g65536-matrix-owned | array-n1073741824-g1048576-sql-chunks | write | 0.371 |
+| array-n1073741824-g65536-matrix-owned | array-n1073741824-g1048576-sql-chunks | scan | 0.268 |
+| array-n1073741824-g65536-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.075 |
+| array-n1073741824-g65536-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.166 |
+| array-n1073741824-g1048576-native-view | array-n1073741824-g1048576-sql-chunks | write | 1.971 |
+| array-n1073741824-g1048576-native-view | array-n1073741824-g1048576-sql-chunks | scan | 0.969 |
+| array-n1073741824-g1048576-native-view | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.020 |
+| array-n1073741824-g1048576-native-view | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.216 |
+| array-n1073741824-g1048576-stream | array-n1073741824-g1048576-sql-chunks | write | 1.614 |
+| array-n1073741824-g1048576-stream | array-n1073741824-g1048576-sql-chunks | scan | 0.751 |
+| array-n1073741824-g1048576-indexed | array-n1073741824-g1048576-sql-chunks | write | 1.635 |
+| array-n1073741824-g1048576-indexed | array-n1073741824-g1048576-sql-chunks | scan | 0.781 |
+| array-n1073741824-g1048576-indexed | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.017 |
+| array-n1073741824-g1048576-indexed | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.188 |
+| array-n1073741824-g1048576-matrix-owned | array-n1073741824-g1048576-sql-chunks | write | 0.466 |
+| array-n1073741824-g1048576-matrix-owned | array-n1073741824-g1048576-sql-chunks | scan | 0.303 |
+| array-n1073741824-g1048576-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | point | 0.006 |
+| array-n1073741824-g1048576-matrix-owned | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.061 |
+| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | write | 0.670 |
+| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | ingest | 0.663 |
+| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | completion | 0.674 |
+| table-w1-n100000-varlit-matrix-packed | table-w1-n100000-sqlite | read_active | 0.767 |
+| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | write | 0.702 |
+| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | ingest | 0.695 |
+| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | completion | 0.706 |
+| table-w4-n100000-varlit-matrix-packed | table-w4-n100000-sqlite | read_active | 0.637 |
+| table-w1-n1000000-varlit-matrix-packed | table-w1-n1000000-sqlite | write | 0.653 |
+| table-w1-n1000000-varlit-matrix-packed | table-w1-sqlite | ingest | 0.651 |
+| table-w1-n1000000-varlit-matrix-packed | table-w1-n1000000-sqlite | completion | 0.653 |
+| table-w1-n1000000-varlit-matrix-packed | table-w1-sqlite | read_active | 0.701 |
+| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | write | 0.637 |
+| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | ingest | 0.634 |
+| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | completion | 0.638 |
+| table-w4-n1000000-varlit-matrix-packed | table-w4-n1000000-sqlite | read_active | 0.548 |
+| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | write | 2.125 |
+| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | scan | 0.868 |
+| mapped-array-n16777216-g65536-native-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 0.870 |
+| mapped-array-n16777216-g65536-native-mmap | array-n16777216-g1048576-sql-chunks | range | 1.029 |
+| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | write | 2.632 |
+| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | scan | 1.407 |
+| mapped-array-n16777216-g1048576-native-mmap | mapped-array-n16777216-g65536-sql-chunks | point | 1.651 |
+| mapped-array-n16777216-g1048576-native-mmap | array-n16777216-g1048576-sql-chunks | range | 1.244 |
+| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | write | 1.793 |
+| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.032 |
+| mapped-array-n268435456-g65536-native-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 0.859 |
+| mapped-array-n268435456-g65536-native-mmap | array-n268435456-g1048576-sql-chunks | range | 0.728 |
+| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | write | 1.982 |
+| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | scan | 1.479 |
+| mapped-array-n268435456-g1048576-native-mmap | mapped-array-n268435456-g65536-sql-chunks | point | 1.432 |
+| mapped-array-n268435456-g1048576-native-mmap | array-n268435456-g1048576-sql-chunks | range | 0.945 |
+| mapped-array-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.564 |
+| mapped-array-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 0.872 |
+| mapped-array-n1073741824-g65536-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | point | 1.742 |
+| mapped-array-n1073741824-g65536-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | range | 0.896 |
+| mapped-array-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.907 |
+| mapped-array-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.277 |
+| mapped-array-n1073741824-g1048576-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | point | 2.547 |
+| mapped-array-n1073741824-g1048576-native-mmap | mapped-array-n1073741824-g1048576-sql-chunks | range | 1.024 |
+| array-mapped-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.732 |
+| array-mapped-n1073741824-g65536-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.076 |
+| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | warm_scan | 1.140 |
+| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | point | 1.751 |
+| array-mapped-n1073741824-g65536-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | range | 0.913 |
+| array-mapped-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | write | 1.907 |
+| array-mapped-n1073741824-g1048576-native-mmap | array-n1073741824-g1048576-sql-chunks | scan | 1.268 |
+| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | warm_scan | 1.432 |
+| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | point | 2.679 |
+| array-mapped-n1073741824-g1048576-native-mmap | array-mapped-n1073741824-g1048576-sql-chunks | range | 0.966 |

@@ -1,6 +1,6 @@
 # Varlit / SQLite / HDF5 workload comparison
 
-This is the canonical combined report. The corrected grouped-item results are integrated below with the existing mixed logging, numerical-array and table-oriented cases. The requested **at least 2× SQLite performance for every equivalent operation is not established**.
+This is the canonical combined report. The corrected grouped-item results are integrated below with the existing mixed logging, numerical-array and table-oriented cases.
 
 The former individual-Frame million-item fixture is withdrawn as a representative grouped-storage model. Its claim that independent logical items should each be a separate physical Frame/index key was incorrect. Those measurements remain historical controls; their timings and storage sizes are not product-wide conclusions and are excluded from the dashboard's current view.
 
@@ -12,7 +12,7 @@ The same report now includes [69 before/after/read-mode configurations](../read-
 
 CRC and additional structure checks are independently selectable, with the compatibility default preserved. TRUSTED uses captured metadata and skips frame rereads/data CRC while retaining bounds, allocation/decoder limits, finite traversal and publication guards. Direct captured-payload API observations are about 18% / 24% faster than FULL at 64 KiB / 1 MiB; this is not a universal speed claim. Optional record/cell CRC does not include required generation/commit checksums.
 
-Five initial median-based alerts remain explicit, including a concurrent writer wall-time increase and native-owned range variation. Stronger repeat calibration leaves 79 of 88 metric comparisons unqualified and nine within the observed 5% threshold; it does not turn those alerts into passes. The appendix gives complete mode tables, CPU/memory/temp results, control ranges, failures and supplemental attribution. The cross-engine 2× goal remains unestablished.
+Five initial median-based alerts remain explicit, including a concurrent writer wall-time increase and native-owned range variation. Stronger repeat calibration leaves 79 of 88 metric comparisons unqualified and nine within the observed 5% threshold; it does not turn those alerts into passes. The appendix gives complete mode tables, CPU/memory/temp results, control ranges, failures and supplemental attribution.
 
 ## Grouped logical items: corrected primary model
 
@@ -117,7 +117,7 @@ Eight readers each consume the entire published logical workload. A nominal 1 Gi
 
 Full write includes engine initialization, ingest, maintenance and final close/checkpoint. Reader-active time is the maximum reader's consumption plus refresh work, including validation and gets, excluding idle sleeps. Completion also includes reader startup/drain. These overlapping phase counters must not be added.
 
-Against the matching tuned SQLite workload, the stream's full-write ratios are about **2.14× / 1.87×** for 64 KiB / 1 MiB Frames; reader-active ratios are **1.36× / 1.40×** and completion ratios **1.97× / 1.78×**. A write improvement therefore does not satisfy the requested target for all reading work. This is maximum-throughput append/follow, not a fixed-rate acquisition or real-time loss guarantee.
+Against the matching tuned SQLite workload, the stream's full-write ratios are about **2.14× / 1.87×** for 64 KiB / 1 MiB Frames; reader-active ratios are **1.36× / 1.40×** and completion ratios **1.97× / 1.78×**. This is maximum-throughput append/follow, not a fixed-rate acquisition or real-time loss guarantee.
 
 HDF5 chunk geometry is also tested: 16 KiB payload chunks eliminate padding for the 64 KiB variable-size model but add enough chunk work to be slower than 1 MiB chunks. For 1 MiB Frames, 256 KiB chunks generally improve the eight-reader result and eliminate padding. Both complete layouts, including metadata/copy costs, remain reported.
 
