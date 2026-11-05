@@ -1,4 +1,4 @@
-// F-52/F-04 — the payload copy every append paid, on every default spec.
+// / — the payload copy every append paid, on every default spec.
 //
 // `prepare_user_record_payload` returned an owned `StoredPayload { bytes:
 // Vec<u8> }`, and `uncompressed_user_payload` filled it with

@@ -54,7 +54,7 @@ impl WireType {
     }
 }
 
-/// FNV-1a 64 state for structural codec identities (API-04).
+/// FNV-1a 64 state for structural codec identities .
 ///
 /// The derive expands the same folding inline so a generated
 /// `SCHEMA_FINGERPRINT` is a const expression over its fields' real
@@ -119,7 +119,7 @@ pub(crate) const fn container_schema_id_with_arity(
 pub trait VarlitEncode {
     const WIRE_TYPE: WireType;
 
-    /// Structural identity of the bytes this codec emits (API-04).
+    /// Structural identity of the bytes this codec emits .
     ///
     /// [`WireType`] is far too coarse to separate two custom codecs that both
     /// encode as [`WireType::Nested`] but disagree on layout, and a derived
@@ -284,7 +284,7 @@ impl Encoder {
     }
 
     /// Encodes a nested value into its own buffer while inheriting this
-    /// encoder's remaining output budget (DEF-02).
+    /// encoder's remaining output budget .
     ///
     /// A nested field encoded through this method can never buffer past the
     /// limit its parent writer entry point imposed: the child encoder is
@@ -565,7 +565,7 @@ impl<'a> Decoder<'a> {
     /// Preflight for a node-per-entry map (`BTreeMap`), whose storage really is
     /// driven by the entries it has already accepted.
     ///
-    /// API3-04: the charge used to be `len * size_of::<(K, V)>()`, which
+    /// the charge used to be `len * size_of::<(K, V)>()`, which
     /// treats a `BTreeMap` as if it stored entries packed end to end. It does
     /// not. A std B-tree node carries a fixed-capacity array - it allocates
     /// room for `2B - 1 = 11` entries whatever its fill - behind a header
@@ -599,7 +599,7 @@ impl<'a> Decoder<'a> {
 
     /// Preflight for an open-addressed hash table (`HashMap`), whose storage is
     /// driven by the *declared* count long before any entry is validated
-    /// (SAFE-01).
+    ///
     ///
     /// `preflight_count` floors a zero-byte entry at a one-byte charge, which
     /// is a wild under-estimate for a hash table: a `HashMap<(), ()>` pays a
@@ -657,7 +657,7 @@ impl<'a> Decoder<'a> {
         {
             return Err(Error::InvalidCanonicalEncoding("duplicate variable field"));
         }
-        // RES-01: every other decoder-owned container charges the
+        // every other decoder-owned container charges the
         // materialization budget before it reserves. Duplicate detection for
         // ids above the small-id mask is the one decoder-owned set whose
         // growth is driven purely by attacker-chosen field ids, so charge
@@ -1272,7 +1272,7 @@ where
         let len = decoder.read_len()?;
         decoder.preflight_hash_map_count::<K, V>(len, "HashMap entries")?;
         let mut values = HashMap::new();
-        // SAFE-01: reserve only a bounded prefix of the declared count, so a
+        // reserve only a bounded prefix of the declared count, so a
         // hostile count cannot materialize a table before a single entry has
         // been proven decodable. The charge above already bounds the table this
         // map can reach; this bounds what it can reach *on a claim alone*.
@@ -1413,7 +1413,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// all of which scale with `Group::WIDTH`:
 ///
 /// * the trailing duplicated control group appended after the control array;
-/// * the minimum bucket count of a small table (SAFE2-01: hashbrown rounds a
+/// * the minimum bucket count of a small table (: hashbrown rounds a
 ///   small table with a one-byte-or-smaller entry up to a whole group so the
 ///   control array is never shorter than one SIMD load);
 /// * the control array's alignment, which is `max(Group::WIDTH, align_of::<T>())`
@@ -1430,7 +1430,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// tables of fewer than fifteen entries. Charging more than hashbrown allocates
 /// is always sound here; charging less is the defect this constant exists to
 /// prevent.
-/// Entry-slot multiplier for the `BTreeMap` materialization model (API3-04).
+/// Entry-slot multiplier for the `BTreeMap` materialization model .
 ///
 /// A std B-tree node allocates a fixed array of `2B - 1 = 11` entry slots
 /// whatever its fill, and is only guaranteed to hold `B - 1 = 5` of them, so
@@ -1440,7 +1440,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// library cannot silently turn the model into an under-charge.
 const BTREE_ENTRY_SLOT_FACTOR: usize = 3;
 
-/// Per-entry allowance for B-tree node headers and child pointers (API3-04).
+/// Per-entry allowance for B-tree node headers and child pointers .
 ///
 /// A leaf node header is a parent pointer, a parent index and a length; an
 /// internal node adds `2B = 12` child pointers. Amortised over the guaranteed
@@ -1452,7 +1452,7 @@ const BTREE_ENTRY_HEADER_BYTES: usize = 16;
 const HASH_TABLE_GROUP_BYTES: u64 = 32;
 
 /// Entries a map codec reserves for before it has validated a single entry
-/// (SAFE-01).
+///
 ///
 /// The declared count is attacker-chosen, so a table sized from it up front is
 /// an allocation granted on nothing but a claim. Reserving a small fixed prefix
@@ -1491,7 +1491,7 @@ fn hash_map_decode_reservation_bytes<T>(len: usize) -> Option<u64> {
 ///   comment here — that "small-table specializations only ever allocate less"
 ///   — was false, and why the old two-bucket model undercharged
 ///   `HashMap<(), ()>` by charging 19 bytes for a table that really costs 32
-///   bytes of control storage alone (SAFE2-01/F-02).
+///   bytes of control storage alone (/).
 /// * Every bucket owns one `T` *and* one control byte — the true floor is never
 ///   one byte per entry, not even for a zero-sized `T`.
 /// * The allocation additionally carries one trailing duplicated control group,
@@ -1628,7 +1628,7 @@ mod tests {
             .encode_nested_to_vec(&vec![2u8; 4])
             .expect("nested value within the remaining budget");
         assert_eq!(nested.len(), 12);
-        // ... while a value larger than the remaining budget is refused with
+        // .. while a value larger than the remaining budget is refused with
         // the parent's typed resource before it is buffered.
         let error = encoder
             .encode_nested_to_vec(&vec![3u8; 1024])
@@ -1675,7 +1675,7 @@ mod tests {
         buckets * (size_of::<(K, V)>() as u64 + 1) + 16
     }
 
-    /// SAFE2-01/F-02. The reservation model must never charge less than the
+    /// /. The reservation model must never charge less than the
     /// table `try_reserve` really allocates, at *every* capacity — including
     /// the small-table classes `1..=14`, where the previous two-bucket model
     /// charged `HashMap<(), ()>` 19 bytes for a 16-bucket table.

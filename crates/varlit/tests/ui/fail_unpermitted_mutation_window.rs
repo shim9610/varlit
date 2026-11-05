@@ -1,4 +1,4 @@
-// SHAPE B, mechanical enforcement (round 12).
+// SHAPE B, mechanical enforcement .
 //
 // A writer's in-flight mutation window (the shape `layout.rs` uses: refuse
 // while a segment write is running, and for good if its rollback failed) can

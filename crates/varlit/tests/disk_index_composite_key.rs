@@ -165,7 +165,7 @@ const CHAINED_BEFORE: u64 = 52_334;
 /// composite-key change.
 ///
 /// The merged tree measures 26,333, exactly `RECORDS` fewer, and the reason is
-/// not this fix. F-52 removed the `logical_payload.to_vec()` in
+/// not this fix.  removed the `logical_payload.to_vec()` in
 /// `uncompressed_user_payload`, and the scalable prepare path
 /// (`file.rs:11460`) goes through it once per record — so a one-allocation
 /// saving times 2,000 records lands on this same measurement. The two fixes
@@ -242,7 +242,7 @@ fn the_keyed_chain_still_stores_rows_under_the_key_they_are_read_by() -> varlit:
         frame: 9,
         payload: b"latest".to_vec(),
     })?;
-    // ... and a batch push, which threads the key through a different call path.
+    // .. and a batch push, which threads the key through a different call path.
     writer
         .push_frames(
             (64..128u32).map(|ordinal| Frame {

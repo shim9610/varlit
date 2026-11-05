@@ -15,7 +15,7 @@ pub struct FatalAccessAllowed(());
 /// Whether safe access to this layout's state is blocked by a `Fatal`
 /// recovery finding, and the sole source of [`FatalAccessAllowed`].
 ///
-/// **Deliberately not `Clone` (round 16).** Re-verification found that
+/// **Deliberately not `Clone` .** Re-verification found that
 /// `layout.fatal_access = donor.fatal_access.clone();` — one line, with any
 /// `&mut MatrixLayout` in scope — copied an unblocked gate from a healthy
 /// layout onto a blocked one, undoing `FatalAccessGate::block`. A gate
@@ -39,7 +39,7 @@ impl FatalAccessGate {
     /// `findings` must be every finding the layout will carry — the CRC
     /// findings and the per-commit quarantine findings.
     ///
-    /// **Private to this module (round 16).** `pub(super)` made it
+    /// **Private to this module .** `pub(super)` made it
     /// file-visible, and a file-visible function returning a
     /// `FatalAccessGate` is a file-visible way to *write* one:
     /// `layout.fatal_access = FatalAccessGate::evaluate(clean.iter(), spec);`

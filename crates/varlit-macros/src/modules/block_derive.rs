@@ -235,7 +235,7 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         let ty = &field.ty;
         let field_id = field.field_id;
         quote! {
-            // DEF-02: the nested field encoder inherits the parent encoder's
+            // the nested field encoder inherits the parent encoder's
             // remaining output budget, so a limit-bounded writer entry point
             // surfaces its typed limit error before an oversized field is
             // ever fully buffered, instead of after staging the whole child
@@ -471,7 +471,7 @@ pub(super) fn option_ident(name: &Ident) -> Ident {
 /// standard `DefaultHasher` output is not stability-guaranteed. The value is a
 /// process-local schema identity, never part of the wire format.
 ///
-/// API-04: each field contributes `<FieldTy as VarlitEncode>::SCHEMA_ID` and
+/// each field contributes `<FieldTy as VarlitEncode>::SCHEMA_ID` and
 /// its decode counterpart — resolved codec identities — alongside the source
 /// spelling, so two custom nested codecs that spell the field type identically
 /// but emit different bytes cannot share a fingerprint. That is why the
@@ -550,7 +550,7 @@ pub(super) fn schema_fingerprint(
 
 /// Compile-time enforcement of the `VarlitEncode::SCHEMA_ID` trust boundary for
 /// every field codec: a field type whose codec declares no identity would
-/// fingerprint by source spelling alone, which is exactly the API-04 collision.
+/// fingerprint by source spelling alone, which is exactly the  collision.
 ///
 /// The rule is deliberately wire-type agnostic. Restricting it to
 /// `WireType::Nested` left the same collision reachable through any other wire

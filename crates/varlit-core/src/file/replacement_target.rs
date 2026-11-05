@@ -76,7 +76,7 @@ impl ReplacementTarget {
     }
 }
 
-/// Mechanical enforcement for F-02: the permission to rewrite the bytes of
+/// Mechanical enforcement for : the permission to rewrite the bytes of
 /// an already-indexed record, which cannot be obtained without dropping the
 /// block's resident keyed-tail map first.
 ///

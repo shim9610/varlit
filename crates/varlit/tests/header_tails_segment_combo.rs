@@ -100,7 +100,7 @@ const ENTRY_LEN: usize = 4 + 8;
 const SLOT_CRC_LEN: usize = 4;
 const BLOCK_FRAMING_LEN: usize = 4 + 4;
 
-/// CRC-32/ISO-HDLC, written out rather than taken from `crc32fast`, so the
+/// /ISO-HDLC, written out rather than taken from `crc32fast`, so the
 /// assertion is "the bytes on disk carry this checksum" and not "two calls into
 /// the same crate agree".
 fn crc32(bytes: &[u8]) -> u32 {

@@ -29,7 +29,7 @@ const DEFAULT_BATCH_RECORDS: usize = 16_384;
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
 
 const META_MAGIC: [u8; 8] = *b"VARVEVKI";
-// v3 adds the primary generation witness (STO-01). A v2 sidecar is 260 bytes
+// v3 adds the primary generation witness . A v2 sidecar is 260 bytes
 // where this record is 300, so it is refused with the typed `MetadataLength`
 // error before the version field is read, and is stale-regenerable by rebuild.
 const META_VERSION: u16 = 3;
@@ -300,7 +300,7 @@ pub enum DiskIndexError {
     IdentityMismatch,
     /// The primary no longer matches the generation the sidecar was published
     /// against: the leading bytes of the file changed underneath it, outside a
-    /// declared header tail region, which is excluded from the witness (STO-01).
+    /// declared header tail region, which is excluded from the witness .
     PrimaryGenerationMismatch,
     ModeMismatch {
         expected: DiskIndexMode,
@@ -629,7 +629,7 @@ pub struct DiskIndexIdentity {
     pub primary_fingerprint: [u8; 32],
 }
 
-/// Bytes of the primary covered by the generation witness (STO-01).
+/// Bytes of the primary covered by the generation witness .
 ///
 /// The window is a small constant: the witness must catch a rewrite of the
 /// primary's leading records, and verifying it costs one bounded read at open
@@ -790,7 +790,7 @@ pub struct DiskIndexDescriptor {
     pub block_id: u32,
     pub block_version: u16,
     pub key_wire_type: u16,
-    /// API-03: the block schema fingerprint of the concrete `T` whose decode
+    /// the block schema fingerprint of the concrete `T` whose decode
     /// and key-extraction function pointers this descriptor captured. Without
     /// it a descriptor built for one block type validated — and then decoded
     /// primary bytes — against a format that declares a different schema for
@@ -812,7 +812,7 @@ impl DiskIndexDescriptor {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the descriptor root,
+        // compile-time keyedness contract at the descriptor root,
         // covering the whole disk-index plan path for `T`.
         let () = crate::traits::KeyedBlockContract::<T>::OK;
         Self {
@@ -989,7 +989,7 @@ fn validate_descriptors(
         {
             return Err(DiskIndexError::PlanNotCanonical);
         }
-        // API-03: the format's immutable block identity — keyedness and schema
+        // the format's immutable block identity — keyedness and schema
         // fingerprint included — is the authority for the concrete type whose
         // decode and key-extraction pointers this descriptor captured. It runs
         // here, at plan construction, so no captured codec can reach primary
@@ -1023,7 +1023,7 @@ fn compute_plan_digest(descriptors: &[DiskIndexDescriptor]) -> DiskIndexResult<D
     let mut digest = [0u8; 32];
     for lane in 0..8u32 {
         let mut hasher = crc32fast::Hasher::new();
-        // v2 folds the block schema fingerprint into the plan digest (API-03),
+        // v2 folds the block schema fingerprint into the plan digest ,
         // so a sidecar published for one block schema is refused as stale for
         // a plan whose descriptors decode a different one.
         hasher.update(b"varve-disk-index-plan-v3");
@@ -2442,7 +2442,7 @@ impl DiskIndexWriteBatch {
         Ok(self.metadata)
     }
 
-    /// Re-stamps the primary generation witness for this batch (STO-01).
+    /// Re-stamps the primary generation witness for this batch .
     ///
     /// Only called while the witness window is still growing — once it covers
     /// [`PRIMARY_GENERATION_WINDOW`] bytes it is frozen for the file's life, so

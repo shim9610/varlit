@@ -112,3 +112,80 @@ fn untraversed_source_inclusion_cannot_silently_hide_interfaces() {
         );
     }
 }
+
+#[test]
+fn included_methods_keep_identity_and_all_validation_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("src");
+    std::fs::create_dir_all(root.join("file")).unwrap();
+    std::fs::write(dir.path().join("outside.rs"), "pub fn hidden() {}").unwrap();
+    std::fs::write(root.join("lib.rs"), "mod file;").unwrap();
+    let method = "impl VarlitFile { pub fn read(&self, n: u64) -> u64 { n } }";
+    let inspect = |inventory_only| {
+        let mut audit = Audit {
+            root: root.clone(),
+            inventory_only,
+            ..Audit::default()
+        };
+        audit.inspect_file(&root.join("lib.rs"));
+        audit
+    };
+    std::fs::write(root.join("file.rs"), method).unwrap();
+    let original = inspect(true).inventory;
+    std::fs::write(root.join("file.rs"), "include!(\"file/methods.rs\");").unwrap();
+    let child = root.join("file/methods.rs");
+    std::fs::write(&child, method).unwrap();
+    let included = inspect(true);
+    assert_eq!(included.seen_files.len(), 3);
+    assert_eq!(
+        original.keys().collect::<Vec<_>>(),
+        included.inventory.keys().collect::<Vec<_>>()
+    );
+    std::fs::write(&child, method.replace("n: u64", "n: u32")).unwrap();
+    assert_ne!(
+        original.keys().collect::<Vec<_>>(),
+        inspect(true).inventory.keys().collect::<Vec<_>>()
+    );
+    std::fs::write(
+        &child,
+        "impl VarlitFile { fn bypass(&self) { read_native_record_header(file, 0); } }",
+    )
+    .unwrap();
+    assert_eq!(inspect(false).errors.len(), 1);
+    // A real child module owns its own source. It must not inherit a legacy
+    // decoder allowance from the file that included its declaration.
+    std::fs::write(&child, "#[path = \"../decoder.rs\"] mod decoder;").unwrap();
+    std::fs::write(
+        root.join("decoder.rs"),
+        "fn fault_record_entry() { read_native_record_header(file, 0); }",
+    )
+    .unwrap();
+    let nested = inspect(false);
+    assert_eq!(nested.seen_files.len(), 4);
+    assert_eq!(nested.errors.len(), 1);
+    // Include paths are relative to the physical source, including inside an
+    // inline module; the namespace must still be retained by the inventory.
+    std::fs::write(&child, method).unwrap();
+    std::fs::write(
+        root.join("file.rs"),
+        "mod nested { include!(\"file/methods.rs\"); }",
+    )
+    .unwrap();
+    let inline = inspect(true);
+    assert!(inline.errors.is_empty());
+    assert_eq!(inline.seen_files.len(), 3);
+    assert!(
+        inline
+            .inventory
+            .keys()
+            .any(|k| k.contains("file::nested::VarlitFile"))
+    );
+    for source in [
+        "include!(concat!(\"file/\", \"methods.rs\"));",
+        "include!(\"missing.rs\");",
+        "include!(\"../outside.rs\");",
+    ] {
+        std::fs::write(root.join("file.rs"), source).unwrap();
+        assert!(!inspect(true).errors.is_empty(), "accepted {source}");
+    }
+}

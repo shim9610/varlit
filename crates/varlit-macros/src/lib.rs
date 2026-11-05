@@ -103,15 +103,15 @@ pub fn derive_varlit_block(input: TokenStream) -> TokenStream {
 ///             segments: 4_000_000;
 ///             sidecar: 268_435_456;
 ///             mmap: 8_589_934_592;
-///         }
+/// }
 ///         endian: little;
 ///         schema_hash: computed;
 ///         extension: "appf";
 ///         blocks {
 ///             fixed Point(id = 1, version = 1) { x: u32, y: u32 }
 ///             variable User(id = 2, version = 1, key = [id]) { id: u64, name: String }
-///         }
-///     }
+/// }
+/// }
 /// }
 ///
 /// # fn main() {
@@ -157,7 +157,7 @@ pub fn varlit_format(input: TokenStream) -> TokenStream {
 }
 
 /// Name under which the calling crate depends on the `varlit` facade, when it
-/// differs from the literal `varlit` (API2-05).
+/// differs from the literal `varlit` .
 ///
 /// Generated code references the facade as `::varlit::__core::…`, which fails
 /// with E0433 when the dependency is renamed (`vv = { package = "varlit", … }`).
@@ -520,7 +520,7 @@ mod tests {
         }
     }
 
-    /// API2-05: absolute facade paths are rewritten to the renamed dependency.
+    /// absolute facade paths are rewritten to the renamed dependency.
     #[test]
     fn rebrand_rewrites_absolute_facade_paths() {
         let facade = Ident::new("vv", proc_macro2::Span::call_site());
@@ -534,7 +534,7 @@ mod tests {
         assert!(!rebranded.contains("varlit"));
     }
 
-    /// API2-05 regression: `IDENT: ::varlit::…` merges the type-ascription
+    ///  regression: `IDENT: ::varlit::…` merges the type-ascription
     /// colon with the leading `::` into a 3-colon run, whose leading-ness the
     /// first-colon latch misjudges (it follows an ident). Rust has no `:::`
     /// token, so the final `::` of a 3+ colon run always begins an absolute
@@ -573,7 +573,7 @@ mod tests {
         assert!(rebranded.contains("< T as :: vv :: __core :: VarlitBlock > :: ID"));
     }
 
-    /// API2-05: user tokens that merely contain the ident `varlit` without a
+    /// user tokens that merely contain the ident `varlit` without a
     /// leading `::` (field access, relative paths, qualified-path members,
     /// strings) survive the rewrite unchanged.
     #[test]
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(rebranded, tokens.to_string());
     }
 
-    /// API2-05: the rewrite recurses into delimited groups.
+    /// the rewrite recurses into delimited groups.
     #[test]
     fn rebrand_recurses_into_groups() {
         let facade = Ident::new("renamed_facade", proc_macro2::Span::call_site());

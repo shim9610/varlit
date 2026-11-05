@@ -12,11 +12,6 @@
 
 #![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires the scalable-fault-injection feature"]
-fn publication_failure_results_require_feature_wiring() {}
-
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
     use std::cell::Cell;
@@ -661,7 +656,7 @@ mod enabled {
         Ok(())
     }
 
-    // --- round 12, F-05: when a native append fails and the truncate-or-seek
+    // --- round 12, : when a native append fails and the truncate-or-seek
     // that rolls it back fails too, the writer poisons itself and returns
     // `WriteRollbackFailed`. The public contract is that *every* later
     // mutation is refused. The defect was that the indexed writer kept a
@@ -735,7 +730,7 @@ mod enabled {
         writer.sync()?;
         let published_len = std::fs::metadata(&path)?.len();
 
-        // The single-record indexed put is the exact path F-05 named: it
+        // The single-record indexed put is the exact path  named: it
         // passes the indexed guard and then calls the stream's internal
         // append.
         VarlitStreamWriter::inject_append_rollback_failures(1);
@@ -799,7 +794,7 @@ mod enabled {
         Ok(())
     }
 
-    /// The single-record indexed *delete* is the second half of F-05: it takes
+    /// The single-record indexed *delete* is the second half of : it takes
     /// the same direct route into the stream, so a rollback failure raised by a
     /// delete must refuse the next put just as a put refuses the next delete.
     #[test]

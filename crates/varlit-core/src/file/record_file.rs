@@ -276,7 +276,7 @@ impl RecordFile {
     /// Rewrites an already-indexed record's header and payload in place.
     ///
     /// Takes the [`RecordOverwrite`] by value; producing one performs the
-    /// version refusal (F-01) and drops the block's keyed-tail map (F-02),
+    /// version refusal  and drops the block's keyed-tail map ,
     /// both strictly before the first byte reaches disk.
     /// Overwrites a fixed-length region *inside the file header*.
     ///

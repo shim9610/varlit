@@ -1,4 +1,4 @@
-// F-04, the MINTING half (round 15).
+// the MINTING half .
 //
 // `CompleteCrcValidEvidence` could not be forged after round 14, and did not
 // need to be: `CrcValidEvidence::new(bits, complete: bool)` handed out evidence

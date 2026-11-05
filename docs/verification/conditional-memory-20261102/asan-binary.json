@@ -1,7 +1,0 @@
-{
-  "path": "fuzz/target/x86_64-unknown-linux-gnu/release/codec_arbitrary",
-  "sha256": "ed1a9aa16df53fd57caaf579a87e2c6d8c9f09fbce929ca662e63cc569930809",
-  "symbol": "__asan_init",
-  "executions": 3518857,
-  "rss_limit_mb": 4096
-}

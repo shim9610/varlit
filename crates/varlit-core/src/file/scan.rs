@@ -224,7 +224,7 @@ pub(super) fn read_record_entry_at(
         None
     };
 
-    // SCAN-01: this is the single line that made open read the whole file. The
+    // this is the single line that made open read the whole file. The
     // check itself is not removed - it is *relocated* to the read that returns
     // the record, where `read_payload_snapshot` already performs the identical
     // one on every typed read. See `IntegrityVerification` for why that is a
@@ -679,7 +679,7 @@ pub(crate) fn fresh_stream_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     fresh_matrix_creation_nonce()
 }
 
-/// Frames the creation-nonce record (STO-01).
+/// Frames the creation-nonce record .
 ///
 /// The nonce lives *inside the primary* because that is the only place an
 /// equal-length in-place rewrite cannot preserve: a nonce in the sidecar, the
@@ -1179,7 +1179,7 @@ impl ScannedIndex {
         Ok(())
     }
 
-    /// Orders the collected tails exactly once (PERF3-03).
+    /// Orders the collected tails exactly once .
     pub(super) fn block_tails(&self) -> Result<BlockTails> {
         let mut tails = Vec::new();
         tails
@@ -1862,7 +1862,7 @@ pub(super) fn walk_segment_chain(
         return Err(Error::InvalidIndexSegment);
     }
     // Same single witness the scan carries, on the same shape of list
-    // (PERF2-07): a chain is written by this crate but read from a file
+    // a chain is written by this crate but read from a file
     // anyone can hand over.
     validate_unique_sequences(entries)?;
     // The scan ends by cutting its list to the committed prefix, and the walk

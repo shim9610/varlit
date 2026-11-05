@@ -1,4 +1,4 @@
-//! DUR3-01 regression: a pathname with no directory component.
+//!  regression: a pathname with no directory component.
 //!
 //! `Path::new("app.varlit").parent()` is `Some("")`, not `None`, so the
 //! `unwrap_or_else(|| Path::new("."))` fallback in the parent-directory sync
@@ -96,7 +96,7 @@ fn bare_filename_child() {
         text: "first".to_string(),
     })
     .expect("append a variable record");
-    // DUR3-01: the created pathname's parent directory is synced here, once.
+    // the created pathname's parent directory is synced here, once.
     file.sync()
         .expect("sync a file created under a bare filename");
     // The request is cleared on success, so a second call must stay clean.

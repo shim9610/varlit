@@ -2,7 +2,7 @@
 use super::*;
 
 /// Opens the diagnostic `<target>.lock` marker for mutation, refusing any
-/// object that is not a dedicated, unaliased regular file (F-07).
+/// object that is not a dedicated, unaliased regular file .
 ///
 /// Acquiring the marker truncates it and writes pid/target metadata through
 /// the handle, and dropping the lock truncates it again. Those writes must
@@ -256,7 +256,7 @@ impl WriterLock {
         policy: WriterLockBreakPolicy,
     ) -> Result<Self> {
         let path = lock_path(target_path);
-        // F-07: acquisition truncates and rewrites this object, so it must be
+        // acquisition truncates and rewrites this object, so it must be
         // a dedicated, unaliased regular file before anything is mutated.
         let file = open_dedicated_lock_marker(&path)?;
         match try_lock_writer_guard(&file) {

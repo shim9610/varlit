@@ -1149,7 +1149,7 @@ fn a_checkpoint_and_a_segment_chain_cannot_both_be_declared() {
 /// **The chain is a property of the file, not of the spec that opens it.**
 ///
 /// `segment_chain_open_is_allowed` used to require `spec.index_policy
-/// .segment_on_flush` — the *writer's* policy — so a reader whose spec did not
+/// segment_on_flush` — the *writer's* policy — so a reader whose spec did not
 /// declare the chain ignored one that was on disk in front of it and walked the
 /// file header-to-EOF instead. The writer's policy governs whether flushing
 /// appends a segment. Whether an open can use one is decided by the bytes.

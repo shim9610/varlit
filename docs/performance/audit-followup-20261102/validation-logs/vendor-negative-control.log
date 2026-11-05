@@ -1,6 +1,0 @@
-{
-  "negative_control": {
-    "vulnerable_path_identity_detected": true,
-    "patched_identity_accepted": true
-  }
-}

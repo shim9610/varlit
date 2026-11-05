@@ -2287,7 +2287,7 @@ pub struct FormatSpec {
     pub chunk_compression: Option<VariableCompression>,
     /// Per-block schema identity of the implementations backing
     /// [`FormatSpec::blocks`], as `(block_id, declared endian override,
-    /// keyedness, generated schema fingerprint)` tuples (API2-01).
+    /// keyedness, generated schema fingerprint)` tuples .
     ///
     /// `varlit_format!` fills this from the registered block types so
     /// [`FormatSpec::computed_schema_hash`] covers the per-block encoding
@@ -2301,7 +2301,7 @@ pub struct FormatSpec {
     /// hash and checked by the in-process registration gate.
     ///
     /// Where an entry exists for a block id it is **authoritative** for that
-    /// id's registration contract, including the endian override (API-01):
+    /// id's registration contract, including the endian override :
     /// typed registration rejects any [`crate::VarlitBlock`] implementation
     /// whose `ENDIAN`, resolved through [`FormatSpec::endian`], disagrees with
     /// the entry's — a manual type can no longer request a block written
@@ -2351,13 +2351,13 @@ pub struct FormatSpecBuilder {
 impl FormatSpec {
     /// Version of the [`FormatSpec::computed_schema_hash`] algorithm.
     ///
-    /// v2 (API2-01, pre-1.0 breaking change): hashes the field encoding
+    /// v2 (, pre-1.0 breaking change): hashes the field encoding
     /// ordinal in declaration order and folds in per-block endian,
     /// keyedness, and generated codec identity from
     /// [`FormatSpec::block_identities`]. Values computed by v1 do not match
     /// v2 for any spec.
     ///
-    /// v3 (API-04, pre-1.0 breaking change): the generated block fingerprints
+    /// v3 (, pre-1.0 breaking change): the generated block fingerprints
     /// folded in from [`FormatSpec::block_identities`] now resolve every
     /// field's codec through [`crate::VarlitEncode::SCHEMA_ID`] instead of the
     /// field type's source spelling, so two custom nested codecs that spell
@@ -3173,14 +3173,14 @@ impl FormatSpec {
     /// Deterministic hash of the wire-relevant schema declaration
     /// (algorithm version [`FormatSpec::SCHEMA_HASH_ALGORITHM_VERSION`]).
     ///
-    /// Version 2 (API2-01) additionally covers, per block: the field
+    /// Version 2  additionally covers, per block: the field
     /// **encoding ordinal** (fixed/matrix payload bytes follow field
     /// declaration order, so two blocks with the same field id/name/type set
     /// in different declaration order must hash differently), and — when
     /// [`FormatSpec::block_identities`] is populated — the block's endian
     /// override, keyedness, and generated codec fingerprint.
     ///
-    /// Version 3 (API-04) inherits transitive custom-codec identity: the
+    /// Version 3  inherits transitive custom-codec identity: the
     /// generated fingerprints in [`FormatSpec::block_identities`] resolve each
     /// field through [`crate::VarlitEncode::SCHEMA_ID`], so a nested codec that
     /// changes its emitted bytes changes this hash even when every declared

@@ -148,7 +148,7 @@ const ENTRY_LEN: usize = 4 + 8;
 const SLOT_CRC_LEN: usize = 4;
 const BLOCK_FRAMING_LEN: usize = 4 + 4;
 
-/// CRC-32/ISO-HDLC, written out here rather than taken from `crc32fast`.
+/// /ISO-HDLC, written out here rather than taken from `crc32fast`.
 ///
 /// The writer uses that crate, so importing it would make this assertion "the
 /// two calls agree" instead of "the bytes on disk carry this checksum".

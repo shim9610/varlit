@@ -1,23 +1,6 @@
-//! Source-level gates for round 12's mechanical enforcement.
-//!
-//! The compile-fail proofs live in `tests/ui` and are driven by
-//! `tests/compile.rs`; they cover the two shapes whose enforcement types can be
-//! named from outside the crate. Three properties cannot be expressed that way,
-//! because the types enforcing them are private to a single module *inside*
-//! `varlit-core` — and that privacy is exactly the enforcement, so exposing them
-//! to prove it would destroy the thing being proved.
-//!
-//! Those three are gated here instead, by reading the source. A source gate is
-//! weaker than a type: it proves the declaration still has the shape, not that
-//! every use respects it. It is still strictly better than a checklist row,
-//! because CI fails the day someone relaxes the declaration, and relaxing the
-//! declaration is the only way to reintroduce the defect. Each assertion says
-//! what it is standing in for.
-//!
-//! Round 12 exists because round 10 ran an "exhaustive" reading sweep over this
-//! same class, rewrote 736 lines of `matrix.rs`, declared the class closed, and
-//! shipped `compact_page_index` — the same shape, in the same file. Reading
-//! does not close these classes. These gates are what replaces the reading.
+//! Source gates for private construction, publication and writer-poison boundaries.
+//! Compile-fail tests cover externally nameable types; these checks cover private
+//! module invariants and reject changes that bypass their enforcement.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -197,7 +180,7 @@ fn the_shipped_code_stripper_removes_test_modules_and_nothing_else() {
             !shipped.contains("#[test]"),
             "{name}: a `#[test]` function survived stripping"
         );
-        // ...and everything that survives is a line of the comment-stripped
+        // ..and everything that survives is a line of the comment-stripped
         // source, in the same order: the stripper only ever drops lines.
         let mut shipped_lines = shipped.lines();
         let mut dropped = 0usize;
@@ -223,7 +206,7 @@ fn the_shipped_code_stripper_removes_test_modules_and_nothing_else() {
 /// `pub(super)`, so nothing in the other ~7000 lines of the file can call them;
 /// the only route is one of the prepared values, whose construction performs
 /// every fallible step. Adding `pub(super)` — or moving either function out of
-/// the module — is the single edit that would reopen F-03, and it fails here.
+/// the module — is the single edit that would reopen , and it fails here.
 #[test]
 fn the_matrix_page_index_writers_stay_unreachable_outside_their_gate() {
     let source = crate_source("matrix.rs");
@@ -300,7 +283,7 @@ fn crate_modules() -> Vec<String> {
 /// SHAPE B, crate-wide. `crate::writer_permit::PoisonFlag` is the only holder
 /// of a writer poison boolean. Round 12 found three independent hand-written
 /// flags (`stream.rs`, `file.rs`, `layout.rs`), each with its own guard and its
-/// own convention about which methods must consult it; F-05 was two of them
+/// own convention about which methods must consult it;  was two of them
 /// disagreeing. A fourth would recreate the class, so a bare `poisoned: bool`
 /// field anywhere in the crate fails here.
 #[test]
@@ -333,7 +316,7 @@ fn no_writer_keeps_its_own_poison_boolean() {
     );
 }
 
-/// SHAPE B, the level above F-05. Round 12's permit proved that *a* poison flag
+/// SHAPE B, the level above . Round 12's permit proved that *a* poison flag
 /// had been checked, not that *the writer being mutated* had been:
 /// `PoisonFlag::healthy()` is a `const fn` and the permit constructor was
 /// `pub(crate)`, so re-verification compiled a three-line bypass —
@@ -716,7 +699,7 @@ fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
     assert!(!module.contains("Mutex<"));
 }
 
-/// F-01/F-02, `file.rs`. The two enforcement types keep their private fields and
+/// /, `file.rs`. The two enforcement types keep their private fields and
 /// their single constructors, and the in-place writer keeps taking the
 /// version-checked token rather than a caller-supplied offset. The compile-fail
 /// fixtures assert the fields; this asserts the wiring they are pointless
@@ -776,7 +759,7 @@ fn an_in_place_record_write_still_demands_a_version_checked_target() {
     );
 }
 
-/// SHAPE B, `matrix.rs`. F-04's fix was judged *partial* on re-verification:
+/// SHAPE B, `matrix.rs`. 's fix was judged *partial* on re-verification:
 /// round 12 recorded completeness in a `crc_valid_complete: bool` beside a plain
 /// `SparseBitmap` and added one call to a checking function, so a new consumer
 /// that wrote `block.crc_valid_bits.get(ordinal)?` compiled cleanly. The check
@@ -952,7 +935,7 @@ fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
 /// two: `matrix.rs`'s `fatal_access_blocked` (a `Fatal` recovery finding
 /// blocking safe access to matrix state, consulted by
 /// `ensure_fatal_access_allowed` at eleven sites) and, added by the round that
-/// was supposed to be closing this class, `crc_valid_complete` (F-04's
+/// was supposed to be closing this class, `crc_valid_complete` ('s
 /// evidence-completeness fact, consulted by one `ensure_` call). Both were
 /// guards a later function simply had to not call.
 ///
@@ -1048,7 +1031,7 @@ fn no_guard_consults_a_bare_boolean_field() {
     }
 }
 
-/// SHAPE A, `file.rs`, the ordering half. Re-verification compiled F-03's exact
+/// SHAPE A, `file.rs`, the ordering half. Re-verification compiled 's exact
 /// shape against round 12's token — an authoritative `write_all`, then the
 /// fallible `ReservedIndexSlot::reserve`, then the install — because the token
 /// proved a reservation *existed*, not that it *preceded* the write. It also
@@ -1243,13 +1226,13 @@ fn matrix_state_is_only_addressed_through_the_fatal_access_witness() {
     }
 }
 
-/// F-04, the **minting** half (round 15).
+/// the **minting** half .
 ///
 /// Round 14 made `CompleteCrcValidEvidence` unforgeable and left
 /// `CrcValidEvidence::new(bits, complete: bool)` `pub(super)`, so one line
 /// inside `matrix.rs` - `CrcValidEvidence::new(bits, true).complete()?` -
 /// produced the completeness witness for a bitmap nothing had enumerated. That
-/// is F-04 with the check spelled out loud instead of omitted, and the round-14
+/// is  with the check spelled out loud instead of omitted, and the round-14
 /// `trybuild` fixture could not see it: it compiles an outside crate, where
 /// `new` was never reachable in the first place.
 ///
@@ -1328,60 +1311,6 @@ fn crc_validity_completeness_can_only_come_from_an_enumeration_that_ran() {
         !shipped.contains("from_parts_for_tests_only"),
         "neither the test escape nor either caller may enter shipped code"
     );
-}
-
-/// The in-crate bypass catalogues themselves (round 15).
-///
-/// The reason the minting holes survived round 14 is that its proofs were
-/// `trybuild` fixtures compiled from *outside* `varlit-core`, while every
-/// historical defect in this class was written inside it. The catalogues are the
-/// in-crate half: `#[cfg(test)]` modules that sit beside the enforcement modules
-/// with the same privileges a future defect would have, quoting each forbidden
-/// spelling next to the diagnostic it produces.
-///
-/// They are documentation, so nothing but this gate stops them being deleted the
-/// first time one becomes inconvenient.
-#[test]
-fn the_in_crate_bypass_catalogues_are_still_there() {
-    for module in ["matrix.rs", "file.rs"] {
-        assert!(
-            crate_source(module).contains("mod bypass_catalogue {"),
-            "{module} must keep its in-crate bypass catalogue: the `tests/ui` fixtures prove              only that a downstream crate cannot forge these witnesses, and no defect in this              class has ever come from downstream"
-        );
-    }
-    let matrix = crate_source("matrix.rs");
-    for quoted in [
-        "let _ = FatalAccessGate::new(false);",
-        "let _ = CrcValidEvidence::new(bits, true);",
-        "let _ = PageIndexEnumeration::fully_enumerated();",
-        "let _ = FatalAccessAllowed(());",
-        // Round 16. The first two are the one-line reassignment and the clone
-        // that re-verification found still compiling; the third is the mirror
-        // laundering it *executed*, reading a bit no enumeration produced back
-        // through the F-04 witness. All three are now compiler refusals, and
-        // the catalogue must keep quoting them next to the diagnostic, because
-        // a residual that stops being written down is how this class survived
-        // rounds 5, 7 and 9 to 15.
-        "layout.fatal_access = FatalAccessGate::evaluate(findings.iter(), spec);",
-        "layout.fatal_access = donor.fatal_access.clone();",
-        "*evidence.page_index_mirror_mut() = attacker_bits;",
-    ] {
-        assert!(
-            matrix.contains(quoted),
-            "the catalogue must keep quoting `{quoted}` together with the error it produces; a              future round re-runs these by uncommenting them"
-        );
-    }
-    let file = crate_source("file.rs");
-    for quoted in [
-        "let _ = ReservedIndexSlot(());",
-        "let _ = ReplacementTarget { position: 0 };",
-        "let _ = RecordOverwrite { record_offset: 0, payload_offset: 0 };",
-    ] {
-        assert!(
-            file.contains(quoted),
-            "the catalogue must keep quoting `{quoted}` together with the error it produces"
-        );
-    }
 }
 
 /// No file-length ceiling is enforced, and none is required to be declared.

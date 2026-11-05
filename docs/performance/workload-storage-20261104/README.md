@@ -6,6 +6,57 @@ The former individual-Frame million-item fixture is withdrawn as a representativ
 
 [Current integrated dashboard](index.html) · [Current integrated data and operation ratios](current-comparison.json) · [Grouping manual](../../scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size) · [Runnable harness](../../../tools/storage-bench/README.md)
 
+## Maintenance before/after comparison
+
+The [maintenance qualification](../maintenance-20261106/README.md) compares the
+0.13.0 cleanup with `9343ea1`, using matched release builds, unchanged budgets,
+complete concurrent reader/query work and separate resource probes. Five-round
+primary observations and fixed 30-round calibration are kept as separate cohorts.
+The rejected Rust-module split and its 16–22% regression remain in the evidence.
+
+| Workload | n | Completion change | CPU change |
+| --- | ---: | ---: | ---: |
+| 128 MiB, 1 producer / 1 reader, 1 MiB blocks | 5 | -2.74% | -3.89% |
+| 128 MiB, 1 producer / 8 readers, 64 KiB blocks | 30 | -0.48% | +1.86% |
+| 1 GiB, 4 producers / 8 readers, 1 MiB blocks | 30 | -1.46% | -1.19% |
+| 1 GiB, 4 producers / 8 readers, 64 KiB blocks | 5 | -7.35% | -6.78% |
+| 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
+| 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
+
+## Maintenance before/after comparison
+
+The [maintenance qualification](../maintenance-20261106/README.md) compares the
+0.13.0 cleanup with `9343ea1`, using matched release builds, unchanged budgets,
+complete concurrent reader/query work and separate resource probes. Five-round
+primary observations and fixed 30-round calibration are kept as separate cohorts.
+The rejected Rust-module split and its 16–22% regression remain in the evidence.
+
+| Workload | n | Completion change | CPU change |
+| --- | ---: | ---: | ---: |
+| 128 MiB, 1 producer / 1 reader, 1 MiB blocks | 5 | -2.74% | -3.89% |
+| 128 MiB, 1 producer / 8 readers, 64 KiB blocks | 30 | -0.48% | +1.86% |
+| 1 GiB, 4 producers / 8 readers, 1 MiB blocks | 30 | -1.46% | -1.19% |
+| 1 GiB, 4 producers / 8 readers, 64 KiB blocks | 5 | -7.35% | -6.78% |
+| 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
+| 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
+
+## Maintenance before/after comparison
+
+The [maintenance qualification](../maintenance-20261106/README.md) compares the
+0.13.0 cleanup with `9343ea1`, using matched release builds, unchanged budgets,
+complete concurrent reader/query work and separate resource probes. Five-round
+primary observations and fixed 30-round calibration are kept as separate cohorts.
+The rejected Rust-module split and its 16–22% regression remain in the evidence.
+
+| Workload | n | Completion change | CPU change |
+| --- | ---: | ---: | ---: |
+| 128 MiB, 1 producer / 1 reader, 1 MiB blocks | 5 | -2.74% | -3.89% |
+| 128 MiB, 1 producer / 8 readers, 64 KiB blocks | 30 | -0.48% | +1.86% |
+| 1 GiB, 4 producers / 8 readers, 1 MiB blocks | 30 | -1.46% | -1.19% |
+| 1 GiB, 4 producers / 8 readers, 64 KiB blocks | 5 | -7.35% | -6.78% |
+| 128 MiB native views, 64 KiB blocks | 5 | +2.01% | +2.89% |
+| 128 MiB immutable mmap, 64 KiB blocks | 5 | +2.23% | +3.75% |
+
 ## Independent read-check modes: added comparison
 
 The same report now includes [69 before/after/read-mode configurations](../read-validation-20261104/README.md) (207 timing observations, 69 separate resource probes, 48 publication gates), plus separately retained payload API, writer-only, range and memory diagnostics. Select **Independent read checks** in the dashboard. These medians form a separate cohort and do not replace or pool the cross-engine observations below.
@@ -179,12 +230,12 @@ The integrated dashboard shows corrected grouped results alongside the still-app
 
 Varlit/HDF5 use bounded MPSC with one writer and one/four producers. SQLite uses independent writer connections with FULLMUTEX but one active write transaction per database. Eight-reader cases use independent processes, including HDF5 SWMR. Writer ingestion never waits for per-publication reader acknowledgments. HDF5 application publication, Varlit CRC/checkpoint and SQLite WAL/FULL retain their different integrity/recovery contracts.
 
-Write-phase time includes initialization, ingest, maintenance and final close/checkpoint work. Complete includes reader startup/drain; counters overlap and must not be added. CPU is kernel user+system including waited-for reader processes. Detailed [corrected methods and evidence](../grouped-storage-20261104/README.md), [per-operation data](current-comparison.json), [resource CSV](../grouped-storage-20261104/metrics.csv) and [local validation](../grouped-storage-20261104/validation.json) are part of this same comparison.
+Write-phase time includes initialization, ingest, maintenance and final close/checkpoint work. Complete includes reader startup/drain; counters overlap and must not be added. CPU is kernel user+system including waited-for reader processes. Detailed [corrected methods and evidence](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md), [per-operation data](current-comparison.json), [resource CSV](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/metrics.csv) and [local validation](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/validation.json) are part of this same comparison.
 
-No production Rust, public API or existing library file format was changed by the benchmark correction. This comparison does not replace the separate [main-versus-PR regression matrix](../../verification/full-performance-20261104/README.md). No merge or release is performed.
+No production Rust, public API or existing library file format was changed by the benchmark correction. This comparison does not replace the separate [main-versus-PR regression matrix](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/verification/full-performance-20261104/README.md). No merge or release is performed.
 
 ## Historical diagnostics and original evidence
 
 The old individual-Frame tables and conclusions are removed from this report's representative results. For audit/reproduction only, the [original frozen report](https://github.com/shim9610/varlit/blob/1e770ce3a73d2f317e32f34d250bc44cd9c4a421/docs/performance/workload-storage-20261104/README.md), [original raw cohort JSON](comparison.json), [original operation-ratio export](operations.md), [original resource export](resources.csv), [evidence manifest](evidence-manifest.json) and [evidence archive](evidence.tar.gz) retain the observations and failure history. Those raw exports are historical, not the current representative view.
 
-The corrected cohort's [measurement appendix](../grouped-storage-20261104/README.md) retains the before/after controls and rejected/interrupted candidates, including HDF5 header-chunk/cache geometry correction. Both archives preserve failures instead of rewriting them into successful measurements.
+The corrected cohort's [measurement appendix](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md) retains the before/after controls and rejected/interrupted candidates, including HDF5 header-chunk/cache geometry correction. Both archives preserve failures instead of rewriting them into successful measurements.

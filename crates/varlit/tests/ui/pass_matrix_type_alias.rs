@@ -1,4 +1,4 @@
-//! F-10: a matrix field spelled as a type ALIAS of a supported scalar must
+//! a matrix field spelled as a type ALIAS of a supported scalar must
 //! compile.
 //!
 //! Matrix field eligibility is decided by the generated `SLOT_STRIDE`, which

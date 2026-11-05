@@ -1,0 +1,2717 @@
+{
+  "baseline": "9343ea1754947d3af8e03dfa525d6ba5af856008",
+  "candidate_source_files_sha256": {
+    "crates/varlit/src/lib.rs": "7069104cf39b01df5f0f03ad226a227be122f63f98e63ddd16ef360b3c9ae665",
+    "crates/varlit-core/src/adapter.rs": "3edc3546d10de0dcffd13ace19fc0ca8c8c90b6167644ce101e4ad1fa306179e",
+    "crates/varlit-core/src/bitmap_directory.rs": "8daab78a09e7e85764caa42baa26a8c8a168d6e6b295a4f32cf9e85109bc41e1",
+    "crates/varlit-core/src/chunks.rs": "f15498f8f2274713d337224b5e75a40087fc5f35f53323a8dc7916e0fc54445b",
+    "crates/varlit-core/src/codec.rs": "76dfcbb9da5cd383e7346e470d18ddcd8d7ec5603584544a3b85df70dd154636",
+    "crates/varlit-core/src/collections.rs": "b50775e18c396d78409af4ad60e2338c166d1a274fbbdaaa6ccfbd41a7c6ac19",
+    "crates/varlit-core/src/compression_buffers.rs": "3d686212f983d5d528872182ac0ac6fea9025e07e4733789faacecc2654ba17e",
+    "crates/varlit-core/src/compression_steps.rs": "80160daf666414f2f8d9ea2ab10fa22d81f39d3b49f34688fd034799770b564e",
+    "crates/varlit-core/src/diagnostics.rs": "c4b559d726e8333dc7214ca4cde41a00487bb5305a734696f7524c52c75a6c8e",
+    "crates/varlit-core/src/disk_index/oracle.rs": "e5ded8d184314e73da3039226859304c25e0369ae043bbabf91917b712b36b92",
+    "crates/varlit-core/src/disk_index/publication_proofs.rs": "b5a6a129ba12b7b62eb1d07e66d7eff256ccec6ddd8f85c0bf102ab62d135253",
+    "crates/varlit-core/src/disk_index/slots.rs": "19499a041b2a94a8ab095e3772c3e499a9e412e6e86e5acfa9837aaf420342c3",
+    "crates/varlit-core/src/disk_index/storage/failure_tests.rs": "9f3df43823151f9eed54f02e4c4ec0fb4eac50fd7e168b90537b703b13825503",
+    "crates/varlit-core/src/disk_index/storage.rs": "50847bfc05e54f3473759290854144babe865237b56cebb3dd1c64f00f0293d0",
+    "crates/varlit-core/src/disk_index/tree.rs": "6c9bf125c718fb1297a4165c40115ffb884f98bbebb4062ed044c54e32fb61d8",
+    "crates/varlit-core/src/disk_index.rs": "fee1583ccc72b6c803444abe38a77fc62afd9c319f3bab2188d26014b3c6b392",
+    "crates/varlit-core/src/error.rs": "779c1fa8ba414e37445eb3a5c27649a85637b4cfcca6cd79c4e2fd0433dc3e00",
+    "crates/varlit-core/src/experimental_matrix.rs": "133189ca7db3356f94c9ba9d5bdcb36c701563500594be0a5a41fe0a8aed3fde",
+    "crates/varlit-core/src/external_merge.rs": "cdd9c11ba54a8b344339ebe8a8e3abc5cd980c431c7b209682a1fc3055dadb8a",
+    "crates/varlit-core/src/fallible/memory_proofs.rs": "bd9bdd66d5725f7f5dab5cbfd40d191c13d87a35d7e36c47445f7d198a3eef41",
+    "crates/varlit-core/src/fallible/proofs.rs": "8a4b029f001e53cae62e98cbad1242288a316bf3d26993e6f2b4d04adeff86d0",
+    "crates/varlit-core/src/fallible.rs": "382280e6b123060cdf0330d23569087c72f2a33f0aacbfb59f704533fc887112",
+    "crates/varlit-core/src/file/append.rs": "e0f0ac395673b457efa8cc463269df15ffeb49b82ece5e5f719d77cbd5dde122",
+    "crates/varlit-core/src/file/directory.rs": "d331d172a1f4ae33c4e4c3a1be2dc86dac747fcc9d5413a2ccc547faa14cafc2",
+    "crates/varlit-core/src/file/follow.rs": "0ffee563be0a1f5dd8b3591796d256d3cab2c985e189da666c64e499374dcc3d",
+    "crates/varlit-core/src/file/header_codec.rs": "05839c2e27445c920491f502fd0b18a4385e1a9c688bd4bde996cc7507443c5c",
+    "crates/varlit-core/src/file/header_slots.rs": "f9456579d8091a97c1a8071528bf1a16481bd81fa938c84e47a5d4f1e8b31af2",
+    "crates/varlit-core/src/file/lifecycle.rs": "31ba51643ba360ecba1c4967404da70f3b5966f1f7e31d29e6dbc448320a5214",
+    "crates/varlit-core/src/file/locks.rs": "ab1ab3fc47dc1a6d0bcdd7fa877690204f948c97340e94918e18a4102c7358b6",
+    "crates/varlit-core/src/file/mapped_access.rs": "dff3945a63af265f8e5e9f94615deeb873b7abad28484d7c970dfbd252f796ae",
+    "crates/varlit-core/src/file/matrix_access.rs": "2a0cdc3c88d98f39ee8241e8a27bf06c2b5cef838fd5935dd9525d680cc61d9a",
+    "crates/varlit-core/src/file/mmap_views.rs": "76516449e654c56e19a7baebd2e77f82016f4c1b9b48d51fa051632ffd8eea0f",
+    "crates/varlit-core/src/file/mutation.rs": "5c93d39d05192bb069c43a0a4924e8ece84ce2b718c47c171d9198b612311387",
+    "crates/varlit-core/src/file/publication.rs": "a7b72690cf9847e430a9181c7a933d9aba3547d275f2354c240665000a883513",
+    "crates/varlit-core/src/file/record_file.rs": "8c48a3d51d616814c533564cd541a24078b11db41af78b82fbad76312ee407e0",
+    "crates/varlit-core/src/file/replacement_target.rs": "1e4f36b206148aef7b7c5b13bed664ba93741b8735091c77d35aa49e40c7c486",
+    "crates/varlit-core/src/file/scan.rs": "b28673ff57dfd0a825fa7e27d747e8ea4e7a90168de779c08f13d9e849289bb7",
+    "crates/varlit-core/src/file/tests.rs": "6fbffbb5b6f22d14e48f6e8a00f7e334a1a55e9fe3bc27f3a725b2a81a417e3b",
+    "crates/varlit-core/src/file/validation_tests.rs": "fdaa27cc2c945a189d023e0f6f82e854860a63cb5e441930a26f6def2cec72d5",
+    "crates/varlit-core/src/file.rs": "1f10fc841a0b4c9fd4f40cba4d15afb7f72b2573570d3ee53a2b8a7e13c5da09",
+    "crates/varlit-core/src/format.rs": "af085fc0b1e4f8494e88717d98adec110c44985e0dfcbe65edd4da58dfd64b44",
+    "crates/varlit-core/src/immediate.rs": "6d43638167253bda45f4f8ba1d09c1a41791424d1b23c25c1fee28130b59539f",
+    "crates/varlit-core/src/indexed.rs": "894e1cac86e7e97385767b6f135bd1cbf8b1af7f2278759ee02161f45ad29fa2",
+    "crates/varlit-core/src/layout.rs": "fd147ab99d2c89d4cb1add603adf7c28aa2be8ab8d63efb232285c590f3cb713",
+    "crates/varlit-core/src/lib.rs": "4319c311cabffe537364a00c000fc84ef5d3ed590ca2bf04196df0d5a5b3c593",
+    "crates/varlit-core/src/matrix/crc_valid_evidence.rs": "eaf0ad042ab20a22728ad270bc79c7e15aee43e0474f147134a06d5739133212",
+    "crates/varlit-core/src/matrix/fatal_access.rs": "051fd65d7f924b88cac72a2915c5e9f2abf60ffef617c04284099468829a7fdb",
+    "crates/varlit-core/src/matrix/page_index.rs": "c0fc147f090d26975ea8e1bf1320ba3c2d65e6714d10967673426a428e24d04f",
+    "crates/varlit-core/src/matrix/page_index_enumeration.rs": "0f3829241d9a224e32cf59db3a54a414779985e789a3918f6feaa30440d130ac",
+    "crates/varlit-core/src/matrix/region_reader.rs": "f9bf2c3d8053a9e0114d41c27738f8af6c9ad0a1274c5728d4af633ba6677c01",
+    "crates/varlit-core/src/matrix/sparse.rs": "8154f05ba0a873de077ab3c9d9b53479be2faa9b2eaac22726acb6454f87b823",
+    "crates/varlit-core/src/matrix.rs": "e4987062acb5e24ec148781760c43e749e7a7f17987e2d12aa51009f1dc79b58",
+    "crates/varlit-core/src/matrix_bulk.rs": "26e378b5e2892425b73641e2c73a634406674e2c5d078c2c4a010750904d0d82",
+    "crates/varlit-core/src/matrix_directory.rs": "cd1a5170dcb3750ec682318a03e93f611be7ec802d3978f2c6feed032af6128a",
+    "crates/varlit-core/src/matrix_follow.rs": "e99204d8d78379f78a9d1e76c2d8e246086cfefd82160437f9ed3875cdf058d7",
+    "crates/varlit-core/src/matrix_generation.rs": "7720b3dbabcfa0633e82de024a7a54fadf55f91d6237d017a31d65f46f5c16cb",
+    "crates/varlit-core/src/merge.rs": "bec26bdb6b918fb7b557f864e1919b38eb086c1dee04587c7bb5e121cac60d87",
+    "crates/varlit-core/src/native_directory.rs": "b9c5c9482c0d2ea580bb23574158e94f6e2375d53c6b921c3bdff3180d8ef0a8",
+    "crates/varlit-core/src/native_layout.rs": "9ec49290d0f754163c517f4ea422add2ba216767be9235a9e2fb5d2d46038d70",
+    "crates/varlit-core/src/native_rewrite.rs": "8d724387803e79720e90ccb4460714f27574c38876e1488f78283feb32ad1b89",
+    "crates/varlit-core/src/native_scan.rs": "39d48e66461b5e9dca0165e1c536f9d528eef4e71aa7a3434eafad0f2b137b31",
+    "crates/varlit-core/src/packed_rows.rs": "3de4770e4963250d50272cdc47b3bb660e1640aca8126ad7e21b9654567da5d6",
+    "crates/varlit-core/src/pib_probe.rs": "083f388585907992929d9d1821051402baefb61e7fdee1402510809b36855ae1",
+    "crates/varlit-core/src/publication_protocol/proofs.rs": "dfcf3c441e0d27a86e036ec67673b50b64a1b94f121c79ecdb540325f5434aa9",
+    "crates/varlit-core/src/publication_protocol.rs": "9e0652073c2546688d6d18d85621f5bd45b56f3c280dd618b285a28a47b981e0",
+    "crates/varlit-core/src/scalable_extent.rs": "b043b9f262d72c0c8a892c2581e82ab1e6c612495e1421d9ac26ee695c541e8b",
+    "crates/varlit-core/src/scalable_fault.rs": "a1caf6a5fde2cd1ef4ec701aa97d430402126b04487cdf249ea29eec10acb320",
+    "crates/varlit-core/src/scan_control.rs": "c1a872e97539a3e5ad6624654e2a27204f3365b9b8ad57cacf6c5076b86ec698",
+    "crates/varlit-core/src/snapshot.rs": "3ceb1a407d62de0faf2352bbf6aafc0687c8a4b46a7269fa2bd19ab4c800b689",
+    "crates/varlit-core/src/spill_file.rs": "b32e2968fc89f87ad81b4e175185c999e3df67df09495d8da63748206c623d39",
+    "crates/varlit-core/src/spill_rows.rs": "9dd015fe0f42547a869e15e269097a2c94e5c4df690c0d779359946b96de76ff",
+    "crates/varlit-core/src/stream.rs": "feadb22908149a9d31cdff9d8d3d7bf5683bb713c51df886c58c046b7ae0e584",
+    "crates/varlit-core/src/traits.rs": "85664e90f74ae1f77e9a5c4d03f72a1228fa546cd6a41fabad8fb65209af243a",
+    "crates/varlit-core/src/verification/buffered_row.rs": "caf588f2cb7dc6ef114d8df69d46f3534fd63b5191ca48ac9761397664123281",
+    "crates/varlit-core/src/verification/chunks.rs": "58af64cd2d19583e8e01bda4cb445040ee05a9adebe0f3d0f8060b39bad2c724",
+    "crates/varlit-core/src/verification/compression.rs": "9ecd085ae977848b70152d04fc9229a795fef6d396b60cb32ec02971fcaa239d",
+    "crates/varlit-core/src/verification/decoder.rs": "d97082d45842bf6bbf382c95ed1fed94e97066999ea3f602cf39a8695fed0891",
+    "crates/varlit-core/src/verification/materialization.rs": "c119fa759737a24ad371098545b76d2de24b4a71b98104bff3362bced883860f",
+    "crates/varlit-core/src/verification/record_extent.rs": "dff7ee12769d76b077a0bad8373580f32955dbb74c51ec1e038357d6f9cec5a0",
+    "crates/varlit-core/src/verification/spill.rs": "d44cd156845dcc851d789fc82a649151f34d6bfb1277ef763b6eaae0ce3199b4",
+    "crates/varlit-core/src/verification/traversal.rs": "dc6ba34353a56bef050067317423e54d9a4352a69571b7ddee8b536cb85c89e3",
+    "crates/varlit-core/src/verification/uniform_prefix.rs": "7f1b9274f0eaa0c822bc7e19bddec6eb666998affbcff9634cb524f91fe6493a",
+    "crates/varlit-core/src/writer_permit.rs": "ac61cac3aa8991d39d2f5853e5e86285f0c2eb097706b0887b75b877283ad5b4",
+    "crates/varlit-macros/src/finite_key.rs": "88d8892d04627118ff6bf9c9411c9838ebf7775572b9c16b3eb237182e506400",
+    "crates/varlit-macros/src/lib.rs": "5ccf5d38598abc6c14f58b1efd11d05afc5fb9bcef1989e31b23960fe0d57f31",
+    "crates/varlit-macros/src/modules/block_derive.rs": "8a2c37e302942b183de86c6f02501852cdd0b3f873be32741087ad2efcf245fb",
+    "crates/varlit-macros/src/modules/format_emit.rs": "d52827e2b1899d14da266fdd8c85ac777d3f420ffd1330956accbf3362609fba",
+    "crates/varlit-macros/src/modules/format_parse.rs": "dea4407fbd4024b21e639b54b6f0d89e352077cf41355636fdcd77e2bcc73d28"
+  },
+  "qualification": "Observed medians; no universal performance guarantee. Candidate unchanged between primary and fixed 30-round calibration. Cohorts are not pooled.",
+  "final": [
+    {
+      "profile": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+      "timings": {
+        "referenceA": {
+          "wall": 0.227829335,
+          "cpu": 0.306732,
+          "file": 134471680,
+          "reader_active": null
+        },
+        "referenceB": {
+          "wall": 0.225552283,
+          "cpu": 0.306912,
+          "file": 134471680,
+          "reader_active": null
+        },
+        "candidate": {
+          "wall": 0.221581735,
+          "cpu": 0.294793,
+          "file": 134471680,
+          "reader_active": null
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 16056971264,
+          "cgroup_memory_file": 14927462400,
+          "cgroup_memory_anon": 135208960,
+          "sampled_processes": 3,
+          "rss_sum": 96780288,
+          "pss_sum": 89422848,
+          "visible_logical": 134465304,
+          "visible_allocated": 134475776,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 16058859520,
+          "cgroup_memory_file": 14927462400,
+          "cgroup_memory_anon": 135208960,
+          "sampled_processes": 3,
+          "rss_sum": 97857536,
+          "pss_sum": 90389504,
+          "visible_logical": 134465304,
+          "visible_allocated": 134475776,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 16057479168,
+          "cgroup_memory_file": 14927462400,
+          "cgroup_memory_anon": 135208960,
+          "sampled_processes": 3,
+          "rss_sum": 96923648,
+          "pss_sum": 89466880,
+          "visible_logical": 134465303,
+          "visible_allocated": 134475776,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": -0.027422280805059596,
+        "cpu": -0.038923229398954096
+      },
+      "identical_reference_change": {
+        "wall": -0.009994551404014729,
+        "cpu": 0.0005868315011150482
+      },
+      "cohort": "5-round primary",
+      "additional": {
+        "referenceA": {
+          "n": 5,
+          "wait4_rss_mib": 80.70703125,
+          "full_writer_s": 0.139071571,
+          "reader_active_s": 0.171828054
+        },
+        "referenceB": {
+          "n": 5,
+          "wait4_rss_mib": 80.71484375,
+          "full_writer_s": 0.147536848,
+          "reader_active_s": 0.174320125
+        },
+        "candidate": {
+          "n": 5,
+          "wait4_rss_mib": 80.75390625,
+          "full_writer_s": 0.14945812000000003,
+          "reader_active_s": 0.16925092200000003
+        }
+      }
+    },
+    {
+      "profile": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+      "timings": {
+        "referenceA": {
+          "wall": 0.3514590995,
+          "cpu": 1.2810955,
+          "file": 136318976.0,
+          "reader_active": null
+        },
+        "referenceB": {
+          "wall": 0.35139968,
+          "cpu": 1.305258,
+          "file": 136316928.0,
+          "reader_active": null
+        },
+        "candidate": {
+          "wall": 0.34978954949999996,
+          "cpu": 1.304866,
+          "file": 136314880.0,
+          "reader_active": null
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 16073043968,
+          "cgroup_memory_file": 15025324032,
+          "cgroup_memory_anon": 146984960,
+          "sampled_processes": 10,
+          "rss_sum": 149016576,
+          "pss_sum": 97710080,
+          "visible_logical": 136309531,
+          "visible_allocated": 136318976,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 16059854848,
+          "cgroup_memory_file": 14889029632,
+          "cgroup_memory_anon": 60903424,
+          "sampled_processes": 10,
+          "rss_sum": 148975616,
+          "pss_sum": 97517568,
+          "visible_logical": 136309531,
+          "visible_allocated": 136323072,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 16091648000,
+          "cgroup_memory_file": 14889029632,
+          "cgroup_memory_anon": 60903424,
+          "sampled_processes": 10,
+          "rss_sum": 149590016,
+          "pss_sum": 97843200,
+          "visible_logical": 136309530,
+          "visible_allocated": 136318976,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": -0.004750339377683432,
+        "cpu": 0.018554822805950222
+      },
+      "identical_reference_change": {
+        "wall": -0.00016906519160986289,
+        "cpu": 0.018860810923151394
+      },
+      "cohort": "30-round calibration",
+      "additional": {
+        "referenceA": {
+          "n": 30,
+          "wait4_rss_mib": 76.25,
+          "full_writer_s": 0.23709872699999998,
+          "reader_active_s": 0.26945082
+        },
+        "referenceB": {
+          "n": 30,
+          "wait4_rss_mib": 76.240234375,
+          "full_writer_s": 0.232540742,
+          "reader_active_s": 0.2873394405
+        },
+        "candidate": {
+          "n": 30,
+          "wait4_rss_mib": 76.2421875,
+          "full_writer_s": 0.23018940200000002,
+          "reader_active_s": 0.2862146955
+        }
+      }
+    },
+    {
+      "profile": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+      "timings": {
+        "referenceA": {
+          "wall": 3.5724313785,
+          "cpu": 13.868075,
+          "file": 1076035584.0,
+          "reader_active": null
+        },
+        "referenceB": {
+          "wall": 3.534333832,
+          "cpu": 13.794205,
+          "file": 1076035584.0,
+          "reader_active": null
+        },
+        "candidate": {
+          "wall": 3.5202116795,
+          "cpu": 13.703602,
+          "file": 1076035584.0,
+          "reader_active": null
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 17095241728,
+          "cgroup_memory_file": 15965155328,
+          "cgroup_memory_anon": 251019264,
+          "sampled_processes": 10,
+          "rss_sum": 256323584,
+          "pss_sum": 204876800,
+          "visible_logical": 1076020179,
+          "visible_allocated": 1076035584,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 17078812672,
+          "cgroup_memory_file": 15965294592,
+          "cgroup_memory_anon": 243773440,
+          "sampled_processes": 10,
+          "rss_sum": 263979008,
+          "pss_sum": 212404224,
+          "visible_logical": 1076102099,
+          "visible_allocated": 1076117504,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 17099055104,
+          "cgroup_memory_file": 15965335552,
+          "cgroup_memory_anon": 239124480,
+          "sampled_processes": 10,
+          "rss_sum": 252710912,
+          "pss_sum": 201098240,
+          "visible_logical": 1076081618,
+          "visible_allocated": 1076097024,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": -0.014617411355827392,
+        "cpu": -0.011859829139949096
+      },
+      "identical_reference_change": {
+        "wall": -0.010664318628842762,
+        "cpu": -0.00532662247644311
+      },
+      "cohort": "30-round calibration",
+      "additional": {
+        "referenceA": {
+          "n": 30,
+          "wait4_rss_mib": 146.603515625,
+          "full_writer_s": 1.878203369,
+          "reader_active_s": 3.4741755120000004
+        },
+        "referenceB": {
+          "n": 30,
+          "wait4_rss_mib": 146.6640625,
+          "full_writer_s": 1.930258628,
+          "reader_active_s": 3.4532379
+        },
+        "candidate": {
+          "n": 30,
+          "wait4_rss_mib": 146.638671875,
+          "full_writer_s": 1.8936117415,
+          "reader_active_s": 3.4158520445
+        }
+      }
+    },
+    {
+      "profile": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "timings": {
+        "referenceA": {
+          "wall": 2.808487629,
+          "cpu": 11.072669,
+          "file": 1156493312,
+          "reader_active": null
+        },
+        "referenceB": {
+          "wall": 2.705029606,
+          "cpu": 10.733973,
+          "file": 1155051520,
+          "reader_active": null
+        },
+        "candidate": {
+          "wall": 2.602108371,
+          "cpu": 10.321951,
+          "file": 1154953216,
+          "reader_active": null
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 17123753984,
+          "cgroup_memory_file": 16033259520,
+          "cgroup_memory_anon": 220643328,
+          "sampled_processes": 10,
+          "rss_sum": 228909056,
+          "pss_sum": 177216512,
+          "visible_logical": 1155687376,
+          "visible_allocated": 1155706880,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 17098219520,
+          "cgroup_memory_file": 16034009088,
+          "cgroup_memory_anon": 221949952,
+          "sampled_processes": 10,
+          "rss_sum": 226902016,
+          "pss_sum": 175265792,
+          "visible_logical": 1156330448,
+          "visible_allocated": 1156349952,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 17122070528,
+          "cgroup_memory_file": 16034148352,
+          "cgroup_memory_anon": 221188096,
+          "sampled_processes": 10,
+          "rss_sum": 226410496,
+          "pss_sum": 174415872,
+          "visible_logical": 1156379599,
+          "visible_allocated": 1156399104,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": -0.07348412571554896,
+        "cpu": -0.06779919096290143
+      },
+      "identical_reference_change": {
+        "wall": -0.03683762817101588,
+        "cpu": -0.030588469681519292
+      },
+      "cohort": "5-round primary",
+      "additional": {
+        "referenceA": {
+          "n": 5,
+          "wait4_rss_mib": 141.171875,
+          "full_writer_s": 2.576832576,
+          "reader_active_s": 2.5831997730000005
+        },
+        "referenceB": {
+          "n": 5,
+          "wait4_rss_mib": 141.3515625,
+          "full_writer_s": 2.573047758,
+          "reader_active_s": 2.6142243269999996
+        },
+        "candidate": {
+          "n": 5,
+          "wait4_rss_mib": 141.2109375,
+          "full_writer_s": 2.5327504830000005,
+          "reader_active_s": 2.41556904499999
+        }
+      }
+    },
+    {
+      "profile": "array-n134217728-g65536-native-view",
+      "timings": {
+        "referenceA": {
+          "wall": 0.288040183,
+          "cpu": 0.221379,
+          "file": 134455296
+        },
+        "referenceB": {
+          "wall": 0.275872285,
+          "cpu": 0.211007,
+          "file": 134455296
+        },
+        "candidate": {
+          "wall": 0.293838151,
+          "cpu": 0.227771,
+          "file": 134455296
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 15987843072,
+          "cgroup_memory_file": 14877847552,
+          "cgroup_memory_anon": 70569984,
+          "sampled_processes": 2,
+          "rss_sum": 25223168,
+          "pss_sum": 24076288,
+          "visible_logical": 134447678,
+          "visible_allocated": 134455296,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 15987658752,
+          "cgroup_memory_file": 14877847552,
+          "cgroup_memory_anon": 70569984,
+          "sampled_processes": 2,
+          "rss_sum": 25202688,
+          "pss_sum": 24055808,
+          "visible_logical": 134447678,
+          "visible_allocated": 134455296,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 15998337024,
+          "cgroup_memory_file": 14965657600,
+          "cgroup_memory_anon": 72060928,
+          "sampled_processes": 2,
+          "rss_sum": 25260032,
+          "pss_sum": 24113152,
+          "visible_logical": 134447755,
+          "visible_allocated": 134459392,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": 0.020129024845120247,
+        "cpu": 0.028873560726175418
+      },
+      "identical_reference_change": {
+        "wall": -0.04224375180319895,
+        "cpu": -0.046851779075702704
+      },
+      "cohort": "5-round primary",
+      "additional": {
+        "referenceA": {
+          "n": 5,
+          "wait4_rss_mib": 23.390625,
+          "full_writer_s": 0.12779037699999998,
+          "array_phases": {
+            "open_seconds": 0.00478811,
+            "scan_seconds": 0.028825484999999994,
+            "warm_scan_seconds": 0.029831658999999993,
+            "point_seconds": 0.046728688000000074,
+            "range_seconds": 0.014138295000000002
+          }
+        },
+        "referenceB": {
+          "n": 5,
+          "wait4_rss_mib": 23.296875,
+          "full_writer_s": 0.12595371000000002,
+          "array_phases": {
+            "open_seconds": 0.004739372,
+            "scan_seconds": 0.026560842999999997,
+            "warm_scan_seconds": 0.027231342999999998,
+            "point_seconds": 0.044466036999999896,
+            "range_seconds": 0.013272786
+          }
+        },
+        "candidate": {
+          "n": 5,
+          "wait4_rss_mib": 23.36328125,
+          "full_writer_s": 0.127204711,
+          "array_phases": {
+            "open_seconds": 0.005335906,
+            "scan_seconds": 0.029301729999999998,
+            "warm_scan_seconds": 0.029193339999999995,
+            "point_seconds": 0.04749246299999999,
+            "range_seconds": 0.014071089000000004
+          }
+        }
+      }
+    },
+    {
+      "profile": "array-n134217728-g65536-native-mmap",
+      "timings": {
+        "referenceA": {
+          "wall": 0.203998395,
+          "cpu": 0.138211,
+          "file": 134455296
+        },
+        "referenceB": {
+          "wall": 0.201226266,
+          "cpu": 0.134789,
+          "file": 134455296
+        },
+        "candidate": {
+          "wall": 0.208538076,
+          "cpu": 0.143388,
+          "file": 134455296
+        }
+      },
+      "resources": {
+        "referenceA": {
+          "cgroup_memory_current": 15988252672,
+          "cgroup_memory_file": 14965657600,
+          "cgroup_memory_anon": 72060928,
+          "sampled_processes": 2,
+          "rss_sum": 149159936,
+          "pss_sum": 148011008,
+          "visible_logical": 134447678,
+          "visible_allocated": 134455296,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "referenceB": {
+          "cgroup_memory_current": 15988154368,
+          "cgroup_memory_file": 14965657600,
+          "cgroup_memory_anon": 72060928,
+          "sampled_processes": 2,
+          "rss_sum": 149299200,
+          "pss_sum": 148150272,
+          "visible_logical": 134447678,
+          "visible_allocated": 134455296,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        },
+        "candidate": {
+          "cgroup_memory_current": 15988355072,
+          "cgroup_memory_file": 14965657600,
+          "cgroup_memory_anon": 72060928,
+          "sampled_processes": 2,
+          "rss_sum": 136716288,
+          "pss_sum": 135567360,
+          "visible_logical": 134447678,
+          "visible_allocated": 134455296,
+          "temporary_allocated": 0,
+          "deleted_open_allocated": 0
+        }
+      },
+      "candidate_change": {
+        "wall": 0.022253513318082563,
+        "cpu": 0.03745722120525863
+      },
+      "identical_reference_change": {
+        "wall": -0.013588974560314604,
+        "cpu": -0.024759244922618384
+      },
+      "cohort": "5-round primary",
+      "additional": {
+        "referenceA": {
+          "n": 5,
+          "wait4_rss_mib": 141.6640625,
+          "full_writer_s": 0.125923518,
+          "array_phases": {
+            "open_seconds": 0.005203935,
+            "scan_seconds": 0.017453015,
+            "warm_scan_seconds": 0.009255017,
+            "point_seconds": 0.0025866000000000088,
+            "range_seconds": 0.005191653999999998
+          }
+        },
+        "referenceB": {
+          "n": 5,
+          "wait4_rss_mib": 141.640625,
+          "full_writer_s": 0.12540147699999998,
+          "array_phases": {
+            "open_seconds": 0.004756637,
+            "scan_seconds": 0.017012624,
+            "warm_scan_seconds": 0.009799583999999998,
+            "point_seconds": 0.00273461900000001,
+            "range_seconds": 0.004917442000000002
+          }
+        },
+        "candidate": {
+          "n": 5,
+          "wait4_rss_mib": 141.6953125,
+          "full_writer_s": 0.127369237,
+          "array_phases": {
+            "open_seconds": 0.004736958,
+            "scan_seconds": 0.017617866,
+            "warm_scan_seconds": 0.009601452,
+            "point_seconds": 0.002756119000000004,
+            "range_seconds": 0.0050193899999999994
+          }
+        }
+      }
+    }
+  ],
+  "cohorts": {
+    "bench": {
+      "manifest": {
+        "baseline": "9343ea1754947d3af8e03dfa525d6ba5af856008",
+        "profiles": [
+          {
+            "name": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 128,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 1,
+              "readers": 1,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 2048,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 1,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 1024,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 16384,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "array-n134217728-g65536-native-view",
+            "kind": "array",
+            "mode": "native-view",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          },
+          {
+            "name": "array-n134217728-g65536-native-mmap",
+            "kind": "array",
+            "mode": "native-mmap",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          }
+        ],
+        "rounds": 5,
+        "labels": {
+          "referenceA": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before/arrays"
+          },
+          "referenceB": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before/arrays"
+          },
+          "candidate": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/after/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/after/arrays"
+          }
+        },
+        "sha256": {
+          "/workspace/scratch/tidy-20261106/bin/before/mixed": "3c91520c5fc796694affc505aa81f83826f629aad55d1444b1d72ca446959089",
+          "/workspace/scratch/tidy-20261106/bin/before/arrays": "10363c3f30f90ca80f547330621a7d6327ac2f9e526243251609c625026983e1",
+          "/workspace/scratch/tidy-20261106/bin/after/mixed": "21326e3da897249edc3b3c57b2845e76ff6d7ff2f3642de5f7dea86b27fc6560",
+          "/workspace/scratch/tidy-20261106/bin/after/arrays": "55d1e4ecbee48cc55cdcc6e050c601db604d144799df935f4b3d6aa54cc4ece6"
+        },
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "disk_budget_gib": 32,
+        "seed": 619303
+      },
+      "summary": [
+        {
+          "profile": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.242565031,
+              "cpu": 0.328701,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.229806739,
+              "cpu": 0.311444,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.261449645,
+              "cpu": 0.336461,
+              "file": 134471680,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15961948160,
+              "cgroup_memory_file": 14785429504,
+              "cgroup_memory_anon": 54976512,
+              "sampled_processes": 3,
+              "rss_sum": 96763904,
+              "pss_sum": 89319424,
+              "visible_logical": 134465295,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15961866240,
+              "cgroup_memory_file": 14785429504,
+              "cgroup_memory_anon": 54976512,
+              "sampled_processes": 3,
+              "rss_sum": 96948224,
+              "pss_sum": 89495552,
+              "visible_logical": 134465295,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15961735168,
+              "cgroup_memory_file": 14785429504,
+              "cgroup_memory_anon": 54976512,
+              "sampled_processes": 3,
+              "rss_sum": 96907264,
+              "pss_sum": 89439232,
+              "visible_logical": 134465294,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.07785381892083199,
+            "cpu": 0.02360808150872673
+          },
+          "identical_reference_change": {
+            "wall": -0.05259740840385185,
+            "cpu": -0.052500600850012735
+          }
+        },
+        {
+          "profile": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.378147189,
+              "cpu": 1.427794,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.376589592,
+              "cpu": 1.419705,
+              "file": 136318976,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.476108002,
+              "cpu": 1.785256,
+              "file": 136314880,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15957745664,
+              "cgroup_memory_file": 14785429504,
+              "cgroup_memory_anon": 54976512,
+              "sampled_processes": 10,
+              "rss_sum": 149422080,
+              "pss_sum": 97508352,
+              "visible_logical": 136309519,
+              "visible_allocated": 136323072,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15948230656,
+              "cgroup_memory_file": 14921904128,
+              "cgroup_memory_anon": 79323136,
+              "sampled_processes": 10,
+              "rss_sum": 149254144,
+              "pss_sum": 97491968,
+              "visible_logical": 136309519,
+              "visible_allocated": 136323072,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15953784832,
+              "cgroup_memory_file": 14785654784,
+              "cgroup_memory_anon": 71229440,
+              "sampled_processes": 10,
+              "rss_sum": 149118976,
+              "pss_sum": 97224704,
+              "visible_logical": 136309518,
+              "visible_allocated": 136323072,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.2590547169187074,
+            "cpu": 0.25035964571920033
+          },
+          "identical_reference_change": {
+            "wall": -0.004119023082305717,
+            "cpu": -0.00566538310148379
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 4.212125622,
+              "cpu": 16.201125,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 3.926213037,
+              "cpu": 15.31711,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 4.691047358,
+              "cpu": 18.49335,
+              "file": 1076035584,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16983474176,
+              "cgroup_memory_file": 15861702656,
+              "cgroup_memory_anon": 245874688,
+              "sampled_processes": 10,
+              "rss_sum": 254238720,
+              "pss_sum": 202418176,
+              "visible_logical": 1076020167,
+              "visible_allocated": 1076039680,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16970240000,
+              "cgroup_memory_file": 15861755904,
+              "cgroup_memory_anon": 250064896,
+              "sampled_processes": 10,
+              "rss_sum": 255860736,
+              "pss_sum": 203965440,
+              "visible_logical": 1076003783,
+              "visible_allocated": 1076023296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16987095040,
+              "cgroup_memory_file": 15861833728,
+              "cgroup_memory_anon": 245555200,
+              "sampled_processes": 10,
+              "rss_sum": 253964288,
+              "pss_sum": 202017792,
+              "visible_logical": 1076020166,
+              "visible_allocated": 1076039680,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.113700724759628,
+            "cpu": 0.14148554498530186
+          },
+          "identical_reference_change": {
+            "wall": -0.06787845630877531,
+            "cpu": -0.05456503792174938
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 2.938247483,
+              "cpu": 11.723752,
+              "file": 1155817472,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 2.898589916,
+              "cpu": 11.49045,
+              "file": 1156395008,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 3.535347873,
+              "cpu": 13.512861,
+              "file": 1155915776,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16998559744,
+              "cgroup_memory_file": 15904493568,
+              "cgroup_memory_anon": 221122560,
+              "sampled_processes": 10,
+              "rss_sum": 234078208,
+              "pss_sum": 182257664,
+              "visible_logical": 1156277191,
+              "visible_allocated": 1156296704,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17044172800,
+              "cgroup_memory_file": 15904493568,
+              "cgroup_memory_anon": 220934144,
+              "sampled_processes": 10,
+              "rss_sum": 226189312,
+              "pss_sum": 174326784,
+              "visible_logical": 1156248519,
+              "visible_allocated": 1156268032,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17011773440,
+              "cgroup_memory_file": 15903862784,
+              "cgroup_memory_anon": 234422272,
+              "sampled_processes": 10,
+              "rss_sum": 239419392,
+              "pss_sum": 187638784,
+              "visible_logical": 1156215750,
+              "visible_allocated": 1156235264,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.20321650693302074,
+            "cpu": 0.15260549694329928
+          },
+          "identical_reference_change": {
+            "wall": -0.013497013859264495,
+            "cpu": -0.019899943294603983
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-view",
+          "timings": {
+            "referenceA": {
+              "wall": 0.285124797,
+              "cpu": 0.227295,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.282822739,
+              "cpu": 0.225507,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.276774231,
+              "cpu": 0.21725,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15890497536,
+              "cgroup_memory_file": 15867314176,
+              "cgroup_memory_anon": 165089280,
+              "sampled_processes": 2,
+              "rss_sum": 25247744,
+              "pss_sum": 24100864,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15890636800,
+              "cgroup_memory_file": 15867314176,
+              "cgroup_memory_anon": 165089280,
+              "sampled_processes": 2,
+              "rss_sum": 25280512,
+              "pss_sum": 24133632,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15890722816,
+              "cgroup_memory_file": 14853455872,
+              "cgroup_memory_anon": 71938048,
+              "sampled_processes": 2,
+              "rss_sum": 25272320,
+              "pss_sum": 24125440,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": -0.02928740708581723,
+            "cpu": -0.04419366902043598
+          },
+          "identical_reference_change": {
+            "wall": -0.008073861074945343,
+            "cpu": -0.007866429089949167
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-mmap",
+          "timings": {
+            "referenceA": {
+              "wall": 0.19974933,
+              "cpu": 0.140251,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.211921776,
+              "cpu": 0.153346,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.214935265,
+              "cpu": 0.153474,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15891165184,
+              "cgroup_memory_file": 14853455872,
+              "cgroup_memory_anon": 71938048,
+              "sampled_processes": 2,
+              "rss_sum": 116666368,
+              "pss_sum": 115517440,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15890780160,
+              "cgroup_memory_file": 14853455872,
+              "cgroup_memory_anon": 71938048,
+              "sampled_processes": 2,
+              "rss_sum": 120233984,
+              "pss_sum": 119085056,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15891468288,
+              "cgroup_memory_file": 14853455872,
+              "cgroup_memory_anon": 71938048,
+              "sampled_processes": 2,
+              "rss_sum": 149417984,
+              "pss_sum": 148269056,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.07602496088472477,
+            "cpu": 0.09428096769363514
+          },
+          "identical_reference_change": {
+            "wall": 0.06093860740358936,
+            "cpu": 0.09336831822946023
+          }
+        }
+      ],
+      "counts": {
+        "timing": 90,
+        "resource": 18,
+        "publication": 8,
+        "errors": 0
+      }
+    },
+    "bench-samepath": {
+      "manifest": {
+        "baseline": "9343ea1754947d3af8e03dfa525d6ba5af856008",
+        "profiles": [
+          {
+            "name": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 128,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 1,
+              "readers": 1,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 2048,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 1,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 1024,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 16384,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "array-n134217728-g65536-native-view",
+            "kind": "array",
+            "mode": "native-view",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          },
+          {
+            "name": "array-n134217728-g65536-native-mmap",
+            "kind": "array",
+            "mode": "native-mmap",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          }
+        ],
+        "rounds": 5,
+        "labels": {
+          "referenceA": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "referenceB": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "candidate": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/after-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/after-samepath/arrays"
+          },
+          "archived": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before/arrays"
+          }
+        },
+        "sha256": {
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed": "2ef40d9d51ad285e16cd50353a36445bbdd0977bbebd2989a83b8b715264c20a",
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays": "59860358dc89f9f49547869e2694e54914f605e9da84da689a628e3893399bfe",
+          "/workspace/scratch/tidy-20261106/bin/after-samepath/mixed": "21326e3da897249edc3b3c57b2845e76ff6d7ff2f3642de5f7dea86b27fc6560",
+          "/workspace/scratch/tidy-20261106/bin/after-samepath/arrays": "55d1e4ecbee48cc55cdcc6e050c601db604d144799df935f4b3d6aa54cc4ece6",
+          "/workspace/scratch/tidy-20261106/bin/before/mixed": "3c91520c5fc796694affc505aa81f83826f629aad55d1444b1d72ca446959089",
+          "/workspace/scratch/tidy-20261106/bin/before/arrays": "10363c3f30f90ca80f547330621a7d6327ac2f9e526243251609c625026983e1"
+        },
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "disk_budget_gib": 32,
+        "seed": 619303
+      },
+      "summary": [
+        {
+          "profile": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.22170069,
+              "cpu": 0.304826,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.245204636,
+              "cpu": 0.325737,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.256008083,
+              "cpu": 0.336263,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "archived": {
+              "wall": 0.217988777,
+              "cpu": 0.305229,
+              "file": 134471680,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16040820736,
+              "cgroup_memory_file": 14994702336,
+              "cgroup_memory_anon": 134139904,
+              "sampled_processes": 3,
+              "rss_sum": 96960512,
+              "pss_sum": 89492480,
+              "visible_logical": 134465304,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16041234432,
+              "cgroup_memory_file": 14994702336,
+              "cgroup_memory_anon": 69095424,
+              "sampled_processes": 3,
+              "rss_sum": 96112640,
+              "pss_sum": 88579072,
+              "visible_logical": 134465304,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16041627648,
+              "cgroup_memory_file": 14994702336,
+              "cgroup_memory_anon": 69095424,
+              "sampled_processes": 3,
+              "rss_sum": 96555008,
+              "pss_sum": 89110528,
+              "visible_logical": 134465303,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 16039796736,
+              "cgroup_memory_file": 14994702336,
+              "cgroup_memory_anon": 69095424,
+              "sampled_processes": 3,
+              "rss_sum": 97026048,
+              "pss_sum": 89496576,
+              "visible_logical": 134465302,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.1547464421513527,
+            "cpu": 0.10313096651860398
+          },
+          "identical_reference_change": {
+            "wall": 0.10601656675042381,
+            "cpu": 0.0685997913563805
+          }
+        },
+        {
+          "profile": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.390862146,
+              "cpu": 1.482368,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.383158398,
+              "cpu": 1.455822,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.478138786,
+              "cpu": 1.714958,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "archived": {
+              "wall": 0.373625961,
+              "cpu": 1.367198,
+              "file": 136314880,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16055148544,
+              "cgroup_memory_file": 14994702336,
+              "cgroup_memory_anon": 69095424,
+              "sampled_processes": 10,
+              "rss_sum": 149204992,
+              "pss_sum": 97420288,
+              "visible_logical": 136309528,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16033050624,
+              "cgroup_memory_file": 14996766720,
+              "cgroup_memory_anon": 143867904,
+              "sampled_processes": 10,
+              "rss_sum": 149364736,
+              "pss_sum": 97442816,
+              "visible_logical": 136309528,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16054976512,
+              "cgroup_memory_file": 14860476416,
+              "cgroup_memory_anon": 57565184,
+              "sampled_processes": 10,
+              "rss_sum": 149110784,
+              "pss_sum": 97334272,
+              "visible_logical": 136309527,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 16020127744,
+              "cgroup_memory_file": 14860476416,
+              "cgroup_memory_anon": 57565184,
+              "sampled_processes": 10,
+              "rss_sum": 149889024,
+              "pss_sum": 98119680,
+              "visible_logical": 136309526,
+              "visible_allocated": 136323072,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.22329263883231087,
+            "cpu": 0.1569043584319143
+          },
+          "identical_reference_change": {
+            "wall": -0.019709629287047892,
+            "cpu": -0.017907833952163
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 3.958734788,
+              "cpu": 15.34422,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 4.132700529,
+              "cpu": 15.758094,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 4.622282788,
+              "cpu": 17.764886,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "archived": {
+              "wall": 4.098254066,
+              "cpu": 15.781493,
+              "file": 1076035584,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 17061703680,
+              "cgroup_memory_file": 15936598016,
+              "cgroup_memory_anon": 243871744,
+              "sampled_processes": 10,
+              "rss_sum": 256622592,
+              "pss_sum": 204715008,
+              "visible_logical": 1076020176,
+              "visible_allocated": 1076039680,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17061326848,
+              "cgroup_memory_file": 15936692224,
+              "cgroup_memory_anon": 244215808,
+              "sampled_processes": 10,
+              "rss_sum": 253427712,
+              "pss_sum": 201602048,
+              "visible_logical": 1076020176,
+              "visible_allocated": 1076035584,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17065570304,
+              "cgroup_memory_file": 15936741376,
+              "cgroup_memory_anon": 245207040,
+              "sampled_processes": 10,
+              "rss_sum": 254783488,
+              "pss_sum": 202887168,
+              "visible_logical": 1076020175,
+              "visible_allocated": 1076039680,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 17069821952,
+              "cgroup_memory_file": 15936806912,
+              "cgroup_memory_anon": 245432320,
+              "sampled_processes": 10,
+              "rss_sum": 258093056,
+              "pss_sum": 206278656,
+              "visible_logical": 1076020174,
+              "visible_allocated": 1076035584,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.16761617929329176,
+            "cpu": 0.1577575139042584
+          },
+          "identical_reference_change": {
+            "wall": 0.04394478294614168,
+            "cpu": 0.026972632039947264
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 2.902648619,
+              "cpu": 11.157027,
+              "file": 1155198976,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 2.996265008,
+              "cpu": 11.708786,
+              "file": 1155182592,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 3.487517688,
+              "cpu": 13.605782,
+              "file": 1156161536,
+              "reader_active": null
+            },
+            "archived": {
+              "wall": 3.07532144,
+              "cpu": 11.851245,
+              "file": 1156493312,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 17125343232,
+              "cgroup_memory_file": 15936806912,
+              "cgroup_memory_anon": 218140672,
+              "sampled_processes": 10,
+              "rss_sum": 227205120,
+              "pss_sum": 175192064,
+              "visible_logical": 1156772816,
+              "visible_allocated": 1156792320,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17124913152,
+              "cgroup_memory_file": 15979622400,
+              "cgroup_memory_anon": 222437376,
+              "sampled_processes": 10,
+              "rss_sum": 227069952,
+              "pss_sum": 175180800,
+              "visible_logical": 1156248528,
+              "visible_allocated": 1156268032,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17119453184,
+              "cgroup_memory_file": 16015773696,
+              "cgroup_memory_anon": 223670272,
+              "sampled_processes": 10,
+              "rss_sum": 228003840,
+              "pss_sum": 176241664,
+              "visible_logical": 1154642895,
+              "visible_allocated": 1154662400,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 17112186880,
+              "cgroup_memory_file": 16017014784,
+              "cgroup_memory_anon": 223326208,
+              "sampled_processes": 10,
+              "rss_sum": 234061824,
+              "pss_sum": 182318080,
+              "visible_logical": 1155785678,
+              "visible_allocated": 1155805184,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.20149496055829696,
+            "cpu": 0.21948096029524722
+          },
+          "identical_reference_change": {
+            "wall": 0.032252057099578346,
+            "cpu": 0.04945394503392353
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-view",
+          "timings": {
+            "referenceA": {
+              "wall": 0.275306814,
+              "cpu": 0.214998,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.283656617,
+              "cpu": 0.224224,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.28042209,
+              "cpu": 0.220629,
+              "file": 134455296
+            },
+            "archived": {
+              "wall": 0.294281692,
+              "cpu": 0.234393,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15971561472,
+              "cgroup_memory_file": 14912000000,
+              "cgroup_memory_anon": 73080832,
+              "sampled_processes": 2,
+              "rss_sum": 25260032,
+              "pss_sum": 24113152,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15971729408,
+              "cgroup_memory_file": 14912000000,
+              "cgroup_memory_anon": 73080832,
+              "sampled_processes": 2,
+              "rss_sum": 25280512,
+              "pss_sum": 24133632,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15971610624,
+              "cgroup_memory_file": 14912000000,
+              "cgroup_memory_anon": 73080832,
+              "sampled_processes": 2,
+              "rss_sum": 25341952,
+              "pss_sum": 24195072,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 15971250176,
+              "cgroup_memory_file": 14912000000,
+              "cgroup_memory_anon": 73080832,
+              "sampled_processes": 2,
+              "rss_sum": 25272320,
+              "pss_sum": 24125440,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.018580273861292795,
+            "cpu": 0.026190941311081906
+          },
+          "identical_reference_change": {
+            "wall": 0.03032908222896369,
+            "cpu": 0.04291202708862407
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-mmap",
+          "timings": {
+            "referenceA": {
+              "wall": 0.20042467,
+              "cpu": 0.14068,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.207758885,
+              "cpu": 0.14632,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.209525493,
+              "cpu": 0.146268,
+              "file": 134455296
+            },
+            "archived": {
+              "wall": 0.205979982,
+              "cpu": 0.144258,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15971303424,
+              "cgroup_memory_file": 14995779584,
+              "cgroup_memory_anon": 73080832,
+              "sampled_processes": 2,
+              "rss_sum": 70299648,
+              "pss_sum": 69150720,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15971741696,
+              "cgroup_memory_file": 14861340672,
+              "cgroup_memory_anon": 55754752,
+              "sampled_processes": 2,
+              "rss_sum": 149368832,
+              "pss_sum": 148219904,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15971618816,
+              "cgroup_memory_file": 14861340672,
+              "cgroup_memory_anon": 55754752,
+              "sampled_processes": 2,
+              "rss_sum": 116236288,
+              "pss_sum": 115087360,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "archived": {
+              "cgroup_memory_current": 15971524608,
+              "cgroup_memory_file": 14861340672,
+              "cgroup_memory_anon": 55754752,
+              "sampled_processes": 2,
+              "rss_sum": 146280448,
+              "pss_sum": 145131520,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.04540769856325566,
+            "cpu": 0.03972135342621552
+          },
+          "identical_reference_change": {
+            "wall": 0.036593374458343986,
+            "cpu": 0.04009098663633792
+          }
+        }
+      ],
+      "counts": {
+        "timing": 120,
+        "resource": 24,
+        "publication": 8,
+        "errors": 0
+      }
+    },
+    "bench-includes": {
+      "manifest": {
+        "baseline": "9343ea1754947d3af8e03dfa525d6ba5af856008",
+        "profiles": [
+          {
+            "name": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 128,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 1,
+              "readers": 1,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 2048,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 1,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 1024,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 16384,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "array-n134217728-g65536-native-view",
+            "kind": "array",
+            "mode": "native-view",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          },
+          {
+            "name": "array-n134217728-g65536-native-mmap",
+            "kind": "array",
+            "mode": "native-mmap",
+            "total": 134217728,
+            "group": 65536,
+            "page": 4096,
+            "mmap": 0,
+            "points": 4096,
+            "ranges": 128,
+            "readers": 0,
+            "warm_scan": true
+          }
+        ],
+        "rounds": 5,
+        "labels": {
+          "referenceA": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "referenceB": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "candidate": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/includes/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/includes/arrays"
+          }
+        },
+        "sha256": {
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed": "2ef40d9d51ad285e16cd50353a36445bbdd0977bbebd2989a83b8b715264c20a",
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays": "59860358dc89f9f49547869e2694e54914f605e9da84da689a628e3893399bfe",
+          "/workspace/scratch/tidy-20261106/bin/includes/mixed": "7e556335f7ea4d77a248c22c096ab6f2ca3f1f889a8dcd0c9e7c4d59d5c4677f",
+          "/workspace/scratch/tidy-20261106/bin/includes/arrays": "37975247e66ab20e740ea058ce83d71f80b79379ff136c78178f5e7af88e6529"
+        },
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "disk_budget_gib": 32,
+        "seed": 619303
+      },
+      "summary": [
+        {
+          "profile": "grouped-n1048576-g8192-t131072-w1-r1-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.227829335,
+              "cpu": 0.306732,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.225552283,
+              "cpu": 0.306912,
+              "file": 134471680,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.221581735,
+              "cpu": 0.294793,
+              "file": 134471680,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16056971264,
+              "cgroup_memory_file": 14927462400,
+              "cgroup_memory_anon": 135208960,
+              "sampled_processes": 3,
+              "rss_sum": 96780288,
+              "pss_sum": 89422848,
+              "visible_logical": 134465304,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16058859520,
+              "cgroup_memory_file": 14927462400,
+              "cgroup_memory_anon": 135208960,
+              "sampled_processes": 3,
+              "rss_sum": 97857536,
+              "pss_sum": 90389504,
+              "visible_logical": 134465304,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16057479168,
+              "cgroup_memory_file": 14927462400,
+              "cgroup_memory_anon": 135208960,
+              "sampled_processes": 3,
+              "rss_sum": 96923648,
+              "pss_sum": 89466880,
+              "visible_logical": 134465303,
+              "visible_allocated": 134475776,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": -0.027422280805059596,
+            "cpu": -0.038923229398954096
+          },
+          "identical_reference_change": {
+            "wall": -0.009994551404014729,
+            "cpu": 0.0005868315011150482
+          }
+        },
+        {
+          "profile": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.341313182,
+              "cpu": 1.295921,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.350633955,
+              "cpu": 1.317851,
+              "file": 136314880,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.358794099,
+              "cpu": 1.356105,
+              "file": 136314880,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16072867840,
+              "cgroup_memory_file": 14927462400,
+              "cgroup_memory_anon": 135208960,
+              "sampled_processes": 10,
+              "rss_sum": 149327872,
+              "pss_sum": 97827840,
+              "visible_logical": 136309528,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16054759424,
+              "cgroup_memory_file": 14927462400,
+              "cgroup_memory_anon": 135208960,
+              "sampled_processes": 10,
+              "rss_sum": 149065728,
+              "pss_sum": 97547264,
+              "visible_logical": 136309528,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16054763520,
+              "cgroup_memory_file": 15013584896,
+              "cgroup_memory_anon": 143360000,
+              "sampled_processes": 10,
+              "rss_sum": 149413888,
+              "pss_sum": 97457152,
+              "visible_logical": 136309527,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.05121664770626988,
+            "cpu": 0.04644110250547673
+          },
+          "identical_reference_change": {
+            "wall": 0.02730856436713891,
+            "cpu": 0.01692232782708203
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 3.61770483,
+              "cpu": 13.611425,
+              "file": 1076031488,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 3.582572582,
+              "cpu": 13.951413,
+              "file": 1076035584,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 3.761022465,
+              "cpu": 14.68429,
+              "file": 1076035584,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 17066352640,
+              "cgroup_memory_file": 15953379328,
+              "cgroup_memory_anon": 245788672,
+              "sampled_processes": 10,
+              "rss_sum": 266825728,
+              "pss_sum": 215202816,
+              "visible_logical": 1076040656,
+              "visible_allocated": 1076060160,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17051402240,
+              "cgroup_memory_file": 15953575936,
+              "cgroup_memory_anon": 172953600,
+              "sampled_processes": 10,
+              "rss_sum": 256221184,
+              "pss_sum": 204433408,
+              "visible_logical": 1076192208,
+              "visible_allocated": 1076211712,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17088352256,
+              "cgroup_memory_file": 15953653760,
+              "cgroup_memory_anon": 249417728,
+              "sampled_processes": 10,
+              "rss_sum": 258293760,
+              "pss_sum": 206362624,
+              "visible_logical": 1076196303,
+              "visible_allocated": 1076215808,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.03961562419673692,
+            "cpu": 0.07882091698701643
+          },
+          "identical_reference_change": {
+            "wall": -0.00971119802496434,
+            "cpu": 0.02497813417772199
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 2.808487629,
+              "cpu": 11.072669,
+              "file": 1156493312,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 2.705029606,
+              "cpu": 10.733973,
+              "file": 1155051520,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 2.602108371,
+              "cpu": 10.321951,
+              "file": 1154953216,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 17123753984,
+              "cgroup_memory_file": 16033259520,
+              "cgroup_memory_anon": 220643328,
+              "sampled_processes": 10,
+              "rss_sum": 228909056,
+              "pss_sum": 177216512,
+              "visible_logical": 1155687376,
+              "visible_allocated": 1155706880,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17098219520,
+              "cgroup_memory_file": 16034009088,
+              "cgroup_memory_anon": 221949952,
+              "sampled_processes": 10,
+              "rss_sum": 226902016,
+              "pss_sum": 175265792,
+              "visible_logical": 1156330448,
+              "visible_allocated": 1156349952,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17122070528,
+              "cgroup_memory_file": 16034148352,
+              "cgroup_memory_anon": 221188096,
+              "sampled_processes": 10,
+              "rss_sum": 226410496,
+              "pss_sum": 174415872,
+              "visible_logical": 1156379599,
+              "visible_allocated": 1156399104,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": -0.07348412571554896,
+            "cpu": -0.06779919096290143
+          },
+          "identical_reference_change": {
+            "wall": -0.03683762817101588,
+            "cpu": -0.030588469681519292
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-view",
+          "timings": {
+            "referenceA": {
+              "wall": 0.288040183,
+              "cpu": 0.221379,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.275872285,
+              "cpu": 0.211007,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.293838151,
+              "cpu": 0.227771,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15987843072,
+              "cgroup_memory_file": 14877847552,
+              "cgroup_memory_anon": 70569984,
+              "sampled_processes": 2,
+              "rss_sum": 25223168,
+              "pss_sum": 24076288,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15987658752,
+              "cgroup_memory_file": 14877847552,
+              "cgroup_memory_anon": 70569984,
+              "sampled_processes": 2,
+              "rss_sum": 25202688,
+              "pss_sum": 24055808,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15998337024,
+              "cgroup_memory_file": 14965657600,
+              "cgroup_memory_anon": 72060928,
+              "sampled_processes": 2,
+              "rss_sum": 25260032,
+              "pss_sum": 24113152,
+              "visible_logical": 134447755,
+              "visible_allocated": 134459392,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.020129024845120247,
+            "cpu": 0.028873560726175418
+          },
+          "identical_reference_change": {
+            "wall": -0.04224375180319895,
+            "cpu": -0.046851779075702704
+          }
+        },
+        {
+          "profile": "array-n134217728-g65536-native-mmap",
+          "timings": {
+            "referenceA": {
+              "wall": 0.203998395,
+              "cpu": 0.138211,
+              "file": 134455296
+            },
+            "referenceB": {
+              "wall": 0.201226266,
+              "cpu": 0.134789,
+              "file": 134455296
+            },
+            "candidate": {
+              "wall": 0.208538076,
+              "cpu": 0.143388,
+              "file": 134455296
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 15988252672,
+              "cgroup_memory_file": 14965657600,
+              "cgroup_memory_anon": 72060928,
+              "sampled_processes": 2,
+              "rss_sum": 149159936,
+              "pss_sum": 148011008,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 15988154368,
+              "cgroup_memory_file": 14965657600,
+              "cgroup_memory_anon": 72060928,
+              "sampled_processes": 2,
+              "rss_sum": 149299200,
+              "pss_sum": 148150272,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 15988355072,
+              "cgroup_memory_file": 14965657600,
+              "cgroup_memory_anon": 72060928,
+              "sampled_processes": 2,
+              "rss_sum": 136716288,
+              "pss_sum": 135567360,
+              "visible_logical": 134447678,
+              "visible_allocated": 134455296,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": 0.022253513318082563,
+            "cpu": 0.03745722120525863
+          },
+          "identical_reference_change": {
+            "wall": -0.013588974560314604,
+            "cpu": -0.024759244922618384
+          }
+        }
+      ],
+      "counts": {
+        "timing": 90,
+        "resource": 18,
+        "publication": 8,
+        "errors": 0
+      }
+    },
+    "bench-calibration": {
+      "manifest": {
+        "baseline": "9343ea1754947d3af8e03dfa525d6ba5af856008",
+        "profiles": [
+          {
+            "name": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 2048,
+              "payload": 65536,
+              "variable": false,
+              "per_tx": 256,
+              "producers": 1,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 512,
+              "telemetry": true
+            }
+          },
+          {
+            "name": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+            "kind": "mixed",
+            "engine": "varlit-indexed",
+            "config": {
+              "scenario": "mixed",
+              "records": 1024,
+              "payload": 1048576,
+              "variable": false,
+              "per_tx": 16,
+              "producers": 4,
+              "readers": 8,
+              "lookups": true,
+              "scalar": false,
+              "cache": 8388608,
+              "page": 4096,
+              "mmap": 0,
+              "fletcher": true,
+              "compact_bytes": 536870912,
+              "hdf_chunk": 0,
+              "group_items": 8192,
+              "telemetry": true
+            }
+          }
+        ],
+        "rounds": 30,
+        "labels": {
+          "referenceA": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "referenceB": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays"
+          },
+          "candidate": {
+            "mixed": "/workspace/scratch/tidy-20261106/bin/includes/mixed",
+            "arrays": "/workspace/scratch/tidy-20261106/bin/includes/arrays"
+          }
+        },
+        "sha256": {
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/mixed": "2ef40d9d51ad285e16cd50353a36445bbdd0977bbebd2989a83b8b715264c20a",
+          "/workspace/scratch/tidy-20261106/bin/before-samepath/arrays": "59860358dc89f9f49547869e2694e54914f605e9da84da689a628e3893399bfe",
+          "/workspace/scratch/tidy-20261106/bin/includes/mixed": "7e556335f7ea4d77a248c22c096ab6f2ca3f1f889a8dcd0c9e7c4d59d5c4677f",
+          "/workspace/scratch/tidy-20261106/bin/includes/arrays": "37975247e66ab20e740ea058ce83d71f80b79379ff136c78178f5e7af88e6529"
+        },
+        "cpu_max": "400000 100000",
+        "memory_max": "17179869184",
+        "disk_budget_gib": 32,
+        "seed": 9206947
+      },
+      "summary": [
+        {
+          "profile": "grouped-n1048576-g512-t131072-w1-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 0.3514590995,
+              "cpu": 1.2810955,
+              "file": 136318976.0,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 0.35139968,
+              "cpu": 1.305258,
+              "file": 136316928.0,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 0.34978954949999996,
+              "cpu": 1.304866,
+              "file": 136314880.0,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 16073043968,
+              "cgroup_memory_file": 15025324032,
+              "cgroup_memory_anon": 146984960,
+              "sampled_processes": 10,
+              "rss_sum": 149016576,
+              "pss_sum": 97710080,
+              "visible_logical": 136309531,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 16059854848,
+              "cgroup_memory_file": 14889029632,
+              "cgroup_memory_anon": 60903424,
+              "sampled_processes": 10,
+              "rss_sum": 148975616,
+              "pss_sum": 97517568,
+              "visible_logical": 136309531,
+              "visible_allocated": 136323072,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 16091648000,
+              "cgroup_memory_file": 14889029632,
+              "cgroup_memory_anon": 60903424,
+              "sampled_processes": 10,
+              "rss_sum": 149590016,
+              "pss_sum": 97843200,
+              "visible_logical": 136309530,
+              "visible_allocated": 136318976,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": -0.004750339377683432,
+            "cpu": 0.018554822805950222
+          },
+          "identical_reference_change": {
+            "wall": -0.00016906519160986289,
+            "cpu": 0.018860810923151394
+          }
+        },
+        {
+          "profile": "grouped-n8388608-g8192-t131072-w4-r8-varlit-indexed",
+          "timings": {
+            "referenceA": {
+              "wall": 3.5724313785,
+              "cpu": 13.868075,
+              "file": 1076035584.0,
+              "reader_active": null
+            },
+            "referenceB": {
+              "wall": 3.534333832,
+              "cpu": 13.794205,
+              "file": 1076035584.0,
+              "reader_active": null
+            },
+            "candidate": {
+              "wall": 3.5202116795,
+              "cpu": 13.703602,
+              "file": 1076035584.0,
+              "reader_active": null
+            }
+          },
+          "resources": {
+            "referenceA": {
+              "cgroup_memory_current": 17095241728,
+              "cgroup_memory_file": 15965155328,
+              "cgroup_memory_anon": 251019264,
+              "sampled_processes": 10,
+              "rss_sum": 256323584,
+              "pss_sum": 204876800,
+              "visible_logical": 1076020179,
+              "visible_allocated": 1076035584,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "referenceB": {
+              "cgroup_memory_current": 17078812672,
+              "cgroup_memory_file": 15965294592,
+              "cgroup_memory_anon": 243773440,
+              "sampled_processes": 10,
+              "rss_sum": 263979008,
+              "pss_sum": 212404224,
+              "visible_logical": 1076102099,
+              "visible_allocated": 1076117504,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            },
+            "candidate": {
+              "cgroup_memory_current": 17099055104,
+              "cgroup_memory_file": 15965335552,
+              "cgroup_memory_anon": 239124480,
+              "sampled_processes": 10,
+              "rss_sum": 252710912,
+              "pss_sum": 201098240,
+              "visible_logical": 1076081618,
+              "visible_allocated": 1076097024,
+              "temporary_allocated": 0,
+              "deleted_open_allocated": 0
+            }
+          },
+          "candidate_change": {
+            "wall": -0.014617411355827392,
+            "cpu": -0.011859829139949096
+          },
+          "identical_reference_change": {
+            "wall": -0.010664318628842762,
+            "cpu": -0.00532662247644311
+          }
+        }
+      ],
+      "counts": {
+        "timing": 180,
+        "resource": 6,
+        "publication": 4,
+        "errors": 0
+      }
+    }
+  },
+  "formatted_vs_timed_text_sha256": "8b6ee7e167a01d571cf85d5d7988b2cc8e300d2a782f97d87f15d3d63f927437"
+}

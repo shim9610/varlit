@@ -438,7 +438,7 @@ fn field_headers_decode_checked_lengths_while_writers_emit_zero_flags() -> varli
     Ok(())
 }
 
-/// RES-01: distinct variable field ids above the small-id mask are the one
+/// distinct variable field ids above the small-id mask are the one
 /// decoder-owned set an attacker sizes directly from the header stream, so
 /// each one must be charged to the materialization budget before the set
 /// reserves for it — like every other decoder-owned container.
@@ -515,7 +515,7 @@ fn duplicate_large_field_ids_are_rejected_without_extra_charge() {
     ));
 }
 
-/// SAFE-01. `HashMap::try_reserve(len)` allocates a real open-addressed table:
+/// `HashMap::try_reserve(len)` allocates a real open-addressed table:
 /// buckets are rounded up to a power of two at a 7/8 load factor and *every*
 /// bucket owns a control byte, so a zero-sized entry costs far more than the
 /// one byte the old preflight floor charged it. With that floor the standard
@@ -601,7 +601,7 @@ fn hash_map_budget_still_admits_honest_maps() {
 }
 
 /// The exact charge the decoder must apply to a `HashMap<(), ()>` at any
-/// declared count in the small-table classes (SAFE2-01/F-02).
+/// declared count in the small-table classes (/).
 ///
 /// 32 buckets (the modelled control-group floor) times one control byte per
 /// zero-sized entry, plus one trailing control group, plus the control-array
@@ -617,7 +617,7 @@ const ONE_BYTE_SMALL_TABLE_BYTES: u64 = 128;
 /// reports capacity 14, i.e. a 16-bucket table.
 const SMALL_TABLE_CAPACITIES: std::ops::RangeInclusive<u64> = 1..=14;
 
-/// SAFE2-01/F-02. The old model charged one entry as two buckets, so
+/// /. The old model charged one entry as two buckets, so
 /// `HashMap<(), ()>` cost 19 bytes at every count in `1..=14` while
 /// `HashMap::<(), ()>::try_reserve(1)` really allocates a 16-bucket table whose
 /// control storage alone is 32 bytes. The charge is now pinned exactly at every
@@ -738,7 +738,7 @@ fn hash_map_charges_never_fall_as_the_declared_count_rises() {
     }
 }
 
-/// API-03. `ChunkedBytes` is a documented variable-field codec, so it must
+/// `ChunkedBytes` is a documented variable-field codec, so it must
 /// declare a stable non-zero identity (the derive rejects zero) that is
 /// distinct from the `Vec<u8>` codec whose bytes it rides on. The literals are
 /// pinned so an accidental retag or format-version bump is a visible test
@@ -777,7 +777,7 @@ fn chunked_bytes_roundtrips_through_the_codec() -> varlit::Result<()> {
     Ok(())
 }
 
-/// API-03, the actual regression: a variable block with a documented
+/// the actual regression: a variable block with a documented
 /// `ChunkedBytes` field (docs/spec.md:52) must compile. `#[derive(VarlitBlock)]`
 /// rejects at compile time every field whose codec identity is zero, so before
 /// the identity above existed this declaration did not build at all.
@@ -808,7 +808,7 @@ fn chunked_bytes_is_usable_as_a_derived_variable_field() -> varlit::Result<()> {
     Ok(())
 }
 
-/// API3-04. `BTreeMap` was charged `len * size_of::<(K, V)>()`, as if entries
+/// `BTreeMap` was charged `len * size_of::<(K, V)>()`, as if entries
 /// were stored packed end to end. A std B-tree node instead allocates a
 /// fixed-capacity array of eleven entry slots whatever its fill, is only
 /// guaranteed to hold five of them, and carries a header (and, for internal

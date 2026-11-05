@@ -1,7 +1,0 @@
-{
-  "scope": "cumulative entire executor session, not an isolated benchmark",
-  "memory_events": "low 0\nhigh 0\nmax 27206\noom 0\noom_kill 0\noom_group_kill 0\n",
-  "memory_peak": "17179869184\n",
-  "memory_max": "17179869184\n",
-  "cpu_max": "400000 100000\n"
-}

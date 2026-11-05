@@ -1,4 +1,4 @@
-//! Shared indexed-handle contracts (PERF-06/PERF-07).
+//! Shared indexed-handle contracts (/).
 //!
 //! Independent in-process indexed handles must share one sidecar database per
 //! native file identity: two readers — or a reader beside a synced writer —
@@ -193,7 +193,7 @@ fn rebuild_replaces_the_sidecar_for_fresh_handles() -> Result<()> {
     // open the replacement database, not a stale shared entry for the
     // replaced file object.
     let report = rebuild_disk_index(spec, &path, options, plan)?;
-    // Three user records plus the internal creation-nonce record (STO-01).
+    // Three user records plus the internal creation-nonce record .
     assert_eq!(report.records, 4);
     let first = VarlitIndexedReader::open(spec, &path, options, plan)?;
     let second = VarlitIndexedReader::open(spec, &path, options, plan)?;
@@ -277,7 +277,7 @@ fn crc_point_lookups_verify_payloads_and_detect_corruption() -> Result<()> {
     let marker = "crc-corruption-target-payload-0123456789abcdef";
     let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
     // Push the corruption target past the primary generation witness window
-    // (STO-01): a byte flipped inside that window is a generation change and
+    // a byte flipped inside that window is a generation change and
     // is refused at open, which is a different contract from the per-record
     // checksum this test pins. Everything asserted below is unchanged.
     for key in 100..200u64 {

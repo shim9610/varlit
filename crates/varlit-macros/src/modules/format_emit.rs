@@ -114,7 +114,7 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
     });
     // Per-block schema identities folded into the computed schema hash:
     // endian override, keyedness, and the generated codec fingerprint
-    // (API2-01). `BlockDescriptor` alone does not carry these.
+    // `BlockDescriptor` alone does not carry these.
     let block_identities = blocks.iter().map(|block| {
         quote! {
             (
@@ -2769,7 +2769,7 @@ pub(super) fn high_cardinality_api_tokens(
     )
 }
 
-/// Rustdoc for a generated typed writer (P-01).
+/// Rustdoc for a generated typed writer .
 ///
 /// The resident writer is the convenient default, and for a format whose
 /// distinct key count is large it is the wrong tool. The published pages are
@@ -2825,7 +2825,7 @@ pub(super) fn generated_writer_doc(format_name: &Ident, keyed_blocks: &[&InlineB
     )
 }
 
-/// Rustdoc for the generated writer's `from_inner` (P-01).
+/// Rustdoc for the generated writer's `from_inner` .
 pub(super) fn generated_writer_construction_doc(keyed_blocks: &[&InlineBlock]) -> String {
     if keyed_blocks.is_empty() {
         return "Wraps an open `VarlitWriter`. This format declares no keyed \
@@ -2873,7 +2873,7 @@ pub(super) fn typed_api_tokens(
         .filter(|block| !block.key_fields.is_empty())
         .copied()
         .collect();
-    // F-01: the writer owns no keyed tail state of its own. Every keyed
+    // the writer owns no keyed tail state of its own. Every keyed
     // mutation routes through the byte-keyed resident cache inside
     // `VarlitFile`, so the only step after an authoritative append is an
     // insert into a `HashMap<Vec<u8>, u64>` slot reserved before it - no
@@ -2894,7 +2894,7 @@ pub(super) fn typed_api_tokens(
     } else {
         quote!(mut inner)
     };
-    // P-01, documentation only. Construction primes one keyed-tail map per
+    // documentation only. Construction primes one keyed-tail map per
     // keyed block type and each priming pass walks the whole resident index,
     // so the cost is Theta(M*N) and the retained cache can reach roughly
     // M * `keyed_tail` because that ceiling is per block id, not per file.
@@ -3765,7 +3765,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
             index: usize,
             value: &#ty,
         ) -> ::varlit::__core::Result<::varlit::__core::ReplacementInfo> {
-            // F-01: a successful replacement republishes the file generation
+            // a successful replacement republishes the file generation
             // and moves record offsets, and the file invalidates its own
             // keyed-tail cache when it rebinds. There is nothing left to
             // translate here, so no fallible step follows the publication.
@@ -3792,7 +3792,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
                     &mut self,
                     value: &#ty,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: the maintained keyed append. The predecessor comes
+                    // the maintained keyed append. The predecessor comes
                     // from - and the new tail goes into - the byte-keyed
                     // resident cache, whose slot is charged and reserved
                     // before the append and filled afterwards by an insert
@@ -3805,7 +3805,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
                     &mut self,
                     key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: see the push path. The key is encoded once, before
+                    // see the push path. The key is encoded once, before
                     // the tombstone, and those same canonical bytes are both
                     // the record payload and the cache key, so nothing owned
                     // by the caller's key type is cloned, hashed or compared
@@ -3892,7 +3892,7 @@ pub(super) fn writer_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2
                     &mut self,
                     value: &#ty,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: the trait route carries its own copy of the body,
+                    // the trait route carries its own copy of the body,
                     // so it routes through the same single implementation as
                     // the inherent method.
                     self.inner.push_keyed_info(value)
@@ -3903,7 +3903,7 @@ pub(super) fn writer_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2
                     &mut self,
                     key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: see the inherent `delete_<block>` method.
+                    // see the inherent `delete_<block>` method.
                     self.inner.delete_info::<#ty>(key)
                 }
             },

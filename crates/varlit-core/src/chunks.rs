@@ -399,7 +399,7 @@ impl Drop for OutputPages<'_> {
     }
 }
 
-/// Structural codec identity of [`ChunkedBytes`] (API-03).
+/// Structural codec identity of [`ChunkedBytes`] .
 ///
 /// Derived exactly the way the built-in container codecs in
 /// [`crate::codec`] derive theirs: a tag naming this codec, folded with the

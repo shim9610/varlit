@@ -373,14 +373,14 @@ fn cleanup(path: &PathBuf) {
     let _ = remove_file(PathBuf::from(lock));
 }
 
-// STO3-01 (report finding STO-01): keyed compact/merge opens its rewrite temp
+// keyed compact/merge opens its rewrite temp
 // through `VarlitFile::create`, which creates `<temp>.lock`. Dropping that
 // writer cleared the marker's contents but left the file, so a *successful*
 // compact deposited an empty marker for a pathname whose native file no longer
 // exists. Markers for real user paths are deliberately persistent stable
 // identities; only this generated, exclusively owned temp pathname is litter.
 //
-// DUR3-01 (report finding DUR-01): `sync` synced file contents but never the
+// `sync` synced file contents but never the
 // parent directory for a pathname the handle created, while atomic replacement
 // did. `sync` now makes the created pathname durable too, once.
 
@@ -437,7 +437,7 @@ fn rewrite_leftovers(directory: &std::path::Path) -> varlit::Result<Vec<String>>
     Ok(leftovers)
 }
 
-/// STO3-01: the reviewers' fixture. A compact that succeeds must leave nothing
+/// the reviewers' fixture. A compact that succeeds must leave nothing
 /// behind for the temp it generated, while the markers for the caller's own
 /// paths keep behaving exactly as designed.
 #[test]
@@ -514,7 +514,7 @@ fn successful_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::
     Ok(())
 }
 
-/// STO3-01: a compact that fails before publication must not leave the temp's
+/// a compact that fails before publication must not leave the temp's
 /// marker either - the temp itself is deleted, so its marker would name
 /// nothing.
 #[test]
@@ -555,7 +555,7 @@ fn refused_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::Res
     Ok(())
 }
 
-/// DUR3-01: `sync` on a file this handle created reports durability for the
+/// `sync` on a file this handle created reports durability for the
 /// pathname as well as the contents, and repeating it stays cheap and typed.
 #[test]
 fn create_and_sync_reports_pathname_durability() -> varlit::Result<()> {
@@ -670,7 +670,7 @@ fn rewrite_temp_is_removed_when_preparation_fails_after_creation() -> varlit::Re
 }
 
 /// STO4-P2: the guard must not touch the one temp whose retention is the
-/// documented contract (DUR2-01).
+/// documented contract .
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
 fn indeterminate_merge_publication_still_retains_its_rewrite_temp() -> varlit::Result<()> {
@@ -702,7 +702,7 @@ fn indeterminate_merge_publication_still_retains_its_rewrite_temp() -> varlit::R
     Ok(())
 }
 
-// F-07: the diagnostic `<target>.lock` marker is truncated and rewritten on
+// the diagnostic `<target>.lock` marker is truncated and rewritten on
 // acquisition and truncated again on drop. Those writes must never reach an
 // object the marker path merely aliases. Both aliasing shapes are refused
 // with `Error::WriterLockMarkerNotDedicated`, on both platforms, and the
@@ -724,7 +724,7 @@ fn an_ordinary_lock_marker_is_still_accepted() -> varlit::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()> {
     let path = temp_path("marker_hardlink");
@@ -751,6 +751,10 @@ fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<(
         "the aliased object must not have been written through"
     );
     let _ = remove_file(lock_marker(&path));
+    // Refusal must leave the alias removable and the ordinary create route retryable.
+    let writer = StorageFormat::create(&path)?;
+    drop(writer);
+    assert_eq!(std::fs::read(&victim)?, b"");
     cleanup(&path);
     Ok(())
 }
@@ -780,40 +784,6 @@ fn a_symlinked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()>
         std::fs::metadata(&victim)?.len(),
         0,
         "the symlink target must not have been written through"
-    );
-    let _ = remove_file(lock_marker(&path));
-    cleanup(&path);
-    Ok(())
-}
-
-/// Windows hard links need no privilege; symbolic links do, so the reparse
-/// case is covered by `a_reparse_point_lock_marker_is_refused` only when the
-/// host grants the privilege, and is skipped rather than failing otherwise.
-#[cfg(windows)]
-#[test]
-fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()> {
-    let path = temp_path("marker_hardlink");
-    cleanup(&path);
-    let directory = path.parent().expect("temp parent").to_path_buf();
-    let victim = directory.join("unrelated-empty-file");
-    std::fs::write(&victim, b"")?;
-    std::fs::hard_link(&victim, lock_marker(&path))?;
-
-    let error = StorageFormat::create(&path).expect_err("an aliased marker must be refused");
-    assert!(
-        matches!(
-            error,
-            Error::WriterLockMarkerNotDedicated {
-                reason: "the marker object has more than one hard link",
-                ..
-            }
-        ),
-        "expected a typed marker refusal, got {error:?}"
-    );
-    assert_eq!(
-        std::fs::metadata(&victim)?.len(),
-        0,
-        "the aliased object must not have been written through"
     );
     let _ = remove_file(lock_marker(&path));
     cleanup(&path);
@@ -863,7 +833,7 @@ fn a_reparse_point_lock_marker_is_refused_and_left_untouched() -> varlit::Result
     Ok(())
 }
 
-/// F-08: `docs/custom-codec-guide.md` gained a mandatory
+/// `docs/custom-codec-guide.md` gained a mandatory
 /// "Charge Every Owned Allocation" section whose compliant example and
 /// negative self-test are the guide's whole answer to "how do I know my codec
 /// charges?". Markdown code blocks compile in no job, so a copy of that

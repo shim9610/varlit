@@ -1,21 +1,16 @@
-//! DUR-01 regression: when the atomic pathname publication has already
+//!  regression: when the atomic pathname publication has already
 //! succeeded but the post-publication parent-directory sync fails, the writer
 //! must be rebound to the published generation (or poisoned) and the caller
 //! must receive the typed publication state instead of a plain failure.
 //!
-//! DUR2-01 regression: `ReplaceFileW` failures must be classified per the
+//!  regression: `ReplaceFileW` failures must be classified per the
 //! Microsoft contract — 1175 is a documented no-mutation failure, while
 //! 1176/1177 leave the pathnames in a possibly partially moved state, after
 //! which the replacement temp file must be preserved and the writer poisoned.
 
 #![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires the scalable-fault-injection feature"]
-fn replace_publication_state_requires_feature_wiring() {}
-
-/// DUR2-01: the pure `ReplaceFileW` error classification, testable on every
+/// the pure `ReplaceFileW` error classification, testable on every
 /// host because a real 1176/1177 cannot be reproduced on demand.
 mod classification {
     use varlit::{ReplacePublicationFailure, classify_replace_publication_error};
@@ -183,7 +178,7 @@ mod enabled {
         writer.push(&PubRecord(1))?;
         writer.sync()?;
 
-        // Models an unreconciled ReplaceFileW 1176/1177 outcome (DUR2-01):
+        // Models an unreconciled ReplaceFileW 1176/1177 outcome :
         // the pathname state is unknown to the caller.
         VarlitFile::inject_replace_indeterminate_failures(1);
         match writer.replace(0, &PubRecord(2)) {
@@ -270,7 +265,7 @@ mod enabled {
         run?;
 
         // The resident replace path must cross the registered publication
-        // boundaries, proving the DUR-01 hooks are wired for resident files.
+        // boundaries, proving the  hooks are wired for resident files.
         let contents = std::fs::read_to_string(&trace)?;
         assert!(
             contents.lines().any(|line| line.contains("replace.atomic")),
@@ -286,7 +281,7 @@ mod enabled {
     }
 }
 
-/// F-01 and F-02 regressions: every replacement entry point that resolves its
+///  and  regressions: every replacement entry point that resolves its
 /// target by block id alone must refuse a stored record whose version differs
 /// from the type being written, and the one entry point that mutates record
 /// bytes in place must refuse keyed blocks outright.
@@ -482,7 +477,7 @@ mod cross_version_and_keyed_refusals {
         assert_still_v1(&path)
     }
 
-    /// F-01, the re-verification harness, kept as a regression.
+    /// the re-verification harness, kept as a regression.
     ///
     /// Round 12 added one test per entry point at ordinal 0. Re-verification
     /// went wider — every entry point including both `replace` strategy
@@ -620,7 +615,7 @@ mod cross_version_and_keyed_refusals {
         .with_read_limits(ReadLimits::STANDARD)
     }
 
-    /// F-02: a resident keyed-tail cache must never outlive an in-place
+    /// a resident keyed-tail cache must never outlive an in-place
     /// record mutation.
     ///
     /// The cache maps canonical key bytes to tail offsets and maintained

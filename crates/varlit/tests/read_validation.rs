@@ -191,7 +191,12 @@ fn eight_independent_readers_keep_pending_edits_hidden_in_every_mode() -> Result
             for (visible, pending) in rx {
                 r.follow()?;
                 for id in 0..visible {
-                    assert_eq!(r.get::<Item>(&id)?.unwrap().bytes, vec![id as u8; 32]);
+                    // Refusal in one reader must preserve its generation and leave
+                    // the other readers and the next writer publication usable.
+                    let (failed, denied) = deny_large(|| r.get::<Item>(&id));
+                    assert!(failed.is_err());
+                    assert!(denied > 0);
+                    assert_eq!(r.get::<Item>(&id)?.unwrap().bytes, vec![id as u8; 65_537]);
                 }
                 assert_eq!(r.get::<Item>(&pending)?, None);
                 ack.send(()).unwrap();
@@ -202,7 +207,7 @@ fn eight_independent_readers_keep_pending_edits_hidden_in_every_mode() -> Result
     for epoch in 0..4u64 {
         w.push_item(&Item {
             id: epoch,
-            bytes: vec![epoch as u8; 32],
+            bytes: vec![epoch as u8; 65_537],
         })?;
         for tx in &senders {
             tx.send((epoch, epoch)).unwrap();

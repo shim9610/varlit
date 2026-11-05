@@ -3,7 +3,7 @@ use varlit::{Decoder, Encoder, Result, VarlitBlock, VarlitDecode, VarlitEncode, 
 // A hand-written codec that is NOT WireType::Nested. Two crates can spell this
 // type identically, declare the same wire type, and pack their u64 differently;
 // without a declared SCHEMA_ID the derived block below would fingerprint them
-// the same while their bytes differ (API-04).
+// the same while their bytes differ .
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Packed(u64);
 

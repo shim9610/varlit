@@ -32,7 +32,7 @@ impl PageIndexEnumeration {
 
 /// Loads the persisted page index into `bits`.
 ///
-/// F-06, the whole point of the v4 header: enumeration length comes from a
+/// the whole point of the v4 header: enumeration length comes from a
 /// *validated occupancy count*, never from scanning for a terminator. The old
 /// representation treated a zero or out-of-range entry as the successful end of
 /// the array, so a single damaged entry silently truncated enumeration — every
@@ -48,7 +48,7 @@ impl PageIndexEnumeration {
 ///
 /// Cost is `O(count)` entries read — the live pages — and never `O(page_count)`.
 ///
-/// F-04: the return value is whether the index was **complete** — whether every
+/// the return value is whether the index was **complete** — whether every
 /// page it named could be enumerated. `false` means the caller holds an
 /// in-memory bitmap that is a *subset* of the published state, with the missing
 /// pages reading as clear. That is safe for reading, because default open is
@@ -82,7 +82,7 @@ pub(super) fn load_page_index(
     }
     let header = read_page_index_header(file, source.index_base)?;
     count_open_bitmap_bytes_read(PAGE_INDEX_ENTRY_LEN);
-    // F-02: a whole-map republication marks the header before it empties the
+    // a whole-map republication marks the header before it empties the
     // entry region and only replaces the marker once the new generation is
     // durable, so seeing it means the index on disk names an unknown subset of
     // the published pages. Reading that subset as authoritative is precisely the

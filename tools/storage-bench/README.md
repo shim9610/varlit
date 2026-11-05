@@ -82,7 +82,7 @@ not an invented exact commit timestamp or an individual item API latency. Reader
 and the entire item-query batch. These finite maximum-throughput runs do not
 establish fixed-rate acquisition deadlines or long-duration losslessness.
 
-The [canonical combined report](../../docs/performance/workload-storage-20261104/README.md) and existing dashboard integrate these measurements with the mixed/array/table cases. [Grouped cohort details](../../docs/performance/grouped-storage-20261104/README.md) are an appendix, not a separate comparison. The original `smoke`/`pilot`/`full` grids remain reproducibility/regression grids; do not publish their individual-record cases alone as the corrected grouped-item comparison.
+The [canonical combined report](../../docs/performance/workload-storage-20261104/README.md) and existing dashboard integrate these measurements with the mixed/array/table cases. [Grouped cohort details](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md) are an appendix, not a separate comparison. The original `smoke`/`pilot`/`full` grids remain reproducibility/regression grids; do not publish their individual-record cases alone as the corrected grouped-item comparison.
 
 | Scenario | Logical work | Varlit candidates | SQLite | HDF5 |
 |---|---|---|---|---|
