@@ -4,13 +4,15 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
-## Unreleased
+## 0.13.0 - 2026-11-05
 
 Existing public method signatures, schema fingerprints and file formats are
-preserved. The additions below are not part of the published 0.12.1 packages.
-See the [upgrade notes](docs/api-changes.md#unreleased) for API selection and
+preserved. Update the Cargo dependency requirement to `0.13.0` to use this release.
+See the [upgrade notes](docs/api-changes.md#0130) for API selection and
 error-handling changes.
 
+- Align the workspace, sibling dependencies and standalone consumer lockfiles
+  at 0.13.0. This release requires no migration of valid 0.12.1 files.
 - Add `ReadValidation::{FULL, CRC_ONLY, STRUCTURE_ONLY, TRUSTED}` through
   `ReadLimits::with_read_validation`. An unset override preserves existing
   behavior. Explicit choices separate data CRC from additional structure

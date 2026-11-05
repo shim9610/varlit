@@ -1,9 +1,11 @@
 # API Changes
 
-## Unreleased
+## 0.13.0
 
-These changes follow the published 0.12.1 release. Existing public signatures,
-schema fingerprints, native/sidecar bytes, VCHK, VMAT v5 and experimental
+Update the Cargo dependency requirement from `0.12.1` to `0.13.0` to use these
+additions. Cargo does not cross a pre-1.0 minor version automatically.
+Existing public signatures, schema fingerprints, native/sidecar bytes, VCHK,
+VMAT v5 and experimental
 STREUSE2 formats are preserved. Rust 1.95 remains the minimum supported version.
 Existing valid files need no format migration. Stricter validation can reject
 damaged metadata that an older reader accepted.

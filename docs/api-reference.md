@@ -3,9 +3,8 @@
 This is a practical public API map for application authors. It is not a
 rustdoc replacement; it explains which API to reach for and what it means.
 
-This page follows the current repository. Read validation selection, range
-streaming and fallible ownership additions are **unreleased**, after 0.12.1;
-see [API changes](api-changes.md#unreleased).
+This page describes Varlit 0.13.0, including read validation selection, range
+streaming and fallible ownership. See [API changes](api-changes.md#0130).
 
 ## Read validation
 

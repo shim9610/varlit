@@ -1,7 +1,7 @@
 # Independent read checks
 
-This API is unreleased after 0.12.1. The [public API reference](../api-reference.md#read-validation)
-and [upgrade notes](../api-changes.md#unreleased) cover application setup.
+This API is available in 0.13.0. The [public API reference](../api-reference.md#read-validation)
+and [upgrade notes](../api-changes.md#0130) cover application setup.
 
 `ReadValidation` selects optional data CRC and additional metadata consistency
 checks independently. This is an explicit read-side policy. Ordinary opens retain

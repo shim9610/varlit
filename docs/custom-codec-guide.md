@@ -251,7 +251,7 @@ Unknown wire type values are malformed data.
 
 ## Fallible ownership in custom codecs
 
-The unreleased [fallible ownership helpers](api-reference.md#fallible-ownership)
+The 0.13.0 [fallible ownership helpers](api-reference.md#fallible-ownership)
 can be used by custom codecs, but do not replace decoder budget accounting.
 `TryClone` implementations must use fallible allocation for newly owned fields,
 clean up partial output and preserve their source on refusal. Existing `Clone`
