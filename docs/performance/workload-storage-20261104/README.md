@@ -6,6 +6,156 @@ The former individual-Frame million-item fixture is withdrawn as a representativ
 
 [Current integrated dashboard](index.html) · [Current integrated data and operation ratios](current-comparison.json) · [Grouping manual](../../scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size) · [Runnable harness](../../../tools/storage-bench/README.md)
 
+## SQLite mmap and append-only readers
+
+The 6 November recheck adds **714 timing observations, 102 separate resource
+probes and ten publication gates** under the same 4 CPU / 16 GiB / 32 GiB caps.
+Every configuration has seven fixed repetitions. The primary and live-snapshot
+cohorts remain separate in the dashboard's **SQLite mmap recheck** view; their
+minima, quartiles, maxima, configuration facts and raw evidence are retained.
+HDF5 was not rerun in this recheck; its earlier measurements below keep their
+original cohorts.
+
+The previous immutable-array comparison already used Varlit mmap and SQLite's
+1 GiB mmap cap. The previous grouped concurrent fixture used ordinary Varlit
+indexed reads and SQLite mmap off, selected by its earlier separate tuning.
+This recheck holds the 64 KiB SQLite page size and 8 MiB per-connection cache
+fixed and measures mmap requests 0 / 1 / 2 GiB for every workload, using SQLite
+3.46.1, serialized connections and WAL/FULL. The 2 GiB request is effectively
+clamped to 2,147,418,112 bytes by this build. Process mapping probes confirm
+primary database mappings for enabled configurations; a requested cap alone
+would not establish that. Mappings do not establish which pages were served
+through mmap, especially while reads can also use WAL.
+
+A private append-only writer can coexist with both native record windows and
+fixed confirmed-prefix snapshots. Every captured record stays immutable;
+truncation, replacement, compaction and growing-matrix rewrites are excluded.
+The existing unsafe APIs and validation defaults are preserved. The added
+regression holds old borrowed slices across a staged append, checks that all
+eight readers hide the uncommitted tail, then exposes the committed new record
+without changing either old mapping.
+
+### Static 1 GiB, 1 MiB blocks, eight scan workers
+
+All rows write the same 8,388,608 128-byte samples in 1,024 physical blocks and
+64 durable 16 MiB publications. After the writer closes, one reader performs
+two complete scans, 4,096 seeded sample queries and 128 windows of 512 KiB;
+eight independent reader threads each perform another complete scan. Write
+includes initialization/final checkpoint and excludes input generation. Scan
+below includes byte verification; repeated scan, point and window backend
+timers are also exported separately. Completion and CPU include all work.
+
+| Configuration | Write s | Initial scan s | Complete s | CPU s | Peak PSS MiB | Peak temp MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Varlit buffered view, FULL | 0.864 | 0.174 | 2.316 | 3.406 | 54.0 | 0.0 |
+| Varlit mmap, FULL | 0.849 | 0.137 | 1.764 | 2.942 | 1122.3 | 0.0 |
+| SQLite mmap off | 1.840 | 0.157 | 3.060 | 3.771 | 86.1 | 65.5 |
+| SQLite mmap cap 1 GiB | 1.869 | 0.183 | 2.804 | 3.355 | 1060.8 | 65.5 |
+| SQLite mmap request 2 GiB | 1.853 | 0.177 | 2.882 | 3.704 | 1096.1 | 65.5 |
+
+The same static work is also measured at 128 MiB and with 64 KiB blocks. The
+mmap routes touch the complete file during the parallel scans, so sampled
+proportional set size (PSS) is about 1 GiB here. The buffered view has a smaller
+resident footprint. Mapped virtual size is reported separately from residency.
+
+### Live 1 GiB, one writer and eight independent reader processes
+
+Each reader consumes and verifies the entire 1 GiB through a 4 MiB caller buffer
+while the writer publishes every 16 MiB. There are no random lookups in this
+sequential-sharing fixture. Writer-active includes input generation and
+publication notifications, and excludes initialization/final checkpoint;
+completion includes initialization, reader startup/drain and final checkpoint.
+Reader-active is the maximum reader's refresh plus verified consumption work,
+including any tail after writing. The writer does not wait for reader receipts.
+
+**1 MiB physical blocks, live-snapshot cohort:**
+
+| Configuration | Writer-active s | Reader-active s | Complete s | CPU s | Peak PSS MiB | Peak temp MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Varlit buffered view, FULL | 1.326 | 0.490 | 1.367 | 3.147 | 80.7 | 0.0 |
+| Varlit record-window mmap, FULL | 1.299 | 0.463 | 1.339 | 2.700 | 76.7 | 0.0 |
+| Varlit prefix-snapshot mmap, FULL | 1.276 | 0.474 | 1.315 | 2.659 | 105.2 | 0.0 |
+| SQLite mmap off | 2.427 | 1.270 | 2.961 | 6.425 | 142.1 | 1045.2 |
+| SQLite mmap cap 1 GiB | 2.356 | 1.269 | 2.823 | 6.369 | 142.2 | 1045.2 |
+| SQLite mmap request 2 GiB | 2.367 | 1.246 | 2.830 | 6.406 | 142.2 | 1045.2 |
+
+**64 KiB physical blocks, same cohort and logical work:**
+
+| Configuration | Writer-active s | Reader-active s | Complete s | CPU s | Peak PSS MiB | Peak temp MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Varlit buffered view, FULL | 1.577 | 0.737 | 1.620 | 3.965 | 85.8 | 0.0 |
+| Varlit record-window mmap, FULL | 1.771 | 0.986 | 1.829 | 4.793 | 85.5 | 0.0 |
+| Varlit prefix-snapshot mmap, FULL | 1.904 | 1.601 | 2.040 | 6.830 | 213.1 | 0.0 |
+| SQLite mmap off | 2.685 | 1.435 | 3.230 | 7.187 | 141.2 | 1182.4 |
+| SQLite mmap cap 1 GiB | 2.632 | 1.427 | 3.221 | 7.248 | 141.2 | 1182.4 |
+| SQLite mmap request 2 GiB | 2.673 | 1.488 | 3.191 | 7.390 | 141.2 | 1182.4 |
+
+Record windows map once per block: 8,192 maps across eight readers at 1 MiB,
+versus 131,072 at 64 KiB. The smaller-window route is slower than the buffered
+view in this measurement. Prefix snapshots reduce map calls but copy the
+complete captured index on each rebuild. At 64 KiB their median aggregate is
+434 rebuilds and 3,196,566 copied entries across eight readers; at 1 MiB it is
+512 rebuilds and 282,880 copied entries. That repeated prefix work is charged
+and is not a constant-cost solution for indefinite streaming. The window and
+buffered routes follow new chain entries from the last cached record.
+
+For the 1 MiB rows the least-advanced reader completes 98.44% of its bytes in
+consume intervals wholly inside the writer window. The 64 KiB snapshot row is
+90.63%; the other 64 KiB rows are 98.44%. Crossing intervals are excluded.
+Final allocated storage is about 1,024.1 / 1,033.3 MiB for Varlit / SQLite at
+1 MiB blocks and 1,025.8 / 1,170.4 MiB at 64 KiB. SQLite WAL/SHM space is included
+in temporary peaks. Shared OS page-cache and anonymous-memory counters, their
+baselines, mapped extents and deleted-open space are exported separately; they
+must not be added to PSS as an independent simultaneous resident peak.
+
+All FULL rows retain additional structural checks and payload CRC. CRC_ONLY
+rows, also measured/exported for every Varlit path, disable only the optional
+additional structure checks. Required bounds, resource limits and publication
+guards remain enabled in both. The primary live cohort (28 configurations) is
+retained alongside the 36-configuration snapshot cohort, with its own seven
+repetitions and references; their medians are never pooled.
+
+### Grouped keyed queries with four producers and eight readers
+
+The primary cohort also repeats the existing indexed query fixture at 1 GiB,
+with both physical block sizes and the three SQLite mmap caps. It packs
+8,388,608 logical items into 1,024 / 16,384 Frames, uses 64 publications, and
+charges every reader for full follow plus separate group-local backend lookup
+and reverse extraction of every item. Multiple producers feed one active
+writer; this is distinct from the native sequential-sharing fixture above.
+
+At 1 MiB blocks, Varlit FULL completes in 3.964 s with 15.518 CPU s; SQLite's
+2 GiB-request configuration completes in 3.998 s with 12.923 CPU s. Reader-active
+is 3.869 / 2.982 s, respectively. Completion is close and Varlit uses more CPU.
+Only 18.75% of the least-advanced Varlit reader's bytes finish wholly during
+writing, versus 98.44% for that SQLite configuration; final drain is included.
+The dashboard retains all ten grouped configurations and their resources.
+
+### Harness qualification and reproducibility
+
+The unchanged runtime is `4b07249`; production changes in this recheck clarify
+mmap safety documentation without changing executable library code. Before/after
+harness controls use the old binary twice as A/B and the new binary, with the
+same static workload and fixed repetitions. An initial 64 KiB mmap alert
+(+6.72% wall time, with identical-binary B +6.46%) is retained. A separate fixed
+30-round calibration gives -1.96% wall / -0.13% CPU; it does not replace the
+initial observation. Final seven-round controls cover both block sizes and
+buffered/mapped paths: changes are +1.14% to +2.36% completion and -1.87% to
++4.22% CPU. An identical-binary pair still differs by +8.09% in one final case,
+so these controls do not establish a universal 5% bound. All three control
+cohorts remain distinct (258 timing observations and 27 probes).
+
+No new OOM or OOM-kill event occurs in either comparison or any control cohort.
+Budgets and read limits are unchanged; only rebuildable compiler output was
+reclaimed before running. Timing, resource probes and gates run separately.
+One complete SQLite configuration is selected by median completion within each
+cohort/workload for operation ratios; write/read/CPU values are not spliced
+from different caps. Full source snapshots, binary hashes, failed smoke
+attempts, controls, measurement rows and verification logs are packed into
+[the mmap evidence archive](sqlite-mmap-20261106.tar.gz), covered by
+[the current checksum manifest](CURRENT_SHA256SUMS). Commands and API choices
+are in the [runnable harness](../../../tools/storage-bench/README.md#sqlite-mmap-recheck).
+
 ## Maintenance before/after comparison
 
 The [maintenance qualification](../maintenance-20261106/README.md) compares the
@@ -152,7 +302,7 @@ The following 1 GiB profiles return identical caller-owned bytes. A point return
 
 Two-scan totals must not be compared with one-scan totals as equal work. Ratios identify the fastest complete measured SQLite candidate across physical BLOB sizes and the typed-column schema. Point/window comparisons match the one/two-scan preparation; write and initial-scan work precedes the extra scan.
 
-For the 1 MiB native payload mapping, conservative SQLite/Varlit ratios are about **1.91× full write, 1.27× initial scan, 1.43× repeated scan, 2.68× points, and 0.97× windows**. Initial open/CRC work is retained separately; repeated reads use the existing mapping's validated certificates. This mapping is used only after every writer closes, with immutable backing files throughout its lifetime.
+For the 1 MiB native payload mapping, conservative SQLite/Varlit ratios are about **1.91× full write, 1.27× initial scan, 1.43× repeated scan, 2.68× points, and 0.97× windows**. Initial open/CRC work is retained separately; repeated reads use the existing mapping's validated certificates. In that earlier cohort, mapping starts after every writer closes, with immutable backing files throughout its lifetime.
 
 HDF5 contiguous f64 storage remains a strong bulk candidate. Plain HDF5, Fletcher32, Varlit CRC32 and SQLite WAL/FULL have different integrity/recovery contracts; this report does not make them equivalent. Primary HDF5 contiguous 1 GiB observations include substantial timing variation (about 1.071–7.192 s for one grouping), retained rather than attributed to an intrinsic format cost. A later identical-binary six-run control has A/B medians 1.177481/1.127446 s, a 4.44% difference; that single control does not qualify the whole grid.
 

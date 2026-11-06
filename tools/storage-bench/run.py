@@ -170,9 +170,25 @@ def descendants(pid):
     return result
 
 
+def primary_mapping_extents(lines, root):
+    """OS mapping extents of benchmark primary files; exclude WAL/SHM and libraries."""
+    prefix = str(root.resolve()) + "/"
+    for line in lines:
+        fields = line.split(None, 5)
+        if len(fields) != 6:
+            continue
+        path = fields[5].strip().removesuffix(" (deleted)")
+        if not path.startswith(prefix) or Path(path).name not in ("samples.bin", "store"):
+            continue
+        start, end = (int(x, 16) for x in fields[0].split("-"))
+        offset = int(fields[2], 16)
+        yield (fields[3], fields[4]), offset, offset + end - start
+
+
 def sample(root, pid, process_ids=None, kind="mixed"):
     rss = pss = deleted = 0
     deleted_inodes = set()
+    mappings, mapped_virtual = {}, 0
     for n in (descendants(pid) if process_ids is None else process_ids):
         try:
             fields = dict((x.split(":", 1)[0], x.split(":", 1)[1].strip())
@@ -180,6 +196,12 @@ def sample(root, pid, process_ids=None, kind="mixed"):
             rss += int(fields["Rss"].split()[0]) * 1024
             pss += int(fields["Pss"].split()[0]) * 1024
         except (OSError, KeyError):
+            pass
+        try:
+            for identity, start, end in primary_mapping_extents(Path(f"/proc/{n}/maps").read_text().splitlines(), root):
+                mapped_virtual += end - start
+                mappings.setdefault(identity, []).append((start, end))
+        except OSError:
             pass
         try:
             for fd in Path(f"/proc/{n}/fd").iterdir():
@@ -198,6 +220,8 @@ def sample(root, pid, process_ids=None, kind="mixed"):
             continue
         for p in folder.rglob("*"):
             try:
+                if p.parent.name == "reader-control":
+                    continue
                 st = p.stat()
                 if p.is_file():
                     logical += st.st_size
@@ -214,7 +238,14 @@ def sample(root, pid, process_ids=None, kind="mixed"):
         cg["cgroup_memory_anon"] = int(stat["anon"])
     except OSError:
         pass
-    return dict(**cg, sampled_processes=len(process_ids) if process_ids is not None else 0, rss_sum=rss, pss_sum=pss, visible_logical=logical,
+    mapped_unique = 0
+    for extents in mappings.values():
+        end = -1
+        for start, stop in sorted(extents):
+            mapped_unique += max(0, stop - max(start, end))
+            end = max(end, stop)
+    return dict(**cg, primary_mmap_virtual_bytes=mapped_virtual, primary_mmap_unique_bytes=mapped_unique,
+                sampled_processes=len(process_ids) if process_ids is not None else 0, rss_sum=rss, pss_sum=pss, visible_logical=logical,
                 visible_allocated=allocated, temporary_allocated=temporary, deleted_open_allocated=deleted)
 
 
@@ -275,6 +306,9 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
                    *map(str, [profile[x] for x in ["total", "group", "page", "mmap", "points", "ranges", "readers"]])]
     if profile.get("warm_scan"):
         command.append("warm-scan")
+    if profile.get("live"):
+        assert not profile.get("warm_scan"), "live and static repeated scans are different workloads"
+        command.append("live")
     usage = output / (stem + ".usage.json")
     pidfile = output / (stem + ".pid")
     cmd = [str(output / "measure"), str(usage), str(pidfile), *command]
@@ -285,7 +319,7 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
     budget_error=[]
 
     def sampler(pid):
-        known={};expected=(profile["config"]["readers"]+2) if profile["kind"]=="mixed" else 2
+        known={};expected=(profile["config"]["readers"]+2) if profile["kind"]=="mixed" else (profile["readers"]+2 if profile.get("live") else 2)
         def birth(n):
             text=Path(f"/proc/{n}/stat").read_text();return text[text.rfind(")")+2:].split()[19]
         while not stop.is_set():
@@ -365,6 +399,10 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
             assert result["passes"] == profile["passes"]
         else:
             assert result["payload_bytes"] == profile["total"] and result["logical_samples"] == profile["total"] // 128
+            if profile.get("live"):
+                assert result["read_bytes"] == profile["readers"] * profile["total"]
+                assert len(result["reader_stats"]) == profile["readers"]
+                assert all(r["bytes"] == profile["total"] for r in result["reader_stats"])
             if profile.get("warm_scan"):
                 assert result["scan_passes"]==2 and result["warm_scan_seconds"] is not None
         row["result"] = result
@@ -376,8 +414,8 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
                 peaks[key] = max(peaks.get(key, 0), final_storage[key])
             row["final_storage"] = final_storage
             row["sampled_peaks"] = peaks
-            expected = profile["config"]["readers"] + 2 if profile["kind"] == "mixed" else 2
-            if profile["name"].startswith(("grouped-", "individual-")):
+            expected = profile["config"]["readers"] + 2 if profile["kind"] == "mixed" else (profile["readers"]+2 if profile.get("live") else 2)
+            if profile["name"].startswith(("grouped-", "individual-")) or profile.get("live"):
                 assert peaks.get("sampled_processes", 0) >= expected, "incomplete process-tree coverage"
                 assert peaks.get("visible_allocated", 0) >= result["allocated_bytes"], "data files missing from probe"
         if not keep:
@@ -402,7 +440,7 @@ def summarize(rows, output):
              "|---|---:|---:|---:|---:|---:|---:|"]
     for name, rs in groups.items():
         median = lambda f: statistics.median(f(r) for r in rs)
-        write = median(lambda r: (r["result"]["initialization_seconds"]+r["result"]["writer_seconds"]+r["result"]["finalize_seconds"]) if r["profile"]["kind"]=="mixed" else r["result"]["write_seconds"])
+        write = median(lambda r: (r["result"]["initialization_seconds"]+r["result"]["writer_seconds"]+r["result"]["finalize_seconds"]) if r["profile"]["kind"]=="mixed" else r["result"]["writer_seconds" if r["profile"].get("live") else "write_seconds"])
         allocated = median(lambda r: r["result"]["allocated_bytes"] / 2**20)
         lines.append(f"| {name} | {len(rs)} | {write:.6f} | {median(lambda r:r['usage']['elapsed_seconds']):.6f} | "
                      f"{median(lambda r:r['usage']['cpu']):.6f} | {median(lambda r:r['usage']['rss_kib']/1024):.2f} | {allocated:.2f} |")

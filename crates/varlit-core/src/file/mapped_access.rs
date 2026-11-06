@@ -11,6 +11,10 @@ impl VarlitFile {
     /// of this record for the entire returned window's lifetime, through all
     /// handles, threads and processes. The same external immutability contract
     /// as `mmap_payloads` applies; this API adds no writer lock.
+    /// Appending strictly after this immutable record is permitted: the window
+    /// has a fixed length and excludes both the file header and later records.
+    /// The caller must still exclude truncation, replacement, compaction and
+    /// every operation that could rewrite this record or invalidate its storage.
     #[cfg(feature = "mmap")]
     pub unsafe fn mmap_payload_window(
         &self,
@@ -69,11 +73,14 @@ impl VarlitFile {
     ///
     /// # Safety
     ///
-    /// The caller must prevent mutation, truncation, replacement, backing-file
-    /// invalidation, and any other modification through every handle, thread,
-    /// and process for the full lifetime of the returned mapping. The mapping
+    /// The caller must keep the captured mapped record region immutable and
+    /// valid through every handle, thread and process for the full lifetime of
+    /// the returned mapping. Truncation, replacement of the backing object and
+    /// operations that rewrite any captured record must be excluded. The mapping
     /// remains tied to this already-open backing object even if its path is
     /// renamed or replaced.
+    /// Appending strictly beyond the captured region and updating unmapped
+    /// header bytes are permitted while the captured records remain unchanged.
     ///
     /// Once that condition holds, Varlit keeps safe accessors sound by creating
     /// a read-only mapping from a clone of the existing handle, validating every

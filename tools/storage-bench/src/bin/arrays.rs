@@ -502,7 +502,7 @@ impl Writer {
                     g,
                 )
             }
-            "native-view" | "native-owned" | "native-mmap" => {
+            "native-view" | "native-owned" | "native-mmap" | "native-mmap-snapshot" => {
                 Self::Native(spec(false, true).create(p)?)
             }
             "stream" => Self::Stream(VarlitStreamWriter::create(spec(false, false), p, sopts())?),
@@ -566,6 +566,11 @@ impl Writer {
 }
 enum Reader {
     NativeMap(MmapPayloads),
+    NativeWindow(
+        VarlitFile,
+        Vec<RecordIndexEntry>,
+        Option<(usize, MmapPayloadWindow)>,
+    ),
     MatrixOwned(VarlitFile),
     Hdf(Hdf),
     Matrix(MmapMatrix),
@@ -603,7 +608,7 @@ impl Reader {
                 // the backing files remain immutable until all reader threads and mappings end.
                 Self::Matrix(unsafe { f.mmap_matrix()? })
             }
-            "native-mmap" => {
+            "native-mmap" | "native-mmap-snapshot" => {
                 let f = VarlitFile::open_readonly(
                     varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
                     p,
@@ -620,6 +625,16 @@ impl Reader {
                 let mut entries = Vec::new();
                 f.block_entries_into::<Chunk>(&mut entries)?;
                 Self::Native(f, entries, mode == "native-view")
+            }
+            "native-window" => {
+                let f = VarlitFile::open_readonly(
+                    varlit_storage_bench::model::selected_read_spec(spec(false, true))?,
+                    p,
+                )?;
+                let mut entries = Vec::new();
+                f.block_entries_into::<Chunk>(&mut entries)?;
+                assert!(entries.iter().all(|entry| entry.committed));
+                Self::NativeWindow(f, entries, None)
             }
             "stream" => {
                 let f = VarlitStreamReader::open(
@@ -688,6 +703,23 @@ impl Reader {
             let offset = pos % g;
             let n = (g - offset).min(out.len() - done);
             match self {
+                Self::NativeWindow(f, entries, cached) => {
+                    if cached.as_ref().is_none_or(|(ordinal, _)| *ordinal != chunk) {
+                        let entry = entries.get(chunk).ok_or("missing confirmed mapped chunk")?;
+                        assert!(entry.committed);
+                        // SAFETY: the private benchmark writer only appends complete Chunk
+                        // records and commit markers. It never replaces/truncates the backing
+                        // file, rewrites records or uses a growing matrix. A fixed-length
+                        // window excludes the mutable header and all later append bytes;
+                        // its committed payload stays immutable through the last reader.
+                        *cached = Some((chunk, unsafe { f.mmap_payload_window(entry)? }));
+                    }
+                    let (_, window) = cached.as_ref().unwrap();
+                    let (first, bytes) = borrowed(window.as_bytes())?;
+                    assert_eq!(first, start);
+                    assert_eq!(bytes.len(), g);
+                    out[done..done + n].copy_from_slice(&bytes[offset..offset + n]);
+                }
                 Self::NativeMap(m) => {
                     let encoded = m
                         .block_payload_window::<Chunk>(chunk)?
@@ -785,6 +817,38 @@ impl Reader {
             s.point_begin();
         }
     }
+    fn follow_native(&mut self, expected: usize) -> R<()> {
+        let (f, entries) = match self {
+            Self::Native(f, entries, _) | Self::NativeWindow(f, entries, _) => (f, entries),
+            _ => return Err("not an append-only native reader".into()),
+        };
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        while entries.len() < expected {
+            if f.follow()? != 0 {
+                let anchor = entries.last().map(|entry| entry.record_offset);
+                let mut appended = Vec::new();
+                let mut found = anchor.is_none();
+                for entry in f.block_chain(Chunk::ID)? {
+                    let entry = entry?;
+                    if Some(entry.record_offset) == anchor {
+                        found = true;
+                        break;
+                    }
+                    assert!(entry.committed);
+                    appended.push(entry);
+                }
+                assert!(found, "append-only native prefix changed");
+                entries.extend(appended.into_iter().rev());
+            }
+            if entries.len() < expected {
+                if Instant::now() > deadline {
+                    return Err("confirmed native publication was not observed".into());
+                }
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            }
+        }
+        Ok(())
+    }
     fn query_begin(&mut self) {
         if let Self::Sql(s) = self {
             s.query_begin();
@@ -825,6 +889,9 @@ fn main() -> R<()> {
     let ranges: usize = a[8].parse()?;
     let readers: usize = a[9].parse()?;
     assert!(total.is_multiple_of(EPOCH) && EPOCH.is_multiple_of(g) && OUTPUT.is_multiple_of(g));
+    if a.get(10).is_some_and(|x| x == "live-reader") {
+        return live_reader(mode, &path, total, g, page, mmap, a[11].parse()?);
+    }
     if a.get(10).is_some_and(|x| x == "live") {
         return live(mode, &path, total, g, page, mmap, readers);
     }
@@ -990,6 +1057,151 @@ fn thread_cpu() -> f64 {
     assert_eq!(unsafe { clock_gettime(3, &mut t) }, 0);
     t.s as f64 + t.n as f64 / 1e9
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LiveRead {
+    id: usize,
+    bytes: usize,
+    refresh_seconds: f64,
+    consume_seconds: f64,
+    // Common monotonic clock: start, end, fully verified bytes.
+    intervals: Vec<(u64, u64, usize)>,
+    snapshot_rebuilds: usize,
+    snapshot_index_entries_copied: usize,
+}
+struct LiveChildren(Vec<std::process::Child>);
+impl Drop for LiveChildren {
+    fn drop(&mut self) {
+        for child in &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn live_reader(
+    mode: &str,
+    path: &Path,
+    total: usize,
+    g: usize,
+    page: usize,
+    mmap: usize,
+    id: usize,
+) -> R<()> {
+    use std::io::Read;
+    let snapshot_mode = mode == "native-mmap-snapshot";
+    let reader_mode = if mode == "native-mmap" || snapshot_mode {
+        "native-window"
+    } else {
+        mode
+    };
+    let mut r = Reader::open(reader_mode, path, g, page, mmap)?;
+    match &mut r {
+        Reader::Hdf(h) => assert_eq!(h.rows, 0),
+        Reader::Stream(_, iter) => assert!(iter.next().is_none()),
+        Reader::Native(_, entries, _) | Reader::NativeWindow(_, entries, _) => {
+            assert!(entries.is_empty())
+        }
+        Reader::Sql(s) => {
+            s.prepare(if s.columns {
+                "SELECT count(*) FROM samples"
+            } else {
+                "SELECT count(*) FROM chunks"
+            });
+            unsafe {
+                assert_eq!(sqlite3_step(s.stmt), 100);
+                assert_eq!(sqlite3_column_int64(s.stmt, 0), 0);
+                ok(sqlite3_reset(s.stmt));
+            }
+        }
+        _ => unreachable!(),
+    }
+    r.query_begin();
+    std::fs::write(
+        path.parent()
+            .unwrap()
+            .join("reader-control")
+            .join(format!("ready-{id}")),
+        b"ready",
+    )?;
+    let mut out = vec![0; OUTPUT];
+    let mut scratch = Vec::new();
+    let mut stats = LiveRead {
+        id,
+        bytes: 0,
+        refresh_seconds: 0.0,
+        consume_seconds: 0.0,
+        intervals: Vec::with_capacity(total / EPOCH),
+        snapshot_rebuilds: 0,
+        snapshot_index_entries_copied: 0,
+    };
+    let mut snapshot: Option<Reader> = None;
+    let mut snapshot_chunks = 0;
+    let mut input = std::io::stdin().lock();
+    let mut frame = [0u8; 8];
+    while input.read(&mut frame[..1])? != 0 {
+        input.read_exact(&mut frame[1..])?;
+        let off = usize::try_from(u64::from_le_bytes(frame))?;
+        assert_eq!(
+            off, stats.bytes,
+            "missing or reordered publication notification"
+        );
+        let start_ns = varlit_storage_bench::monotonic_ns();
+        let phase = Instant::now();
+        match &mut r {
+            Reader::Hdf(h) => h.follow(),
+            Reader::Stream(f, iter) => {
+                f.follow_blocks(iter)?;
+            }
+            Reader::Native(_, _, _) | Reader::NativeWindow(_, _, _) => {
+                r.follow_native((off + EPOCH) / g)?;
+            }
+            Reader::Sql(s) => {
+                unsafe {
+                    if !s.blob.is_null() {
+                        ok(sqlite3_blob_close(s.blob));
+                        s.blob = std::ptr::null_mut();
+                        s.blob_row = None;
+                    }
+                    if !s.stmt.is_null() {
+                        ok(sqlite3_reset(s.stmt));
+                    }
+                }
+                s.exec("COMMIT; BEGIN");
+            }
+            _ => unreachable!(),
+        }
+        stats.refresh_seconds += phase.elapsed().as_secs_f64();
+        let phase = Instant::now();
+        if snapshot_mode && snapshot_chunks < (off + EPOCH) / g {
+            let Reader::NativeWindow(file, entries, _) = &r else {
+                unreachable!()
+            };
+            // SAFETY: this private writer never modifies captured records. Its
+            // later appends and header updates are outside the fixed confirmed
+            // prefix. No growing matrix, replacement, compaction or truncation
+            // can invalidate the mapping. No uncommitted tail is mapped.
+            let mapped = unsafe { file.mmap_payloads()? };
+            stats.snapshot_rebuilds += 1;
+            stats.snapshot_index_entries_copied += mapped.len();
+            snapshot_chunks = entries.len();
+            snapshot = Some(Reader::NativeMap(mapped));
+        }
+        for j in (0..EPOCH).step_by(OUTPUT) {
+            let source = snapshot.as_mut().unwrap_or(&mut r);
+            source.range((off + j) / SAMPLE, &mut out, g, &mut scratch)?;
+            verify((off + j) / SAMPLE, &out);
+            stats.bytes += out.len();
+        }
+        stats.consume_seconds += phase.elapsed().as_secs_f64();
+        stats
+            .intervals
+            .push((start_ns, varlit_storage_bench::monotonic_ns(), EPOCH));
+    }
+    assert_eq!(stats.bytes, total);
+    println!("{}", serde_json::to_string(&stats)?);
+    Ok(())
+}
+
 fn live(
     mode: &str,
     path: &Path,
@@ -999,8 +1211,18 @@ fn live(
     mmap: usize,
     readers: usize,
 ) -> R<()> {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
     assert!(
-        (matches!(mode, "stream" | "sql-chunks" | "sql-columns") || mode.starts_with("hdf-swmr"))
+        (matches!(
+            mode,
+            "stream"
+                | "sql-chunks"
+                | "sql-columns"
+                | "native-view"
+                | "native-mmap"
+                | "native-mmap-snapshot"
+        ) || mode.starts_with("hdf-swmr"))
             && readers > 0
     );
     let mut writer = Writer::open(mode, path, g, page, mmap, total)?;
@@ -1010,106 +1232,109 @@ fn live(
             data: vec![0; g],
         })
         .collect();
-    let ready = std::sync::mpsc::channel();
-    let mut backend = 0.0;
-    let mut writer_cpu = 0.0;
-    let mut generation = 0.0;
-    let mut ingest = 0.0;
+    let control = path.parent().unwrap().join("reader-control");
+    std::fs::create_dir(&control)?;
     let all = Instant::now();
-    let bytes = std::thread::scope(|scope| -> R<usize> {
-        let mut joins = Vec::new();
-        let mut senders = Vec::new();
-        for _ in 0..readers {
-            let (tx, rx) = std::sync::mpsc::channel::<usize>();
-            senders.push(tx);
-            let ready = ready.0.clone();
-            joins.push(scope.spawn(move || -> R<usize> {
-                let mut r = Reader::open(mode, path, g, page, mmap)?;
-                match &mut r {
-                    Reader::Hdf(h) => assert_eq!(h.rows, 0),
-                    Reader::Stream(_, iter) => assert!(iter.next().is_none()),
-                    Reader::Sql(s) => {
-                        s.prepare(if s.columns {
-                            "SELECT count(*) FROM samples"
-                        } else {
-                            "SELECT count(*) FROM chunks"
-                        });
-                        unsafe {
-                            assert_eq!(sqlite3_step(s.stmt), 100);
-                            assert_eq!(sqlite3_column_int64(s.stmt, 0), 0);
-                            ok(sqlite3_reset(s.stmt));
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-                r.query_begin();
-                ready.send(())?;
-                let mut out = vec![0; OUTPUT];
-                let mut scratch = Vec::new();
-                let mut processed = 0;
-                for off in rx {
-                    match &mut r {
-                        Reader::Hdf(h) => h.follow(),
-                        Reader::Stream(f, iter) => {
-                            f.follow_blocks(iter)?;
-                        }
-                        Reader::Sql(s) => {
-                            unsafe {
-                                if !s.blob.is_null() {
-                                    ok(sqlite3_blob_close(s.blob));
-                                    s.blob = std::ptr::null_mut();
-                                    s.blob_row = None;
-                                }
-                                if !s.stmt.is_null() {
-                                    ok(sqlite3_reset(s.stmt));
-                                }
-                            }
-                            s.exec("COMMIT; BEGIN");
-                        }
-                        _ => unreachable!(),
-                    }
-                    for j in (0..EPOCH).step_by(OUTPUT) {
-                        r.range((off + j) / SAMPLE, &mut out, g, &mut scratch)?;
-                        verify((off + j) / SAMPLE, &out);
-                        processed += out.len();
-                    }
-                }
-                assert_eq!(processed, total);
-                Ok(processed)
-            }));
+    let mut children = LiveChildren(Vec::new());
+    for id in 0..readers {
+        children.0.push(
+            Command::new(std::env::current_exe()?)
+                .arg(mode)
+                .arg(path.parent().unwrap())
+                .args([
+                    total.to_string(),
+                    g.to_string(),
+                    page.to_string(),
+                    mmap.to_string(),
+                ])
+                .args(["0", "0", "0", "live-reader"])
+                .arg(id.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()?,
+        );
+    }
+    let deadline = Instant::now() + std::time::Duration::from_secs(60);
+    while !(0..readers).all(|id| control.join(format!("ready-{id}")).exists()) {
+        if Instant::now() > deadline {
+            return Err("independent-reader startup timed out".into());
         }
-        for _ in 0..readers {
-            ready.1.recv_timeout(std::time::Duration::from_secs(60))?;
-        }
-        let start = Instant::now();
-        for off in (0..total).step_by(EPOCH) {
-            let t = Instant::now();
-            for (k, c) in bank.iter_mut().enumerate() {
-                c.first = ((off + k * g) / SAMPLE) as u64;
-                fill(c.first as usize, &mut c.data);
-            }
-            generation += t.elapsed().as_secs_f64();
-            let tc = thread_cpu();
-            let t = Instant::now();
-            writer.epoch(&bank, &[])?;
-            backend += t.elapsed().as_secs_f64();
-            writer_cpu += thread_cpu() - tc;
-            for tx in &senders {
-                tx.send(off)?;
+        for child in &mut children.0 {
+            if let Some(status) = child.try_wait()? {
+                return Err(format!("reader exited before startup: {status}").into());
             }
         }
-        ingest = start.elapsed().as_secs_f64();
-        drop(senders);
-        let mut bytes = 0;
-        for j in joins {
-            bytes += j.join().expect("live reader panicked")?;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (mut backend, mut writer_cpu, mut generation) = (0.0, 0.0, 0.0);
+    let start = Instant::now();
+    let writer_start_ns = varlit_storage_bench::monotonic_ns();
+    for off in (0..total).step_by(EPOCH) {
+        let t = Instant::now();
+        for (k, c) in bank.iter_mut().enumerate() {
+            c.first = ((off + k * g) / SAMPLE) as u64;
+            fill(c.first as usize, &mut c.data);
         }
-        Ok(bytes)
-    })?;
+        generation += t.elapsed().as_secs_f64();
+        let tc = thread_cpu();
+        let t = Instant::now();
+        writer.epoch(&bank, &[])?;
+        backend += t.elapsed().as_secs_f64();
+        writer_cpu += thread_cpu() - tc;
+        for child in &mut children.0 {
+            child
+                .stdin
+                .as_mut()
+                .ok_or("publication pipe closed")?
+                .write_all(&(off as u64).to_le_bytes())?;
+        }
+    }
+    let writer_end_ns = varlit_storage_bench::monotonic_ns();
+    let ingest = start.elapsed().as_secs_f64();
+    for child in &mut children.0 {
+        drop(child.stdin.take());
+    }
+    let mut reader_stats: Vec<LiveRead> = Vec::new();
+    for child in &mut children.0 {
+        let mut output = Vec::new();
+        child
+            .stdout
+            .take()
+            .ok_or("missing reader output")?
+            .read_to_end(&mut output)?;
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(format!("live reader failed: {status}").into());
+        }
+        reader_stats.push(serde_json::from_slice(&output)?);
+    }
+    let facts = if let Writer::Sql(s) = &mut writer {
+        Some(s.facts())
+    } else {
+        None
+    };
     writer.finish();
     drop(writer);
     let seconds = all.elapsed().as_secs_f64();
+    let bytes: usize = reader_stats.iter().map(|r| r.bytes).sum();
     assert_eq!(bytes, readers * total);
+    let reader_active_seconds = reader_stats
+        .iter()
+        .map(|r| r.refresh_seconds + r.consume_seconds)
+        .fold(0.0_f64, f64::max);
+    let during_write_bytes: usize = reader_stats
+        .iter()
+        .flat_map(|r| &r.intervals)
+        .filter(|(start, end, _)| *start >= writer_start_ns && *end <= writer_end_ns)
+        .map(|(_, _, bytes)| bytes)
+        .sum();
+    let crossing_write_bytes: usize = reader_stats
+        .iter()
+        .flat_map(|r| &r.intervals)
+        .filter(|(start, end, _)| *start < writer_end_ns && *end > writer_end_ns)
+        .map(|(_, _, bytes)| bytes)
+        .sum();
     use std::os::unix::fs::MetadataExt;
     let mut allocated = 0;
     let mut file_bytes = 0;
@@ -1122,7 +1347,16 @@ fn live(
     }
     println!(
         "{}",
-        serde_json::json!({"kind":"live","mode":mode,"payload_bytes":total,"logical_samples":total/SAMPLE,"channels":16,"sample_bytes":SAMPLE,"group_bytes":g,"data_units":if mode=="sql-columns"{total/SAMPLE}else{total/g},"page":page,"mmap_requested":mmap,"readers":readers,"read_bytes":bytes,"commits":total/EPOCH,"writer_seconds":ingest,"writer_backend_seconds":backend,"writer_cpu_seconds":writer_cpu,"input_generation_seconds":generation,"seconds":seconds,"file_bytes":file_bytes,"allocated_bytes":allocated,"verified":true})
+        serde_json::json!({"kind":"live","mode":mode,"payload_bytes":total,
+        "logical_samples":total/SAMPLE,"channels":16,"sample_bytes":SAMPLE,"group_bytes":g,
+        "data_units":if mode=="sql-columns"{total/SAMPLE}else{total/g},"page":page,
+        "mmap_requested":mmap,"sqlite_facts":facts,"readers":readers,"reader_model":"independent processes",
+        "read_bytes":bytes,"reader_stats":reader_stats,"reader_active_seconds":reader_active_seconds,
+        "writer_active_start_ns":writer_start_ns,"writer_active_end_ns":writer_end_ns,
+        "reader_fully_during_write_bytes":during_write_bytes,"reader_crossing_write_end_bytes":crossing_write_bytes,
+        "commits":total/EPOCH,"writer_seconds":ingest,"writer_backend_seconds":backend,
+        "writer_cpu_seconds":writer_cpu,"input_generation_seconds":generation,"seconds":seconds,
+        "file_bytes":file_bytes,"allocated_bytes":allocated,"verified":true})
     );
     Ok(())
 }

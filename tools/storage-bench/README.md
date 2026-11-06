@@ -152,7 +152,72 @@ COW pages into the primary. Mmap may refuse a 1 GiB overlay under the unchanged
 materialization limit; those refusals remain failures, and bounded owned bulk
 reads are a separate candidate. No limits are raised to enable mmap.
 No ReadLimits are increased. Table matrix reserved capacity, COW files and index
-sidecars count toward storage. No live file is mapped under an immutability promise.
+sidecars count toward storage. Live append-only native readers can map individual
+confirmed immutable payloads with `mmap_payload_window`; mutable headers and later
+appends are outside those fixed windows. Their private writer never rewrites,
+truncates or replaces mapped storage and does not use growing matrix chunks.
+
+### SQLite mmap recheck
+
+The focused recheck uses 64 KiB SQLite pages and an 8 MiB connection cache, with
+WAL/FULL and mmap requests of 0, 1 GiB and 2 GiB. The larger request covers page
+overhead beyond a 1 GiB logical payload without changing the 4 CPU / 16 GiB /
+32 GiB budgets. Effective PRAGMA values and sampled primary-file mappings are
+recorded separately: a requested mmap ceiling does not prove that live WAL reads
+use mapped data. OS mapping extents exclude libraries and SQLite WAL/SHM files;
+shared file offsets are deduplicated across processes. They measure virtual file
+coverage, while PSS measures sampled physical memory. A zero observation can mean
+that a short mapping escaped periodic sampling; it does not prove no mapping occurred.
+
+Static 128 MiB/1 GiB arrays use 64 KiB/1 MiB blocks, two full scans, 4,096
+single-sample lookups, 128 windows of 4,096 samples and eight additional reader-thread
+full scans. Live 1 GiB arrays publish 16 MiB at a time to one or eight independent reader processes;
+each reader consumes the complete stream through 4 MiB caller buffers. Common-clock
+intervals expose reads entirely during writing, intervals crossing writer end and
+the final drain. Live arrays do not include random queries. A separate grouped
+1 GiB case retains four producers, eight readers, metadata and group-local item
+queries. These distinct workloads are never pooled.
+
+Varlit FULL and CRC_ONLY keep data CRC enabled; CRC_ONLY trusts captured structural
+metadata. Static mmap uses the whole validated snapshot after writers close. Live
+mmap maps one confirmed record payload at a time and includes mapping/unmapping
+costs. Its retained record directory grows from new tail entries, stopping at the
+last observed record offset. It does not rebuild a complete mmap index at every
+publication. Native blocks contain many logical samples, with one durable
+publication per 16 MiB; no sample is turned into an individual record.
+
+`--live-snapshots` runs a separate matched live study that also rebuilds a
+`mmap_payloads` snapshot when the confirmed prefix advances. Appends are outside
+that fixed mapped prefix and all captured records remain immutable. This route
+includes a full captured-index copy at each rebuild; per-reader rebuild and copied
+entry counts are recorded. It is a finite-workload alternative, not a claim of
+incremental metadata cost or long-duration scaling. The record-window route and
+all SQLite controls are repeated in this cohort instead of pooling timings.
+
+```sh
+CARGO_TARGET_DIR=target cargo build --locked --release --manifest-path tools/storage-bench/Cargo.toml --bins
+python3 tools/storage-bench/compare_sqlite_mmap.py --binary-dir target/release --smoke --output /absolute/fresh/mmap-smoke
+python3 tools/storage-bench/compare_sqlite_mmap.py --binary-dir target/release --repeats 7 --output /absolute/fresh/mmap-primary
+python3 tools/storage-bench/compare_sqlite_mmap.py --binary-dir target/release --live-snapshots --repeats 7 --output /absolute/fresh/mmap-snapshots
+```
+
+Build the supplied binary directory from this checkout before running. Seven
+rounds are frozen before observing the primary results, with randomized complete
+workload blocks. Publication gates and sampled resource probes remain separate
+from timing observations. The recheck is integrated into the combined report;
+older HDF5 and other cohorts retain their own observations and source revisions.
+
+The retained campaign names are `primary-v1`, `snapshots-v1`, `control-v1`,
+`control-calibration-v1` and `control-final-v1`. To regenerate the integrated
+data/dashboard from the extracted evidence, retaining earlier cohorts:
+
+```sh
+python3 tools/storage-bench/integrate_report.py --current docs/performance/workload-storage-20261104/current-comparison.json --sqlite-mmap-evidence /path/to/extracted-evidence --output docs/performance/workload-storage-20261104
+node tools/storage-bench/check_report.cjs
+```
+
+The evidence archive contains the fixed before/after control drivers as well as
+source snapshots, exact measured binary hashes and raw timing/resource rows.
 
 ## Build and run
 
