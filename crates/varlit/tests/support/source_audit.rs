@@ -292,12 +292,105 @@ pub(crate) struct Audit {
     pub(crate) include_owner: Option<PathBuf>,
     pub(crate) inventory: BTreeMap<String, Surface>,
     pub(crate) proof_bodies: BTreeMap<String, ProofBody>,
+    pub(crate) contract_definitions: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) contract_harnesses: BTreeMap<String, String>,
+    pub(crate) verified_stubs: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) ordinary_stubs: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) stub_replacements: BTreeMap<String, BTreeMap<String, String>>,
     pub(crate) seen_files: BTreeSet<PathBuf>,
     pub(crate) edges: BTreeSet<(String, String, String)>,
     pub(crate) errors: Vec<String>,
 }
 
 impl Audit {
+    fn proof_annotations(&mut self, name: &str, attrs: &[Attribute]) {
+        // Preserve the actual Rust attribute relationships. Exported hashes
+        // cannot substitute for a missing proof_for_contract or verified stub.
+        if self.crate_name == "core" {
+            let full = self
+                .scope
+                .iter()
+                .cloned()
+                .chain(std::iter::once(name.to_owned()))
+                .collect::<Vec<_>>()
+                .join("::");
+            for attr in attrs {
+                let path = attr
+                    .path()
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                match path.as_str() {
+                    "kani::proof_for_contract" => {
+                        let target: syn::Path =
+                            attr.parse_args().expect("invalid contract proof target");
+                        assert!(
+                            self.contract_harnesses
+                                .insert(full.clone(), target.to_token_stream().to_string())
+                                .is_none()
+                        );
+                    }
+                    "kani::stub_verified" => {
+                        let target: syn::Path =
+                            attr.parse_args().expect("invalid verified stub target");
+                        self.verified_stubs
+                            .entry(full.clone())
+                            .or_default()
+                            .insert(target.to_token_stream().to_string());
+                    }
+                    "kani::stub" => {
+                        let targets=syn::punctuated::Punctuated::<syn::ExprPath,Token![,]>::parse_terminated;
+                        let args = attr.parse_args_with(targets).expect("invalid stub target");
+                        self.ordinary_stubs
+                            .entry(full.clone())
+                            .or_default()
+                            .insert(args.first().unwrap().to_token_stream().to_string());
+                        assert_eq!(args.len(), 2);
+                        self.stub_replacements
+                            .entry(full.clone())
+                            .or_default()
+                            .insert(
+                                args.first().unwrap().to_token_stream().to_string(),
+                                args.last().unwrap().to_token_stream().to_string(),
+                            );
+                    }
+                    "kani::requires" | "kani::ensures" | "kani::modifies" => {
+                        self.contract_definitions
+                            .entry(full.clone())
+                            .or_default()
+                            .insert(attr.path().segments.last().unwrap().ident.to_string());
+                    }
+                    "cfg_attr" => {
+                        let args = metas(match &attr.meta {
+                            Meta::List(list) => list,
+                            _ => unreachable!(),
+                        });
+                        let enabled = match args.first() {
+                            Some(Meta::Path(path)) => path.is_ident("kani"),
+                            _ => false,
+                        };
+                        if !enabled {
+                            continue;
+                        }
+                        for meta in args.iter().skip(1) {
+                            let name = meta.path().to_token_stream().to_string();
+                            if ["kani :: requires", "kani :: ensures", "kani :: modifies"]
+                                .contains(&name.as_str())
+                            {
+                                self.contract_definitions
+                                    .entry(full.clone())
+                                    .or_default()
+                                    .insert(meta.path().segments.last().unwrap().ident.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     fn proof_body(&mut self, kind: &str, name: &str, tokens: impl ToTokens) {
         let tokens = tokens.to_token_stream();
         let mut refs = ProofReferences::default();
@@ -505,6 +598,7 @@ impl<'ast> Visit<'ast> for Audit {
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         self.proof_body("fn", &item.sig.ident.to_string(), item);
+        self.proof_annotations(&item.sig.ident.to_string(), &item.attrs);
         if self.generator_crate || self.crate_name == "macros" {
             // Proc-macro output is generated inside quote! and cannot be
             // inventoried as ordinary Rust declarations before expansion.
@@ -528,6 +622,7 @@ impl<'ast> Visit<'ast> for Audit {
         if test_only(&item.attrs) {
             return;
         }
+        self.proof_annotations(&item.sig.ident.to_string(), &item.attrs);
         // Impl methods are parsed inside their owning impl for reference
         // discovery, including trait methods without a public visibility token.
         let method = item.to_token_stream();
@@ -624,6 +719,7 @@ impl<'ast> Visit<'ast> for Audit {
             return;
         }
         let method = item.to_token_stream();
+        self.proof_annotations(&item.sig.ident.to_string(), &item.attrs);
         let wrapped: Item = syn::parse_quote!(trait ProofOwner { #method });
         self.proof_body("trait-method", &item.sig.ident.to_string(), wrapped);
         visit::visit_trait_item_fn(self, item);

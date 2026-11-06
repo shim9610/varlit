@@ -444,6 +444,13 @@ struct ChunkedHeader {
 }
 
 // Establish the real-input iteration bound before considering declared output.
+#[cfg_attr(kani, kani::ensures(|result: &Option<usize>| {
+    let end = count as u128 * 16 + 32;
+    match result {
+        Some(actual) => *actual as u128 == end && end <= input_len as u128,
+        None => end > input_len as u128,
+    }
+}))]
 fn table_extent(count: usize, input_len: usize) -> Option<usize> {
     let end = count
         .checked_mul(CHUNK_ENTRY_LEN)?
@@ -617,3 +624,7 @@ impl crate::TryClone for ChunkedBytes {
         })
     }
 }
+
+#[cfg(kani)]
+#[path = "verification/chunk_contracts.rs"]
+mod contract_proofs;

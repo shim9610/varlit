@@ -87,7 +87,7 @@ def main():
             if code:
                 raise ValueError('positive control failed: '+harness)
             validate(log, [harness])
-    cargo = ['cargo', 'kani', '-p', 'varlit-core', '-Z', 'stubbing', '-Z', 'unstable-options',
+    cargo = ['cargo', 'kani', '-p', 'varlit-core', '-Z', 'stubbing', '-Z', 'unstable-options', '-Z', 'function-contracts',
              '--harness-timeout', '300', '--exact']
     if args.features == 'all':
         cargo += ['--all-features']

@@ -1648,11 +1648,18 @@ mod corruption_guards {
     }
 }
 
+#[cfg_attr(kani, kani::ensures(|result: &bool| *result == expected.is_none_or(|height| height == actual)))]
 fn height_matches(expected: Option<u8>, actual: u8) -> bool {
     expected.is_none_or(|height| height == actual)
 }
 
 // Success consumes exactly one visit before reading attacker-controlled nodes.
+#[cfg_attr(kani, kani::modifies(remaining))]
+#[cfg_attr(kani, kani::ensures(|result: &Option<()>| {
+    let before = old(*remaining);
+    result.is_some() == (before != 0)
+        && *remaining == if before == 0 { 0 } else { before - 1 }
+}))]
 fn take_visit(remaining: &mut u64) -> Option<()> {
     *remaining = remaining.checked_sub(1)?;
     Some(())
@@ -1661,3 +1668,7 @@ fn take_visit(remaining: &mut u64) -> Option<()> {
 #[cfg(kani)]
 #[path = "../verification/traversal.rs"]
 mod resource_proofs;
+
+#[cfg(kani)]
+#[path = "../verification/traversal_contracts.rs"]
+mod contract_proofs;

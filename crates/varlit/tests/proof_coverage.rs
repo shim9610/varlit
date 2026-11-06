@@ -13,6 +13,7 @@ use source_audit::Audit;
 fn observed(root: &Path) -> Value {
     let mut functions = BTreeMap::new();
     let mut sources = BTreeMap::new();
+    let mut contracts = json!({});
     for (name, directory, generator) in [
         ("core", "varlit-core", false),
         ("facade", "varlit", false),
@@ -28,6 +29,11 @@ fn observed(root: &Path) -> Value {
         };
         audit.inspect_file(&source_root.join("lib.rs"));
         assert!(audit.errors.is_empty(), "{}", audit.errors.join("\n"));
+        if name == "core" {
+            contracts = json!({"definitions": audit.contract_definitions,
+                "proofs": audit.contract_harnesses, "verified": audit.verified_stubs,
+                "ordinary": audit.ordinary_stubs,"replacements":audit.stub_replacements});
+        }
         for (id, body) in audit.proof_bodies {
             assert!(
                 functions
@@ -91,7 +97,7 @@ fn observed(root: &Path) -> Value {
     // megabyte of duplicated source metadata into the repository. Every source
     // edit conservatively requires all contract families, not an inferred call
     // graph that could miss dynamic dispatch or generated code.
-    json!({"schema":1,"functions":{"count":functions.len(),"catalogue":source_audit::fingerprint(&serde_json::to_string(&functions).unwrap())},"sources":sources})
+    json!({"schema":1,"functions":{"count":functions.len(),"catalogue":source_audit::fingerprint(&serde_json::to_string(&functions).unwrap())},"sources":sources,"contracts":contracts})
 }
 
 #[test]
@@ -109,7 +115,7 @@ fn every_source_change_has_current_proof_obligations() {
             .expect("missing production proof inventory"),
     )
     .unwrap();
-    for key in ["functions", "sources"] {
+    for key in ["functions", "sources", "contracts"] {
         let before = expected[key].as_object().unwrap();
         let after = current[key].as_object().unwrap();
         let changed: BTreeSet<_> = before
@@ -126,6 +132,7 @@ fn every_source_change_has_current_proof_obligations() {
         &fs::read(root.join("docs/verification/proof-contracts.json")).unwrap(),
     )
     .unwrap();
+    check_contract_links(&current["contracts"], &manifest).unwrap();
     let families: BTreeSet<_> = manifest["contracts"]
         .as_array()
         .unwrap()
@@ -226,4 +233,209 @@ fn private_edits_and_new_paths_invalidate_the_body_catalogue() {
         catalogue("trait T { fn f(){ protected(); } }"),
         catalogue("trait T { fn f(){ unprotected(); } }")
     );
+}
+
+fn check_contract_links(facts: &Value, manifest: &Value) -> Result<(), String> {
+    let registered: BTreeSet<_> = manifest["contracts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["harnesses"].as_array().unwrap())
+        .map(|h| h.as_str().unwrap())
+        .collect();
+    let mut definitions = BTreeMap::new();
+    let mut proofs = BTreeMap::new();
+    let mut references = BTreeMap::new();
+    for c in manifest["executable_contracts"]
+        .as_array()
+        .ok_or("missing executable contracts")?
+    {
+        let target = c["target"].as_str().unwrap();
+        let proof = c["proof"].as_str().unwrap();
+        let reference = c["reference"].as_str().unwrap();
+        if !registered.contains(proof) {
+            return Err(format!("unregistered contract proof: {proof}"));
+        }
+        if references.insert(target, reference).is_some()
+            || proofs.insert(proof, reference).is_some()
+        {
+            return Err("duplicate executable contract".into());
+        }
+        if !c["annotations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ensures"))
+        {
+            return Err("contract has no postcondition".into());
+        }
+        definitions.insert(target, c["annotations"].clone());
+    }
+    if definitions.is_empty() {
+        return Err("empty executable contracts".into());
+    }
+    if serde_json::to_value(definitions).unwrap() != facts["definitions"] {
+        return Err("contract definition/annotation mismatch".into());
+    }
+    if serde_json::to_value(proofs).unwrap() != facts["proofs"] {
+        return Err("proof_for_contract target mismatch".into());
+    }
+    let mut expected = BTreeMap::new();
+    for (caller, dependencies) in manifest["contract_uses"]
+        .as_object()
+        .ok_or("missing contract dependencies")?
+    {
+        if !registered.contains(caller.as_str()) {
+            return Err(format!("unregistered contract consumer: {caller}"));
+        }
+        let mut targets = BTreeSet::new();
+        for target in dependencies.as_array().unwrap() {
+            let name = target.as_str().unwrap();
+            targets.insert(
+                *references
+                    .get(name)
+                    .ok_or_else(|| format!("unproved dependency: {name}"))?,
+            );
+        }
+        expected.insert(caller, targets);
+    }
+    if serde_json::to_value(expected).unwrap() != facts["verified"] {
+        return Err("verified-stub dependency mismatch".into());
+    }
+    let protected: BTreeSet<_> = references.values().copied().collect();
+    for targets in facts["ordinary"].as_object().unwrap().values() {
+        for target in targets.as_array().unwrap() {
+            let last = target.as_str().unwrap().rsplit("::").next().unwrap().trim();
+            if protected.contains(last) {
+                return Err("unverified stub replaces a contracted function".into());
+            }
+        }
+    }
+    let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (consumer, targets) in manifest["contract_uses"].as_object().unwrap() {
+        for target in targets.as_array().unwrap() {
+            let entry = manifest["executable_contracts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["target"] == *target)
+                .unwrap();
+            graph
+                .entry(consumer.clone())
+                .or_default()
+                .insert(entry["proof"].as_str().unwrap().into());
+        }
+    }
+    if let Some(callers) = facts["replacements"].as_object() {
+        for (consumer, targets) in callers {
+            for (target, replacement) in targets.as_object().unwrap() {
+                let target = target.replace(' ', "");
+                let replacement = replacement.as_str().unwrap().replace(' ', "");
+                // Existing allocator/empty-Vec assumptions remain explicit in
+                // the family specifications. A new semantic stub needs proofs.
+                let allocation = target.starts_with("std::alloc::")
+                    || target.starts_with("<std::alloc::Globalas");
+                let empty_vec = target.starts_with("std::vec::Vec") && target.ends_with("::new");
+                let sentinel = target == "parse_entry" && replacement == "forbidden_entry_read";
+                if !(allocation || empty_vec || sentinel) {
+                    return Err(format!(
+                        "semantic stub has no verified function contract: {consumer} {target} {replacement}"
+                    ));
+                }
+            }
+        }
+    }
+    fn acyclic(
+        node: &str,
+        graph: &BTreeMap<String, BTreeSet<String>>,
+        active: &mut BTreeSet<String>,
+        done: &mut BTreeSet<String>,
+    ) -> bool {
+        if done.contains(node) {
+            return true;
+        }
+        if !active.insert(node.into()) {
+            return false;
+        }
+        if graph
+            .get(node)
+            .is_some_and(|edges| edges.iter().any(|next| !acyclic(next, graph, active, done)))
+        {
+            return false;
+        }
+        active.remove(node);
+        done.insert(node.into());
+        true
+    }
+    let mut done = BTreeSet::new();
+    for node in graph.keys() {
+        if !acyclic(node, &graph, &mut BTreeSet::new(), &mut done) {
+            return Err("cyclic proof/model dependency".into());
+        }
+    }
+    for contract in manifest["contracts"].as_array().unwrap() {
+        for key in ["requires", "ensures", "on_error", "frame", "progress"] {
+            if contract["specification"][key]
+                .as_str()
+                .is_none_or(|s| s.trim().is_empty())
+            {
+                return Err(format!(
+                    "missing specification clause: {} {key}",
+                    contract["id"]
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn contract_links_require_the_real_definition_proof_and_verified_use() {
+    let facts = json!({"definitions":{"f":["ensures"]},"proofs":{"proof":"f"},
+        "verified":{"consumer":["f"]},"ordinary":{}});
+    let manifest = json!({"contracts":[{"id":"fixture","harnesses":["proof","consumer"],
+        "specification":{"requires":"valid typed inputs","ensures":"r == x","on_error":"none","frame":"pure","progress":"one step"}}],
+        "executable_contracts":[{"target":"f","reference":"f","proof":"proof","annotations":["ensures"]}],
+        "contract_uses":{"consumer":["f"]}});
+    check_contract_links(&facts, &manifest).unwrap();
+    for (kind, expected) in [
+        (0, "definition/annotation"),
+        (1, "proof_for_contract"),
+        (2, "verified-stub"),
+        (3, "unverified stub"),
+        (4, "unproved dependency"),
+        (5, "specification clause"),
+        (6, "cyclic"),
+        (7, "semantic stub"),
+    ] {
+        let mut f = facts.clone();
+        let mut m = manifest.clone();
+        match kind {
+            0 => {
+                f["definitions"] = json!({});
+            }
+            1 => {
+                f["proofs"]["proof"] = json!("different");
+            }
+            2 => {
+                f["verified"] = json!({});
+            }
+            3 => {
+                f["ordinary"] = json!({"consumer":["module :: f"]});
+            }
+            4 => {
+                m["contract_uses"]["consumer"] = json!(["unknown"]);
+            }
+            5 => {
+                m["contracts"][0]["specification"]["on_error"] = Value::Null;
+            }
+            6 => {
+                m["contract_uses"] = json!({"proof":["f"]});
+                f["verified"] = json!({"proof":["f"]});
+            }
+            _ => {
+                f["replacements"] = json!({"consumer":{"semantic::g":"unchecked_model"}});
+            }
+        }
+        assert!(check_contract_links(&f, &m).unwrap_err().contains(expected));
+    }
 }
