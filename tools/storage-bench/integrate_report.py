@@ -17,7 +17,11 @@ def append_only_study(data, root):
                         if r.get('presentation') != 'append-only'}
     data['cohorts'] = [c for c in data['cohorts'] if c.get('kind') != 'append-only']
     manifests, events, changes = {}, {}, {}
-    for cohort in ['primary-v1', 'primary-v2', 'primary-final-v1', 'calibration-v1', 'calibration-alerts-v1']:
+    cohorts = ['primary-v1', 'primary-v2', 'primary-final-v1', 'calibration-v1', 'calibration-alerts-v1']
+    for extra in ['lifecycle-v1', 'lifecycle-calibration-v1']:
+        if (root / extra).is_dir():
+            cohorts.append(extra)
+    for cohort in cohorts:
         manifest = json.loads((root / cohort / 'manifest.json').read_text())
         manifests[cohort] = manifest
         rows = [json.loads(s) for s in (root / cohort / 'results.jsonl').read_text().splitlines()]
@@ -66,7 +70,10 @@ def append_only_study(data, root):
             variants = {r['profile']['variant']: r['metrics'] for r in study
                         if r['profile']['workload'] == workload}
             references = [('raw-b', 'raw-a'), ('guarded', 'raw-a')] if calibration else [
+                ('baseline-b', 'baseline-a'), ('current', 'baseline-a')] if cohort.startswith('lifecycle') else [
                 ('before-b', 'before-a'), ('after-raw', 'before-a'), ('after-guarded', 'after-raw')]
+            if 'reconnect' in variants:
+                references.append(('reconnect', 'current'))
             changes[cohort][workload] = {f'{candidate}/{reference}': {
                 k: 100 * (variants[candidate][k] / variants[reference][k] - 1)
                 for k in variants[candidate] if variants[reference][k] > 0}
@@ -82,9 +89,9 @@ def append_only_study(data, root):
     data['append_only'] = dict(date='2026-11-06', budgets=dict(cpu=4, memory_gib=16, filesystem_gib=32),
         manifests={c: {k: m[k] for k in ['started_utc', 'baseline', 'binaries', 'affinity', 'memory_max', 'cpu_max']}
                    for c, m in manifests.items()}, memory_event_deltas=events, changes_percent=changes,
-        evidence='append-only-mmap-20261106.tar.gz',
-        qualification='Three separate seven-run implementation stages plus two fixed 30-round phase calibrations. Identical-binary controls and all phase alerts retained; no universal zero-overhead or 5% guarantee.',
-        runtime_notes='primary-v1 used the earlier resource-options replacement API with fully resolved FULL limits. primary-v2 and both calibrations use open_reader_with_resource_limits and preserve missing format defaults. primary-final-v1 additionally includes metadata-only mmap Debug formatting and is the final implementation. No cohort pooling.',
+        evidence='append-only-mmap-20261106.tar.gz', lifecycle_evidence='append-only-lifecycle-20261106.tar.gz' if 'lifecycle-v1' in cohorts else None,
+        qualification='Separate implementation and fixed 30-round phase-check cohorts. Identical-binary controls and all phase alerts retained; no universal zero-overhead or 5% guarantee.',
+        runtime_notes='primary-v1 used the earlier resource-options replacement API with fully resolved FULL limits. primary-v2 and both calibrations use open_reader_with_resource_limits and preserve missing format defaults. primary-final-v1 additionally includes metadata-only mmap Debug formatting and predates lifecycle-v1. lifecycle-v1 compares the c5 guarded baseline with current guarded operation and actual reader-first repeated writer leases. lifecycle-calibration-v1 retains fixed 30-round before A/B/current phase checks. No cohort pooling.',
         scope='One process, one active writer and independent reader threads; live per-record windows or two-pass fixed snapshots. No new SQLite/HDF5 comparison.')
     data['timing_observations'] = sum(c['timing_observations'] for c in data['cohorts'])
     data['resource_probes'] = sum(c['resource_probes'] for c in data['cohorts'])
@@ -298,7 +305,7 @@ def main():
     (args.output / "index.html").write_text(template.replace("__DATA__", json.dumps(current).replace("</", "<\\/")))
     (args.output / "CURRENT_SHA256SUMS").write_text("".join(
         f"{hashlib.sha256((args.output/name).read_bytes()).hexdigest()}  {name}\n"
-        for name in ["README.md", "current-comparison.json", "index.html", "sqlite-mmap-20261106.tar.gz", "append-only-mmap-20261106.tar.gz"]
+        for name in ["README.md", "current-comparison.json", "index.html", "sqlite-mmap-20261106.tar.gz", "append-only-mmap-20261106.tar.gz", "append-only-lifecycle-20261106.tar.gz"]
         if (args.output / name).exists()))
     print("Integrated", len(current["profiles"]), "measured configurations; historical controls excluded by default")
 

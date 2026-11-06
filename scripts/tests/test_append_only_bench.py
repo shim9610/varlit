@@ -71,3 +71,27 @@ class AppendOnlyBenchmarkContracts(unittest.TestCase):
                 ('session-live', 1 << 30, 1 << 20),
                 ('session-warm', 128 << 20, 65536),
             ])
+
+
+    def test_lifecycle_keeps_baseline_controls_and_equal_data_work(self):
+        profiles = comparison.lifecycle_profiles(Path('before'), Path('after'))
+        self.assertEqual(len(profiles), 42)
+        self.assertEqual(sum(p['variant'] == 'reconnect' for p in profiles), 6)
+        for workload in {p['workload'] for p in profiles}:
+            variants = {p['variant']: p for p in profiles if p['workload'] == workload}
+            self.assertEqual(variants['baseline-a']['binary_override'], variants['baseline-b']['binary_override'])
+            work = {tuple(p[k] for k in ['total', 'group', 'readers', 'producers', 'complex', 'read_validation']) + tuple(p['command_tail']) for p in variants.values()}
+            self.assertEqual(len(work), 1)
+            self.assertTrue(all(p['mode'] == 'session-guarded' for k,p in variants.items() if k != 'reconnect'))
+            if 'reconnect' in variants:
+                self.assertEqual(variants['reconnect']['mode'], 'session-reconnect')
+                self.assertEqual(variants['reconnect']['binary_override'], variants['current']['binary_override'])
+
+
+    def test_lifecycle_phase_check_fixes_all_four_alerts_before_execution(self):
+        profiles = comparison.lifecycle_calibration_profiles(Path('before'), Path('after'))
+        self.assertEqual(len(profiles), 12)
+        self.assertEqual({p['variant'] for p in profiles}, {'baseline-a','baseline-b','current'})
+        self.assertEqual({(p['total'],p['group'],p['readers']) for p in profiles},
+                         {(1<<30,1<<20,1),(1<<30,65536,8),(128<<20,1<<20,8),(128<<20,65536,8)})
+        self.assertTrue(all(p['command_tail'][0] == 'session-warm' and p['read_validation'] == 'full' for p in profiles))

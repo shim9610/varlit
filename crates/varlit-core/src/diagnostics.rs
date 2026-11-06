@@ -890,7 +890,14 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
             DiagnosticDomain::CallerUsage
         }
 
-        Error::IndexBusy => DiagnosticDomain::Environment,
+        Error::IndexBusy
+        | Error::AppendOnlyWriterActive
+        | Error::AppendOnlyRecoveryRequired
+        | Error::AppendOnlyReadersActive
+        | Error::AppendOnlySessionBusy => DiagnosticDomain::Environment,
+
+        Error::AppendOnlySessionClosed => DiagnosticDomain::CallerUsage,
+        Error::AppendOnlySessionPoisoned => DiagnosticDomain::LibraryInvariant,
 
         Error::IntegrityFeatureDisabled | Error::CompressionFeatureDisabled => {
             DiagnosticDomain::FeatureGate

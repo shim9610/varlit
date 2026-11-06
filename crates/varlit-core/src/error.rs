@@ -319,6 +319,24 @@ pub enum Error {
     #[error("the derived disk index is busy")]
     IndexBusy,
 
+    #[error("an append-only writer is already active")]
+    AppendOnlyWriterActive,
+
+    #[error("the append-only session requires recovery before another writer can start")]
+    AppendOnlyRecoveryRequired,
+
+    #[error("protected readers or mappings must be released before append-only recovery")]
+    AppendOnlyReadersActive,
+
+    #[error("the append-only session is permanently closed to writers")]
+    AppendOnlySessionClosed,
+
+    #[error("the append-only session is recovering or changing writer ownership")]
+    AppendOnlySessionBusy,
+
+    #[error("append-only session coordination was poisoned")]
+    AppendOnlySessionPoisoned,
+
     #[error("disk index error: {0}")]
     DiskIndex(#[source] Box<crate::disk_index::DiskIndexError>),
 

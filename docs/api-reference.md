@@ -9,55 +9,93 @@ streaming and fallible ownership. See [API changes](api-changes.md#0130).
 ## Append-only mmap sessions
 
 With `mmap`, consume a native `VarlitFile` through
-`unsafe AppendOnlyWriter::new(file)`. It accepts a healthy writer holding the
-native object lock and a transaction-marker format; matrix storage is refused.
-The writer exposes `push_info`, `push_keyed_info`, `flush`, `commit` and
-`commit_durable`. It updates ordinary unmapped file headers as needed and never
-offers an API to rewrite captured records.
+`unsafe AppendOnlySession::new(file)`. Admission requires a healthy writer
+holding the native object lock, a transaction-marker format and no matrix
+storage. Initial native open/recovery completes before issuing capabilities.
+`unsafe AppendOnlyWriter::new(file)` remains a writer-first convenience;
+retain `writer.session()` if later writer reconnect is needed.
 
-Issue `writer.reader_token()` and create each reader on its owning worker with
-`token.open_reader()`. The token accepts no arbitrary path or file handle.
-Opening checks the session's pinned object identity before parsing the opened
-handle. Path removal can fail; replacement with a different object is refused.
-Existing readers follow the original open object.
+Create `session.reader_token()` before, during or after an active writer, then
+open each worker's reader with `token.open_reader()`. Tokens grant read-only
+capability and cannot create write authority. They accept no arbitrary path or
+file handle. Opening registers a reader before filesystem access and checks the
+pinned object identity before parsing that same handle. A removed path may fail;
+a different object at that path is refused. Existing readers follow their
+original open object.
 
-Use `block_entries_into` or incremental `block_chain` traversal, then safe
+`session.open_writer()` issues exactly one active writer. Session clones share
+that slot. The writer offers `push_info`, `push_keyed_info`, `flush`, `commit`
+and `commit_durable`; it updates ordinary unmapped file headers but cannot
+rewrite captured records. After committing, `writer.close()` or normal drop
+returns cached native state to the session. Reconnect work is independent of file size and record count,
+without reopening or rescanning; existing readers and mappings may remain.
+No successful append/commit or mapped byte access acquires a session mutex.
+
+Use incremental `block_chain` traversal or `block_entries_into`, then safe
 `reader.mmap_payload_window(&entry)` for one confirmed stored payload.
 `reader.mmap_payloads()` captures a fixed prefix with the existing whole-index
-copy cost. Compressed payload windows contain stored encodings, not decompressed
-bytes. Existing mappings never grow; call `follow()` and obtain new views.
+copy cost. Compressed windows contain stored encodings, not decompressed bytes.
+Existing mappings never grow; call `follow()` and obtain new views.
 
-Owned windows/snapshots keep protection after writer, token and reader drop.
-An ordinary Varlit writer still receives `WriterLockHeld` while any protected
-owner remains, including through hard-link aliases. Drop all protected owners
-before reopening for edits. There is no waiting destructive operation or
-`MappedReadersActive` API in this initial append-only facade.
+| Writer status | Meaning |
+| --- | --- |
+| `NotStarted` | Session admitted; no writer handle issued |
+| `Active` | One writer owns the slot |
+| `Closed` | Writer returned; reconnect allowed only if `recovery_required` is false |
+| `Recovering` | Writer reconstruction excludes new readers and writers |
+| `Finished` | Write authority ended permanently; retained readers may drain |
 
-An append I/O error can also fail its tail rollback. In that case
-`WriteRollbackFailed` leaves the writer poisoned; releasing a mapping does not
-clear that state. Windows requires all mapped views to be released before
-[changing file length](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setendoffile),
-even when the failed append lies beyond the captured prefix. Existing confirmed
-views stay valid. To resume, drop mappings and all session owners, reopen through
-the existing native recovery path, and admit a new append-only writer.
+Read `session.status()`, `token.session_status()` or `reader.session_status()`
+without file I/O. `wait_for_change(observed, timeout)` waits for a different
+lifetime/error snapshot, not a data commit; continue using `follow()` and your
+publication coordination for new data. Snapshots are observations, never
+capabilities. `last_error` records allocation-free summary facts and stays
+latched across recovery/reconnect; subsequent errors replace it. Inspect the
+writer's returned error for full details. A commit durability error may already
+have published records; `None` for its summary sequence does not prove otherwise.
+
+A pending transaction at writer close is **not committed automatically**.
+Pending tails, a poisoned writer or panic during writer unwind require explicit
+recovery; `open_writer()` returns `AppendOnlyRecoveryRequired`. A nonfatal
+operation refusal is reported to readers without necessarily requiring recovery.
+
+An append I/O error can also fail its tail rollback. `WriteRollbackFailed`
+poisons the writer. Windows refuses file-length changes while mapped, even for
+an unpublished tail beyond captured bytes; existing confirmed views stay valid.
+To resume, end the writer, **drop every protected reader and mapping**, retain
+the session/token, call `session.recover()`, then acquire a new writer.
+Recovery may truncate unpublished bytes and rebuild writer metadata. It refuses
+with `AppendOnlyReadersActive` while read protection remains, atomically blocks
+new registration during reconstruction, and keeps the pinned native lock
+through success or failure. Native I/O/allocation recovery failures are
+observable and retryable. `AppendOnlySessionPoisoned` reports coordination
+poisoning and refuses further writer use.
+
+`session.close()` permanently revokes writer issuance across all session clones;
+it refuses an active writer or recovery and never commits pending data. Dropping
+the last session/writer also ends write authority and releases cached writer
+buffers. Read-only tokens and owned windows keep native exclusion alive without
+retaining those writer buffers. Failures writing/syncing the clean liveness marker are also recorded in retained
+readers' status, including when write authority ends by drop. Use
+explicit `session.close()` to receive its cleanup result directly. An ordinary
+Varlit writer receives
+`WriterLockHeld` through the last protected owner, including hard-link aliases.
+Release all protected owners before reopening for arbitrary edits.
 
 `token.open_reader_with_resource_limits(limits)` overlays supplied resource and
-read-check options on admitted format defaults. Start with `ReadLimits::MISSING`
-to change only selected fields; explicit limits can be raised on a fresh reader
-after a refusal. This does not authorize unbounded reads or disable required
-extent/publication checks. `ReadValidation::FULL` still requires stored CRCs and
-the `integrity` feature.
+read-check options on admitted defaults. Start with `ReadLimits::MISSING` to
+change selected fields. Required extent/publication checks remain in every
+mode; `ReadValidation::FULL` requires stored CRCs and the `integrity` feature.
 
-The admission promise applies to other handles, callbacks, tools and processes
-for the full protected lifetime, including after writer drop. Advisory locks
-coordinate cooperating Varlit writers; they cannot prevent arbitrary external
-writes/truncation. This initial facade supports threads in one process, not
-cross-process token transfer. Use a supported filesystem with reliable object
-identity and native locking. See [mmap safety](../SECURITY.md#mapped-files-and-external-modification).
-
-The facade adds no payload-read lock acquisition. Admission/reader creation and
-owned mapping construction/release have bookkeeping costs, which must be measured
-separately from existing mapping, validation, copying and index costs.
+The admission promise excludes nonparticipating mutation/invalidation for the
+complete lifetime of every derived token, reader, mapping and borrowed slice,
+including after writer/session drop. Advisory locks coordinate cooperating
+Varlit entry points; they cannot prevent arbitrary external writes or truncation.
+This API supports threads in one process, not cross-process token transfer.
+Recovery counts only readers/maps issued through this session; pre-existing
+raw or external mappings remain subject to their own unsafe lifetime contract.
+Use reliable native locking/object identity. See
+[mmap safety](../SECURITY.md#mapped-files-and-external-modification).
 
 [Complete executable example](../crates/varlit/examples/append_only_mmap.rs):
 
@@ -1706,7 +1744,7 @@ Feature-gated APIs:
 
 | Feature | API | Meaning |
 | --- | --- | --- |
-| `mmap` | `unsafe AppendOnlyWriter::new(file)` | admit a protected native append-only session |
+| `mmap` | `unsafe AppendOnlySession::new(file)` / `AppendOnlyWriter::new(file)` | admit a protected native append-only session; issue readers before a writer or use writer-first convenience |
 | `mmap` | `AppendOnlyReader::mmap_payload_window(entry)` / `mmap_payloads()` | safe stored-byte mappings retaining the session's native writer exclusion |
 | `mmap` | `unsafe mmap_payloads()` | mmap append-log payload windows |
 | `mmap` | `unsafe VarlitFile::mmap_payload_window(entry)` | independently map one stored record payload |

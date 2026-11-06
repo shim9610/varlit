@@ -212,6 +212,210 @@ fn read_policy_probe(
 }
 
 const CONTRACTS: &[Contract] = &[
+    contract!("core/error.rs::error::Error::variant:AppendOnlyReadersActive@1cd41598c8a3507f",
+        valid { let error = varlit::Error::AppendOnlyReadersActive; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let _reader = session.reader_token().open_reader()?; assert!(matches!( session.recover(), Err(varlit::Error::AppendOnlyReadersActive))); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:AppendOnlyRecoveryRequired@587d509cf6697589",
+        valid { let error = varlit::Error::AppendOnlyRecoveryRequired; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut writer = session.open_writer()?; writer.push_info(&append_cases::Value { value: 23 })?; let _ = writer.close(); assert!(matches!( session.open_writer().map(drop), Err(varlit::Error::AppendOnlyRecoveryRequired))); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:AppendOnlySessionBusy@282d61232bfc1460",
+        valid { let error = varlit::Error::AppendOnlySessionBusy; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let error = varlit::Error::AppendOnlySessionBusy; assert_eq!(varlit::classify_error(&error), varlit::DiagnosticDomain::Environment); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:AppendOnlySessionClosed@c350bf13246e7005",
+        valid { let error = varlit::Error::AppendOnlySessionClosed; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; session.close()?; assert!(matches!( session.open_writer().map(drop), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:AppendOnlySessionPoisoned@442a1b898a2072a8",
+        valid { let error = varlit::Error::AppendOnlySessionPoisoned; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let error = varlit::Error::AppendOnlySessionPoisoned; assert_eq!(varlit::classify_error(&error), varlit::DiagnosticDomain::LibraryInvariant); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:AppendOnlyWriterActive@76c31c8d75462a76",
+        valid { let error = varlit::Error::AppendOnlyWriterActive; assert!(!error.to_string().is_empty()); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let _writer = session.open_writer()?; assert!(matches!( session.open_writer().map(drop), Err(varlit::Error::AppendOnlyWriterActive))); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlyFailure@502090b27df8410a",
+        valid { let facts: varlit::AppendOnlyFailure = append_cases::failure()?; assert_eq!(facts.operation, "push_info"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts: varlit::AppendOnlyFailure = append_cases::failure()?; let mut observed = session.status()?; observed.last_error = Some(facts); assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlySession@ec102b140937a554",
+        valid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); clone.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); session.close()?; assert!(matches!(clone.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlySessionStatus@cccae90389f1ad3e",
+        valid { let (_directory, session) = append_cases::session()?; let snapshot: varlit::AppendOnlySessionStatus = session.status()?; assert_eq!(snapshot.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed: varlit::AppendOnlySessionStatus = session.status()?; observed.writer_epoch = u64::MAX; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer_epoch, 0); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlyWriterState@8f725a7c66119590",
+        valid { let (_directory, session) = append_cases::session()?; let value: varlit::AppendOnlyWriterState = session.status()?.writer; assert_eq!(value, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Recovering; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:session_status@e5e56a1941e012dd",
+        valid { let (_directory, session) = append_cases::session()?; let reader = session.reader_token().open_reader()?; let observed = reader.session_status()?; assert_eq!(reader.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let reader = session.reader_token().open_reader()?; let observed = reader.session_status()?; assert!(matches!(reader.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:wait_for_change@8ba318780227a05f",
+        valid { let (_directory, session) = append_cases::session()?; let reader = session.reader_token().open_reader()?; let observed = reader.session_status()?; assert_eq!(reader.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let reader = session.reader_token().open_reader()?; let observed = reader.session_status()?; assert!(matches!(reader.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReaderToken::fn:session_status@e5e56a1941e012dd",
+        valid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); let observed = token.session_status()?; assert_eq!(token.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); let observed = token.session_status()?; assert!(matches!(token.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReaderToken::fn:wait_for_change@8ba318780227a05f",
+        valid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); let observed = token.session_status()?; assert_eq!(token.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); let observed = token.session_status()?; assert!(matches!(token.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:close@e9a3f06bdcf29e15",
+        valid { let (_directory, writer, reader) = append_cases::populated()?; let session = writer.session(); writer.close()?; assert_eq!(reader.session_status()?.writer, varlit::AppendOnlyWriterState::Closed); session.open_writer()?.close()?; Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut writer = session.open_writer()?; writer.push_info(&append_cases::Value { value: 23 })?; assert!(matches!(writer.close(), Err(varlit::Error::AppendOnlyRecoveryRequired))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:session@68a19d8a7a8e5fb1",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let session = writer.session(); writer.close()?; session.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 2); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; assert!(matches!(writer.session().open_writer(), Err(varlit::Error::AppendOnlyWriterActive))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::export:AppendOnlyFailure@15c11417763b6633",
+        valid { let facts: varlit::AppendOnlyFailure = append_cases::failure()?; assert_eq!(facts.operation, "push_info"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts: varlit::AppendOnlyFailure = append_cases::failure()?; let mut observed = session.status()?; observed.last_error = Some(facts); assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::export:AppendOnlySession@151f54f87165062d",
+        valid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); clone.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); session.close()?; assert!(matches!(clone.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::export:AppendOnlySessionStatus@19679698a77f9657",
+        valid { let (_directory, session) = append_cases::session()?; let snapshot: varlit::AppendOnlySessionStatus = session.status()?; assert_eq!(snapshot.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed: varlit::AppendOnlySessionStatus = session.status()?; observed.writer_epoch = u64::MAX; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer_epoch, 0); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::export:AppendOnlyWriterState@18523d1acc990791",
+        valid { let (_directory, session) = append_cases::session()?; let value: varlit::AppendOnlyWriterState = session.status()?.writer; assert_eq!(value, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Recovering; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:category@a29a3e1b26944a31",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.category, "resource limit exceeded"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().category, facts.category); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:committed_sequence@0504e5cb6c5993db",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.committed_sequence, None); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().committed_sequence, facts.committed_sequence); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:io_kind@5cbbd4dcd6b359b2",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.io_kind, None); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().io_kind, facts.io_kind); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:operation@a29a3e1b26944a31",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.operation, "push_info"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().operation, facts.operation); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:raw_os_error@4f49a7fcafe0bb9c",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.raw_os_error, None); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().raw_os_error, facts.raw_os_error); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyFailure::field:writer_epoch@4d35d3193e8d66f2",
+        valid { let facts = append_cases::failure()?; assert_eq!(facts.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts = append_cases::failure()?; let mut forged = session.status()?; forged.last_error = Some(facts); assert_eq!(forged.last_error.unwrap().writer_epoch, facts.writer_epoch); assert_eq!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:close@1642b40ec1826995",
+        valid { let (_directory, session) = append_cases::session()?; session.close()?; assert!(matches!(session.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let _writer = session.open_writer()?; assert!(matches!(session.close(), Err(varlit::Error::AppendOnlyWriterActive))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:new@807d3c97a9ab0fda",
+        valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let session = unsafe { varlit::AppendOnlySession::new(file)? }; assert_eq!(session.status()?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("bad"))?; assert!(matches!(unsafe { varlit::AppendOnlySession::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:open_writer@4f305fe70f3e3d15",
+        valid { let (_directory, session) = append_cases::session()?; session.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let _writer = session.open_writer()?; assert!(matches!(session.open_writer(), Err(varlit::Error::AppendOnlyWriterActive))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:reader_token@79c95b9b187eb642",
+        valid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); assert!(token.open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let token = session.reader_token(); session.close()?; assert!(token.open_reader()?.mmap_payloads()?.is_empty()); assert!(matches!(session.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:recover@84ce92e66c53a125",
+        valid { let (_directory, session) = append_cases::session()?; session.recover()?; session.open_writer()?.close()?; assert!(!session.status()?.recovery_required); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let _reader = session.reader_token().open_reader()?; assert!(matches!(session.recover(), Err(varlit::Error::AppendOnlyReadersActive))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:status@5ba9a8faddeb5496",
+        valid { let (_directory, session) = append_cases::session()?;  let observed = session.status()?; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?;  let observed = session.status()?; assert!(matches!(session.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySession::fn:wait_for_change@8ba318780227a05f",
+        valid { let (_directory, session) = append_cases::session()?;  let observed = session.status()?; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?, observed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?;  let observed = session.status()?; assert!(matches!(session.wait_for_change(observed, std::time::Duration::MAX), Err(varlit::Error::ResourceArithmeticOverflow { .. }))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySessionStatus::field:last_error@89b07df61aa361e2",
+        valid { let (_directory, session) = append_cases::session()?; assert_eq!(session.status()?.last_error, None); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut forged = session.status()?; forged.last_error = Some(append_cases::failure()?); assert_ne!(session.wait_for_change(forged, std::time::Duration::ZERO)?.last_error, forged.last_error); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySessionStatus::field:recovery_required@cd2fd49bc6b014bd",
+        valid { let (_directory, session) = append_cases::session()?; assert!(!session.status()?.recovery_required); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut forged = session.status()?; forged.recovery_required = true; assert_ne!(session.wait_for_change(forged, std::time::Duration::ZERO)?.recovery_required, forged.recovery_required); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySessionStatus::field:revision@4d35d3193e8d66f2",
+        valid { let (_directory, session) = append_cases::session()?; assert_eq!(session.status()?.revision, 0); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut forged = session.status()?; forged.revision = u64::MAX; assert_ne!(session.wait_for_change(forged, std::time::Duration::ZERO)?.revision, forged.revision); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySessionStatus::field:writer@ef59ee1e28bd4ea9",
+        valid { let (_directory, session) = append_cases::session()?; assert_eq!(session.status()?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut forged = session.status()?; forged.writer = varlit::AppendOnlyWriterState::Active; assert_ne!(session.wait_for_change(forged, std::time::Duration::ZERO)?.writer, forged.writer); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlySessionStatus::field:writer_epoch@4d35d3193e8d66f2",
+        valid { let (_directory, session) = append_cases::session()?; assert_eq!(session.status()?.writer_epoch, 0); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut forged = session.status()?; forged.writer_epoch = u64::MAX; assert_ne!(session.wait_for_change(forged, std::time::Duration::ZERO)?.writer_epoch, forged.writer_epoch); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyWriterState::variant:Active@a45a194b58837e4f",
+        valid { let value = varlit::AppendOnlyWriterState::Active; assert_eq!(value, varlit::AppendOnlyWriterState::Active); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Active; let actual = session.wait_for_change(observed, std::time::Duration::ZERO)?; assert_eq!(actual.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyWriterState::variant:Closed@6dbbe2646b239ca5",
+        valid { let value = varlit::AppendOnlyWriterState::Closed; assert_eq!(value, varlit::AppendOnlyWriterState::Closed); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Closed; let actual = session.wait_for_change(observed, std::time::Duration::ZERO)?; assert_eq!(actual.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyWriterState::variant:Finished@bb99d4ec27fbb263",
+        valid { let value = varlit::AppendOnlyWriterState::Finished; assert_eq!(value, varlit::AppendOnlyWriterState::Finished); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Finished; let actual = session.wait_for_change(observed, std::time::Duration::ZERO)?; assert_eq!(actual.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyWriterState::variant:NotStarted@764c9efff2bd4f43",
+        valid { let value = varlit::AppendOnlyWriterState::NotStarted; assert_eq!(value, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::NotStarted; let actual = session.wait_for_change(observed, std::time::Duration::ZERO)?; assert_eq!(actual.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::AppendOnlyWriterState::variant:Recovering@bc134fe39bd2d7dd",
+        valid { let value = varlit::AppendOnlyWriterState::Recovering; assert_eq!(value, varlit::AppendOnlyWriterState::Recovering); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Recovering; let actual = session.wait_for_change(observed, std::time::Duration::ZERO)?; assert_eq!(actual.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::enum:AppendOnlyWriterState@cbf29ce484222325",
+        valid { let (_directory, session) = append_cases::session()?; let value: varlit::AppendOnlyWriterState = session.status()?.writer; assert_eq!(value, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Recovering; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::struct:AppendOnlyFailure@cbf29ce484222325",
+        valid { let facts: varlit::AppendOnlyFailure = append_cases::failure()?; assert_eq!(facts.operation, "push_info"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts: varlit::AppendOnlyFailure = append_cases::failure()?; let mut observed = session.status()?; observed.last_error = Some(facts); assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::struct:AppendOnlySession@cbf29ce484222325",
+        valid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); clone.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); session.close()?; assert!(matches!(clone.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/file/append_only/session.rs::file::append_only::session::struct:AppendOnlySessionStatus@cbf29ce484222325",
+        valid { let (_directory, session) = append_cases::session()?; let snapshot: varlit::AppendOnlySessionStatus = session.status()?; assert_eq!(snapshot.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed: varlit::AppendOnlySessionStatus = session.status()?; observed.writer_epoch = u64::MAX; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer_epoch, 0); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlyFailure@7b3aa8e7b1f681e7",
+        valid { let facts: varlit::AppendOnlyFailure = append_cases::failure()?; assert_eq!(facts.operation, "push_info"); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let facts: varlit::AppendOnlyFailure = append_cases::failure()?; let mut observed = session.status()?; observed.last_error = Some(facts); assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.last_error, None); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlySession@1465a9e874bea809",
+        valid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); clone.open_writer()?.close()?; assert_eq!(session.status()?.writer_epoch, 1); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let clone: varlit::AppendOnlySession = session.clone(); session.close()?; assert!(matches!(clone.open_writer(), Err(varlit::Error::AppendOnlySessionClosed))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlySessionStatus@77199a1b7e6dffeb",
+        valid { let (_directory, session) = append_cases::session()?; let snapshot: varlit::AppendOnlySessionStatus = session.status()?; assert_eq!(snapshot.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed: varlit::AppendOnlySessionStatus = session.status()?; observed.writer_epoch = u64::MAX; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer_epoch, 0); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlyWriterState@89bd2d8b90272865",
+        valid { let (_directory, session) = append_cases::session()?; let value: varlit::AppendOnlyWriterState = session.status()?.writer; assert_eq!(value, varlit::AppendOnlyWriterState::NotStarted); Ok(()) },
+        invalid { let (_directory, session) = append_cases::session()?; let mut observed = session.status()?; observed.writer = varlit::AppendOnlyWriterState::Recovering; assert_eq!(session.wait_for_change(observed, std::time::Duration::ZERO)?.writer, varlit::AppendOnlyWriterState::NotStarted); Ok(()) }
+    ),
     contract!("core/file.rs::file::export:AppendOnlyReader@fdeca656217f498b",
         valid { let (_directory, writer, _reader) = append_cases::populated()?; let reader: varlit::AppendOnlyReader = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_read_validation(varlit::ReadValidation::TRUSTED))?; assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
         invalid { let (_directory, writer, _reader) = append_cases::populated()?; let result: varlit::Result<varlit::AppendOnlyReader> = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_records(0)); assert!(result.is_err()); Ok(()) }
@@ -272,7 +476,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.flush()?; assert_eq!(reader.follow()?,0); assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
         invalid { let (_directory, mut writer) = append_cases::limited_writer(1)?; writer.push_info(&append_cases::Value { value: 23 })?; assert!(writer.flush().is_err()); Ok(()) }
     ),
-    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:new@807d3c97a9ab0fda",
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:new@458eb2164e1469b4",
         valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; assert!(writer.reader_token().open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
         invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("session"))?; assert!(matches!(unsafe { varlit::AppendOnlyWriter::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),

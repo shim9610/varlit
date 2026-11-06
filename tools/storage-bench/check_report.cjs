@@ -94,20 +94,22 @@ console.log('SQLite mmap cohorts, equal-work references, actual mappings and liv
 
 controls.scope.value = 'append-only'; controls.family.value = ''; controls.engine.value = ''; context.render();
 const appendRows = Object.entries(data.profiles).filter(([, row]) => row.presentation === 'append-only');
-assert.equal(appendRows.length, 159);
+assert.equal(appendRows.length, 213);
 assert.deepEqual(new Set(names()), new Set(appendRows.map(([name]) => name)));
-assert.equal(data.profiles[names()[0]].profile.cohort, 'primary-final-v1', 'Final runtime must lead ownership view');
-assert.equal(controls.rows.children[0].children[1].textContent, 'final implementation');
+assert.equal(data.profiles[names()[0]].profile.cohort, 'lifecycle-v1', 'Current runtime must lead ownership view');
+assert.equal(controls.rows.children[0].children[1].textContent, 'current implementation');
 for (const row of controls.rows.children) {
   const selected = data.profiles[row.children[0].textContent];
   const p = selected.profile;
   const calibrated = p.cohort.startsWith('calibration');
-  assert.equal(selected.observations, calibrated ? 30 : 7);
+  const lifecycleCalibration = p.cohort === 'lifecycle-calibration-v1';
+  if (p.cohort === 'lifecycle-v1') assert.equal(row.children[1].textContent, p.variant.startsWith('baseline-') ? 'baseline control' : 'current implementation');
+  assert.equal(selected.observations, calibrated || lifecycleCalibration ? 30 : 7);
   assert(selected.probe.sampled_processes >= 2);
   assert(selected.metric_spread.completion.min <= selected.metrics.completion);
   assert.equal(row.children[10].textContent, '—', 'Ownership cohort has no new SQLite comparison');
   const guarded = appendRows.find(([, r]) => r.profile.cohort === p.cohort && r.profile.workload === p.workload
-    && r.profile.variant === (calibrated ? 'guarded' : 'after-guarded'))[1];
+    && r.profile.variant === (calibrated ? 'guarded' : p.cohort.startsWith('lifecycle') ? 'current' : 'after-guarded'))[1];
   assert.equal(row.children[11].textContent, (guarded.metrics.write / selected.metrics.write).toFixed(3));
   const manifest = data.append_only.manifests[p.cohort];
   if (calibrated) assert.equal(Object.keys(manifest.binaries).length, 1);
@@ -116,5 +118,5 @@ for (const row of controls.rows.children) {
 }
 controls.family.value = 'session-live'; context.render();
 assert(names().every(n => data.profiles[n].profile.workload.startsWith('session-live')));
-assert.equal(names().length, 75);
+assert.equal(names().length, 99);
 console.log('Append-only before/after/cohort filters, thread probes and nonpooled ownership ratios pass');

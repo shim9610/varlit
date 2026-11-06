@@ -14,7 +14,99 @@ nonparticipants can bypass advisory locking; derived session mappings have
 safe entry points. Matrix storage and editable conversion are excluded.
 See the [API contract](../../api-reference.md#append-only-mmap-sessions).
 
-The final implementation is compared with `a3a1e26` across 12 equal-work
+### Reader-first lifecycle and writer reconnect
+
+The current lifecycle cohort compares the guarded writer-first API on
+`c5db359` with the current guarded path, using the same harness, complete byte
+oracles and fixed **4 CPU / 16 GiB / 32 GiB** budgets. It adds **294 timings and
+42 separate probes**, seven fixed repetitions across 12 conditions. The live
+cases additionally test readers opened before the first writer, followed by
+64 actual writer acquisitions/closes for 64 durable 16 MiB publications. Each
+reader retains its first actual mapping through all subsequent publications and
+verifies it again after drain. The new lifecycle has no old-runtime counterpart;
+its incremental cost is measured against the current writer-first path from
+the same binary.
+
+Every live reader verifies all 1 GiB. Warm readers verify all 128 MiB/1 GiB
+twice after writing. Blocks average 64 KiB or 1 MiB; complex cases use four
+bounded producers, variable block sizes, two metadata records per publication
+and eight readers. Startup, input generation, final drain and teardown remain
+charged. Existing read limits and FULL validation are unchanged.
+
+All values below are primary-cohort medians. Positive changes mean more time
+or CPU. Reconnect changes use the current path as reference; the other changes
+use baseline A. No new SQLite/HDF5 ratios are inferred.
+
+| Work | Block / readers / producers | c5 completion s | Current s | Completion change | CPU change | Reconnect completion / CPU change |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Live, 1 GiB | 1024 KiB / 1 / 1 | 0.907 | 0.917 | +1.06% | +1.03% | +2.00% / -1.05% |
+| Live, 1 GiB | 1024 KiB / 8 / 1 | 1.119 | 1.142 | +2.09% | +0.11% | -3.04% / +2.64% |
+| Live, 1 GiB | 1024 KiB / 8 / 4 | 1.197 | 1.192 | -0.41% | +1.68% | -0.26% / -3.48% |
+| Live, 1 GiB | 64 KiB / 1 / 1 | 1.276 | 1.276 | +0.01% | -0.51% | -1.65% / -3.18% |
+| Live, 1 GiB | 64 KiB / 8 / 1 | 3.360 | 3.410 | +1.50% | +0.62% | -0.26% / +0.73% |
+| Live, 1 GiB | 64 KiB / 8 / 4 | 3.362 | 3.338 | -0.71% | -1.88% | +1.68% / +2.33% |
+| Two scans, 1 GiB | 1024 KiB / 1 / 1 | 1.091 | 1.144 | +4.89% | +5.12% | — |
+| Two scans, 1 GiB | 1024 KiB / 8 / 1 | 1.615 | 1.623 | +0.49% | +0.41% | — |
+| Two scans, 1 GiB | 64 KiB / 1 / 1 | 1.442 | 1.457 | +1.04% | -0.53% | — |
+| Two scans, 1 GiB | 64 KiB / 8 / 1 | 1.974 | 1.995 | +1.06% | +2.77% | — |
+| Two scans, 128 MiB | 1024 KiB / 8 / 1 | 0.212 | 0.219 | +3.31% | +2.04% | — |
+| Two scans, 128 MiB | 64 KiB / 8 / 1 | 0.264 | 0.270 | +2.35% | +2.33% | — |
+
+Current writer-first completion changes range from **−0.71% to +4.89%** and
+CPU from **−1.88% to +5.12%**. Actual repeated writer reconnect changes live
+completion by **−3.04% to +2.00%**, CPU by **−3.48% to +2.64%**. These are
+observations, not a universal overhead bound.
+
+Primary phase alerts remain: 1 GiB/1 MiB/one reader has **+5.12% total CPU**,
+**+6.91% reader-active time** and **+5.85% second-scan time**; 1 GiB/64 KiB/eight
+readers has **+5.70% second-scan time**; 128 MiB/1 MiB/eight readers has
+**+7.06% writer time / +17.54% writer CPU**; 128 MiB/64 KiB/eight readers has
+**+7.16% reader-active time / +5.36% writer CPU**. All four conditions receive a
+separate fixed 30-round comparison with identical c5 A/B controls. The primary
+observations are retained alongside the additional comparison.
+
+The fixed 30-round cohort adds **360 timings and 12 separate probes**, with all
+six A/B/current execution orders repeated five times per condition. It uses the
+same frozen binaries and budgets; no runtime change or repeated-until-pass
+selection occurs between these completed cohorts.
+
+| Rechecked condition | Completion change | Total CPU change | Writer CPU change | Reader-active change | Second-scan change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB / 1024 KiB / 1 reader | -1.80% | -1.59% | -3.12% | +0.06% | -0.22% |
+| 1 GiB / 64 KiB / 8 readers | +1.13% | +0.61% | +0.17% | -0.07% | -0.17% |
+| 128 MiB / 1024 KiB / 8 readers | -1.11% | +0.04% | -1.39% | -1.37% | +2.14% |
+| 128 MiB / 64 KiB / 8 readers | +0.10% | +1.20% | -1.44% | +2.43% | +2.53% |
+
+The retained primary alerts do not recur above 5% in these phase medians.
+Total completion changes are **−1.80% to +1.13%**, CPU **−1.59% to +1.20%**;
+identical-binary A/B completion changes range **−2.36% to +0.04%** and CPU
+**−1.74% to +0.88%**. No implementation overhead is isolated by the initial
+alerts. This does not turn noisy observations into a universal 5% guarantee.
+The combined ownership scope now retains **2,112 completed timings and 213
+probes**, with the new primary/calibration cohorts kept separate from earlier
+runtime stages. The additional probes also observe zero temporary/deleted-open
+bytes and zero new OOM/OOM-kill events.
+
+The primary probes observed current live process proportional set size (PSS) of **73.9–179.8 MiB**
+(versus **73.8–166.2 MiB** for baseline A), and warm PSS of **154.0–1,103.8 MiB**.
+One warm probe differs by 129.3 MiB; the 50 ms sampler can miss brief mapped
+peaks, so individual probe differences do not qualify memory equality.
+All primary configurations have identical final allocated file bytes across
+variants, zero sampled temporary/deleted-open bytes and zero OOM/OOM-kill
+counter deltas. File-cache/cgroup baselines, sample peaks, per-thread CPU and
+repeat spreads remain exported. The memory budget is unchanged.
+
+An earlier lifecycle run was interrupted after **150 recorded timings** to fix
+missing notification when final native liveness cleanup failed. Those raw rows
+and its binary are retained as incomplete evidence; they are excluded from the
+completed cohort and every qualification.
+
+[Raw lifecycle observations, binaries, captured final source and controls](append-only-lifecycle-20261106.tar.gz)
+are part of this combined report and its [checksums](CURRENT_SHA256SUMS).
+
+### Earlier writer-first measurements
+
+The preceding writer-first implementation is compared with `a3a1e26` across 12 equal-work
 conditions, seven fixed repetitions and 48 separate resource probes.
 Earlier prototype and resource-options corrections each retain their own
 336 timings and 48 probes. Two fixed 30-round calibrations of those earlier

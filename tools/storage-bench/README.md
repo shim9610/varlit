@@ -471,6 +471,55 @@ tokens/maps are created or dropped, with no lock or reference-count operation
 in payload accessors. Neither this design nor the observations promise a
 universal zero-overhead bound.
 
+### Reader-first lifecycle and writer reconnect
+
+The `--lifecycle` cohort uses the same 12 shapes and seven fixed randomized
+repetitions. Both `baseline-a` and `baseline-b` execute the guarded path on
+`c5db359730b1ac3e7014c04b5b48675cd4c6f9f3`; `current` uses the new guarded path.
+Every live reader retains its first actual mapped window through subsequent
+publications and checks it again after drain, on both runtime snapshots.
+
+For the six live shapes, `reconnect` additionally opens readers before issuing
+the first writer, acquires/closes the actual writer once per 16 MiB publication,
+and keeps readers and their old views alive throughout. This new lifecycle had
+no old-runtime counterpart; compare it with `current` from the same binary to
+measure its incremental cost. It performs identical bytes, metadata and durable
+publications. Warm readers still start after writer teardown, exposing any
+writer-buffer retention in read-only capabilities. The primary cohort has 294 timings and
+42 separate resource probes; do not pool them with earlier ownership cohorts.
+
+Copy the current `Cargo.toml` and `src/thread_mmap.rs` into a detached c5 checkout,
+then build baseline with `--features guarded-mmap` and current with
+`--features session-lifecycle`. Freeze both binaries before running:
+
+```sh
+python3 tools/storage-bench/compare_append_only.py --lifecycle \
+  --before /absolute/c5-guarded-arrays --after /absolute/current-arrays \
+  --output /absolute/fresh/lifecycle-v1
+```
+
+The caps, FULL checks, complete byte oracles, bounded producers, file-cache
+conditions and separate sampling protocol above remain unchanged. Reconnect
+reuses maintained writer state; the native recovery tests separately cover
+failure/truncation and reader exclusion, rather than charging recovery to every
+healthy handoff. `session-lifecycle` is a harness-only switch with no new library
+dependency.
+
+The lifecycle phase alerts are rechecked separately with:
+
+```sh
+python3 tools/storage-bench/compare_append_only.py --lifecycle-calibration \
+  --before /absolute/c5-guarded-arrays --after /absolute/current-arrays \
+  --output /absolute/fresh/lifecycle-calibration-v1
+```
+
+This fixes 30 balanced rounds for all four primary conditions with a phase
+increase above 5%: warm 1 GiB/1 MiB/one reader, warm 1 GiB/64 KiB/eight readers,
+and both 128 MiB/eight-reader block sizes. All six A/B/current execution orders
+occur five times per condition: 360 timings and 12 probes. The frozen binaries
+are unchanged. Primary results and phase checks stay separate regardless of the
+outcome; this command is not a repeat-until-pass procedure.
+
 The canonical dashboard also accepts `--read-validation docs/performance/read-validation-20261104/comparison.json` in the `integrate_report.py` command. This keeps the 69 mode configurations in the existing report as a separate cohort; it never pools their timings or invents new SQLite ratios.
 
 After freezing `payload` and `writer` diagnostic binaries from the same harness for each supported snapshot:
