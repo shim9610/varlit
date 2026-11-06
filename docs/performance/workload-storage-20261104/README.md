@@ -116,6 +116,16 @@ Native regressions cover staged/confirmed visibility, rollback and failed
 rollback, durability retry, aliases, writer-first drop, concurrent registration
 and release, panic cleanup, partial resource defaults and all read policies.
 
+The Windows CI follow-up corrects a test assumption about mapped-file rollback:
+Windows refuses the file-length change with `ERROR_USER_MAPPED_FILE` (1224).
+The tests require the typed rollback error, retained poison and confirmed bytes,
+then release every protection before native reopen/recovery and append retry.
+File leases without mappings separately require successful rollback/retry.
+The fix changes tests, CI ordering and documentation only; the rebuilt release
+executable's `.text` hash remains
+`307d0834feb92f9bfbf97b215bb0bf6118c32fb40779c737ab71b5094374d330`.
+The existing performance observations therefore retain their executable code.
+
 [Raw observations, manifests, sources, patches and verification logs](append-only-mmap-20261106.tar.gz)
 are covered by [checksums](CURRENT_SHA256SUMS). The [harness protocol and commands](../../../tools/storage-bench/README.md#append-only-ownership-comparison)
 reproduce the cohorts. No new SQLite/HDF5 measurements or cross-engine ratios

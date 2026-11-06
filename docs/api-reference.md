@@ -33,6 +33,14 @@ owner remains, including through hard-link aliases. Drop all protected owners
 before reopening for edits. There is no waiting destructive operation or
 `MappedReadersActive` API in this initial append-only facade.
 
+An append I/O error can also fail its tail rollback. In that case
+`WriteRollbackFailed` leaves the writer poisoned; releasing a mapping does not
+clear that state. Windows requires all mapped views to be released before
+[changing file length](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setendoffile),
+even when the failed append lies beyond the captured prefix. Existing confirmed
+views stay valid. To resume, drop mappings and all session owners, reopen through
+the existing native recovery path, and admit a new append-only writer.
+
 `token.open_reader_with_resource_limits(limits)` overlays supplied resource and
 read-check options on admitted format defaults. Start with `ReadLimits::MISSING`
 to change only selected fields; explicit limits can be raised on a fresh reader
