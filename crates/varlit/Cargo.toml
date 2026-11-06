@@ -81,3 +81,7 @@ required-features = ["integrity", "scalable-fault-injection"]
 [[example]]
 name = "nonresident_boundary_load"
 required-features = ["integrity", "scalable-fault-injection"]
+
+[[example]]
+name = "append_only_mmap"
+required-features = ["mmap"]

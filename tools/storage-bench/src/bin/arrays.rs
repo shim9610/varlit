@@ -7,6 +7,8 @@ use std::{
     time::Instant,
 };
 use varlit::*;
+#[path = "../thread_mmap.rs"]
+mod thread_mmap;
 type R<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const CHANNELS: usize = 16;
 const SAMPLE: usize = 128;
@@ -888,6 +890,17 @@ fn main() -> R<()> {
     let points: usize = a[7].parse()?;
     let ranges: usize = a[8].parse()?;
     let readers: usize = a[9].parse()?;
+    if a.get(10).is_some_and(|x| x.starts_with("session-")) {
+        return thread_mmap::run(
+            mode,
+            &path,
+            total,
+            g,
+            readers,
+            &a[10],
+            (a[11].parse()?, a[12] == "complex"),
+        );
+    }
     assert!(total.is_multiple_of(EPOCH) && EPOCH.is_multiple_of(g) && OUTPUT.is_multiple_of(g));
     if a.get(10).is_some_and(|x| x == "live-reader") {
         return live_reader(mode, &path, total, g, page, mmap, a[11].parse()?);

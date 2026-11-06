@@ -120,6 +120,11 @@ pub use file::{
     merge_keyed_files_with_key_limit,
 };
 #[cfg(feature = "mmap")]
+pub use file::{
+    AppendOnlyReader, AppendOnlyReaderToken, AppendOnlyWriter, GuardedMmapPayloads,
+    GuardedMmapWindow,
+};
+#[cfg(feature = "mmap")]
 pub use file::{MmapMatrix, MmapPayloadWindow, MmapPayloads};
 pub use format::{
     BlockCompressionDescriptor, BlockDescriptor, BlockKind, BlockResidencyDescriptor, CommitPolicy,

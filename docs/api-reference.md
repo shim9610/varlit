@@ -6,6 +6,57 @@ rustdoc replacement; it explains which API to reach for and what it means.
 This page describes Varlit 0.13.0, including read validation selection, range
 streaming and fallible ownership. See [API changes](api-changes.md#0130).
 
+## Append-only mmap sessions
+
+With `mmap`, consume a native `VarlitFile` through
+`unsafe AppendOnlyWriter::new(file)`. It accepts a healthy writer holding the
+native object lock and a transaction-marker format; matrix storage is refused.
+The writer exposes `push_info`, `push_keyed_info`, `flush`, `commit` and
+`commit_durable`. It updates ordinary unmapped file headers as needed and never
+offers an API to rewrite captured records.
+
+Issue `writer.reader_token()` and create each reader on its owning worker with
+`token.open_reader()`. The token accepts no arbitrary path or file handle.
+Opening checks the session's pinned object identity before parsing the opened
+handle. Path removal can fail; replacement with a different object is refused.
+Existing readers follow the original open object.
+
+Use `block_entries_into` or incremental `block_chain` traversal, then safe
+`reader.mmap_payload_window(&entry)` for one confirmed stored payload.
+`reader.mmap_payloads()` captures a fixed prefix with the existing whole-index
+copy cost. Compressed payload windows contain stored encodings, not decompressed
+bytes. Existing mappings never grow; call `follow()` and obtain new views.
+
+Owned windows/snapshots keep protection after writer, token and reader drop.
+An ordinary Varlit writer still receives `WriterLockHeld` while any protected
+owner remains, including through hard-link aliases. Drop all protected owners
+before reopening for edits. There is no waiting destructive operation or
+`MappedReadersActive` API in this initial append-only facade.
+
+`token.open_reader_with_resource_limits(limits)` overlays supplied resource and
+read-check options on admitted format defaults. Start with `ReadLimits::MISSING`
+to change only selected fields; explicit limits can be raised on a fresh reader
+after a refusal. This does not authorize unbounded reads or disable required
+extent/publication checks. `ReadValidation::FULL` still requires stored CRCs and
+the `integrity` feature.
+
+The admission promise applies to other handles, callbacks, tools and processes
+for the full protected lifetime, including after writer drop. Advisory locks
+coordinate cooperating Varlit writers; they cannot prevent arbitrary external
+writes/truncation. This initial facade supports threads in one process, not
+cross-process token transfer. Use a supported filesystem with reliable object
+identity and native locking. See [mmap safety](../SECURITY.md#mapped-files-and-external-modification).
+
+The facade adds no payload-read lock acquisition. Admission/reader creation and
+owned mapping construction/release have bookkeeping costs, which must be measured
+separately from existing mapping, validation, copying and index costs.
+
+[Complete executable example](../crates/varlit/examples/append_only_mmap.rs):
+
+```sh
+cargo run --locked -p varlit --features mmap --example append_only_mmap
+```
+
 ## Read validation
 
 `ReadLimits::with_read_validation` selects optional read-side checks independently
@@ -1647,6 +1698,8 @@ Feature-gated APIs:
 
 | Feature | API | Meaning |
 | --- | --- | --- |
+| `mmap` | `unsafe AppendOnlyWriter::new(file)` | admit a protected native append-only session |
+| `mmap` | `AppendOnlyReader::mmap_payload_window(entry)` / `mmap_payloads()` | safe stored-byte mappings retaining the session's native writer exclusion |
 | `mmap` | `unsafe mmap_payloads()` | mmap append-log payload windows |
 | `mmap` | `unsafe VarlitFile::mmap_payload_window(entry)` | independently map one stored record payload |
 | `mmap` | `unsafe mmap_matrix()` | mmap matrix slot windows |
@@ -1818,7 +1871,7 @@ survives.
 | --- | --- | --- |
 | `integrity` | record and matrix cell/commit-map CRC checks | stable |
 | `compression-zstd` | zstd record compression | stable |
-| `mmap` | mmap payload/matrix views | stable, `unsafe` entry points |
+| `mmap` | mmap payload/matrix views and append-only sessions | stable; unsafe native mapping or session admission, safe derived session views |
 | `zero-copy` | raw mmap views; implies `mmap` | stable, `unsafe` entry points |
 | `scalable-fault-injection` | fault-injection counters and hooks for the scalable-path tests | **test infrastructure**: not a production feature; the counters it exposes are `#[doc(hidden)]` |
 

@@ -17,6 +17,10 @@ use source_audit::{Audit, Surface};
 #[path = "support/validation_cases.rs"]
 mod cases;
 
+#[path = "support/append_only_cases.rs"]
+#[allow(dead_code)]
+mod append_cases;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn inventory() -> BTreeMap<String, Surface> {
@@ -208,6 +212,146 @@ fn read_policy_probe(
 }
 
 const CONTRACTS: &[Contract] = &[
+    contract!("core/file.rs::file::export:AppendOnlyReader@fdeca656217f498b",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let reader: varlit::AppendOnlyReader = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_read_validation(varlit::ReadValidation::TRUSTED))?; assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let result: varlit::Result<varlit::AppendOnlyReader> = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_records(0)); assert!(result.is_err()); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlyReaderToken@b9cc0f9f9b8a8688",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(), 1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); drop(writer); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(),1); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:AppendOnlyWriter@7267e58d4a64f55f",
+        valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; assert!(writer.reader_token().open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
+        invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("session"))?; assert!(matches!(unsafe { varlit::AppendOnlyWriter::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:GuardedMmapPayloads@ce1410272430e0be",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let entry=append_cases::entries(&reader)?.remove(0); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(snapshot.payload_window(&entry)?,varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let mut entry=append_cases::entries(&reader)?.remove(0); entry.payload_offset=0; assert!(snapshot.payload_window(&entry).is_err()); Ok(()) }
+    ),
+    contract!("core/file.rs::file::export:GuardedMmapWindow@15751bfc5ed70c39",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; drop(writer); drop(reader); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:block_chain@831ef8651d93d26c",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; assert_eq!(reader.block_chain(81)?.count(),1); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; assert!(reader.block_chain(987654)?.next().is_none()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:block_entries_into@4da6211c209a3250",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let mut entries=Vec::new(); reader.block_entries_into::<append_cases::Value>(&mut entries)?; assert_eq!(entries.len(),1); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let mut entries=Vec::new(); assert!(reader.block_entries_into::<Probe>(&mut entries).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:follow@50c37f253f67cf10",
+        valid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.commit_durable()?; assert!(reader.follow()?>0); Ok(()) },
+        invalid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.flush()?; assert_eq!(reader.follow()?,0); assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:mmap_payload_window@d27caff5e0cd971b",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let entry=append_cases::entries(&reader)?.remove(0); let window=reader.mmap_payload_window(&entry)?; assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let mut entry=append_cases::entries(&reader)?.remove(0); entry.payload_offset=0; assert!(reader.mmap_payload_window(&entry).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReader::fn:mmap_payloads@6b305a99222f909b",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.block_payload_window::<append_cases::Value>(0)?.is_some()); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let reader=writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_mmap_len(0))?; assert!(reader.mmap_payloads().is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReaderToken::fn:open_reader@30dcf9da34af435d",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let token = writer.reader_token(); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(), 1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let token = writer.reader_token(); std::fs::rename(_directory.path().join("session"),_directory.path().join("retired"))?; assert!(token.open_reader().is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyReaderToken::fn:open_reader_with_resource_limits@e51c24f91186f48d",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let reader = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_read_validation(varlit::ReadValidation::TRUSTED))?; assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; assert!(writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_records(0)).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:commit@e05550d789b245e3",
+        valid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.commit()?; assert!(reader.follow()?>0); assert_eq!(append_cases::entries(&reader)?.len(),2); Ok(()) },
+        invalid { let (_directory, mut writer) = append_cases::limited_writer(1)?; writer.push_info(&append_cases::Value { value: 23 })?; assert!(writer.commit().is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:commit_durable@d37a3c901bdfe8d7",
+        valid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.commit_durable()?; assert!(reader.follow()?>0); assert_eq!(append_cases::entries(&reader)?.len(),2); Ok(()) },
+        invalid { let (_directory, mut writer) = append_cases::limited_writer(1)?; writer.push_info(&append_cases::Value { value: 23 })?; assert!(writer.commit_durable().is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:flush@cefc5dc6589270fd",
+        valid { let (_directory, mut writer, mut reader) = append_cases::populated()?; writer.push_info(&append_cases::Value { value: 23 })?; writer.flush()?; assert_eq!(reader.follow()?,0); assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
+        invalid { let (_directory, mut writer) = append_cases::limited_writer(1)?; writer.push_info(&append_cases::Value { value: 23 })?; assert!(writer.flush().is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:new@807d3c97a9ab0fda",
+        valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; assert!(writer.reader_token().open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
+        invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("session"))?; assert!(matches!(unsafe { varlit::AppendOnlyWriter::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:push_info@949ad2bbbf0a5e9b",
+        valid { let (_directory, writer) = append_cases::limited_writer(8)?; let _reader = writer.reader_token().open_reader()?; let mut writer = writer; writer.push_info(&append_cases::Value { value: 23 })?; writer.commit_durable()?; assert_eq!(append_cases::entries(&writer.reader_token().open_reader()?)?.len(),1); Ok(()) },
+        invalid { let (_directory, mut writer) = append_cases::limited_writer(0)?; assert!(writer.push_info(&append_cases::Value { value: 23 }).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:push_keyed_info@f3f09b501ca262e3",
+        valid { let directory = tempfile::tempdir()?; let spec = OwnershipIndex::spec().with_commit_policy(varlit::CommitPolicy::TransactionMarker(varlit::TransactionMarkerMode::Explicit)); let file = spec.create(directory.path().join("session"))?; let mut writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; writer.push_keyed_info(&OwnedEntry { id: 7, value: 19 })?; writer.commit_durable()?; let reader = writer.reader_token().open_reader()?; let mut entries = Vec::new(); reader.block_entries_into::<OwnedEntry>(&mut entries)?; assert_eq!(entries.len(),1); Ok(()) },
+        invalid { let (_directory, mut writer, _reader) = append_cases::populated()?; assert!(writer.push_keyed_info(&OwnedEntry { id: 7, value: 19 }).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::AppendOnlyWriter::fn:reader_token@79c95b9b187eb642",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let token = writer.reader_token(); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(), 1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let token = writer.reader_token(); drop(writer); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(),1); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapPayloads::fn:block_payload_window@e33e90159dc7bd5a",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.block_payload_window::<append_cases::Value>(0)?.is_some()); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.block_payload_window::<append_cases::Value>(usize::MAX)?.is_none()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapPayloads::fn:index_entries@68e7c4edb6e6fd09",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.index_entries().iter().any(|e|e.block_id==81)); Ok(()) },
+        invalid { let (_directory, writer) = append_cases::limited_writer(8)?; let reader = writer.reader_token().open_reader()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.index_entries().is_empty()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapPayloads::fn:is_empty@e7e3831b94a3c46d",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; assert!(!snapshot.is_empty()); Ok(()) },
+        invalid { let (_directory, writer) = append_cases::limited_writer(8)?; let reader = writer.reader_token().open_reader()?; let snapshot=reader.mmap_payloads()?; assert!(snapshot.is_empty()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapPayloads::fn:len@65247375ae88e3da",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; let count = snapshot.len(); assert!(count >= 1); Ok(()) },
+        invalid { let (_directory, writer) = append_cases::limited_writer(8)?; let reader = writer.reader_token().open_reader()?; let snapshot=reader.mmap_payloads()?; assert_eq!(snapshot.len(),0); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapPayloads::fn:payload_window@3fb1fc79eb411523",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; let entry=append_cases::entries(&reader)?.remove(0); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(snapshot.payload_window(&entry)?,varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot=reader.mmap_payloads()?; let mut entry=append_cases::entries(&reader)?.remove(0); entry.payload_offset=0; assert!(snapshot.payload_window(&entry).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::GuardedMmapWindow::fn:as_bytes@1544a81313953a96",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let window=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, writer, reader) = append_cases::populated()?; let window=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; drop(writer); drop(reader); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::struct:AppendOnlyReader@cbf29ce484222325",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let reader: varlit::AppendOnlyReader = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_read_validation(varlit::ReadValidation::TRUSTED))?; assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let result: varlit::Result<varlit::AppendOnlyReader> = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_records(0)); assert!(result.is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::struct:AppendOnlyReaderToken@cbf29ce484222325",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(), 1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); drop(writer); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(),1); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::struct:AppendOnlyWriter@cbf29ce484222325",
+        valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; assert!(writer.reader_token().open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
+        invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("session"))?; assert!(matches!(unsafe { varlit::AppendOnlyWriter::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::struct:GuardedMmapPayloads@cbf29ce484222325",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let entry=append_cases::entries(&reader)?.remove(0); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(snapshot.payload_window(&entry)?,varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let mut entry=append_cases::entries(&reader)?.remove(0); entry.payload_offset=0; assert!(snapshot.payload_window(&entry).is_err()); Ok(()) }
+    ),
+    contract!("core/file/append_only.rs::file::append_only::struct:GuardedMmapWindow@cbf29ce484222325",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; drop(writer); drop(reader); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlyReader@69a93baa9949f600",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let reader: varlit::AppendOnlyReader = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_read_validation(varlit::ReadValidation::TRUSTED))?; assert_eq!(append_cases::entries(&reader)?.len(),1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let result: varlit::Result<varlit::AppendOnlyReader> = writer.reader_token().open_reader_with_resource_limits(varlit::ReadLimits::STANDARD.with_max_records(0)); assert!(result.is_err()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlyReaderToken@21f96b15640d3dd5",
+        valid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(), 1); Ok(()) },
+        invalid { let (_directory, writer, _reader) = append_cases::populated()?; let token: varlit::AppendOnlyReaderToken = writer.reader_token(); drop(writer); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(append_cases::entries(&token.open_reader()?)?.len(),1); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:AppendOnlyWriter@4baad3ab1c92a110",
+        valid { let directory = tempfile::tempdir()?; let file = append_cases::spec().create(directory.path().join("session"))?; let writer = unsafe { varlit::AppendOnlyWriter::new(file) }?; assert!(writer.reader_token().open_reader()?.mmap_payloads()?.is_empty()); Ok(()) },
+        invalid { let directory = tempfile::tempdir()?; let file = append_cases::SessionFormat::spec().create(directory.path().join("session"))?; assert!(matches!(unsafe { varlit::AppendOnlyWriter::new(file) }, Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:GuardedMmapPayloads@a33496426766af73",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let entry=append_cases::entries(&reader)?.remove(0); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(snapshot.payload_window(&entry)?,varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, _writer, reader) = append_cases::populated()?; let snapshot: varlit::GuardedMmapPayloads=reader.mmap_payloads()?; let mut entry=append_cases::entries(&reader)?.remove(0); entry.payload_offset=0; assert!(snapshot.payload_window(&entry).is_err()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:GuardedMmapWindow@9b6718252715b1d8",
+        valid { let (_directory, _writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) },
+        invalid { let (_directory, writer, reader) = append_cases::populated()?; let window: varlit::GuardedMmapWindow=reader.mmap_payload_window(&append_cases::entries(&reader)?.remove(0))?; drop(writer); drop(reader); append_cases::assert_locked(&_directory.path().join("session")); assert_eq!(varlit::decode_from_slice::<append_cases::Value>(window.as_bytes(),varlit::Endian::Little)?.value,19); Ok(()) }
+    ),
     contract!("core/format.rs::format::ReadValidation::const:FULL@65630b1aec77469e",
         valid { assert_eq!(read_policy_probe(varlit::ReadValidation::FULL, false, false)??, Probe { value: 19 }); Ok(()) },
         invalid { let result = read_policy_probe(varlit::ReadValidation::FULL, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }

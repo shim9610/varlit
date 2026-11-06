@@ -1,0 +1,11 @@
+error[E0616]: field `mapped` of struct `GuardedMmapWindow` is private
+ --> tests/ui/fail_append_only_detach.rs:2:12
+  |
+2 |     window.mapped
+  |            ^^^^^^ private field
+
+error[E0616]: field `protection` of struct `AppendOnlyReaderToken` is private
+ --> tests/ui/fail_append_only_detach.rs:4:64
+  |
+4 | fn token(token: varlit::AppendOnlyReaderToken) { let _ = token.protection; }
+  |                                                                ^^^^^^^^^^ private field

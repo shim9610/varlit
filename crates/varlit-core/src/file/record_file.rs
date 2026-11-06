@@ -177,6 +177,11 @@ impl RecordFile {
         opened_file_identity(&self.file)
     }
 
+    #[cfg(feature = "mmap")]
+    pub(super) fn object_identity_array(&self) -> Result<[u8; 16]> {
+        super::publication::opened_file_identity_array(&self.file)
+    }
+
     /// The named exception: the handle `crate::matrix`'s functions take.
     ///
     /// The matrix region is disjoint from the record region; its own
