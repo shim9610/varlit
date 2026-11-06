@@ -14,6 +14,8 @@ impl ReaderGate {
         Self(AtomicUsize::new(0))
     }
 
+    // Rust 1.95 and Loom 0.7.2 share this API; newer std renamed it try_update.
+    #[allow(deprecated)]
     pub(super) fn try_reader(&self) -> bool {
         self.0
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
