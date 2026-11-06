@@ -1,6 +1,31 @@
 //! Production metadata validators; filesystem ordering is tested separately.
 use super::*;
 
+#[kani::proof]
+#[kani::unwind(26)]
+fn wire_frontier_decode_enforces_sequence_exhaustion() {
+    let bytes: [u8; 24] = kani::any();
+    let exhausted: bool = kani::any();
+    let sequence = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let result = decode_frontier(&bytes, exhausted);
+    assert_eq!(result.is_ok(), !exhausted || sequence == 0);
+    if let Ok(frontier) = &result {
+        assert_eq!(
+            frontier.eof,
+            u64::from_le_bytes(bytes[..8].try_into().unwrap())
+        );
+        assert_eq!(
+            frontier.record_count,
+            u64::from_le_bytes(bytes[8..16].try_into().unwrap())
+        );
+        assert_eq!(
+            frontier.next_sequence,
+            if exhausted { None } else { Some(sequence) }
+        );
+    }
+    std::mem::forget(result);
+}
+
 fn frontier() -> DiskIndexFrontier {
     DiskIndexFrontier::new(kani::any(), kani::any(), kani::any())
 }

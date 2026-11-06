@@ -79,7 +79,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-**55 harnesses in 14 contract groups**. Both default and all-feature builds must
+**58 harnesses in 14 contract groups**. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -90,14 +90,14 @@ A zero-harness run fails.
 | --- | ---: | --- |
 | Record extent | 1 | Full-width checked address arithmetic |
 | Observed prefix | 4 | Prefix transitions; bounded membership/truncation models |
-| Publication metadata | 4 | Typed frontier/checkpoint validation |
+| Publication metadata | 5 | Typed frontier/checkpoint validation and actual 24-byte frontier decoder |
 | Publication protocol | 9 | Abstract I/O effects and inductive frontier invariants |
 | Compression steps | 3 | Block progress and output reservation bounds |
 | Limited spill | 2 | Checked extents and bounded partial-write/retry model |
-| Chunk parser | 3 | Header/entry parsing and table extent |
+| Chunk parser | 4 | Header/entry/table extent and complete-validator positive witness |
 | Materialization | 1 | Budget transition |
 | Index visits | 2 | Decreasing traversal fuel and child height |
-| Decoder memory | 6 | Charge/transfer, bounded input and HashMap reservation accounting |
+| Decoder memory | 7 | Charge/transfer, HashMap reservation accounting and complete bounded byte-vector decode |
 | Fallible ownership | 16 | Refusal, partial cleanup and bounded clone/owner models |
 | Scalar owner memory | 2 | Selected scalar Box validity and refusal-before-initialization |
 | Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
@@ -142,6 +142,67 @@ The scalar memory checks qualify two validity harnesses and one
 refusal-before-initialization harness, with positive/negative controls.
 Whole-owner initialization/value-validity proofs remain in the separately planned
 library; they are not counted as a completed Varlit guarantee.
+
+## Production callers and future changes
+
+The source-wide `proof_coverage` integration test inventories all three published
+crates, including private methods, trait defaults, nested functions, inactive
+platform branches and macro generator sources. A compact checked-in
+[baseline](verification/production-inventory.json) records every source/config
+file and a digest of the complete AST body catalogue. Any change conservatively
+requires reviewing **all** proof families. This is change detection, not a proof
+that every inventoried body satisfies a specification.
+
+The [caller contracts](verification/caller-contracts.json) additionally record
+compiler-resolved protected calls for default and all-feature Linux builds.
+`check_proof_bindings.py` reads unoptimized MIR from pinned rustc 1.95.0; unknown
+protected resolutions, unregistered indirect references, new/changed callers and
+unsupported MIR syntax fail. One existing `Option::map(RecordIndexEntry::checked_physical_end)`
+edge has an explicit body-bound indirect contract; it is inventoried, not an
+interprocedural refinement proof. Selected result checks follow
+`Result`/`Option`/`Try` propagation.
+Five default and seven all-feature control-flow obligations require a guard to
+precede its effect and prevent a rejected guard from reaching that effect.
+These checks cover normal control flow, not unwinding or arbitrary interprocedural
+semantics. Other targets and feature combinations retain source-change and native
+feature-matrix checks; they do not acquire a MIR refinement proof.
+
+```sh
+rustup toolchain install 1.95.0 --profile minimal --no-self-update
+export RUSTUP_TOOLCHAIN=1.95.0
+cargo test --locked -p varlit --test proof_coverage
+cargo rustc --locked -p varlit-core --lib -- --emit=mir=target/default-callers.mir
+python3 scripts/check_proof_bindings.py --mir target/default-callers.mir --features default --output target/default-bindings.json
+cargo rustc --locked -p varlit-core --lib --all-features -- --emit=mir=target/all-callers.mir
+python3 scripts/check_proof_bindings.py --mir target/all-callers.mir --features all --output target/all-bindings.json
+python3 -m unittest discover -s scripts/tests -p test_proof_bindings.py
+```
+
+The controls compile valid renamed calls and deliberately broken Rust callers:
+ignored/overwritten results (including mutable aliases), late or bypassed guards,
+ignored rejection, shadowed helpers, function pointers and generic function-item
+dispatch. Rejection is checked against actual compiler MIR,
+independently of the frozen caller hashes.
+
+For a source change, first identify the new behavior and its input, callback,
+allocation and error obligations. Extend the actual consumer proof or native
+regression where its scope requires it. Export candidate source inventory with
+`VARLIT_PROOF_INVENTORY_OUT=target/production-candidate.json cargo test --locked -p varlit --test proof_coverage`
+and candidate typed callers with the runner's `--observe` option. Export never
+bypasses acceptance or rewrites either baseline. Review the differences before
+recording the inventory, then require both complete Kani configurations, caller
+checks, deliberate-defect controls and native regressions on the final tree.
+Each caller family must retain exactly its registered harnesses. Updating a
+fingerprint alone supplies no semantic evidence; reviewers must assess the
+changed behavior. No finite harness set automatically proves every future edit.
+
+New consumer proofs execute the actual frontier wire decoder, complete bounded
+`Vec<u8>` decoding with symbolic allocation refusal, and a 49-byte one-entry
+positive witness through the complete chunk structural validator (frame checks
+disabled). Header/table helpers retain their separate full-width proofs. A general whole-validator
+proof is not established: exploratory attempts timed out at the existing
+300-second budget, and additional empty-output experiments were not qualified.
+None of these experiments is counted as a completed proof.
 
 ## Deliberate-defect controls
 

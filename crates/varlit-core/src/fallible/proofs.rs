@@ -63,7 +63,7 @@ unsafe fn model_realloc(ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
     }
     result
 }
-fn model_empty_vec<T>() -> Vec<T> {
+pub(crate) fn model_empty_vec<T>() -> Vec<T> {
     // Kani 0.68's allocation-stub build can misrepresent RawVec::new_in:
     // its trace returns cap=1 for Vec::new(). Use the standard empty Vec
     // invariant through its documented raw-parts constructor. No T exists,

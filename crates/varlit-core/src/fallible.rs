@@ -594,7 +594,7 @@ mod tests {
 }
 
 #[cfg(kani)]
-mod proofs;
+pub(crate) mod proofs;
 
 #[cfg(kani)]
 mod memory_proofs;

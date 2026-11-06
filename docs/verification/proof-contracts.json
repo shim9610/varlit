@@ -33,14 +33,15 @@
         "disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers",
         "disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected",
         "disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier",
-        "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected"
+        "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected",
+        "disk_index::publication_proofs::wire_frontier_decode_enforces_sequence_exhaustion"
       ],
       "sources": [
         "crates/varlit-core/src/disk_index/publication_proofs.rs",
         "crates/varlit-core/src/disk_index.rs"
       ],
-      "scope": "full-width typed metadata",
-      "limits": "Raw byte parsing and OS ordering excluded"
+      "scope": "full-width typed metadata; actual 24-byte frontier wire decoder and exhaustion flag",
+      "limits": "Complete metadata byte parsing and OS ordering excluded; the 24-byte frontier decoder is included"
     },
     {
       "id": "publication-protocol",
@@ -95,13 +96,14 @@
       "harnesses": [
         "chunks::resource_proofs::full_width_chunk_table_bounds_iteration_by_real_input",
         "chunks::resource_proofs::arbitrary_chunk_entry_bytes_are_checked",
-        "chunks::resource_proofs::full_width_chunk_header_fields_are_validated"
+        "chunks::resource_proofs::full_width_chunk_header_fields_are_validated",
+        "chunks::resource_proofs::bounded_whole_chunk_validator_accepts_a_complete_container"
       ],
       "sources": [
         "crates/varlit-core/src/verification/chunks.rs",
         "crates/varlit-core/src/chunks.rs"
       ],
-      "scope": "full-width actual table extent plus arbitrary header fields and entry bytes",
+      "scope": "full-width actual table extent plus arbitrary header fields and entry bytes; complete 49-byte one-entry validator positive witness, frame checks disabled",
       "limits": "Whole 0..96-byte parser attempts timed out. Loop count derives from validated actual input extent; complete raw parser covered by native corpus/fuzzing, not a whole-parser proof."
     },
     {
@@ -137,14 +139,16 @@
         "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
         "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
         "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
-        "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables"
+        "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables",
+        "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds"
       ],
       "sources": [
         "crates/varlit-core/src/codec.rs",
-        "crates/varlit-core/src/verification/decoder.rs"
+        "crates/varlit-core/src/verification/decoder.rs",
+        "crates/varlit-core/src/verification/decoder_callers.rs"
       ],
-      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting",
-      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom codecs. Hash table layout bound assumes the documented supported std layout. No global process OOM claim."
+      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting; actual complete Vec<u8> decode, arbitrary u64 declared length/budget, at most4 payload bytes and symbolic reservation refusal",
+      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom codecs. Hash table layout bound assumes the documented supported std layout. No global process OOM claim. Caller decode proof assumes a contract-obeying allocator and the independently checked standard empty-Vec model; it does not model arbitrary T."
     },
     {
       "id": "fallible-ownership",

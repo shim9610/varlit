@@ -33,7 +33,14 @@ def fingerprint(manifest):
     paths = {p for c in manifest['contracts'] for p in c['sources']}
     paths.update(str(p.relative_to(ROOT)) for p in (ROOT/'crates').glob('*/src/**/*.rs'))
     paths.update(str(p.relative_to(ROOT)) for p in (ROOT/'crates').glob('*/Cargo.toml'))
-    paths.update(['Cargo.toml', 'Cargo.lock'])
+    paths.update(['Cargo.toml', 'Cargo.lock',
+                  'docs/verification/caller-contracts.json',
+                  'docs/verification/production-inventory.json',
+                  'scripts/check_proof_bindings.py',
+                  'scripts/tests/test_proof_bindings.py',
+                  'crates/varlit/tests/proof_coverage.rs',
+                  'crates/varlit/tests/support/source_audit.rs',
+                  '.github/workflows/verification.yml', '.github/workflows/ci.yml'])
     paths = sorted(paths)
     return dict(source_sha256={p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in paths},
                 manifest_sha256=hashlib.sha256(MANIFEST.read_bytes()).hexdigest())

@@ -1777,3 +1777,7 @@ mod field_guard_tests {
 #[cfg(kani)]
 #[path = "verification/decoder.rs"]
 mod resource_proofs;
+
+#[cfg(kani)]
+#[path = "verification/decoder_callers.rs"]
+mod caller_proofs;
