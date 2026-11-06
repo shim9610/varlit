@@ -284,6 +284,13 @@ impl Drop for WriteAuthority {
             .as_ref()
             .map(|error| summarize("session drop", error, slot.epoch));
         let recovery_required = slot.recovery_required;
+        // No observer can appear after the last write authority disappears.
+        // A unique protection needs no notification. In particular, a failed
+        // authority allocation must not lazily allocate a pthread mutex during
+        // cleanup on platforms whose std mutex initializes on its first lock.
+        if Arc::get_mut(&mut self.protection).is_some() {
+            return;
+        }
         let _ = self.protection.publish(|status| {
             status.writer = AppendOnlyWriterState::Finished;
             status.recovery_required = recovery_required;

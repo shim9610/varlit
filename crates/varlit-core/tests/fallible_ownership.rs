@@ -464,7 +464,10 @@ fn append_only_admission_and_reader_allocation_refusals_release_native_authority
         AppendOnlySession::new(file).map(drop)
     });
     baseline?;
-    assert!(counts.calls >= 3);
+    assert_eq!(
+        counts.calls, 3,
+        "admission/observer-free cleanup acquired hidden allocation work"
+    );
     for cutoff in 1..=counts.calls {
         let file = spec.open(&path)?;
         // Refusal remains active through all partially constructed owner drops.

@@ -16,7 +16,9 @@ error-handling changes.
   safe derived mappings retain native writer exclusion through the last owner.
   Readers may precede the first writer and retain views across committed writer
   reconnect without reopen/rescan. Lifecycle/error snapshots report shutdown
-  and failures; exclusive recovery refuses retained readers/maps.
+  and failures; exclusive recovery refuses retained readers/maps. Failed
+  admission cleanup avoids initializing notification locks when no read
+  capability exists.
   Native transaction markers are required; matrix and cross-process token
   support are excluded. Empty mapped-snapshot diagnostics use owned metadata
   without referencing mutable file headers. Existing APIs and file formats

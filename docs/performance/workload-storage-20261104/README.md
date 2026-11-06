@@ -14,9 +14,84 @@ nonparticipants can bypass advisory locking; derived session mappings have
 safe entry points. Matrix storage and editable conversion are excluded.
 See the [API contract](../../api-reference.md#append-only-mmap-sessions).
 
+### Latest allocation-failure cleanup
+
+A macOS allocation-refusal regression found an avoidable first-use allocation:
+final write-authority cleanup locked the notification mutex even when no read
+capability existed. On pthread-based std synchronization, that first lock can
+allocate an internal object. Refusing allocations during ownership-admission
+cleanup aborted the test process on a 64-byte request; this was fault injection,
+not a reproduction of system-wide memory exhaustion.
+
+The final implementation skips notification only when `Arc::get_mut` proves the
+protection uniquely owned after final write-authority release. No observer can
+then appear. Existing readers/maps still receive lifecycle and cleanup-failure
+status. Native lock release, liveness cleanup and writer-buffer destruction are
+unchanged. Recovery authorization continues to use the atomic reader gate,
+not reference-count observations. Admission/refusal cleanup now requires exactly
+three allocation requests; all three refusals retain denial through cleanup and
+require successful native reopening. macOS runs this check before its full suite.
+
+This final code change has its own **294 timings and 42 probes**, seven fixed
+repetitions across the same 12 conditions, comparing `09c2028` with the final
+runtime. Both frozen binaries enable the same Rust harness feature. They perform
+the same full byte/metadata verification, retained-view check, publications and
+reader counts under unchanged **4 CPU /16 GiB /32 GiB** caps. The added ownership
+check runs once on final write-authority drop; no record search or per-payload
+synchronization is added.
+
+| Work | Block / readers / producers | Before09 s | Final s | Completion change | CPU change |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Live, 1 GiB | 1024 KiB / 1 / 1 | 0.930 | 0.982 | +5.57% | +3.04% |
+| Live, 1 GiB | 1024 KiB / 8 / 1 | 1.182 | 1.162 | -1.72% | +3.25% |
+| Live, 1 GiB | 1024 KiB / 8 / 4 | 1.229 | 1.222 | -0.63% | -0.96% |
+| Live, 1 GiB | 64 KiB / 1 / 1 | 1.271 | 1.274 | +0.19% | -1.07% |
+| Live, 1 GiB | 64 KiB / 8 / 1 | 3.431 | 3.459 | +0.81% | +0.18% |
+| Live, 1 GiB | 64 KiB / 8 / 4 | 3.453 | 3.428 | -0.74% | -0.27% |
+| Two scans, 1 GiB | 1024 KiB / 1 / 1 | 1.150 | 1.151 | +0.08% | -1.29% |
+| Two scans, 1 GiB | 1024 KiB / 8 / 1 | 1.666 | 1.640 | -1.55% | +1.08% |
+| Two scans, 1 GiB | 64 KiB / 1 / 1 | 1.470 | 1.543 | +4.99% | +5.11% |
+| Two scans, 1 GiB | 64 KiB / 8 / 1 | 2.011 | 2.018 | +0.34% | -1.40% |
+| Two scans, 128 MiB | 1024 KiB / 8 / 1 | 0.234 | 0.238 | +1.78% | +2.00% |
+| Two scans, 128 MiB | 64 KiB / 8 / 1 | 0.268 | 0.277 | +3.09% | -2.84% |
+
+The final cleanup cohort retains its phase alerts: live 1 GiB/1 MiB/one reader
+has +5.57% completion /+9.02% reader-active; warm 1 GiB/64 KiB/one reader has
++5.11% CPU; warm 128 MiB/1 MiB/eight readers has +10.92% second-scan time;
+warm 128 MiB/64 KiB/eight readers has +17.41% writer time /+9.55% writer CPU.
+A separate fixed 30-round A/B/final check covers all four conditions. Identical
+before-binary controls also vary, including +6.61% completion /+6.35% CPU in
+the live 64 KiB/eight-reader case and +10.50% CPU in warm 1 MiB/one reader.
+All observations remain available; they are not pooled with the earlier cohorts.
+
+The final correction's fixed 30-round phase check adds **360 timings and 12
+probes**, using each of the six A/B/final orders five times per condition.
+
+| Rechecked condition | Completion change | Total CPU change | Writer time change | Reader-active change | Reader CPU change | Second-scan change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Live, 1 GiB / 1024 KiB / 1 | +0.91% | +4.39% | +0.96% | +5.01% | +5.52% | — |
+| Two scans, 1 GiB / 64 KiB / 1 | -0.87% | -2.37% | -0.23% | -1.59% | -1.61% | +0.47% |
+| Two scans, 128 MiB / 1024 KiB / 8 | +0.91% | -1.55% | +0.68% | -7.03% | -1.46% | -1.15% |
+| Two scans, 128 MiB / 64 KiB / 8 | +1.48% | +0.40% | +0.38% | -2.58% | +1.99% | +3.86% |
+
+Completion changes are **−0.87% to +1.48%**, total CPU **−2.37% to +4.39%**.
+The live 1 MiB/one-reader condition retains **+5.01% reader-active time and
++5.52% reader CPU**; it does not qualify a 5% bound for every phase. Its reader
+consumer is 6,650 bytes /1,318 decoded instructions in both binaries, with an
+identical normalized instruction sequence after relocating addresses. The new
+ownership check executes at final writer-authority teardown, not in that reader
+loop. This diagnostic does not isolate the timing difference from code layout,
+callees or kernel/scheduling effects; the exceedance remains exported.
+
+The final correction's two cohorts have identical final allocated file bytes
+across variants, zero sampled temporary/deleted-open space and zero new
+OOM/OOM-kill events. Their PSS/cache/cgroup probes and repeat distributions stay
+separate. The complete ownership scope now retains **2,766 completed timings
+and 267 probes**; all 497 pre-lifecycle profiles remain unchanged.
+
 ### Reader-first lifecycle and writer reconnect
 
-The current lifecycle cohort compares the guarded writer-first API on
+The preceding lifecycle cohort compares the guarded writer-first API on
 `c5db359` with the current guarded path, using the same harness, complete byte
 oracles and fixed **4 CPU / 16 GiB / 32 GiB** budgets. It adds **294 timings and
 42 separate probes**, seven fixed repetitions across 12 conditions. The live
@@ -82,7 +157,7 @@ Total completion changes are **−1.80% to +1.13%**, CPU **−1.59% to +1.20%**;
 identical-binary A/B completion changes range **−2.36% to +0.04%** and CPU
 **−1.74% to +0.88%**. No implementation overhead is isolated by the initial
 alerts. This does not turn noisy observations into a universal 5% guarantee.
-The combined ownership scope now retains **2,112 completed timings and 213
+Through this earlier stage, the ownership scope retains **2,112 completed timings and 213
 probes**, with the new primary/calibration cohorts kept separate from earlier
 runtime stages. The additional probes also observe zero temporary/deleted-open
 bytes and zero new OOM/OOM-kill events.
@@ -101,7 +176,7 @@ missing notification when final native liveness cleanup failed. Those raw rows
 and its binary are retained as incomplete evidence; they are excluded from the
 completed cohort and every qualification.
 
-The final MSRV/current-Rust compatibility annotation preserves the **entire**
+The preceding MSRV/current-Rust compatibility annotation preserves the **entire**
 rebuilt Linux release binary (SHA-256
 `c4744ebbdc06044d228ca44eb648e8e348269b46b71a60d08ed22943b6678858`).
 It changes no measured execution path; focused native tests, Loom and
