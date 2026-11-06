@@ -318,19 +318,8 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<Self> {
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
         lock.bind_native(&file, &path)?;
-        Self::open_writer_file_with_scratch(spec, path, file, scratch)
-    }
-
-    // The caller already owns native exclusion for this opened object. Session
-    // recovery additionally excludes reader registration for the entire call.
-    fn open_writer_file_with_scratch<B: ScanBuffer>(
-        spec: FormatSpec,
-        path: PathBuf,
-        mut file: File,
-        scratch: &mut B,
-    ) -> Result<Self> {
         let captured_len = check_open_file_len(spec, &file)?;
         let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
         let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
@@ -474,19 +463,7 @@ impl VarlitFile {
         spec.validate()?;
         ensure_native_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new().read(true).open(&path)?;
-        Self::open_readonly_file(spec, path, file, scratch, retention)
-    }
-
-    // Accepts an already-open, independently positioned read handle. Admission
-    // can check object identity before parsing any caller-controlled file bytes.
-    fn open_readonly_file<B: ScanBuffer>(
-        spec: FormatSpec,
-        path: PathBuf,
-        mut file: File,
-        scratch: &mut B,
-        retention: DirectoryRetention,
-    ) -> Result<Self> {
+        let mut file = OpenOptions::new().read(true).open(&path)?;
         let captured_len = check_open_file_len(spec, &file)?;
         let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
         let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(

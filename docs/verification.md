@@ -4,11 +4,11 @@ This guide follows the current repository. The documentation gate rejects repeat
 report sections, checks local links and executes the grouped-block quickstart from
 its actual Markdown source. Historical reports identify the
 revision they tested; a successful older run is not a result for a newer commit.
-The reviewed baseline `c5db359` passed its complete CI run and all **three
+The production runtime at `851836e` passed all **69 CI jobs** and all **three
 Sanitizers jobs**:
 
-- [CI, including the strict required gate](https://github.com/shim9610/varlit/actions/runs/42210694374)
-- [Miri, AddressSanitizer/leaks and fuzz smoke](https://github.com/shim9610/varlit/actions/runs/42210694085)
+- [CI, including the strict required gate](https://github.com/shim9610/varlit/actions/runs/41892694910)
+- [Miri, AddressSanitizer/leaks and fuzz smoke](https://github.com/shim9610/varlit/actions/runs/41892694877)
 
 `ci / required` includes native tests, feature interactions, executable API
 contracts, storage/resource contracts, package/docs checks, CodeQL, dependency
@@ -54,16 +54,6 @@ defines which checks can be omitted.
 python3 -m unittest discover -s scripts/tests
 python3 scripts/check_storage_contracts.py --output target/storage-contracts
 ```
-
-The append-only mmap lifecycle suite checks reader-first creation, exclusive
-writer issuance across session clones, retained views over repeated healthy
-writer reconnect, pending close, writer panic, final cleanup failure, failure
-notification and explicit
-recovery. Actual allocation refusal checks partial admission cleanup and reader
-registration cleanup. Native stress races reader/map lifetimes with recovery;
-Windows CI separately exercises mapped-file rollback refusal. Recovery must use
-the pinned object even after path replacement. These native checks complement
-the atomic-gate models below; they do not model arbitrary external mutation.
 
 ## Coverage
 
@@ -204,15 +194,6 @@ models explore cancellation publication/monotonicity and progress-driver checks,
 without unbounded spinning or a configured preemption bound. They do not model
 triomphe allocation/refcount internals, every single-writer/multiple-reader
 protocol or filesystem durability.
-
-Two additional models include the production append-only reader/recovery gate.
-They explore registration versus exclusive recovery and the release/acquire
-ordering from final reader use to recovery. The gate is registered once per
-reader; owned maps retain that registration until their final unmap. Native
-lifecycle tests cover the surrounding file handles and failure paths. These
-models do not prove the complete session or operating-system mapping contract.
-Deliberately allowing a reader during exclusive recovery and removing final
-release ordering each cause a model assertion failure in the recorded controls.
 
 The runner refuses a build without `varlit_loom`. Its dependencies have their own
 lockfile and advisory audit and are not library runtime dependencies. A retained

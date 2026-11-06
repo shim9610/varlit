@@ -41,7 +41,7 @@ the selected policy; [the durability model](https://github.com/shim9610/varlit/b
 | --- | --- |
 | `integrity` | Stored CRC creation and verification |
 | `compression-zstd` | Zstandard compression and decoding |
-| `mmap` | Mapped byte views and [protected append-only sessions](docs/api-reference.md#append-only-mmap-sessions), with stable backing-file requirements |
+| `mmap` | Mapped byte views with stable backing-file requirements |
 | `zero-copy` | Typed raw views; includes `mmap` |
 | `experimental-matrix-reuse` | Explicit opt-in experimental matrix page reuse |
 | `scalable-fault-injection` | Failure hooks for development and qualification |

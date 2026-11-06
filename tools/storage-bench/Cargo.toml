@@ -7,8 +7,6 @@ publish = false
 [features]
 default = ["read-validation"]
 read-validation = []
-guarded-mmap = []
-session-lifecycle = ["guarded-mmap"]
 [dependencies]
 varlit = { path = "../../crates/varlit", features = ["integrity", "mmap"] }
 serde = { version = "1", features = ["derive"] }

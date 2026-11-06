@@ -375,15 +375,6 @@ Growing matrix layouts require their own stricter mapping contract. See
 [mmap safety](../SECURITY.md#mapped-files-and-external-modification) and
 the [live mmap comparison](performance/workload-storage-20261104/README.md#sqlite-mmap-and-append-only-readers).
 
-For application-controlled native append logs in one process, the
-[append-only mmap facade](api-reference.md#append-only-mmap-sessions) binds readers
-to an admitted session's object and retains native exclusion through the last
-mapped owner. Readers may open before the first writer. Healthy committed
-writer close/reconnect reuses native state without a file reopen or rescan.
-Read and successful append operations acquire no new mutation lock. Admission
-still requires the documented external-ownership promise; this API does not
-extend the protocol to independent reader processes.
-
 See the [grouped-item benchmark](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md)
 for separately counted items, blocks and publications, concurrent-reader
 measurements and the comparison with individually framed controls.

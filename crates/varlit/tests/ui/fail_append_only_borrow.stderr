@@ -1,8 +1,0 @@
-error[E0515]: cannot return value referencing function parameter `window`
- --> tests/ui/fail_append_only_borrow.rs:2:5
-  |
-2 |     window.as_bytes()
-  |     ------^^^^^^^^^^^
-  |     |
-  |     returns a value referencing data owned by the current function
-  |     `window` is borrowed here
