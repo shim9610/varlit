@@ -75,3 +75,35 @@ fn bounded_whole_chunk_validator_accepts_a_complete_container() {
     assert!(result.is_ok(), "complete one-chunk container rejected");
     std::mem::forget(result);
 }
+
+fn forbidden_entry_read(_: &[u8], _: usize) -> Result<ChunkEntry> {
+    assert!(false, "incomplete chunk table reached an entry read");
+    Err(Error::InvalidChunkedBytes)
+}
+unsafe fn forbidden_allocation(_: std::alloc::Layout) -> *mut u8 {
+    assert!(false, "structural chunk admission allocated");
+    std::ptr::null_mut()
+}
+
+/// Actual validator with a verified table contract. No entry exists in the
+/// real input: even internally consistent hostile counts must be rejected
+/// before an entry read or allocation. Arbitrary total/count retain wire width.
+#[kani::proof]
+#[kani::unwind(10)]
+#[kani::stub_verified(table_extent)]
+#[kani::stub(parse_entry, forbidden_entry_read)]
+#[kani::stub(std::alloc::alloc, forbidden_allocation)]
+fn incomplete_chunk_table_rejects_before_entry_read_or_allocation() {
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(b"VCHK\x01\x00\x01\x00");
+    bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let total: u64 = kani::any();
+    let count: u32 = kani::any();
+    bytes[16..24].copy_from_slice(&total.to_le_bytes());
+    bytes[24..28].copy_from_slice(&count.to_le_bytes());
+    let len: u8 = kani::any();
+    kani::assume(len <= 32);
+    let result = validate_chunked_bytes(&bytes[..usize::from(len)], false);
+    assert_eq!(result.is_ok(), len == 32 && total == 0 && count == 0);
+    std::mem::forget(result);
+}

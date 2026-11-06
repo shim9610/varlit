@@ -690,7 +690,10 @@
       "required_harnesses": [
         "compression_buffers::resource_steps::proofs::output_requests_respect_both_limits",
         "compression_buffers::resource_steps::proofs::arbitrary_block_step_progresses_or_rejects",
-        "compression_buffers::resource_steps::proofs::streaming_step_is_bounded_and_strictly_progresses"
+        "compression_buffers::resource_steps::proofs::streaming_step_is_bounded_and_strictly_progresses",
+        "compression_buffers::resource_steps::contract_proofs::reservation_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::block_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::streaming_contract_is_total_and_exact"
       ]
     },
     "limited-spill": {
@@ -849,7 +852,9 @@
         "chunks::resource_proofs::full_width_chunk_table_bounds_iteration_by_real_input",
         "chunks::resource_proofs::arbitrary_chunk_entry_bytes_are_checked",
         "chunks::resource_proofs::full_width_chunk_header_fields_are_validated",
-        "chunks::resource_proofs::bounded_whole_chunk_validator_accepts_a_complete_container"
+        "chunks::resource_proofs::bounded_whole_chunk_validator_accepts_a_complete_container",
+        "chunks::contract_proofs::table_extent_contract_is_total_and_exact",
+        "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation"
       ]
     },
     "materialization": {
@@ -1215,7 +1220,8 @@
         ]
       },
       "required_harnesses": [
-        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
+        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
       ]
     },
     "index-visits": {
@@ -1265,7 +1271,9 @@
       },
       "required_harnesses": [
         "disk_index::tree::resource_proofs::every_node_visit_consumes_finite_fuel",
-        "disk_index::tree::resource_proofs::accepted_child_height_strictly_decreases"
+        "disk_index::tree::resource_proofs::accepted_child_height_strictly_decreases",
+        "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+        "disk_index::tree::contract_proofs::height_contract_is_total_and_exact"
       ]
     },
     "decoder-memory": {
@@ -1646,7 +1654,8 @@
         "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
         "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
         "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables",
-        "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds"
+        "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds",
+        "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges"
       ]
     },
     "fallible-ownership": {

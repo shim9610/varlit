@@ -79,7 +79,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-**58 harnesses in 14 contract groups**. Both default and all-feature builds must
+**67 harnesses in 14 contract groups**. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -92,12 +92,12 @@ A zero-harness run fails.
 | Observed prefix | 4 | Prefix transitions; bounded membership/truncation models |
 | Publication metadata | 5 | Typed frontier/checkpoint validation and actual 24-byte frontier decoder |
 | Publication protocol | 9 | Abstract I/O effects and inductive frontier invariants |
-| Compression steps | 3 | Block progress and output reservation bounds |
+| Compression steps | 6 | Block progress and output reservation bounds |
 | Limited spill | 2 | Checked extents and bounded partial-write/retry model |
-| Chunk parser | 4 | Header/entry/table extent and complete-validator positive witness |
-| Materialization | 1 | Budget transition |
-| Index visits | 2 | Decreasing traversal fuel and child height |
-| Decoder memory | 7 | Charge/transfer, HashMap reservation accounting and complete bounded byte-vector decode |
+| Chunk parser | 6 | Header/entry/table extent and complete-validator positive witness |
+| Materialization | 2 | Budget transition |
+| Index visits | 4 | Decreasing traversal fuel and child height |
+| Decoder memory | 8 | Charge/transfer, HashMap reservation accounting and complete bounded byte-vector decode |
 | Fallible ownership | 16 | Refusal, partial cleanup and bounded clone/owner models |
 | Scalar owner memory | 2 | Selected scalar Box validity and refusal-before-initialization |
 | Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
@@ -131,7 +131,7 @@ for varlit_features in default all; do
     varlit_output="target/verification/$varlit_features"
     mkdir -p "$varlit_output"
     python3 scripts/check_proof_contracts.py --capture "$varlit_output/source-before.json"
-    cargo kani -p varlit-core "${varlit_flags[@]}" --jobs 2 --output-format terse --default-unwind 5 -Z stubbing -Z unstable-options --harness-timeout 300 2>&1 | tee "$varlit_output/kani.log"
+    cargo kani -p varlit-core "${varlit_flags[@]}" --jobs 2 --output-format terse --default-unwind 5 -Z stubbing -Z unstable-options -Z function-contracts --harness-timeout 300 2>&1 | tee "$varlit_output/kani.log"
     python3 scripts/check_proof_contracts.py --source-before "$varlit_output/source-before.json" --log "$varlit_output/kani.log" --features "$varlit_features" --output "$varlit_output/contracts.json"
     python3 scripts/check_memory_proofs.py --kani-checkout "$varlit_kani_checkout" --features "$varlit_features" --output "$varlit_output/memory-checks"
 done
@@ -204,6 +204,52 @@ proof is not established: exploratory attempts timed out at the existing
 300-second budget, and additional empty-output experiments were not qualified.
 None of these experiments is counted as a completed proof.
 
+## Executable specifications and composed consumers
+
+Every contract family now declares `requires`, `ensures`, `on_error`, `frame`
+and `progress` clauses in the manifest. These clauses describe the actual proof
+scope and assumptions; prose is not counted as a new proof.
+
+Six actual implementation helpers additionally carry Kani `ensures` contracts:
+chunk table extent, compression reservation/block/stream decisions, traversal
+height matching and visit fuel. They accept all unsigned input values without
+extra file-validity assumptions. Fuel also declares `modifies(remaining)` and
+compares the post-state with `old(*remaining)`, so failed admission preserves zero
+and success consumes exactly one visit. `proof_for_contract` harnesses check the
+real bodies against these executable specifications.
+
+The actual chunk validator uses `stub_verified(table_extent)` in a composed
+proof. It covers real input lengths 0..32, fixed valid format fields and chunk
+size 1, arbitrary u64 declared output and u32 count. No entry exists in those
+inputs. Instrumented entry-read/allocation sentinels must remain unreachable;
+only the complete empty container may succeed. This proof includes cases whose
+declared count/output agree but whose real table is absent. It does not prove
+the complete arbitrary-size/C-zstd parser.
+
+The two new decoder/budget consumers execute two full-width charges around
+possibly truncated reads, a returning callback error and trailing input. Nested
+decode preserves the parent's backing reference, cursor and limit while
+retaining completed charges on every return. Two actual
+`MaterializationBudget::decode` calls keep the same remaining ledger across
+success, error and retry; the input bound is 18 bytes and the callback terminates
+and uses Decoder's read/charge interface. Both endians are checked in nested
+decode. These are concrete callback models, not a proof of arbitrary user code.
+
+The native AST gate requires each executable definition, exact annotation set,
+`proof_for_contract` target and verified use to match the registry. Every
+consumer's callee proof must be registered and complete. Replacing a contracted
+helper with an ordinary stub, deleting a contract/proof, introducing an
+unregistered semantic stub or making the dependency graph cyclic fails.
+Allocator and existing empty-Vec models retain their separately stated
+assumptions; an unreachable-call sentinel is an assertion, not an assumption.
+
+Allocated-String experiments exceeded the unchanged 300-second/16-GiB
+qualification budget, including verifier OOM kills. They are excluded from the
+registered set and do not establish a runtime library OOM or successful String
+ownership proof. General Box/Arc/TryClone initialization remains in the separate
+library project. No input narrowing or unqualified model is labeled a completed
+whole-library proof.
+
 ## Deliberate-defect controls
 
 The required default Kani job also checks production bindings and deliberately
@@ -214,7 +260,7 @@ timeouts and unrelated failures do not count as detecting the expected defect.
 | --- | --- |
 | `check_publication_protocol.py` | 11 publication-ordering mutations |
 | `check_ownership_mutations.py` | 5 ownership-allocation mutations |
-| `check_resource_mutations.py` | 19 registered baseline harnesses and 17 resource/traversal mutations |
+| `check_resource_mutations.py` | 26 registered baseline harnesses and 22 resource/traversal/contract mutations |
 
 ```sh
 python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
