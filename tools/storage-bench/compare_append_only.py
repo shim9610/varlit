@@ -61,6 +61,17 @@ def lifecycle_calibration_profiles(before, after):
     return selected
 
 
+def oom_cleanup_calibration_profiles(before, after):
+    """Four retained cleanup-change alerts, fixed before A/B/current rounds."""
+    shapes={('session-live',1<<30,1<<20,1),('session-warm',1<<30,65536,1),
+            ('session-warm',128<<20,1<<20,8),('session-warm',128<<20,65536,8)}
+    selected=[p for p in lifecycle_profiles(before,after)
+              if p['variant']!='reconnect'
+              and (p['command_tail'][0],p['total'],p['group'],p['readers']) in shapes]
+    assert len(selected)==12
+    return selected
+
+
 def calibration_profiles(binary, new_alerts=False):
     """Three retained warm phase alerts; identical raw A/B and guarded binary."""
     selected = []
@@ -88,12 +99,15 @@ def calibration_profiles(binary, new_alerts=False):
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--before',type=Path,required=True);ap.add_argument('--after',type=Path,required=True)
+    ap.add_argument('--baseline-sha',help='Exact source revision of the frozen before binary')
     ap.add_argument('--output',type=Path,required=True);ap.add_argument('--smoke',action='store_true')
     ap.add_argument('--lifecycle',action='store_true',help='Compare c5 guarded baseline with current guard and reader-first writer handoffs')
+    ap.add_argument('--oom-cleanup-calibration',action='store_true',help='Fixed 30-round checks for four retained observer-free cleanup alerts')
     ap.add_argument('--lifecycle-calibration',action='store_true',help='Fixed 30-round before A/B/current checks for four retained lifecycle phase alerts')
     ap.add_argument('--calibration',action='store_true',help='Fixed 30-round same-binary warm phase calibration')
     ap.add_argument('--calibration-new-alerts',action='store_true',help='Fixed 30-round confirmation of two additional final-runtime alerts')
     args=ap.parse_args();out=args.output.resolve();out.mkdir(exist_ok=False)
+    args.lifecycle_calibration = args.lifecycle_calibration or args.oom_cleanup_calibration
     args.lifecycle = args.lifecycle or args.lifecycle_calibration
     assert not (args.calibration and args.calibration_new_alerts)
     assert not args.lifecycle or not (args.smoke or args.calibration or args.calibration_new_alerts)
@@ -106,7 +120,7 @@ def main():
     assert quota!='max' and int(quota)<=4*int(period)
     assert shutil.disk_usage(out).total<=32*2**30
     subprocess.run(['cc','-O2',str(bench.HERE/'measure.c'),'-o',str(out/'measure')],check=True)
-    grid=lifecycle_calibration_profiles(args.before,args.after) if args.lifecycle_calibration else lifecycle_profiles(args.before,args.after) if args.lifecycle else calibration_profiles(args.after,args.calibration_new_alerts) if args.calibration else profiles(args.before,args.after,args.smoke)
+    grid=oom_cleanup_calibration_profiles(args.before,args.after) if args.oom_cleanup_calibration else lifecycle_calibration_profiles(args.before,args.after) if args.lifecycle_calibration else lifecycle_profiles(args.before,args.after) if args.lifecycle else calibration_profiles(args.after,args.calibration_new_alerts) if args.calibration else profiles(args.before,args.after,args.smoke)
     repeats=30 if args.calibration else 1 if args.smoke else 7
     binaries={p['binary_override']:hashlib.sha256(Path(p['binary_override']).read_bytes()).hexdigest() for p in grid}
     sources=[bench.HERE/n for n in ['Cargo.toml','Cargo.lock','build.rs','run.py','compare_append_only.py','measure.c']]
@@ -115,9 +129,9 @@ def main():
         target=out/'source'/path.relative_to(bench.HERE);target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
     (out/'worktree.patch').write_bytes(subprocess.check_output(['git','diff','--binary','HEAD'],cwd=bench.REPO))
     bench.save(out/'manifest.json',dict(profiles=grid,repeats=repeats,smoke=args.smoke,calibration=args.calibration,
-        new_alerts=args.calibration_new_alerts,lifecycle=args.lifecycle,lifecycle_calibration=args.lifecycle_calibration,affinity=cpus,memory_max=memory,
+        new_alerts=args.calibration_new_alerts,lifecycle=args.lifecycle,lifecycle_calibration=args.lifecycle_calibration,oom_cleanup_calibration=args.oom_cleanup_calibration,affinity=cpus,memory_max=memory,
         cpu_max=f'{quota} {period}',disk_budget_gib=32,seed=9610,binaries=binaries,
-        baseline='c5db359730b1ac3e7014c04b5b48675cd4c6f9f3' if args.lifecycle else 'a3a1e262d3a935cf2f16c1637e3eb626b13f1354',started_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+        baseline=args.baseline_sha or ('c5db359730b1ac3e7014c04b5b48675cd4c6f9f3' if args.lifecycle else 'a3a1e262d3a935cf2f16c1637e3eb626b13f1354'),started_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
         scope='One process, one writer, 1/8 reader threads; live windows, static two-pass snapshots, fixed/variable packed frames and four bounded MPSC producers. Same byte oracles, payload and publication count. Before A/B are the identical binary.',
         limitations='Fresh writes warm OS cache. No privileged cache eviction. Separate 50 ms process/storage probes can miss brief peaks. Do not pool cohorts or infer a cross-process token protocol.'))
     events=Path('/sys/fs/cgroup/memory.events');(out/'memory-before.txt').write_text(events.read_text())

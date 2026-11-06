@@ -95,3 +95,12 @@ class AppendOnlyBenchmarkContracts(unittest.TestCase):
         self.assertEqual({(p['total'],p['group'],p['readers']) for p in profiles},
                          {(1<<30,1<<20,1),(1<<30,65536,8),(128<<20,1<<20,8),(128<<20,65536,8)})
         self.assertTrue(all(p['command_tail'][0] == 'session-warm' and p['read_validation'] == 'full' for p in profiles))
+
+
+    def test_cleanup_phase_check_keeps_the_four_new_alerts_and_equal_work(self):
+        profiles = comparison.oom_cleanup_calibration_profiles(Path('before'), Path('after'))
+        self.assertEqual(len(profiles), 12)
+        self.assertEqual({p['variant'] for p in profiles}, {'baseline-a','baseline-b','current'})
+        self.assertEqual({(p['command_tail'][0],p['total'],p['group'],p['readers']) for p in profiles},
+                         {('session-live',1<<30,1<<20,1),('session-warm',1<<30,65536,1),
+                          ('session-warm',128<<20,1<<20,8),('session-warm',128<<20,65536,8)})

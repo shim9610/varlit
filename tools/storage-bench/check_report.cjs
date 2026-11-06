@@ -94,16 +94,16 @@ console.log('SQLite mmap cohorts, equal-work references, actual mappings and liv
 
 controls.scope.value = 'append-only'; controls.family.value = ''; controls.engine.value = ''; context.render();
 const appendRows = Object.entries(data.profiles).filter(([, row]) => row.presentation === 'append-only');
-assert.equal(appendRows.length, 213);
+assert.equal(appendRows.length, 267);
 assert.deepEqual(new Set(names()), new Set(appendRows.map(([name]) => name)));
-assert.equal(data.profiles[names()[0]].profile.cohort, 'lifecycle-v1', 'Current runtime must lead ownership view');
+assert.equal(data.profiles[names()[0]].profile.cohort, 'lifecycle-oom-cleanup-v1', 'Current runtime must lead ownership view');
 assert.equal(controls.rows.children[0].children[1].textContent, 'current implementation');
 for (const row of controls.rows.children) {
   const selected = data.profiles[row.children[0].textContent];
   const p = selected.profile;
   const calibrated = p.cohort.startsWith('calibration');
-  const lifecycleCalibration = p.cohort === 'lifecycle-calibration-v1';
-  if (p.cohort === 'lifecycle-v1') assert.equal(row.children[1].textContent, p.variant.startsWith('baseline-') ? 'baseline control' : 'current implementation');
+  const lifecycleCalibration = ['lifecycle-calibration-v1','lifecycle-oom-calibration-v1'].includes(p.cohort);
+  if (p.cohort === 'lifecycle-oom-cleanup-v1') assert.equal(row.children[1].textContent, p.variant.startsWith('baseline-') ? 'baseline control' : 'current implementation');
   assert.equal(selected.observations, calibrated || lifecycleCalibration ? 30 : 7);
   assert(selected.probe.sampled_processes >= 2);
   assert(selected.metric_spread.completion.min <= selected.metrics.completion);
@@ -118,5 +118,5 @@ for (const row of controls.rows.children) {
 }
 controls.family.value = 'session-live'; context.render();
 assert(names().every(n => data.profiles[n].profile.workload.startsWith('session-live')));
-assert.equal(names().length, 99);
+assert.equal(names().length, 126);
 console.log('Append-only before/after/cohort filters, thread probes and nonpooled ownership ratios pass');

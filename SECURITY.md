@@ -44,7 +44,8 @@ optional checks; wrong but well-formed data may then be returned if that trust
 is violated. Retained checks return errors, but skipped damage is not guaranteed
 to be detected. Snapshot bounds, checked arithmetic, resource/decoder limits,
 finite traversal and committed-publication guards remain in force. This is not a
-process-wide OOM guarantee. Protocol/generation checksums and standalone container
+process-wide OOM guarantee; platform std synchronization can allocate on first
+use. Protocol/generation checksums and standalone container
 checks are distinct from optional record/cell CRCs. See the
 [read-policy contract](docs/design/read-validation-policy-review.md).
 

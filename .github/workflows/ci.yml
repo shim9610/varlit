@@ -300,6 +300,8 @@ jobs:
           key: macos-native
       - name: Default native tests
         run: cargo run --locked -p varlit-test-runner -- test --locked --workspace
+      - name: Check admission refusal cleanup before the full suite
+        run: cargo run --locked -p varlit-test-runner -- test --locked -p varlit-core --all-features --test fallible_ownership append_only_admission
       - name: All-feature native tests
         if: ${{ !cancelled() }}
         run: cargo run --locked -p varlit-test-runner -- test --locked --workspace --all-features

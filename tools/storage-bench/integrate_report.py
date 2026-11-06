@@ -18,7 +18,7 @@ def append_only_study(data, root):
     data['cohorts'] = [c for c in data['cohorts'] if c.get('kind') != 'append-only']
     manifests, events, changes = {}, {}, {}
     cohorts = ['primary-v1', 'primary-v2', 'primary-final-v1', 'calibration-v1', 'calibration-alerts-v1']
-    for extra in ['lifecycle-v1', 'lifecycle-calibration-v1']:
+    for extra in ['lifecycle-v1', 'lifecycle-calibration-v1', 'lifecycle-oom-cleanup-v1', 'lifecycle-oom-calibration-v1']:
         if (root / extra).is_dir():
             cohorts.append(extra)
     for cohort in cohorts:
@@ -91,7 +91,7 @@ def append_only_study(data, root):
                    for c, m in manifests.items()}, memory_event_deltas=events, changes_percent=changes,
         evidence='append-only-mmap-20261106.tar.gz', lifecycle_evidence='append-only-lifecycle-20261106.tar.gz' if 'lifecycle-v1' in cohorts else None,
         qualification='Separate implementation and fixed 30-round phase-check cohorts. Identical-binary controls and all phase alerts retained; no universal zero-overhead or 5% guarantee.',
-        runtime_notes='primary-v1 used the earlier resource-options replacement API with fully resolved FULL limits. primary-v2 and both calibrations use open_reader_with_resource_limits and preserve missing format defaults. primary-final-v1 additionally includes metadata-only mmap Debug formatting and predates lifecycle-v1. lifecycle-v1 compares the c5 guarded baseline with current guarded operation and actual reader-first repeated writer leases. lifecycle-calibration-v1 retains fixed 30-round before A/B/current phase checks. No cohort pooling.',
+        runtime_notes='primary-v1 used the earlier resource-options replacement API with fully resolved FULL limits. primary-v2 and both calibrations use open_reader_with_resource_limits and preserve missing format defaults. primary-final-v1 additionally includes metadata-only mmap Debug formatting and predates lifecycle-v1. lifecycle-v1 compares the c5 guarded baseline with current guarded operation and actual reader-first repeated writer leases. lifecycle-calibration-v1 retains fixed 30-round before A/B/current phase checks. lifecycle-oom-cleanup-v1 compares 09c2028 with the final observer-free cleanup fix using identical Rust harness sources; lifecycle-oom-calibration-v1 keeps its four fixed 30-round phase checks separate. No cohort pooling.',
         scope='One process, one active writer and independent reader threads; live per-record windows or two-pass fixed snapshots. No new SQLite/HDF5 comparison.')
     data['timing_observations'] = sum(c['timing_observations'] for c in data['cohorts'])
     data['resource_probes'] = sum(c['resource_probes'] for c in data['cohorts'])

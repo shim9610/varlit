@@ -520,6 +520,31 @@ occur five times per condition: 360 timings and 12 probes. The frozen binaries
 are unchanged. Primary results and phase checks stay separate regardless of the
 outcome; this command is not a repeat-until-pass procedure.
 
+### Observer-free cleanup correction
+
+Freeze `09c2028` and the observer-free cleanup correction with the same
+`session-lifecycle` feature and Rust harness. The final correction has its own
+12-condition, seven-round primary cohort, plus a fixed 30-round recheck of its
+four retained phase alerts. Both keep all bytes, metadata and retained-view
+verification. Specify the actual source baseline instead of silently labeling
+the newer before binary as c5:
+
+```sh
+python3 tools/storage-bench/compare_append_only.py --lifecycle \
+  --baseline-sha 09c2028180ff1fec87ffe27935f4cdd2dff9a201 \
+  --before /absolute/09-arrays --after /absolute/final-arrays \
+  --output /absolute/fresh/lifecycle-oom-cleanup-v1
+python3 tools/storage-bench/compare_append_only.py --oom-cleanup-calibration \
+  --baseline-sha 09c2028180ff1fec87ffe27935f4cdd2dff9a201 \
+  --before /absolute/09-arrays --after /absolute/final-arrays \
+  --output /absolute/fresh/lifecycle-oom-calibration-v1
+```
+
+The phase check fixes live 1 GiB/1 MiB/one reader, warm 1 GiB/64 KiB/one reader,
+and both warm 128 MiB/eight-reader block sizes before execution. Each A/B/final
+order occurs five times per condition. It does not replace or pool the original
+294 primary timings or earlier implementation/calibration evidence.
+
 The canonical dashboard also accepts `--read-validation docs/performance/read-validation-20261104/comparison.json` in the `integrate_report.py` command. This keeps the 69 mode configurations in the existing report as a separate cohort; it never pools their timings or invents new SQLite ratios.
 
 After freezing `payload` and `writer` diagnostic binaries from the same harness for each supported snapshot:
