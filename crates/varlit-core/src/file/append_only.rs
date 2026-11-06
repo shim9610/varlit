@@ -186,7 +186,7 @@ mod tests {
     use crate::{Decoder, Encoder, VarlitDecode};
 
     #[derive(Debug, PartialEq)]
-    struct Number(u64);
+    pub(super) struct Number(pub(super) u64);
     impl VarlitEncode for Number {
         const WIRE_TYPE: WireType = WireType::U64;
         fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
@@ -207,7 +207,7 @@ mod tests {
         const IS_KEYED: bool = false;
         const SCHEMA_FINGERPRINT: u64 = 81;
     }
-    fn spec() -> FormatSpec {
+    pub(super) fn spec() -> FormatSpec {
         FormatSpec::new(
             b"MMFAULT",
             1,
@@ -287,8 +287,8 @@ mod tests {
                 Number(19)
             );
             assert!(snapshot.block_payload_window::<Number>(1)?.is_none());
-            if fail_rollback {
-                assert!(matches!(failure, Error::WriteRollbackFailed { .. }));
+            if fail_rollback || cfg!(windows) {
+                platform_tests::assert_rollback_failure(&failure, fail_rollback);
                 assert!(matches!(
                     writer.commit_durable(),
                     Err(Error::WriterPoisoned(_))
@@ -411,3 +411,7 @@ impl GuardedMmapPayloads {
         self.mapped.block_payload_window::<T>(index)
     }
 }
+
+#[cfg(test)]
+#[path = "append_only_platform_tests.rs"]
+mod platform_tests;

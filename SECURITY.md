@@ -73,6 +73,11 @@ Varlit writer entry points; it does not enforce immutability against arbitrary
 filesystem access or transfer protection to another process. See the
 [append-only API contract](docs/api-reference.md#append-only-mmap-sessions).
 
+On Windows, a live mapping also prevents the file-length change used to roll
+back a failed append. Varlit reports `WriteRollbackFailed` and poisons that
+writer while preserving confirmed mapped bytes. Release all mappings and session
+owners before reopening for recovery; unmapping alone does not clear poison.
+
 An external truncate can make a mapped page inaccessible and cause an operating
 system fault such as `SIGBUS`, rather than a recoverable Rust error. External
 writes can invalidate previously checked contents; mutation while a zero-copy
