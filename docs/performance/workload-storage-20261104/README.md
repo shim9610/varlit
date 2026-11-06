@@ -101,6 +101,12 @@ missing notification when final native liveness cleanup failed. Those raw rows
 and its binary are retained as incomplete evidence; they are excluded from the
 completed cohort and every qualification.
 
+The final MSRV/current-Rust compatibility annotation preserves the **entire**
+rebuilt Linux release binary (SHA-256
+`c4744ebbdc06044d228ca44eb648e8e348269b46b71a60d08ed22943b6678858`).
+It changes no measured execution path; focused native tests, Loom and
+warnings-denied checks were repeated on Rust 1.95 and 1.99.1.
+
 [Raw lifecycle observations, binaries, captured final source and controls](append-only-lifecycle-20261106.tar.gz)
 are part of this combined report and its [checksums](CURRENT_SHA256SUMS).
 
