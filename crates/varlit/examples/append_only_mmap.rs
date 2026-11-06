@@ -1,7 +1,7 @@
 //! Controlled mapped access after one explicit external-ownership admission.
 use varlit::{
-    AppendOnlyWriter, CommitPolicy, Endian, Result, TransactionMarkerMode, decode_from_slice,
-    varlit_format,
+    AppendOnlySession, AppendOnlyWriterState, CommitPolicy, Endian, Result, TransactionMarkerMode,
+    decode_from_slice, varlit_format,
 };
 
 varlit_format! {
@@ -21,18 +21,27 @@ fn main() -> Result<()> {
     // SAFETY: this example owns the private backing object. All modifications
     // use this append-only facade; no other handles/processes rewrite or
     // truncate it while any token, reader, mapping or borrowed slice exists.
-    let mut writer = unsafe { AppendOnlyWriter::new(file)? };
+    let session = unsafe { AppendOnlySession::new(file)? };
+    let token = session.reader_token();
+    let mut reader = token.open_reader()?;
+    assert_eq!(
+        reader.session_status()?.writer,
+        AppendOnlyWriterState::NotStarted
+    );
+    let mut writer = session.open_writer()?;
     writer.push_info(&Samples {
         data: vec![1; 64 << 10],
     })?;
     writer.commit_durable()?;
-    let token = writer.reader_token();
-    let mut reader = token.open_reader()?;
+    reader.follow()?;
     let mut entries = Vec::new();
     reader.block_entries_into::<Samples>(&mut entries)?;
     let mapped = reader.mmap_payload_window(&entries[0])?;
     let captured = mapped.as_bytes();
 
+    writer.close()?;
+    // Cached native state reconnects while reader and captured bytes remain.
+    let mut writer = session.open_writer()?;
     writer.push_info(&Samples {
         data: vec![2; 64 << 10],
     })?;
@@ -47,7 +56,13 @@ fn main() -> Result<()> {
         vec![1; 64 << 10]
     );
 
-    drop(writer);
+    writer.close()?;
+    session.close()?;
+    assert_eq!(
+        token.session_status()?.writer,
+        AppendOnlyWriterState::Finished
+    );
+    drop(session);
     drop(token);
     drop(reader);
     // An owned window remains protected after its originating handles drop.

@@ -6,6 +6,8 @@ enum Sink {
     Raw(VarlitFile),
     #[cfg(feature = "guarded-mmap")]
     Guarded(AppendOnlyWriter),
+    #[cfg(feature = "session-lifecycle")]
+    Session(varlit::AppendOnlySession, Option<AppendOnlyWriter>),
 }
 enum Factory {
     Raw(PathBuf, FormatSpec),
@@ -28,6 +30,21 @@ enum Snapshot {
     Guarded(GuardedMmapPayloads),
 }
 impl Sink {
+    fn begin_epoch(&mut self) -> R<()> {
+        #[cfg(feature = "session-lifecycle")]
+        if let Self::Session(session, writer) = self {
+            assert!(writer.is_none());
+            *writer = Some(session.open_writer()?);
+        }
+        Ok(())
+    }
+    fn end_epoch(&mut self) -> R<()> {
+        #[cfg(feature = "session-lifecycle")]
+        if let Self::Session(_, writer) = self {
+            writer.take().ok_or("no writer lease")?.close()?;
+        }
+        Ok(())
+    }
     fn append<T: VarlitBlock>(&mut self, value: &T) -> R<()> {
         match self {
             Self::Raw(f) => {
@@ -36,6 +53,10 @@ impl Sink {
             #[cfg(feature = "guarded-mmap")]
             Self::Guarded(f) => {
                 f.push_info(value)?;
+            }
+            #[cfg(feature = "session-lifecycle")]
+            Self::Session(_, f) => {
+                f.as_mut().ok_or("no writer lease")?.push_info(value)?;
             }
         }
         Ok(())
@@ -48,6 +69,10 @@ impl Sink {
             #[cfg(feature = "guarded-mmap")]
             Self::Guarded(f) => {
                 f.commit_durable()?;
+            }
+            #[cfg(feature = "session-lifecycle")]
+            Self::Session(_, f) => {
+                f.as_mut().ok_or("no writer lease")?.commit_durable()?;
             }
         }
         Ok(())
@@ -159,6 +184,7 @@ fn consume(
     complex: bool,
 ) -> R<Stats> {
     let mut reader = factory.open()?;
+    let mut retained = None;
     let mut chunks = Vec::new();
     let mut metadata = Vec::new();
     let mut out = vec![0; OUTPUT];
@@ -203,6 +229,9 @@ fn consume(
             out[..bytes.len()].copy_from_slice(bytes);
             verify(first, &out[..bytes.len()]);
             stats.bytes += bytes.len();
+            if retained.is_none() {
+                retained = Some((first, mapped));
+            }
         }
         if complex {
             for (i, entry) in metadata[stats.metadata..stats.metadata + 2]
@@ -225,6 +254,11 @@ fn consume(
             stats.bytes - old_bytes,
         ));
     }
+    // Keep an actual view alive across every subsequent publication/handoff.
+    let (expected, mapped) = retained.ok_or("no retained view")?;
+    let (first, bytes) = borrowed(mapped.bytes())?;
+    assert_eq!(first, expected);
+    verify(first, bytes);
     assert_eq!(stats.bytes, total);
     assert!(seen.iter().all(|v| *v));
     Ok(stats)
@@ -275,6 +309,13 @@ pub(super) fn run(
             let writer = unsafe { AppendOnlyWriter::new(file)? };
             let factory = Factory::Guarded(writer.reader_token(), selected.read_limits);
             (Sink::Guarded(writer), factory)
+        }
+        #[cfg(feature = "session-lifecycle")]
+        "session-reconnect" => {
+            // SAFETY: the private backing object has no nonparticipating access.
+            let session = unsafe { varlit::AppendOnlySession::new(file)? };
+            let factory = Factory::Guarded(session.reader_token(), selected.read_limits);
+            (Sink::Session(session, None), factory)
         }
         _ => return Err("unsupported session benchmark mode".into()),
     };
@@ -329,6 +370,7 @@ pub(super) fn run(
         drop(producer_send);
         let mut written = 0;
         for (epoch, bank) in producer_receive {
+            sink.begin_epoch()?;
             if complex {
                 for i in 0..2 {
                     sink.append(&KeyChunk {
@@ -342,6 +384,7 @@ pub(super) fn run(
                 written += 1;
             }
             sink.commit()?;
+            sink.end_epoch()?;
             for send in &sends {
                 send.send((epoch, written))?;
             }

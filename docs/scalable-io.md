@@ -377,8 +377,10 @@ the [live mmap comparison](performance/workload-storage-20261104/README.md#sqlit
 
 For application-controlled native append logs in one process, the
 [append-only mmap facade](api-reference.md#append-only-mmap-sessions) binds readers
-to an admitted writer's object and retains native exclusion through the last
-mapped owner. Read and append operations acquire no new mutation lock. Admission
+to an admitted session's object and retains native exclusion through the last
+mapped owner. Readers may open before the first writer. Healthy committed
+writer close/reconnect reuses native state without a file reopen or rescan.
+Read and successful append operations acquire no new mutation lock. Admission
 still requires the documented external-ownership promise; this API does not
 extend the protocol to independent reader processes.
 

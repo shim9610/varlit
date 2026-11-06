@@ -20,7 +20,8 @@ damaged metadata that an older reader accepted.
 | `ScanCancellationToken::try_new` | Create a cancellation token with a fallible shared allocation |
 | `Error::BufferTooSmall`, `InvalidChunkedRange` | Distinguish empty streaming scratch from an invalid decoded range |
 | `Error::ErrorContextAllocationFailed`, `AllocationFailureContext` | Preserve completed or uncertain publication facts when detailed error storage is refused |
-| `AppendOnlyWriter`, `AppendOnlyReaderToken`, `AppendOnlyReader` (`mmap`) | Admit an owned native writer once, restrict it to append/publication, and open file-bound mapped readers |
+| `AppendOnlySession`, `AppendOnlyWriter`, `AppendOnlyReaderToken`, `AppendOnlyReader` (`mmap`) | Admit native authority once; open readers before a writer and retain protected views across committed writer reconnect |
+| `AppendOnlySessionStatus`, `AppendOnlyWriterState`, `AppendOnlyFailure` (`mmap`) | Observe writer lifecycle and latched failures independently of data publications |
 | `GuardedMmapWindow`, `GuardedMmapPayloads` (`mmap`) | Keep native writer exclusion alive until the final protected owner drops |
 
 `ReadLimits` and `Error` were already non-exhaustive. Existing `Clone`, token
@@ -30,18 +31,36 @@ no dependency-specific owner type is exposed in place of a public std `Arc`.
 
 ### Append-only mapped access
 
-`unsafe AppendOnlyWriter::new(VarlitFile)` is an explicit, lasting promise to
-exclude nonparticipating writes and backing-object invalidation. It requires a
-healthy, natively locked writer, native transaction markers and no matrix storage.
-Derived mapping methods are safe under that admission contract. There is no
-mutable inner writer, writable-handle accessor or editable conversion.
+`unsafe AppendOnlySession::new(VarlitFile)` is a lasting promise to exclude
+nonparticipating mutation and invalidation. It requires a healthy, natively
+locked writer, transaction markers and no matrix storage. Existing
+`AppendOnlyWriter::new` remains the writer-first convenience. Derived mappings
+are safe under this contract; there is no mutable inner handle or editable
+conversion.
 
-`reader_token().open_reader()` creates a worker-owned reader. Its
-`open_reader_with_resource_limits` variant overlays only supplied operational
-options: use `ReadLimits::MISSING` to preserve other format defaults. Bounds,
-publication and ownership protection remain required in every read-check mode.
-Existing unguarded mapping constructors retain their `unsafe` contracts.
-See [the API guide](api-reference.md#append-only-mmap-sessions) and
+The session can issue readers before the first writer. Clones share one writer
+slot. A committed healthy writer close returns cached native state; reconnect
+needs no file reopen or rescan. Retain `writer.session()` when starting through
+the writer-first constructor. `status`/`session_status` and `wait_for_change`
+report lifetime/error snapshots, not new data. Failures stay latched across
+reconnect; commit durability failures may already have published records.
+
+Pending close, writer panic and fatal append failures require recovery.
+Drop all protected readers/maps, keep the session/token, call `recover`, and
+acquire a new writer. `AppendOnlyWriterActive`, `AppendOnlyReadersActive` and
+`AppendOnlySessionBusy` distinguish conflicting activity;
+`AppendOnlyRecoveryRequired` requests reconstruction, `AppendOnlySessionClosed`
+ends writer issuance, and `AppendOnlySessionPoisoned` fails closed on coordination
+poisoning. Recovery never releases the pinned native lock; it
+excludes new reader registration and refuses existing read protection.
+`close` on the session permanently revokes writer issuance. Read tokens/maps
+retain native exclusion after write authority and its buffers end.
+
+`open_reader_with_resource_limits` overlays supplied operational options on
+format defaults: use `ReadLimits::MISSING` to preserve other fields. Bounds,
+publication and ownership remain required in every read mode. Existing
+unguarded mapping constructors retain their `unsafe` contracts. See
+[the lifecycle and error table](api-reference.md#append-only-mmap-sessions) and
 [runnable example](../crates/varlit/examples/append_only_mmap.rs).
 
 ### Selecting read checks

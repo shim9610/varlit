@@ -11,9 +11,12 @@ preserved. Update the Cargo dependency requirement to `0.13.0` to use this relea
 See the [upgrade notes](docs/api-changes.md#0130) for API selection and
 error-handling changes.
 
-- Add the `mmap` append-only writer/token/reader facade and owned guarded windows
+- Add the `mmap` append-only session/writer/token/reader facade and owned guarded windows
   and snapshots. One unsafe admission defines the external-ownership contract;
   safe derived mappings retain native writer exclusion through the last owner.
+  Readers may precede the first writer and retain views across committed writer
+  reconnect without reopen/rescan. Lifecycle/error snapshots report shutdown
+  and failures; exclusive recovery refuses retained readers/maps.
   Native transaction markers are required; matrix and cross-process token
   support are excluded. Empty mapped-snapshot diagnostics use owned metadata
   without referencing mutable file headers. Existing APIs and file formats

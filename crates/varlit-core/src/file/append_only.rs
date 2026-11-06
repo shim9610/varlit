@@ -1,153 +1,148 @@
-//! Append-only ownership of a native file, including its last mapped reader.
+//! Session-bound native append writers and independently retained mappings.
 use super::*;
 use crate::fallible::{Arc, try_arc};
+use std::time::Duration;
+mod reader_gate;
+mod session;
+pub use session::{
+    AppendOnlyFailure, AppendOnlySession, AppendOnlySessionStatus, AppendOnlyWriterState,
+};
+use session::{Protection, ReaderProtection, WriteAuthority};
 
-#[derive(Debug)]
-struct Protection {
-    spec: FormatSpec,
-    path: PathBuf,
-    identity: [u8; 16],
-    // Never explicitly released/rebound by a writer: only the last owner drops it.
-    _lock: Option<WriterLock>,
-}
-
-/// A native writer exposing only append and publication operations.
+/// One active append-only writer lease from a pinned session.
 ///
-/// Requires the `mmap` feature and a non-matrix transaction-marker format.
-/// Reader tokens and mappings retain its native writer lock after writer drop.
-/// There is no mutable inner-handle accessor or conversion to an editable writer.
+/// Closing a committed healthy writer returns its cached native state to the
+/// session. Readers and their mappings can remain alive across reconnect.
 #[derive(Debug)]
 pub struct AppendOnlyWriter {
-    // Drop the writer (including its unmapped header updates) before protection.
-    file: VarlitFile,
-    protection: Arc<Protection>,
+    file: Option<VarlitFile>,
+    authority: Arc<WriteAuthority>,
 }
 
 impl AppendOnlyWriter {
-    /// Consumes an exclusively owned writer and restricts it to append-only use.
-    ///
-    /// Admission allocates shared protection once. Ordinary append and commit
-    /// do not acquire a new lock or increment its reference count.
+    /// Admits a native writer and immediately acquires its session's writer slot.
     ///
     /// # Safety
-    ///
-    /// Exclude writes, truncation and backing-object invalidation outside this
-    /// facade for the entire lifetime of all derived tokens, readers, mappings
-    /// and references, including after this writer is dropped. Advisory locks
-    /// coordinate cooperating Varlit writers, not arbitrary external handles.
-    /// This contract includes handles/callbacks in this process and filesystem
-    /// actions in other processes. Cross-process token transfer is unsupported.
-    pub unsafe fn new(mut file: VarlitFile) -> Result<Self> {
-        if file.mode != OpenMode::ReadWrite
-            || file
-                ._lock
-                .as_ref()
-                .is_none_or(|lock| lock.native_guard.is_none())
-        {
-            return Err(Error::InvalidFormatSpec(
-                "append-only admission requires a locked writer",
-            ));
-        }
-        if file.poison.is_refusing() {
-            return Err(Error::WriterPoisoned("append-only admission"));
-        }
-        if file.matrix.is_some()
-            || file.spec.has_matrix_blocks()
-            || file.spec.growing_matrix.is_some()
-        {
-            return Err(Error::InvalidFormatSpec(
-                "append-only mappings do not support matrix storage",
-            ));
-        }
-        if !file.spec.commit_policy.is_transaction_marker() {
-            return Err(Error::InvalidFormatSpec(
-                "append-only mappings require transaction markers",
-            ));
-        }
-        let identity = file.file.object_identity_array()?;
-        let native = file
-            ._lock
-            .as_ref()
-            .and_then(|lock| lock.native_guard.as_ref())
-            .expect("admission checked native exclusion");
-        if super::publication::opened_file_identity_array(native)? != identity {
-            return Err(Error::InvalidFormatSpec(
-                "append-only writer lock protects another object",
-            ));
-        }
-        let mut protection = try_arc(Protection {
-            spec: file.spec,
-            path: file.path.try_clone()?,
-            identity,
-            _lock: None,
-        })?;
-        // All fallible preparation completes while the original writer still
-        // owns its lock. No clone can exist before this private assignment.
-        let owner = Arc::get_mut(&mut protection).expect("new protection is unique");
-        owner._lock = file._lock.take();
-        Ok(Self { file, protection })
+    /// Exclude nonparticipating mutation/invalidation for the complete lifetime
+    /// of all derived tokens, readers, mappings and references. This includes
+    /// handles/callbacks in this process and other processes, after writer drop.
+    pub unsafe fn new(file: VarlitFile) -> Result<Self> {
+        // SAFETY: the same lasting external-ownership admission contract.
+        let session = unsafe { AppendOnlySession::new(file)? };
+        session.open_writer()
     }
 
-    /// Issues a file-bound token without allocating or accessing the filesystem.
+    /// Retains write authority for reader-first use and future writer reconnect.
+    pub fn session(&self) -> AppendOnlySession {
+        session::session_from_writer(&self.authority)
+    }
+
+    /// Issues read-only capability without allocation or filesystem access.
     pub fn reader_token(&self) -> AppendOnlyReaderToken {
         AppendOnlyReaderToken {
-            protection: Arc::clone(&self.protection),
+            protection: Arc::clone(&self.authority.protection),
         }
     }
 
-    /// Appends through the existing bounded native encoder.
+    /// Returns the writer without committing pending records. A pending tail or
+    /// poisoned writer returns `AppendOnlyRecoveryRequired` and remains visible
+    /// through session status. Existing confirmed views stay valid.
+    pub fn close(mut self) -> Result<()> {
+        self.return_file()
+    }
+
+    fn active_file(&mut self) -> &mut VarlitFile {
+        self.file
+            .as_mut()
+            .expect("a live writer owns its native file")
+    }
+
+    fn report<T>(&mut self, operation: &'static str, result: &Result<T>) {
+        if let Err(error) = result {
+            let poisoned = self
+                .file
+                .as_ref()
+                .is_some_and(|file| file.poison.is_refusing());
+            if self.authority.failure(operation, error, poisoned).is_err() {
+                self.active_file().poison.poison();
+            }
+        }
+    }
+
+    fn return_file(&mut self) -> Result<()> {
+        match self.file.take() {
+            Some(file) => self.authority.return_writer(file),
+            None => Ok(()),
+        }
+    }
+
+    /// Appends through the existing bounded native encoder. Normal success
+    /// acquires no coordination lock; errors update the shared failure snapshot.
+    #[inline]
     pub fn push_info<T: VarlitBlock>(&mut self, block: &T) -> Result<AppendInfo> {
-        self.file.push_info(block)
+        let result = self.active_file().push_info(block);
+        self.report("push_info", &result);
+        result
     }
 
     /// Appends a keyed record without changing its predecessor's bytes.
+    #[inline]
     pub fn push_keyed_info<T>(&mut self, block: &T) -> Result<AppendInfo>
     where
         T: VarlitKeyedBlock,
         T::Key: Eq + Hash,
     {
-        self.file.push_keyed_info(block)
+        let result = self.active_file().push_keyed_info(block);
+        self.report("push_keyed_info", &result);
+        result
     }
 
-    /// Flushes according to the format's existing transaction-marker policy.
+    /// Flushes according to the existing transaction-marker policy.
     pub fn flush(&mut self) -> Result<()> {
-        self.file.flush()
+        let result = self.active_file().flush();
+        self.report("flush", &result);
+        result
     }
 
-    /// Publishes the pending records without a durability request.
+    /// Publishes pending records without a durability request.
     pub fn commit(&mut self) -> Result<AppendInfo> {
-        self.file.commit()
+        let result = self.active_file().commit();
+        self.report("commit", &result);
+        result
     }
 
-    /// Publishes and durably synchronizes the pending records.
+    /// Publishes and durably synchronizes pending records. A reported commit
+    /// durability failure may still have published data; inspect the error.
     pub fn commit_durable(&mut self) -> Result<AppendInfo> {
-        self.file.commit_durable()
+        let result = self.active_file().commit_durable();
+        self.report("commit_durable", &result);
+        result
     }
 }
 
-/// Authority to open protected readers of exactly one backing file object.
-///
-/// May be shared between threads; create each reader on its owning worker.
-/// Keeping a token alive also keeps the native writer exclusion alive.
+impl Drop for AppendOnlyWriter {
+    fn drop(&mut self) {
+        let _ = self.return_file();
+    }
+}
+
+/// Read-only capability tied to one pinned backing object. It grants no write
+/// authority, does not block recovery by itself, and survives writer shutdown.
 #[derive(Debug)]
 pub struct AppendOnlyReaderToken {
     protection: Arc<Protection>,
 }
 
 impl AppendOnlyReaderToken {
-    /// Opens an independent read-only handle and verifies its backing identity.
-    ///
-    /// This initial API opens the session's original pathname once. A removed
-    /// pathname can fail to open; replacement with another object is refused.
-    /// Existing readers and mappings remain pinned to the original object.
-    /// No caller-supplied path or file handle is accepted.
+    /// Opens an independently positioned reader on this session's pinned object.
+    /// The original pathname must still identify that object; it is checked
+    /// before parsing bytes. Existing opened readers do not reopen on follow.
     pub fn open_reader(&self) -> Result<AppendOnlyReader> {
         self.open_reader_with_resource_limits(crate::ReadLimits::MISSING)
     }
 
-    /// Selects this reader's resource limits and optional read-check policy.
-    /// Missing fields preserve admitted format defaults; supplied fields replace
-    /// them. File identity, confirmed bounds and ownership remain mandatory.
+    /// Overlays supplied resource/read-check options while preserving defaults.
+    /// Registration excludes recovery until this reader and all derived maps end.
     pub fn open_reader_with_resource_limits(
         &self,
         limits: crate::ReadLimits,
@@ -159,6 +154,7 @@ impl AppendOnlyReaderToken {
             .resolve_entrypoint();
         spec.validate()?;
         ensure_native_open_limits(spec)?;
+        let protection = Protection::reader(&self.protection)?;
         let file = OpenOptions::new().read(true).open(&self.protection.path)?;
         if super::publication::opened_file_identity_array(&file)? != self.protection.identity {
             return Err(Error::InvalidFormatSpec(
@@ -173,10 +169,21 @@ impl AppendOnlyReaderToken {
             &mut scratch,
             DirectoryRetention::Keep,
         )?;
-        Ok(AppendOnlyReader {
-            file,
-            protection: Arc::clone(&self.protection),
-        })
+        Ok(AppendOnlyReader { file, protection })
+    }
+
+    /// Reads lifetime/error status without filesystem I/O or write authority.
+    pub fn session_status(&self) -> Result<AppendOnlySessionStatus> {
+        self.protection.status()
+    }
+
+    /// Waits for lifetime/error status, not for a new data publication.
+    pub fn wait_for_change(
+        &self,
+        observed: AppendOnlySessionStatus,
+        timeout: Duration,
+    ) -> Result<AppendOnlySessionStatus> {
+        self.protection.wait(observed, timeout)
     }
 }
 
@@ -317,10 +324,24 @@ mod tests {
 #[derive(Debug)]
 pub struct AppendOnlyReader {
     file: VarlitFile,
-    protection: Arc<Protection>,
+    protection: Arc<ReaderProtection>,
 }
 
 impl AppendOnlyReader {
+    /// Reads writer lifetime/error state without a filesystem operation.
+    pub fn session_status(&self) -> Result<AppendOnlySessionStatus> {
+        self.protection.session.status()
+    }
+
+    /// Waits for lifetime/error changes; ordinary payload access takes no lock.
+    pub fn wait_for_change(
+        &self,
+        observed: AppendOnlySessionStatus,
+        timeout: Duration,
+    ) -> Result<AppendOnlySessionStatus> {
+        self.protection.session.wait(observed, timeout)
+    }
+
     /// Follows newly confirmed records using the existing incremental reader.
     pub fn follow(&mut self) -> Result<u64> {
         self.file.follow()
@@ -372,7 +393,7 @@ impl AppendOnlyReader {
 #[derive(Debug)]
 pub struct GuardedMmapWindow {
     mapped: MmapPayloadWindow,
-    _protection: Arc<Protection>,
+    _protection: Arc<ReaderProtection>,
 }
 
 impl GuardedMmapWindow {
@@ -386,7 +407,7 @@ impl GuardedMmapWindow {
 #[derive(Debug)]
 pub struct GuardedMmapPayloads {
     mapped: MmapPayloads,
-    _protection: Arc<Protection>,
+    _protection: Arc<ReaderProtection>,
 }
 
 impl GuardedMmapPayloads {

@@ -1,0 +1,21 @@
+error[E0599]: no method named `session` found for reference `&AppendOnlyReaderToken` in the current scope
+ --> tests/ui/fail_append_only_read_authority.rs:2:68
+  |
+2 | fn token_escalation(token: &AppendOnlyReaderToken) { let _ = token.session(); }
+  |                                                                    ^^^^^^^
+  |
+help: there is a method `session_status` with a similar name
+  |
+2 | fn token_escalation(token: &AppendOnlyReaderToken) { let _ = token.session_status(); }
+  |                                                                           +++++++
+
+error[E0599]: no method named `session` found for reference `&AppendOnlyReader` in the current scope
+ --> tests/ui/fail_append_only_read_authority.rs:3:66
+  |
+3 | fn reader_escalation(reader: &AppendOnlyReader) { let _ = reader.session(); }
+  |                                                                  ^^^^^^^
+  |
+help: there is a method `session_status` with a similar name
+  |
+3 | fn reader_escalation(reader: &AppendOnlyReader) { let _ = reader.session_status(); }
+  |                                                                         +++++++

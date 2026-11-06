@@ -7713,7 +7713,8 @@ pub(crate) use locks::with_writer_lock_value;
 mod mmap_views;
 #[cfg(feature = "mmap")]
 pub use append_only::{
-    AppendOnlyReader, AppendOnlyReaderToken, AppendOnlyWriter, GuardedMmapPayloads,
+    AppendOnlyFailure, AppendOnlyReader, AppendOnlyReaderToken, AppendOnlySession,
+    AppendOnlySessionStatus, AppendOnlyWriter, AppendOnlyWriterState, GuardedMmapPayloads,
     GuardedMmapWindow,
 };
 #[cfg(feature = "mmap")]

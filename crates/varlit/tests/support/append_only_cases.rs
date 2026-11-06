@@ -79,3 +79,16 @@ pub fn limited_writer(records: u64) -> Result<(tempfile::TempDir, AppendOnlyWrit
     // SAFETY: exclusively owned private test backing object.
     Ok((directory, unsafe { AppendOnlyWriter::new(file)? }))
 }
+
+pub fn session() -> Result<(tempfile::TempDir, varlit::AppendOnlySession)> {
+    let directory = tempfile::tempdir()?;
+    let file = spec().create(directory.path().join("session"))?;
+    // SAFETY: private exclusively controlled backing object.
+    Ok((directory, unsafe { varlit::AppendOnlySession::new(file)? }))
+}
+
+pub fn failure() -> Result<varlit::AppendOnlyFailure> {
+    let (_directory, mut writer) = limited_writer(0)?;
+    assert!(writer.push_info(&Value { value: 19 }).is_err());
+    Ok(writer.reader_token().session_status()?.last_error.unwrap())
+}

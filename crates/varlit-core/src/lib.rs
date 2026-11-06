@@ -121,7 +121,8 @@ pub use file::{
 };
 #[cfg(feature = "mmap")]
 pub use file::{
-    AppendOnlyReader, AppendOnlyReaderToken, AppendOnlyWriter, GuardedMmapPayloads,
+    AppendOnlyFailure, AppendOnlyReader, AppendOnlyReaderToken, AppendOnlySession,
+    AppendOnlySessionStatus, AppendOnlyWriter, AppendOnlyWriterState, GuardedMmapPayloads,
     GuardedMmapWindow,
 };
 #[cfg(feature = "mmap")]
