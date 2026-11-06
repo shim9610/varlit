@@ -207,11 +207,4 @@ fn mmap_safety_contracts() {
     let tests = trybuild::TestCases::new();
     tests.pass("tests/ui/pass_mmap_unsafe.rs");
     tests.compile_fail("tests/ui/fail_mmap_requires_unsafe.rs");
-    tests.pass("tests/ui/pass_append_only_mmap.rs");
-    tests.pass("tests/ui/pass_append_only_session.rs");
-    tests.compile_fail("tests/ui/fail_append_only_read_authority.rs");
-    tests.compile_fail("tests/ui/fail_append_only_requires_unsafe.rs");
-    tests.compile_fail("tests/ui/fail_append_only_mutation.rs");
-    tests.compile_fail("tests/ui/fail_append_only_detach.rs");
-    tests.compile_fail("tests/ui/fail_append_only_borrow.rs");
 }

@@ -236,9 +236,6 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: test-${{ matrix.features.name }}
-      - name: Check Windows mapped append rollback before the full suite
-        if: matrix.os == 'windows-latest' && matrix.features.name == 'all-features'
-        run: cargo run --locked -p varlit-test-runner -- test --locked -p varlit-core --lib --all-features file::append_only
       - name: Test
         env:
           # The trybuild UI cases compare rustc diagnostic prose against snapshots
@@ -300,8 +297,6 @@ jobs:
           key: macos-native
       - name: Default native tests
         run: cargo run --locked -p varlit-test-runner -- test --locked --workspace
-      - name: Check admission refusal cleanup before the full suite
-        run: cargo run --locked -p varlit-test-runner -- test --locked -p varlit-core --all-features --test fallible_ownership append_only_admission
       - name: All-feature native tests
         if: ${{ !cancelled() }}
         run: cargo run --locked -p varlit-test-runner -- test --locked --workspace --all-features

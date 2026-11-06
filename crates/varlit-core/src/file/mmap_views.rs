@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// requirement that the captured mapped bytes stay immutable and the backing
 /// object stays valid for this value's full lifetime. Later appends outside the
 /// captured region do not enlarge or alter this snapshot.
+#[derive(Debug)]
 pub struct MmapPayloads {
     pub(super) spec: FormatSpec,
     /// The file offset the mapping starts at, which is the start of the append
@@ -40,19 +41,6 @@ pub struct MmapPayloads {
     // racing first readers may both verify the same immutable bytes.
     pub(super) verified: Vec<AtomicBool>,
     pub(super) mmap: memmap2::Mmap,
-}
-
-#[cfg(feature = "mmap")]
-impl std::fmt::Debug for MmapPayloads {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // An empty snapshot can map the file header without exposing a payload.
-        // memmap2's Debug uses slice methods for pointer/length, which would
-        // transiently reference that mutable header. Format owned metadata only.
-        f.debug_struct("MmapPayloads")
-            .field("base", &self.base)
-            .field("records", &self.index.len())
-            .finish_non_exhaustive()
-    }
 }
 
 /// One record payload or matrix cell mapped independently of the file's total size.

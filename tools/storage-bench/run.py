@@ -304,7 +304,6 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
         work.mkdir()
         command = [profile.get("binary_override",str(HERE / "target/release/arrays")), profile["mode"], str(work),
                    *map(str, [profile[x] for x in ["total", "group", "page", "mmap", "points", "ranges", "readers"]])]
-    command.extend(profile.get("command_tail", []))
     if profile.get("warm_scan"):
         command.append("warm-scan")
     if profile.get("live"):

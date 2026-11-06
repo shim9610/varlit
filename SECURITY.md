@@ -44,8 +44,7 @@ optional checks; wrong but well-formed data may then be returned if that trust
 is violated. Retained checks return errors, but skipped damage is not guaranteed
 to be detected. Snapshot bounds, checked arithmetic, resource/decoder limits,
 finite traversal and committed-publication guards remain in force. This is not a
-process-wide OOM guarantee; platform std synchronization can allocate on first
-use. Protocol/generation checksums and standalone container
+process-wide OOM guarantee. Protocol/generation checksums and standalone container
 checks are distinct from optional record/cell CRCs. See the
 [read-policy contract](docs/design/read-validation-policy-review.md).
 
@@ -63,26 +62,6 @@ records. Every mapped record must remain unchanged and valid: exclude truncation
 replacement, compaction and layout operations that rewrite those records. New
 appends do not enlarge an existing mapping. Having one writer alone does not
 establish these conditions.
-
-The optional `AppendOnlySession` / `AppendOnlyWriter` facade moves native writer exclusion into shared
-protection held by its tokens, readers and owned mappings. Its initial `unsafe`
-admission requires exclusion of all nonparticipating mutation for their complete
-lifetime. Derived mapped accessors preserve that protection, including after
-writer drop. The facade rejects matrix and markerless formats and exposes no
-mutable inner handle. It coordinates one process's reader workers and cooperating
-Varlit writer entry points; it does not enforce immutability against arbitrary
-filesystem access or transfer protection to another process. See the
-[append-only API contract](docs/api-reference.md#append-only-mmap-sessions).
-
-On Windows, a live mapping also prevents the file-length change used to roll
-back a failed append. Varlit reports `WriteRollbackFailed` and poisons that
-writer while preserving confirmed mapped bytes. Ending that writer does not
-authorize immediate reconnect: drop every protected reader and mapping, retain
-the session/token and call `session.recover()`. Recovery atomically excludes
-reader registration and retains the native object lock. It may truncate an
-unpublished tail; a failed attempt remains observable and retryable. Unmapping
-alone does not clear poison. Normal committed writer handoff needs no recovery
-and may retain readers/maps. Pending close and writer panic require recovery.
 
 An external truncate can make a mapped page inaccessible and cause an operating
 system fault such as `SIGBUS`, rather than a recoverable Rust error. External
