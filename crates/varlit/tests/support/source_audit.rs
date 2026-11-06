@@ -231,6 +231,43 @@ pub(crate) struct Surface {
     pub(crate) reference: String,
 }
 
+/// Verification-only inventory of complete function bodies, including private
+/// methods, trait defaults, nested functions and every syntactic cfg branch.
+#[derive(Clone, Debug)]
+pub(crate) struct ProofBody {
+    pub(crate) fingerprint: String,
+    pub(crate) references: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct ProofReferences(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for ProofReferences {
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        self.0
+            .insert(expr.path.segments.last().unwrap().ident.to_string());
+        visit::visit_expr_path(self, expr);
+    }
+    fn visit_expr_method_call(&mut self, expr: &'ast syn::ExprMethodCall) {
+        self.0.insert(expr.method.to_string());
+        visit::visit_expr_method_call(self, expr);
+    }
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        fn identifiers(tokens: proc_macro2::TokenStream, refs: &mut BTreeSet<String>) {
+            for token in tokens {
+                match token {
+                    proc_macro2::TokenTree::Ident(name) => {
+                        refs.insert(name.to_string());
+                    }
+                    proc_macro2::TokenTree::Group(group) => identifiers(group.stream(), refs),
+                    _ => {}
+                }
+            }
+        }
+        identifiers(mac.tokens.clone(), &mut self.0);
+    }
+}
+
 // Change detector, not an authentication primitive. Canonical Rust tokens
 // exclude whitespace and comments; no dependency/toolchain-specific Debug output.
 pub(crate) fn fingerprint(text: &str) -> String {
@@ -254,12 +291,46 @@ pub(crate) struct Audit {
     pub(crate) inventory_only: bool,
     pub(crate) include_owner: Option<PathBuf>,
     pub(crate) inventory: BTreeMap<String, Surface>,
+    pub(crate) proof_bodies: BTreeMap<String, ProofBody>,
     pub(crate) seen_files: BTreeSet<PathBuf>,
     pub(crate) edges: BTreeSet<(String, String, String)>,
     pub(crate) errors: Vec<String>,
 }
 
 impl Audit {
+    fn proof_body(&mut self, kind: &str, name: &str, tokens: impl ToTokens) {
+        let tokens = tokens.to_token_stream();
+        let mut refs = ProofReferences::default();
+        // Parse the body as an item whenever possible. Macro bodies additionally
+        // contribute identifiers; this is a conservative impact inventory,
+        // never a claim of Rust name resolution or proof reachability.
+        if let Ok(item) = syn::parse2::<Item>(tokens.clone()) {
+            refs.visit_item(&item);
+        }
+        let id = format!(
+            "{}/{}::{}::within:{}::{kind}:{name}",
+            self.crate_name,
+            self.logical_file(),
+            self.scope.join("::"),
+            self.function
+        );
+        let hash = fingerprint(&tokens.to_string());
+        // Separate platform/generic definitions can share a logical name. Keep
+        // each definition rather than silently overwriting one of them.
+        let id = format!("{id}@{hash}");
+        assert!(
+            self.proof_bodies
+                .insert(
+                    id,
+                    ProofBody {
+                        fingerprint: hash,
+                        references: refs.0,
+                    }
+                )
+                .is_none(),
+            "duplicate proof-body identity"
+        );
+    }
     fn logical_file(&self) -> String {
         self.include_owner
             .as_ref()
@@ -433,6 +504,7 @@ impl<'ast> Visit<'ast> for Audit {
     }
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.proof_body("fn", &item.sig.ident.to_string(), item);
         if self.generator_crate || self.crate_name == "macros" {
             // Proc-macro output is generated inside quote! and cannot be
             // inventoried as ordinary Rust declarations before expansion.
@@ -456,6 +528,11 @@ impl<'ast> Visit<'ast> for Audit {
         if test_only(&item.attrs) {
             return;
         }
+        // Impl methods are parsed inside their owning impl for reference
+        // discovery, including trait methods without a public visibility token.
+        let method = item.to_token_stream();
+        let wrapped: Item = syn::parse_quote!(impl ProofOwner { #method });
+        self.proof_body("method", &item.sig.ident.to_string(), wrapped);
         if matches!(item.vis, syn::Visibility::Public(_)) {
             self.surface("fn", &item.sig.ident.to_string(), &item.sig);
         }
@@ -537,7 +614,19 @@ impl<'ast> Visit<'ast> for Audit {
             }
             self.scope.pop();
         }
+        self.scope.push(item.ident.to_string());
         visit::visit_item_trait(self, item);
+        self.scope.pop();
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        if test_only(&item.attrs) {
+            return;
+        }
+        let method = item.to_token_stream();
+        let wrapped: Item = syn::parse_quote!(trait ProofOwner { #method });
+        self.proof_body("trait-method", &item.sig.ident.to_string(), wrapped);
+        visit::visit_trait_item_fn(self, item);
     }
 
     fn visit_item_type(&mut self, item: &'ast syn::ItemType) {

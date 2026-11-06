@@ -59,3 +59,19 @@ fn full_width_chunk_header_fields_are_validated() {
     }
     std::mem::forget(result);
 }
+
+#[kani::proof]
+#[kani::unwind(18)]
+fn bounded_whole_chunk_validator_accepts_a_complete_container() {
+    let mut bytes = [0u8; 49];
+    bytes[..8].copy_from_slice(b"VCHK\x01\x00\x01\x00");
+    bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+    bytes[16..24].copy_from_slice(&1u64.to_le_bytes());
+    bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&1u32.to_le_bytes());
+    bytes[36..40].copy_from_slice(&1u32.to_le_bytes());
+    bytes[48] = kani::any();
+    let result = validate_chunked_bytes(&bytes, false);
+    assert!(result.is_ok(), "complete one-chunk container rejected");
+    std::mem::forget(result);
+}

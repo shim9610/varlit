@@ -70,6 +70,13 @@ jobs:
           bash scripts/build_memory_kani.sh "$RUNNER_TEMP/kani-ownership"
           echo "$RUNNER_TEMP/kani-ownership/scripts" >> "$GITHUB_PATH"
           echo "$HOME/.kani/kani-0.68.0/bin" >> "$GITHUB_PATH"
+      - name: Check compiler-resolved callers and guard failure paths
+        run: |
+          mkdir -p target/verification
+          features=()
+          if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
+          cargo rustc --locked -p varlit-core --lib "${features[@]}" -- --emit=mir=target/verification/callers.mir
+          python3 scripts/check_proof_bindings.py --mir target/verification/callers.mir --features '${{ matrix.features }}' --output target/verification/caller-contracts.json
       - name: Check every registered core proof, including unwinding assertions
         run: |
           set -o pipefail
