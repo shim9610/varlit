@@ -6,6 +6,121 @@ The former individual-Frame million-item fixture is withdrawn as a representativ
 
 [Current integrated dashboard](index.html) · [Current integrated data and operation ratios](current-comparison.json) · [Grouping manual](../../scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size) · [Runnable harness](../../../tools/storage-bench/README.md)
 
+## Protected append-only mmap sessions
+
+The new `mmap` facade keeps native writer exclusion alive through the last
+token, reader or owned mapping. Admission remains unsafe because external
+nonparticipants can bypass advisory locking; derived session mappings have
+safe entry points. Matrix storage and editable conversion are excluded.
+See the [API contract](../../api-reference.md#append-only-mmap-sessions).
+
+The final implementation is compared with `a3a1e26` across 12 equal-work
+conditions, seven fixed repetitions and 48 separate resource probes.
+Earlier prototype and resource-options corrections each retain their own
+336 timings and 48 probes. Two fixed 30-round calibrations of those earlier
+phase alerts add 450 timings and 15 probes. All **1,458 timings and 159 probes**
+remain separate in the dashboard’s **Append-only ownership** scope; they are
+not pooled. The final cohort includes the metadata-only empty-snapshot
+`Debug` refinement and was rebuilt and remeasured after executable text
+changed. The earlier calibrations do not qualify that final binary.
+
+This fixture uses one process, one active writer and independent reader
+threads, unlike the existing SQLite live cohort’s reader processes. Every
+live reader verifies all 1 GiB during append plus final drain. Warm readers
+each scan all 128 MiB/1 GiB twice after writing, using one fixed snapshot.
+There are no random queries. Blocks average 64 KiB or 1 MiB; 16 MiB durable
+publications give 64 transactions and 16,384/1,024 data records per 1 GiB.
+Four-producer cases use bounded MPSC, variable block lengths and two metadata
+records per publication. Every metadata value and payload byte is checked.
+
+### Final 1 GiB live measurements
+
+Each pair below is **new ordinary mmap / new guarded mmap**, from the same
+binary. The dashboard also retains both identical old-runtime A/B controls.
+Writer-active includes input generation, queue handoff and publications;
+reader-active is the maximum worker’s refresh plus verified reading, including
+drain. Completion includes startup and cleanup; overlapping timers are not
+additive. CPU is kernel wait4 user+system for all threads. During-write counts
+only full consume intervals inside the writer window for the least-advanced
+guarded reader.
+
+| Blocks / readers / producers | Writer s | Reader-active s | Completion s | CPU s | Guarded during-write % |
+|---|---:|---:|---:|---:|---:|
+| 1024 KiB / 1 / 1 | 0.875 / 0.934 | 0.212 / 0.236 | 0.890 / 0.951 | 0.757 / 0.858 | 98.44 |
+| 1024 KiB / 8 / 1 | 1.103 / 1.059 | 0.721 / 0.689 | 1.131 / 1.081 | 2.575 / 2.396 | 98.44 |
+| 1024 KiB / 8 / 4 variable | 1.140 / 1.107 | 0.816 / 0.789 | 1.166 / 1.129 | 2.736 / 2.662 | 98.44 |
+| 64 KiB / 1 / 1 | 1.288 / 1.284 | 0.629 / 0.647 | 1.301 / 1.298 | 1.532 / 1.543 | 98.44 |
+| 64 KiB / 8 / 1 | 1.426 / 1.440 | 3.296 / 3.256 | 3.340 / 3.299 | 5.445 / 5.437 | 28.12 |
+| 64 KiB / 8 / 4 variable | 1.447 / 1.444 | 3.316 / 3.330 | 3.369 / 3.379 | 5.448 / 5.515 | 28.12 |
+
+All four read-check variants remain supported by the API; this performance
+cohort holds FULL checks fixed. No read limit or 4 CPU / 16 GiB / 32 GiB budget
+is raised. Mapping/unmapping, checksums, byte verification and fixed-snapshot
+index copies remain charged. Native record-window follow stops at its last
+cached record; it does not copy/revalidate the entire old prefix per poll.
+
+### Retained alerts and fixed calibration
+
+The prototype has warm reader-phase alerts of +7.03% (1 GiB/64 KiB) and
++6.46% (128 MiB/1 MiB), plus +5.41% writer time (1 GiB/1 MiB), all with eight
+readers. The corrected-options cohort also observes live 1 MiB/eight-reader
+CPU +6.39% and reader-active +12.31%, warm 1 GiB/64 KiB CPU +5.34% and
+reader-active +6.23%, and 128 MiB/64 KiB writer-active +11.93%. These initial
+medians remain visible. An identical old-runtime A/B CPU pair differs by
+−10.70% in that cohort. No alert is converted to a pass by pooling repeats.
+
+The fixed 30-round comparisons below use one binary’s raw A/B and guarded
+routes, with all six execution orders occurring five times. Changes are
+guarded / raw A; the last column retains the raw B / raw A CPU control.
+
+| Condition | Writer change | Reader-active change | Completion change | CPU change | Raw B CPU change |
+|---|---:|---:|---:|---:|---:|
+| Warm 1024 MiB, 1024 KiB, 8 readers | +0.77% | +0.77% | +1.14% | +1.87% | -1.16% |
+| Warm 1024 MiB, 64 KiB, 8 readers | -0.21% | +0.88% | +1.00% | +0.20% | +0.64% |
+| Warm 128 MiB, 1024 KiB, 8 readers | -2.67% | +1.65% | -1.03% | -1.44% | +0.93% |
+| Live 1 GiB, 1024 KiB, 8 readers | +0.40% | -4.55% | +0.41% | -0.50% | +0.28% |
+| Warm 128 MiB, 64 KiB, 8 readers | +1.26% | +2.36% | +1.72% | +5.01% | -1.40% |
+
+The short 128 MiB/64 KiB calibration retains a **+5.01% CPU** median.
+The calibration therefore does not establish a blanket 5% bound, even though
+the larger initial phase alerts do not persist at those magnitudes. The
+final implementation’s own medians and repeat spreads remain separate.
+
+The final seven-run cohort also retains alerts: guarded versus new ordinary
+mmap at live 1 GiB/1 MiB/one reader is +6.85% completion and +13.32% CPU
+(writer +6.72%, reader-active +11.34%). The 128 MiB/eight-reader warm cases
+show +5.85% writer time at 1 MiB and +6.75% CPU at 64 KiB. Ordinary mmap also
+shows +7.90% CPU versus old A at live 1 MiB/eight readers and +5.43% with four
+producers. Identical old-runtime A/B controls vary by up to 9.17% completion
+and 7.98% CPU in this final cohort. These controls leave attribution unresolved;
+they do not erase the measured increases or establish a 5% regression pass.
+
+### Memory, storage and evidence
+
+Live sampled process PSS is 73.7–162.8 MiB ordinary / 73.8–161.5 MiB guarded.
+Two-pass warm sampled process PSS is 145.7–1113.3 MiB ordinary / 133.4–1107.4 MiB guarded.
+
+Every matched variant has identical final allocated storage; temporary and
+deleted-open peaks are zero in the final probes. Warm mappings touch the
+whole file, so residency can approach the dataset size. Probes sample every
+50 ms and can miss brief peaks; file-cache/cgroup baselines and RSS are
+exported separately and must not be added to PSS as independent residency.
+No cohort records a new OOM or OOM-kill event. Four unchanged-path unit
+controls also retain 84 timings and 12 probes in the archive.
+
+The facade adds one fallible shared-protection allocation at admission and
+shared ownership at token/map construction and release. Payload access and
+ordinary append acquire no new lock or lease clone. This does not remove
+existing mapping, validation and indexing costs or promise zero overhead.
+Native regressions cover staged/confirmed visibility, rollback and failed
+rollback, durability retry, aliases, writer-first drop, concurrent registration
+and release, panic cleanup, partial resource defaults and all read policies.
+
+[Raw observations, manifests, sources, patches and verification logs](append-only-mmap-20261106.tar.gz)
+are covered by [checksums](CURRENT_SHA256SUMS). The [harness protocol and commands](../../../tools/storage-bench/README.md#append-only-ownership-comparison)
+reproduce the cohorts. No new SQLite/HDF5 measurements or cross-engine ratios
+are inferred from this ownership study.
+
 ## SQLite mmap and append-only readers
 
 The 6 November recheck adds **714 timing observations, 102 separate resource

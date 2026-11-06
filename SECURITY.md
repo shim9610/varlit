@@ -63,6 +63,16 @@ replacement, compaction and layout operations that rewrite those records. New
 appends do not enlarge an existing mapping. Having one writer alone does not
 establish these conditions.
 
+The optional `AppendOnlyWriter` facade moves native writer exclusion into shared
+protection held by its tokens, readers and owned mappings. Its initial `unsafe`
+admission requires exclusion of all nonparticipating mutation for their complete
+lifetime. Derived mapped accessors preserve that protection, including after
+writer drop. The facade rejects matrix and markerless formats and exposes no
+mutable inner handle. It coordinates one process's reader workers and cooperating
+Varlit writer entry points; it does not enforce immutability against arbitrary
+filesystem access or transfer protection to another process. See the
+[append-only API contract](docs/api-reference.md#append-only-mmap-sessions).
+
 An external truncate can make a mapped page inaccessible and cause an operating
 system fault such as `SIGBUS`, rather than a recoverable Rust error. External
 writes can invalidate previously checked contents; mutation while a zero-copy

@@ -1,0 +1,17 @@
+error[E0599]: no method named `file_mut` found for mutable reference `&mut AppendOnlyWriter` in the current scope
+ --> tests/ui/fail_append_only_mutation.rs:2:12
+  |
+2 |     writer.file_mut();
+  |            ^^^^^^^^ method not found in `&mut AppendOnlyWriter`
+
+error[E0599]: no method named `defragment` found for mutable reference `&mut AppendOnlyWriter` in the current scope
+ --> tests/ui/fail_append_only_mutation.rs:3:12
+  |
+3 |     writer.defragment();
+  |            ^^^^^^^^^^ method not found in `&mut AppendOnlyWriter`
+
+error[E0599]: no method named `into_inner` found for struct `AppendOnlyWriter` in the current scope
+ --> tests/ui/fail_append_only_mutation.rs:5:55
+  |
+5 | fn consume(writer: varlit::AppendOnlyWriter) { writer.into_inner(); }
+  |                                                       ^^^^^^^^^^ method not found in `AppendOnlyWriter`

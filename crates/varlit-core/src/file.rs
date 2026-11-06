@@ -689,6 +689,8 @@ pub(crate) mod replacement_target;
 
 use replacement_target::{RecordOverwrite, ReplacementTarget};
 
+#[cfg(feature = "mmap")]
+mod append_only;
 /// Mechanical enforcement for shape A/B on the primary file handle: the record
 /// bytes of an open generation cannot be written except through one of two
 /// gated operations.
@@ -7709,6 +7711,11 @@ pub(crate) use locks::with_writer_lock_value;
 #[cfg(feature = "mmap")]
 #[path = "file/mmap_views.rs"]
 mod mmap_views;
+#[cfg(feature = "mmap")]
+pub use append_only::{
+    AppendOnlyReader, AppendOnlyReaderToken, AppendOnlyWriter, GuardedMmapPayloads,
+    GuardedMmapWindow,
+};
 #[cfg(feature = "mmap")]
 use mmap_views::*;
 #[cfg(feature = "mmap")]
