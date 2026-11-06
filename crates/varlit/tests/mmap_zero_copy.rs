@@ -431,6 +431,131 @@ fn mmap_snapshot_refreshes_after_append() -> varlit::Result<()> {
     Ok(())
 }
 
+#[test]
+fn mapped_record_survives_append_with_eight_independent_readers() -> varlit::Result<()> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let path = temp_path("mapped_append_readers");
+    cleanup(&path);
+    let spec = MmapFormat::spec().with_commit_policy(varlit::CommitPolicy::TransactionMarker(
+        varlit::TransactionMarkerMode::Explicit,
+    ));
+    let mut writer = spec.create(&path)?;
+    writer.push_info(&MmapPoint { x: 1, y: 2 })?;
+    writer.commit_durable()?;
+    std::thread::scope(|scope| -> varlit::Result<()> {
+        let (ready, events) = mpsc::channel();
+        let mut commands = Vec::new();
+        let mut joins = Vec::new();
+        for _ in 0..8 {
+            let (command, receive) = mpsc::channel();
+            commands.push(command);
+            let ready = ready.clone();
+            let path = &path;
+            joins.push(scope.spawn(move || -> varlit::Result<()> {
+                let mut reader = varlit::VarlitFile::open_readonly(spec, path)?;
+                let mut entries = Vec::new();
+                reader.block_entries_into::<MmapPoint>(&mut entries)?;
+                assert_eq!(entries.len(), 1);
+                assert!(entries[0].committed);
+                // SAFETY: this test's only writer appends after the captured
+                // record. It never rewrites/truncates/replaces the file or uses
+                // growing matrix chunks. Every mapped record stays immutable
+                // until the readers finish, including while the writer appends.
+                let window = unsafe { reader.mmap_payload_window(&entries[0])? };
+                let before = window.as_bytes();
+                // SAFETY: every record in this captured prefix is immutable;
+                // later appends and mutable file-header bytes are outside it.
+                let snapshot = unsafe { reader.mmap_payloads()? };
+                let captured = snapshot
+                    .block_payload_window::<MmapPoint>(0)?
+                    .expect("captured point");
+                ready.send(0).expect("reader ready");
+                assert_eq!(
+                    receive
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("staged command"),
+                    1
+                );
+                assert_eq!(reader.follow()?, 0);
+                reader.block_entries_into::<MmapPoint>(&mut entries)?;
+                assert_eq!(entries.len(), 1, "uncommitted append must stay hidden");
+                assert!(snapshot.block_payload_window::<MmapPoint>(1)?.is_none());
+                assert_eq!(
+                    decode_from_slice::<MmapPoint>(captured, Endian::Little)?,
+                    MmapPoint { x: 1, y: 2 }
+                );
+                assert_eq!(
+                    decode_from_slice::<MmapPoint>(before, Endian::Little)?,
+                    MmapPoint { x: 1, y: 2 }
+                );
+                ready.send(1).expect("pending prefix checked");
+                assert_eq!(
+                    receive
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("publication command"),
+                    2
+                );
+                assert!(reader.follow()? > 0);
+                reader.block_entries_into::<MmapPoint>(&mut entries)?;
+                assert_eq!(entries.len(), 2);
+                assert!(entries.iter().all(|entry| entry.committed));
+                assert!(snapshot.block_payload_window::<MmapPoint>(1)?.is_none());
+                assert_eq!(
+                    decode_from_slice::<MmapPoint>(captured, Endian::Little)?,
+                    MmapPoint { x: 1, y: 2 }
+                );
+                // SAFETY: the same append-only ownership excludes mutations of
+                // this newly confirmed record for the fresh window's lifetime.
+                let fresh = unsafe { reader.mmap_payload_window(&entries[1])? };
+                assert_eq!(
+                    decode_from_slice::<MmapPoint>(fresh.as_bytes(), Endian::Little)?,
+                    MmapPoint { x: 3, y: 4 }
+                );
+                assert_eq!(
+                    decode_from_slice::<MmapPoint>(before, Endian::Little)?,
+                    MmapPoint { x: 1, y: 2 }
+                );
+                Ok(())
+            }));
+        }
+        drop(ready);
+        for _ in 0..8 {
+            assert_eq!(
+                events
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("all mappings pinned"),
+                0
+            );
+        }
+        writer.push_info(&MmapPoint { x: 3, y: 4 })?;
+        writer.flush()?;
+        for command in &commands {
+            command.send(1).expect("check pending prefix");
+        }
+        for _ in 0..8 {
+            assert_eq!(
+                events
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("all pending reads checked"),
+                1
+            );
+        }
+        writer.commit_durable()?;
+        for command in &commands {
+            command.send(2).expect("read published append");
+        }
+        drop(commands);
+        for join in joins {
+            join.join().expect("mapped reader panicked")?;
+        }
+        Ok(())
+    })?;
+    drop(writer);
+    cleanup(&path);
+    Ok(())
+}
+
 #[cfg(feature = "zero-copy")]
 #[test]
 fn zero_copy_raw_fixed_successfully_views_canonical_little_endian_payload() -> varlit::Result<()> {

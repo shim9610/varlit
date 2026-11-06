@@ -57,3 +57,37 @@ for (const row of controls.rows.children) {
   assert.equal(row.children[11].textContent, (full.metrics.write / selected.metrics.write).toFixed(3));
 }
 console.log('Independent read-check scope, separate ratios and 69 measured profiles pass');
+
+controls.scope.value = 'mmap'; context.render();
+const mmapRows = Object.entries(data.profiles).filter(([, row]) => row.presentation === 'mmap');
+assert.equal(mmapRows.length, 102);
+assert.deepEqual(new Set(names()), new Set(mmapRows.map(([name]) => name)));
+for (const [name, row] of mmapRows) {
+  assert.equal(row.observations, 7);
+  assert(row.metric_spread.completion.min <= row.metrics.completion);
+  assert(row.metric_spread.completion.max >= row.metrics.completion);
+  const p = row.profile;
+  if (p.live || p.kind === 'mixed') {
+    const readers = p.config?.readers ?? p.readers;
+    assert(row.probe.sampled_processes >= readers + 2, `${name}: missing reader processes`);
+    assert(row.metrics.min_reader_during_fraction > 0, `${name}: no observed live reads`);
+  }
+  if (p.variant === 'sqlite-m0') assert.equal(row.probe.primary_mmap_virtual_bytes, 0);
+  if (p.variant.startsWith('sqlite-') && p.variant !== 'sqlite-m0') {
+    assert(row.probe.primary_mmap_unique_bytes > 0, `${name}: primary database mapping unobserved`);
+  }
+}
+const references = new Map();
+for (const ratio of data.comparisons.filter(r => r.profile.startsWith('mmapcheck-'))) {
+  const row = data.profiles[ratio.profile], sql = data.profiles[ratio.sqlite];
+  assert.equal(row.profile.cohort, sql.profile.cohort);
+  assert.equal(row.profile.workload, sql.profile.workload);
+  assert.equal(ratio.ratio, sql.metrics[ratio.metric] / row.metrics[ratio.metric]);
+  assert(!references.has(ratio.profile) || references.get(ratio.profile) === ratio.sqlite,
+    'Do not splice SQLite configurations across write/read/CPU metrics');
+  references.set(ratio.profile, ratio.sqlite);
+}
+controls.family.value = 'live-'; controls.engine.value = 'sqlite'; context.render();
+const liveSql = mmapRows.filter(([, r]) => r.profile.live && r.profile.mode === 'sql-chunks');
+assert.deepEqual(new Set(names()), new Set(liveSql.map(([name]) => name)));
+console.log('SQLite mmap cohorts, equal-work references, actual mappings and live reader coverage pass');

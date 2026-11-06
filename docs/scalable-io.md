@@ -364,8 +364,16 @@ Keep one writer owner and use a bounded MPSC queue for multiple producers.
 Open an independent reader handle per worker and use `follow()` plus persistent
 cursors to consume new published data. Reader block buffers and caches add
 across readers; include producer staging, queue contents and the active writer
-when sizing memory. Do not mmap an actively modified backing file under the
-immutable-file API contract.
+when sizing memory. For native append-only files, `mmap_payload_window` and
+`mmap_payloads` can capture confirmed immutable records while the writer appends
+strictly after them. These unsafe APIs require the application to exclude
+truncation, replacement, compaction and every operation that could modify or
+invalidate captured records. Existing mappings never grow; follow publications
+and map new windows or take a new snapshot. Whole-prefix snapshots copy the
+captured index when rebuilt; record windows avoid that repeated full-index copy.
+Growing matrix layouts require their own stricter mapping contract. See
+[mmap safety](../SECURITY.md#mapped-files-and-external-modification) and
+the [live mmap comparison](performance/workload-storage-20261104/README.md#sqlite-mmap-and-append-only-readers).
 
 See the [grouped-item benchmark](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md)
 for separately counted items, blocks and publications, concurrent-reader

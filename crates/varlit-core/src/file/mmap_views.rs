@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// mapping, so returned slices cannot outlive it.
 ///
 /// These guarantees rely on the caller having upheld the unsafe constructor's
-/// requirement that the backing object remains immutable and valid for this
-/// value's full lifetime.
+/// requirement that the captured mapped bytes stay immutable and the backing
+/// object stays valid for this value's full lifetime. Later appends outside the
+/// captured region do not enlarge or alter this snapshot.
 #[derive(Debug)]
 pub struct MmapPayloads {
     pub(super) spec: FormatSpec,

@@ -56,6 +56,13 @@ the lifetime of the view and all borrowed references. An advisory writer lock
 only coordinates cooperating writers. CRC checks detect corruption when checked;
 they neither prevent later writes nor authenticate the file.
 
+A coordinated append-only writer may coexist with fixed-length
+`mmap_payload_window` views or `mmap_payloads` snapshots of already confirmed
+records. Every mapped record must remain unchanged and valid: exclude truncation,
+replacement, compaction and layout operations that rewrite those records. New
+appends do not enlarge an existing mapping. Having one writer alone does not
+establish these conditions.
+
 An external truncate can make a mapped page inaccessible and cause an operating
 system fault such as `SIGBUS`, rather than a recoverable Rust error. External
 writes can invalidate previously checked contents; mutation while a zero-copy
