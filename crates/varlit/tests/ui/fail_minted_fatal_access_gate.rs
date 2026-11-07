@@ -1,4 +1,4 @@
-// SHAPE B, the MINTING half (round 15).
+// SHAPE B, the MINTING half.
 //
 // Round 14 proved that `FatalAccessAllowed` cannot be *forged* — see
 // `fail_fabricated_fatal_access.rs` — and left `FatalAccessGate::new(blocked:

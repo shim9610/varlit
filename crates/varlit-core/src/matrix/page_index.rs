@@ -6,7 +6,7 @@ use super::*;
 /// (`CrcValidEvidence::page_index_mirror_mut`) and held it to one call site
 /// with a source gate. Re-verification showed what a `&mut SparseBitmap`
 /// is: `*evidence.page_index_mirror_mut() = attacker_bits;` replaces a
-/// block's whole CRC-validity map — completeness stays `true`, so the F-04
+/// block's whole CRC-validity map — completeness stays `true`, so the
 /// witness then reads bits no enumeration ever produced — and
 /// `.page_index_mirror_mut().set(ordinal, true)` writes one in place. Both
 /// were two lines or fewer, and both are exactly what deleting
@@ -108,7 +108,7 @@ impl PreparedDirect {
                 .map(u64::to_le_bytes),
             count,
         };
-        index.prepare_cache_update(&plan.entries[..plan.used], plan.header);
+        index.prepare_cache_update(&plan.entries[..plan.used], plan.header)?;
         Ok(plan)
     }
     fn remove(
@@ -139,7 +139,7 @@ impl PreparedDirect {
             plan.entries[2] = (index.reverse_offset(moved)?, (slot + 1).to_le_bytes());
             plan.used = 3;
         }
-        index.prepare_cache_update(&plan.entries[..plan.used], plan.header);
+        index.prepare_cache_update(&plan.entries[..plan.used], plan.header)?;
         Ok(Some(plan))
     }
     fn commit(self, file: &mut impl MatrixIo, bits: &mut SparseBitmap) -> Result<()> {
@@ -160,7 +160,7 @@ impl PreparedDirect {
 
 /// Records `page` in the persisted page index before its bytes are written.
 ///
-/// PERF-01: this is what lets open enumerate the written pages without a
+/// this is what lets open enumerate the written pages without a
 /// `0..page_count` loop, including where the platform reports no allocation
 /// map at all. The order matters: an index entry whose page never reached
 /// the disk names a page that still reads as uninitialised zeros, which
@@ -170,7 +170,7 @@ impl PreparedDirect {
 /// A first touch writes the forward entry, reverse entry and count. Later
 /// bits in an already indexed page require no directory writes.
 ///
-/// F-03: the whole mutation, including the compaction an already-full array
+/// the whole mutation, including the compaction an already-full array
 /// needs, is prepared before the first byte reaches the disk and installed
 /// infallibly afterwards. There is no local ordering to get right here.
 pub(super) fn record_entry(
@@ -192,7 +192,7 @@ pub(super) fn record_entry(
 /// Removes `page` from the persisted page index once its final set bit
 /// clears.
 ///
-/// F-03: this is what makes both the array and its in-memory mirror track
+/// this is what makes both the array and its in-memory mirror track
 /// *live* pages instead of every page ever published. It runs strictly
 /// after the bitmap byte that emptied the page is durable, because the safe
 /// direction is a superset: an entry naming an all-zero page costs one
@@ -261,7 +261,7 @@ fn write_entry_run(file: &mut impl MatrixIo, offset: u64, bytes: &[u8]) -> Resul
 ///
 /// Private for the same reason. The value is always encoded and validated
 /// during preparation, which is what keeps [`PAGE_INDEX_REBUILD_MARKER`] —
-/// deliberately not a representable count (F-02) — expressible without
+/// deliberately not a representable count  — expressible without
 /// exposing an unvalidated header write to the rest of the file.
 fn write_header_bytes(file: &mut impl MatrixIo, base: u64, bytes: [u8; 8]) -> Result<()> {
     #[cfg(any(test, feature = "scalable-fault-injection"))]
@@ -276,7 +276,7 @@ fn write_header_bytes(file: &mut impl MatrixIo, base: u64, bytes: [u8; 8]) -> Re
     Ok(())
 }
 
-/// Fails a page-index *mirror* reservation, which is the allocation F-03
+/// Fails a page-index *mirror* reservation, which is the allocation
 /// requires to happen before the first disk byte rather than after the last
 /// one.
 #[cfg(any(test, feature = "scalable-fault-injection"))]
@@ -304,7 +304,7 @@ fn entry_bytes(page: u64) -> Result<[u8; 8]> {
         .to_le_bytes())
 }
 
-/// The occupancy count that publishes a republished generation (F-02).
+/// The occupancy count that publishes a republished generation.
 #[must_use = "a prepared page-index publication must be committed"]
 pub(super) struct PreparedPublication {
     header: [u8; 8],
@@ -326,7 +326,7 @@ impl PreparedPublication {
     }
 }
 
-/// Publishes [`PAGE_INDEX_REBUILD_MARKER`] into the occupancy slot (F-02).
+/// Publishes [`PAGE_INDEX_REBUILD_MARKER`] into the occupancy slot.
 ///
 /// This is not a mirror mutation and takes no prepared value: it destroys
 /// nothing on its own and is the step that makes everything after it

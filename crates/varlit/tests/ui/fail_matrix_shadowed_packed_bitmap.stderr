@@ -69,3 +69,38 @@ help: the trait `VarlitEncode` is not implemented for `PackedBitmap`
              HashMap<K, V>
            and $N others
    = note: this error originates in the derive macro `::varlit::VarlitBlock` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `PackedBitmap: VarlitDecode` is not satisfied
+  --> tests/ui/fail_matrix_shadowed_packed_bitmap.rs:43:24
+   |
+11 | / varlit_format! {
+12 | |     pub format ShadowedPackedBitmapFormat {
+13 | |         magic: b"SPBM";
+14 | |         version: 1;
+...  |
+43 | |                 value: PackedBitmap,
+   | |                        ^^^^^^^^^^^^ unsatisfied trait bound
+...  |
+47 | | }
+   | |_- required by a bound introduced by this call
+   |
+help: the trait `VarlitDecode` is not implemented for `PackedBitmap`
+  --> tests/ui/fail_matrix_shadowed_packed_bitmap.rs:7:1
+   |
+ 7 | pub struct PackedBitmap {
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `VarlitDecode`:
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             BTreeMap<K, V>
+             BadCell
+             ChunkedBytes
+             HashMap<K, V>
+           and $N others
+note: required by a bound in `Decoder::<'a>::decode_value`
+  --> $WORKSPACE/crates/varlit-core/src/codec.rs
+   |
+   |     pub fn decode_value<T: VarlitDecode>(&mut self) -> Result<T> {
+   |                            ^^^^^^^^^^^^ required by this bound in `Decoder::<'a>::decode_value`

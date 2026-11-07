@@ -1,0 +1,446 @@
+{
+  "contracts": [
+    {
+      "id": "record-extent",
+      "harnesses": [
+        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/record_extent.rs",
+        "crates/varlit-core/src/file.rs"
+      ],
+      "scope": "full-width arithmetic",
+      "limits": "No filesystem or allocation model",
+      "specification": {
+        "requires": "Valid Rust field values; no assumed file validity.",
+        "ensures": "Returned end equals the full-width header+payload+footer sum exactly when representable.",
+        "on_error": "Overflow returns an error.",
+        "frame": "Record fields are unchanged.",
+        "progress": "One checked arithmetic step."
+      }
+    },
+    {
+      "id": "observed-prefix",
+      "harnesses": [
+        "file::resident_index::uniform_prefix_proofs::observed_prefix_never_invents_membership",
+        "file::resident_index::uniform_prefix_proofs::full_width_prefix_initialization_establishes_invariant",
+        "file::resident_index::uniform_prefix_proofs::full_width_prefix_observation_preserves_invariant",
+        "file::resident_index::uniform_prefix_proofs::full_width_bounded_prefix_truncation_only_removes_rows"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/uniform_prefix.rs",
+        "crates/varlit-core/src/native_directory.rs"
+      ],
+      "scope": "full-width inductive range/observation transition; truncation up to four rows; four-row u16 membership",
+      "limits": "General count*stride representation induction timed out and is not proved; internal row indices must be representable. No whole-caller refinement.",
+      "specification": {
+        "requires": "Reachable prefix invariant and representable private row indices.",
+        "ensures": "Observed membership is never invented; truncation removes only rows.",
+        "on_error": "Unrepresentable or irregular observations do not establish a new prefix.",
+        "frame": "Unrelated rows remain unchanged.",
+        "progress": "Observation advances monotonically; bounded truncation checks at most four rows."
+      }
+    },
+    {
+      "id": "publication-metadata",
+      "harnesses": [
+        "disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers",
+        "disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected",
+        "disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier",
+        "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected",
+        "disk_index::publication_proofs::wire_frontier_decode_enforces_sequence_exhaustion"
+      ],
+      "sources": [
+        "crates/varlit-core/src/disk_index/publication_proofs.rs",
+        "crates/varlit-core/src/disk_index.rs"
+      ],
+      "scope": "full-width typed metadata; actual 24-byte frontier wire decoder and exhaustion flag",
+      "limits": "Complete metadata byte parsing and OS ordering excluded; the 24-byte frontier decoder is included",
+      "specification": {
+        "requires": "Typed metadata values; the frontier wire input has exactly 24 bytes.",
+        "ensures": "Accepted metadata obeys confirmed/published/checkpoint frontier relations; exhausted wire sequence must be zero.",
+        "on_error": "Invalid frontiers are rejected before checkpoint/publication.",
+        "frame": "Validation and wire decoding do not mutate published state.",
+        "progress": "Finite field checks, independent of declared record count."
+      }
+    },
+    {
+      "id": "publication-protocol",
+      "harnesses": [
+        "publication_protocol::proofs::commit_survives_every_io_failure_effect",
+        "publication_protocol::proofs::successful_commit_is_reachable_and_durable",
+        "publication_protocol::proofs::nonconfirmed_publications_do_not_use_a_second_head",
+        "publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync",
+        "publication_protocol::proofs::follow_error_preserves_the_entire_reader",
+        "publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition",
+        "publication_protocol::proofs::initial_frontier_satisfies_the_inductive_invariant",
+        "publication_protocol::proofs::poisoned_writer_never_reaches_publication",
+        "publication_protocol::proofs::resumed_writer_cannot_acknowledge_a_volatile_head"
+      ],
+      "sources": [
+        "crates/varlit-core/src/publication_protocol/proofs.rs",
+        "crates/varlit-core/src/publication_protocol.rs"
+      ],
+      "scope": "abstract I/O effects and inductive frontiers",
+      "limits": "Callbacks, fsync durability and stable snapshots assumed; creation/replacement not modeled",
+      "specification": {
+        "requires": "Returning I/O callbacks obey the stated effect model; confirmed snapshots are stable.",
+        "ensures": "Acknowledgment follows the required data/head/checkpoint durability steps.",
+        "on_error": "A failed transition preserves reader state or poisons the writer as specified.",
+        "frame": "Confirmed frontiers are not changed by failed publications.",
+        "progress": "Finite protocol transitions; OS liveness/durability is assumed."
+      }
+    },
+    {
+      "id": "compression-steps",
+      "harnesses": [
+        "compression_buffers::resource_steps::proofs::output_requests_respect_both_limits",
+        "compression_buffers::resource_steps::proofs::arbitrary_block_step_progresses_or_rejects",
+        "compression_buffers::resource_steps::proofs::streaming_step_is_bounded_and_strictly_progresses",
+        "compression_buffers::resource_steps::contract_proofs::reservation_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::block_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::streaming_contract_is_total_and_exact"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/compression.rs",
+        "crates/varlit-core/src/compression_steps.rs",
+        "crates/varlit-core/src/compression_buffers.rs",
+        "crates/varlit-core/src/verification/compression_contracts.rs"
+      ],
+      "scope": "full-width progress and reservation arithmetic",
+      "limits": "C zstd decoding/workspace and legacy parsing excluded",
+      "specification": {
+        "requires": "Unsigned fields may be arbitrary; valid Rust scalar values.",
+        "ensures": "Output requests obey both bounds; accepted block/stream steps stay inside input and output extents.",
+        "on_error": "Invalid or non-progressing steps return None.",
+        "frame": "Pure decisions do not change buffers or backend state.",
+        "progress": "Every accepted streaming step strictly decreases remaining input+output; a block advances its input offset."
+      }
+    },
+    {
+      "id": "limited-spill",
+      "harnesses": [
+        "spill_file::proofs::limited_writes_preserve_progress_across_failure_and_retry",
+        "spill_file::proofs::valid_limited_writes_are_not_rejected"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/spill.rs",
+        "crates/varlit-core/src/spill_file.rs"
+      ],
+      "scope": "full-width offsets, at most four bytes and one Interrupted",
+      "limits": "Write returns n <= requested; unending Interrupted and OS liveness excluded",
+      "specification": {
+        "requires": "Write returns n<=requested, callbacks return; bounded model has at most one Interrupted.",
+        "ensures": "Position reflects every accepted partial write and never exceeds the optional capacity.",
+        "on_error": "No write is issued past the capacity; errors preserve completed progress for retry.",
+        "frame": "Unwritten bytes and unrelated state remain unchanged.",
+        "progress": "Each positive write consumes input; unending Interrupted is excluded."
+      }
+    },
+    {
+      "id": "chunk-parser",
+      "harnesses": [
+        "chunks::resource_proofs::full_width_chunk_table_bounds_iteration_by_real_input",
+        "chunks::resource_proofs::arbitrary_chunk_entry_bytes_are_checked",
+        "chunks::resource_proofs::full_width_chunk_header_fields_are_validated",
+        "chunks::resource_proofs::bounded_whole_chunk_validator_accepts_a_complete_container",
+        "chunks::contract_proofs::table_extent_contract_is_total_and_exact",
+        "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/chunks.rs",
+        "crates/varlit-core/src/chunks.rs",
+        "crates/varlit-core/src/verification/chunk_contracts.rs"
+      ],
+      "scope": "full-width actual table extent plus arbitrary header fields and entry bytes; complete 49-byte one-entry validator positive witness, frame checks disabled; executable table contract and actual short-table consumer composition with arbitrary u64 total/u32 count",
+      "limits": "Whole 0..96-byte parser attempts timed out. Loop count derives from validated actual input extent; complete raw parser covered by native corpus/fuzzing, not a whole-parser proof.",
+      "specification": {
+        "requires": "Valid byte slice; structural-only composition disables C frame decoding.",
+        "ensures": "Accepted table extent equals 32+16*count within actual input; empty complete container is accepted.",
+        "on_error": "Incomplete tables are rejected before entry reads or allocations, with 0..32 real input bytes, chunk size 1 and arbitrary u64 total/u32 count.",
+        "frame": "Header/table checks do not mutate input; the composed rejection path allocates nothing.",
+        "progress": "Table count is bounded by actual input; this is not a whole arbitrary-size parser proof."
+      }
+    },
+    {
+      "id": "materialization",
+      "harnesses": [
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
+        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/materialization.rs",
+        "crates/varlit-core/src/collections.rs",
+        "crates/varlit-core/src/verification/decoder_callers.rs"
+      ],
+      "scope": "full-width inductive budget step; actual MaterializationBudget::decode twice across short input, callback errors and retry",
+      "limits": "Budget reset requires prior record release; not a whole-process live-memory bound",
+      "specification": {
+        "requires": "0<=remaining<=limit; returning codecs read/charge through Decoder and do not manipulate its private state.",
+        "ensures": "Accepted charges decrease the shared ledger exactly; retained sibling decodes and retry use the same remainder.",
+        "on_error": "Short reads, callback rejection and trailing bytes do not refund completed charges.",
+        "frame": "Limit is unchanged; reset is used only after prior retained values are released.",
+        "progress": "Each admitted count is bounded by the finite work/materialization budget."
+      }
+    },
+    {
+      "id": "index-visits",
+      "harnesses": [
+        "disk_index::tree::resource_proofs::every_node_visit_consumes_finite_fuel",
+        "disk_index::tree::resource_proofs::accepted_child_height_strictly_decreases",
+        "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+        "disk_index::tree::contract_proofs::height_contract_is_total_and_exact"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/traversal.rs",
+        "crates/varlit-core/src/disk_index/tree.rs",
+        "crates/varlit-core/src/verification/traversal_contracts.rs"
+      ],
+      "scope": "full-width decreasing fuel",
+      "limits": "Binding guard plus real CRC-valid hostile index tests; callbacks and node parser not formally refined",
+      "specification": {
+        "requires": "Valid mutable fuel reference; unsigned values may be arbitrary.",
+        "ensures": "Accepted visit consumes exactly one fuel unit; an accepted child matches expected height.",
+        "on_error": "Zero fuel rejects and remains zero; mismatched height rejects.",
+        "frame": "Only the declared fuel location may change; height matching is pure.",
+        "progress": "Accepted recursive child height is strictly lower; finite visit fuel decreases."
+      }
+    },
+    {
+      "id": "decoder-memory",
+      "harnesses": [
+        "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_zero_width_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_small_wire_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_above_input_wire_work",
+        "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
+        "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
+        "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
+        "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables",
+        "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds",
+        "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+        "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+        "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+        "codec::caller_proofs::active_callback_step_preserves_invariant_or_rejects_replacement"
+      ],
+      "sources": [
+        "crates/varlit-core/src/codec.rs",
+        "crates/varlit-core/src/verification/decoder.rs",
+        "crates/varlit-core/src/verification/decoder_callers.rs"
+      ],
+      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting; actual complete Vec<u8> decode, arbitrary u64 declared length/budget, at most4 payload bytes and symbolic reservation refusal; actual nested two-stage charged callback with 0..18 input bytes, both endians and unchanged parent frame; root callback numeric havoc and active safe-primitive induction over four-byte backing, full-width cursor/budget and changed scope/input identities; collection preflight exhaustively partitions wire width into zero, 1..64 and >64 with the same full-width count/entry/budget and u128 oracle",
+      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom-code allocation/termination. Numeric callback effects are separately over-approximated; safe active-frame mutation also relies on Rust privacy/lifetimes and the structural closure gate. Hash table layout bound assumes the documented supported std layout. No global process OOM claim. Caller decode proof assumes a contract-obeying allocator and the independently checked standard empty-Vec model; it does not model arbitrary T. Unqualified allocated-String experiments are excluded: verifier timeout/memory exhaustion is not a library OOM or a successful proof.",
+      "specification": {
+        "requires": "Reachable cursor/budget invariant and a returning callback. Budget-to-allocation claims require custom allocation to use the read/charge interface and a Rust-contract-obeying allocator.",
+        "ensures": "Byte decode allocates only for input- and budget-admitted lengths; complete byte results consume exactly the supplied input. Root callback admission cannot expand budget, retreat/escape cursor or replace frame identity; an active safe read/charge/replacement step preserves the invariant or rejects.",
+        "on_error": "Byte reservation refusal and short input return errors; two-stage callback failures, short reads and trailing bytes do not refund completed charges. Invalid replacement is rejected with exhausted authority; callback unwind is checked separately by native tests.",
+        "frame": "Nested decode preserves parent input/cursor/limit; only its remaining budget is transferred back on both outcomes. Callback admission retains original input identity, endian and limit.",
+        "progress": "Length/count arithmetic is full-width; actual byte decode payload is bounded to four bytes; two-stage callback input is at most 18 bytes."
+      }
+    },
+    {
+      "id": "fallible-ownership",
+      "harnesses": [
+        "fallible::proofs::box_value_refusal_or_unique_ownership",
+        "fallible::proofs::box_initializer_runs_only_after_reservation",
+        "fallible::proofs::uninitialized_box_alignment_and_zero_size",
+        "fallible::proofs::byte_clone_preserves_source_on_every_refusal",
+        "fallible::proofs::string_clone_preserves_source_on_every_refusal",
+        "fallible::proofs::nested_clone_0_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_1_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_2_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_3_releases_every_partial_owner",
+        "fallible::proofs::shared_initializer_refusal_and_last_owner_drop",
+        "fallible::proofs::copy_on_write_refusal_preserves_shared_source",
+        "fallible::proofs::full_width_clone_capacity_refuses_without_abort",
+        "fallible::proofs::shared_vector_initialization_preserves_payload",
+        "fallible::proofs::boxed_clone_reserves_before_payload_callback",
+        "fallible::proofs::empty_vector_model_obeys_its_standard_contract",
+        "fallible::proofs::shared_value_refusal_or_unique_ownership"
+      ],
+      "sources": [
+        "crates/varlit-core/src/fallible.rs",
+        "crates/varlit-core/src/fallible/proofs.rs",
+        "crates/varlit-core/src/lib.rs",
+        "Cargo.lock"
+      ],
+      "scope": "Actual Box/clone/private Arc helpers; symbolic allocation refusal; full-width raw u16 reservation requests; byte vectors <=4 elements and ASCII strings <=4 bytes, nested boxed clones <=3 elements, COW vector of 3 bytes; single-threaded refcounts",
+      "limits": "Allocator obeys Rust contract and returns null on refusal. User initializers/TryClone/Drop return normally and satisfy contracts. No universal proof of arbitrary T, container size, concurrency, refcount overflow, OS termination or stack space. Returned heap-free errors are forgotten at caller boundary; payload and partial-owner drops execute. Kani 0.68 RawVec::new_in layout problem requires an explicit standard empty-Vec constructor model, independently checked; fresh clone growth is forbidden by the allocator model.",
+      "specification": {
+        "requires": "Allocator obeys Rust allocation contract; initializer/TryClone/Drop return normally with valid values.",
+        "ensures": "Successful construction/clone has the stated unique/shared ownership and payload.",
+        "on_error": "Refusal preserves the source and drops partial owners; initializer is not called before reservation.",
+        "frame": "Existing source ownership and payload remain valid.",
+        "progress": "Bounded payload/clone models; no arbitrary-T or complete initialization proof."
+      }
+    },
+    {
+      "id": "scalar-owner-memory",
+      "harnesses": [
+        "fallible::memory_proofs::initialized_scalar_box_and_clone",
+        "fallible::memory_proofs::refused_scalar_box_does_not_initialize"
+      ],
+      "sources": [
+        "crates/varlit-core/src/fallible.rs",
+        "crates/varlit-core/src/fallible/memory_proofs.rs"
+      ],
+      "scope": "Actual u32 Box construction and boxed TryClone success; complete allocator refusal before callback.",
+      "limits": "No arbitrary-T, Arc, partial multi-allocation failure or global OOM claim. Extra validity checks cover both harnesses; extra uninit checks cover refusal only. Successful Box::write is unsupported by uninit instrumentation (raw pointer/union). Success uses normal Kani allocation models; refusal returns null. Heap-free error is forgotten at caller boundary.",
+      "specification": {
+        "requires": "Selected u32 value and contract-obeying allocator; refusal returns null.",
+        "ensures": "Selected scalar construction/clone passes value-validity instrumentation.",
+        "on_error": "Refusal returns before initialization callback.",
+        "frame": "No uninitialized successful Box::write is claimed under unsupported instrumentation.",
+        "progress": "Selected scalar cases only; complete owner initialization belongs to the separate library."
+      }
+    },
+    {
+      "id": "buffered-private-row",
+      "harnesses": [
+        "spill_rows::buffered_row_proofs::full_width_buffered_rows_match_the_actual_window"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/buffered_row.rs",
+        "crates/varlit-core/src/spill_rows.rs"
+      ],
+      "scope": "full-width indices and arbitrary first row, up to39 backing bytes and13-byte rows",
+      "limits": "No filesystem, allocation or whole-owner initialization model",
+      "specification": {
+        "requires": "Nonzero fixed row width; backing window has at most 39 bytes for 13-byte rows.",
+        "ensures": "Returned row agrees exactly with the private resident window.",
+        "on_error": "Outside-window or unrepresentable row rejects.",
+        "frame": "Backing bytes and unrelated indices remain unchanged.",
+        "progress": "Finite index/extent arithmetic; no filesystem model."
+      }
+    },
+    {
+      "id": "untrusted-sequence-candidate",
+      "harnesses": [
+        "file::resident_index::uniform_prefix_proofs::full_width_sequence_candidate_matches_wide_subtraction"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/uniform_prefix.rs",
+        "crates/varlit-core/src/native_directory.rs"
+      ],
+      "scope": "full-width u64 sequence subtraction and usize candidate conversion",
+      "limits": "Candidate arithmetic only. Membership requires the actual private offset comparison. No filesystem/allocation model.",
+      "specification": {
+        "requires": "Unsigned sequences may be arbitrary.",
+        "ensures": "Candidate equals the wide nonnegative sequence difference exactly when representable.",
+        "on_error": "Underflow or usize overflow returns no candidate.",
+        "frame": "No private row/offset proof is synthesized from a sequence candidate alone.",
+        "progress": "One subtraction/conversion step; membership still requires the real offset comparison."
+      }
+    },
+    {
+      "id": "decode-state-transitions",
+      "harnesses": [
+        "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
+        "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects"
+      ],
+      "sources": [
+        "crates/varlit-core/src/decode_state.rs",
+        "crates/varlit-core/src/verification/decode_transitions.rs"
+      ],
+      "scope": "Full-width scalar transition contracts, independent of physical input/container length",
+      "limits": "Actual storage/callback binding is checked separately; no allocator or OS model",
+      "specification": {
+        "requires": "Valid unsigned values, booleans and optional shared byte references; no assumed file validity.",
+        "ensures": "Charges and cursor steps return exactly the admitted state; callback exit requires origin, bounded cursor and non-increasing budget.",
+        "on_error": "Rejected transitions have no committed state.",
+        "frame": "Pure scalar decisions.",
+        "progress": "Successful nonzero charge/read strictly reduces its remaining extent."
+      }
+    }
+  ],
+  "executable_contracts": [
+    {
+      "target": "chunks::table_extent",
+      "reference": "table_extent",
+      "proof": "chunks::contract_proofs::table_extent_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "compression_buffers::resource_steps::output_capacity",
+      "reference": "output_capacity",
+      "proof": "compression_buffers::resource_steps::contract_proofs::reservation_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "compression_buffers::resource_steps::block_extent",
+      "reference": "block_extent",
+      "proof": "compression_buffers::resource_steps::contract_proofs::block_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "compression_buffers::resource_steps::stream_progress",
+      "reference": "stream_progress",
+      "proof": "compression_buffers::resource_steps::contract_proofs::streaming_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "disk_index::tree::take_visit",
+      "reference": "take_visit",
+      "proof": "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+      "annotations": [
+        "ensures",
+        "modifies"
+      ]
+    },
+    {
+      "target": "disk_index::tree::height_matches",
+      "reference": "height_matches",
+      "proof": "disk_index::tree::contract_proofs::height_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::charge",
+      "reference": "charge",
+      "proof": "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::read_end",
+      "reference": "read_end",
+      "proof": "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::callback_exit",
+      "reference": "callback_exit",
+      "proof": "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::same_scope",
+      "reference": "same_scope",
+      "proof": "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects",
+      "annotations": [
+        "ensures"
+      ]
+    }
+  ],
+  "contract_uses": {
+    "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation": [
+      "chunks::table_extent"
+    ]
+  }
+}

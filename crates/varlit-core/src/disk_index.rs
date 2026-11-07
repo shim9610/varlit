@@ -8,6 +8,8 @@ use std::{
 
 #[cfg(test)]
 mod oracle;
+#[cfg(kani)]
+mod publication_proofs;
 mod slots;
 mod storage;
 mod tree;
@@ -27,7 +29,7 @@ const DEFAULT_BATCH_RECORDS: usize = 16_384;
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024 * 1024;
 
 const META_MAGIC: [u8; 8] = *b"VARVEVKI";
-// v3 adds the primary generation witness (STO-01). A v2 sidecar is 260 bytes
+// v3 adds the primary generation witness. A v2 sidecar is 260 bytes
 // where this record is 300, so it is refused with the typed `MetadataLength`
 // error before the version field is read, and is stale-regenerable by rebuild.
 const META_VERSION: u16 = 3;
@@ -298,7 +300,7 @@ pub enum DiskIndexError {
     IdentityMismatch,
     /// The primary no longer matches the generation the sidecar was published
     /// against: the leading bytes of the file changed underneath it, outside a
-    /// declared header tail region, which is excluded from the witness (STO-01).
+    /// declared header tail region, which is excluded from the witness.
     PrimaryGenerationMismatch,
     ModeMismatch {
         expected: DiskIndexMode,
@@ -526,6 +528,34 @@ impl std::error::Error for DiskIndexError {
     }
 }
 
+// Allocation failures must not allocate again while crossing the public API.
+pub(crate) fn index_error(error: DiskIndexError) -> Error {
+    match error {
+        DiskIndexError::Busy => Error::IndexBusy,
+        DiskIndexError::Io(error) if error.kind() == std::io::ErrorKind::OutOfMemory => {
+            Error::Io(error)
+        }
+        DiskIndexError::Primary(error @ Error::AllocationFailed { .. }) => error,
+        DiskIndexError::Primary(Error::Io(error))
+            if error.kind() == std::io::ErrorKind::OutOfMemory =>
+        {
+            Error::Io(error)
+        }
+        error => match crate::fallible::try_box(DiskIndexError::Busy) {
+            Ok(mut slot) => {
+                *slot = error;
+                Error::DiskIndex(slot)
+            }
+            Err(refusal) => match error {
+                // Preserve any completed/uncertain publication facts even if
+                // the extra disk-index wrapper cannot be allocated.
+                DiskIndexError::Primary(source) => source,
+                _ => refusal,
+            },
+        },
+    }
+}
+
 impl From<std::io::Error> for DiskIndexError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -599,7 +629,7 @@ pub struct DiskIndexIdentity {
     pub primary_fingerprint: [u8; 32],
 }
 
-/// Bytes of the primary covered by the generation witness (STO-01).
+/// Bytes of the primary covered by the generation witness.
 ///
 /// The window is a small constant: the witness must catch a rewrite of the
 /// primary's leading records, and verifying it costs one bounded read at open
@@ -747,7 +777,7 @@ type ExtractTombstoneUpdate = fn(
     FormatSpec,
     &RecordIndexEntry,
     &[u8],
-    &mut MaterializationBudget,
+    crate::collections::DecodeBudget<'_>,
     usize,
 ) -> crate::Result<DiskIndexUpdate>;
 
@@ -760,7 +790,7 @@ pub struct DiskIndexDescriptor {
     pub block_id: u32,
     pub block_version: u16,
     pub key_wire_type: u16,
-    /// API-03: the block schema fingerprint of the concrete `T` whose decode
+    /// the block schema fingerprint of the concrete `T` whose decode
     /// and key-extraction function pointers this descriptor captured. Without
     /// it a descriptor built for one block type validated — and then decoded
     /// primary bytes — against a format that declares a different schema for
@@ -782,7 +812,7 @@ impl DiskIndexDescriptor {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the descriptor root,
+        // compile-time keyedness contract at the descriptor root,
         // covering the whole disk-index plan path for `T`.
         let () = crate::traits::KeyedBlockContract::<T>::OK;
         Self {
@@ -959,7 +989,7 @@ fn validate_descriptors(
         {
             return Err(DiskIndexError::PlanNotCanonical);
         }
-        // API-03: the format's immutable block identity — keyedness and schema
+        // the format's immutable block identity — keyedness and schema
         // fingerprint included — is the authority for the concrete type whose
         // decode and key-extraction pointers this descriptor captured. It runs
         // here, at plan construction, so no captured codec can reach primary
@@ -993,7 +1023,7 @@ fn compute_plan_digest(descriptors: &[DiskIndexDescriptor]) -> DiskIndexResult<D
     let mut digest = [0u8; 32];
     for lane in 0..8u32 {
         let mut hasher = crc32fast::Hasher::new();
-        // v2 folds the block schema fingerprint into the plan digest (API-03),
+        // v2 folds the block schema fingerprint into the plan digest ,
         // so a sidecar published for one block schema is refused as stale for
         // a plan whose descriptors decode a different one.
         hasher.update(b"varve-disk-index-plan-v3");
@@ -1024,15 +1054,53 @@ pub fn tail_limit_for_spec(spec: FormatSpec) -> DiskIndexResult<u32> {
     if !spec.index_policy.block_offset_chain {
         return Ok(0);
     }
-    let count = spec
-        .blocks
-        .len()
-        .checked_add(2)
-        .ok_or(DiskIndexError::MetadataInvariant(
-            "tail declaration count overflow",
-        ))?;
+    let internal = crate::stream::INTERNAL_BLOCK_IDS
+        .iter()
+        .filter(|&&id| {
+            id != crate::MANIFEST_BLOCK_ID
+                || spec.manifest_policy == crate::ManifestPolicy::Embedded
+        })
+        .count();
+    let count =
+        spec.blocks
+            .len()
+            .checked_add(internal)
+            .ok_or(DiskIndexError::MetadataInvariant(
+                "tail declaration count overflow",
+            ))?;
     u32::try_from(count)
         .map_err(|_| DiskIndexError::MetadataInvariant("tail declaration count exceeds u32"))
+}
+
+/// The exact old bound is accepted only for formats whose corrected bound is
+/// larger. It still bounds tail allocation before any persisted count is used.
+#[derive(Clone, Copy)]
+struct TailLimitPolicy {
+    current: u32,
+    legacy: Option<u32>,
+}
+
+impl TailLimitPolicy {
+    fn for_spec(spec: FormatSpec) -> DiskIndexResult<Self> {
+        let current = tail_limit_for_spec(spec)?;
+        let legacy = spec
+            .blocks
+            .len()
+            .checked_add(2)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n < current);
+        Ok(Self { current, legacy })
+    }
+
+    fn validate(self, metadata: DiskIndexMetadata) -> DiskIndexResult<u32> {
+        if metadata.tail_limit != self.current && Some(metadata.tail_limit) != self.legacy {
+            return Err(DiskIndexError::TailLimitMismatch {
+                expected: self.current,
+                actual: metadata.tail_limit,
+            });
+        }
+        Ok(metadata.tail_limit)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1276,6 +1344,7 @@ pub(crate) fn extract_plan_update(
     entry: &RecordIndexEntry,
     max_key_bytes: usize,
 ) -> crate::Result<Option<DiskIndexUpdate>> {
+    let spec = spec.with_strict_read_validation();
     if entry.block_id == TOMBSTONE_BLOCK_ID {
         // Same shape gate as `file::decode_stream_tombstone_key`: reject any
         // tombstone that does not carry version 1 and exactly the internal flag.
@@ -1307,7 +1376,7 @@ pub(crate) fn extract_plan_update(
             spec,
             entry,
             key_payload,
-            &mut budget,
+            budget.decode_view(),
             max_key_bytes,
         )?))
     } else {
@@ -1355,14 +1424,14 @@ where
     };
     let physical = record_physical_descriptor(spec, entry)?;
     DiskIndexUpdate::from_key_with_record(T::ID, &value.key(), indexed, physical, max_key_bytes)
-        .map_err(|error| Error::DiskIndex(Box::new(error)))
+        .map_err(index_error)
 }
 
 fn extract_descriptor_tombstone<T>(
     spec: FormatSpec,
     entry: &RecordIndexEntry,
     key_payload: &[u8],
-    budget: &mut MaterializationBudget,
+    mut budget: crate::collections::DecodeBudget<'_>,
     max_key_bytes: usize,
 ) -> crate::Result<DiskIndexUpdate>
 where
@@ -1381,7 +1450,7 @@ where
     };
     let physical = record_physical_descriptor(spec, entry)?;
     DiskIndexUpdate::from_key_with_record(T::ID, &key, indexed, physical, max_key_bytes)
-        .map_err(|error| Error::DiskIndex(Box::new(error)))
+        .map_err(index_error)
 }
 
 fn record_physical_descriptor(
@@ -1501,6 +1570,9 @@ pub struct DiskIndexStore {
     tail_cache: Option<TailCache>,
     slots_cache: Option<slots::Working>,
     finite_layout: Vec<(u32, u32)>,
+    /// Corrected capacity for a legacy companion, installed in the next
+    /// ordinary dirty-generation commit without an extra write at open.
+    write_tail_limit: Option<u32>,
     pub(crate) batch: Option<DiskIndexWriteBatch>,
 }
 
@@ -1534,20 +1606,37 @@ impl DiskIndexStore {
             tail_cache: None,
             slots_cache: None,
             finite_layout: Vec::new(),
+            write_tail_limit: None,
             batch: None,
         })
     }
     pub(crate) fn configure_finite(&mut self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
-        let layout: Vec<_> = plan
-            .descriptors()
-            .iter()
-            .filter(|d| d.finite_key_count != 0)
-            .map(|d| (d.block_id, d.finite_key_count))
-            .collect();
+        let mut layout = Vec::new();
+        let descriptors = plan.descriptors();
+        layout
+            .try_reserve_exact(
+                descriptors
+                    .iter()
+                    .filter(|d| d.finite_key_count != 0)
+                    .count(),
+            )
+            .map_err(|_| {
+                DiskIndexError::Io(std::io::Error::from(std::io::ErrorKind::OutOfMemory))
+            })?;
+        layout.extend(
+            descriptors
+                .iter()
+                .filter(|d| d.finite_key_count != 0)
+                .map(|d| (d.block_id, d.finite_key_count)),
+        );
+        let checkpoint = self.storage.current()?;
+        self.storage
+            .reader(&checkpoint)
+            .slots
+            .validate_layout(plan)?;
         if layout.is_empty() {
             return Ok(());
         }
-        let checkpoint = self.storage.current()?;
         let working = slots::Working::load(
             &self.storage.reader(&checkpoint).slots,
             &layout,
@@ -1725,6 +1814,24 @@ impl DiskIndexStore {
         }
         Ok(state)
     }
+
+    pub(crate) fn validate_clean_writer_for_spec(
+        &mut self,
+        identity: DiskIndexIdentity,
+        mode: DiskIndexMode,
+        physical_native_eof: u64,
+        spec: FormatSpec,
+    ) -> DiskIndexResult<DiskIndexPersistentState> {
+        let policy = TailLimitPolicy::for_spec(spec)?;
+        let actual = policy.validate(self.read_metadata()?)?;
+        let state = self.validate_clean_writer(identity, mode, physical_native_eof, actual)?;
+        // A previous writer can die after exposing one clean head but before
+        // syncing it. Clean sync is otherwise a no-op for the sidecar. Reconcile
+        // only divergent/torn heads; normal matching copies need no extra fsync.
+        self.storage.reconcile_confirmed_heads()?;
+        self.write_tail_limit = Some(policy.current);
+        Ok(state)
+    }
     /// Copy the current clean tree into a new file generation. Old readers keep
     /// their open file and never delay the writer. Call sync explicitly first.
     pub(crate) fn compact(&mut self) -> DiskIndexResult<IndexCompaction> {
@@ -1735,7 +1842,8 @@ impl DiskIndexStore {
         }
         let state = self.storage.state(&base, None)?;
         let before_bytes = self.storage.file.metadata()?.len();
-        let target = self.storage.path.clone();
+        let target =
+            crate::TryClone::try_clone(&self.storage.path).map_err(DiskIndexError::Primary)?;
         let temp = tempfile::Builder::new()
             .prefix(".varlit-compact-")
             .tempfile_in(target.parent().unwrap_or(Path::new(".")))?
@@ -1800,7 +1908,7 @@ impl DiskIndexStore {
         let after_bytes = replacement.file.metadata()?.len();
         // Construct all fallible local state before publishing the replacement.
         let identity = opened_sidecar_identity(&replacement.file)?;
-        replacement.path = target.clone();
+        replacement.path = crate::TryClone::try_clone(&target).map_err(DiskIndexError::Primary)?;
         let new_slots = if !self.finite_layout.is_empty() {
             let checkpoint = replacement.current()?;
             Some(slots::Working::load(
@@ -1819,12 +1927,14 @@ impl DiskIndexStore {
         match publication {
             crate::file::ReplaceDurability::Durable => {}
             crate::file::ReplaceDurability::ParentSyncPending(source) => {
-                return Err(DiskIndexError::Primary(
-                    Error::PublishedButParentSyncPending {
-                        path: target.display().to_string(),
-                        source: Box::new(source),
+                return Err(DiskIndexError::Primary(crate::fallible::boxed_path_error(
+                    source,
+                    &target,
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::ParentSyncPending,
                     },
-                ));
+                    |path, source| Error::PublishedButParentSyncPending { path, source },
+                )));
             }
         }
         Ok(IndexCompaction {
@@ -1841,6 +1951,7 @@ impl DiskIndexStore {
         }
         let state = self.storage.state(&clean, None)?;
         let mut dirty = clean.metadata;
+        dirty.tail_limit = self.write_tail_limit.unwrap_or(dirty.tail_limit);
         dirty.state = DiskIndexState::Dirty;
         dirty.checkpoint = Some(DiskIndexCheckpoint {
             checkpoint_offset: clean.offset,
@@ -1983,6 +2094,7 @@ impl DiskIndexStore {
         }
         self.publish_clean(metadata.working)
     }
+    #[cfg(test)]
     pub fn stage_restore(
         &mut self,
         expected_identity: DiskIndexIdentity,
@@ -1990,10 +2102,43 @@ impl DiskIndexStore {
         physical_native_eof: u64,
         expected_tail_limit: u32,
     ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
+        self.stage_restore_bounded(
+            expected_identity,
+            expected_mode,
+            physical_native_eof,
+            TailLimitPolicy {
+                current: expected_tail_limit,
+                legacy: None,
+            },
+        )
+    }
+
+    pub(crate) fn stage_restore_for_spec(
+        &mut self,
+        expected_identity: DiskIndexIdentity,
+        expected_mode: DiskIndexMode,
+        physical_native_eof: u64,
+        spec: FormatSpec,
+    ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
+        self.stage_restore_bounded(
+            expected_identity,
+            expected_mode,
+            physical_native_eof,
+            TailLimitPolicy::for_spec(spec)?,
+        )
+    }
+
+    fn stage_restore_bounded(
+        &mut self,
+        expected_identity: DiskIndexIdentity,
+        expected_mode: DiskIndexMode,
+        physical_native_eof: u64,
+        policy: TailLimitPolicy,
+    ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
         self.storage.writer()?;
         let dirty = self.storage.current()?;
         validate_identity_mode(dirty.metadata, expected_identity, expected_mode)?;
-        validate_expected_tail_limit(dirty.metadata, expected_tail_limit)?;
+        policy.validate(dirty.metadata)?;
         if dirty.metadata.state != DiskIndexState::Dirty {
             return Err(DiskIndexError::DirtyStateRequired);
         }
@@ -2011,9 +2156,11 @@ impl DiskIndexStore {
         }
         crate::scalable_fault_point("restore.stage");
         let base = self.storage.at(checkpoint.checkpoint_offset)?;
-        let staged = self.storage.state(&base, Some(expected_tail_limit))?;
+        let base_limit = policy.validate(base.metadata)?;
+        let staged = self.storage.state(&base, Some(base_limit))?;
         validate_restored_root(&dirty.metadata, &staged)?;
         crate::scalable_fault_point("restore.stage");
+        self.write_tail_limit = Some(policy.current);
         Ok(DiskIndexRestoreGuard {
             storage: &mut self.storage,
             root: base.root,
@@ -2295,7 +2442,7 @@ impl DiskIndexWriteBatch {
         Ok(self.metadata)
     }
 
-    /// Re-stamps the primary generation witness for this batch (STO-01).
+    /// Re-stamps the primary generation witness for this batch.
     ///
     /// Only called while the witness window is still growing — once it covers
     /// [`PRIMARY_GENERATION_WINDOW`] bytes it is frozen for the file's life, so
@@ -2503,6 +2650,9 @@ pub struct DiskIndexSnapshot {
 }
 
 impl DiskIndexSnapshot {
+    pub(crate) fn validate_finite_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
+        self.pinned()?.reader.slots.validate_layout(plan)
+    }
     fn pinned(&self) -> DiskIndexResult<&SnapshotPin> {
         self.pin.as_ref().ok_or(DiskIndexError::SnapshotReleased)
     }
@@ -2980,10 +3130,7 @@ fn composite_key(block_id: u32, canonical_key: &[u8], limit: usize) -> DiskIndex
     let mut output = Vec::new();
     output
         .try_reserve_exact(capacity)
-        .map_err(|_| DiskIndexError::KeyTooLong {
-            actual: canonical_key.len(),
-            limit,
-        })?;
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
     output.extend_from_slice(&DiskIndexKeyTag::keyed(block_id).encode());
     output.extend_from_slice(canonical_key);
     Ok(output)
@@ -3437,11 +3584,12 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 /// buffer. No writer admission, shared cache, publication or durability I/O:
 /// this file is disposable scratch owned by a single handle.
 pub(crate) struct ScratchIndex {
-    file: std::sync::Arc<std::fs::File>,
+    file: crate::fallible::Arc<std::fs::File>,
     root: tree::Root,
     reader: tree::Reader,
     cache_bytes: usize,
     end: u64,
+    maximum: Option<u64>,
 }
 impl Clone for ScratchIndex {
     fn clone(&self) -> Self {
@@ -3450,6 +3598,7 @@ impl Clone for ScratchIndex {
             root: self.root,
             cache_bytes: self.cache_bytes,
             end: self.end,
+            maximum: self.maximum,
             reader: tree::Reader::new(
                 self.file.clone(),
                 self.end,
@@ -3475,7 +3624,9 @@ impl ScratchIndex {
         }
     }
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
-        let file = std::sync::Arc::new(tempfile::tempfile()?);
+        let (file, maximum) = crate::spill_file::SpillFile::new()?.into_parts();
+        crate::spill_file::check_extent(maximum, tree::PAGE as u64)?;
+        let file = crate::fallible::try_arc(file)?;
         file.set_len(tree::PAGE as u64)?;
         let reader = tree::Reader::new(
             file.clone(),
@@ -3489,12 +3640,11 @@ impl ScratchIndex {
             reader,
             cache_bytes,
             end: tree::PAGE as u64,
+            maximum,
         })
     }
     pub(crate) fn get(&self, key: &[u8]) -> crate::Result<Option<[u8; 52]>> {
-        self.reader
-            .get(self.root, key)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))
+        self.reader.get(self.root, key).map_err(index_error)
     }
     pub(crate) fn visit(
         &self,
@@ -3504,20 +3654,33 @@ impl ScratchIndex {
         let result = self.reader.visit(self.root, &mut |key, value| {
             if let Err(error) = visitor(key, value) {
                 failure = Some(error);
-                return Err(DiskIndexError::Io(std::io::Error::other(
-                    "scratch visitor failed",
-                )));
+                return Err(DiskIndexError::Io(std::io::ErrorKind::Other.into()));
             }
             Ok(())
         });
         if let Some(error) = failure {
             return Err(error);
         }
-        result.map_err(|error| crate::Error::Io(std::io::Error::other(error)))
+        result.map_err(index_error)
     }
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
-        let root = tree::apply(&self.file, &self.reader, self.root, values)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        // A refused limited batch must not consume the remaining scratch
+        // allowance with unpublished nodes. Preserve all pre-existing clones.
+        let prior = self
+            .maximum
+            .map(|_| self.file.metadata().map(|m| m.len()))
+            .transpose()?;
+        let root =
+            match tree::apply_with_limit(&self.file, &self.reader, self.root, values, self.maximum)
+            {
+                Ok(root) => root,
+                Err(error) => {
+                    if let Some(prior) = prior {
+                        self.file.set_len(prior)?;
+                    }
+                    return Err(index_error(error));
+                }
+            };
         self.end = self.file.metadata()?.len();
         self.reader = tree::Reader::new(
             self.file.clone(),
@@ -3611,6 +3774,36 @@ mod tests {
 
     fn plan() -> DiskIndexPlan {
         DiskIndexPlan::canonical(spec(), DESCRIPTORS).unwrap()
+    }
+
+    #[test]
+    fn a_finite_directory_cannot_shadow_a_nonfinite_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = DiskIndexStore::create(
+            dir.path().join("index"),
+            DiskIndexOptions::default(),
+            metadata(64),
+        )
+        .unwrap();
+        let checkpoint = store.storage.current().unwrap();
+        let reader = store.storage.reader(&checkpoint);
+        let mut slots =
+            slots::Working::load(&reader.slots, &[(PlanItem::ID, 2)], 1024 * 1024).unwrap();
+        let root = storage::Root {
+            tree: tree::Root::default(),
+            slots: slots
+                .publish(store.storage.writer().unwrap(), true)
+                .unwrap(),
+        };
+        store
+            .storage
+            .publish(metadata(64), &[], root, storage::Publication::Confirmed)
+            .unwrap();
+        let snapshot = store
+            .begin_committed_snapshot(identity(), plan().mode())
+            .unwrap();
+        assert!(snapshot.validate_finite_layout(plan()).is_err());
+        assert!(store.configure_finite(plan()).is_err());
     }
 
     fn metadata(eof: u64) -> DiskIndexMetadata {
@@ -4170,6 +4363,110 @@ mod tests {
                 actual: u32::MAX
             })
         ));
+    }
+
+    #[test]
+    fn legacy_tail_capacity_upgrades_without_a_scan_or_extra_open_write() {
+        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
+        let current_limit = tail_limit_for_spec(spec).unwrap();
+        assert_eq!(current_limit, 4);
+        for legacy_dirty in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("legacy.vki");
+            let options = DiskIndexOptions::default();
+            let mut legacy = metadata(64);
+            legacy.tail_limit = 3;
+            let mut store = DiskIndexStore::create(&path, options, legacy).unwrap();
+            if legacy_dirty {
+                store.begin_generation().unwrap();
+            }
+            drop(store);
+            let mut store = DiskIndexStore::open_writer(&path, options).unwrap();
+            if legacy_dirty {
+                // An interrupted write made entirely by the old version.
+                store
+                    .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
+                    .unwrap()
+                    .commit_after_native_sync(64)
+                    .unwrap();
+            }
+            let before = fs::read(&path).unwrap();
+            store
+                .validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec)
+                .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
+
+            // The first ordinary write upgrades the dirty root. Its rollback
+            // checkpoint still has the old bound, and must remain restorable.
+            assert_eq!(store.begin_generation().unwrap().tail_limit, current_limit);
+            store
+                .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
+                .unwrap()
+                .commit_after_native_sync(64)
+                .unwrap();
+            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
+
+            let mut eof = 64;
+            let batch = store.begin_write_batch().unwrap();
+            for (sequence, id) in [
+                PlanItem::ID,
+                crate::MANIFEST_BLOCK_ID,
+                crate::CREATION_NONCE_BLOCK_ID,
+                crate::TOMBSTONE_BLOCK_ID,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                batch
+                    .advance_coverage_with_tail(
+                        eof,
+                        eof + 64,
+                        sequence as u64,
+                        Some(DiskIndexTail {
+                            block_id: id,
+                            record_offset: eof,
+                            sequence: sequence as u64,
+                        }),
+                    )
+                    .unwrap();
+                eof += 64;
+            }
+            store.commit_batch().unwrap();
+            store.mark_clean(eof).unwrap();
+            drop(store);
+            let mut reopened = DiskIndexStore::open_writer(&path, options).unwrap();
+            let state = reopened
+                .validate_clean_writer_for_spec(identity(), plan().mode(), eof, spec)
+                .unwrap();
+            assert_eq!(state.metadata.tail_limit, current_limit);
+            assert_eq!(state.tails.len(), 4);
+        }
+    }
+
+    #[test]
+    fn legacy_tail_compatibility_refuses_other_bounds() {
+        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
+        for actual in [0, 1, 2, 5, u32::MAX] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut bad = metadata(64);
+            bad.tail_limit = actual;
+            let mut store = DiskIndexStore::create(
+                directory.path().join("bad.vki"),
+                DiskIndexOptions::default(),
+                bad,
+            )
+            .unwrap();
+            assert!(
+                matches!(store.validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec),
+                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
+            );
+            store.begin_generation().unwrap();
+            assert!(
+                matches!(store.stage_restore_for_spec(identity(), plan().mode(), 64, spec),
+                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Scaling contracts for the paged matrix integrity representation
-//! (PERF-01 and PERF-02).
+//! ( and ).
 //!
 //! Every assertion here is a counter or a typed error, never wall-clock time:
 //! the point is that the *amount of work* per commit-bit mutation, per create,
@@ -27,7 +27,7 @@ use varlit::{
 
 /// Commit-map page size used by the paged integrity representation.
 const PAGE_BYTES: u64 = 4096;
-/// Native file header, then the 24-byte matrix creation-nonce region (DUR2-03).
+/// Native file header, then the 24-byte matrix creation-nonce region.
 const NATIVE_PREFIX_LEN: u64 = 18 + 24;
 /// Current on-disk matrix layout version (v4 gives the persisted page index a
 /// validated occupancy header and makes it the live set, not the history).
@@ -212,7 +212,7 @@ fn temp_dir(name: &str) -> tempfile::TempDir {
         .expect("temp dir")
 }
 
-// PERF-01 -------------------------------------------------------------------
+//  -------------------------------------------------------------------
 
 /// A commit-bit mutation must hash one page, not the whole category bitmap, so
 /// quadrupling the cell count must not change the per-mutation hashing cost.
@@ -279,7 +279,7 @@ fn a_single_mutation_hashes_exactly_one_page_anywhere_in_the_map() -> varlit::Re
     Ok(())
 }
 
-// PERF-02 -------------------------------------------------------------------
+//  -------------------------------------------------------------------
 
 /// Creation must not explicitly initialise per-cell metadata: the commit maps,
 /// per-cell checksums, and validity bitmaps are a sparse zero extent.
@@ -643,12 +643,12 @@ fn cleared_pages_are_evicted_and_residency_returns_to_baseline() -> varlit::Resu
     Ok(())
 }
 
-// F-03: page-index residency and enumeration follow live state ---------------
+// page-index residency and enumeration follow live state ---------------
 
 /// The persisted page index must track the pages a matrix *currently* holds
 /// state in, not every page it has ever published.
 ///
-/// Before F-03 the tracking set was append-only: a page whose final bit cleared
+/// Before  the tracking set was append-only: a page whose final bit cleared
 /// released its 4 KiB payload but kept its id forever, so resident memory was
 /// `Theta(4096 * live + set(historically touched))` and the second term was
 /// bounded only by the total page count. Payload accounting alone could not see
@@ -697,7 +697,7 @@ fn page_index_residency_returns_to_baseline_across_page_churn() -> varlit::Resul
     Ok(())
 }
 
-/// F-01: a whole-category clear must refund **every** counter it releases.
+/// a whole-category clear must refund **every** counter it releases.
 ///
 /// A cell-category clear drops four resident structures: the commit bitmap's
 /// payload pages, the validity bitmap's payload pages, and the persisted
@@ -800,7 +800,7 @@ fn category_clear_refunds_payload_and_page_index_residency_every_cycle() -> varl
     Ok(())
 }
 
-/// F-01, the same contract under a runtime ceiling: repeated populate/clear
+/// the same contract under a runtime ceiling: repeated populate/clear
 /// cycles must not exhaust `max_matrix_bitmap_bytes`.
 ///
 /// This is the failure a caller actually sees. The counters above prove the
@@ -894,7 +894,7 @@ fn reopen_after_churn_visits_only_live_pages() -> varlit::Result<()> {
     Ok(())
 }
 
-// F-06: damaged page-index entries are reported, never silently truncating ---
+// damaged page-index entries are reported, never silently truncating ---
 
 /// A damaged page-index entry used to be read as a successful end-of-array, so
 /// every *later* published page went unvisited, its cells answered
@@ -992,7 +992,7 @@ fn zero_page_index_region_is_an_empty_index_not_damage() -> varlit::Result<()> {
     Ok(())
 }
 
-// F-08: the streaming-zero fallback is detectable ----------------------------
+// the streaming-zero fallback is detectable ----------------------------
 
 /// Whole-category clear removes a byte range where the platform and filesystem
 /// can, and streams zeros where they cannot. The second path is
@@ -1042,7 +1042,7 @@ fn whole_category_clear_reports_whether_it_streamed_zeros() -> varlit::Result<()
     Ok(())
 }
 
-/// F-08 accounting completeness: every range a whole-category clear zeroes is
+///  accounting completeness: every range a whole-category clear zeroes is
 /// accounted for, including the page-digest array.
 ///
 /// The digest array is not zeroed through `zero_range`: the clear punches it
@@ -1325,7 +1325,7 @@ fn version_three_page_index_artifact_is_rejected_typed() -> varlit::Result<()> {
     Ok(())
 }
 
-// F-02: interrupted whole-map page-index republication ----------------------
+// interrupted whole-map page-index republication ----------------------
 
 /// 66_560 cells: a commit map of 8_320 bytes, i.e. exactly three 4 KiB pages,
 /// so a rebuild has three page-index entries to republish. Deliberately the
@@ -1395,7 +1395,7 @@ fn assert_page_index_fails_closed(path: &Path, context: &str) -> varlit::Result<
     Ok(())
 }
 
-/// F-02: a rebuild whose page-index *entry* write fails after the index has
+/// a rebuild whose page-index *entry* write fails after the index has
 /// been emptied must not leave a valid short index behind.
 ///
 /// The allocation map is forced unavailable throughout the verification,
@@ -1447,7 +1447,7 @@ fn an_interrupted_rebuild_entry_write_fails_closed_and_rebuilds() -> varlit::Res
     Ok(())
 }
 
-/// F-02: the same contract at the other end of the republication, the final
+/// the same contract at the other end of the republication, the final
 /// occupancy-count write, which is the publication itself.
 #[test]
 fn an_interrupted_rebuild_header_write_fails_closed() -> varlit::Result<()> {
@@ -1469,7 +1469,7 @@ fn an_interrupted_rebuild_header_write_fails_closed() -> varlit::Result<()> {
     Ok(())
 }
 
-/// F-02: failing the *marker* write destroys nothing, so the complete old index
+/// failing the *marker* write destroys nothing, so the complete old index
 /// must still be there and the reopen must be exactly what it was before.
 ///
 /// This is the other admissible outcome of an interrupted rebuild: either the
@@ -1553,7 +1553,7 @@ fn run_rebuild_interruption_child(path: &Path, stage: u64) -> std::process::Exit
         .expect("run the rebuild interruption child")
 }
 
-/// F-02, process level: a rebuild killed at any point between marking the
+/// process level: a rebuild killed at any point between marking the
 /// persisted page index and publishing its replacement must fail closed.
 ///
 /// A returned error also unwinds in-memory state, so only killing the process
@@ -1579,9 +1579,9 @@ fn an_interrupted_rebuild_process_fails_closed_at_every_stage() -> varlit::Resul
     Ok(())
 }
 
-// F-03: allocation failure can no longer follow persistence -----------------
+// allocation failure can no longer follow persistence -----------------
 
-/// F-03: a first-touch bitmap page allocation failure must be refused *before*
+/// a first-touch bitmap page allocation failure must be refused *before*
 /// anything reaches the file, so disk and memory can never disagree.
 ///
 /// The failing allocation used to run after the page-index entry, the page
@@ -1689,7 +1689,7 @@ fn assert_failed_allocation_persists_nothing(label: &str, attempt: u64) -> varli
     Ok(())
 }
 
-// F-03: page-index mutation is prepared before it is persisted ---------------
+// page-index mutation is prepared before it is persisted ---------------
 
 /// Cell count giving the commit map exactly three 4 KiB pages, which is the
 /// smallest width at which a compaction can reorder the *counted prefix* of the
@@ -1760,7 +1760,7 @@ fn failed_direct_directory_removal_cannot_publish_mismatched_metadata() -> varli
     Ok(())
 }
 
-// F-04: CRC rebuild refuses incomplete validity evidence ---------------------
+// CRC rebuild refuses incomplete validity evidence ---------------------
 
 /// Base of a block's CRC-validity page-index array.
 ///
@@ -1774,7 +1774,7 @@ fn validity_page_index_off(path: &Path, scans: u64) -> u64 {
     page_index_off(path) + (pages * 2 + 1) * PAGE_INDEX_SLOT_LEN
 }
 
-/// F-04. CRC commit-map rebuild derives every bit from the block's CRC-validity
+/// CRC commit-map rebuild derives every bit from the block's CRC-validity
 /// bitmap: a cell is committed only where the validity bit says the stored CRC
 /// is meaningful *and* the recomputed CRC matches. A damaged validity page index
 /// is reported as a fatal finding, but the pages it omits simply stay absent
@@ -2226,5 +2226,36 @@ fn on_demand_directory_damage_is_detected_by_access_scrub_and_rebuild() -> varli
     ));
     writer.sync()?;
     assert_eq!(page_index_state(&path, 2), before);
+    Ok(())
+}
+
+#[cfg(feature = "mmap")]
+#[test]
+fn mmap_reads_require_crc_validity_even_when_the_stored_crc_matches() -> varlit::Result<()> {
+    let dir = temp_dir("mmap-validity");
+    let path = dir.path().join("matrix.varlit");
+    fill(&path, SMALL_SCANS, 2)?;
+    // One commit digest, then per-cell checksums, then the validity bitmap.
+    // Leave cell 1 valid so the page remains populated and structurally sound.
+    let validity = header_u64(&path, 10) + 16 + 8 + SMALL_SCANS * CHANNELS * 4;
+    patch_byte(&path, validity, 2);
+    let reader = spec().open_reader(&path)?;
+    assert!(matches!(
+        reader.read_matrix_cell::<ScalingCell>(key(0)),
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    // SAFETY: all fixture mutation precedes the mapping; it stays immutable.
+    let mapped = unsafe { reader.mmap_matrix()? };
+    assert!(matches!(
+        mapped.cell_payload_window::<ScalingCell>(key(0)),
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    assert_eq!(mapped.cell_numeric::<ScalingCell, u32>(key(1))?, 2);
+    assert!(matches!(
+        unsafe { reader.mmap_matrix_cell::<ScalingCell>(key(0)) },
+        Err(Error::MatrixChecksumMismatch { .. })
+    ));
+    let valid = unsafe { reader.mmap_matrix_cell::<ScalingCell>(key(1)) }?;
+    assert_eq!(valid.as_bytes(), &2u32.to_le_bytes());
     Ok(())
 }

@@ -1,0 +1,397 @@
+[
+  {
+    "test": "diagnostics::tests::cleanup_does_not_delete_a_file_interposed_before_the_unlink",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "diagnostics::tests::cleanup_leaves_a_swapped_pathname_alone",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "diagnostics::tests::cleanup_refuses_a_shared_writable_directory",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "diagnostics::tests::cleanup_removes_the_verified_object",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "diagnostics::tests::lock_marker_removal_leaves_a_swapped_object_alone",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "disk_index::oracle::randomized_pages_match_redb_across_splits_and_old_roots",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [
+      "disk_index::storage::failure_tests::head_parser_rejects_torn_and_hostile_words"
+    ],
+    "remaining_gap": "Portable production parser checks head bytes; durability, paired-head selection and missing checkpoint extents remain native tests."
+  },
+  {
+    "test": "file::tests::atomic_replace_invokes_parent_directory_sync",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::create_then_sync_makes_the_new_pathname_durable_once",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::fixed_publish_rebind_failure_is_explicit_and_poisoned",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::replace_block_finds_predecessors_without_rescanning_the_prefix",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::replace_block_preserves_transaction_visibility_and_next_sequence",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::replace_block_translates_keyed_predecessors_after_target",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::replacement_publish_rebind_failure_is_explicit_and_poisoned",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "file::tests::rewrite_publish_rebind_failure_is_explicit_and_poisoned",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::clean_index_open_and_append_do_not_scan_native_records",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::concurrent_handles_share_the_sidecar_database",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::dirty_index_restore_uses_checkpoint_without_native_scan",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::equal_length_primary_files_reject_swapped_sidecars",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::failed_clean_publication_stops_further_indexed_mutation",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::finite_sidecar_read_policy_does_not_cap_index_lifetime",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::following_a_dirty_reader_only_parses_new_records",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::indexed_mutations_encode_each_sidecar_key_once",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::indexed_roundtrip_overwrite_tombstone_reopen_and_rebuild",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::point_lookup_stops_canonical_key_encoding_at_max_key_bytes",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::rebuild_decodes_each_tombstone_key_once_across_descriptors",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::rebuild_refuses_to_promote_an_existing_dirty_generation",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::rebuild_refuses_truncated_record_instead_of_publishing_a_prefix",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::rebuild_retires_a_sidecar_published_for_a_replaced_primary",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::rebuild_splits_at_the_configured_sidecar_batch_bound",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::sidecar_batch_bound_splits_before_native_publication",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "matrix::page_store_lru_tests::a_page_released_by_a_clear_leaves_the_recency_order",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [
+      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
+    ],
+    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
+  },
+  {
+    "test": "matrix::page_store_lru_tests::a_recency_touch_costs_a_bounded_number_of_probes",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [
+      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
+    ],
+    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
+  },
+  {
+    "test": "matrix::page_store_lru_tests::a_writer_materialised_page_is_never_evicted",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [
+      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
+    ],
+    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
+  },
+  {
+    "test": "matrix_generation::tests::normal_sparse_roots_allow_spills_shared_generations_and_compaction_with_exact_budgets",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "matrix_generation::tests::root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "matrix_generation::tests::seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "matrix_generation::tests::tiny_pending_budget_spills_without_publishing_and_compacts_in_batches",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::batch_writer_coalesces_records_and_matches_single_append",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::bootstrap_refuses_to_promote_an_existing_dirty_generation",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::bootstrap_retires_a_sidecar_published_for_a_replaced_primary",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::clean_open_append_and_sync_construct_no_scanner",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::dirty_checkpoint_restore_truncates_without_scanning",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::low_level_stream_methods_cannot_bypass_keyed_chain_indexing",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::reopen_and_owned_iterators_remain_bounded",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::restore_validates_format_tails_before_native_truncate",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::scalable_writer_stops_encoding_at_the_runtime_payload_limit",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::state_sidecar_bound_splits_native_batch",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::stream_writer_matches_resident_native_bytes",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate",
+    "category": "workload-cost",
+    "alternative": "native-and-asan",
+    "portable_tests": [
+      "disk_index::tree::corruption_guards::hostile_child_with_short_reads_io_errors_and_allocation_refusal_recovers"
+    ],
+    "remaining_gap": "Portable compound-failure sample does not replace the full 795-image resource corpus."
+  },
+  {
+    "test": "disk_index::oracle::lookup_profiles",
+    "category": "opt-in-probe",
+    "alternative": "not-required",
+    "portable_tests": [],
+    "remaining_gap": "Ignored native probe; no routine execution or Miri coverage claimed."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_pib",
+    "category": "opt-in-probe",
+    "alternative": "not-required",
+    "portable_tests": [],
+    "remaining_gap": "Ignored native probe; no routine execution or Miri coverage claimed."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_tib_smoke",
+    "category": "opt-in-probe",
+    "alternative": "not-required",
+    "portable_tests": [],
+    "remaining_gap": "Ignored native probe; no routine execution or Miri coverage claimed."
+  }
+]

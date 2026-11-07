@@ -1,10 +1,5 @@
 #![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires main-agent scalable-fault-injection feature and hook wiring"]
-fn scalable_crash_faults_require_feature_wiring() {}
-
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
 
@@ -26,6 +21,11 @@ mod enabled {
         VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType, WriterLockBreakPolicy,
         bootstrap_stream_checkpoint, clear_stale_writer_lock, rebuild_disk_index,
     };
+
+    mod histories {
+        use super::*;
+        include!("support/publication_histories.rs");
+    }
 
     const CHILD_ENV: &str = "VARLIT_SCALABLE_FAULT_CHILD";
     const SCENARIO_ENV: &str = "VARLIT_SCALABLE_FAULT_SCENARIO";

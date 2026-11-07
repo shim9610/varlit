@@ -1,5 +1,5 @@
 //! Contract coverage for the v2 computed schema hash (review finding
-//! API2-01).
+//! ).
 //!
 //! Fixed/matrix payload bytes follow field declaration order, so the computed
 //! hash must cover the encoding ordinal: two blocks with the same field
@@ -307,7 +307,7 @@ fn file_created_with_omitted_hash_rejects_pinned_open() -> varlit::Result<()> {
     Ok(())
 }
 
-/// API-04 reproducer: two crates can spell a nested field type identically
+///  reproducer: two crates can spell a nested field type identically
 /// while their custom codecs emit different bytes. Before transitive codec
 /// identity the outer fingerprint and the computed format hash both matched.
 macro_rules! nested_codec_module {
@@ -423,7 +423,7 @@ fn custom_nested_codecs_with_equal_spelling_cannot_share_an_identity() {
     .expect("encode beta");
     assert_ne!(alpha_bytes, beta_bytes);
 
-    // ... so neither the block fingerprint nor the format hash may match.
+    // .. so neither the block fingerprint nor the format hash may match.
     assert_ne!(
         <nested_codec_alpha::Wrapper as VarlitBlock>::SCHEMA_FINGERPRINT,
         <nested_codec_beta::Wrapper as VarlitBlock>::SCHEMA_FINGERPRINT
@@ -481,7 +481,7 @@ fn built_in_codec_identities_are_structural() {
     );
 }
 
-/// The same API-04 defect one wire type over: a hand-written codec does not
+/// The same  defect one wire type over: a hand-written codec does not
 /// have to be `WireType::Nested` to collide. These two modules spell the field
 /// type `Packed` identically, both declare `WireType::U64`, and both are the
 /// single field of a derived `Outer` block - only the packing (and therefore
@@ -603,7 +603,7 @@ fn custom_non_nested_codecs_with_equal_spelling_cannot_share_an_identity() {
     .expect("encode beta");
     assert_ne!(alpha_bytes, beta_bytes);
 
-    // ... so neither the block fingerprint nor the format hash may match.
+    // .. so neither the block fingerprint nor the format hash may match.
     assert_ne!(
         <packed_codec_alpha::Outer as VarlitBlock>::SCHEMA_FINGERPRINT,
         <packed_codec_beta::Outer as VarlitBlock>::SCHEMA_FINGERPRINT

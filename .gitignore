@@ -1,4 +1,5 @@
 /target/
+/tools/verification/target/
 /.idea/
 /.vscode/
 /.venv-tdms/

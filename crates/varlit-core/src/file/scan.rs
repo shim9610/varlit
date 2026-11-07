@@ -96,8 +96,9 @@ pub(super) struct ScanChecks {
     pub(super) checksum_boundary: Option<u64>,
     /// Whether the stored checksum is recomputed from the payload here.
     ///
-    /// False only on the open path under `IntegrityVerification::OnDemand`,
-    /// where the identical check runs on the read that returns the record.
+    /// False on the open path under `IntegrityVerification::OnDemand` and
+    /// frame-only scans for typed reads/index rebuilds. The read that returns
+    /// or indexes the payload performs the identical check instead.
     pub(super) verify_checksums: bool,
 }
 
@@ -173,7 +174,7 @@ pub(super) fn read_record_entry_at(
     }
     file.seek(SeekFrom::Start(offset))?;
     let mut entry = read_record_header(file, spec, offset)?;
-    validate_record_entry(spec, &entry)?;
+    validate_record_entry(&spec, &entry)?;
     spec.read_limits
         .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
     if !entry.is_compressed() {
@@ -223,7 +224,7 @@ pub(super) fn read_record_entry_at(
         None
     };
 
-    // SCAN-01: this is the single line that made open read the whole file. The
+    // this is the single line that made open read the whole file. The
     // check itself is not removed - it is *relocated* to the read that returns
     // the record, where `read_payload_snapshot` already performs the identical
     // one on every typed read. See `IntegrityVerification` for why that is a
@@ -271,6 +272,7 @@ pub(super) fn read_record_entry_at(
 #[derive(Debug)]
 pub(crate) struct NativeStreamScanner {
     pub(super) spec: FormatSpec,
+    verify_checksums: bool,
     pub(super) file: crate::snapshot::SnapshotReader,
     pub(super) snapshot: SnapshotFile,
     pub(super) offset: u64,
@@ -312,6 +314,7 @@ impl NativeStreamScanner {
         STREAM_SCANNER_CONSTRUCTIONS.set(STREAM_SCANNER_CONSTRUCTIONS.get() + 1);
         Ok(Self {
             spec,
+            verify_checksums: spec.read_limits.read_validation.is_none_or(|p| p.data_crc),
             file,
             snapshot,
             offset: header_len,
@@ -319,6 +322,17 @@ impl NativeStreamScanner {
             records: 0,
             previous_sequence: None,
         })
+    }
+
+    /// Keep the format contract intact while deferring payload verification to
+    /// the typed read or index extraction that consumes each selected record.
+    pub(crate) fn from_snapshot_framing_only(
+        spec: FormatSpec,
+        snapshot: SnapshotFile,
+    ) -> Result<Self> {
+        let mut scanner = Self::from_snapshot(spec, snapshot)?;
+        scanner.verify_checksums = false;
+        Ok(scanner)
     }
 
     pub(crate) fn extend_snapshot(&mut self, snapshot: SnapshotFile) {
@@ -340,19 +354,23 @@ impl NativeStreamScanner {
             &mut self.file,
             self.snapshot.len(),
             self.offset,
-            // An explicit scan is a caller asking to walk records; it is not
-            // the open path this policy exists to shorten.
+            // Explicit scans verify payloads unless their caller owns the
+            // checksum-verified read used for typed decode/index extraction.
             ScanChecks {
                 partial_boundary,
                 checksum_boundary: None,
-                verify_checksums: true,
+                verify_checksums: self.verify_checksums,
             },
             &mut self.accounting,
         )? {
             RecordRead::Entry(entry) => entry,
             RecordRead::RecoverableTail(tail) => {
-                self.offset = tail.truncate_to;
-                return Ok(None);
+                // This cursor is bounded to an already selected snapshot.
+                // An incomplete record inside that extent is corruption, not
+                // an unconfirmed append beyond its end.
+                return Err(Error::CorruptTail {
+                    offset: tail.offset,
+                });
             }
         };
         if matches!(
@@ -389,8 +407,8 @@ impl NativeStreamScanner {
         &self.snapshot
     }
 
-    pub(crate) const fn spec(&self) -> FormatSpec {
-        self.spec
+    pub(crate) const fn verifies_checksums(&self) -> bool {
+        self.verify_checksums
     }
 }
 
@@ -661,7 +679,7 @@ pub(crate) fn fresh_stream_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     fresh_matrix_creation_nonce()
 }
 
-/// Frames the creation-nonce record (STO-01).
+/// Frames the creation-nonce record.
 ///
 /// The nonce lives *inside the primary* because that is the only place an
 /// equal-length in-place rewrite cannot preserve: a nonce in the sidecar, the
@@ -675,7 +693,7 @@ pub(crate) fn fresh_stream_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
 /// user record and needs no exemption from the caller's read limits.
 pub(crate) fn prepare_stream_creation_nonce_record(
     spec: FormatSpec,
-    nonce: [u8; MATRIX_CREATION_NONCE_LEN],
+    creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
     sequence: u64,
     record_offset: u64,
 ) -> Result<PreparedStreamRecord> {
@@ -685,7 +703,7 @@ pub(crate) fn prepare_stream_creation_nonce_record(
         1,
         RECORD_FLAG_INTERNAL,
         0,
-        &nonce,
+        &creation_id,
         sequence,
         record_offset,
         None,
@@ -867,6 +885,11 @@ pub(super) fn prepare_stream_record_into(
 /// more, and are carried out of the walk instead.
 #[derive(Debug)]
 pub(super) struct ScannedIndex {
+    pub(super) frames_verified: bool,
+    pub(super) boundaries: Option<resident_index::BoundaryProof>,
+    pub(super) minimum_sequence: Option<u64>,
+    minimum_sequence_at_commit: Option<u64>,
+    sequences_increasing: bool,
     /// The highest sequence any record in the file carries, resident or not.
     ///
     /// `SequenceState::from_index` took the maximum in the resident index. With
@@ -884,20 +907,13 @@ pub(super) struct ScannedIndex {
     /// record that survives *past* the marker is the trailing segment, and it
     /// is resident, so the final entry list covers it.
     pub(super) sequence_high_water_at_commit: Option<u64>,
-    /// The tails as of the newest commit marker, for the same reason.
-    ///
-    /// A tail left pointing into the truncated region makes the next append
-    /// write a footer naming a record past the end of the file, and the reopen
-    /// after that fails with `InvalidRecordFooter`.
-    pub(super) newest_at_commit: HashMap<u32, u64>,
-    /// Newest record offset per block id, resident or not.
-    ///
-    /// `BlockTails::from_index` cannot answer this any more: it would drop the
-    /// tail of a non-resident block, and that tail is the only way back to its
-    /// records. Collected in a map and ordered exactly once at the end, because
-    /// a per-record `note_appended` reintroduces the `Theta(B^2)` sorted-vector
-    /// insertion term PERF3-03 removed.
-    pub(super) newest: HashMap<u32, u64>,
+    // One table retains the last offset and the value before its first update
+    // after a commit. Advancing the commit epoch is O(1), even for many block
+    // IDs and frequent markers; no whole-map clone is needed.
+    newest: ScanTails,
+    commit_epoch: u64,
+    records: u64,
+    record_limit: Option<u64>,
     /// Where the last record the walk accepted physically ends, resident or
     /// not.
     ///
@@ -922,6 +938,111 @@ pub(super) struct ScannedIndex {
     pub(super) physical_end_at_commit: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ScanTail {
+    offset: u64,
+    before_epoch: u64,
+    epoch: u64,
+}
+
+// Formats without transaction markers never need a rollback copy per block.
+// Keep their original one-offset table; marker formats retain the epoch journal.
+#[derive(Debug)]
+enum ScanTails {
+    Current(HashMap<u32, u64>),
+    WithCommitHistory(HashMap<u32, ScanTail>),
+}
+
+impl ScanTails {
+    fn new(spec: &FormatSpec) -> Self {
+        if spec.commit_policy.is_transaction_marker() {
+            Self::WithCommitHistory(HashMap::new())
+        } else {
+            Self::Current(HashMap::new())
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Current(map) => map.len(),
+            Self::WithCommitHistory(map) => map.len(),
+        }
+    }
+
+    fn update(&mut self, id: u32, offset: u64, epoch: u64) -> bool {
+        match self {
+            Self::Current(map) => match map.get_mut(&id) {
+                Some(tail) => {
+                    *tail = offset;
+                    true
+                }
+                None => false,
+            },
+            Self::WithCommitHistory(map) => match map.get_mut(&id) {
+                Some(tail) => {
+                    if tail.epoch != epoch {
+                        tail.before_epoch = tail.offset;
+                        tail.epoch = epoch;
+                    }
+                    tail.offset = offset;
+                    true
+                }
+                None => false,
+            },
+        }
+    }
+
+    fn insert(&mut self, id: u32, tail: ScanTail) -> Result<()> {
+        fn reserve<V>(map: &mut HashMap<u32, V>, id: u32) -> Result<()> {
+            if map.len() == map.capacity() && !map.contains_key(&id) {
+                map.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                    resource: "scan block tails",
+                    requested: (map.len() as u64 + 1).saturating_mul(128),
+                })?;
+            }
+            Ok(())
+        }
+        match self {
+            Self::Current(map) => {
+                reserve(map, id)?;
+                map.insert(id, tail.offset);
+            }
+            Self::WithCommitHistory(map) => {
+                reserve(map, id)?;
+                map.insert(id, tail);
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback(&mut self, epoch: u64) {
+        match self {
+            Self::Current(map) => map.clear(),
+            Self::WithCommitHistory(map) => map.retain(|_, tail| {
+                if tail.epoch == epoch {
+                    tail.offset = tail.before_epoch;
+                }
+                tail.offset != 0
+            }),
+        }
+    }
+
+    fn pairs(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
+        let (current, history) = match self {
+            Self::Current(map) => (Some(map), None),
+            Self::WithCommitHistory(map) => (None, Some(map)),
+        };
+        current
+            .into_iter()
+            .flat_map(|map| map.iter().map(|(id, offset)| (*id, *offset)))
+            .chain(
+                history
+                    .into_iter()
+                    .flat_map(|map| map.iter().map(|(id, tail)| (*id, tail.offset))),
+            )
+    }
+}
+
 impl ScannedIndex {
     /// Records one record's contribution to the parts that outlive filtering.
     ///
@@ -929,22 +1050,84 @@ impl ScannedIndex {
     /// hold: the segment walk computes it one statement earlier as the offset
     /// the next record must begin at, and the scan assigns it to `offset` five
     /// lines earlier for the same reason. Neither pays a new computation.
-    pub(super) fn note(&mut self, entry: &RecordIndexEntry, physical_end: u64) {
-        self.sequence_high_water = Some(match self.sequence_high_water {
-            Some(seen) => seen.max(entry.sequence),
-            None => entry.sequence,
-        });
-        self.newest.insert(entry.block_id, entry.record_offset);
+    pub(super) fn note(
+        &mut self,
+        spec: &FormatSpec,
+        entry: &RecordIndexEntry,
+        physical_end: u64,
+    ) -> Result<()> {
+        let records = self
+            .records
+            .checked_add(1)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "record count",
+            })?;
+        if let Some(limit) = self.record_limit
+            && records > limit
+        {
+            return Err(Error::LimitExceeded {
+                resource: ReadLimitKey::Records.resource(),
+                actual: records,
+                limit,
+            });
+        }
+        if !self
+            .newest
+            .update(entry.block_id, entry.record_offset, self.commit_epoch)
+        {
+            // Declared/internal IDs are bounded by the trusted schema. Only
+            // unknown IDs let file bytes grow this table independently of it.
+            // Bound that expansion without changing tiny payload/directory
+            // budgets for known schemas. Include table slack, rehash overlap
+            // and the sorted tail vector produced at end.
+            let bytes = (self.newest.len() as u64 + 1)
+                .checked_mul(128)
+                .and_then(|n| n.checked_add(64))
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "scan block tails",
+                })?;
+            if spec.block(entry.block_id).is_none() && !INTERNAL_BLOCK_IDS.contains(&entry.block_id)
+            {
+                spec.read_limits
+                    .check(ReadLimitKey::MaterializedBytes, bytes)?;
+            }
+            self.newest.insert(
+                entry.block_id,
+                ScanTail {
+                    offset: entry.record_offset,
+                    before_epoch: 0,
+                    epoch: self.commit_epoch,
+                },
+            )?;
+        }
+        if let Some(boundaries) = &mut self.boundaries
+            && boundaries.note(entry.record_offset, physical_end).is_err()
+        {
+            // Retaining a certificate is optional. Failure keeps the full
+            // source scan authoritative and uses the existing cold proof
+            // path only if a later mutation actually requires one.
+            self.boundaries = None;
+        }
+        self.records = records;
+        self.sequences_increasing &= self
+            .sequence_high_water
+            .is_none_or(|old| old < entry.sequence);
+        self.minimum_sequence = Some(
+            self.minimum_sequence
+                .map_or(entry.sequence, |old| old.min(entry.sequence)),
+        );
+        self.sequence_high_water = Some(
+            self.sequence_high_water
+                .map_or(entry.sequence, |seen| seen.max(entry.sequence)),
+        );
         self.physical_end = Some(physical_end);
         if entry.block_id == COMMIT_BLOCK_ID {
+            self.minimum_sequence_at_commit = self.minimum_sequence;
             self.sequence_high_water_at_commit = self.sequence_high_water;
             self.physical_end_at_commit = self.physical_end;
-            // O(B) and allocation-free after the first marker: the keys are
-            // already there, only the values move.
-            self.newest_at_commit.clear();
-            self.newest_at_commit
-                .extend(self.newest.iter().map(|(id, offset)| (*id, *offset)));
+            self.commit_epoch = entry.record_offset;
         }
+        Ok(())
     }
 
     /// Drops the recovered state to what survives a commit-boundary truncation.
@@ -954,6 +1137,11 @@ impl ScannedIndex {
     /// taken there bound it; the one record that survives *past* the marker is
     /// the trailing segment, which is resident and therefore in `entries`.
     pub(super) fn commit_boundary_applied(&mut self, entries: &[RecordIndexEntry]) -> Result<()> {
+        self.minimum_sequence = self
+            .minimum_sequence_at_commit
+            .into_iter()
+            .chain(entries.iter().map(|entry| entry.sequence))
+            .min();
         let surviving = entries.iter().map(|entry| entry.sequence).max();
         self.sequence_high_water = match (self.sequence_high_water_at_commit, surviving) {
             (Some(at_commit), Some(resident)) => Some(at_commit.max(resident)),
@@ -970,21 +1158,39 @@ impl ScannedIndex {
             (Some(at_commit), Some(resident)) => Some(at_commit.max(resident)),
             (at_commit, resident) => at_commit.or(resident),
         };
-        self.newest.clear();
-        self.newest.extend(
-            self.newest_at_commit
-                .iter()
-                .map(|(id, offset)| (*id, *offset)),
-        );
+        if let Some(boundaries) = &mut self.boundaries
+            && boundaries
+                .truncate_to(self.physical_end.unwrap_or(boundaries.start()))
+                .is_err()
+        {
+            self.boundaries = None;
+        }
+        self.newest.rollback(self.commit_epoch);
         for entry in entries {
-            self.newest.insert(entry.block_id, entry.record_offset);
+            self.newest.insert(
+                entry.block_id,
+                ScanTail {
+                    offset: entry.record_offset,
+                    before_epoch: 0,
+                    epoch: self.commit_epoch,
+                },
+            )?;
         }
         Ok(())
     }
 
-    /// Orders the collected tails exactly once (PERF3-03).
-    pub(super) fn block_tails(&self) -> BlockTails {
-        BlockTails::from_newest(&self.newest)
+    /// Orders the collected tails exactly once.
+    pub(super) fn block_tails(&self) -> Result<BlockTails> {
+        let mut tails = Vec::new();
+        tails
+            .try_reserve_exact(self.newest.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "scan block tails",
+                requested: (self.newest.len() as u64).saturating_mul(16),
+            })?;
+        tails.extend(self.newest_pairs());
+        tails.sort_unstable_by_key(|tail| tail.0);
+        Ok(BlockTails::from_sorted(tails))
     }
 
     /// The same tails, for a caller holding a `BlockTails` to merge them into
@@ -995,7 +1201,7 @@ impl ScannedIndex {
     /// already had. Replacing wholesale would report every such block as having
     /// no records at all.
     pub(super) fn newest_pairs(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
-        self.newest.iter().map(|(id, offset)| (*id, *offset))
+        self.newest.pairs()
     }
 
     pub(super) fn sequence_state(&self) -> SequenceState {
@@ -1033,11 +1239,12 @@ impl ScannedIndex {
 pub(super) fn segment_chain_open_is_allowed(spec: FormatSpec, intent: ScanIntent) -> bool {
     let _ = spec.index_policy.segment_on_flush;
     intent != ScanIntent::Recover
-        && spec
-            .read_limits
-            .resolve()
-            .effective_integrity_verification()
-            != IntegrityVerification::AtOpen
+        && (spec.read_limits.read_validation == Some(crate::ReadValidation::TRUSTED)
+            || spec
+                .read_limits
+                .resolve()
+                .effective_integrity_verification()
+                != IntegrityVerification::AtOpen)
 }
 
 pub(super) fn load_generation_index<B: ScanBuffer>(
@@ -1426,7 +1633,7 @@ pub(super) fn corroborate_header_tails(
     Ok(Some(OpenDigest {
         physical_end: file_len,
         sequence_high_water: Some(sequence_high_water),
-        block_tails: BlockTails::from_sorted(slot.tails.clone()),
+        block_tails: BlockTails::from_sorted(slot.tails.try_clone()?),
     }))
 }
 
@@ -1444,6 +1651,17 @@ pub(super) fn read_lazy_block_tails(
     extensions: &[u8],
     source: LazyOpenSource,
 ) -> Result<OpenDigest> {
+    if spec.read_limits.read_validation != Some(crate::ReadValidation::TRUSTED)
+        && spec
+            .read_limits
+            .resolve()
+            .effective_integrity_verification()
+            == IntegrityVerification::AtOpen
+    {
+        // A digest cannot discharge the caller's full-payload verification policy.
+        return Err(Error::InvalidIndexSegment);
+    }
+
     match source {
         LazyOpenSource::HeaderTails => {
             read_header_tails(spec, file, append_start, file_len, header_len, extensions)
@@ -1582,10 +1800,17 @@ pub(super) fn walk_segment_chain(
     }
 
     let mut scanned = ScannedIndex {
+        frames_verified: false,
+        boundaries: None,
+        minimum_sequence: None,
+        minimum_sequence_at_commit: None,
+        sequences_increasing: true,
         sequence_high_water: None,
         sequence_high_water_at_commit: None,
-        newest: HashMap::new(),
-        newest_at_commit: HashMap::new(),
+        newest: ScanTails::new(&spec),
+        commit_epoch: 0,
+        records: 0,
+        record_limit: spec.read_limits.require(ReadLimitKey::Records)?,
         physical_end: None,
         physical_end_at_commit: None,
     };
@@ -1631,8 +1856,13 @@ pub(super) fn walk_segment_chain(
     if running != file_len {
         return Err(Error::InvalidIndexSegment);
     }
+    if !scanned.sequences_increasing && spec.block_residency.iter().any(|block| !block.resident) {
+        // The resident-only uniqueness check cannot attest omitted records.
+        // The authoritative scan below can replay all sequences on demand.
+        return Err(Error::InvalidIndexSegment);
+    }
     // Same single witness the scan carries, on the same shape of list
-    // (PERF2-07): a chain is written by this crate but read from a file
+    // a chain is written by this crate but read from a file
     // anyone can hand over.
     validate_unique_sequences(entries)?;
     // The scan ends by cutting its list to the committed prefix, and the walk
@@ -1674,7 +1904,7 @@ pub(super) fn push_scanned_entry(
     // end of the walk; only a resident one is materialised. The chain carries
     // every record precisely so this filter can happen here rather than on
     // disk.
-    scanned.note(&entry, end);
+    scanned.note(&spec, &entry, end)?;
     if record_is_resident(spec, entry.block_id) {
         reserve_scanned_entry(spec, entries)?;
         entries.push(entry);
@@ -1714,35 +1944,41 @@ pub(super) fn push_scanned_entry(
 /// file with `InvalidCanonicalEncoding("duplicate native record sequence")`.
 pub(super) fn rebuilt_open_digest_payload(
     spec: FormatSpec,
-    written: &[RecordIndexEntry],
+    written: &RewriteDirectory,
     own_sequence: u64,
     record_offset: u64,
 ) -> Result<Vec<u8>> {
-    let high_water = written
-        .iter()
-        .map(|entry| entry.sequence)
-        .chain(core::iter::once(own_sequence))
-        .max();
-    encode_digest_payload(
-        spec,
-        high_water,
-        rewritten_block_tails(written).as_slice(),
-        record_offset,
-    )
-}
-
-/// One forward pass into a map and one ordering — the shape
-/// [`BlockTails::from_newest`] exists for, and the same shape the open scan
-/// uses. It runs once per digest record in the source, so a rewrite of a file
-/// with `S` commit points pays `O(S * N)`; that is the order the rewrite's
-/// segment re-encoding already pays, on the path that is already the expensive
-/// one.
-pub(super) fn rewritten_block_tails(entries: &[RecordIndexEntry]) -> BlockTails {
-    let mut newest: HashMap<u32, u64> = HashMap::new();
-    for entry in entries {
+    if let Some(tails) = written.cached_tails() {
+        return encode_digest_payload(
+            spec,
+            Some(written.maximum_sequence().max(own_sequence)),
+            tails,
+            record_offset,
+        );
+    }
+    let mut high_water = own_sequence;
+    let mut newest = HashMap::<u32, u64>::new();
+    for entry in directory_records(written) {
+        let entry = entry?;
+        high_water = high_water.max(entry.sequence);
+        if newest.len() == newest.capacity() && !newest.contains_key(&entry.block_id) {
+            newest.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                resource: "rewrite block tails",
+                requested: (newest.len() as u64 + 1).saturating_mul(32),
+            })?;
+        }
         newest.insert(entry.block_id, entry.record_offset);
     }
-    BlockTails::from_newest(&newest)
+    let mut tails = Vec::new();
+    tails
+        .try_reserve_exact(newest.len())
+        .map_err(|_| Error::AllocationFailed {
+            resource: "rewrite digest tails",
+            requested: (newest.len() as u64).saturating_mul(16),
+        })?;
+    tails.extend(newest);
+    tails.sort_unstable_by_key(|tail| tail.0);
+    encode_digest_payload(spec, Some(high_water), &tails, record_offset)
 }
 
 pub(super) fn record_is_resident(spec: FormatSpec, block_id: u32) -> bool {
@@ -1861,12 +2097,14 @@ pub(super) fn truncate_uncommitted_tail_if_needed<B: ScanBuffer>(
     Ok(None)
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct IndexCheckpoint {
     pub(super) covered_offset: u64,
     pub(super) entries: Vec<RecordIndexEntry>,
 }
 
+#[cfg(test)]
 pub(super) fn decode_index_checkpoint(
     spec: FormatSpec,
     payload: &[u8],
@@ -1993,37 +2231,6 @@ pub(super) fn check_index_checkpoint_limits_for(
     )
 }
 
-pub(super) fn inspect_index_checkpoint<'a>(
-    spec: FormatSpec,
-    payload: &[u8],
-    header_len: u64,
-    file_len: u64,
-    checkpoint_record: &RecordIndexEntry,
-    observed_prefix_len: usize,
-    observed_prefix: impl Iterator<Item = &'a RecordIndexEntry>,
-) -> Result<()> {
-    match decode_index_checkpoint(spec, payload, file_len) {
-        Ok(checkpoint) => {
-            let _ = validate_index_checkpoint(
-                header_len,
-                file_len,
-                checkpoint_record,
-                &checkpoint,
-                observed_prefix_len,
-                observed_prefix,
-            );
-            Ok(())
-        }
-        Err(error @ Error::LimitExceeded { .. })
-        | Err(error @ Error::MissingResourceLimit { .. })
-        | Err(error @ Error::TrustedUnboundedRequiresExplicitApi { .. })
-        | Err(error @ Error::ResourceArithmeticOverflow { .. })
-        | Err(error @ Error::LengthOverflow { .. })
-        | Err(error @ Error::AllocationFailed { .. }) => Err(error),
-        Err(_) => Ok(()),
-    }
-}
-
 pub(super) fn read_index_entry_payload(
     payload: &[u8],
     checkpoint_version: u16,
@@ -2096,6 +2303,7 @@ pub(super) fn read_index_entry_payload(
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate_index_checkpoint<'a>(
     header_len: u64,
     file_len: u64,
@@ -2185,45 +2393,70 @@ pub(super) fn record_headers_match(left: &RecordIndexEntry, right: &RecordIndexE
 /// other half of resuming: a read-only handle's snapshot ends at a commit
 /// point, so the tail past it stands or falls on a marker of its own exactly
 /// as it would in a scan of the whole file.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
+/// Private progress for one range. Uncommitted state is never installed in a
+/// reader's published snapshot. Failure drops the range and permits a clean retry.
+#[derive(Debug)]
+pub(super) struct ScanProgress {
+    pub(super) from: u64,
+    pub(super) next: u64,
+    pub(super) scanned: ScannedIndex,
+    latest_commit_end: Option<u64>,
+    pub(super) all_sequences: Option<crate::disk_index::ScratchIndex>,
+    accounting: ScanAccounting,
+}
+impl ScanProgress {
+    pub(super) fn new(
+        spec: FormatSpec,
+        from: u64,
+        prefix_charge: u64,
+        resume_commit_end: Option<u64>,
+    ) -> Result<Self> {
+        let scanned = ScannedIndex {
+            frames_verified: true,
+            boundaries: None,
+            minimum_sequence: None,
+            minimum_sequence_at_commit: None,
+            sequences_increasing: true,
+            sequence_high_water: None,
+            sequence_high_water_at_commit: None,
+            newest: ScanTails::new(&spec),
+            commit_epoch: 0,
+            records: 0,
+            record_limit: spec.read_limits.require(ReadLimitKey::Records)?,
+            physical_end: None,
+            physical_end_at_commit: None,
+        };
+        let mut accounting = ScanAccounting::default();
+        accounting.advance(spec, prefix_charge)?;
+        Ok(Self {
+            from,
+            next: from,
+            scanned,
+            latest_commit_end: resume_commit_end,
+            all_sequences: None,
+            accounting,
+        })
+    }
+}
+
+pub(super) fn resume_record_scan<B: ScanBuffer>(
     spec: FormatSpec,
     file: &mut File,
-    from: u64,
-    prefix_charge: u64,
-    resume_commit_end: Option<u64>,
+    progress: ScanProgress,
     intent: ScanIntent,
     entries: &mut B,
     file_len: u64,
-) -> Result<ScannedIndex> {
+) -> Result<ScanProgress> {
+    let ScanProgress {
+        from,
+        next: mut offset,
+        mut scanned,
+        mut latest_commit_end,
+        mut all_sequences,
+        mut accounting,
+    } = progress;
     let header_len = from;
-    let mut offset = header_len;
-    entries.reset();
-    let mut scanned = ScannedIndex {
-        sequence_high_water: None,
-        sequence_high_water_at_commit: None,
-        newest: HashMap::new(),
-        newest_at_commit: HashMap::new(),
-        physical_end: None,
-        physical_end_at_commit: None,
-    };
-    // A commit boundary the *caller* already knows about, because it is where
-    // this range begins.
-    //
-    // It decides `checksum_boundary`, and that decides whether a record whose
-    // checksum fails is a recoverable tail the walk stops at or a hard
-    // `ChecksumMismatch`. A scan of the whole file has seen the last marker by
-    // the time it reaches anything after it, so it stops cleanly; a range that
-    // *starts* after that marker had not, so it errored where the open it is
-    // supposed to agree with returned `Ok`. Measured under
-    // `IntegrityVerification::AtOpen`, on a file whose first uncommitted record
-    // was byte-flipped: open `Ok`, follow `Err(ChecksumMismatch { offset: 818 })`.
-    //
-    // `None` for a scan from the start of the append log, where no commit has
-    // happened yet and a failing checksum really is unrecoverable.
-    let mut latest_commit_end = resume_commit_end;
-    let mut accounting = ScanAccounting::default();
-    accounting.advance(spec, prefix_charge)?;
+    let has_nonresident = spec.block_residency.iter().any(|block| !block.resident);
     while offset < file_len {
         let partial_boundary = match spec.commit_policy {
             CommitPolicy::None
@@ -2247,11 +2480,13 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
         // Dropping it here would turn a recoverable tail into a silently
         // accepted one, which is the failure this whole policy must not create.
         let verify_checksums = intent == ScanIntent::Recover
-            || spec
-                .read_limits
-                .resolve()
-                .effective_integrity_verification()
-                == IntegrityVerification::AtOpen;
+            || (spec.read_validation().data_crc
+                && spec
+                    .read_limits
+                    .resolve()
+                    .effective_integrity_verification()
+                    == IntegrityVerification::AtOpen);
+        let before_attempt = accounting;
         let entry = match read_record_entry_at(
             spec,
             file,
@@ -2265,20 +2500,61 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
             &mut accounting,
         )? {
             RecordRead::Entry(entry) => entry,
-            RecordRead::RecoverableTail(tail) => match intent {
-                ScanIntent::ReadOnly => break,
-                ScanIntent::Recover if spec.recovery_policy == RecoveryPolicy::TruncateTail => {
-                    file.set_len(tail.truncate_to)?;
-                    break;
+            RecordRead::RecoverableTail(tail) => {
+                // The cursor still names this incomplete/damaged frame. A
+                // later retry must not charge its extent for a second time.
+                accounting = before_attempt;
+                match intent {
+                    ScanIntent::ReadOnly => break,
+                    ScanIntent::Recover if spec.recovery_policy == RecoveryPolicy::TruncateTail => {
+                        file.set_len(tail.truncate_to)?;
+                        break;
+                    }
+                    ScanIntent::Writer if spec.commit_policy.is_transaction_marker() => break,
+                    ScanIntent::Writer | ScanIntent::Recover => {
+                        return Err(Error::CorruptTail {
+                            offset: tail.offset,
+                        });
+                    }
                 }
-                ScanIntent::Writer if spec.commit_policy.is_transaction_marker() => break,
-                ScanIntent::Writer | ScanIntent::Recover => {
-                    return Err(Error::CorruptTail {
-                        offset: tail.offset,
-                    });
-                }
-            },
+            }
         };
+        if has_nonresident {
+            if all_sequences.is_none()
+                && scanned
+                    .sequence_high_water
+                    .is_some_and(|old| entry.sequence <= old)
+            {
+                let mut index = crate::disk_index::ScratchIndex::new(0)?;
+                let mut replay = from;
+                let mut replay_accounting = ScanAccounting::default();
+                while replay < entry.record_offset {
+                    let old = match read_record_entry_at(
+                        spec,
+                        file,
+                        file_len,
+                        replay,
+                        ScanChecks {
+                            partial_boundary: None,
+                            checksum_boundary: None,
+                            verify_checksums: false,
+                        },
+                        &mut replay_accounting,
+                    )? {
+                        RecordRead::Entry(old) => old,
+                        RecordRead::RecoverableTail(_) => {
+                            return Err(Error::CorruptTail { offset: replay });
+                        }
+                    };
+                    BufferedScan::remember_sequence(&mut index, old.sequence)?;
+                    replay = old.checked_physical_end()?;
+                }
+                all_sequences = Some(index);
+            }
+            if let Some(index) = &mut all_sequences {
+                BufferedScan::remember_sequence(index, entry.sequence)?;
+            }
+        }
         offset = entry
             .checked_physical_end()
             .map_err(|_| Error::ResourceArithmeticOverflow {
@@ -2290,7 +2566,7 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
         // the only way back to a non-resident record, and the end is the byte
         // range a read-only handle may look at. `offset` was just advanced to
         // this record's end.
-        scanned.note(&entry, offset);
+        scanned.note(&spec, &entry, offset)?;
         let resident = record_is_resident(spec, entry.block_id);
         if resident {
             entries.reserve_entry(spec)?;
@@ -2312,8 +2588,38 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
             entries.push_entry(entry)?;
         }
     }
-    entries.finish(spec, &mut scanned)?;
-    Ok(scanned)
+    Ok(ScanProgress {
+        from,
+        next: offset,
+        scanned,
+        latest_commit_end,
+        all_sequences,
+        accounting,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
+    spec: FormatSpec,
+    file: &mut File,
+    from: u64,
+    prefix_charge: u64,
+    resume_commit_end: Option<u64>,
+    intent: ScanIntent,
+    entries: &mut B,
+    file_len: u64,
+) -> Result<ScannedIndex> {
+    entries.reset();
+    let mut progress = ScanProgress::new(spec, from, prefix_charge, resume_commit_end)?;
+    if intent != ScanIntent::ReadOnly && spec.block_residency.iter().any(|block| !block.resident) {
+        progress.scanned.boundaries = Some(resident_index::BoundaryProof::new(
+            from,
+            resident_index::boundary_budget(spec),
+        ));
+    }
+    let mut progress = resume_record_scan(spec, file, progress, intent, entries, file_len)?;
+    entries.finish(spec, &mut progress.scanned)?;
+    Ok(progress.scanned)
 }
 
 impl RecordIndexEntry {
@@ -2386,7 +2692,7 @@ impl RecordIndexEntry {
         if !self.is_compressed() {
             return Ok(self.payload_len);
         }
-        validate_record_entry(spec, self)?;
+        validate_record_entry(&spec, self)?;
         let compression = variable_compression_for_block(spec, self.block_id)
             .ok_or(Error::InvalidCompressionHeader)?;
         let expected_len = match compression.header_mode {
@@ -2421,7 +2727,7 @@ impl RecordIndexEntry {
         spec: FormatSpec,
         snapshot: &SnapshotFile,
     ) -> Result<u64> {
-        validate_record_entry(spec, self)?;
+        validate_record_entry(&spec, self)?;
         let compression = variable_compression_for_block(spec, self.block_id)
             .ok_or(Error::InvalidCompressionHeader)?;
         let expected_len = match compression.header_mode {
@@ -2456,36 +2762,77 @@ impl RecordIndexEntry {
         snapshot: &SnapshotFile,
         payload: &[u8],
     ) -> Result<()> {
-        if spec.integrity_policy == IntegrityPolicy::None {
-            return Ok(());
+        if !spec.read_validation().structure {
+            return self.verify_captured_payload(spec, payload);
         }
 
         let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
         snapshot.read_exact_at(self.record_offset, &mut header_bytes)?;
-        let mut header_reader = header_bytes.as_slice();
-        let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
-        if !record_header_describes(&actual, self) {
-            return Err(Error::ChecksumMismatch {
-                offset: self.record_offset,
-            });
-        }
-
         let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
         let footer = if let Some(footer_offset) = self.footer_offset {
             snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-            let decoded =
-                decode_record_footer(spec, &footer_bytes, footer_offset, self.record_offset)?;
-            if decoded.prev_same_block_offset != self.prev_same_block_offset
-                || decoded.prev_same_key_offset != self.prev_same_key_offset
-            {
-                return Err(Error::ChecksumMismatch {
-                    offset: self.record_offset,
-                });
-            }
             &footer_bytes[..]
         } else {
             &[]
         };
+        self.verify_record_bytes(spec, &header_bytes, payload, footer)
+    }
+
+    /// The same integrity check for owned reads and immutable mapped slices.
+    /// Framing is borrowed; verification never copies or allocates the payload.
+    pub(super) fn verify_record_bytes(
+        &self,
+        spec: FormatSpec,
+        header_bytes: &[u8],
+        payload: &[u8],
+        footer: &[u8],
+    ) -> Result<()> {
+        if spec.read_validation().structure {
+            let mut header_reader = header_bytes;
+            let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
+            if !record_header_describes(&actual, self) {
+                return Err(Error::ChecksumMismatch {
+                    offset: self.record_offset,
+                });
+            }
+
+            if let Some(footer_offset) = self.footer_offset {
+                let decoded =
+                    decode_record_footer(spec, footer, footer_offset, self.record_offset)?;
+                if decoded.prev_same_block_offset != self.prev_same_block_offset
+                    || decoded.prev_same_key_offset != self.prev_same_key_offset
+                {
+                    return Err(Error::ChecksumMismatch {
+                        offset: self.record_offset,
+                    });
+                }
+            }
+        }
+        self.verify_payload_crc(spec, payload, footer)
+    }
+
+    /// Check bytes against captured framing without rereading file metadata.
+    /// In CRC-only mode the captured header/footer supply the checksum input.
+    pub(super) fn verify_captured_payload(&self, spec: FormatSpec, payload: &[u8]) -> Result<()> {
+        if !spec.read_validation().data_crc {
+            return Ok(());
+        }
+        let footer = if self.footer_offset.is_some() {
+            Some(encode_record_footer(RecordFooterFields {
+                prev_same_block_offset: self.prev_same_block_offset,
+                prev_same_key_offset: self.prev_same_key_offset,
+                mutable_flags: self.mutable_flags,
+            })?)
+        } else {
+            None
+        };
+        self.verify_payload_crc(spec, payload, footer.as_ref().map_or(&[], |f| &f[..]))
+    }
+
+    fn verify_payload_crc(&self, spec: FormatSpec, payload: &[u8], footer: &[u8]) -> Result<()> {
+        if !spec.read_validation().data_crc {
+            return Ok(());
+        }
         let header = RecordHeaderFields {
             block_id: self.block_id,
             block_version: self.block_version,

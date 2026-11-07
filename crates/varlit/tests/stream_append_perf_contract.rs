@@ -241,7 +241,7 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-    // 20 user records plus the internal creation-nonce record (STO-01).
+    // 20 user records plus the internal creation-nonce record.
     assert_eq!(reader.verify_all()?, 21);
     let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
     assert_eq!(values, (0..20).map(Value).collect::<Vec<_>>());
@@ -260,7 +260,7 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
     {
         let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
         // The corrupted record must sit past the primary generation witness
-        // window (STO-01); a byte flipped inside that window is a generation
+        // window ; a byte flipped inside that window is a generation
         // change refused at open, which is a different contract from the
         // per-record checksum this test pins. Assertions are unchanged.
         for value in 0..400 {
@@ -364,11 +364,6 @@ fn bootstrap_aborts_when_pathname_identity_changes_before_publish() -> Result<()
     );
     Ok(())
 }
-
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "sidecar commit counting requires the scalable-fault-injection trace hooks"]
-fn scalar_appends_bound_sidecar_commits_requires_feature() {}
 
 #[cfg(feature = "scalable-fault-injection")]
 mod commit_contract {
@@ -476,7 +471,7 @@ mod commit_contract {
     }
 }
 
-/// STO-01 must not add per-append work to the streaming hot path. The primary
+///  must not add per-append work to the streaming hot path. The primary
 /// generation witness covers a bounded prefix, so once that window is full the
 /// witness is frozen for the file's life and no further append recomputes it.
 #[cfg(feature = "scalable-fault-injection")]

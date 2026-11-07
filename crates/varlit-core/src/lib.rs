@@ -1,4 +1,5 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![cfg_attr(kani, feature(allocator_api))]
 
 extern crate alloc;
 
@@ -6,10 +7,13 @@ mod adapter;
 mod chunks;
 mod codec;
 mod collections;
+mod compression_buffers;
+mod decode_state;
 mod diagnostics;
 
 mod disk_index;
 mod error;
+mod fallible;
 mod file;
 mod format;
 mod immediate;
@@ -29,8 +33,11 @@ mod scalable_extent;
 #[doc(hidden)]
 pub mod scalable_fault;
 
+mod packed_rows;
+mod publication_protocol;
 mod scan_control;
 mod snapshot;
+mod spill_file;
 mod spill_rows;
 
 mod stream;
@@ -97,7 +104,9 @@ pub use disk_index::{
     DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
     sidecar_path as disk_index_sidecar_path,
 };
-pub use error::{Error, Result};
+pub use error::{AllocationFailureContext, Error, Result};
+pub use fallible::{TryClone, try_box};
+pub use fallible::{try_box_uninit, try_box_with};
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
     DirectoryRead, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID, IndexEntries, KeyedChain,
@@ -126,8 +135,8 @@ pub use format::{
     LivenessPolicy, ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor,
     MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor, MatrixMetadataResidency,
     MatrixMetadataVerification, MetadataDescriptor, RawRegionDescriptor, ReadLimit, ReadLimits,
-    RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat, TransactionMarkerMode,
-    VariableCompression,
+    ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat,
+    TransactionMarkerMode, VariableCompression,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 
@@ -176,3 +185,6 @@ pub(crate) fn scalable_fault_point(point: &'static str) {
     #[cfg(not(feature = "scalable-fault-injection"))]
     let _ = point;
 }
+
+#[doc(hidden)]
+pub use codec::BuiltinCodec;

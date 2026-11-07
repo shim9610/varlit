@@ -371,6 +371,12 @@ const _: () = assert!(
 /// everything a caller actually reads, and it is what makes open read the whole
 /// file instead of its framing.
 ///
+/// These scheduling descriptions assume the compatibility default for
+/// [`ReadLimits::read_validation`]. An explicit [`ReadValidation`] override
+/// independently chooses which optional checks run; with both off, `AtOpen`
+/// does not force an otherwise unnecessary verification scan. Recovery and
+/// explicit verification still use their strict contracts.
+///
 /// Measured on Linux x86_64, cold cache, one 2,052 MB file of 50,000 records:
 /// open took 7,096 ms verifying at open and 3,621 ms not verifying at open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -440,6 +446,43 @@ const _: () = assert!(
     ),
     "IntegrityVerification::DEFAULT must be a resolved policy"
 );
+
+/// Optional checks on returned data, independent of the checksums stored in
+/// the file. Configure with [`ReadLimits::with_read_validation`].
+///
+/// Bounds, resource limits, decoder validity, finite traversal and committed
+/// publication checks always apply. Trusting metadata may return incorrect but
+/// well-formed data if the file violates that trust; skipped damage cannot be
+/// promised an error. Protocol/publication checksums remain enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadValidation {
+    /// Recompute stored record/cell checksums. Requires a CRC-bearing format.
+    pub data_crc: bool,
+    /// Additional record/index metadata consistency checks and eager matrix
+    /// metadata reporting. Required parsing and publication guards remain.
+    pub structure: bool,
+}
+
+impl ReadValidation {
+    pub const FULL: Self = Self {
+        data_crc: true,
+        structure: true,
+    };
+    pub const CRC_ONLY: Self = Self {
+        data_crc: true,
+        structure: false,
+    };
+    pub const STRUCTURE_ONLY: Self = Self {
+        data_crc: false,
+        structure: true,
+    };
+    /// Trust captured framing; read payload without rereading its frame or CRC.
+    /// Does not relax resource limits or authorize unsafe memory accesses.
+    pub const TRUSTED: Self = Self {
+        data_crc: false,
+        structure: false,
+    };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -518,7 +561,11 @@ pub struct ReadLimits {
     /// one open and not of the file: it changes no byte, so it is neither
     /// hashed nor persisted.
     pub integrity_verification: IntegrityVerification,
-    trusted_api: bool,
+    /// Optional read-side override. `None` preserves legacy checking according
+    /// to the stored integrity policy. Does not alter file bytes or write CRCs.
+    pub read_validation: Option<ReadValidation>,
+    // Authorization state, not a secret payload. Keep the boolean name explicit.
+    is_trusted_api: bool,
 }
 
 macro_rules! read_limit_setters {
@@ -568,7 +615,8 @@ impl ReadLimits {
         // would win over a format's declaration through `overlay`.
         matrix_metadata_verification: MatrixMetadataVerification::Missing,
         integrity_verification: IntegrityVerification::Missing,
-        trusted_api: false,
+        read_validation: None,
+        is_trusted_api: false,
     };
     /// Finite companion to [`Self::STANDARD`] for input from untrusted
     /// sources. Every aggregate dimension that `STANDARD` leaves effectively
@@ -615,7 +663,8 @@ impl ReadLimits {
             matrix_directory_cache_bytes: ReadLimit::Missing,
             matrix_metadata_verification: MatrixMetadataVerification::Missing,
             integrity_verification: IntegrityVerification::Missing,
-            trusted_api: false,
+            read_validation: None,
+            is_trusted_api: false,
         }
     }
 
@@ -716,6 +765,28 @@ impl ReadLimits {
         self
     }
 
+    /// Select optional read checks without changing allocation ceilings,
+    /// publication checks or the file's stored integrity policy.
+    pub const fn with_read_validation(mut self, validation: ReadValidation) -> Self {
+        self.read_validation = Some(validation);
+        self
+    }
+
+    /// Resolve an unset override for record payload CRC/framing checks.
+    /// Other backend admission checks retain their legacy behavior when unset.
+    pub const fn effective_read_validation(self, integrity: IntegrityPolicy) -> ReadValidation {
+        match self.read_validation {
+            Some(policy) => policy,
+            None => {
+                let enabled = !matches!(integrity, IntegrityPolicy::None);
+                ReadValidation {
+                    data_crc: enabled,
+                    structure: enabled,
+                }
+            }
+        }
+    }
+
     /// The file-header extension ceiling in force, in bytes.
     ///
     /// Unset — which is what every format that never wrote
@@ -811,6 +882,9 @@ impl ReadLimits {
     /// demand cache already has — so this admits rather than checks, and states
     /// that fact in one place instead of at each call site.
     pub(crate) fn admit_matrix_metadata_verification(self) -> bool {
+        if self.read_validation.is_some_and(|p| !p.structure) {
+            return false;
+        }
         match self.effective_matrix_metadata_verification() {
             MatrixMetadataVerification::AtOpen => true,
             MatrixMetadataVerification::OnDemand => false,
@@ -884,6 +958,10 @@ impl ReadLimits {
             integrity_verification: self
                 .integrity_verification
                 .tighten(runtime.integrity_verification),
+            read_validation: match self.read_validation {
+                Some(declared) => Some(declared),
+                None => runtime.read_validation,
+            },
             max_file_len: self.max_file_len.tighten(runtime.max_file_len),
             max_records: self.max_records.tighten(runtime.max_records),
             max_index_bytes: self.max_index_bytes.tighten(runtime.max_index_bytes),
@@ -922,7 +1000,7 @@ impl ReadLimits {
             max_keyed_tail_bytes: self
                 .max_keyed_tail_bytes
                 .tighten(runtime.max_keyed_tail_bytes),
-            trusted_api: false,
+            is_trusted_api: false,
         }
     }
 
@@ -954,6 +1032,10 @@ impl ReadLimits {
             integrity_verification: self
                 .integrity_verification
                 .overlay(runtime.integrity_verification),
+            read_validation: match runtime.read_validation {
+                Some(declared) => Some(declared),
+                None => self.read_validation,
+            },
             max_file_len: self.max_file_len.overlay(runtime.max_file_len),
             max_records: self.max_records.overlay(runtime.max_records),
             max_index_bytes: self.max_index_bytes.overlay(runtime.max_index_bytes),
@@ -992,7 +1074,7 @@ impl ReadLimits {
             max_keyed_tail_bytes: self
                 .max_keyed_tail_bytes
                 .overlay(runtime.max_keyed_tail_bytes),
-            trusted_api: false,
+            is_trusted_api: false,
         }
     }
 
@@ -1001,20 +1083,20 @@ impl ReadLimits {
     }
 
     pub(crate) const fn authorize_trusted_api(mut self) -> Self {
-        self.trusted_api = true;
+        self.is_trusted_api = true;
         self
     }
 
-    const fn clear_trusted_api(mut self) -> Self {
-        self.trusted_api = false;
+    const fn without_unbounded_opt_in(mut self) -> Self {
+        self.is_trusted_api = false;
         self
     }
 
     pub(crate) fn require(self, key: ReadLimitKey) -> Result<Option<u64>> {
         match key.value(self) {
             ReadLimit::Finite(value) => Ok(Some(value)),
-            ReadLimit::Missing if self.trusted_api => Ok(None),
-            ReadLimit::TrustedUnbounded if self.trusted_api => Ok(None),
+            ReadLimit::Missing if self.is_trusted_api => Ok(None),
+            ReadLimit::TrustedUnbounded if self.is_trusted_api => Ok(None),
             ReadLimit::Missing => Err(Error::MissingResourceLimit {
                 resource: key.resource(),
             }),
@@ -2205,7 +2287,7 @@ pub struct FormatSpec {
     pub chunk_compression: Option<VariableCompression>,
     /// Per-block schema identity of the implementations backing
     /// [`FormatSpec::blocks`], as `(block_id, declared endian override,
-    /// keyedness, generated schema fingerprint)` tuples (API2-01).
+    /// keyedness, generated schema fingerprint)` tuples.
     ///
     /// `varlit_format!` fills this from the registered block types so
     /// [`FormatSpec::computed_schema_hash`] covers the per-block encoding
@@ -2219,7 +2301,7 @@ pub struct FormatSpec {
     /// hash and checked by the in-process registration gate.
     ///
     /// Where an entry exists for a block id it is **authoritative** for that
-    /// id's registration contract, including the endian override (API-01):
+    /// id's registration contract, including the endian override :
     /// typed registration rejects any [`crate::VarlitBlock`] implementation
     /// whose `ENDIAN`, resolved through [`FormatSpec::endian`], disagrees with
     /// the entry's — a manual type can no longer request a block written
@@ -2269,13 +2351,13 @@ pub struct FormatSpecBuilder {
 impl FormatSpec {
     /// Version of the [`FormatSpec::computed_schema_hash`] algorithm.
     ///
-    /// v2 (API2-01, pre-1.0 breaking change): hashes the field encoding
+    /// v2 (, pre-1.0 breaking change): hashes the field encoding
     /// ordinal in declaration order and folds in per-block endian,
     /// keyedness, and generated codec identity from
     /// [`FormatSpec::block_identities`]. Values computed by v1 do not match
     /// v2 for any spec.
     ///
-    /// v3 (API-04, pre-1.0 breaking change): the generated block fingerprints
+    /// v3 (, pre-1.0 breaking change): the generated block fingerprints
     /// folded in from [`FormatSpec::block_identities`] now resolve every
     /// field's codec through [`crate::VarlitEncode::SCHEMA_ID`] instead of the
     /// field type's source spelling, so two custom nested codecs that spell
@@ -2520,7 +2602,7 @@ impl FormatSpec {
     }
 
     pub const fn with_read_limits(mut self, read_limits: ReadLimits) -> Self {
-        self.read_limits = read_limits.clear_trusted_api();
+        self.read_limits = read_limits.without_unbounded_opt_in();
         self
     }
 
@@ -2547,12 +2629,12 @@ impl FormatSpec {
     }
 
     pub(crate) const fn ordinary_read(mut self) -> Self {
-        self.read_limits = self.read_limits.resolve().clear_trusted_api();
+        self.read_limits = self.read_limits.resolve().without_unbounded_opt_in();
         self
     }
 
     pub(crate) const fn resolve_entrypoint(self) -> Self {
-        if self.read_limits.trusted_api {
+        if self.read_limits.is_trusted_api {
             self
         } else {
             self.ordinary_read()
@@ -3091,14 +3173,14 @@ impl FormatSpec {
     /// Deterministic hash of the wire-relevant schema declaration
     /// (algorithm version [`FormatSpec::SCHEMA_HASH_ALGORITHM_VERSION`]).
     ///
-    /// Version 2 (API2-01) additionally covers, per block: the field
+    /// Version 2  additionally covers, per block: the field
     /// **encoding ordinal** (fixed/matrix payload bytes follow field
     /// declaration order, so two blocks with the same field id/name/type set
     /// in different declaration order must hash differently), and — when
     /// [`FormatSpec::block_identities`] is populated — the block's endian
     /// override, keyedness, and generated codec fingerprint.
     ///
-    /// Version 3 (API-04) inherits transitive custom-codec identity: the
+    /// Version 3  inherits transitive custom-codec identity: the
     /// generated fingerprints in [`FormatSpec::block_identities`] resolve each
     /// field through [`crate::VarlitEncode::SCHEMA_ID`], so a nested codec that
     /// changes its emitted bytes changes this hash even when every declared
@@ -3232,7 +3314,29 @@ impl FormatSpec {
             .find(|identity| identity.0 == id)
     }
 
+    pub(crate) const fn read_validation(self) -> ReadValidation {
+        self.read_limits
+            .effective_read_validation(self.integrity_policy)
+    }
+
+    /// Explicit verification, recovery and rewrite admission must never inherit
+    /// a caller's trusted payload-read policy.
+    pub(crate) const fn with_strict_read_validation(mut self) -> Self {
+        self.read_limits.read_validation = Some(ReadValidation {
+            data_crc: !matches!(self.integrity_policy, IntegrityPolicy::None),
+            structure: true,
+        });
+        self
+    }
+
     pub fn validate(self) -> Result<()> {
+        if self.read_limits.read_validation.is_some_and(|p| p.data_crc)
+            && self.integrity_policy == IntegrityPolicy::None
+        {
+            return Err(Error::InvalidFormatSpec(
+                "data CRC verification requires stored checksums",
+            ));
+        }
         if self.magic.is_empty() {
             return Err(Error::InvalidFormatSpec("magic must not be empty"));
         }
@@ -4690,7 +4794,7 @@ mod read_limit_tests {
 
         assert_eq!(effective.max_file_len, ReadLimit::Finite(50));
         assert_eq!(effective.max_records, ReadLimit::Finite(0));
-        assert!(!effective.trusted_api);
+        assert!(!effective.is_trusted_api);
     }
 
     #[test]

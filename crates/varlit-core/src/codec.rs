@@ -54,7 +54,7 @@ impl WireType {
     }
 }
 
-/// FNV-1a 64 state for structural codec identities (API-04).
+/// FNV-1a 64 state for structural codec identities.
 ///
 /// The derive expands the same folding inline so a generated
 /// `SCHEMA_FINGERPRINT` is a const expression over its fields' real
@@ -119,7 +119,7 @@ pub(crate) const fn container_schema_id_with_arity(
 pub trait VarlitEncode {
     const WIRE_TYPE: WireType;
 
-    /// Structural identity of the bytes this codec emits (API-04).
+    /// Structural identity of the bytes this codec emits.
     ///
     /// [`WireType`] is far too coarse to separate two custom codecs that both
     /// encode as [`WireType::Nested`] but disagree on layout, and a derived
@@ -147,7 +147,32 @@ pub trait VarlitEncode {
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()>;
 }
 
+/// Internal evidence for a library-owned codec implementation.
+/// The private invariant field binds the evidence to its exact output type.
+///
+/// Safe downstream code cannot construct evidence or reuse another type's:
+/// ```compile_fail
+/// use varlit_core::BuiltinCodec;
+/// let _: BuiltinCodec<()> = BuiltinCodec { invariant: std::marker::PhantomData };
+/// ```
+/// ```compile_fail
+/// use varlit_core::{BuiltinCodec, Decoder, Result, VarlitDecode, WireType};
+/// struct Custom;
+/// impl VarlitDecode for Custom {
+///     const WIRE_TYPE: WireType = WireType::Unit;
+///     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = <u64 as VarlitDecode>::__VARLIT_BUILTIN;
+///     fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(Self) }
+/// }
+/// ```
+#[doc(hidden)]
+pub struct BuiltinCodec<T> {
+    invariant: std::marker::PhantomData<fn(T) -> T>,
+    callback_free: bool,
+}
+
 pub trait VarlitDecode: Sized {
+    #[doc(hidden)]
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = None;
     const WIRE_TYPE: WireType;
 
     /// Structural identity of the bytes this codec accepts; see
@@ -185,7 +210,32 @@ pub struct Encoder {
     output: Vec<u8>,
     max_len: Option<u64>,
     limit_resource: &'static str,
-    overflow: Option<(u64, u64)>,
+    failure: Option<EncoderFailure>,
+}
+
+// Retain only the failure facts that encoding can produce. Storing the general
+// Error (which can contain a boxed I/O error) would remove Encoder's public
+// UnwindSafe/RefUnwindSafe auto traits even when that variant is never used.
+#[derive(Debug)]
+enum EncoderFailure {
+    LimitExceeded { actual: u64, limit: u64 },
+    AllocationFailed { requested: u64 },
+}
+
+impl EncoderFailure {
+    fn into_error(self, resource: &'static str) -> Error {
+        match self {
+            Self::LimitExceeded { actual, limit } => Error::LimitExceeded {
+                resource,
+                actual,
+                limit,
+            },
+            Self::AllocationFailed { requested } => Error::AllocationFailed {
+                resource,
+                requested,
+            },
+        }
+    }
 }
 
 impl Encoder {
@@ -195,7 +245,7 @@ impl Encoder {
             output: Vec::new(),
             max_len: None,
             limit_resource: "encoded payload",
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -205,7 +255,7 @@ impl Encoder {
             output: Vec::new(),
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -226,7 +276,7 @@ impl Encoder {
             output,
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -237,15 +287,8 @@ impl Encoder {
     /// writer that needs it for the next record — a failed encode must not cost
     /// the writer its scratch.
     pub(crate) fn into_buffer_and_result(self) -> (Vec<u8>, Result<()>) {
-        match self.overflow {
-            Some((actual, limit)) => (
-                self.output,
-                Err(Error::LimitExceeded {
-                    resource: self.limit_resource,
-                    actual,
-                    limit,
-                }),
-            ),
+        match self.failure {
+            Some(error) => (self.output, Err(error.into_error(self.limit_resource))),
             None => (self.output, Ok(())),
         }
     }
@@ -259,18 +302,14 @@ impl Encoder {
     }
 
     pub(crate) fn try_into_inner(self) -> Result<Vec<u8>> {
-        if let Some((actual, limit)) = self.overflow {
-            return Err(Error::LimitExceeded {
-                resource: self.limit_resource,
-                actual,
-                limit,
-            });
+        if let Some(error) = self.failure {
+            return Err(error.into_error(self.limit_resource));
         }
         Ok(self.output)
     }
 
     /// Encodes a nested value into its own buffer while inheriting this
-    /// encoder's remaining output budget (DEF-02).
+    /// encoder's remaining output budget.
     ///
     /// A nested field encoded through this method can never buffer past the
     /// limit its parent writer entry point imposed: the child encoder is
@@ -290,14 +329,25 @@ impl Encoder {
             self.output.extend_from_slice(bytes);
             return;
         }
-        if self.overflow.is_some() {
+        if self.failure.is_some() {
             return;
         }
         let actual = (self.output.len() as u64).checked_add(bytes.len() as u64);
         if let Some(limit) = self.max_len
             && actual.is_none_or(|actual| actual > limit)
         {
-            self.overflow = Some((actual.unwrap_or(u64::MAX), limit));
+            self.failure = Some(EncoderFailure::LimitExceeded {
+                actual: actual.unwrap_or(u64::MAX),
+                limit,
+            });
+            return;
+        }
+        if bytes.len() > self.output.capacity() - self.output.len()
+            && self.output.try_reserve(bytes.len()).is_err()
+        {
+            self.failure = Some(EncoderFailure::AllocationFailed {
+                requested: actual.unwrap_or(u64::MAX),
+            });
             return;
         }
         self.output.extend_from_slice(bytes);
@@ -345,21 +395,86 @@ pub struct Decoder<'a> {
     large_field_ids: Option<HashSet<u32>>,
     materialization_limit: u64,
     materialization_remaining: u64,
+    // A short-lived borrow makes an active callback frame unforgeable by safe
+    // custom codecs, including whole-value replacement with a fresh Decoder.
+    callback_scope: Option<&'a u8>,
 }
 
-/// Materialization charged per distinct variable field id above the small-id
-/// mask (RES-01). A `HashSet<u32>` bucket costs four payload bytes plus one
-/// control byte at a 7/8 load factor; eight bytes over-approximates that so
-/// the charge can never undercount the reservation it guards.
-const FIELD_ID_SET_ENTRY_BYTES: u64 = 2 * size_of::<u32>() as u64;
+// Sealed static adapters keep every extensible trait call inside the checked
+// boundary and let the compiler inline builtin codecs without an FnOnce shim.
+trait DecoderCallback {
+    type Output;
+    const BUILTIN: bool;
+    const CALLBACK_FREE: bool;
+    fn call(decoder: &mut Decoder<'_>) -> Result<Self::Output>;
+}
+struct ValueCallback<T>(std::marker::PhantomData<T>);
+struct ArrayCallback<T, const N: usize>(std::marker::PhantomData<T>);
+impl<T: VarlitDecode> DecoderCallback for ValueCallback<T> {
+    type Output = T;
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call(decoder: &mut Decoder<'_>) -> Result<T> {
+        T::decode_varlit(decoder)
+    }
+}
+impl<T: VarlitDecode, const N: usize> DecoderCallback for ArrayCallback<T, N> {
+    type Output = [T; N];
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call(decoder: &mut Decoder<'_>) -> Result<[T; N]> {
+        T::decode_array(decoder)
+    }
+}
+
+// Nested checked calls already have a short-lived, unforgeable frame borrow.
+// Reuse that decoder instead of moving its field-id set at every scalar call.
+struct CallbackGuard<'d, 'i> {
+    decoder: &'d mut Decoder<'i>,
+    input: &'i [u8],
+    endian: Endian,
+    limit: u64,
+    scope: Option<&'i u8>,
+}
+impl Drop for CallbackGuard<'_, '_> {
+    #[inline]
+    fn drop(&mut self) {
+        *self.decoder = Decoder {
+            input: self.input,
+            endian: self.endian,
+            materialization_limit: self.limit,
+            callback_scope: self.scope,
+            position: self.input.len(),
+            materialization_remaining: 0,
+            small_field_ids: 0,
+            large_field_ids: None,
+        };
+    }
+}
 
 impl<'a> Decoder<'a> {
     pub const STANDARD_MATERIALIZATION_LIMIT: u64 = 1024 * 1024 * 1024;
 
+    #[inline]
     pub fn new(input: &'a [u8], endian: Endian) -> Self {
         Self::new_limited(input, endian, Self::STANDARD_MATERIALIZATION_LIMIT)
     }
 
+    #[inline]
     pub fn new_limited(input: &'a [u8], endian: Endian, materialization_limit: u64) -> Self {
         Self {
             endian,
@@ -369,9 +484,11 @@ impl<'a> Decoder<'a> {
             large_field_ids: None,
             materialization_limit,
             materialization_remaining: materialization_limit,
+            callback_scope: None,
         }
     }
 
+    #[inline(always)]
     pub fn decode_from_slice_limited<T: VarlitDecode>(
         input: &'a [u8],
         endian: Endian,
@@ -387,6 +504,8 @@ impl<'a> Decoder<'a> {
         materialization_remaining: &mut u64,
     ) -> Result<T> {
         let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
+        *materialization_remaining = 0;
         let result = decoder.decode_complete();
         *materialization_remaining = decoder.materialization_remaining;
         result
@@ -406,12 +525,18 @@ impl<'a> Decoder<'a> {
 
     pub fn decode_nested<T: VarlitDecode>(&mut self, input: &[u8]) -> Result<T> {
         let mut nested = Decoder::new_limited(input, self.endian, self.materialization_remaining);
+        self.materialization_remaining = 0;
         let result = nested.decode_complete();
         self.materialization_remaining = nested.materialization_remaining;
         result
     }
 
+    #[inline]
     pub fn charge_materialization(&mut self, bytes: u64, resource: &'static str) -> Result<()> {
+        if let Some(next) = crate::decode_state::charge(self.materialization_remaining, bytes) {
+            self.materialization_remaining = next;
+            return Ok(());
+        }
         let consumed = self
             .materialization_limit
             .checked_sub(self.materialization_remaining)
@@ -419,19 +544,115 @@ impl<'a> Decoder<'a> {
         let actual = consumed
             .checked_add(bytes)
             .ok_or(Error::ResourceArithmeticOverflow { resource })?;
-        if actual > self.materialization_limit {
-            return Err(Error::LimitExceeded {
-                resource,
-                actual,
-                limit: self.materialization_limit,
-            });
-        }
-        self.materialization_remaining -= bytes;
-        Ok(())
+        Err(Error::LimitExceeded {
+            resource,
+            actual,
+            limit: self.materialization_limit,
+        })
     }
 
+    /// Decode one value while preserving this decoder's input and budget authority.
+    ///
+    /// Custom codecs should use this method when composing other codecs. A codec
+    /// that returns with a fresh decoder or violates its cursor/budget boundary
+    /// is rejected. Completed charges survive errors. A callback panic or invalid
+    /// replacement exhausts this frame's input and remaining budget.
+    #[inline(always)]
+    pub fn decode_value<T: VarlitDecode>(&mut self) -> Result<T> {
+        self.with_callback::<ValueCallback<T>>()
+    }
+
+    #[inline(always)]
+    fn with_callback<C: DecoderCallback>(&mut self) -> Result<C::Output> {
+        if C::CALLBACK_FREE || (C::BUILTIN && self.callback_scope.is_some()) {
+            return C::call(self);
+        }
+        if self.callback_scope.is_some() {
+            return self.with_existing_callback::<C>();
+        }
+        let scope = 0u8;
+        let start = self.position;
+        let before = self.materialization_remaining;
+        // Borrow input only for this call. An active frame cannot be retained
+        // in a 'static slot and reused to forge a later invocation's authority.
+        let mut frame = Decoder {
+            endian: self.endian,
+            input: self.input,
+            position: start,
+            small_field_ids: self.small_field_ids,
+            large_field_ids: self.large_field_ids.take(),
+            materialization_limit: self.materialization_limit,
+            materialization_remaining: before,
+            callback_scope: Some(&scope),
+        };
+        // Establish the safe unwind/rejection state before invoking user code.
+        self.position = self.input.len();
+        self.materialization_remaining = 0;
+        let result = C::call(&mut frame);
+        let linked = frame
+            .callback_scope
+            .is_some_and(|actual| std::ptr::eq(actual, &scope))
+            && std::ptr::eq(frame.input, self.input)
+            && frame.endian as u8 == self.endian as u8
+            && frame.materialization_limit == self.materialization_limit;
+        if !crate::decode_state::callback_exit(
+            linked,
+            start,
+            frame.position,
+            self.input.len(),
+            before,
+            frame.materialization_remaining,
+        ) {
+            // Preserve a callback error rather than destroying and replacing
+            // it. Successful values are released before rejecting the frame.
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        self.position = frame.position;
+        self.materialization_remaining = frame.materialization_remaining;
+        self.small_field_ids = frame.small_field_ids;
+        self.large_field_ids = frame.large_field_ids.take();
+        result
+    }
+
+    #[inline(always)]
+    fn with_existing_callback<C: DecoderCallback>(&mut self) -> Result<C::Output> {
+        let input = self.input;
+        let endian = self.endian;
+        let limit = self.materialization_limit;
+        let scope = self.callback_scope;
+        let guard = CallbackGuard {
+            decoder: self,
+            input,
+            endian,
+            limit,
+            scope,
+        };
+        let result = C::call(guard.decoder);
+        // All safe methods preserve the numeric invariant and immutable frame
+        // fields; the MIR closure gate covers every writer. Fresh replacement
+        // cannot reproduce the private, short-lived scope borrow.
+        if !crate::decode_state::same_scope(scope, guard.decoder.callback_scope) {
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        // The guard owns only borrows/scalars. On successful admission its
+        // rollback is unnecessary; forgetting it releases no owned resource.
+        std::mem::forget(guard);
+        result
+    }
+
+    #[inline(always)]
     fn decode_complete<T: VarlitDecode>(&mut self) -> Result<T> {
-        let value = T::decode_varlit(self)?;
+        let value = self.decode_value::<T>()?;
         if self.remaining() != 0 {
             return Err(Error::TrailingBytes {
                 remaining: self.remaining(),
@@ -440,20 +661,21 @@ impl<'a> Decoder<'a> {
         Ok(value)
     }
 
+    #[inline]
     pub fn read_exact(&mut self, len: usize) -> Result<&'a [u8]> {
-        let end = self.position.checked_add(len).ok_or(Error::UnexpectedEof)?;
-        if end > self.input.len() {
-            return Err(Error::UnexpectedEof);
-        }
+        let end = crate::decode_state::read_end(self.position, len, self.input.len())
+            .ok_or(Error::UnexpectedEof)?;
         let bytes = &self.input[self.position..end];
         self.position = end;
         Ok(bytes)
     }
 
+    #[inline]
     pub fn read_u8(&mut self) -> Result<u8> {
         Ok(self.read_exact(1)?[0])
     }
 
+    #[inline]
     pub fn read_u16(&mut self) -> Result<u16> {
         let mut bytes = [0; 2];
         bytes.copy_from_slice(self.read_exact(2)?);
@@ -463,6 +685,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u32(&mut self) -> Result<u32> {
         let mut bytes = [0; 4];
         bytes.copy_from_slice(self.read_exact(4)?);
@@ -472,6 +695,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(self.read_exact(8)?);
@@ -481,6 +705,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u128(&mut self) -> Result<u128> {
         let mut bytes = [0; 16];
         bytes.copy_from_slice(self.read_exact(16)?);
@@ -546,7 +771,7 @@ impl<'a> Decoder<'a> {
     /// Preflight for a node-per-entry map (`BTreeMap`), whose storage really is
     /// driven by the entries it has already accepted.
     ///
-    /// API3-04: the charge used to be `len * size_of::<(K, V)>()`, which
+    /// the charge used to be `len * size_of::<(K, V)>()`, which
     /// treats a `BTreeMap` as if it stored entries packed end to end. It does
     /// not. A std B-tree node carries a fixed-capacity array - it allocates
     /// room for `2B - 1 = 11` entries whatever its fill - behind a header
@@ -580,7 +805,7 @@ impl<'a> Decoder<'a> {
 
     /// Preflight for an open-addressed hash table (`HashMap`), whose storage is
     /// driven by the *declared* count long before any entry is validated
-    /// (SAFE-01).
+    ///
     ///
     /// `preflight_count` floors a zero-byte entry at a one-byte charge, which
     /// is a wild under-estimate for a hash table: a `HashMap<(), ()>` pays a
@@ -604,15 +829,24 @@ impl<'a> Decoder<'a> {
                 "collection count cannot make bounded input progress",
             ));
         }
-        let bytes = hash_table_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
-            resource,
-            actual: u64::MAX,
-            limit: self.materialization_limit,
-        })?;
+        // Growth retains the old table until the new table is populated. Both
+        // allocations fit the final-count bound individually. Charge two tables
+        // when the declared count can exceed the upfront reservation. Payload charges remain separate.
+        let bytes =
+            hash_map_decode_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
+                resource,
+                actual: u64::MAX,
+                limit: self.materialization_limit,
+            })?;
         self.charge_materialization(bytes, resource)
     }
 
     fn note_field_id(&mut self, field_id: u32) -> Result<()> {
+        if field_id == 0 {
+            return Err(Error::InvalidCanonicalEncoding(
+                "variable field id must be nonzero",
+            ));
+        }
         if field_id < u64::BITS {
             let mask = 1u64 << field_id;
             if self.small_field_ids & mask != 0 {
@@ -629,12 +863,29 @@ impl<'a> Decoder<'a> {
         {
             return Err(Error::InvalidCanonicalEncoding("duplicate variable field"));
         }
-        // RES-01: every other decoder-owned container charges the
+        // every other decoder-owned container charges the
         // materialization budget before it reserves. Duplicate detection for
         // ids above the small-id mask is the one decoder-owned set whose
         // growth is driven purely by attacker-chosen field ids, so charge
         // before reserving rather than after.
-        self.charge_materialization(FIELD_ID_SET_ENTRY_BYTES, "variable field ids")?;
+        let count = self.large_field_ids.as_ref().map_or(0, HashSet::len);
+        let bound = |count| {
+            hash_table_reservation_bytes::<u32>(count)
+                .and_then(|bytes| bytes.checked_mul(2))
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })
+        };
+        // Cover both old and new tables during a rehash, including power-of-two
+        // capacity rounding and control bytes. Charge only the bound's growth.
+        let charge = bound(
+            count
+                .checked_add(1)
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })?,
+        )? - bound(count)?;
+        self.charge_materialization(charge, "variable field ids")?;
         let field_ids = self.large_field_ids.get_or_insert_with(HashSet::new);
         let requested = u64::try_from(field_ids.len())
             .unwrap_or(u64::MAX)
@@ -664,6 +915,11 @@ pub fn write_field(
     wire_type: WireType,
     payload: &[u8],
 ) -> Result<()> {
+    if field_id == 0 {
+        return Err(Error::InvalidCanonicalEncoding(
+            "variable field id must be nonzero",
+        ));
+    }
     encoder.write_u32(field_id);
     encoder.write_u16(wire_type as u16);
     encoder.write_u16(0);
@@ -697,9 +953,9 @@ pub fn read_field_header(decoder: &mut Decoder<'_>) -> Result<FieldHeader> {
 }
 
 pub fn encode_to_vec<T: VarlitEncode>(value: &T, endian: Endian) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new(endian);
+    let mut encoder = Encoder::new_limited(endian, u64::MAX, "encoded payload");
     value.encode_varlit(&mut encoder)?;
-    Ok(encoder.into_inner())
+    encoder.try_into_inner()
 }
 
 pub(crate) fn encode_to_vec_limited<T: VarlitEncode>(
@@ -745,6 +1001,10 @@ impl VarlitEncode for () {
 }
 
 impl VarlitDecode for () {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Unit;
     const SCHEMA_ID: u64 = leaf_schema_id(b"unit");
 
@@ -766,9 +1026,14 @@ macro_rules! unsigned {
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 decoder.$read()
             }
@@ -789,9 +1054,14 @@ macro_rules! signed {
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 Ok(decoder.$read()? as Self)
             }
@@ -810,9 +1080,14 @@ impl VarlitEncode for u8 {
 }
 
 impl VarlitDecode for u8 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::U8;
     const SCHEMA_ID: u64 = leaf_schema_id(b"u8");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         decoder.read_u8()
     }
@@ -848,9 +1123,14 @@ impl VarlitEncode for bool {
 }
 
 impl VarlitDecode for bool {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Bool;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bool");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         match decoder.read_u8()? {
             0 => Ok(false),
@@ -873,9 +1153,14 @@ impl VarlitEncode for f32 {
 }
 
 impl VarlitDecode for f32 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F32;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f32");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u32()?))
     }
@@ -892,9 +1177,14 @@ impl VarlitEncode for f64 {
 }
 
 impl VarlitDecode for f64 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F64;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f64");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u64()?))
     }
@@ -912,9 +1202,14 @@ impl VarlitEncode for Vec<u8> {
 }
 
 impl VarlitDecode for Vec<u8> {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bytes");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         if len > decoder.remaining() {
@@ -946,9 +1241,14 @@ impl VarlitEncode for String {
 }
 
 impl VarlitDecode for String {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::String;
     const SCHEMA_ID: u64 = leaf_schema_id(b"string");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         if len > decoder.remaining() {
@@ -993,12 +1293,23 @@ impl<T> VarlitDecode for Option<T>
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"option", &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        if bool::decode_varlit(decoder)? {
-            Ok(Some(T::decode_varlit(decoder)?))
+        if decoder.decode_value::<bool>()? {
+            Ok(Some(decoder.decode_value::<T>()?))
         } else {
             Ok(None)
         }
@@ -1052,7 +1363,7 @@ where
 {
     let mut slots: [Option<T>; N] = [const { None }; N];
     for slot in &mut slots {
-        *slot = Some(T::decode_varlit(decoder)?);
+        *slot = Some(decoder.decode_value::<T>()?);
     }
     Ok(slots.map(|value| value.expect("every array slot was filled by the loop above")))
 }
@@ -1084,7 +1395,7 @@ where
             requested: allocation_request::<T>(N),
         })?;
     for _ in 0..N {
-        values.push(T::decode_varlit(decoder)?);
+        values.push(decoder.decode_value::<T>()?);
     }
     values.try_into().map_err(|_| Error::UnexpectedEof)
 }
@@ -1093,11 +1404,22 @@ impl<T, const N: usize> VarlitDecode for [T; N]
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Seq;
     const SCHEMA_ID: u64 = container_schema_id_with_arity(b"array", N as u64, &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        T::decode_array(decoder)
+        decoder.with_callback::<ArrayCallback<T, N>>()
     }
 }
 
@@ -1124,9 +1446,26 @@ where
     K: VarlitDecode + Ord,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"btreemap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_map_count::<K, V>(len, "BTreeMap entries")?;
@@ -1135,10 +1474,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1156,7 +1495,7 @@ where
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
+        let pending_value = decoder.decode_value::<V>()?;
         if values.insert(pending_key, pending_value).is_some() {
             return Err(Error::InvalidCanonicalEncoding("duplicate BTreeMap key"));
         }
@@ -1173,8 +1512,34 @@ where
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-        let mut entries: Vec<(&K, &V)> = self.iter().collect();
-        entries.sort_by_key(|(key, _)| *key);
+        // Refuse impossible output before allocating one reference pair per
+        // entry. Custom Nested/Seq codecs may be zero-width, so only charge
+        // the minimum guaranteed by their declared wire type here.
+        if let Some(limit) = encoder.max_len {
+            let per_entry =
+                minimum_wire_size(K::WIRE_TYPE) as u64 + minimum_wire_size(V::WIRE_TYPE) as u64;
+            let actual = (self.len() as u64)
+                .checked_mul(per_entry)
+                .and_then(|n| n.checked_add(8))
+                .and_then(|n| n.checked_add(encoder.output.len() as u64))
+                .unwrap_or(u64::MAX);
+            if actual > limit {
+                return Err(Error::LimitExceeded {
+                    resource: encoder.limit_resource,
+                    actual,
+                    limit,
+                });
+            }
+        }
+        let mut entries: Vec<(&K, &V)> = Vec::new();
+        entries
+            .try_reserve_exact(self.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "HashMap encoding entries",
+                requested: allocation_request::<(&K, &V)>(self.len()),
+            })?;
+        entries.extend(self.iter());
+        entries.sort_unstable_by_key(|(key, _)| *key);
         encoder.write_u64(entries.len() as u64);
         for (key, value) in entries {
             key.encode_varlit(encoder)?;
@@ -1189,14 +1554,31 @@ where
     K: VarlitDecode + Ord + Eq + Hash,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_hash_map_count::<K, V>(len, "HashMap entries")?;
         let mut values = HashMap::new();
-        // SAFE-01: reserve only a bounded prefix of the declared count, so a
+        // reserve only a bounded prefix of the declared count, so a
         // hostile count cannot materialize a table before a single entry has
         // been proven decodable. The charge above already bounds the table this
         // map can reach; this bounds what it can reach *on a claim alone*.
@@ -1211,10 +1593,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1226,18 +1608,31 @@ where
                     ));
                 }
             }
-            if values.insert(pending_key, pending_value).is_some() {
-                return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-            }
+            insert_hash_map_entry(&mut values, pending_key, pending_value)?;
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
-        if values.insert(pending_key, pending_value).is_some() {
-            return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-        }
+        let pending_value = decoder.decode_value::<V>()?;
+        insert_hash_map_entry(&mut values, pending_key, pending_value)?;
         Ok(values)
     }
+}
+
+fn insert_hash_map_entry<K: Eq + Hash, V>(
+    values: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+) -> Result<()> {
+    if values.len() == values.capacity() {
+        values.try_reserve(1).map_err(|_| Error::AllocationFailed {
+            resource: "HashMap entries",
+            requested: allocation_request::<(K, V)>(values.len().saturating_add(1)),
+        })?;
+    }
+    if values.insert(key, value).is_some() {
+        return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
+    }
+    Ok(())
 }
 
 macro_rules! vec_seq_codec {
@@ -1258,10 +1653,12 @@ macro_rules! vec_seq_codec {
             }
 
             impl VarlitDecode for Vec<$ty> {
+                const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true });
                 const WIRE_TYPE: WireType = WireType::Seq;
                 const SCHEMA_ID: u64 =
                     container_schema_id(b"seq", &[<$ty as VarlitDecode>::SCHEMA_ID]);
 
+                #[inline]
                 fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                     let len = decoder.read_len()?;
                     decoder.preflight_count(
@@ -1276,7 +1673,7 @@ macro_rules! vec_seq_codec {
                         requested: allocation_request::<$ty>(len),
                     })?;
                     for _ in 0..len {
-                        values.push(<$ty>::decode_varlit(decoder)?);
+                        values.push(decoder.decode_value::<$ty>()?);
                     }
                     Ok(values)
                 }
@@ -1324,7 +1721,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// all of which scale with `Group::WIDTH`:
 ///
 /// * the trailing duplicated control group appended after the control array;
-/// * the minimum bucket count of a small table (SAFE2-01: hashbrown rounds a
+/// * the minimum bucket count of a small table (: hashbrown rounds a
 ///   small table with a one-byte-or-smaller entry up to a whole group so the
 ///   control array is never shorter than one SIMD load);
 /// * the control array's alignment, which is `max(Group::WIDTH, align_of::<T>())`
@@ -1341,7 +1738,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// tables of fewer than fifteen entries. Charging more than hashbrown allocates
 /// is always sound here; charging less is the defect this constant exists to
 /// prevent.
-/// Entry-slot multiplier for the `BTreeMap` materialization model (API3-04).
+/// Entry-slot multiplier for the `BTreeMap` materialization model.
 ///
 /// A std B-tree node allocates a fixed array of `2B - 1 = 11` entry slots
 /// whatever its fill, and is only guaranteed to hold `B - 1 = 5` of them, so
@@ -1351,7 +1748,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// library cannot silently turn the model into an under-charge.
 const BTREE_ENTRY_SLOT_FACTOR: usize = 3;
 
-/// Per-entry allowance for B-tree node headers and child pointers (API3-04).
+/// Per-entry allowance for B-tree node headers and child pointers.
 ///
 /// A leaf node header is a parent pointer, a parent index and a length; an
 /// internal node adds `2B = 12` child pointers. Amortised over the guaranteed
@@ -1363,7 +1760,7 @@ const BTREE_ENTRY_HEADER_BYTES: usize = 16;
 const HASH_TABLE_GROUP_BYTES: u64 = 32;
 
 /// Entries a map codec reserves for before it has validated a single entry
-/// (SAFE-01).
+///
 ///
 /// The declared count is attacker-chosen, so a table sized from it up front is
 /// an allocation granted on nothing but a claim. Reserving a small fixed prefix
@@ -1372,6 +1769,16 @@ const HASH_TABLE_GROUP_BYTES: u64 = 32;
 /// through `insert`'s own amortized doubling, which performs no syscalls and no
 /// per-entry allocation.
 const MAP_PREALLOCATION_ENTRIES: usize = 1024;
+
+fn hash_map_decode_reservation_bytes<T>(len: usize) -> Option<u64> {
+    // The bounded upfront reservation guarantees no growth for small maps.
+    let copies = if len > MAP_PREALLOCATION_ENTRIES {
+        2
+    } else {
+        1
+    };
+    hash_table_reservation_bytes::<T>(len)?.checked_mul(copies)
+}
 
 /// Upper bound on the heap a `HashMap<K, V>` allocates when asked to hold `len`
 /// entries, with `T = (K, V)`.
@@ -1392,7 +1799,7 @@ const MAP_PREALLOCATION_ENTRIES: usize = 1024;
 ///   comment here — that "small-table specializations only ever allocate less"
 ///   — was false, and why the old two-bucket model undercharged
 ///   `HashMap<(), ()>` by charging 19 bytes for a table that really costs 32
-///   bytes of control storage alone (SAFE2-01/F-02).
+///   bytes of control storage alone.
 /// * Every bucket owns one `T` *and* one control byte — the true floor is never
 ///   one byte per entry, not even for a zero-sized `T`.
 /// * The allocation additionally carries one trailing duplicated control group,
@@ -1463,12 +1870,14 @@ macro_rules! tuple_codec {
         where
             $($name: VarlitDecode),+
         {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true $(&& matches!($name::__VARLIT_BUILTIN, Some(BuiltinCodec { callback_free:true, .. })))+ });
             const WIRE_TYPE: WireType = WireType::Nested;
             const SCHEMA_ID: u64 =
                 container_schema_id(b"tuple", &[$(<$name as VarlitDecode>::SCHEMA_ID),+]);
 
+            #[inline(always)]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-                Ok(($($name::decode_varlit(decoder)?,)+))
+                Ok(($(decoder.decode_value::<$name>()?,)+))
             }
         }
     };
@@ -1481,6 +1890,26 @@ tuple_codec!(A, B, C, D);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoder_preserves_public_auto_traits_and_catch_unwind_usage() {
+        fn assert_traits<
+            T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
+        >() {
+        }
+        assert_traits::<Encoder>();
+
+        let encoder = Encoder::new(Endian::Little);
+        assert_eq!(
+            std::panic::catch_unwind(|| encoder.endian()).unwrap(),
+            Endian::Little
+        );
+        assert!(
+            std::panic::catch_unwind(move || encoder.into_inner())
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn limited_encoder_stops_before_the_over_limit_allocation() {
@@ -1509,7 +1938,7 @@ mod tests {
             .encode_nested_to_vec(&vec![2u8; 4])
             .expect("nested value within the remaining budget");
         assert_eq!(nested.len(), 12);
-        // ... while a value larger than the remaining budget is refused with
+        // .. while a value larger than the remaining budget is refused with
         // the parent's typed resource before it is buffered.
         let error = encoder
             .encode_nested_to_vec(&vec![3u8; 1024])
@@ -1556,7 +1985,7 @@ mod tests {
         buckets * (size_of::<(K, V)>() as u64 + 1) + 16
     }
 
-    /// SAFE2-01/F-02. The reservation model must never charge less than the
+    /// The reservation model must never charge less than the
     /// table `try_reserve` really allocates, at *every* capacity — including
     /// the small-table classes `1..=14`, where the previous two-bucket model
     /// charged `HashMap<(), ()>` 19 bytes for a 16-bucket table.
@@ -1613,3 +2042,52 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod field_guard_tests {
+    use super::*;
+    #[test]
+    fn zero_field_id_is_refused_by_both_codec_directions() {
+        let mut encoder = Encoder::new(Endian::Little);
+        assert!(matches!(
+            write_field(&mut encoder, 0, WireType::U8, &[1]),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        let mut bytes = [0u8; 17];
+        bytes[4..6].copy_from_slice(&(WireType::U8 as u16).to_le_bytes());
+        bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let mut decoder = Decoder::new(&bytes, Endian::Little);
+        assert!(matches!(
+            read_field_header(&mut decoder),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+    }
+    #[test]
+    fn field_set_budget_covers_growth_and_rehash() {
+        let bytes = [];
+        let mut decoder = Decoder::new_limited(&bytes, Endian::Little, 1 << 20);
+        for id in 64..10064 {
+            decoder.note_field_id(id).unwrap();
+            let count = (id - 63) as usize;
+            let charged = (1 << 20) - decoder.materialization_remaining();
+            assert_eq!(
+                charged,
+                2 * hash_table_reservation_bytes::<u32>(count).unwrap()
+            );
+        }
+        let mut small = Decoder::new_limited(&bytes, Endian::Little, 8);
+        assert!(matches!(
+            small.note_field_id(64),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert!(small.large_field_ids.is_none());
+    }
+}
+
+#[cfg(kani)]
+#[path = "verification/decoder.rs"]
+mod resource_proofs;
+
+#[cfg(kani)]
+#[path = "verification/decoder_callers.rs"]
+pub(crate) mod caller_proofs;

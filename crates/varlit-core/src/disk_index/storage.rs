@@ -2,8 +2,15 @@
 //! non-durable batches can never overwrite the last durable recovery anchor.
 use super::tree::{self, read_at, write_at};
 use super::*;
+use crate::fallible::Arc;
 use std::fs::{File, OpenOptions};
-use std::sync::Arc;
+
+#[cfg(test)]
+mod failure_tests;
+#[cfg(test)]
+thread_local! {
+    static RECONCILE_SYNC_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 const MAGIC: &[u8; 8] = b"VARVEIX5";
 const HEAD_MAGIC: &[u8; 8] = b"VIXHEAD1";
@@ -16,7 +23,7 @@ const DIRTY: u64 = 20480;
 const FILE_HEADER: usize = 24576;
 
 fn corrupt(message: &'static str) -> DiskIndexError {
-    DiskIndexError::Storage(message.into())
+    DiskIndexError::CheckpointMismatch(message)
 }
 
 struct WriterFile(File);
@@ -64,17 +71,36 @@ pub(super) struct Checkpoint {
     pub metadata: DiskIndexMetadata,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum Publication {
-    Confirmed,
-    Working,
-    Dirty,
-}
+pub(super) use crate::publication_protocol::CheckpointKind as Publication;
 
 #[derive(Clone, Copy)]
 struct Head {
     offset: u64,
     end: u64,
+}
+
+// Shared by file-backed recovery and portable corruption checks.
+fn parse_head(bytes: &[u8; 64]) -> Option<Head> {
+    if &bytes[..8] != HEAD_MAGIC
+        || bytes[24..28] != [0; 4]
+        || bytes[32..] != [0; 32]
+        || crc32fast::hash(&bytes[..28]) != read_u32(bytes, 28)
+    {
+        return None;
+    }
+    let head = Head {
+        offset: read_u64(bytes, 8),
+        end: read_u64(bytes, 16),
+    };
+    if head.offset < FILE_HEADER as u64
+        || head
+            .end
+            .checked_sub(head.offset)
+            .is_none_or(|n| n < ROOT_HEADER as u64)
+    {
+        return None;
+    }
+    Some(head)
 }
 
 impl Store {
@@ -103,7 +129,7 @@ impl Store {
             None
         };
         // Independent read-only file description; snapshots cannot retain a writer lock.
-        let file = Arc::new(File::open(path)?);
+        let file = crate::fallible::try_arc(File::open(path)?)?;
         if let Some(writer) = &writer
             && opened_sidecar_identity(&writer.0)? != opened_sidecar_identity(&file)?
         {
@@ -160,6 +186,15 @@ impl Store {
                     .max_key_bytes
                     .saturating_add(DiskIndexKeyTag::ENCODED_LEN),
                 budget,
+            )
+            .with_minimum_offset(FILE_HEADER as u64)
+            .with_metadata_verification(
+                self.writer.is_some()
+                    || self
+                        .options
+                        .limits
+                        .read_validation
+                        .is_none_or(|p| p.structure),
             ),
             slots: slots::Reader::new(
                 self.file.clone(),
@@ -172,26 +207,7 @@ impl Store {
     fn head(&self, slot: u64) -> DiskIndexResult<Option<Head>> {
         let mut bytes = [0; 64];
         read_at(&self.file, slot, &mut bytes)?;
-        if &bytes[..8] != HEAD_MAGIC
-            || bytes[24..28] != [0; 4]
-            || bytes[32..] != [0; 32]
-            || crc32fast::hash(&bytes[..28]) != read_u32(&bytes, 28)
-        {
-            return Ok(None);
-        }
-        let head = Head {
-            offset: read_u64(&bytes, 8),
-            end: read_u64(&bytes, 16),
-        };
-        if head.offset < FILE_HEADER as u64
-            || head
-                .end
-                .checked_sub(head.offset)
-                .is_none_or(|n| n < ROOT_HEADER as u64)
-        {
-            return Ok(None);
-        }
-        Ok(Some(head))
+        Ok(parse_head(&bytes))
     }
     pub fn at(&self, offset: u64) -> DiskIndexResult<Checkpoint> {
         let mut bytes = [0; ROOT_HEADER];
@@ -224,7 +240,7 @@ impl Store {
         if (tree.offset == 0) != (tree.count == 0)
             || tree.count > metadata.working.record_count
             || (tree.offset != 0
-                && (tree.offset < tree::PAGE as u64
+                && (tree.offset < FILE_HEADER as u64
                     || tree
                         .offset
                         .checked_add(tree::PAGE as u64)
@@ -265,21 +281,18 @@ impl Store {
     fn latest(&self, confirmed_only: bool) -> DiskIndexResult<Checkpoint> {
         // Retry only an incomplete publication. Old immutable checkpoints remain readable.
         for _ in 0..8 {
-            let mut heads = Vec::with_capacity(5);
+            let mut heads = [(Head { offset: 0, end: 0 }, false); 5];
+            let mut head_count = 0;
             let mut has_confirmed_head = false;
-            for (slot, durable) in
-                CONFIRMED
+            for (slot, durable) in CONFIRMED.into_iter().map(|s| (s, true)).chain(
+                [(WORKING[0], false), (WORKING[1], false), (DIRTY, true)]
                     .into_iter()
-                    .map(|s| (s, true))
-                    .chain(if confirmed_only {
-                        vec![]
-                    } else {
-                        vec![(WORKING[0], false), (WORKING[1], false), (DIRTY, true)]
-                    })
-            {
+                    .filter(|_| !confirmed_only),
+            ) {
                 if let Some(head) = self.head(slot)? {
                     has_confirmed_head |= CONFIRMED.contains(&slot);
-                    heads.push((head, durable));
+                    heads[head_count] = (head, durable);
+                    head_count += 1;
                 }
             }
             // Working/dirty heads are not substitutes for a confirmed anchor.
@@ -291,8 +304,9 @@ impl Store {
                 std::hint::spin_loop();
                 continue;
             }
+            let heads = &mut heads[..head_count];
             heads.sort_unstable_by_key(|(head, _)| std::cmp::Reverse(head.offset));
-            for (head, durable) in heads {
+            for &(head, durable) in heads.iter() {
                 match self.at(head.offset) {
                     Ok(checkpoint)
                         if checkpoint.end == head.end
@@ -319,6 +333,18 @@ impl Store {
     pub fn confirmed(&self) -> DiskIndexResult<Checkpoint> {
         self.latest(true)
     }
+    pub(super) fn reconcile_confirmed_heads(&self) -> DiskIndexResult<()> {
+        let first = self.head(CONFIRMED[0])?.map(|h| (h.offset, h.end));
+        let second = self.head(CONFIRMED[1])?.map(|h| (h.offset, h.end));
+        crate::publication_protocol::resume(first, second, || {
+            #[cfg(test)]
+            if RECONCILE_SYNC_FAILURE.with(|flag| flag.replace(false)) {
+                return Err(std::io::Error::other("injected head reconciliation failure").into());
+            }
+            self.writer()?.sync_data()?;
+            Ok(())
+        })
+    }
     pub fn state(
         &self,
         checkpoint: &Checkpoint,
@@ -338,7 +364,7 @@ impl Store {
         let mut tails = Vec::new();
         tails
             .try_reserve_exact(count)
-            .map_err(|_| corrupt("tail allocation failed"))?;
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
         let mut previous = None;
         for i in 0..count {
             let mut row = [0; TAIL_LEN];
@@ -375,7 +401,11 @@ impl Store {
         }
         let file = self.writer()?;
         let len = ROOT_HEADER + tails.len() * TAIL_LEN;
-        let mut bytes = vec![0; len];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(len)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+        bytes.resize(len, 0);
         bytes[..8].copy_from_slice(ROOT_MAGIC);
         bytes[8..16].copy_from_slice(&(len as u64).to_le_bytes());
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
@@ -396,60 +426,71 @@ impl Store {
         let end = offset
             .checked_add(len as u64)
             .ok_or_else(|| corrupt("checkpoint extent overflow"))?;
-        #[cfg(feature = "scalable-fault-injection")]
-        if crate::scalable_fault::is_armed() {
-            crate::scalable_fault_point("checkpoint.record_prefix");
-            write_at(file, offset, &bytes[..bytes.len() / 2])?;
-            crate::scalable_fault_point("checkpoint.record_prefix");
-        }
-        crate::scalable_fault_point("checkpoint.record_write");
-        write_at(file, offset, &bytes)?;
-        crate::scalable_fault_point("checkpoint.record_write");
-        let durable = !matches!(publication, Publication::Working);
-        if durable {
-            crate::scalable_fault_point("checkpoint.data_sync");
-            file.sync_data()?;
-            crate::scalable_fault_point("checkpoint.data_sync");
-        }
-        let slot = match publication {
-            Publication::Dirty => DIRTY,
-            Publication::Confirmed | Publication::Working => {
-                let slots = if matches!(publication, Publication::Confirmed) {
-                    CONFIRMED
-                } else {
-                    WORKING
-                };
-                let first = self.head(slots[0])?.map_or(0, |h| h.offset);
-                let second = self.head(slots[1])?.map_or(0, |h| h.offset);
-                slots[usize::from(first > second)]
-            }
-        };
         let mut head = [0; 64];
         head[..8].copy_from_slice(HEAD_MAGIC);
         head[8..16].copy_from_slice(&offset.to_le_bytes());
         head[16..24].copy_from_slice(&end.to_le_bytes());
         let checksum = crc32fast::hash(&head[..28]);
         head[28..32].copy_from_slice(&checksum.to_le_bytes());
-        let mut slots = vec![slot];
-        if matches!(publication, Publication::Confirmed) {
-            slots.push(CONFIRMED[usize::from(slot == CONFIRMED[0])]);
-        }
-        for slot in slots {
-            #[cfg(feature = "scalable-fault-injection")]
-            if crate::scalable_fault::is_armed() {
-                crate::scalable_fault_point("checkpoint.head_prefix");
-                write_at(file, slot, &head[..24])?;
-                crate::scalable_fault_point("checkpoint.head_prefix");
+        let mut slot = 0;
+        use crate::publication_protocol::CheckpointStep;
+        crate::publication_protocol::checkpoint(publication, |step| -> DiskIndexResult<()> {
+            match step {
+                CheckpointStep::Body => {
+                    #[cfg(feature = "scalable-fault-injection")]
+                    if crate::scalable_fault::is_armed() {
+                        crate::scalable_fault_point("checkpoint.record_prefix");
+                        write_at(file, offset, &bytes[..bytes.len() / 2])?;
+                        crate::scalable_fault_point("checkpoint.record_prefix");
+                    }
+                    crate::scalable_fault_point("checkpoint.record_write");
+                    write_at(file, offset, &bytes)?;
+                    crate::scalable_fault_point("checkpoint.record_write");
+                }
+                CheckpointStep::DataSync => {
+                    crate::scalable_fault_point("checkpoint.data_sync");
+                    file.sync_data()?;
+                    crate::scalable_fault_point("checkpoint.data_sync");
+                }
+                CheckpointStep::SelectHead => {
+                    slot = match publication {
+                        Publication::Dirty => DIRTY,
+                        Publication::Confirmed | Publication::Working => {
+                            let slots = if matches!(publication, Publication::Confirmed) {
+                                CONFIRMED
+                            } else {
+                                WORKING
+                            };
+                            let first = self.head(slots[0])?.map_or(0, |h| h.offset);
+                            let second = self.head(slots[1])?.map_or(0, |h| h.offset);
+                            slots[crate::publication_protocol::older_head(first, second)]
+                        }
+                    };
+                }
+                CheckpointStep::Head(second) => {
+                    let slot = if second {
+                        CONFIRMED[usize::from(slot == CONFIRMED[0])]
+                    } else {
+                        slot
+                    };
+                    #[cfg(feature = "scalable-fault-injection")]
+                    if crate::scalable_fault::is_armed() {
+                        crate::scalable_fault_point("checkpoint.head_prefix");
+                        write_at(file, slot, &head[..24])?;
+                        crate::scalable_fault_point("checkpoint.head_prefix");
+                    }
+                    crate::scalable_fault_point("checkpoint.head_write");
+                    write_at(file, slot, &head)?;
+                    crate::scalable_fault_point("checkpoint.head_write");
+                }
+                CheckpointStep::HeadSync => {
+                    crate::scalable_fault_point("checkpoint.head_sync");
+                    file.sync_data()?;
+                    crate::scalable_fault_point("checkpoint.head_sync");
+                }
             }
-            crate::scalable_fault_point("checkpoint.head_write");
-            write_at(file, slot, &head)?;
-            crate::scalable_fault_point("checkpoint.head_write");
-            if durable {
-                crate::scalable_fault_point("checkpoint.head_sync");
-                file.sync_data()?;
-                crate::scalable_fault_point("checkpoint.head_sync");
-            }
-        }
+            Ok(())
+        })?;
         Ok(Checkpoint {
             offset,
             end,

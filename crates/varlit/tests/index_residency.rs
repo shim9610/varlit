@@ -555,3 +555,90 @@ fn temp_path(name: &str) -> TempPath {
     ));
     TempPath { path, _dir: dir }
 }
+
+#[test]
+fn nonresident_records_still_count_toward_the_explicit_record_limit() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("limited.varlit");
+    let spec = lean_spec();
+    let mut writer = spec.create(&path)?;
+    for value in 0..3 {
+        writer.push(&Line { value })?;
+    }
+    writer.flush()?;
+    drop(writer);
+    let limited = spec.with_read_limits(spec.read_limits.with_max_records(2));
+    assert!(matches!(
+        varlit::VarlitFile::open_readonly(limited, &path),
+        Err(varlit::Error::LimitExceeded { .. })
+    ));
+    assert!(varlit::VarlitFile::open_readonly(spec, &path).is_ok());
+    Ok(())
+}
+
+#[test]
+fn nonresident_sequence_checks_include_records_omitted_from_the_directory() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    for duplicate in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("sequences.varlit");
+        let spec = lean_spec().with_commit_policy(varlit::CommitPolicy::None);
+        let mut writer = spec.create(&path)?;
+        let mut records = Vec::new();
+        for value in 0..3 {
+            records.push(writer.push_info(&Line { value })?);
+        }
+        writer.sync()?;
+        drop(writer);
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+        // A reordered but unique sequence is a valid native layout. A repeat
+        // of an earlier, non-adjacent sequence must be rejected instead.
+        let sequences = if duplicate {
+            [0u64, 2, 0]
+        } else {
+            [2u64, 1, 0]
+        };
+        for (record, sequence) in records.iter().zip(sequences) {
+            file.seek(SeekFrom::Start(record.record_offset + 8))?;
+            file.write_all(&sequence.to_le_bytes())?;
+        }
+        drop(file);
+        let opened = varlit::VarlitFile::open_readonly(spec, &path);
+        if duplicate {
+            assert!(matches!(
+                opened,
+                Err(varlit::Error::InvalidCanonicalEncoding(_))
+            ));
+        } else {
+            assert_eq!(opened?.block_chain(Line::ID)?.count(), 3);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn follow_refuses_nonresident_sequences_older_than_its_snapshot() -> varlit::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("follow-sequences.varlit");
+    let spec = lean_spec().with_commit_policy(varlit::CommitPolicy::None);
+    let mut writer = spec.create(&path)?;
+    let first = writer.push_info(&Line { value: 1 })?;
+    writer.sync()?;
+    let mut reader = varlit::VarlitFile::open_readonly(spec, &path)?;
+    let second = writer.push_info(&Line { value: 2 })?;
+    writer.sync()?;
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    file.seek(SeekFrom::Start(second.record_offset + 8))?;
+    file.write_all(&first.sequence.to_le_bytes())?;
+    drop(file);
+    assert!(matches!(
+        reader.follow(),
+        Err(varlit::Error::InvalidCanonicalEncoding(_))
+    ));
+    assert_eq!(
+        reader.block_tail_offset(Line::ID),
+        Some(first.record_offset)
+    );
+    Ok(())
+}

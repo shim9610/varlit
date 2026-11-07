@@ -13,7 +13,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/shim9610/varlit"
 rust-version = "1.95"
-version = "0.12.1"
+version = "0.13.0"
 
 [workspace.dependencies]
 crc32fast = "1.5.2"
@@ -27,4 +27,5 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 trybuild = "1.0.121"
 zerocopy = "0.8.59"
-zstd = "0.14.0"
+# Safe block-bound query for the legacy frame compatibility path. No custom FFI.
+zstd = { version = "0.14.0", features = ["experimental"] }

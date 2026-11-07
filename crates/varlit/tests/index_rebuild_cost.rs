@@ -1,5 +1,5 @@
-//! Rebuild cost contracts (PERF-04/PERF-05, PERF2-03, DUR-03, DUR2-04,
-//! DUR2-01).
+//! Rebuild cost contracts (/, , , ,
+//! ).
 //!
 //! Rebuild resolves each record's descriptor once by block id and decodes each
 //! tombstone key exactly once, so rebuild cost must not scale with the plan's
@@ -8,11 +8,11 @@
 //! rebuilds a tombstone-heavy file in roughly the time of a single-descriptor
 //! plan, the published `historical_distinct_keys` metric follows K-ever,
 //! rebuild refuses to publish a sidecar when the pathname identity changes
-//! after the scan (DUR-03), a CRC rebuild traverses each indexed payload once
-//! (PERF2-03), sidecar publication surfaces the pending parent-directory
-//! durability state instead of discarding it (DUR2-04), and an indeterminate
+//! after the scan , a CRC rebuild traverses each indexed payload once
+//! sidecar publication surfaces the pending parent-directory
+//! durability state instead of discarding it , and an indeterminate
 //! sidecar publication preserves the replacement temp for reconciliation
-//! instead of blind-deleting it (DUR2-01).
+//! instead of blind-deleting it.
 
 use std::fs;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -279,7 +279,7 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     }
     let records = u64::from(PUTS + TOMBSTONES);
     // A rebuild also scans the internal creation-nonce record every
-    // stream/indexed primary carries as its first record (STO-01).
+    // stream/indexed primary carries as its first record.
     let scanned_records = records + 1;
 
     fs::remove_file(disk_index_sidecar_path(&path))?;
@@ -361,14 +361,14 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
     // does not shrink without a native compaction.
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
-    // 64 user records plus the internal creation-nonce record (STO-01).
+    // 64 user records plus the internal creation-nonce record.
     assert_eq!(report.records, 65);
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
     Ok(())
 }
 
-/// PERF2-03: under CRC policies the rebuild traverses each payload once. The
+/// under CRC policies the rebuild traverses each payload once. The
 /// scanner reads frames only, extraction owns the single checksum-verified
 /// payload read for indexed records, and payloads outside the plan are never
 /// read — a corrupt unindexed payload no longer fails the rebuild (the old
@@ -477,7 +477,7 @@ mod crc_single_traversal {
         // Baseline: the clean CRC file rebuilds.
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
 
         // Corrupt the payload of the record outside the plan. A rebuild that
@@ -486,7 +486,7 @@ mod crc_single_traversal {
         let corrupted = flip_marker_byte(&path, blob_marker)?;
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
         let reader = VarlitIndexedReader::open(crc_spec(), &path, options, crc_plan())?;
         assert_eq!(
@@ -520,13 +520,13 @@ mod crc_single_traversal {
     }
 }
 
-/// DUR2-04: sidecar publication must not discard the replacement durability
+/// sidecar publication must not discard the replacement durability
 /// state. When the pathname publication succeeded but the parent-directory
 /// sync failed, the caller receives the typed
 /// `PublishedButParentSyncPending` state and the already-published sidecar is
 /// preserved.
 ///
-/// DUR2-01: when publication fails in the indeterminate state (an
+/// when publication fails in the indeterminate state (an
 /// unreconciled `ReplaceFileW` 1176/1177), the replacement temp file may be
 /// the only surviving copy of the new sidecar and must be preserved for
 /// out-of-band reconciliation — no caller may blind-delete it, including via
@@ -632,7 +632,7 @@ mod publication_state {
 
     /// Destructures an indeterminate publication error, asserting it names
     /// `expected_target` and that the replacement temp it reports survives on
-    /// disk for out-of-band reconciliation (DUR2-01). Returns the preserved
+    /// disk for out-of-band reconciliation. Returns the preserved
     /// temp path.
     fn assert_preserved_replacement(
         error: Error,
@@ -730,7 +730,7 @@ mod publication_state {
         // The injected failure fires before the target pathname is touched,
         // so no sidecar was published under its target name...
         assert!(!disk_index_sidecar_path(&path).exists());
-        // ...and the native file remains recoverable: an unarmed rebuild
+        // ..and the native file remains recoverable: an unarmed rebuild
         // publishes a fresh sidecar generation alongside the preserved temp.
         let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
         // No user records, but the internal creation-nonce record is there.

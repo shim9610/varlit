@@ -12,11 +12,6 @@
 
 #![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires the scalable-fault-injection feature"]
-fn publication_failure_results_require_feature_wiring() {}
-
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
     use std::cell::Cell;
@@ -469,6 +464,91 @@ mod enabled {
         Ok(())
     }
 
+    #[test]
+    fn failed_writer_preserves_concurrent_readers_and_retry_after_recovery() -> Result<()> {
+        let _gate = fault_gate();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("concurrent-failed-batch.varlit");
+        let mut writer =
+            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())?;
+        writer.push_info(&FaultRecord::ok(0))?;
+        writer.push_info(&FaultRecord::ok(1))?;
+        writer.sync()?;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(9));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let mut reader =
+                VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || -> Result<()> {
+                let cursor = reader.blocks::<FaultRecord>();
+                barrier.wait();
+                // Reads overlap the writer's failed batch. This handle must
+                // retain its complete original generation throughout.
+                let mut intact = true;
+                for _ in 0..256 {
+                    intact &= reader
+                        .get::<FaultRecord>(&0)?
+                        .is_some_and(|v| v == FaultRecord::ok(0));
+                    intact &= reader.get::<FaultRecord>(&2)?.is_none();
+                }
+                barrier.wait();
+                barrier.wait();
+                // Do not panic before the final barrier: the test runner's
+                // timeout is a failure, never evidence of a good interleaving.
+                let followed = reader.follow();
+                barrier.wait();
+                assert!(intact);
+                followed?;
+                assert_eq!(reader.get::<FaultRecord>(&4)?, Some(FaultRecord::ok(4)));
+                assert_eq!(reader.get::<FaultRecord>(&2)?, None);
+                drop(reader);
+                // Cursor is now the last owner of this old snapshot.
+                assert_eq!(
+                    cursor?.collect::<Result<Vec<_>>>()?,
+                    vec![FaultRecord::ok(0), FaultRecord::ok(1)]
+                );
+                Ok(())
+            }));
+        }
+        barrier.wait();
+        let failure = writer.push_iter::<FaultRecord, _>(
+            [FaultRecord::ok(2), FaultRecord::poison(3)],
+            one_record_chunks(),
+        );
+        barrier.wait();
+        assert!(matches!(
+            failure.unwrap_err().source,
+            Error::InvalidCanonicalEncoding(_)
+        ));
+        assert!(matches!(
+            writer.sync(),
+            Err(Error::WriterPoisoned("indexed"))
+        ));
+        drop(writer);
+        // All eight old readers and cursors still exist. They must not retain
+        // the writer lock or prevent restoring the confirmed checkpoint.
+        let mut recovered = VarlitIndexedWriter::restore_checkpoint_and_open(
+            indexed_spec(),
+            &path,
+            disk_options(),
+            index_plan(),
+        )?;
+        recovered.push_info(&FaultRecord::ok(4))?;
+        recovered.sync()?;
+        barrier.wait();
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap()?;
+        }
+        drop(recovered);
+        let reopened =
+            VarlitIndexedWriter::open(indexed_spec(), &path, disk_options(), index_plan())?;
+        drop(reopened);
+        println!("FAILED_SWMR readers=8 probes=2048 retained_cursors=8 recovered=true");
+        Ok(())
+    }
+
     // --- round 11, invariant 3: the native chunk write is the authoritative
     // commit for a prepared chunk, so *every* fallible sidecar step after it
     // must be a typed published outcome. The primary-generation restamp inside
@@ -576,7 +656,7 @@ mod enabled {
         Ok(())
     }
 
-    // --- round 12, F-05: when a native append fails and the truncate-or-seek
+    // --- round 12, : when a native append fails and the truncate-or-seek
     // that rolls it back fails too, the writer poisons itself and returns
     // `WriteRollbackFailed`. The public contract is that *every* later
     // mutation is refused. The defect was that the indexed writer kept a
@@ -650,7 +730,7 @@ mod enabled {
         writer.sync()?;
         let published_len = std::fs::metadata(&path)?.len();
 
-        // The single-record indexed put is the exact path F-05 named: it
+        // The single-record indexed put is the exact path  named: it
         // passes the indexed guard and then calls the stream's internal
         // append.
         VarlitStreamWriter::inject_append_rollback_failures(1);
@@ -714,7 +794,7 @@ mod enabled {
         Ok(())
     }
 
-    /// The single-record indexed *delete* is the second half of F-05: it takes
+    /// The single-record indexed *delete* is the second half of : it takes
     /// the same direct route into the stream, so a rollback failure raised by a
     /// delete must refuse the next put just as a put refuses the next delete.
     #[test]

@@ -2,7 +2,7 @@ use varlit::{Decoder, Encoder, Result, VarlitBlock, VarlitDecode, VarlitEncode, 
 
 // Wrapping an identity-less codec in a built-in container must not launder it
 // into an identity: the container fold propagates the missing SCHEMA_ID
-// outward, so the derive still rejects the field (API-04).
+// outward, so the derive still rejects the field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Packed(u64);
 

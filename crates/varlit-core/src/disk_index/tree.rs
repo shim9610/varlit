@@ -1,10 +1,10 @@
 //! Immutable, append-only index pages. Each handle owns its bounded cache.
 //! Only the sole writer appends pages; published pages are never reused.
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
+use crate::fallible::Arc;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
-use std::sync::Arc;
 
 pub(super) const PAGE: usize = 4096;
 const HEADER: usize = 32;
@@ -23,19 +23,96 @@ fn fanout(height: u8) -> usize {
 }
 
 fn corrupt(message: &'static str) -> DiskIndexError {
-    DiskIndexError::Storage(message.into())
+    DiskIndexError::CheckpointMismatch(message)
+}
+
+// Test-only syscall seam: production continues to call the native positional
+// read directly. Fault state is thread-local, so other readers are unaffected.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ReadFault {
+    chunk: usize,
+    fail_at: usize,
+    calls: usize,
+    interrupted: usize,
+    kind: std::io::ErrorKind,
+}
+#[cfg(test)]
+thread_local! {
+    static READ_FAULT: std::cell::Cell<Option<ReadFault>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+fn with_read_fault<T>(
+    chunk: usize,
+    fail_at: usize,
+    kind: std::io::ErrorKind,
+    op: impl FnOnce() -> T,
+) -> (T, usize) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            READ_FAULT.with(|s| s.set(None));
+        }
+    }
+    assert!(chunk > 0);
+    READ_FAULT.with(|s| {
+        assert!(s.get().is_none());
+        s.set(Some(ReadFault {
+            chunk,
+            fail_at,
+            calls: 0,
+            interrupted: 0,
+            kind,
+        }));
+    });
+    let _reset = Reset;
+    let result = op();
+    let calls = READ_FAULT.with(|s| {
+        let f = s.get().unwrap();
+        f.calls - f.interrupted
+    });
+    (result, calls)
 }
 
 pub(super) fn read_at(file: &File, mut offset: u64, mut bytes: &mut [u8]) -> std::io::Result<()> {
     while !bytes.is_empty() {
+        #[cfg(test)]
+        let limit = READ_FAULT.with(|state| -> std::io::Result<usize> {
+            let Some(mut fault) = state.get() else {
+                return Ok(bytes.len());
+            };
+            fault.calls += 1;
+            state.set(Some(fault));
+            if fault.calls == fault.fail_at {
+                // A zero-length syscall result exercises the real EOF branch.
+                if fault.kind == std::io::ErrorKind::UnexpectedEof {
+                    return Ok(0);
+                }
+                return Err(fault.kind.into());
+            }
+            Ok(bytes.len().min(fault.chunk))
+        })?;
+        #[cfg(test)]
+        let target = &mut bytes[..limit];
+        #[cfg(not(test))]
+        let target = &mut *bytes;
         #[cfg(unix)]
-        let result = std::os::unix::fs::FileExt::read_at(file, bytes, offset);
+        let result = std::os::unix::fs::FileExt::read_at(file, target, offset);
         #[cfg(windows)]
-        let result = std::os::windows::fs::FileExt::seek_read(file, bytes, offset);
+        let result = std::os::windows::fs::FileExt::seek_read(file, target, offset);
         #[cfg(not(any(unix, windows)))]
         let result: std::io::Result<usize> = Err(std::io::ErrorKind::Unsupported.into());
         let n = match result {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                #[cfg(test)]
+                READ_FAULT.with(|s| {
+                    if let Some(mut f) = s.get() {
+                        f.interrupted += 1;
+                        s.set(Some(f));
+                    }
+                });
+                continue;
+            }
             other => other?,
         };
         if n == 0 {
@@ -83,7 +160,7 @@ struct Key {
     offset: u64,
     len: usize,
     prefix: [u8; 16],
-    decoded: Option<(Arc<Vec<u8>>, usize)>,
+    decoded: Option<usize>,
 }
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
@@ -92,13 +169,12 @@ impl PartialEq for Key {
 }
 impl Eq for Key {}
 impl Key {
-    fn cached(&self) -> Option<&[u8]> {
+    fn cached<'a>(&'a self, packed: &'a [u8]) -> Option<&'a [u8]> {
         if self.len <= 16 {
             Some(&self.prefix[..self.len])
         } else {
             self.decoded
-                .as_ref()
-                .map(|(bytes, at)| &bytes[*at..*at + self.len])
+                .and_then(|at| packed.get(at..at.checked_add(self.len)?))
         }
     }
 }
@@ -129,6 +205,7 @@ struct Node {
     height: u8,
     count: u64,
     entries: Vec<Entry>,
+    key_bytes: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -139,17 +216,88 @@ enum Cached {
 
 #[derive(Default)]
 struct Cache {
-    pages: HashMap<u64, Arc<Node>>,
-    keys: HashMap<u64, Arc<Vec<u8>>>,
+    pages: HashMap<u64, Option<Node>>,
+    keys: HashMap<u64, Option<Vec<u8>>>,
     order: VecDeque<Cached>,
     bytes: usize,
+}
+
+// A lease temporarily owns an existing cache value. Its occupied slot remains
+// charged and cannot be evicted until Drop returns it without allocating.
+// This replaces per-page/per-key Arc allocations with single ownership.
+trait Resident: Sized {
+    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>>;
+    fn charge(&self) -> usize;
+    fn tag(offset: u64) -> Cached;
+}
+impl Resident for Node {
+    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>> {
+        &mut cache.pages
+    }
+    fn charge(&self) -> usize {
+        Reader::charge(self)
+    }
+    fn tag(offset: u64) -> Cached {
+        Cached::Page(offset)
+    }
+}
+impl Resident for Vec<u8> {
+    fn slots(cache: &mut Cache) -> &mut HashMap<u64, Option<Self>> {
+        &mut cache.keys
+    }
+    fn charge(&self) -> usize {
+        self.capacity() + 128
+    }
+    fn tag(offset: u64) -> Cached {
+        Cached::Key(offset)
+    }
+}
+struct Lease<'a, T: Resident> {
+    value: Option<T>,
+    reader: &'a Reader,
+    offset: u64,
+    cached: bool,
+}
+impl<T: Resident> std::ops::Deref for Lease<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.value.as_ref().expect("live cache lease")
+    }
+}
+impl<T: Resident> Drop for Lease<'_, T> {
+    fn drop(&mut self) {
+        if self.cached {
+            let mut cache = self.reader.cache.borrow_mut();
+            let slot = T::slots(&mut cache)
+                .get_mut(&self.offset)
+                .expect("leased cache slot");
+            *slot = self.value.take();
+        }
+    }
+}
+fn oom(_: std::collections::TryReserveError) -> DiskIndexError {
+    std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
+}
+fn buffer(len: usize) -> DiskIndexResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).map_err(oom)?;
+    bytes.resize(len, 0);
+    Ok(bytes)
+}
+fn copy_bytes(bytes: &[u8]) -> DiskIndexResult<Vec<u8>> {
+    let mut result = Vec::new();
+    result.try_reserve_exact(bytes.len()).map_err(oom)?;
+    result.extend_from_slice(bytes);
+    Ok(result)
 }
 
 /// Send, not Sync: a reader's cache is never shared between reading threads.
 pub(super) struct Reader {
     file: Arc<File>,
     end: u64,
+    minimum_offset: u64,
     max_key: usize,
+    verify_metadata: bool,
     budget: usize,
     cache: RefCell<Cache>,
     #[cfg(test)]
@@ -163,7 +311,9 @@ impl Reader {
         Self {
             file,
             end,
+            minimum_offset: PAGE as u64,
             max_key,
+            verify_metadata: true,
             budget,
             cache: RefCell::new(Cache::default()),
             #[cfg(test)]
@@ -172,20 +322,31 @@ impl Reader {
             key_reads: std::cell::Cell::new(0),
         }
     }
-    fn node(&self, root: Root) -> DiskIndexResult<Arc<Node>> {
-        if root.offset < PAGE as u64
+    pub(super) fn with_metadata_verification(mut self, enabled: bool) -> Self {
+        self.verify_metadata = enabled;
+        self
+    }
+    pub(super) fn with_minimum_offset(mut self, minimum_offset: u64) -> Self {
+        self.minimum_offset = minimum_offset;
+        self
+    }
+    fn node(&self, root: Root) -> DiskIndexResult<Lease<'_, Node>> {
+        if let Some(node) = self.cached::<Node>(root.offset) {
+            if node.count != root.count {
+                return Err(corrupt("index subtree count mismatch"));
+            }
+            return Ok(node);
+        }
+        self.retain(root.offset, self.read_node(root)?)
+    }
+    fn read_node(&self, root: Root) -> DiskIndexResult<Node> {
+        if root.offset < self.minimum_offset
             || root
                 .offset
                 .checked_add(PAGE as u64)
                 .is_none_or(|e| e > self.end)
         {
             return Err(corrupt("index page outside checkpoint extent"));
-        }
-        if let Some(node) = self.cache.borrow().pages.get(&root.offset) {
-            if node.count != root.count {
-                return Err(corrupt("index subtree count mismatch"));
-            }
-            return Ok(node.clone());
         }
         let mut bytes = [0; PAGE];
         read_at(&self.file, root.offset, &mut bytes)?;
@@ -196,7 +357,7 @@ impl Reader {
         }
         let checksum = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
         bytes[16..20].fill(0);
-        if crc32fast::hash(&bytes) != checksum {
+        if self.verify_metadata && crc32fast::hash(&bytes) != checksum {
             return Err(corrupt("index page checksum mismatch"));
         }
         let height = bytes[8];
@@ -204,13 +365,15 @@ impl Reader {
         if height > 31 || len == 0 || len > fanout(height) || bytes[12..16] != [0; 4] {
             return Err(corrupt("invalid index page shape"));
         }
-        if bytes[HEADER + len * entry_size(height)..]
-            .iter()
-            .any(|x| *x != 0)
+        if self.verify_metadata
+            && bytes[HEADER + len * entry_size(height)..]
+                .iter()
+                .any(|x| *x != 0)
         {
             return Err(corrupt("nonzero index page padding"));
         }
-        let mut entries = Vec::with_capacity(len);
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(len).map_err(oom)?;
         let mut count = 0u64;
         for item in
             bytes[HEADER..HEADER + len * entry_size(height)].chunks_exact(entry_size(height))
@@ -228,7 +391,7 @@ impl Reader {
                 if key.offset != 0 || key.prefix[key.len..].iter().any(|x| *x != 0) {
                     return Err(corrupt("invalid inline index key"));
                 }
-            } else if key.offset < PAGE as u64
+            } else if key.offset < self.minimum_offset
                 || key
                     .offset
                     .checked_add(key.len as u64 + 4)
@@ -244,7 +407,7 @@ impl Reader {
             } else {
                 let child = entry.child();
                 if child.count == 0
-                    || child.offset < PAGE as u64
+                    || child.offset < self.minimum_offset
                     || child
                         .offset
                         .checked_add(PAGE as u64)
@@ -282,11 +445,12 @@ impl Reader {
             .iter()
             .zip(needed)
             .filter(|(_, needed)| *needed)
-            .try_fold(0usize, |n, (e, _)| n.checked_add(e.key.len + 4));
+            .try_fold(0usize, |n, (e, _)| n.checked_add(e.key.len)?.checked_add(4));
+        let mut packed = Vec::new();
         if let Some(len) = key_bytes.filter(|len| *len <= self.budget / 2)
             && len != 0
         {
-            let mut bytes = vec![0; len];
+            let mut bytes = buffer(len)?;
             let mut at = 0;
             let mut run_offset = 0u64;
             let mut run_start = 0usize;
@@ -317,20 +481,21 @@ impl Reader {
                 let key = &entry.key;
                 let checksum =
                     u32::from_le_bytes(bytes[at + key.len..at + key.len + 4].try_into().unwrap());
-                if crc32fast::hash(&bytes[at..at + key.len]) != checksum
-                    || bytes[at..at + 16] != key.prefix
+                if self.verify_metadata
+                    && (crc32fast::hash(&bytes[at..at + key.len]) != checksum
+                        || bytes[at..at + 16] != key.prefix)
                 {
                     return Err(corrupt("index key checksum mismatch"));
                 }
                 at += key.len + 4;
             }
-            let bytes = Arc::new(bytes);
+            packed = bytes;
             let mut at = 0;
             for (entry, needed) in entries.iter_mut().zip(needed) {
                 if !needed {
                     continue;
                 }
-                entry.key.decoded = Some((bytes.clone(), at));
+                entry.key.decoded = Some(at);
                 at += entry.key.len + 4;
             }
         }
@@ -343,56 +508,105 @@ impl Reader {
             if left.prefix != right.prefix {
                 continue;
             }
-            let ordered = if let Some(key) = right.cached() {
-                self.compare(left, key)?.is_lt()
+            let ordered = if let Some(key) = right.cached(&packed) {
+                self.compare(left, key, &packed)?.is_lt()
             } else {
-                self.compare(left, self.long_key(right)?.as_slice())?
+                self.compare(left, self.long_key(right)?.as_slice(), &packed)?
                     .is_lt()
             };
             if !ordered {
                 return Err(corrupt("index keys are not strictly sorted"));
             }
         }
-        let node = Arc::new(Node {
+        Ok(Node {
             height,
             count,
             entries,
-        });
-        let charge = Self::charge(&node);
+            key_bytes: packed,
+        })
+    }
+    fn cached<T: Resident>(&self, offset: u64) -> Option<Lease<'_, T>> {
         let mut cache = self.cache.borrow_mut();
-        if Self::reserve(&mut cache, charge, self.budget) {
-            cache.order.push_back(Cached::Page(root.offset));
-            cache.pages.insert(root.offset, node.clone());
+        let value = T::slots(&mut cache).get_mut(&offset)?.take()?;
+        Some(Lease {
+            value: Some(value),
+            reader: self,
+            offset,
+            cached: true,
+        })
+    }
+    fn retain<T: Resident>(&self, offset: u64, value: T) -> DiskIndexResult<Lease<'_, T>> {
+        let charge = value.charge();
+        let mut cache = self.cache.borrow_mut();
+        let cached = !T::slots(&mut cache).contains_key(&offset)
+            && Self::reserve(&mut cache, charge, self.budget);
+        if cached {
+            // Reserve both structures before charging or installing a slot.
+            cache.order.try_reserve(1).map_err(oom)?;
+            T::slots(&mut cache).try_reserve(1).map_err(oom)?;
+            T::slots(&mut cache).insert(offset, None);
+            cache.order.push_back(T::tag(offset));
+            cache.bytes += charge;
         }
-        Ok(node)
+        Ok(Lease {
+            value: Some(value),
+            reader: self,
+            offset,
+            cached,
+        })
+    }
+    fn store<T: Resident>(&self, offset: u64, value: T) -> DiskIndexResult<()> {
+        let charge = value.charge();
+        let mut cache = self.cache.borrow_mut();
+        debug_assert!(!T::slots(&mut cache).contains_key(&offset));
+        if Self::reserve(&mut cache, charge, self.budget) {
+            cache.order.try_reserve(1).map_err(oom)?;
+            T::slots(&mut cache).try_reserve(1).map_err(oom)?;
+            T::slots(&mut cache).insert(offset, Some(value));
+            cache.order.push_back(T::tag(offset));
+            cache.bytes += charge;
+        }
+        Ok(())
     }
     fn charge(node: &Node) -> usize {
-        256 + node.entries.capacity() * std::mem::size_of::<Entry>()
-            + node
-                .entries
-                .iter()
-                .find_map(|e| e.key.decoded.as_ref().map(|(data, _)| data.capacity() + 64))
-                .unwrap_or(0)
+        256 + node.entries.capacity() * std::mem::size_of::<Entry>() + node.key_bytes.capacity()
     }
     fn reserve(cache: &mut Cache, charge: usize, budget: usize) -> bool {
         if charge > budget {
             return false;
         }
-        while cache.bytes.saturating_add(charge) > budget {
-            match cache
+        // Each queue entry is examined at most once. Pinned parents remain
+        // charged; a full pinned cache simply leaves the child uncached.
+        let mut remaining = cache.order.len();
+        while cache.bytes.checked_add(charge).is_none_or(|n| n > budget) {
+            if remaining == 0 {
+                return false;
+            }
+            remaining -= 1;
+            let tag = cache
                 .order
                 .pop_front()
-                .expect("cache accounting has an owner")
-            {
-                Cached::Page(offset) => {
-                    cache.bytes -= Self::charge(&cache.pages.remove(&offset).unwrap());
-                }
-                Cached::Key(offset) => {
-                    cache.bytes -= cache.keys.remove(&offset).unwrap().capacity() + 128;
-                }
+                .expect("cache accounting has an owner");
+            let released = match tag {
+                Cached::Page(offset) => match cache.pages.entry(offset) {
+                    std::collections::hash_map::Entry::Occupied(entry) if entry.get().is_some() => {
+                        Some(Self::charge(&entry.remove().unwrap()))
+                    }
+                    _ => None,
+                },
+                Cached::Key(offset) => match cache.keys.entry(offset) {
+                    std::collections::hash_map::Entry::Occupied(entry) if entry.get().is_some() => {
+                        Some(entry.remove().unwrap().capacity() + 128)
+                    }
+                    _ => None,
+                },
+            };
+            if let Some(bytes) = released {
+                cache.bytes -= bytes;
+            } else {
+                cache.order.push_back(tag);
             }
         }
-        cache.bytes += charge;
         true
     }
     fn read_key_bytes(&self, offset: u64, bytes: &mut [u8]) -> DiskIndexResult<()> {
@@ -401,37 +615,42 @@ impl Reader {
         self.key_reads.set(self.key_reads.get() + 1);
         Ok(())
     }
-    fn long_key(&self, key: &Key) -> DiskIndexResult<Arc<Vec<u8>>> {
-        if let Some(bytes) = self.cache.borrow().keys.get(&key.offset) {
+    fn long_key(&self, key: &Key) -> DiskIndexResult<Lease<'_, Vec<u8>>> {
+        if let Some(bytes) = self.cached::<Vec<u8>>(key.offset) {
             if bytes.len() != key.len || bytes[..16] != key.prefix {
                 return Err(corrupt("inconsistent cached index key"));
             }
-            return Ok(bytes.clone());
+            return Ok(bytes);
         }
-        let mut bytes = vec![0; key.len + 4];
+        let len = key
+            .len
+            .checked_add(4)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+        let mut bytes = buffer(len)?;
         self.read_key_bytes(key.offset, &mut bytes)?;
         let checksum = u32::from_le_bytes(bytes[key.len..].try_into().unwrap());
-        if crc32fast::hash(&bytes[..key.len]) != checksum || bytes[..16] != key.prefix {
+        if self.verify_metadata
+            && (crc32fast::hash(&bytes[..key.len]) != checksum || bytes[..16] != key.prefix)
+        {
             return Err(corrupt("index key checksum mismatch"));
         }
         bytes.truncate(key.len);
-        let bytes = Arc::new(bytes);
-        let mut cache = self.cache.borrow_mut();
-        if Self::reserve(&mut cache, bytes.capacity() + 128, self.budget) {
-            cache.order.push_back(Cached::Key(key.offset));
-            cache.keys.insert(key.offset, bytes.clone());
-        }
-        Ok(bytes)
+        self.retain(key.offset, bytes)
     }
-    fn key(&self, key: &Key) -> DiskIndexResult<Vec<u8>> {
-        if let Some(bytes) = key.cached() {
-            Ok(bytes.to_vec())
+    fn key(&self, key: &Key, packed: &[u8]) -> DiskIndexResult<Vec<u8>> {
+        if let Some(bytes) = key.cached(packed) {
+            copy_bytes(bytes)
         } else {
-            Ok(self.long_key(key)?.as_ref().clone())
+            copy_bytes(&self.long_key(key)?)
         }
     }
-    fn compare(&self, stored: &Key, key: &[u8]) -> DiskIndexResult<std::cmp::Ordering> {
-        if let Some(bytes) = stored.cached() {
+    fn compare(
+        &self,
+        stored: &Key,
+        key: &[u8],
+        packed: &[u8],
+    ) -> DiskIndexResult<std::cmp::Ordering> {
+        if let Some(bytes) = stored.cached(packed) {
             return Ok(bytes.cmp(key));
         }
         let prefix = &stored.prefix[..stored.len.min(16)];
@@ -441,17 +660,50 @@ impl Reader {
         }
         Ok(self.long_key(stored)?.as_slice().cmp(key))
     }
-    fn search(&self, entries: &[Entry], key: &[u8]) -> DiskIndexResult<Result<usize, usize>> {
+    fn search(&self, node: &Node, key: &[u8]) -> DiskIndexResult<Result<usize, usize>> {
+        let entries = &node.entries;
         let (mut low, mut high) = (0, entries.len());
         while low < high {
             let mid = low + (high - low) / 2;
-            match self.compare(&entries[mid].key, key)? {
+            match self.compare(&entries[mid].key, key, &node.key_bytes)? {
                 std::cmp::Ordering::Less => low = mid + 1,
                 std::cmp::Ordering::Greater => high = mid,
                 std::cmp::Ordering::Equal => return Ok(Ok(mid)),
             }
         }
         Ok(Err(low))
+    }
+    fn cached_search(
+        cache: &Cache,
+        node: &Node,
+        key: &[u8],
+    ) -> DiskIndexResult<Option<Result<usize, usize>>> {
+        let (mut low, mut high) = (0, node.entries.len());
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let stored = &node.entries[mid].key;
+            let order = if let Some(bytes) = stored.cached(&node.key_bytes) {
+                bytes.cmp(key)
+            } else {
+                let prefix = stored.prefix[..stored.len.min(16)].cmp(&key[..key.len().min(16)]);
+                if !prefix.is_eq() || stored.len <= 16 || key.len() <= 16 {
+                    prefix.then(stored.len.cmp(&key.len()))
+                } else if let Some(Some(bytes)) = cache.keys.get(&stored.offset) {
+                    if bytes.len() != stored.len || bytes[..16] != stored.prefix {
+                        return Err(corrupt("inconsistent cached index key"));
+                    }
+                    bytes.as_slice().cmp(key)
+                } else {
+                    return Ok(None);
+                }
+            };
+            match order {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => return Ok(Some(Ok(mid))),
+            }
+        }
+        Ok(Some(Err(low)))
     }
     pub fn get(&self, mut root: Root, key: &[u8]) -> DiskIndexResult<Option<[u8; LATEST_LEN]>> {
         if root.offset == 0 {
@@ -460,31 +712,81 @@ impl Reader {
             }
             return Ok(None);
         }
-        let mut expected_height = None;
-        let mut minimum: Option<Key> = None;
-        loop {
-            let node = self.node(root)?;
-            if expected_height.is_some_and(|h| h != node.height) {
-                return Err(corrupt("index height mismatch"));
-            }
-            if minimum
-                .as_ref()
-                .is_some_and(|key| *key != node.entries[0].key)
-            {
-                return Err(corrupt("index separator mismatch"));
-            }
-            let position = self.search(&node.entries, key)?;
+        enum Step {
+            Done(Option<[u8; LATEST_LEN]>),
+            Child(Root, u8, Key),
+        }
+        let step = |node: &Node, position: Result<usize, usize>| {
             if node.height == 0 {
-                return Ok(position.ok().map(|i| node.entries[i].value));
+                return Step::Done(position.ok().map(|i| node.entries[i].value));
             }
             let at = match position {
                 Ok(i) => i,
-                Err(0) => return Ok(None),
+                Err(0) => return Step::Done(None),
                 Err(i) => i - 1,
             };
-            expected_height = Some(node.height - 1);
-            minimum = Some(node.entries[at].key.clone());
-            root = node.entries[at].child();
+            Step::Child(
+                node.entries[at].child(),
+                node.height - 1,
+                node.entries[at].key.clone(),
+            )
+        };
+        let mut expected_height = None;
+        let mut minimum: Option<Key> = None;
+        loop {
+            let validate = |node: &Node| -> DiskIndexResult<()> {
+                if node.count != root.count {
+                    return Err(corrupt("index subtree count mismatch"));
+                }
+                if !height_matches(expected_height, node.height) {
+                    return Err(corrupt("index height mismatch"));
+                }
+                if minimum.as_ref().is_some_and(|k| *k != node.entries[0].key) {
+                    return Err(corrupt("index separator mismatch"));
+                }
+                Ok(())
+            };
+            // Warm point reads borrow the resident value once. They neither
+            // move cache entries nor increment reference counts. A cold long
+            // key releases this borrow before the fallible cache fill below.
+            let (cached, resident) = {
+                let cache = self.cache.borrow();
+                match cache.pages.get(&root.offset) {
+                    Some(Some(node)) => {
+                        validate(node)?;
+                        (
+                            Self::cached_search(&cache, node, key)?
+                                .map(|position| step(node, position)),
+                            true,
+                        )
+                    }
+                    Some(None) => (None, true),
+                    None => (None, false),
+                }
+            };
+            let next = match cached {
+                Some(step) => step,
+                None if !resident => {
+                    let node = self.read_node(root)?;
+                    validate(&node)?;
+                    let next = step(&node, self.search(&node, key)?);
+                    self.store(root.offset, node)?;
+                    next
+                }
+                None => {
+                    let node = self.node(root)?;
+                    validate(&node)?;
+                    step(&node, self.search(&node, key)?)
+                }
+            };
+            match next {
+                Step::Done(value) => return Ok(value),
+                Step::Child(child, height, key) => {
+                    root = child;
+                    expected_height = Some(height);
+                    minimum = Some(key);
+                }
+            }
         }
     }
     pub fn visit(
@@ -493,25 +795,85 @@ impl Reader {
         visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>,
     ) -> DiskIndexResult<()> {
         if root.offset == 0 {
+            if root.count != 0 {
+                return Err(corrupt("invalid empty index"));
+            }
             return Ok(());
         }
-        self.visit_at(root, None, visitor)
+        // Nodes occupy disjoint PAGE-byte extents in a valid snapshot. Include
+        // historical pages and key extents: this conservative ceiling cannot
+        // reject a valid tree, even with unaligned append offsets or old roots.
+        self.visit_at(
+            root,
+            None,
+            None,
+            None,
+            &mut (self.end / PAGE as u64),
+            visitor,
+        )
+    }
+    fn before(
+        &self,
+        left: &Key,
+        left_packed: &[u8],
+        right: &Key,
+        right_packed: &[u8],
+    ) -> DiskIndexResult<bool> {
+        let order = left.prefix[..left.len.min(16)].cmp(&right.prefix[..right.len.min(16)]);
+        if !order.is_eq() || left.len <= 16 || right.len <= 16 {
+            return Ok(order.then(left.len.cmp(&right.len)).is_lt());
+        }
+        if let Some(bytes) = right.cached(right_packed) {
+            Ok(self.compare(left, bytes, left_packed)?.is_lt())
+        } else {
+            Ok(self
+                .compare(left, &self.long_key(right)?, left_packed)?
+                .is_lt())
+        }
     }
     fn visit_at(
         &self,
         root: Root,
         height: Option<u8>,
+        minimum: Option<&Key>,
+        upper: Option<(&Key, &[u8])>,
+        remaining: &mut u64,
         visitor: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>,
     ) -> DiskIndexResult<()> {
+        take_visit(remaining)
+            .ok_or_else(|| corrupt("index traversal exceeds checkpoint extent"))?;
         let node = self.node(root)?;
-        if height.is_some_and(|h| h != node.height) {
+        if minimum.is_some_and(|key| *key != node.entries[0].key) {
+            return Err(corrupt("index separator mismatch"));
+        }
+        if !height_matches(height, node.height) {
             return Err(corrupt("index height mismatch"));
         }
-        for entry in &node.entries {
+        if let Some((bound, packed)) = upper
+            && !self.before(
+                &node.entries.last().unwrap().key,
+                &node.key_bytes,
+                bound,
+                packed,
+            )?
+        {
+            return Err(corrupt("index child exceeds separator range"));
+        }
+        for (i, entry) in node.entries.iter().enumerate() {
             if node.height == 0 {
-                visitor(self.key(&entry.key)?, entry.value)?;
+                visitor(self.key(&entry.key, &node.key_bytes)?, entry.value)?;
             } else {
-                self.visit_at(entry.child(), Some(node.height - 1), visitor)?;
+                self.visit_at(
+                    entry.child(),
+                    Some(node.height - 1),
+                    Some(&entry.key),
+                    node.entries
+                        .get(i + 1)
+                        .map(|next| (&next.key, node.key_bytes.as_slice()))
+                        .or(upper),
+                    remaining,
+                    visitor,
+                )?;
             }
         }
         Ok(())
@@ -525,6 +887,16 @@ pub(super) fn apply(
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
 ) -> DiskIndexResult<Root> {
+    apply_with_limit(file, reader, root, updates, None)
+}
+
+pub(super) fn apply_with_limit(
+    file: &File,
+    reader: &Reader,
+    root: Root,
+    updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+    maximum: Option<u64>,
+) -> DiskIndexResult<Root> {
     if updates.is_empty() {
         return Ok(root);
     }
@@ -532,8 +904,12 @@ pub(super) fn apply(
         file,
         reader,
         end: file.metadata()?.len().max(PAGE as u64),
+        maximum,
     };
-    let updates: Vec<_> = updates.iter().collect();
+    let mut sorted = Vec::new();
+    sorted.try_reserve_exact(updates.len()).map_err(oom)?;
+    sorted.extend(updates.iter());
+    let updates = sorted;
     let height = if root.offset == 0 {
         0
     } else {
@@ -555,6 +931,7 @@ struct Writer<'a> {
     file: &'a File,
     reader: &'a Reader,
     end: u64,
+    maximum: Option<u64>,
 }
 
 impl Writer<'_> {
@@ -563,6 +940,7 @@ impl Writer<'_> {
         self.end = start
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| corrupt("index file size overflow"))?;
+        crate::spill_file::check_extent(self.maximum, self.end)?;
         write_at(self.file, start, bytes)?;
         Ok(start)
     }
@@ -588,7 +966,10 @@ impl Writer<'_> {
         })
     }
     fn nodes(&mut self, height: u8, entries: Vec<Entry>) -> DiskIndexResult<Vec<Entry>> {
-        let mut output = Vec::with_capacity(entries.len().div_ceil(fanout(height)));
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(entries.len().div_ceil(fanout(height)))
+            .map_err(oom)?;
         for chunk in entries.chunks(fanout(height)) {
             let mut bytes = [0; PAGE];
             bytes[..8].copy_from_slice(MAGIC);
@@ -630,16 +1011,22 @@ impl Writer<'_> {
             return Err(corrupt("index height mismatch"));
         }
         let entries = node.as_ref().map_or(&[][..], |n| n.entries.as_slice());
+        let packed = node.as_ref().map_or(&[][..], |n| n.key_bytes.as_slice());
         let mut output = Vec::new();
+        output
+            .try_reserve(entries.len().saturating_add(updates.len()))
+            .map_err(oom)?;
         if height == 0 {
             let mut old = 0;
             for (key, value) in updates {
-                while old < entries.len() && self.reader.compare(&entries[old].key, key)?.is_lt() {
+                while old < entries.len()
+                    && self.reader.compare(&entries[old].key, key, packed)?.is_lt()
+                {
                     output.push(entries[old].clone());
                     old += 1;
                 }
                 let stored_key = if old < entries.len()
-                    && self.reader.compare(&entries[old].key, key)?.is_eq()
+                    && self.reader.compare(&entries[old].key, key, packed)?.is_eq()
                 {
                     let k = entries[old].key.clone();
                     old += 1;
@@ -661,7 +1048,7 @@ impl Writer<'_> {
                     && (i + 1 == entries.len()
                         || self
                             .reader
-                            .compare(&entries[i + 1].key, updates[consumed].0)?
+                            .compare(&entries[i + 1].key, updates[consumed].0, packed)?
                             .is_gt())
                 {
                     consumed += 1;
@@ -669,11 +1056,10 @@ impl Writer<'_> {
                 if begin == consumed {
                     output.push(entry.clone());
                 } else {
-                    output.extend(self.update(
-                        entry.child(),
-                        height - 1,
-                        &updates[begin..consumed],
-                    )?);
+                    let children =
+                        self.update(entry.child(), height - 1, &updates[begin..consumed])?;
+                    output.try_reserve(children.len()).map_err(oom)?;
+                    output.extend(children);
                 }
             }
             if consumed != updates.len() {
@@ -720,16 +1106,41 @@ mod tests {
         let actual = cache
             .pages
             .values()
-            .map(|n| Reader::charge(n))
+            .map(|n| Reader::charge(n.as_ref().unwrap()))
             .sum::<usize>()
             + cache
                 .keys
                 .values()
-                .map(|k| k.capacity() + 128)
+                .map(|k| k.as_ref().unwrap().capacity() + 128)
                 .sum::<usize>();
         assert_eq!(cache.bytes, actual);
         assert!(actual <= reader.budget);
         assert_eq!(cache.order.len(), cache.pages.len() + cache.keys.len());
+    }
+
+    #[test]
+    fn reserved_storage_pages_cannot_supply_nodes_or_long_keys() {
+        for (count, key_len) in [(1u64, 8), (1, 128), (200, 8)] {
+            let (_dir, file) = fixture();
+            let updates = (0..count)
+                .map(|id| (id.to_be_bytes().repeat(key_len / 8), value(id)))
+                .collect();
+            let root = apply(&file, &reader(&file, 0), Root::default(), &updates).unwrap();
+            let key = vec![0; key_len];
+            assert!(reader(&file, 0).get(root, &key).unwrap().is_some());
+            let mut protected = reader(&file, 0).with_minimum_offset(24576);
+            assert!(protected.get(root, &key).is_err());
+            if count > 1 || key_len > 16 {
+                // Move only the root into the allowed extent: its child/key
+                // references still target reserved publication storage.
+                let mut bytes = [0; PAGE];
+                read_at(&file, root.offset, &mut bytes).unwrap();
+                let offset = file.metadata().unwrap().len().max(24576);
+                write_at(&file, offset, &bytes).unwrap();
+                protected = reader(&file, 0).with_minimum_offset(24576);
+                assert!(protected.get(Root { offset, ..root }, &key).is_err());
+            }
+        }
     }
 
     #[test]
@@ -749,6 +1160,8 @@ mod tests {
         .unwrap();
         let read = reader(&file, 1024 * 1024);
         let node = read.node(root).unwrap();
+        let damaged_key_offset = node.entries[5].key.offset;
+        drop(node);
         assert_eq!(
             read.key_reads.get(),
             0,
@@ -767,7 +1180,7 @@ mod tests {
         );
         assert_eq!(read.page_reads.get(), 1);
         assert_cache_accounting(&read);
-        write_at(&file, node.entries[5].key.offset + 20, &[0xff]).unwrap();
+        write_at(&file, damaged_key_offset + 20, &[0xff]).unwrap();
         let read = reader(&file, 1024 * 1024);
         assert_eq!(read.get(root, &query).unwrap(), Some(value(20)));
         assert!(read.get(root, &5u64.to_be_bytes().repeat(16)).is_err());
@@ -935,3 +1348,327 @@ mod tests {
         assert!(reader(&file, 1024 * 1024).get(root, b"key").is_err());
     }
 }
+
+#[cfg(test)]
+mod corruption_guards {
+    use super::*;
+    #[test]
+    fn key_extent_overflow_returns_an_allocation_error_before_io() {
+        let file = Arc::new(tempfile::tempfile().unwrap());
+        let reader = Reader::new(file, 0, usize::MAX, 1024);
+        let key = Key {
+            offset: 0,
+            len: usize::MAX,
+            prefix: [0; 16],
+            decoded: None,
+        };
+        assert!(matches!(
+            reader.long_key(&key),
+            Err(DiskIndexError::Io(error)) if error.kind() == std::io::ErrorKind::OutOfMemory
+        ));
+        assert_eq!(reader.key_reads.get(), 0);
+    }
+    fn page(height: u8, child: Root) -> [u8; PAGE] {
+        let mut bytes = [0; PAGE];
+        bytes[..8].copy_from_slice(MAGIC);
+        bytes[8] = height;
+        let count: u16 = if height == 0 { 1 } else { 2 };
+        bytes[10..12].copy_from_slice(&count.to_le_bytes());
+        for i in 0..count as usize {
+            let at = HEADER + i * entry_size(height);
+            bytes[at + 8..at + 12].copy_from_slice(&8u32.to_le_bytes());
+            bytes[at + 12..at + 20].copy_from_slice(&((i + 1) as u64).to_be_bytes());
+            if height != 0 {
+                bytes[at + 28..at + 36].copy_from_slice(&child.offset.to_le_bytes());
+                bytes[at + 36..at + 44].copy_from_slice(&child.count.to_le_bytes());
+            }
+        }
+        let checksum = crc32fast::hash(&bytes);
+        bytes[16..20].copy_from_slice(&checksum.to_le_bytes());
+        bytes
+    }
+    fn image(height: u8) -> (Arc<File>, Root) {
+        let file = Arc::new(tempfile::tempfile().unwrap());
+        file.set_len(PAGE as u64).unwrap();
+        let mut root = Root::default();
+        for level in 0..=height {
+            let bytes = page(level, root);
+            let offset = file.metadata().unwrap().len();
+            write_at(&file, offset, &bytes).unwrap();
+            root = Root {
+                offset,
+                count: if level == 0 { 1 } else { root.count * 2 },
+            };
+        }
+        (file, root)
+    }
+    #[test]
+    fn hostile_child_with_short_reads_io_errors_and_allocation_refusal_recovers() {
+        use std::io::ErrorKind;
+        let (file, root) = image(1);
+        let valid = page(0, Root::default());
+        let mut hostile = valid;
+        hostile[8] = 255;
+        hostile[16..20].fill(0);
+        let crc = crc32fast::hash(&hostile);
+        hostile[16..20].copy_from_slice(&crc.to_le_bytes());
+        let end = file.metadata().unwrap().len();
+        let mut trials = 0;
+        let mut io_errors = 0;
+        let mut allocation_errors = 0;
+        for verify_metadata in [true, false] {
+            for chunk in [31, 4096] {
+                // Fail before reading, inside the root, and inside the bad child;
+                // MAX lets the CRC-valid hostile shape itself cause rejection.
+                let root_calls = PAGE.div_ceil(chunk);
+                for fail_at in [1, 2, root_calls + 2, usize::MAX] {
+                    for kind in [ErrorKind::UnexpectedEof, ErrorKind::PermissionDenied] {
+                        for allocation in [1, 2, 3, 4, usize::MAX] {
+                            write_at(&file, PAGE as u64, &hostile).unwrap();
+                            let read = Reader::new(file.clone(), end, 4096, 8192)
+                                .with_metadata_verification(verify_metadata);
+                            let (result, calls) = with_read_fault(chunk, fail_at, kind, || {
+                                crate::pib_probe::with_allocation_refusal(allocation, || {
+                                    read.get(root, &1u64.to_be_bytes())
+                                })
+                            });
+                            assert!(result.is_err(), "hostile child accepted");
+                            // A native syscall may return LESS than the supplied chunk
+                            // (Miri exercises this). Each non-interrupted success
+                            // advances at least one byte; at most one terminal error.
+                            assert!(calls <= 2 * PAGE + 1, "unbounded read work: {calls}");
+                            if let Err(DiskIndexError::Io(error)) = &result {
+                                io_errors += usize::from(error.kind() == kind);
+                                allocation_errors +=
+                                    usize::from(error.kind() == ErrorKind::OutOfMemory);
+                            }
+                            // Repair only the rejected child. Retry on the SAME
+                            // reader, including any partially warmed root cache.
+                            write_at(&file, PAGE as u64, &valid).unwrap();
+                            assert!(read.get(root, &1u64.to_be_bytes()).unwrap().is_some());
+                            let cache = read.cache.borrow();
+                            assert!(cache.pages.values().all(Option::is_some));
+                            assert!(cache.keys.values().all(Option::is_some));
+                            assert!(cache.bytes <= read.budget);
+                            drop(cache);
+                            drop(read);
+                            assert_eq!(Arc::strong_count(&file), 1);
+                            trials += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(io_errors > 0 && allocation_errors > 0);
+        assert_eq!(trials, 160);
+        println!(
+            "COMPOUND_READ trials={trials} retries={trials} bounded=true strict_and_trusted=true"
+        );
+    }
+
+    #[test]
+    fn duplicated_subtrees_stop_before_repeated_leaf_delivery() {
+        for height in [4, 8, 12] {
+            let (file, root) = image(height);
+            let bytes = file.metadata().unwrap().len();
+            let read = Reader::new(file, bytes, 4096, 1024 * 1024);
+            assert!(read.get(root, &1u64.to_be_bytes()).unwrap().is_some());
+            let mut visits = 0;
+            let result = read.visit(root, &mut |_, _| {
+                visits += 1;
+                Ok(())
+            });
+            assert!(
+                result.is_err(),
+                "shared child must not masquerade as a second subtree"
+            );
+            assert!(visits <= 1, "repeated leaf reached the visitor");
+            assert!(
+                read.get(root, &1u64.to_be_bytes()).unwrap().is_some(),
+                "failure left a cache lease detached"
+            );
+        }
+    }
+    #[test]
+    fn direct_cycles_are_rejected_by_lookup_and_visit() {
+        let (file, mut root) = image(1);
+        let bytes = page(1, root);
+        write_at(&file, root.offset, &bytes).unwrap();
+        root.count *= 2;
+        let read = Reader::new(
+            file.clone(),
+            file.metadata().unwrap().len(),
+            4096,
+            1024 * 1024,
+        );
+        assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+        assert!(read.visit(root, &mut |_, _| Ok(())).is_err());
+    }
+    #[test]
+    fn checksummed_hostile_heights_and_counts_terminate() {
+        let mut cases = 0;
+        for verify_metadata in [true, false] {
+            for height in 1..=u8::MAX {
+                for count in [1, u64::MAX / 2, u64::MAX] {
+                    let file = Arc::new(tempfile::tempfile().unwrap());
+                    let root = Root {
+                        offset: PAGE as u64,
+                        count,
+                    };
+                    // Self-references with freshly recomputed, valid CRCs.
+                    write_at(&file, root.offset, &page(height, root)).unwrap();
+                    let read = Reader::new(file, 2 * PAGE as u64, 4096, 0)
+                        .with_metadata_verification(verify_metadata);
+                    assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+                    let mut delivered = 0;
+                    assert!(
+                        read.visit(root, &mut |_, _| {
+                            delivered += 1;
+                            Ok(())
+                        })
+                        .is_err()
+                    );
+                    assert_eq!(delivered, 0);
+                    cases += 1;
+                }
+            }
+            // Valid, backward child extents reach the height check (cycles above
+            // can be rejected earlier by the extent/shape checks).
+            for height in 2..=31 {
+                let (file, leaf) = image(0);
+                let root = Root {
+                    offset: 2 * PAGE as u64,
+                    count: 2,
+                };
+                write_at(&file, root.offset, &page(height, leaf)).unwrap();
+                let read = Reader::new(file, 3 * PAGE as u64, 4096, 0)
+                    .with_metadata_verification(verify_metadata);
+                assert!(read.get(root, &1u64.to_be_bytes()).is_err());
+                assert!(
+                    read.page_reads.get() >= 2,
+                    "child height check was not reached"
+                );
+                let mut delivered = 0;
+                assert!(
+                    read.visit(root, &mut |_, _| {
+                        delivered += 1;
+                        Ok(())
+                    })
+                    .is_err()
+                );
+                assert_eq!(delivered, 0);
+                cases += 1;
+            }
+        }
+        println!("HOSTILE_INDEX valid_crc_cases={cases} delivered=0");
+    }
+
+    #[test]
+    fn child_keys_cannot_overlap_the_next_separator() {
+        for long in [false, true] {
+            let file = Arc::new(tempfile::tempfile().unwrap());
+            file.set_len(PAGE as u64).unwrap();
+            let values: BTreeMap<_, _> = (0..150u64)
+                .map(|n| {
+                    let mut key = if long { vec![b'x'; 32] } else { Vec::new() };
+                    key.extend_from_slice(&n.to_be_bytes());
+                    (key, [0; LATEST_LEN])
+                })
+                .collect();
+            let initial = Reader::new(file.clone(), PAGE as u64, 4096, 1024 * 1024);
+            let root = apply(&file, &initial, Root::default(), &values).unwrap();
+            let end = file.metadata().unwrap().len();
+            let clean = Reader::new(file.clone(), end, 4096, 1024 * 1024);
+            let parent = clean.node(root).unwrap();
+            assert_eq!(parent.height, 1);
+            let child = parent.entries[0].child();
+            let next = &parent.entries[1].key;
+            let mut bytes = [0; PAGE];
+            read_at(&file, child.offset, &mut bytes).unwrap();
+            let count = u16::from_le_bytes(bytes[10..12].try_into().unwrap()) as usize;
+            let at = HEADER + (count - 1) * LEAF_ENTRY;
+            bytes[at..at + 8].copy_from_slice(&next.offset.to_le_bytes());
+            bytes[at + 8..at + 12].copy_from_slice(&(next.len as u32).to_le_bytes());
+            bytes[at + 12..at + 28].copy_from_slice(&next.prefix);
+            bytes[16..20].fill(0);
+            let crc = crc32fast::hash(&bytes);
+            bytes[16..20].copy_from_slice(&crc.to_le_bytes());
+            write_at(&file, child.offset, &bytes).unwrap();
+            let damaged = Reader::new(file, end, 4096, 1024 * 1024);
+            // The leaf is locally sorted and CRC-valid; only its inherited
+            // exclusive upper bound reveals this cross-page inconsistency.
+            assert!(damaged.node(child).is_ok());
+            let mut visits = 0;
+            assert!(
+                damaged
+                    .visit(root, &mut |_, _| {
+                        visits += 1;
+                        Ok(())
+                    })
+                    .is_err()
+            );
+            assert_eq!(visits, 0);
+        }
+    }
+    #[test]
+    fn old_and_rewritten_roots_visit_each_key_once_with_tiny_caches() {
+        let file = Arc::new(tempfile::tempfile().unwrap());
+        file.set_len(PAGE as u64).unwrap();
+        let values: BTreeMap<_, _> = (0..350u64)
+            .map(|n| (n.to_be_bytes().to_vec(), [0; LATEST_LEN]))
+            .collect();
+        let initial = Reader::new(file.clone(), PAGE as u64, 4096, 1024);
+        let old = apply(&file, &initial, Root::default(), &values).unwrap();
+        let pinned = Reader::new(file.clone(), file.metadata().unwrap().len(), 4096, 1024);
+        let changes = BTreeMap::from([(125u64.to_be_bytes().to_vec(), [1; LATEST_LEN])]);
+        let new = apply(&file, &pinned, old, &changes).unwrap();
+        let current = Reader::new(file.clone(), file.metadata().unwrap().len(), 4096, 1024);
+        let node = current.node(new).unwrap();
+        assert!(
+            node.entries
+                .windows(2)
+                .any(|p| p[0].child().offset > p[1].child().offset)
+        );
+        drop(node);
+        for (read, root) in [(&pinned, old), (&current, new)] {
+            let mut count = 0u64;
+            read.visit(root, &mut |key, _| {
+                assert_eq!(key.as_slice(), count.to_be_bytes());
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(count, 350);
+            let failed = read.visit(root, &mut |_, _| {
+                Err(std::io::Error::from(std::io::ErrorKind::OutOfMemory).into())
+            });
+            assert!(failed.is_err());
+            assert!(read.get(root, &125u64.to_be_bytes()).unwrap().is_some());
+        }
+    }
+}
+
+#[cfg_attr(kani, kani::ensures(|result: &bool| *result == expected.is_none_or(|height| height == actual)))]
+fn height_matches(expected: Option<u8>, actual: u8) -> bool {
+    expected.is_none_or(|height| height == actual)
+}
+
+// Success consumes exactly one visit before reading attacker-controlled nodes.
+#[cfg_attr(kani, kani::modifies(remaining))]
+#[cfg_attr(kani, kani::ensures(|result: &Option<()>| {
+    let before = old(*remaining);
+    result.is_some() == (before != 0)
+        && *remaining == if before == 0 { 0 } else { before - 1 }
+}))]
+fn take_visit(remaining: &mut u64) -> Option<()> {
+    *remaining = remaining.checked_sub(1)?;
+    Some(())
+}
+
+#[cfg(kani)]
+#[path = "../verification/traversal.rs"]
+mod resource_proofs;
+
+#[cfg(kani)]
+#[path = "../verification/traversal_contracts.rs"]
+mod contract_proofs;

@@ -1,0 +1,2060 @@
+{
+  "profiles": {
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-a": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-a",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.596442691,
+        "cpu": 9.716635,
+        "rss_mib": 141.33984375,
+        "allocated_mib": 1102.36328125,
+        "write": 2.138748861,
+        "ingest": 2.135226485,
+        "read_active": 2.517223376,
+        "drain": 0.360631718,
+        "min_reader_during_fraction": 0.578125,
+        "min_reader_during_mib_s": 262.36377512724073,
+        "max_reader_crossing_bytes": 318767104,
+        "max_reader_after_bytes": 201326592,
+        "delay_p50_lower_ms": 302.732616,
+        "delay_p50_upper_ms": 339.222121,
+        "delay_p95_lower_ms": 951.480805,
+        "delay_p95_upper_ms": 987.190811,
+        "delay_p99_lower_ms": 1100.748468,
+        "delay_p99_upper_ms": 1134.886675
+      },
+      "metric_ranges": {
+        "completion": [
+          2.52852166,
+          2.668409305
+        ],
+        "cpu": [
+          9.499108,
+          10.096366
+        ],
+        "rss_mib": [
+          141.18359375,
+          170.4375
+        ],
+        "allocated_mib": [
+          1101.88671875,
+          1102.92578125
+        ],
+        "write": [
+          2.117795304,
+          2.260231977
+        ],
+        "ingest": [
+          2.113444141,
+          2.256409634
+        ],
+        "read_active": [
+          2.425574374,
+          2.586259153
+        ],
+        "drain": [
+          0.309553796,
+          0.522548036
+        ],
+        "min_reader_during_fraction": [
+          0.515625,
+          0.578125
+        ],
+        "min_reader_during_mib_s": [
+          249.82923615743957,
+          277.25404525055967
+        ],
+        "max_reader_crossing_bytes": [
+          285212672,
+          352321536
+        ],
+        "max_reader_after_bytes": [
+          184549376,
+          218103808
+        ],
+        "delay_p50_lower_ms": [
+          204.356441,
+          473.025794
+        ],
+        "delay_p50_upper_ms": [
+          235.142817,
+          505.43406
+        ],
+        "delay_p95_lower_ms": [
+          855.354929,
+          1035.425916
+        ],
+        "delay_p95_upper_ms": [
+          886.209788,
+          1067.460197
+        ],
+        "delay_p99_lower_ms": [
+          1049.975112,
+          1213.788362
+        ],
+        "delay_p99_upper_ms": [
+          1077.807656,
+          1252.132303
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16152727552,
+        "cgroup_memory_file": 15119060992,
+        "cgroup_memory_anon": 220352512,
+        "sampled_processes": 10,
+        "rss_sum": 229367808,
+        "pss_sum": 177575936,
+        "visible_logical": 1154491404,
+        "visible_allocated": 1154506752,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14850846720,
+        "cgroup_memory_file": 13964468224,
+        "cgroup_memory_anon": 48947200
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-a.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-a.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-a.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--after-default": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--after-default",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.608569035,
+        "cpu": 10.109958,
+        "rss_mib": 141.19921875,
+        "allocated_mib": 1101.6640625,
+        "write": 2.119712395,
+        "ingest": 2.11555465,
+        "read_active": 2.5053725719999997,
+        "drain": 0.460901684,
+        "min_reader_during_fraction": 0.515625,
+        "min_reader_during_mib_s": 249.58002264389438,
+        "max_reader_crossing_bytes": 369098752,
+        "max_reader_after_bytes": 167772160,
+        "delay_p50_lower_ms": 402.738722,
+        "delay_p50_upper_ms": 436.956545,
+        "delay_p95_lower_ms": 1160.89614,
+        "delay_p95_upper_ms": 1190.44529,
+        "delay_p99_lower_ms": 1349.439411,
+        "delay_p99_upper_ms": 1377.840866
+      },
+      "metric_ranges": {
+        "completion": [
+          2.604811998,
+          2.824198233
+        ],
+        "cpu": [
+          9.778355,
+          10.525029
+        ],
+        "rss_mib": [
+          141.18359375,
+          156.4375
+        ],
+        "allocated_mib": [
+          1101.484375,
+          1102.8203125
+        ],
+        "write": [
+          2.119633296,
+          2.213110684
+        ],
+        "ingest": [
+          2.115347832,
+          2.209296418
+        ],
+        "read_active": [
+          2.480928423,
+          2.7423572910000003
+        ],
+        "drain": [
+          0.357382967,
+          0.674855592
+        ],
+        "min_reader_during_fraction": [
+          0.484375,
+          0.59375
+        ],
+        "min_reader_during_mib_s": [
+          234.4769221927618,
+          275.200843001016
+        ],
+        "max_reader_crossing_bytes": [
+          234881024,
+          503316480
+        ],
+        "max_reader_after_bytes": [
+          134217728,
+          201326592
+        ],
+        "delay_p50_lower_ms": [
+          356.266595,
+          457.075801
+        ],
+        "delay_p50_upper_ms": [
+          390.357409,
+          493.311914
+        ],
+        "delay_p95_lower_ms": [
+          833.580818,
+          1608.079851
+        ],
+        "delay_p95_upper_ms": [
+          866.593057,
+          1632.980446
+        ],
+        "delay_p99_lower_ms": [
+          989.032128,
+          1768.526033
+        ],
+        "delay_p99_upper_ms": [
+          1015.667574,
+          1797.391301
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16138088448,
+        "cgroup_memory_file": 15120510976,
+        "cgroup_memory_anon": 225116160,
+        "sampled_processes": 10,
+        "rss_sum": 233701376,
+        "pss_sum": 181767168,
+        "visible_logical": 1155892241,
+        "visible_allocated": 1155907584,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851117056,
+        "cgroup_memory_file": 13964550144,
+        "cgroup_memory_anon": 49082368
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--after-default.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--after-default.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--after-default.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--full": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--full",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.550624537,
+        "cpu": 9.84335,
+        "rss_mib": 141.2578125,
+        "allocated_mib": 1101.6796875,
+        "write": 2.154419309,
+        "ingest": 2.150004617,
+        "read_active": 2.460294214,
+        "drain": 0.365832785,
+        "min_reader_during_fraction": 0.4375,
+        "min_reader_during_mib_s": 216.25642665647482,
+        "max_reader_crossing_bytes": 352321536,
+        "max_reader_after_bytes": 268435456,
+        "delay_p50_lower_ms": 377.30825,
+        "delay_p50_upper_ms": 413.471401,
+        "delay_p95_lower_ms": 1169.939136,
+        "delay_p95_upper_ms": 1202.851025,
+        "delay_p99_lower_ms": 1363.827322,
+        "delay_p99_upper_ms": 1390.608999
+      },
+      "metric_ranges": {
+        "completion": [
+          2.443320478,
+          2.720503494
+        ],
+        "cpu": [
+          9.245539,
+          10.312271
+        ],
+        "rss_mib": [
+          141.23046875,
+          141.26953125
+        ],
+        "allocated_mib": [
+          1101.0625,
+          1103.21875
+        ],
+        "write": [
+          2.075114295,
+          2.1859880319999996
+        ],
+        "ingest": [
+          2.071615736,
+          2.181912587
+        ],
+        "read_active": [
+          2.3725722190000003,
+          2.628016279
+        ],
+        "drain": [
+          0.339321573,
+          0.507012003
+        ],
+        "min_reader_during_fraction": [
+          0.3125,
+          0.53125
+        ],
+        "min_reader_during_mib_s": [
+          146.66037673920502,
+          253.02279131118263
+        ],
+        "max_reader_crossing_bytes": [
+          301989888,
+          402653184
+        ],
+        "max_reader_after_bytes": [
+          201326592,
+          385875968
+        ],
+        "delay_p50_lower_ms": [
+          186.325843,
+          396.84764
+        ],
+        "delay_p50_upper_ms": [
+          222.294519,
+          427.185793
+        ],
+        "delay_p95_lower_ms": [
+          841.91864,
+          1412.459564
+        ],
+        "delay_p95_upper_ms": [
+          874.147404,
+          1450.471281
+        ],
+        "delay_p99_lower_ms": [
+          1097.939581,
+          1605.889915
+        ],
+        "delay_p99_upper_ms": [
+          1128.43378,
+          1639.202512
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16135110656,
+        "cgroup_memory_file": 15121268736,
+        "cgroup_memory_anon": 219873280,
+        "sampled_processes": 10,
+        "rss_sum": 228438016,
+        "pss_sum": 176620544,
+        "visible_logical": 1156527112,
+        "visible_allocated": 1156542464,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851215360,
+        "cgroup_memory_file": 13964636160,
+        "cgroup_memory_anon": 49303552
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--full.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--full.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--full.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--crc-only": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--crc-only",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "crc-only",
+        "read_validation": "crc-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.604335299,
+        "cpu": 9.862183,
+        "rss_mib": 141.20703125,
+        "allocated_mib": 1101.93359375,
+        "write": 2.260955383,
+        "ingest": 2.253913818,
+        "read_active": 2.506289986,
+        "drain": 0.303720467,
+        "min_reader_during_fraction": 0.578125,
+        "min_reader_during_mib_s": 249.25276757010505,
+        "max_reader_crossing_bytes": 301989888,
+        "max_reader_after_bytes": 234881024,
+        "delay_p50_lower_ms": 246.775418,
+        "delay_p50_upper_ms": 279.28044,
+        "delay_p95_lower_ms": 1051.765614,
+        "delay_p95_upper_ms": 1092.217091,
+        "delay_p99_lower_ms": 1180.670262,
+        "delay_p99_upper_ms": 1213.85333
+      },
+      "metric_ranges": {
+        "completion": [
+          2.578980635,
+          2.703414196
+        ],
+        "cpu": [
+          9.737453,
+          10.308508
+        ],
+        "rss_mib": [
+          141.0625,
+          141.328125
+        ],
+        "allocated_mib": [
+          1100.953125,
+          1102.046875
+        ],
+        "write": [
+          2.249928108,
+          2.378754853
+        ],
+        "ingest": [
+          2.244876693,
+          2.375099954
+        ],
+        "read_active": [
+          2.4750085349999997,
+          2.614069155
+        ],
+        "drain": [
+          0.298969266,
+          0.314886133
+        ],
+        "min_reader_during_fraction": [
+          0.46875,
+          0.59375
+        ],
+        "min_reader_during_mib_s": [
+          212.96301280222357,
+          270.8390404420116
+        ],
+        "max_reader_crossing_bytes": [
+          251658240,
+          369098752
+        ],
+        "max_reader_after_bytes": [
+          134217728,
+          251658240
+        ],
+        "delay_p50_lower_ms": [
+          181.720918,
+          293.680254
+        ],
+        "delay_p50_upper_ms": [
+          213.361275,
+          323.175777
+        ],
+        "delay_p95_lower_ms": [
+          927.8015,
+          1258.688689
+        ],
+        "delay_p95_upper_ms": [
+          958.923494,
+          1301.340228
+        ],
+        "delay_p99_lower_ms": [
+          1124.403575,
+          1458.727576
+        ],
+        "delay_p99_upper_ms": [
+          1171.326663,
+          1504.656302
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16140288000,
+        "cgroup_memory_file": 15119622144,
+        "cgroup_memory_anon": 219611136,
+        "sampled_processes": 10,
+        "rss_sum": 233967616,
+        "pss_sum": 182053888,
+        "visible_logical": 1154790412,
+        "visible_allocated": 1154805760,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851432448,
+        "cgroup_memory_file": 13964759040,
+        "cgroup_memory_anon": 49483776
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--crc-only.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--crc-only.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--crc-only.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--structure-only": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--structure-only",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "structure-only",
+        "read_validation": "structure-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.758706373,
+        "cpu": 10.379182,
+        "rss_mib": 141.2734375,
+        "allocated_mib": 1101.15625,
+        "write": 2.302013397,
+        "ingest": 2.298393842,
+        "read_active": 2.6542955589999995,
+        "drain": 0.428299583,
+        "min_reader_during_fraction": 0.609375,
+        "min_reader_during_mib_s": 264.5120139724741,
+        "max_reader_crossing_bytes": 318767104,
+        "max_reader_after_bytes": 150994944,
+        "delay_p50_lower_ms": 381.586508,
+        "delay_p50_upper_ms": 420.957465,
+        "delay_p95_lower_ms": 1104.221058,
+        "delay_p95_upper_ms": 1141.256373,
+        "delay_p99_lower_ms": 1244.580039,
+        "delay_p99_upper_ms": 1277.26981
+      },
+      "metric_ranges": {
+        "completion": [
+          2.687593102,
+          2.895969026
+        ],
+        "cpu": [
+          10.351552,
+          11.006057
+        ],
+        "rss_mib": [
+          141.234375,
+          173.1875
+        ],
+        "allocated_mib": [
+          1100.5,
+          1103.2109375
+        ],
+        "write": [
+          2.261081806,
+          2.36331598
+        ],
+        "ingest": [
+          2.257773052,
+          2.359061751
+        ],
+        "read_active": [
+          2.576812671,
+          2.7613936180000005
+        ],
+        "drain": [
+          0.398431112,
+          0.497662971
+        ],
+        "min_reader_during_fraction": [
+          0.484375,
+          0.609375
+        ],
+        "min_reader_during_mib_s": [
+          215.80297600057148,
+          276.3786023680329
+        ],
+        "max_reader_crossing_bytes": [
+          318767104,
+          369098752
+        ],
+        "max_reader_after_bytes": [
+          150994944,
+          201326592
+        ],
+        "delay_p50_lower_ms": [
+          270.822699,
+          421.537034
+        ],
+        "delay_p50_upper_ms": [
+          308.695043,
+          462.954108
+        ],
+        "delay_p95_lower_ms": [
+          1023.823036,
+          1209.210327
+        ],
+        "delay_p95_upper_ms": [
+          1057.931693,
+          1243.273426
+        ],
+        "delay_p99_lower_ms": [
+          1235.65493,
+          1360.069403
+        ],
+        "delay_p99_upper_ms": [
+          1263.956458,
+          1397.018143
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16145494016,
+        "cgroup_memory_file": 15119536128,
+        "cgroup_memory_anon": 215396352,
+        "sampled_processes": 10,
+        "rss_sum": 229109760,
+        "pss_sum": 177100800,
+        "visible_logical": 1154602002,
+        "visible_allocated": 1154617344,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851919872,
+        "cgroup_memory_file": 13964832768,
+        "cgroup_memory_anon": 49483776
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--structure-only.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--structure-only.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--structure-only.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--trusted": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--trusted",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.699748304,
+        "cpu": 10.223182,
+        "rss_mib": 141.2265625,
+        "allocated_mib": 1101.890625,
+        "write": 2.352670282,
+        "ingest": 2.347875247,
+        "read_active": 2.599623805,
+        "drain": 0.313644351,
+        "min_reader_during_fraction": 0.5625,
+        "min_reader_during_mib_s": 243.31624435941674,
+        "max_reader_crossing_bytes": 268435456,
+        "max_reader_after_bytes": 218103808,
+        "delay_p50_lower_ms": 215.660726,
+        "delay_p50_upper_ms": 246.639836,
+        "delay_p95_lower_ms": 937.29671,
+        "delay_p95_upper_ms": 976.69239,
+        "delay_p99_lower_ms": 1153.395704,
+        "delay_p99_upper_ms": 1185.060454
+      },
+      "metric_ranges": {
+        "completion": [
+          2.633839052,
+          2.816603823
+        ],
+        "cpu": [
+          9.957866,
+          10.718169
+        ],
+        "rss_mib": [
+          141.12890625,
+          156.44921875
+        ],
+        "allocated_mib": [
+          1100.265625,
+          1103.20703125
+        ],
+        "write": [
+          2.3247014619999997,
+          2.437264382
+        ],
+        "ingest": [
+          2.321071902,
+          2.433047602
+        ],
+        "read_active": [
+          2.5344462340000002,
+          2.7199969310000003
+        ],
+        "drain": [
+          0.281353601,
+          0.353280716
+        ],
+        "min_reader_during_fraction": [
+          0.46875,
+          0.578125
+        ],
+        "min_reader_during_mib_s": [
+          206.80104066350748,
+          245.32825607880602
+        ],
+        "max_reader_crossing_bytes": [
+          251658240,
+          285212672
+        ],
+        "max_reader_after_bytes": [
+          184549376,
+          318767104
+        ],
+        "delay_p50_lower_ms": [
+          199.121276,
+          310.49423
+        ],
+        "delay_p50_upper_ms": [
+          235.99785,
+          345.271478
+        ],
+        "delay_p95_lower_ms": [
+          884.991375,
+          940.513
+        ],
+        "delay_p95_upper_ms": [
+          924.150698,
+          984.729089
+        ],
+        "delay_p99_lower_ms": [
+          1080.1211,
+          1179.952603
+        ],
+        "delay_p99_upper_ms": [
+          1112.538156,
+          1215.624986
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16122949632,
+        "cgroup_memory_file": 15119679488,
+        "cgroup_memory_anon": 219226112,
+        "sampled_processes": 10,
+        "rss_sum": 227876864,
+        "pss_sum": 175990784,
+        "visible_logical": 1154675723,
+        "visible_allocated": 1154691072,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851899392,
+        "cgroup_memory_file": 13964931072,
+        "cgroup_memory_anon": 49483776
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--trusted.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--trusted.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--trusted.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-b": {
+      "profile": {
+        "name": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-b",
+        "kind": "mixed",
+        "engine": "varlit-indexed",
+        "config": {
+          "scenario": "mixed",
+          "records": 16384,
+          "payload": 65536,
+          "variable": false,
+          "per_tx": 256,
+          "producers": 4,
+          "readers": 8,
+          "lookups": true,
+          "scalar": false,
+          "cache": 8388608,
+          "page": 4096,
+          "mmap": 0,
+          "fletcher": true,
+          "compact_bytes": 536870912,
+          "hdf_chunk": 0,
+          "group_items": 512,
+          "telemetry": true
+        },
+        "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/mixed"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 2.822201958,
+        "cpu": 10.695526,
+        "rss_mib": 141.19921875,
+        "allocated_mib": 1101.39453125,
+        "write": 2.222339124,
+        "ingest": 2.217377538,
+        "read_active": 2.7246468930000005,
+        "drain": 0.556038572,
+        "min_reader_during_fraction": 0.375,
+        "min_reader_during_mib_s": 169.32767324659687,
+        "max_reader_crossing_bytes": 352321536,
+        "max_reader_after_bytes": 335544320,
+        "delay_p50_lower_ms": 400.311533,
+        "delay_p50_upper_ms": 434.978118,
+        "delay_p95_lower_ms": 1322.447565,
+        "delay_p95_upper_ms": 1351.117887,
+        "delay_p99_lower_ms": 1603.132519,
+        "delay_p99_upper_ms": 1634.29351
+      },
+      "metric_ranges": {
+        "completion": [
+          2.75473962,
+          2.865649912
+        ],
+        "cpu": [
+          10.503878,
+          10.730759
+        ],
+        "rss_mib": [
+          141.1328125,
+          141.33984375
+        ],
+        "allocated_mib": [
+          1100.41015625,
+          1102.23828125
+        ],
+        "write": [
+          2.171739725,
+          2.2722906
+        ],
+        "ingest": [
+          2.167630228,
+          2.26779335
+        ],
+        "read_active": [
+          2.643088551,
+          2.760506212
+        ],
+        "drain": [
+          0.519586086,
+          0.614806038
+        ],
+        "min_reader_during_fraction": [
+          0.265625,
+          0.390625
+        ],
+        "min_reader_during_mib_s": [
+          122.6676011075627,
+          184.53337256217583
+        ],
+        "max_reader_crossing_bytes": [
+          335544320,
+          486539264
+        ],
+        "max_reader_after_bytes": [
+          318767104,
+          486539264
+        ],
+        "delay_p50_lower_ms": [
+          387.692928,
+          448.469966
+        ],
+        "delay_p50_upper_ms": [
+          422.899311,
+          487.415564
+        ],
+        "delay_p95_lower_ms": [
+          1255.400651,
+          1462.529832
+        ],
+        "delay_p95_upper_ms": [
+          1288.507261,
+          1500.84948
+        ],
+        "delay_p99_lower_ms": [
+          1501.758103,
+          1607.684266
+        ],
+        "delay_p99_upper_ms": [
+          1529.727265,
+          1640.635962
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 16119758848,
+        "cgroup_memory_file": 15120191488,
+        "cgroup_memory_anon": 225624064,
+        "sampled_processes": 10,
+        "rss_sum": 234020864,
+        "pss_sum": 182262784,
+        "visible_logical": 1155081228,
+        "visible_allocated": 1155096576,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14851952640,
+        "cgroup_memory_file": 13965033472,
+        "cgroup_memory_anon": 49483776
+      },
+      "observation_files": [
+        "timing-0-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-b.json",
+        "timing-1-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-b.json",
+        "timing-2-grouped-n8388608-g512-t131072-w4-r8-varlit-indexed--before-b.json"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--before-a": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--before-a",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "before-a",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.673498668,
+        "cpu": 1.216705,
+        "rss_mib": 25.296875,
+        "allocated_mib": 1024.12109375,
+        "write": 0.812309608,
+        "scan": 0.16993520599999995,
+        "point": 0.5176034719999995,
+        "range": 0.025488745999999996
+      },
+      "metric_ranges": {
+        "completion": [
+          1.662503657,
+          1.705130294
+        ],
+        "cpu": [
+          1.185609,
+          1.226328
+        ],
+        "rss_mib": [
+          25.21484375,
+          25.359375
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.811672205,
+          0.8603076499999995
+        ],
+        "scan": [
+          0.16679908100000007,
+          0.18482015399999993
+        ],
+        "point": [
+          0.509564167999999,
+          0.5415685179999996
+        ],
+        "range": [
+          0.025426114999999992,
+          0.028169927
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15967322112,
+        "cgroup_memory_file": 15038988288,
+        "cgroup_memory_anon": 70729728,
+        "sampled_processes": 2,
+        "rss_sum": 27316224,
+        "pss_sum": 26169344,
+        "visible_logical": 1073860894,
+        "visible_allocated": 1073868800,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14852644864,
+        "cgroup_memory_file": 13965119488,
+        "cgroup_memory_anon": 49872896
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--after-default": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--after-default",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "after-default",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.648370428,
+        "cpu": 1.165974,
+        "rss_mib": 25.30078125,
+        "allocated_mib": 1024.12109375,
+        "write": 0.8739987170000002,
+        "scan": 0.17081524500000006,
+        "point": 0.4965000129999995,
+        "range": 0.025050014000000002
+      },
+      "metric_ranges": {
+        "completion": [
+          1.627712881,
+          1.808634492
+        ],
+        "cpu": [
+          1.137812,
+          1.289579
+        ],
+        "rss_mib": [
+          25.23828125,
+          25.34375
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.805355165,
+          0.908375334
+        ],
+        "scan": [
+          0.14748519799999998,
+          0.175883689
+        ],
+        "point": [
+          0.4813401620000011,
+          0.566171656999999
+        ],
+        "range": [
+          0.024392895000000005,
+          0.028829878999999992
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15964672000,
+        "cgroup_memory_file": 15039021056,
+        "cgroup_memory_anon": 68460544,
+        "sampled_processes": 2,
+        "rss_sum": 27234304,
+        "pss_sum": 26087424,
+        "visible_logical": 1073860894,
+        "visible_allocated": 1073868800,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14852943872,
+        "cgroup_memory_file": 13965139968,
+        "cgroup_memory_anon": 49872896
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--full": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--full",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "full",
+        "read_validation": "full",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.672696244,
+        "cpu": 1.191721,
+        "rss_mib": 25.28515625,
+        "allocated_mib": 1024.12109375,
+        "write": 0.833705219,
+        "scan": 0.16935260099999994,
+        "point": 0.5239204049999988,
+        "range": 0.026992253
+      },
+      "metric_ranges": {
+        "completion": [
+          1.662975325,
+          1.688196888
+        ],
+        "cpu": [
+          1.167352,
+          1.211563
+        ],
+        "rss_mib": [
+          25.26171875,
+          25.30078125
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.8285131499999998,
+          0.8345828759999999
+        ],
+        "scan": [
+          0.15106257399999995,
+          0.17001006800000004
+        ],
+        "point": [
+          0.5132655079999999,
+          0.5269744589999995
+        ],
+        "range": [
+          0.025330788000000003,
+          0.02823839999999998
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15965360128,
+        "cgroup_memory_file": 15039033344,
+        "cgroup_memory_anon": 70750208,
+        "sampled_processes": 2,
+        "rss_sum": 27316224,
+        "pss_sum": 26169344,
+        "visible_logical": 1073860894,
+        "visible_allocated": 1073868800,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14852866048,
+        "cgroup_memory_file": 13965164544,
+        "cgroup_memory_anon": 49901568
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--crc-only": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--crc-only",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "crc-only",
+        "read_validation": "crc-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.661191845,
+        "cpu": 1.187256,
+        "rss_mib": 25.359375,
+        "allocated_mib": 1024.12109375,
+        "write": 0.802205844,
+        "scan": 0.162965997,
+        "point": 0.5348853139999992,
+        "range": 0.025586968999999998
+      },
+      "metric_ranges": {
+        "completion": [
+          1.547410951,
+          1.686841871
+        ],
+        "cpu": [
+          1.087106,
+          1.218231
+        ],
+        "rss_mib": [
+          25.296875,
+          25.36328125
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.7649013529999995,
+          0.8091837510000001
+        ],
+        "scan": [
+          0.149883975,
+          0.17874174400000004
+        ],
+        "point": [
+          0.49183084699999907,
+          0.5497491819999996
+        ],
+        "range": [
+          0.02445259600000001,
+          0.02625885599999999
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15965118464,
+        "cgroup_memory_file": 15039049728,
+        "cgroup_memory_anon": 70750208,
+        "sampled_processes": 2,
+        "rss_sum": 27250688,
+        "pss_sum": 26103808,
+        "visible_logical": 1073860894,
+        "visible_allocated": 1073868800,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14853156864,
+        "cgroup_memory_file": 13965180928,
+        "cgroup_memory_anon": 49901568
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--structure-only": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--structure-only",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "structure-only",
+        "read_validation": "structure-only",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.539725466,
+        "cpu": 1.06289,
+        "rss_mib": 25.296875,
+        "allocated_mib": 1024.12109375,
+        "write": 0.8379063600000001,
+        "scan": 0.14489535799999997,
+        "point": 0.416976231999999,
+        "range": 0.022713343999999993
+      },
+      "metric_ranges": {
+        "completion": [
+          1.539094526,
+          1.584437037
+        ],
+        "cpu": [
+          1.021679,
+          1.067922
+        ],
+        "rss_mib": [
+          25.23828125,
+          25.30078125
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.8255561800000001,
+          0.8439613280000001
+        ],
+        "scan": [
+          0.14416626000000016,
+          0.14729208699999996
+        ],
+        "point": [
+          0.41502923700000033,
+          0.4476842869999986
+        ],
+        "range": [
+          0.021525174000000008,
+          0.023837397999999992
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15977107456,
+        "cgroup_memory_file": 15039082496,
+        "cgroup_memory_anon": 70754304,
+        "sampled_processes": 2,
+        "rss_sum": 27254784,
+        "pss_sum": 26107904,
+        "visible_logical": 1073861027,
+        "visible_allocated": 1073872896,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14852915200,
+        "cgroup_memory_file": 13965201408,
+        "cgroup_memory_anon": 49901568
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--trusted": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--trusted",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "trusted",
+        "read_validation": "trusted",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/final/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.547233214,
+        "cpu": 1.070015,
+        "rss_mib": 25.296875,
+        "allocated_mib": 1024.12109375,
+        "write": 0.8123307850000001,
+        "scan": 0.14473319899999992,
+        "point": 0.4287050700000014,
+        "range": 0.025776137000000015
+      },
+      "metric_ranges": {
+        "completion": [
+          1.513813999,
+          1.549632339
+        ],
+        "cpu": [
+          1.058434,
+          1.070334
+        ],
+        "rss_mib": [
+          25.23828125,
+          25.359375
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.7953806669999999,
+          0.8145120770000001
+        ],
+        "scan": [
+          0.14351309499999998,
+          0.147478432
+        ],
+        "point": [
+          0.41383514499999985,
+          0.4340176590000005
+        ],
+        "range": [
+          0.02099393100000001,
+          0.03338961000000001
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15977209856,
+        "cgroup_memory_file": 15039102976,
+        "cgroup_memory_anon": 70762496,
+        "sampled_processes": 2,
+        "rss_sum": 27246592,
+        "pss_sum": 26099712,
+        "visible_logical": 1073861020,
+        "visible_allocated": 1073872896,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14853029888,
+        "cgroup_memory_file": 13965230080,
+        "cgroup_memory_anon": 49901568
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    },
+    "readcheck-array-native-owned-n1073741824-g1048576--before-b": {
+      "profile": {
+        "name": "array-native-owned-n1073741824-g1048576--before-b",
+        "kind": "array",
+        "mode": "native-owned",
+        "total": 1073741824,
+        "group": 1048576,
+        "page": 4096,
+        "mmap": 0,
+        "points": 4096,
+        "ranges": 128,
+        "readers": 0,
+        "warm_scan": false,
+        "workload": "array-native-owned-n1073741824-g1048576",
+        "variant": "before-b",
+        "read_validation": "legacy",
+        "binary_override": "/workspace/scratch/read-validation-20261104/binaries/after/arrays"
+      },
+      "observations": 3,
+      "metrics": {
+        "completion": 1.636978511,
+        "cpu": 1.114363,
+        "rss_mib": 25.3515625,
+        "allocated_mib": 1024.12109375,
+        "write": 0.8424988739999999,
+        "scan": 0.15506941700000013,
+        "point": 0.4935860849999996,
+        "range": 0.024440716000000008
+      },
+      "metric_ranges": {
+        "completion": [
+          1.57857438,
+          1.759608657
+        ],
+        "cpu": [
+          1.084541,
+          1.237956
+        ],
+        "rss_mib": [
+          25.23828125,
+          25.359375
+        ],
+        "allocated_mib": [
+          1024.12109375,
+          1024.12109375
+        ],
+        "write": [
+          0.8040941140000004,
+          0.8731269419999997
+        ],
+        "scan": [
+          0.15084309299999993,
+          0.17402986500000023
+        ],
+        "point": [
+          0.48380232299999903,
+          0.5379421049999995
+        ],
+        "range": [
+          0.02418248799999999,
+          0.02901898799999999
+        ]
+      },
+      "probe": {
+        "cgroup_memory_current": 15965442048,
+        "cgroup_memory_file": 15039123456,
+        "cgroup_memory_anon": 70180864,
+        "sampled_processes": 2,
+        "rss_sum": 27250688,
+        "pss_sum": 26103808,
+        "visible_logical": 1073860894,
+        "visible_allocated": 1073868800,
+        "temporary_allocated": 0,
+        "deleted_open_allocated": 0
+      },
+      "probe_baseline": {
+        "cgroup_memory_current": 14852907008,
+        "cgroup_memory_file": 13965246464,
+        "cgroup_memory_anon": 49905664
+      },
+      "observation_files": [
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile",
+        "see results.jsonl command and profile"
+      ],
+      "presentation": "validation",
+      "origin_report": "Independent read-check comparison; separate cohort"
+    }
+  },
+  "comparisons": [],
+  "read_validation_comparisons": [
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "write",
+      "control_variation": 0.03716472845166674,
+      "after_over_before": [
+        1.0759428528143178,
+        1.0373885876552522
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.0392659505482238,
+        "structure-only": 0.9949861449911896,
+        "trusted": 1.0263124756499287
+      },
+      "aa_median_status": "exceeds",
+      "baseline_repeat_spread": [
+        0.059873039197142555,
+        0.081938184287709
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "completion",
+      "control_variation": 0.02182263882148483,
+      "after_over_before": [
+        0.9849846071105448,
+        1.0069591121223949
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.0069253885604044,
+        "structure-only": 1.0863600563452653,
+        "trusted": 1.0810886354201545
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.025471569123471757,
+        0.11059050304173479
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "cpu",
+      "control_variation": 0.08411406215968531,
+      "after_over_before": [
+        0.958304601361875,
+        1.0463143517866262
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.0037607727398303,
+        "structure-only": 1.1212082153374292,
+        "trusted": 1.11374233071499
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.033466616805224086,
+        0.13767057951493372
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "scan",
+      "control_variation": 0.08747915955684793,
+      "after_over_before": [
+        1.0051786738058275,
+        1.1015405120146928
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.0391897949116338,
+        "structure-only": 1.1687924536547263,
+        "trusted": 1.1701019681047748
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.1060467305403441,
+        0.1495251123566182
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "point",
+      "control_variation": 0.0464011319460389,
+      "after_over_before": [
+        0.9592285211718983,
+        1.005903586200166
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9795004485765328,
+        "structure-only": 1.2564754650092385,
+        "trusted": 1.2220998576013973
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.06183179157654608,
+        0.10968660512380633
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "range",
+      "control_variation": 0.04111736214876904,
+      "after_over_before": [
+        0.9827872269589099,
+        1.0249296297211585
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.054921862765379,
+        "structure-only": 1.1883874518873139,
+        "trusted": 1.0471799168354818
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.10764797922973571,
+        0.19788700134644155
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "allocated_mib",
+      "control_variation": 0.0,
+      "after_over_before": [
+        1.0,
+        1.0
+      ],
+      "observed_exceedance": false,
+      "status": "within",
+      "full_over_mode": {
+        "crc-only": 1.0,
+        "structure-only": 1.0,
+        "trusted": 1.0
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "sampled_pss_mib",
+      "control_variation": 0.0025043042729692155,
+      "after_over_before": [
+        0.9968696196587885,
+        0.999372352110466
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "scope": "One separate sampled probe per condition; observational resource control only",
+      "aa_median_status": "within",
+      "calibration_gap": "Only one sampled resource probe per baseline condition; see separate repeated diagnostics."
+    },
+    {
+      "workload": "array-native-owned-n1073741824-g1048576",
+      "metric": "temporary_mib",
+      "control_variation": 0.0,
+      "after_over_before": [
+        null,
+        null
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "scope": "One separate sampled probe per condition; observational resource control only",
+      "aa_median_status": "within",
+      "calibration_gap": "Only one sampled resource probe per baseline condition; see separate repeated diagnostics."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "write",
+      "control_variation": 0.03908372063885812,
+      "after_over_before": [
+        0.9910992513674097,
+        0.9538204012647352
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9528800635337438,
+        "structure-only": 0.9358847832109294,
+        "trusted": 0.9157336348757433
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.06659812921345148,
+        0.04524551357356192
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "read_active",
+      "control_variation": 0.082401712528829,
+      "after_over_before": [
+        0.9952921126853542,
+        0.9195219308735575
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9816478650687152,
+        "structure-only": 0.9269104209807407,
+        "trusted": 0.9464039409348309
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.06383413587050682,
+        0.04309463413466992
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "completion",
+      "control_variation": 0.08694945117893216,
+      "after_over_before": [
+        1.0046703684398786,
+        0.9243027514758744
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9793764028692374,
+        "structure-only": 0.9245726772386733,
+        "trusted": 0.9447638260281319
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.053876654194945195,
+        0.039299204539776526
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "cpu",
+      "control_variation": 0.10074382746701915,
+      "after_over_before": [
+        1.0404793429000885,
+        0.9452511264990615
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 0.9980903822206503,
+        "structure-only": 0.9483743516589264,
+        "trusted": 0.9628460101756967
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.06146757596637108,
+        0.021212701460405086
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "allocated_mib",
+      "control_variation": 0.000878793784660048,
+      "after_over_before": [
+        0.9993657093247816,
+        1.0002447181662453
+      ],
+      "observed_exceedance": false,
+      "status": "within",
+      "full_over_mode": {
+        "crc-only": 0.9997695811694642,
+        "structure-only": 1.000475352612311,
+        "trusted": 0.9998085676606968
+      },
+      "aa_median_status": "within",
+      "baseline_repeat_spread": [
+        0.0009425772045144487,
+        0.0016598275623587993
+      ]
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "drain",
+      "control_variation": 0.5418460003565186,
+      "after_over_before": [
+        1.278039786838716,
+        0.828902358953616
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.2045048811280803,
+        "structure-only": 0.854151625452318,
+        "trusted": 1.1663936679669389
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.5906142731461019,
+        0.1712470263663651
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "delay_p99_lower_ms",
+      "control_variation": 0.4564022259443199,
+      "after_over_before": [
+        1.2259289476476474,
+        0.8417516300160586
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.1551297308782391,
+        "structure-only": 1.0958132697482545,
+        "trusted": 1.1824452937272256
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.1488198755321819,
+        0.06607448962863942
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "delay_p99_upper_ms",
+      "control_variation": 0.4400499591732363,
+      "after_over_before": [
+        1.2140779307325993,
+        0.8430804243969616
+      ],
+      "observed_exceedance": true,
+      "status": "unqualified",
+      "full_over_mode": {
+        "crc-only": 1.1456153430002949,
+        "structure-only": 1.0887355107845225,
+        "trusted": 1.1734498390408699
+      },
+      "aa_median_status": "unqualified",
+      "baseline_repeat_spread": [
+        0.15360533420660716,
+        0.06786338948381437
+      ],
+      "calibration_gap": "Within-baseline repetitions vary by more than 5%; AA medians alone are insufficient."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "sampled_pss_mib",
+      "control_variation": 0.026393486108388098,
+      "after_over_before": [
+        1.0236024773086372,
+        0.9972807613868117
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "scope": "One separate sampled probe per condition; observational resource control only",
+      "aa_median_status": "within",
+      "calibration_gap": "Only one sampled resource probe per baseline condition; see separate repeated diagnostics."
+    },
+    {
+      "workload": "grouped-n8388608-g512-t131072-w4-r8-varlit-indexed",
+      "metric": "temporary_mib",
+      "control_variation": 0.0,
+      "after_over_before": [
+        null,
+        null
+      ],
+      "observed_exceedance": false,
+      "status": "unqualified",
+      "scope": "One separate sampled probe per condition; observational resource control only",
+      "aa_median_status": "within",
+      "calibration_gap": "Only one sampled resource probe per baseline condition; see separate repeated diagnostics."
+    }
+  ],
+  "failures": [],
+  "timing_observations": 42,
+  "resource_probes": 14,
+  "prefix_gates": 7,
+  "qualification": "Observed 5% gates with AA median and within-baseline repeat controls; AA-only statuses and exceedances retained. Single resource probes are unqualified. Not statistical or library-wide certification.",
+  "resource_caps": {
+    "cpu": 4,
+    "memory_gib": 16,
+    "disk_gib": 32
+  }
+}

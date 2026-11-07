@@ -1,4 +1,4 @@
-// PERF-02 regression: a resident format with `checkpoint_on_flush` must not
+//  regression: a resident format with `checkpoint_on_flush` must not
 // serialize the whole index on every flush. Before the geometric-spacing fix,
 // flush-after-every-record produced cumulative checkpoint bytes of
 // `22 + 94N + 73N^2` (see the 2026-07-19 adversarial review), so doubling the
@@ -6,7 +6,7 @@
 // behavior and verifies that sparse checkpoints and a checkpoint-less tail
 // still recover every native record.
 //
-// PERF2-02 regression: the checkpoint *decision* must also be O(1) per flush.
+//  regression: the checkpoint *decision* must also be O(1) per flush.
 // The first fix linearized the file bytes but still reverse-searched the
 // resident index on every flush (179,392 predicate entry touches at 1,024
 // records vs 11,253,678 at 8,192 in the 2026-07-19 re-verification), keeping
@@ -169,7 +169,7 @@ fn checkpoint_positions(path: &PathBuf) -> varlit::Result<Vec<usize>> {
         .collect())
 }
 
-// PERF2-02: the O(1) flush-cadence state recovered at reopen must make the
+// the O(1) flush-cadence state recovered at reopen must make the
 // writer take exactly the same checkpoint decisions as a writer that never
 // restarted. Any recovery bug (forgetting the live tail, resetting the
 // geometric threshold, or double-counting the suffix) shifts or duplicates a
@@ -229,7 +229,7 @@ fn reopened_writer_recovers_checkpoint_cadence() -> varlit::Result<()> {
     Ok(())
 }
 
-// PERF2-02: cumulative index-entry touches by the checkpoint cadence machinery
+// cumulative index-entry touches by the checkpoint cadence machinery
 // must stay near-linear in the number of flush-per-record appends. The
 // pre-fix predicate re-walked the resident index on every flush, so doubling
 // the record count roughly quadrupled the touches; the O(1) state keeps the
@@ -270,11 +270,6 @@ fn checkpoint_cadence_touches_grow_linearly() -> varlit::Result<()> {
     );
     Ok(())
 }
-
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires the scalable-fault-injection feature"]
-fn checkpoint_cadence_touches_grow_linearly() {}
 
 struct TempPath {
     path: PathBuf,

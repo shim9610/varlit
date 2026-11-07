@@ -1,4 +1,4 @@
-//! DUR-02 regression: the authoritative single-writer lock is held on the
+//!  regression: the authoritative single-writer lock is held on the
 //! native file object itself, so hard-link aliases cannot bypass it the way
 //! they bypass the path-derived ".lock" marker.
 
@@ -219,7 +219,7 @@ fn stream_sidecar(path: &std::path::Path) -> std::path::PathBuf {
     std::path::PathBuf::from(value)
 }
 
-/// DUR-02 on the scalable path the review specifically called out: a freshly
+///  on the scalable path the review specifically called out: a freshly
 /// created stream writer must bind the object lock onto the file it just
 /// created, or a hard-link alias opened afterwards wins a second writer role.
 #[test]
@@ -262,7 +262,7 @@ fn stream_create_binds_object_lock_against_hard_link_alias() -> Result<()> {
     Ok(())
 }
 
-/// DUR2-05 on the scalable stream create path: creating over a hard-link
+///  on the scalable stream create path: creating over a hard-link
 /// alias of a live writer's file must be refused by the object lock without
 /// ever truncating the live file object. Before the fix,
 /// `VarlitStreamWriter::create_unmanaged` opened with `.truncate(true)` ahead
@@ -300,7 +300,7 @@ fn stream_create_over_live_alias_is_refused_before_truncation() -> Result<()> {
     Ok(())
 }
 
-/// DUR2-05 companion for the stream create path: with the truncating open
+///  companion for the stream create path: with the truncating open
 /// replaced by an explicit `set_len(0)` after the lock bind, creating over a
 /// stale unlocked file must still clear every stale byte. The recreated file
 /// must be byte-length identical to a control file created fresh.
@@ -390,7 +390,7 @@ fn write_lock_layout_segment(writer: &mut LockLayoutFormatLayoutWriter, kind: u3
     writer.flush()
 }
 
-/// DUR2-05 on the layout create path: creating over a hard-link alias of a
+///  on the layout create path: creating over a hard-link alias of a
 /// live layout writer's file must be refused by the object lock without ever
 /// truncating the live file object. Before the fix,
 /// `VarlitLayoutWriter::create_inner` opened with `.truncate(true)` ahead of
@@ -432,7 +432,7 @@ fn layout_create_over_live_alias_is_refused_before_truncation() -> Result<()> {
     Ok(())
 }
 
-/// DUR2-05 companion for the layout create path: with the truncating open
+///  companion for the layout create path: with the truncating open
 /// replaced by an explicit `set_len(0)` after the lock bind, creating over a
 /// stale unlocked file must still clear every stale byte. The recreated file
 /// must be byte-identical to a control file created fresh.

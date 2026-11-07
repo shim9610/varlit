@@ -2,10 +2,13 @@
 
 This guide covers the default stream/indexed public API. It is the
 Varlit path intended for very large append logs. Its normal open and append
-costs do not grow with native file size or record count.
+paths do not rescan the complete native prefix. Resident buffers are bounded;
+this is not a constant-total-cost claim for an unrestricted disk index. Its
+tree height, changed pages, key locality and publication frequency still affect
+lookup/update work and companion growth.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
-APIs can still scan the complete file at open. Their 16-byte directory rows use
+APIs can still scan the complete file at open. Their ordinary 13-byte private rows use
 bounded private buffers (2 MiB by default, or the declared finite index budget)
 and spill excess rows to temporary storage. Bounded RAM does not make that scan
 independent of file size.
@@ -24,7 +27,7 @@ keyed lookup. Stream/indexed handles keep primary open/append work independent
 of the complete native directory; choose a digest when native open scans are
 the immediate cost to reduce.
 
-> **Status (0.12.1).** Stream/indexed handles, disk-index
+> **API availability.** Stream/indexed handles, disk-index
 > plans, finite keys and scan control are part of the default public API, also
 > with `--no-default-features`. Remove `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.
@@ -34,6 +37,26 @@ the immediate cost to reduce.
 > sparse-offset measurements apply to their recorded revisions and filesystems.
 > See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
+
+This guide describes Varlit 0.13.0, including read-check selection and fallible
+token construction. See [API changes](api-changes.md#0130).
+
+## Private spill policy
+
+Set `VARLIT_SPILL_DIR` to an existing writable directory to choose the volume
+for disposable directory, merge and index scratch files. Otherwise the platform
+temporary directory is used. Invalid explicit paths return an error without
+falling back to another location. Set process configuration before opening
+handles or starting worker threads; each new spill captures the current policy.
+
+`VARLIT_SPILL_MAX_BYTES` is an optional unsigned decimal ceiling on the logical
+length of **each** private spill file. Unset adds no cap; `0` refuses nonempty
+spills. It is not a database-size limit, total directory quota, free-space
+reservation or process-memory limit. Filesystem-full and partial-write errors
+still propagate. Use a filesystem quota if an aggregate limit is required.
+Files used for atomic replacement stay beside their destination. On `tmpfs`,
+temporary storage consumes memory outside ordinary process resident set size
+(RSS) accounting.
 
 The [self-check guide](self-check-guide.md#scalable-io-validation) gives commands
 for model histories, concurrent snapshots, external-kill recovery, memory budgets
@@ -274,6 +297,88 @@ The stream writer does not expose `push_frame` for this declaration because
 
 ## Batch Cost And Memory
 
+### Choose the physical block before choosing the batch size
+
+An application item, an encoded Varlit record, a buffered append batch, and a
+durable publication are different units. `push_frames(items, BatchOptions)`
+coalesces writes, but still encodes one Frame per input item. If each Frame has
+a distinct disk key, it still creates one latest-key index entry per Frame.
+`sync()` publishes the accumulated work; calling it less often does not remove
+the individual framing or key entries.
+
+For small samples/items normally consumed together, declare a block containing
+hundreds or thousands of items. Index the block and locate an item inside its
+payload. For example, 1,048,576 128-byte items can be stored as 2,048 blocks of
+512 items (64 KiB payload each), or 128 blocks of 8,192 items (1 MiB each).
+These are still 1,048,576 logical items, not that many physical records or
+durability boundaries. The block size controls framing/index amortization and
+the bytes fetched on a cache miss. The publication size independently controls
+durability cost, reader visibility latency and producer buffering.
+The disk index counts distinct block keys in this layout; it does not
+automatically index every logical item inside a payload. Packing is an explicit
+application schema choice, not something `BatchOptions` performs implicitly.
+
+Use this layout when the application can identify an item's block: a declared
+`(block_key, slot)` key, fixed-size dense IDs, or a persisted routing directory.
+For unrelated arbitrary keys, grouping alone does not provide a lookup index.
+Store and measure the routing/secondary index too; do not silently replace
+arbitrary-key lookup with a known block offset or an uncharged RAM map.
+Finite `key_domain`/`key_values` describes a bounded set of key values; it is
+not a switch that packs an unbounded number of individually framed records.
+
+A minimal declaration for application-owned packed bytes is:
+
+```rust
+use varlit::varlit_format;
+varlit_format! {
+    pub format PackedCapture {
+        magic: b"PACK";
+        version: 1;
+        index: keyed_offset_chain;
+        blocks {
+            variable ItemBlock(id = 1, key = [group], key_index = disk) {
+                group: u64,
+                data: Vec<u8>,
+            }
+        }
+    }
+}
+```
+
+Define and version the item encoding inside `data`, including item width/count,
+byte order and key-to-slot mapping. A library block checksum protects those
+bytes; the application must still validate its internal layout and slot bounds.
+The benchmark's executable example is
+[`tools/storage-bench/examples/grouped.rs`](../tools/storage-bench/examples/grouped.rs).
+
+For immutable published groups, a reader can fetch/verify one block and satisfy
+a batch of item queries from that bounded buffer. Charge block lookup, decoding,
+cache misses, item extraction and copies. This is a locality-dependent workload;
+it is not equivalent to a million unrelated cold random block reads. Reusing a
+just-scanned payload without a separate point fetch must also be disclosed.
+Choose grouping and publication sizes against the application's latency target,
+not throughput alone. Incomplete tail groups need an explicit count or a separate
+publication policy; do not expose padding as valid items.
+
+Keep one writer owner and use a bounded MPSC queue for multiple producers.
+Open an independent reader handle per worker and use `follow()` plus persistent
+cursors to consume new published data. Reader block buffers and caches add
+across readers; include producer staging, queue contents and the active writer
+when sizing memory. For native append-only files, `mmap_payload_window` and
+`mmap_payloads` can capture confirmed immutable records while the writer appends
+strictly after them. These unsafe APIs require the application to exclude
+truncation, replacement, compaction and every operation that could modify or
+invalidate captured records. Existing mappings never grow; follow publications
+and map new windows or take a new snapshot. Whole-prefix snapshots copy the
+captured index when rebuilt; record windows avoid that repeated full-index copy.
+Growing matrix layouts require their own stricter mapping contract. See
+[mmap safety](../SECURITY.md#mapped-files-and-external-modification) and
+the [live mmap comparison](performance/workload-storage-20261104/README.md#sqlite-mmap-and-append-only-readers).
+
+See the [grouped-item benchmark](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md)
+for separately counted items, blocks and publications, concurrent-reader
+measurements and the comparison with individually framed controls.
+
 `BatchOptions` bounds transient native buffering:
 
 ```rust
@@ -483,12 +588,13 @@ and the pending state is a durability warning, not a rollback.
 `rebuild_disk_index_with_progress` use the same scan-control types:
 
 ```rust
+# fn scan(reader: &varlit::VarlitStreamReader) -> varlit::Result<()> {
 use std::num::NonZeroU64;
 use varlit::{
     ScanCancellationToken, ScanOptions, ScanProgressOptions, ScanProgressPhase,
 };
 
-let cancellation = ScanCancellationToken::new();
+let cancellation = ScanCancellationToken::try_new()?;
 let scan = ScanOptions {
     progress: ScanProgressOptions {
         every_records: NonZeroU64::new(100_000),
@@ -508,6 +614,7 @@ let records = reader.verify_all_with_progress(scan, |progress| {
     }
 })?;
 # Ok::<(), varlit::Error>(())
+# }
 ```
 
 The default callback cadence is every 16,384 records or 16 MiB, whichever is
@@ -517,6 +624,9 @@ reached first. Setting both cadence fields to `None` emits only `Started` and
 run on the scanning thread. Display absolute completion with
 `current_offset / snapshot_len`; use `scanned_bytes` for scan-throughput
 accounting rather than mixing the two coordinate systems.
+
+`try_new` reports token allocation refusal. Existing `new`/`default` and token
+cloning remain available; all clones share the same cancellation flag.
 
 Cancellation is checked before scanning, after every completed record, after
 every callback, and after the final `Complete` callback. It returns
@@ -631,20 +741,69 @@ Native data is synced before a durable confirmed root is published.
 Old redb sidecars require rebuild/bootstrap;
 there is deliberately no compatibility decoder.
 
+## Independent optional read checks
+
+Choose read checks explicitly when the application controls its input files:
+
+```rust
+let options = varlit::DiskIndexOptions {
+    limits: varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::TRUSTED),
+    ..varlit::DiskIndexOptions::default()
+};
+// VarlitIndexedReader::open(spec, path, options, plan)?;
+```
+
+`FULL`, `CRC_ONLY`, `STRUCTURE_ONLY` and `TRUSTED` select the four combinations
+of additional structure checks and data CRC. Leaving the override unset retains
+existing behavior. `TRUSTED` uses confirmed metadata directly for uncompressed
+indexed payload reads; it does not reread the native frame or checksum the
+payload. Bounds, resource limits, decoder validity, traversal termination and
+publication guards remain. A well-formed wrong value need not produce an error
+when its detecting check is disabled. Stored checksum policy and write behavior
+remain unchanged, and CRC-on requires a format that stores CRCs.
+
+This does not remove the initial framing needed by a stream/demand directory,
+compression metadata absent from an index, or protocol/generation checksums.
+There is no unbounded cache or larger resource allowance behind the option.
+See the [complete contract and baseline review](design/read-validation-policy-review.md)
+for exact I/O scope, explicit verification, recovery and mmap restrictions.
+
+## Native follow and boundary-cache reuse
+
+Native handles retain the last complete pending frame and staging storage.
+With a cooperating current writer, unchanged polls frame no old records, and
+growth frames only newly complete records. A commit discovered from cached
+progress causes one authoritative replay of that pending batch before the
+reader publishes its new view. Cached progress alone cannot expose pending data.
+
+Writer/lease changes, truncation and incompatible state invalidate progress.
+Legacy or unknown writers use conservative growth handling. Initial opens,
+explicit verification and invalidated state can still require scans; this is
+not a constant-time guarantee for every follow or mark.
+
+Full scans and successful appends can retain validated nonresident record
+offsets, eight bytes each. Their buffers share at most 16 KiB of the existing
+directory allowance, with larger metadata spilled to private storage. Failure
+to allocate or spill this optional acceleration falls back to checked traversal.
+Sequence hints only select a candidate; its actual offset must match before a
+native mutation is authorized. Full record metadata remains nonresident.
+
 ## Checked I/O Boundary
 
 Sidecar offsets and lengths are untrusted. They become private-field
 `FileOffset`, `ByteLength`, `SnapshotBounds`, and validated record-pointer
 types before positional I/O or allocation. Validation uses checked `u64`
-arithmetic and rejects overflow, ranges past the pinned EOF, impossible
-framing, block/version/sequence mismatch, noncanonical flags, and checksum
-mismatch where the format declares integrity.
+arithmetic and always rejects overflow and extents beyond the pinned EOF.
+Required parsing, traversal budgets and publication checks remain in every
+read mode. Additional framing/identity comparisons and data CRC verification
+follow the selected read policy described above. Index writers, recovery and
+reconstruction keep strict metadata admission.
 
 This prevents a malicious file from turning a claimed extent into an unchecked
 slice or claim-sized allocation. It does not authenticate a file. CRC is an
 integrity/error-detection policy, not a cryptographic authenticity mechanism.
 
-## Current Regression Baseline
+## Historical Regression Baseline
 
 On the Windows development host on 2026-07-17, the release-mode million unique
 composite-key probe reported:

@@ -220,7 +220,7 @@ fn self_test_never_truncates_or_deletes_pre_existing_matrix_target() {
         .run();
 
     assert!(!report.passed(), "{report:#?}");
-    // API2-02: the exclusive create is itself the claim, so the pre-existing
+    // the exclusive create is itself the claim, so the pre-existing
     // target is rejected in the single "create matrix file" step instead of a
     // separate pathname claim that a concurrent swap could race.
     let failure = report.failures().next().expect("expected a create failure");
@@ -262,7 +262,7 @@ fn self_test_cleanup_removes_files_created_by_the_run() {
     );
 }
 
-/// F-05. On POSIX, `unlink` names a pathname rather than the object whose
+/// On POSIX, `unlink` names a pathname rather than the object whose
 /// identity was checked, so cleanup is only safe in a directory no other
 /// unprivileged principal can bind names in. In any other directory the
 /// destructive step must be declined *and reported* — a silent skip would look
@@ -405,7 +405,7 @@ impl VarlitDecode for SwapProbe {
         if let Some(target) = SWAP_ON_DECODE.lock().unwrap().take() {
             // The self-test reader still holds the original file object open,
             // so this models a hostile pathname swap between the run's last
-            // probe and its identity-checked cleanup (API2-02).
+            // probe and its identity-checked cleanup.
             let _ = remove_file(&target);
             let _ = write(&target, IMPOSTOR_BYTES);
         }
@@ -460,7 +460,7 @@ fn self_test_cleanup_refuses_to_delete_a_swapped_in_file_object() {
         .run();
 
     assert!(report.passed(), "{report:#?}");
-    // API2-02: cleanup(true) verified the native object identity before
+    // cleanup(true) verified the native object identity before
     // deleting by pathname, so the swapped-in impostor must survive even
     // though this run created (and would otherwise clean up) the pathname.
     let bytes = std::fs::read(&*path)
@@ -544,7 +544,7 @@ fn writer_encode_paths_reject_oversized_values_with_typed_limit_error() {
 
     let mut writer = blob_spec().create(&path).expect("create blob file");
 
-    // DEF-02: the resident push encoder is hard-bounded by the logical
+    // the resident push encoder is hard-bounded by the logical
     // payload limit, so a 16 MiB value fails with the typed limit error. The
     // rejected encoding is never materialized: `Encoder::write_all` checks
     // the budget before extending its buffer (allocation-freedom is verified
@@ -600,7 +600,7 @@ fn generated_variable_push_rejects_oversized_field_with_typed_limit_error() {
         .create_writer_with_limits(&path, ReadLimits::finite_all(64_000))
         .expect("create limited writer");
 
-    // DEF-02: the generated variable encoder runs inside the limit-bounded
+    // the generated variable encoder runs inside the limit-bounded
     // entry-point encoder, so the record is refused with the typed limit
     // error instead of being fully materialized first. Generated nested
     // fields inherit the parent's remaining budget through
@@ -644,7 +644,7 @@ fn generated_nested_field_encode_inherits_the_entry_point_budget() {
         .create_writer_with_limits(&path, ReadLimits::finite_all(64_000))
         .expect("create limited writer");
 
-    // DEF-02 (varlit-macros): the generated variable encoder stages each
+    //  (varlit-macros): the generated variable encoder stages each
     // nested field through `Encoder::encode_nested_to_vec`, which caps the
     // child encoder at the entry point's REMAINING budget. A ~2 MiB
     // `Vec<u64>` field (262_144 element writes of 8 bytes each) must be cut
@@ -718,7 +718,7 @@ fn temp_path(name: &str) -> TempPath {
     TempPath { path, _dir: dir }
 }
 
-/// F-08 regression. `remove_unowned_lock_marker` used to `return` silently
+///  regression. `remove_unowned_lock_marker` used to `return` silently
 /// when it could not re-acquire the writer-lock marker, so a self-test could
 /// report `passed = true` with zero cleanup failures while a live marker
 /// survived and refused the *next* run. The marker must still be preserved -

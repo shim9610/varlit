@@ -1,7 +1,7 @@
+use crate::fallible::Arc;
 use std::{
     fs::File,
     io::{BufReader, Read, Seek, SeekFrom, Write},
-    sync::Arc,
 };
 
 use crate::scalable_extent::{UntrustedRecordPointer, ValidatedRecordPointer};
@@ -40,6 +40,15 @@ impl WrittenThrough {
     }
 }
 
+#[cfg(all(test, feature = "integrity"))]
+std::thread_local! {
+    static READ_REQUESTS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(all(test, feature = "integrity"))]
+pub(crate) fn take_read_requests() -> (u64, u64) {
+    READ_REQUESTS.with(|s| s.replace((0, 0)))
+}
+
 impl SnapshotFile {
     pub(crate) fn new(file: File) -> Result<Self> {
         Self::from_file(file)
@@ -53,7 +62,7 @@ impl SnapshotFile {
     pub(crate) fn from_file_with_len(file: File, len: u64) -> Result<Self> {
         let bounds = checked_snapshot_bounds(&file, len)?;
         Ok(Self {
-            file: Arc::new(file),
+            file: crate::fallible::try_arc(file)?,
             bounds,
         })
     }
@@ -154,21 +163,27 @@ impl SnapshotFile {
         Ok(self.file.try_clone()?)
     }
 
+    #[inline]
     pub(crate) fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> Result<()> {
         let len =
             u64::try_from(buffer.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
         self.check_range(offset, len)?;
 
+        #[cfg(all(test, feature = "integrity"))]
+        READ_REQUESTS.with(|s| {
+            let (calls, bytes) = s.get();
+            s.set((calls + 1, bytes + len));
+        });
+
         let mut consumed = 0usize;
         while consumed < buffer.len() {
-            let current_offset = offset
-                .checked_add(
-                    u64::try_from(consumed)
-                        .map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
-                )
-                .ok_or(Error::ResourceArithmeticOverflow {
+            let Some(current_offset) = offset.checked_add(
+                u64::try_from(consumed).map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
+            ) else {
+                return Err(Error::ResourceArithmeticOverflow {
                     resource: "snapshot read offset",
-                })?;
+                });
+            };
             match read_at(&self.file, &mut buffer[consumed..], current_offset) {
                 Ok(0) => return Err(Error::UnexpectedEof),
                 Ok(read) => consumed += read,
@@ -240,7 +255,24 @@ impl SnapshotFile {
         output: &mut W,
     ) -> Result<()> {
         self.check_range(offset, len)?;
-        let mut buffer = [0u8; 64 * 1024];
+        if len <= 1024 {
+            self.copy_range_buffered::<1024, W>(offset, len, output)
+        } else {
+            self.copy_range_buffered::<{ 64 * 1024 }, W>(offset, len, output)
+        }
+    }
+
+    #[inline(never)]
+    fn copy_range_buffered<const BUFFER: usize, W: Write>(
+        &self,
+        offset: u64,
+        len: u64,
+        output: &mut W,
+    ) -> Result<()> {
+        const {
+            assert!(BUFFER > 0);
+        }
+        let mut buffer = [0u8; BUFFER];
         let mut copied = 0u64;
         while copied < len {
             let remaining = len - copied;
@@ -646,5 +678,67 @@ mod tests {
     fn snapshot_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SnapshotFile>();
+    }
+    #[test]
+    fn range_copy_preserves_prefixes_and_retries_short_or_failed_writes() {
+        struct Sink {
+            bytes: Vec<u8>,
+            fail_at: Option<usize>,
+            zero: bool,
+        }
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_at == Some(self.bytes.len()) {
+                    return if self.zero {
+                        Ok(0)
+                    } else {
+                        Err(std::io::Error::other("copy cut"))
+                    };
+                }
+                let available = self.fail_at.unwrap_or(usize::MAX) - self.bytes.len();
+                let count = bytes.len().min(17).min(available);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let path = temp_path();
+        let bytes: Vec<u8> = (0..65544).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let snapshot = SnapshotFile::new(File::open(&path).unwrap()).unwrap();
+        for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+            let expected = &bytes[3..3 + len];
+            let mut sink = Sink {
+                bytes: Vec::new(),
+                fail_at: None,
+                zero: false,
+            };
+            snapshot.copy_range_to(3, len as u64, &mut sink).unwrap();
+            assert_eq!(sink.bytes, expected);
+            if len != 0 {
+                for zero in [false, true] {
+                    let cut = len / 2;
+                    let mut sink = Sink {
+                        bytes: Vec::new(),
+                        fail_at: Some(cut),
+                        zero,
+                    };
+                    assert!(snapshot.copy_range_to(3, len as u64, &mut sink).is_err());
+                    assert_eq!(sink.bytes, expected[..cut]);
+                    sink.fail_at = None;
+                    snapshot
+                        .copy_range_to(3 + cut as u64, (len - cut) as u64, &mut sink)
+                        .unwrap();
+                    assert_eq!(sink.bytes, expected);
+                }
+            }
+        }
+        let mut untouched = Vec::new();
+        assert!(snapshot.copy_range_to(u64::MAX, 1, &mut untouched).is_err());
+        assert!(untouched.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        remove_file(path).unwrap();
     }
 }

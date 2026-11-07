@@ -1,8 +1,13 @@
-# Varlit 0.3 Implementation Spec
+# Varlit Implementation Spec
+
+This specification describes [Varlit 0.13.0](api-changes.md#0130). Dated sections
+and versioned wire markers retain their stated compatibility scope.
 
 ## Goal
 
-Implement the first stable core of Varlit: a Rust workspace that can define typed binary block formats with macros, create/read append-friendly files, support lazy typed access, keyed merge semantics, explicit durability, recovery policy, and compile-time schema validation.
+Define typed binary block formats with macros and provide append-friendly files,
+lazy typed access, keyed merge semantics, explicit durability, recovery policy
+and compile-time schema validation.
 
 ## Workspace
 
@@ -12,6 +17,13 @@ Implement the first stable core of Varlit: a Rust workspace that can define type
 
 ## Wire Contract
 
+- `ReadValidation` is runtime read policy and is not stored or included in a
+  schema fingerprint. It selects optional data CRC and additional structure
+  checks; bounds, resource/decoder limits and publication guards remain required.
+  Writer checksums and explicit verification/recovery contracts are unchanged.
+- Fallible ownership and caller-buffer chunk range APIs add no wire fields.
+  Native 13-byte directory rows, compact rewrite rows and cached nonresident
+  offsets are private scratch representations, not persistent format revisions.
 - `LayoutSpec` is the physical layout layer. If no layout is declared,
   `LayoutPreset::VarlitNative` is used and the existing Varlit header/record
   bytes remain unchanged.
@@ -279,6 +291,10 @@ Implement the first stable core of Varlit: a Rust workspace that can define type
   `ReadLimits::STANDARD`; `*_with_resource_limits` may raise or lower defaults,
   while compatibility `*_with_limits` methods only tighten them. The explicit
   trusted-unbounded APIs remain separately named.
+- Optional read-check selection uses the Rust `ReadLimits::with_read_validation`
+  API; it is not a new `limits { ... }` grammar key. An unset selection preserves
+  compatibility. Use `ReadLimits::MISSING` for a runtime override that supplies
+  only this selection and preserves the format's other resource defaults.
 - `integrity` accepts `none`, `crc32`, or `crc32_with_header`. `crc32`
   covers payload plus native record footer when present. `crc32_with_header`
   additionally covers the native 32-byte record header with the checksum field

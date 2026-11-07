@@ -48,14 +48,14 @@
 //!             fixed Point(id = 1) {
 //!                 x: u32,
 //!                 y: u32,
-//!             }
+//! }
 //!
 //!             variable User(id = 2, key = [id]) {
 //!                 id: u64,
 //!                 name: String,
-//!             }
-//!         }
-//!     }
+//! }
+//! }
+//! }
 //! }
 //!
 //! # fn main() -> varlit::Result<()> {

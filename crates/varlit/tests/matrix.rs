@@ -130,7 +130,7 @@ impl VarlitBlock for BadSizedCell {
     const KIND: BlockKind = BlockKind::Matrix;
     const ENDIAN: Option<Endian> = None;
     // Mirrors `MatrixCell`'s fingerprint (the documented escape hatch) so the
-    // DEF-01 first-seen registration gate passes and the encode-size check
+    //  first-seen registration gate passes and the encode-size check
     // below is what fires, keeping the stride-mismatch contract covered.
     const SCHEMA_FINGERPRINT: u64 = MatrixCell::SCHEMA_FINGERPRINT;
     const IS_KEYED: bool = false;
@@ -143,7 +143,7 @@ impl VarlitMatrixBlock for BadSizedCell {
 }
 
 /// A hostile matrix block whose encode streams far more than the slot stride
-/// in small chunks (1 MiB total in 4 KiB writes). DEF-02: `write_matrix_cell`
+/// in small chunks (1 MiB total in 4 KiB writes). : `write_matrix_cell`
 /// must cut the encode off at the slot-stride bound instead of materializing
 /// the whole encoding before the size check fires.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,7 +175,7 @@ impl VarlitBlock for ChunkedOversizedCell {
     const KIND: BlockKind = BlockKind::Matrix;
     const ENDIAN: Option<Endian> = None;
     // Mirrors `MatrixCell`'s fingerprint (the documented escape hatch) so the
-    // DEF-01 first-seen registration gate passes and the bounded-encode size
+    //  first-seen registration gate passes and the bounded-encode size
     // check is what fires.
     const SCHEMA_FINGERPRINT: u64 = MatrixCell::SCHEMA_FINGERPRINT;
     const IS_KEYED: bool = false;
@@ -587,7 +587,7 @@ fn matrix_write_cell_bounds_hostile_encode_at_the_slot_stride() -> varlit::Resul
     let dims = MatrixDimensions::from_pairs([("scan", 3), ("ch", 2)]);
     let mut writer = spec.create_writer_with_dims(&path, dims)?;
 
-    // DEF-02: the encode is hard-bounded by the slot stride, so a hostile
+    // the encode is hard-bounded by the slot stride, so a hostile
     // encode that streams 1 MiB in 4 KiB chunks is cut off at its FIRST
     // over-stride write (actual = 4096) instead of being fully materialized
     // before the size check (which would report actual = 1_048_576). The
@@ -747,7 +747,7 @@ fn matrix_p1_p2_extension_points_are_usable() -> varlit::Result<()> {
                 Ok(())
             },
         )?;
-        // F-04: the hook runs after the cell is committed and synced, so a
+        // the hook runs after the cell is committed and synced, so a
         // hook failure is a *published* outcome. It must not be reported as a
         // bare `Err` that a caller can read as "nothing happened" - the cell
         // below is verified as readable after this, and a result-driven retry
@@ -920,10 +920,10 @@ impl MatrixDurabilityBarrier for FailingMatrixBarrier {
 
 /// INVARIANT 3, round 11. Walking forward from the authoritative commit in
 /// `write_matrix_cell_durable_with_barrier`, the commit sync is the step
-/// *before* the hook that F-04 typed. It used to return a bare `Err` although
+/// *before* the hook that  typed. It used to return a bare `Err` although
 /// the commit bit was already on disk and the cell was readable after a clean
 /// exit, so "published, durability unproven" was indistinguishable from
-/// "nothing happened" - the same complaint as F-04, one step earlier.
+/// "nothing happened" - the same complaint as , one step earlier.
 ///
 /// The negative control in the same test is the data sync: it runs *before*
 /// the commit, so its failure is genuinely pre-publication and must stay a
@@ -1572,7 +1572,7 @@ struct VmatOffsets {
 fn read_vmat_offsets(path: &PathBuf, spec: FormatSpec) -> varlit::Result<VmatOffsets> {
     let mut file = OpenOptions::new().read(true).open(path)?;
     // Native file header (magic + marker + version + endian + flags + schema
-    // hash), then the 24-byte matrix creation-nonce region (DUR2-03), then the
+    // hash), then the 24-byte matrix creation-nonce region , then the
     // VMAT layout header this helper decodes.
     let header_len = spec.magic.len() as u64 + 18 + 24;
     file.seek(SeekFrom::Start(header_len))?;
@@ -1632,7 +1632,7 @@ fn cleanup(path: &PathBuf) {
     }
 }
 
-/// F-06: the post-commit outcome carries nothing that owns heap.
+/// the post-commit outcome carries nothing that owns heap.
 ///
 /// After `commit_matrix_cell` the cell is authoritative, and the two remaining
 /// steps build `Error::MatrixCommittedButDurabilityUnproven` or
@@ -1686,15 +1686,8 @@ fn the_post_commit_event_stays_shape_sized() {
     assert_eq!(slot_len, 4);
 }
 
-/// F-06, invariant 4: the code's narrowing and the documents' narrowing agree.
-///
-/// The durability contract published an absolute structural claim — that the
-/// two typed variants are the only post-publication outcomes — and a harness
-/// disproved it by terminating the process between the commit and the
-/// construction of either variant. The claim is kept, because it is true of
-/// every value the call *returns*, and its scope is now published beside it.
-/// This test fails if one copy is corrected and another is not, which is the
-/// half-applied correction invariant 4 exists to catch.
+/// Keep the documented preflight reservation and fallback publication facts
+/// aligned across the durability guide, API reference and public rustdoc.
 #[test]
 fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1709,11 +1702,17 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
         "the crate-wide allocator-failure policy must be published where the \
          published-outcome family is defined"
     );
-    for needle in ["shape-sized", "content-sized", "terminates the process"] {
+    for needle in [
+        "try_box",
+        "AllocationFailureContext",
+        "scalar placeholder",
+        "post-commit allocation",
+        "BTreeMap",
+    ] {
         assert!(
             durability.contains(needle),
             "docs/durability-model.md no longer states {needle:?}: the policy \
-             must name both allocation classes and say what a refusal does"
+             must describe preflight reservation, retained outcomes and the deferred allocation scope"
         );
     }
 

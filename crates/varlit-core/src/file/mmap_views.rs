@@ -1,5 +1,6 @@
 //! Memory-mapped owned views and bounds checks.
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "mmap")]
 /// A read-only mapping paired with an immutable snapshot of the validated
 /// append-log index.
@@ -11,8 +12,9 @@ use super::*;
 /// mapping, so returned slices cannot outlive it.
 ///
 /// These guarantees rely on the caller having upheld the unsafe constructor's
-/// requirement that the backing object remains immutable and valid for this
-/// value's full lifetime.
+/// requirement that the captured mapped bytes stay immutable and the backing
+/// object stays valid for this value's full lifetime. Later appends outside the
+/// captured region do not enlarge or alter this snapshot.
 #[derive(Debug)]
 pub struct MmapPayloads {
     pub(super) spec: FormatSpec,
@@ -30,9 +32,14 @@ pub struct MmapPayloads {
     pub(super) base: u64,
     // Sorted by `record_offset` (append-log order), so snapshot membership is
     // a binary search on this one copy instead of a second full HashSet copy
-    // of every entry (PERF2-07).
+    // of every entry.
     pub(super) index: Vec<RecordIndexEntry>,
     pub(super) by_block: HashMap<u32, Vec<usize>>,
+    // One byte per record only when an optional read check is selected. The mapping is
+    // immutable by contract, so a successful check remains valid. Relaxed
+    // atomics retain Send + Sync without locks or publishing mutable data;
+    // racing first readers may both verify the same immutable bytes.
+    pub(super) verified: Vec<AtomicBool>,
     pub(super) mmap: memmap2::Mmap,
 }
 
@@ -72,7 +79,7 @@ impl MmapPayloads {
         // Entries occupy disjoint physical extents, so `record_offset` is
         // unique within the snapshot: binary search finds the only candidate
         // and the full equality compare keeps the exact-match contract that
-        // the former per-entry hash-set copy provided (PERF2-07).
+        // the former per-entry hash-set copy provided.
         let position = self
             .index
             .binary_search_by_key(&entry.record_offset, |candidate| candidate.record_offset)
@@ -80,7 +87,7 @@ impl MmapPayloads {
         if self.index[position] != *entry {
             return Err(Error::MmapEntryNotInSnapshot);
         }
-        self.payload_window_unchecked(entry)
+        self.payload_window_at(position)
     }
 
     pub fn block_payload_window<T: VarlitBlock>(
@@ -104,7 +111,34 @@ impl MmapPayloads {
                 actual: entry.block_version,
             });
         }
-        Ok(Some(self.payload_window_unchecked(entry)?))
+        Ok(Some(self.payload_window_at(position)?))
+    }
+
+    #[inline]
+    fn payload_window_at(&self, position: usize) -> Result<&[u8]> {
+        let entry = &self.index[position];
+        let payload = self.window(entry.payload_offset, entry.payload_len)?;
+        if let Some(verified) = self.verified.get(position)
+            && !verified.load(Ordering::Relaxed)
+        {
+            self.verify_payload(entry, payload)?;
+            verified.store(true, Ordering::Relaxed);
+        }
+        Ok(payload)
+    }
+
+    // Keep framing decode and CRC scratch off the already-verified read path.
+    #[cold]
+    fn verify_payload(&self, entry: &RecordIndexEntry, payload: &[u8]) -> Result<()> {
+        if !self.spec.read_validation().structure {
+            return entry.verify_captured_payload(self.spec, payload);
+        }
+        let header = self.window(entry.record_offset, RECORD_HEADER_LEN)?;
+        let footer = match entry.footer_offset {
+            Some(offset) => self.window(offset, RECORD_FOOTER_LEN)?,
+            None => &[],
+        };
+        entry.verify_record_bytes(self.spec, header, payload, footer)
     }
 
     #[cfg(feature = "zero-copy")]
@@ -155,32 +189,26 @@ impl MmapPayloads {
             })
     }
 
-    pub(super) fn payload_window_unchecked(&self, entry: &RecordIndexEntry) -> Result<&[u8]> {
+    #[inline]
+    fn window(&self, offset: u64, len: u64) -> Result<&[u8]> {
         // File offsets are absolute; the mapping starts at `base`.
-        let start = entry
-            .payload_offset
+        let start = offset
             .checked_sub(self.base)
             .and_then(|offset| usize::try_from(offset).ok())
-            .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
-            })?;
+            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
         let len =
-            usize::try_from(entry.payload_len).map_err(|_| Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
-            })?;
+            usize::try_from(len).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?;
         let end = start
             .checked_add(len)
             .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
+                offset,
+                len: len as u64,
             })?;
         self.mmap
             .get(start..end)
             .ok_or(Error::MmapPayloadOutOfBounds {
-                offset: entry.payload_offset,
-                len: entry.payload_len,
+                offset,
+                len: len as u64,
             })
     }
 }
@@ -207,16 +235,20 @@ pub struct MmapMatrix {
 #[cfg(feature = "mmap")]
 impl MmapMatrix {
     pub fn cell_payload_window<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<&[u8]> {
-        let (offset, len, crc_offset) = crate::matrix::cell_payload_parts::<T>(
+        let (offset, len, crc) = crate::matrix::cell_payload_parts::<T>(
             self.spec,
             &self.layout,
             key,
             crate::matrix::BitmapRead::Mapped(&self.mmap),
         )?;
         let payload = self.window(offset, len)?;
-        if let Some(crc_offset) = crc_offset {
-            let expected = self.read_crc(crc_offset)?;
-            crate::matrix::verify_payload_crc_bytes(offset, payload, expected)?;
+        if let Some(crc) = crc {
+            let expected = self.read_crc(crc.offset)?;
+            crc.verify(
+                payload,
+                expected,
+                crate::matrix::BitmapRead::Mapped(&self.mmap),
+            )?;
         }
         Ok(payload)
     }

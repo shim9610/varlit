@@ -1,4 +1,4 @@
-//! F-10 companion: dropping the primitive-spelling whitelist must not drop the
+//!  companion: dropping the primitive-spelling whitelist must not drop the
 //! rejection. A tuple can never denote a type with a fixed matrix slot stride
 //! whatever it resolves to, so the macro still refuses it with a readable
 //! diagnostic pointing at the offending field.

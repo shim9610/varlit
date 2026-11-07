@@ -160,7 +160,7 @@ fn merge_compact_bench(records: usize) -> varlit::Result<()> {
     let direct = temp_path("direct_compacted");
     cleanup_many([&base, &delta, &merged, &compacted, &direct]);
 
-    // BENCH-01: the exact shape of the workload, so each report below can name
+    // the exact shape of the workload, so each report below can name
     // its own denominator instead of borrowing the base record count.
     let updates = records / 4;
     let deletes = records / 3 - records / 4;
@@ -250,7 +250,7 @@ fn merge_compact_bench(records: usize) -> varlit::Result<()> {
         elapsed,
     );
 
-    // BENCH-01: every line that prints a live-value denominator is checked
+    // every line that prints a live-value denominator is checked
     // against the file that line actually produced, not just the last one. The
     // contract this loop upholds: for each of the three merge and compact lines,
     // the run reopens the file that line produced and asserts the live-value
@@ -287,7 +287,7 @@ fn timed(operation: impl FnOnce() -> varlit::Result<()>) -> varlit::Result<Durat
     Ok(start.elapsed())
 }
 
-/// What a throughput number is actually per (BENCH-01).
+/// Unit and denominator for each reported throughput rate.
 ///
 /// The merge and compact operations do not process `records` items: their input
 /// is the base file *plus* every delta record (updates, deletes, and inserts),

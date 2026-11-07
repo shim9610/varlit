@@ -12,11 +12,11 @@ use crate::disk_index::{
     tail_limit_for_spec,
 };
 use crate::file::{
-    NativeStreamScanner, RECORD_FOOTER_LEN, RECORD_HEADER_LEN, ReplaceDurability, WriterLock,
-    decode_stream_tombstone_key, prepare_stream_tombstone_record, prepare_stream_user_record_into,
-    publish_temp_path_atomically, read_file_header, read_stream_entry_at,
+    NativeStreamScanner, ReplaceDurability, WriterLock, decode_stream_tombstone_key,
+    prepare_stream_tombstone_record, prepare_stream_user_record_into, publish_temp_path_atomically,
+    read_file_header, read_index_entry_from_descriptor, read_record_entry_positional,
+    read_stream_entry_at,
 };
-use crate::native_layout::{decode_native_record_footer, read_native_record_header};
 use crate::scalable_extent::UntrustedRecordPointer;
 use crate::stream::{StreamCheckpoint, StreamTail, primary_generation, primary_identity};
 use crate::traits::KeyedBlockContract;
@@ -66,7 +66,7 @@ impl DiskIndexRebuildReport {
 /// already published at its pathname and only the parent-directory entry's
 /// durability is unconfirmed; the published sidecar is preserved.
 ///
-/// # Non-cooperating writers (F-09)
+/// # Non-cooperating writers
 ///
 /// Cooperating writers are serialized by the writer lock this call holds. A
 /// process that replaces the primary *pathname* without taking that lock is
@@ -138,6 +138,7 @@ pub struct VarlitIndexedReader {
     index: crate::disk_index::DiskIndexSnapshot,
     _store: DiskIndexStore,
     indexed_blocks: Vec<u32>,
+    plan: DiskIndexPlan,
 }
 
 impl VarlitIndexedReader {
@@ -159,16 +160,28 @@ impl VarlitIndexedReader {
             },
         )?;
         let identity = primary_identity(stream.spec(), stream.snapshot())?;
+        let mut options = options;
+        options.limits.read_validation = stream.spec().read_limits.read_validation;
         let store = DiskIndexStore::open(sidecar_path(&path), options).map_err(index_error)?;
         let index = store
             .begin_committed_snapshot(identity, plan.mode())
             .map_err(index_error)?;
+        index.validate_finite_layout(plan).map_err(index_error)?;
         stream.adopt_snapshot(stream.committed_native_snapshot(&index)?);
+        let mut indexed_blocks = Vec::new();
+        indexed_blocks
+            .try_reserve_exact(blocks.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "indexed block IDs",
+                requested: (blocks.len() as u64).saturating_mul(4),
+            })?;
+        indexed_blocks.extend(blocks.iter().map(|block| block.block_id));
         Ok(Self {
             stream,
             index,
             _store: store,
-            indexed_blocks: blocks.iter().map(|block| block.block_id).collect(),
+            indexed_blocks,
+            plan,
         })
     }
 
@@ -176,22 +189,35 @@ impl VarlitIndexedReader {
     /// Dirty working generations expose their saved confirmed root. An error
     /// leaves this handle unchanged. Existing iterators retain their old view.
     pub fn follow(&mut self) -> Result<u64> {
-        let (store, next) = self
-            ._store
-            .followed_handle(&self.index)
-            .map_err(index_error)?;
-        let added = next.record_count() - self.index.record_count();
-        if next.generation() == self.index.generation()
-            && self.index.is_pinned()
-            && self._store.same_file(&store)
-        {
-            return Ok(0);
-        }
-        let native = self.stream.committed_native_snapshot(&next)?;
-        self.stream.adopt_snapshot(native);
-        self.index = next;
-        self._store = store;
-        Ok(added)
+        crate::publication_protocol::follow(
+            self,
+            |current| {
+                let (store, next) = current
+                    ._store
+                    .followed_handle(&current.index)
+                    .map_err(index_error)?;
+                let added = next.record_count() - current.index.record_count();
+                if next.generation() == current.index.generation()
+                    && current.index.is_pinned()
+                    && current._store.same_file(&store)
+                {
+                    return Ok(None);
+                }
+                next.validate_finite_layout(current.plan)
+                    .map_err(index_error)?;
+                let native = current.stream.committed_native_snapshot(&next)?;
+                Ok(Some((store, next, native, added)))
+            },
+            |current, prepared| {
+                let Some((store, next, native, added)) = prepared else {
+                    return 0;
+                };
+                current.stream.adopt_snapshot(native);
+                current.index = next;
+                current._store = store;
+                added
+            },
+        )
     }
 
     /// Refresh and resume this reader's event cursor at its previous offset.
@@ -255,7 +281,7 @@ impl VarlitIndexedReader {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: every public keyed generic entry point evaluates the
+        // every public keyed generic entry point evaluates the
         // compile-time keyedness contract post-monomorphization; the
         // registration in `ensure_indexed` stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
@@ -270,7 +296,7 @@ impl VarlitIndexedReader {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_indexed::<T>()?;
         let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
@@ -321,7 +347,28 @@ impl VarlitIndexedReader {
     /// second time. In that case read only the frame here: each caller feeds
     /// the entry into `read_logical_payload_snapshot`, which verifies the full
     /// record checksum against this entry with a single payload read.
-    fn candidate_entry(&self, offset: u64, physical_len: u64) -> Result<RecordIndexEntry> {
+    fn candidate_entry(
+        &self,
+        offset: u64,
+        sequence: u64,
+        physical: DiskIndexPhysicalRecord,
+    ) -> Result<RecordIndexEntry> {
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_some_and(|p| !p.structure)
+        {
+            return read_index_entry_from_descriptor(
+                self.stream.spec(),
+                self.stream.snapshot(),
+                offset,
+                sequence,
+                physical,
+            );
+        }
+        let physical_len = physical.physical_len;
         if self.stream.spec().integrity_policy == crate::IntegrityPolicy::None {
             read_stream_entry_at(
                 self.stream.spec(),
@@ -361,12 +408,32 @@ impl VarlitIndexedReader {
             } => (record_offset, sequence),
         };
         let physical = pointer.physical.ok_or(Error::InvalidIndexCheckpoint)?;
-        let entry = self.candidate_entry(offset, physical.physical_len)?;
+        let entry = self.candidate_entry(offset, expected_sequence, physical)?;
         validate_physical_candidate(self.stream.spec(), &entry, physical)?;
         if entry.sequence != expected_sequence {
             return Err(index_invariant(
                 "candidate sequence does not match native record",
             ));
+        }
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_some_and(|p| !p.structure && !p.data_crc)
+        {
+            let valid_type = match pointer.entry {
+                DiskIndexEntry::Put { .. } => {
+                    entry.block_id == T::ID && entry.block_version == T::VERSION
+                }
+                DiskIndexEntry::Tombstone { .. } => entry.block_id == TOMBSTONE_BLOCK_ID,
+                DiskIndexEntry::Missing => true,
+            };
+            return if valid_type {
+                Ok(())
+            } else {
+                Err(Error::InvalidIndexCheckpoint)
+            };
         }
         match pointer.entry {
             DiskIndexEntry::Put { .. } => {
@@ -403,7 +470,7 @@ impl VarlitIndexedReader {
             _ => return Err(Error::InvalidIndexCheckpoint),
         };
         let physical = pointer.physical.ok_or(Error::InvalidIndexCheckpoint)?;
-        let entry = self.candidate_entry(offset, physical.physical_len)?;
+        let entry = self.candidate_entry(offset, expected_sequence, physical)?;
         validate_physical_candidate(self.stream.spec(), &entry, physical)?;
         if entry.sequence != expected_sequence {
             return Err(index_invariant(
@@ -428,7 +495,14 @@ impl VarlitIndexedReader {
         let payload =
             entry.read_logical_payload_snapshot(self.stream.spec(), self.stream.snapshot())?;
         let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(self.stream.spec().endian))?;
-        if !value.key_eq(key) {
+        if self
+            .stream
+            .spec()
+            .read_limits
+            .read_validation
+            .is_none_or(|p| p.structure)
+            && !value.key_eq(key)
+        {
             return Err(index_invariant("put candidate key mismatch"));
         }
         Ok(value)
@@ -439,9 +513,11 @@ pub struct VarlitIndexedWriter {
     stream: VarlitStreamWriter,
     index: DiskIndexStore,
     indexed_blocks: Vec<u32>,
-    /// Staging buffer for the single-record put path, reused for the life of
-    /// the writer. Cleared per record and never read across calls.
+    /// Staging shared by single-record puts and keyed batches. Reusing the
+    /// existing allocation avoids overlapping old/new buffers on repeated
+    /// batch growth. Contents are cleared and never read across calls.
     record_buffer: Vec<u8>,
+    last_batch_capacity: usize,
     batch_records: usize,
     batch_last_sequence: Option<u64>,
     dirty: bool,
@@ -532,15 +608,10 @@ impl VarlitIndexedWriter {
                 state: options,
             },
             |identity, physical_len| {
-                let store = DiskIndexStore::open_writer(sidecar_path(&path), options)
+                let mut store = DiskIndexStore::open_writer(sidecar_path(&path), options)
                     .map_err(index_error)?;
                 let state = store
-                    .validate_clean_writer(
-                        identity,
-                        plan.mode(),
-                        physical_len,
-                        tail_limit_for_spec(spec).map_err(index_error)?,
-                    )
+                    .validate_clean_writer_for_spec(identity, plan.mode(), physical_len, spec)
                     .map_err(index_error)?;
                 Ok((
                     stream_checkpoint_from_state(&state),
@@ -561,6 +632,7 @@ impl VarlitIndexedWriter {
         index.configure_finite(plan).map_err(index_error)?;
         Ok(Self {
             record_buffer: Vec::new(),
+            last_batch_capacity: 0,
             stream,
             index,
             indexed_blocks: blocks.iter().map(|block| block.block_id).collect(),
@@ -576,7 +648,7 @@ impl VarlitIndexedWriter {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_writable::<T>()?;
         let key = value.key();
@@ -661,7 +733,7 @@ impl VarlitIndexedWriter {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_writable::<T>()?;
         let mandatory = T::IMMEDIATE;
@@ -730,7 +802,7 @@ impl VarlitIndexedWriter {
         I: IntoIterator,
         I::Item: Borrow<T>,
     {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         let start = self.stream.snapshot().len();
         let mut written = BatchAppendInfo {
@@ -738,7 +810,21 @@ impl VarlitIndexedWriter {
             end_offset: start,
             ..BatchAppendInfo::default()
         };
-        let result = self.push_indexed_iter_inner::<T, I>(values, options, &mut written);
+        let mut bytes = std::mem::take(&mut self.record_buffer);
+        bytes.clear();
+        let result =
+            self.push_indexed_iter_inner::<T, I>(values, options, &mut written, &mut bytes);
+        bytes.clear();
+        // Admit repeated sizes only. A one-off large batch must not enlarge
+        // retained staging indefinitely. Releasing the initial large buffer
+        // also lets adaptive allocators settle before steady buffer reuse.
+        let capacity = bytes.capacity();
+        if capacity == self.last_batch_capacity {
+            self.record_buffer = bytes;
+        }
+        if capacity != 0 {
+            self.last_batch_capacity = capacity;
+        }
         if let Err(source) = result {
             self.index.batch.take();
             self.stream.poison();
@@ -794,7 +880,7 @@ impl VarlitIndexedWriter {
         &mut self,
         key: &T::Key,
     ) -> Result<AppendInfo> {
-        // API2-03: compile-time keyedness contract at the public entry point.
+        // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_not_poisoned()?;
         ensure_registered_block::<T>(self.stream.spec())?;
@@ -822,24 +908,31 @@ impl VarlitIndexedWriter {
     }
 
     pub fn sync(&mut self) -> Result<()> {
-        self.ensure_not_poisoned()?;
-        self.commit_pending_batch()?;
-        self.stream.sync()?;
-        if self.dirty
-            && let Err(error) = self
-                .index
-                .publish_clean(checkpoint_frontier(&self.stream.checkpoint()))
-        {
-            // Publication can be visible even when its final sync failed.
-            // The writer must reopen/reconcile before another mutation.
-            self.stream.poison();
-            return Err(index_error(error));
-        }
-        self.batch_records = 0;
-        self.batch_last_sequence = None;
-        self.dirty = false;
-        self.immediate_state.reset();
-        Ok(())
+        use crate::publication_protocol::CommitStep;
+        crate::publication_protocol::commit(|step| {
+            match step {
+                CommitStep::Prepare => {
+                    self.ensure_not_poisoned()?;
+                    self.commit_pending_batch()?;
+                }
+                CommitStep::PrimarySync => self.stream.sync()?,
+                CommitStep::Publish => {
+                    if self.dirty {
+                        self.index
+                            .publish_clean(checkpoint_frontier(&self.stream.checkpoint()))
+                            .map_err(index_error)?;
+                    }
+                }
+                CommitStep::Poison => self.stream.poison(),
+                CommitStep::Finish => {
+                    self.batch_records = 0;
+                    self.batch_last_sequence = None;
+                    self.dirty = false;
+                    self.immediate_state.reset();
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Persist all preceding records, then publish their clean disk-index root.
@@ -908,6 +1001,7 @@ impl VarlitIndexedWriter {
         values: I,
         options: BatchOptions,
         written: &mut BatchAppendInfo,
+        bytes: &mut Vec<u8>,
     ) -> Result<()>
     where
         T: VarlitKeyedBlock,
@@ -920,7 +1014,6 @@ impl VarlitIndexedWriter {
         self.commit_pending_batch()?;
 
         let max_records = options.max_records.min(INDEX_BATCH_RECORDS);
-        let mut bytes = Vec::new();
         let mut records = Vec::new();
         let mut next_sequence = Some(self.stream.next_sequence()?);
         let mut next_offset = self.stream.snapshot().len();
@@ -964,7 +1057,7 @@ impl VarlitIndexedWriter {
                 next_offset,
                 previous_block,
                 previous_key,
-                &mut bytes,
+                bytes,
             )?;
             let exceeds_records = records.len() >= max_records;
             let exceeds_bytes = record_start != 0 && bytes.len() > options.max_bytes;
@@ -973,7 +1066,7 @@ impl VarlitIndexedWriter {
                 // the next chunk; the flush advances the native eof to exactly
                 // `next_offset`, which is what it was prepared against.
                 self.publish_staged_prefix(
-                    &mut bytes,
+                    bytes,
                     &mut records,
                     &mut record_start,
                     record.len,
@@ -1011,7 +1104,7 @@ impl VarlitIndexedWriter {
             if !fits_index {
                 if !records.is_empty() {
                     self.publish_staged_prefix(
-                        &mut bytes,
+                        bytes,
                         &mut records,
                         &mut record_start,
                         record.len,
@@ -1050,7 +1143,7 @@ impl VarlitIndexedWriter {
                 || records.len() >= max_records
                 || self.batch_records >= INDEX_BATCH_RECORDS
             {
-                self.publish_prepared_chunk(&bytes, &records, written)?;
+                self.publish_prepared_chunk(bytes, &records, written)?;
                 bytes.clear();
                 records.clear();
                 if immediate {
@@ -1063,7 +1156,7 @@ impl VarlitIndexedWriter {
             }
         }
         if !records.is_empty() {
-            self.publish_prepared_chunk(&bytes, &records, written)?;
+            self.publish_prepared_chunk(bytes, &records, written)?;
         }
         self.commit_pending_batch()?;
         Ok(())
@@ -1276,15 +1369,18 @@ impl VarlitIndexedWriter {
         self.stream.poison();
         match error {
             already @ Error::PublishedButIndexStale { .. } => already,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         }
     }
 
     fn commit_pending_batch_inner(&mut self) -> Result<()> {
-        // STO-01: see VarlitStreamWriter::commit_state_chunk. The witness stops
+        // see VarlitStreamWriter::commit_state_chunk. The witness stops
         // being recomputed once its bounded window is full.
         if let Some(batch) = self.index.batch.as_ref()
             && batch.primary_generation().len < PRIMARY_GENERATION_WINDOW
@@ -1338,10 +1434,18 @@ impl VarlitIndexedWriter {
             )
         {
             self.stream.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: info.sequence,
-                source: Box::new(index_error(error)),
-            });
+            return Err(crate::fallible::boxed_error(
+                index_error(error),
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
         }
         self.finish_record(info.sequence)?;
         Ok(info)
@@ -1369,10 +1473,18 @@ impl VarlitIndexedWriter {
             .map_err(index_error);
         if let Err(error) = result {
             self.stream.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: info.sequence,
-                source: Box::new(error),
-            });
+            return Err(crate::fallible::boxed_error(
+                error,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
         }
         self.finish_record(info.sequence)?;
         Ok(info)
@@ -1386,10 +1498,13 @@ impl VarlitIndexedWriter {
         }
         self.commit_pending_batch().map_err(|error| match error {
             Error::PublishedButIndexStale { .. } => error,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         })
     }
 
@@ -1481,7 +1596,7 @@ impl VarlitIndexedWriter {
     /// The writer's poison guard, and the only source of the witness the
     /// stream's mutating entry points demand.
     ///
-    /// Round 12, F-05: this used to read a *second* poison flag owned by this
+    /// Round 12, : this used to read a *second* poison flag owned by this
     /// struct, which could and did disagree with the stream's own. When a
     /// native append failed and its truncate-or-seek rollback failed too, the
     /// stream poisoned itself and this flag stayed clear, so a later
@@ -1554,12 +1669,10 @@ where
     // in-memory buffer against the real spec. Payloads of records outside the
     // plan are not read at all; `VarlitStreamReader::verify_all` remains the
     // whole-file integrity scan.
-    let scan_spec = spec.with_integrity_policy(crate::IntegrityPolicy::None);
-    let mut scanner = NativeStreamScanner::from_snapshot(scan_spec, snapshot.clone())?;
-    debug_assert_eq!(
-        scanner.spec().integrity_policy,
-        crate::IntegrityPolicy::None,
-        "rebuild requires an integrity-stripped scanner spec",
+    let mut scanner = NativeStreamScanner::from_snapshot_framing_only(spec, snapshot.clone())?;
+    debug_assert!(
+        !scanner.verifies_checksums(),
+        "rebuild requires a frame-only scanner",
     );
     let mut covered = header_eof;
     while let Some(entry) = scanner.next_entry()? {
@@ -1642,7 +1755,7 @@ where
     // while the rebuild scans its retained snapshot. Re-resolve the pathname
     // just before publication and refuse to publish a sidecar for a primary
     // object the scan never observed.
-    // F-09: the verified primary is held open across publication. It excludes
+    // the verified primary is held open across publication. It excludes
     // nothing a `WriterLock` does not already exclude, but it does stop the
     // operating system from handing the scanned object's identity to a
     // different file while the sidecar is published, so the post-publication
@@ -1651,13 +1764,13 @@ where
     if primary_identity(spec, &current)? != identity {
         return Err(index_error(DiskIndexError::IdentityMismatch));
     }
-    // DUR2-01: publication takes ownership of the temp guard so an
+    // publication takes ownership of the temp guard so an
     // indeterminate outcome preserves the replacement for out-of-band
     // reconciliation instead of the guard blind-deleting it by pathname.
     let durability = publish_temp_path_atomically(temporary, &path)?;
     #[cfg(test)]
     crate::stream::interpose_after_state_publication(native_path);
-    // F-09: publication is not one syscall with the identity check above. If
+    // publication is not one syscall with the identity check above. If
     // the primary was replaced in between, the sidecar now at `path` was built
     // for a file object the pathname no longer names, and leaving it there
     // would displace whatever newer sidecar arrived with the replacement.
@@ -1689,10 +1802,14 @@ where
             // parent-directory entry's durability is pending. Preserve the
             // published sidecar and surface the durability gap exactly like
             // the native and matrix publication paths.
-            return Err(Error::PublishedButParentSyncPending {
-                path: path.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &path,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     Ok(DiskIndexRebuildReport {
@@ -1778,7 +1895,7 @@ fn create_index_store(
     crate::scalable_fault_point("create.sidecar_complete");
     let store = store?;
     drop(store);
-    // DUR2-01: the temp guard is handed to publication so an indeterminate
+    // the temp guard is handed to publication so an indeterminate
     // outcome preserves the replacement for reconciliation.
     match publish_temp_path_atomically(temporary, &sidecar)? {
         ReplaceDurability::Durable => {}
@@ -1786,10 +1903,14 @@ fn create_index_store(
             // Publication already happened: keep the published sidecar and
             // report the pending parent-directory durability instead of
             // silently promoting it to full success.
-            return Err(Error::PublishedButParentSyncPending {
-                path: sidecar.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &sidecar,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     DiskIndexStore::open_writer_validated(&sidecar, options, metadata.identity, metadata.mode)
@@ -1839,37 +1960,15 @@ fn read_stream_entry_frame(
         spec.spec_needs_record_footer(),
     )?;
     let span = validated.span();
-    let mut header_bytes = [0u8; RECORD_HEADER_LEN as usize];
-    snapshot.read_exact_at(offset, &mut header_bytes)?;
-    let fields = read_native_record_header(&mut header_bytes.as_slice(), offset)?.fields;
-    let mut entry = RecordIndexEntry {
-        block_id: fields.block_id,
-        block_version: fields.block_version,
-        flags: fields.flags,
-        sequence: fields.sequence,
-        record_offset: span.record_offset().get(),
-        payload_offset: span.payload_offset().get(),
-        payload_len: fields.payload_len,
-        checksum: fields.checksum,
-        uncompressed_len_hint: fields.uncompressed_len_hint,
-        footer_offset: None,
-        prev_same_block_offset: None,
-        prev_same_key_offset: None,
-        mutable_flags: 0,
-        committed: true,
-    };
-    if spec.spec_needs_record_footer() {
-        let footer_offset = span.footer_offset().get();
-        let mut footer_bytes = [0u8; RECORD_FOOTER_LEN as usize];
-        snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
-        let footer = decode_native_record_footer(&footer_bytes, footer_offset, offset)?;
-        entry.footer_offset = Some(footer_offset);
-        entry.prev_same_block_offset = footer.prev_same_block_offset;
-        entry.prev_same_key_offset = footer.prev_same_key_offset;
-        entry.mutable_flags = footer.mutable_flags;
-    }
+    // Sharing the positional parser preserves flag, compression and footer
+    // policy checks even though payload CRC verification is deferred.
+    let entry = read_record_entry_positional(spec, snapshot, offset)?;
     // The header's own length claim must agree with the extent-validated span.
     if entry.payload_len != span.payload_len().get()
+        || entry.footer_offset
+            != spec
+                .spec_needs_record_footer()
+                .then_some(span.footer_offset().get())
         || entry.checked_physical_end()? != span.end().get()
     {
         return Err(Error::InvalidIndexCheckpoint);
@@ -1933,10 +2032,7 @@ fn reserve_records(records: &mut Vec<(u32, AppendInfo)>) -> Result<()> {
 }
 
 fn index_error(error: DiskIndexError) -> Error {
-    match error {
-        DiskIndexError::Busy => Error::IndexBusy,
-        error => Error::DiskIndex(Box::new(error)),
-    }
+    crate::disk_index::index_error(error)
 }
 
 fn index_invariant(reason: &'static str) -> Error {
@@ -2102,6 +2198,36 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_refuses_truncated_record_instead_of_publishing_a_prefix() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("partial-rebuild.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        writer.push_info(&Item {
+            key: 1,
+            value: "first".into(),
+        })?;
+        writer.push_info(&Item {
+            key: 2,
+            value: "second".into(),
+        })?;
+        writer.sync()?;
+        drop(writer);
+        fs::remove_file(sidecar_path(&path))?;
+        let raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.set_len(raw.metadata()?.len() - 1)?;
+        drop(raw);
+        let before = fs::read(&path)?;
+        assert!(matches!(
+            rebuild_disk_index(spec(), &path, options, index_plan()),
+            Err(Error::CorruptTail { .. })
+        ));
+        assert_eq!(fs::read(&path)?, before);
+        assert!(VarlitIndexedReader::open(spec(), &path, options, index_plan()).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn indexed_roundtrip_overwrite_tombstone_reopen_and_rebuild() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("items.varlit");
@@ -2154,7 +2280,7 @@ mod tests {
             Err(Error::DiskIndex(_))
         ));
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
+        // Three user records plus the internal creation-nonce record.
         assert_eq!(report.records, 4);
         assert!(report.scanned_bytes > 0);
         let mut writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
@@ -2420,7 +2546,7 @@ mod tests {
         Ok(())
     }
 
-    /// F-09, rebuild half. Same contract as the stream bootstrap test: a
+    /// rebuild half. Same contract as the stream bootstrap test: a
     /// primary replaced between the pre-publication identity check and the
     /// sidecar becoming visible must produce a typed mismatch, and the sidecar
     /// this call published must not be left standing in place of whatever
@@ -2460,7 +2586,7 @@ mod tests {
 
         match rebuild_disk_index(spec(), &path, options, index_plan()) {
             Err(Error::DiskIndex(error)) if matches!(*error, DiskIndexError::IdentityMismatch) => {}
-            other => panic!("expected a typed identity mismatch, got {other:?}"),
+            _ => panic!("rebuild must reject the replaced primary with IdentityMismatch"),
         }
         assert!(
             interposed.load(std::sync::atomic::Ordering::SeqCst),
@@ -2499,7 +2625,7 @@ mod tests {
             ..DiskIndexOptions::default()
         };
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Five user records plus the internal creation-nonce record (STO-01).
+        // Five user records plus the internal creation-nonce record.
         assert_eq!(report.records, 6);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(reader.get::<Item>(&4)?.unwrap().value, "value-4");
@@ -2583,7 +2709,7 @@ mod tests {
         fs::remove_file(sidecar_path(&path))?;
         crate::disk_index::reset_tombstone_key_decode_calls();
         let report = rebuild_disk_index(spec_multi(), &path, options, plan_multi())?;
-        // Four user records plus the internal creation-nonce record (STO-01).
+        // Four user records plus the internal creation-nonce record.
         assert_eq!(report.records, 5);
         // One decode per tombstone record, not one per plan descriptor.
         assert_eq!(crate::disk_index::tombstone_key_decode_calls(), 2);
@@ -2595,9 +2721,9 @@ mod tests {
         Ok(())
     }
 
-    /// PERF2-03: a CRC rebuild must traverse each indexed payload exactly
-    /// once. The scanner runs with an integrity-stripped spec (frame reads
-    /// only), and `extract_plan_update` owns the single checksum-verified
+    /// a CRC rebuild must traverse each indexed payload exactly
+    /// once. The scanner reads frames only with the original format contract,
+    /// and `extract_plan_update` owns the single checksum-verified
     /// payload read; payloads of records outside the plan are never
     /// materialized.
     #[cfg(feature = "integrity")]
@@ -2691,7 +2817,7 @@ mod tests {
 
         crate::disk_index::reset_plan_payload_reads();
         let report = rebuild_disk_index(spec_crc(), &path, options, plan_crc())?;
-        // Four user records plus the internal creation-nonce record (STO-01).
+        // Four user records plus the internal creation-nonce record.
         assert_eq!(report.records, 5);
         // Two indexed puts and one tombstone: three payload materializations,
         // never a scanner checksum pre-pass on top and never the unindexed
@@ -2711,6 +2837,121 @@ mod tests {
         let record = prepare_stream_tombstone_record::<Item>(spec(), &7u64, 0, 64, None, None)?;
         assert_eq!(record.flags, crate::disk_index::TOMBSTONE_RECORD_FLAGS);
         assert_eq!(record.block_version, 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "integrity")]
+    #[test]
+    fn indexed_candidates_reject_unknown_flags_even_with_matching_checksums() -> Result<()> {
+        use crate::native_layout::{encode_native_record_header, read_native_record_header};
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        const UNKNOWN_FLAG: u16 = 0x0002;
+        for integrity in [
+            IntegrityPolicy::None,
+            IntegrityPolicy::Crc32,
+            IntegrityPolicy::Crc32WithHeader,
+        ] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("unknown-flags.varlit");
+            let spec = spec()
+                .with_index_policy(IndexPolicy::ScanOnOpen)
+                .with_integrity_policy(integrity);
+            let plan = index_plan().validate(spec).map_err(index_error)?;
+            let options = DiskIndexOptions::default();
+            let value = Item {
+                key: 7,
+                value: "payload with an invalid frame".into(),
+            };
+            let info = {
+                let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
+                let info = writer.push_info(&value)?;
+                writer.sync()?;
+                info
+            };
+            let mut file = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+            file.seek(SeekFrom::Start(info.record_offset))?;
+            let mut header = read_native_record_header(&mut file, info.record_offset)?.fields;
+            let mut payload = vec![0; info.payload_len as usize];
+            file.read_exact(&mut payload)?;
+            header.flags = UNKNOWN_FLAG;
+            if integrity == IntegrityPolicy::Crc32WithHeader {
+                header.checksum = 0;
+                let mut hash = crc32fast::Hasher::new();
+                hash.update(&encode_native_record_header(header, info.record_offset, 0)?);
+                hash.update(&payload);
+                header.checksum = hash.finalize();
+            }
+            file.seek(SeekFrom::Start(info.record_offset))?;
+            file.write_all(&encode_native_record_header(header, info.record_offset, 0)?)?;
+            file.sync_all()?;
+            let end = file.metadata()?.len();
+            let snapshot = SnapshotFile::from_file_with_len(file, end)?;
+
+            // Build a companion whose own CRCs, identity and native descriptor
+            // agree with the malformed record. Consistency with an untrusted
+            // companion must not replace validation of the native frame.
+            fs::remove_file(sidecar_path(&path))?;
+            let metadata = DiskIndexMetadata::new_disk(
+                primary_identity(spec, &snapshot)?,
+                plan.digest(),
+                DiskIndexFrontier {
+                    eof: info.record_offset,
+                    record_count: 1,
+                    next_sequence: Some(info.sequence),
+                },
+                0,
+            )
+            .with_primary_generation(primary_generation(
+                spec,
+                &snapshot,
+                info.record_offset,
+            )?);
+            let mut store = DiskIndexStore::create(sidecar_path(&path), options, metadata)
+                .map_err(index_error)?;
+            let update = DiskIndexUpdate::from_key_with_record(
+                Item::ID,
+                &value.key,
+                DiskIndexEntry::Put {
+                    record_offset: info.record_offset,
+                    sequence: info.sequence,
+                },
+                DiskIndexPhysicalRecord {
+                    physical_len: end - info.record_offset,
+                    block_id: Item::ID,
+                    block_version: Item::VERSION,
+                    flags: UNKNOWN_FLAG,
+                    native_crc: (integrity != IntegrityPolicy::None).then_some(header.checksum),
+                },
+                options.max_key_bytes,
+            )
+            .map_err(index_error)?;
+            let batch = store.begin_write_batch().map_err(index_error)?;
+            batch
+                .apply_update(info.record_offset, end, &update)
+                .map_err(index_error)?;
+            batch
+                .set_primary_generation(primary_generation(spec, &snapshot, end)?)
+                .map_err(index_error)?;
+            store.commit_batch().map_err(index_error)?;
+            store.mark_clean(end).map_err(index_error)?;
+            drop(store);
+
+            let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
+            assert!(matches!(
+                reader.verify_all(),
+                Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))
+            ));
+            let result = reader.get::<Item>(&value.key);
+            assert!(
+                matches!(result, Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))),
+                "indexed get must reject unknown flags with UnknownRecordFlags under {integrity:?}"
+            );
+            assert!(matches!(
+                reader.lookup::<Item>(&value.key),
+                Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))
+            ));
+        }
         Ok(())
     }
 

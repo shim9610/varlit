@@ -1,10 +1,11 @@
+use crate::TryClone;
+use crate::fallible::Arc;
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::SeekFrom;
 #[cfg(test)]
 use std::io::{Seek, Write};
-use std::sync::Arc;
 
 use crate::codec::encode_to_vec_limited;
 use crate::format::ReadLimitKey;
@@ -18,19 +19,19 @@ use fatal_access::{FatalAccessAllowed, FatalAccessGate};
 use page_index_enumeration::PageIndexEnumeration;
 
 const VMAT_MAGIC: &[u8; 4] = b"VMAT";
-// PERF-01/PERF-02: layout version 2 replaces the whole-bitmap commit checksum
+// Layout version 2 replaces the whole-bitmap commit checksum
 // with per-page digests and stops explicitly initialising the per-cell CRC and
 // validity regions at create. Version 1 artifacts describe a different physical
 // representation, so they are rejected as stale-regenerable rather than being
 // reinterpreted under the new rules.
-// PERF-01: layout version 3 adds the persisted page-index region. Open used to
+// Layout version 3 adds the persisted page-index region. Open used to
 // visit `0..page_count` of every commit map and validity bitmap, which is
 // `Theta(cell_count / 8)` of loop iterations even when the filesystem proved
 // every page a hole, and degraded to that much *I/O* whenever the allocation
 // map was unavailable or exceeded the tracked-extent cap. Version 2 artifacts
 // carry no index, so they are rejected as stale-regenerable rather than being
 // reinterpreted under the new rules.
-// PERF-01/SAFE: layout version 4 gives every persisted page index a validated
+// /SAFE: layout version 4 gives every persisted page index a validated
 // occupancy header and makes the array the *live* set rather than the history
 // of everything ever published. Version 3 arrays are terminator-scanned, so a
 // zeroed or garbage entry silently truncated enumeration and hid every later
@@ -73,7 +74,7 @@ const PAGE_INDEX_MAX_ENTRIES: u64 = (1u64 << 48) - 1;
 /// digest array.
 const PAGE_INDEX_HEADER_MIX: u64 = 0x9E37_79B9_7F4A_7C15;
 /// Occupancy-header encoding published while a whole-map page-index
-/// republication is in flight (F-02).
+/// republication is in flight.
 ///
 /// It is never a resting state: [`write_commit_map_pages`] writes it, makes it
 /// durable, and only replaces it with a real count once every entry, digest and
@@ -141,7 +142,7 @@ const MAX_TRACKED_EXTENTS: usize = 8192;
 /// The byte ranges of a matrix file that the filesystem reports as allocated,
 /// i.e. the only ranges that can possibly hold non-zero bytes.
 ///
-/// PERF-02: the commit maps, per-cell checksums, and validity bitmaps are
+/// the commit maps, per-cell checksums, and validity bitmaps are
 /// established as a zero extent by `set_len` and are never written at create.
 /// Authenticating a `PAGE_STATE_UNINITIALIZED` page still requires proving that
 /// it reads as zero, which previously meant streaming every page of every map
@@ -155,7 +156,7 @@ const MAX_TRACKED_EXTENTS: usize = 8192;
 /// this map is available* such a page is pulled back into the visit set and the
 /// corruption is still read and still reported.
 ///
-/// F-06: that last property is conditional on the map. Where it is `None` the
+/// that last property is conditional on the map. Where it is `None` the
 /// visit set is the persisted page index alone, which names only pages the
 /// matrix itself published; a stray byte written out of band into a page the
 /// matrix never published is then not visited and not reported. The page is not
@@ -181,7 +182,7 @@ struct AllocatedExtents {
 
 impl AllocatedExtents {
     /// Queries the filesystem, restoring the file cursor before returning.
-    fn query(file: &mut impl MatrixIo) -> Option<Self> {
+    fn query_base(file: &mut impl MatrixIo) -> Option<Vec<(u64, u64)>> {
         if allocation_map_forced_unavailable() {
             return None;
         }
@@ -191,7 +192,7 @@ impl AllocatedExtents {
         let cursor = std::io::Seek::stream_position(&mut raw).ok()?;
         let ranges = query_allocated_extents(raw);
         let restored = std::io::Seek::seek(&mut raw, SeekFrom::Start(cursor)).is_ok();
-        let mut ranges = ranges?;
+        let ranges = ranges?;
         if !restored {
             return None;
         }
@@ -207,8 +208,21 @@ impl AllocatedExtents {
         if !ordered {
             return None;
         }
+        Some(ranges)
+    }
+
+    fn query(file: &mut impl MatrixIo) -> Result<Option<Self>> {
+        let Some(mut ranges) = Self::query_base(file) else {
+            return Ok(None);
+        };
         if let Some(view) = file.paged() {
-            ranges.extend(view.allocated_ranges().ok()?);
+            // An unavailable OS allocation map is optional. A malformed COW
+            // directory is not: dropping its error would silently omit pages.
+            match view.allocated_ranges() {
+                Ok(changed) => ranges.extend(changed),
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
             ranges.sort_unstable();
             let mut merged: Vec<(u64, u64)> = Vec::new();
             for (start, end) in ranges {
@@ -220,7 +234,7 @@ impl AllocatedExtents {
             }
             ranges = merged;
         }
-        Some(Self { ranges })
+        Ok(Some(Self { ranges }))
     }
 
     /// True when `[offset, offset + len)` overlaps any allocated range, i.e.
@@ -241,7 +255,7 @@ impl AllocatedExtents {
     /// Visits every `unit`-sized slot of `[base, base + len)` that overlaps an
     /// allocated range, in ascending order.
     ///
-    /// PERF-01: the walk is over ranges, not over slots, so its cost is
+    /// the walk is over ranges, not over slots, so its cost is
     /// proportional to the *allocated* part of the region and never to the
     /// region's logical size. This is what lets verification enumerate the pages
     /// that may hold bytes without a `0..page_count` loop.
@@ -295,7 +309,7 @@ fn range_may_hold_data(extents: Option<&AllocatedExtents>, offset: u64, len: u64
 /// Zeroes `[offset, offset + len)` by removing the range where the platform
 /// and filesystem support it, and by streaming zero bytes where they do not.
 ///
-/// F-08, stated exactly rather than qualitatively: range removal is attempted
+/// stated exactly rather than qualitatively: range removal is attempted
 /// on Windows (`FSCTL_SET_ZERO_DATA`) and Linux (`FALLOC_FL_PUNCH_HOLE`) only,
 /// and even there it fails on filesystems without sparse support. Every other
 /// target, and every failed attempt, streams `len` zero bytes, which is
@@ -352,7 +366,7 @@ std::thread_local! {
     };
 }
 
-/// Always-compiled observation of the sparse-zeroing fallback (PERF-03/F-08).
+/// Always-compiled observation of the sparse-zeroing fallback.
 ///
 /// Whole-category clear and whole-map rebuild ask the filesystem to *remove* a
 /// byte range. Where that is unavailable the range has to be streamed as zero
@@ -548,7 +562,7 @@ fn allocation_map_forced_unavailable() -> bool {
 }
 
 /// Consumes one step of an injected-failure countdown, reporting whether this
-/// call is the selected one (F-02).
+/// call is the selected one.
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 fn take_injected_failure(cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>) -> bool {
     let remaining = scaling_counters::get_always(cell);
@@ -560,7 +574,7 @@ fn take_injected_failure(cell: &'static std::thread::LocalKey<std::cell::Cell<u6
 }
 
 /// Aborts the process at a named boundary inside a whole-map page-index
-/// republication (F-02).
+/// republication.
 ///
 /// Interruption between emptying the persisted index and republishing it is the
 /// only way to observe the state [`PAGE_INDEX_REBUILD_MARKER`] exists to make
@@ -728,7 +742,7 @@ fn record_open_resident_bitmap_bytes(layout: &MatrixLayout) {
 #[cfg(not(any(test, feature = "scalable-fault-injection")))]
 fn record_open_resident_bitmap_bytes(_layout: &MatrixLayout) {}
 
-/// Tracks the live resident total, so PERF-02 eviction is observable and not
+/// Tracks the live resident total, so  eviction is observable and not
 /// only visible at open.
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 fn record_resident_bitmap_bytes(bytes: u64) {
@@ -739,7 +753,7 @@ fn record_resident_bitmap_bytes(bytes: u64) {
 fn record_resident_bitmap_bytes(_bytes: u64) {}
 
 /// Tracks the modelled resident cost of persisted page-index tracking, so
-/// F-03's "resident cost follows live state" contract is observable rather than
+/// 's "resident cost follows live state" contract is observable rather than
 /// asserted.
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 fn record_resident_page_index_bytes(bytes: u64) {
@@ -895,7 +909,7 @@ impl PackedBitmap {
     }
 }
 
-/// Structural codec identity of [`PackedBitmap`] (API-04).
+/// Structural codec identity of [`PackedBitmap`] .
 ///
 /// Derived the way the built-in container codecs derive theirs: a tag naming
 /// this codec folded with the identities of the codecs whose bytes it actually
@@ -935,8 +949,8 @@ impl crate::VarlitDecode for PackedBitmap {
     const SCHEMA_ID: u64 = PACKED_BITMAP_SCHEMA_ID;
 
     fn decode_varlit(decoder: &mut crate::Decoder<'_>) -> Result<Self> {
-        let bit_len = <u64 as crate::VarlitDecode>::decode_varlit(decoder)?;
-        let bytes = <Vec<u8> as crate::VarlitDecode>::decode_varlit(decoder)?;
+        let bit_len = decoder.decode_value::<u64>()?;
+        let bytes = decoder.decode_value::<Vec<u8>>()?;
         // Ordinary malformed codec input, so an ordinary decode error: this
         // type is accepted in plain variable fields and must not report a
         // matrix-layout fault there.
@@ -988,7 +1002,7 @@ pub struct MatrixRecoveryReport {
     pub recommended_actions: Vec<MatrixRecoveryAction>,
 }
 
-/// Always-available cost qualification for whole-range zeroing (F-08).
+/// Always-available cost qualification for whole-range zeroing.
 ///
 /// Whole-category clear, whole-map rebuild, and page-index rebuild all ask the
 /// filesystem to remove a byte range. Where removal is unavailable the range is
@@ -1038,7 +1052,7 @@ impl MatrixRecoveryReport {
 }
 
 /// Thread-local observability counters for the paged matrix integrity
-/// representation (PERF-01/PERF-02 scaling contracts).
+/// representation (/ scaling contracts).
 ///
 /// These hang off `MatrixRecoveryReport` because it is the matrix diagnostic
 /// type already exported from the crate root; they are not a property of any
@@ -1056,7 +1070,7 @@ impl MatrixRecoveryReport {
         scaling_counters::get(&scaling_counters::CREATE_METADATA_BYTES_WRITTEN)
     }
 
-    /// Mandatory non-cache residency charged for page-index tracking (F-03).
+    /// Mandatory non-cache residency charged for page-index tracking.
     /// The spillable representation has no mandatory per-entry charge. This
     /// excludes the optional `matrix_directory_cache_bytes` working cache,
     /// COW staging and fixed tree-page workspace; it is not total heap usage.
@@ -1097,7 +1111,7 @@ impl MatrixRecoveryReport {
     /// costs `O(live pages)` rather than `O(cell_count / 8)`, and **every
     /// persisted-index page is verified on every platform**.
     ///
-    /// F-06: two things are lost, not one. The first is the ability to skip the
+    /// two things are lost, not one. The first is the ability to skip the
     /// read of an indexed page whose bytes the filesystem would have proved
     /// zero. The second is coverage of pages the matrix never indexed: those are
     /// additionally visited **only** when the platform supplies a usable
@@ -1110,10 +1124,10 @@ impl MatrixRecoveryReport {
 
     /// Bitmap pages that matrix opens on this thread actually visited.
     ///
-    /// PERF-01: this is the loop bound that must not follow the logical page
+    /// this is the loop bound that must not follow the logical page
     /// count. Open visits the union of the persisted page index and, where the
     /// filesystem can answer, the pages its allocation map reports as written.
-    /// F-07: that union is the *candidate* page count — `L` indexed pages plus
+    /// that union is the *candidate* page count — `L` indexed pages plus
     /// `A` allocation-derived candidates — and only the first term follows live
     /// state. A densely allocated bitmap region makes `A` proportional to the
     /// region's page count even when few bits are live, so this counter is
@@ -1126,7 +1140,7 @@ impl MatrixRecoveryReport {
     /// Resident bitmap page bytes currently held by the most recently created,
     /// opened, or mutated matrix layout on this thread.
     ///
-    /// PERF-02: this falls again when a page loses its final set bit, so a
+    /// this falls again when a page loses its final set bit, so a
     /// set/clear cycle returns to its starting value instead of accumulating
     /// residency for every page it has ever touched.
     pub fn matrix_resident_bitmap_bytes() -> u64 {
@@ -1289,7 +1303,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::FORCE_NO_ALLOCATION_MAP, u64::from(force));
     }
 
-    /// Fails the `after`-th persisted page-index *entry* write from now (F-02).
+    /// Fails the `after`-th persisted page-index *entry* write from now.
     ///
     /// Zero disarms. This is the boundary a whole-map republication crosses once
     /// per materialised page, so it is how a test reaches the window between
@@ -1298,7 +1312,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::PAGE_INDEX_ENTRY_WRITE_FAILURE, after);
     }
 
-    /// Fails the `after`-th persisted page-index *header* write from now (F-02).
+    /// Fails the `after`-th persisted page-index *header* write from now.
     ///
     /// Zero disarms. During a whole-map republication the header is written
     /// exactly twice: the rebuild marker first and the published occupancy count
@@ -1307,7 +1321,7 @@ impl MatrixRecoveryReport {
         scaling_counters::set(&scaling_counters::PAGE_INDEX_HEADER_WRITE_FAILURE, after);
     }
 
-    /// Fails the `after`-th first-touch bitmap page allocation from now (F-03).
+    /// Fails the `after`-th first-touch bitmap page allocation from now.
     ///
     /// Zero disarms. This is the allocation that used to run *after* the bitmap
     /// byte was durable, so a typed `AllocationFailed` there left disk holding a
@@ -1318,7 +1332,7 @@ impl MatrixRecoveryReport {
     }
 
     /// Fails the `after`-th persisted page-index *mirror* reservation from now
-    /// (F-03). Zero disarms.
+    /// Zero disarms.
     ///
     /// This is the allocation that page-index compaction used to perform after
     /// it had already rewritten the entry array on disk, so a typed
@@ -1331,7 +1345,7 @@ impl MatrixRecoveryReport {
     }
 
     /// Aborts the calling process at one stage of a whole-map page-index
-    /// republication (F-02). Zero disarms.
+    /// republication. Zero disarms.
     ///
     /// The stages are `1` once the rebuild marker is durable and before the
     /// entry region is cleared, `2` once it is cleared and before any entry is
@@ -1375,7 +1389,7 @@ impl MatrixRecoveryReport {
 struct BitmapPage {
     bytes: Arc<Vec<u8>>,
     /// Set bits held by this page, maintained on every mutation so that
-    /// "this page is now all zero" is an `O(1)` question (PERF-02).
+    /// "this page is now all zero" is an `O(1)` question.
     ones: u64,
     /// True when this page is held by the demand cache
     /// ([`MatrixMetadataResidency::Lazy`]) rather than admitted through
@@ -1700,7 +1714,7 @@ impl std::ops::Deref for PagePayload {
     }
 }
 
-/// One bitmap byte write whose fallible work is already done (F-03).
+/// One bitmap byte write whose fallible work is already done.
 ///
 /// Produced by [`SparseBitmap::prepare_byte_write`] and consumed by
 /// [`SparseBitmap::commit_byte_write`]. Holding one of these is the statement
@@ -1726,7 +1740,7 @@ struct PreparedByteWrite {
 
 /// Residency change produced by one bitmap mutation.
 ///
-/// PERF-02: a page that loses its final set bit is released immediately, so
+/// a page that loses its final set bit is released immediately, so
 /// long-running set/clear churn cannot hold residency proportional to the pages
 /// it has historically touched. Both terms are reported so the caller can charge
 /// the growth *before* the memory is taken and refund the shrink afterwards.
@@ -1816,6 +1830,31 @@ impl Clone for SparseBitmap {
             directory: self.directory.clone(),
             direct: self.direct.clone(),
         }
+    }
+}
+
+impl TryClone for SparseBitmap {
+    fn try_clone(&self) -> Result<Self> {
+        let source = self.store();
+        Ok(Self {
+            bit_count: self.bit_count,
+            byte_len: self.byte_len,
+            page_count: self.page_count,
+            store: RefCell::new(PageStore {
+                pages: source.pages.try_clone()?,
+                ones: source.ones,
+                charged_bytes: source.charged_bytes,
+                cached_bytes: source.cached_bytes,
+                // The recency chain rides along inside `pages`: its links are
+                // page numbers, which are stable across the clone, so copying
+                // the two ends is the whole of it.
+                lru_head: source.lru_head,
+                lru_tail: source.lru_tail,
+            }),
+            backing: self.backing.try_clone()?,
+            directory: self.directory.try_clone()?,
+            direct: self.direct.try_clone()?,
+        })
     }
 }
 
@@ -1994,7 +2033,7 @@ impl SparseBitmap {
         store.pages.insert(
             page,
             BitmapPage {
-                bytes: Arc::new(bytes),
+                bytes: crate::fallible::try_arc(bytes)?,
                 ones,
                 cached: true,
                 lru_prev: NO_PAGE,
@@ -2058,6 +2097,7 @@ impl SparseBitmap {
             .contains_key(&page))
     }
 
+    #[inline]
     fn byte(&self, index: u64, read: BitmapRead<'_>) -> Result<u8> {
         if index >= self.byte_len {
             return Err(Error::InvalidMatrixLayout);
@@ -2065,6 +2105,37 @@ impl SparseBitmap {
         let page = index / BITMAP_PAGE_BYTES;
         let within =
             usize::try_from(index % BITMAP_PAGE_BYTES).map_err(|_| Error::InvalidMatrixLayout)?;
+        // Reuse the existing verified page directly on a hit. The old path
+        // probed membership in faulted_store and then looked up the same page
+        // again here. Keep recency updates and release the borrow before I/O.
+        {
+            let mut store = self.store();
+            if let Some(held) = store.pages.get(&page) {
+                let byte = held
+                    .bytes
+                    .get(within)
+                    .copied()
+                    .ok_or(Error::InvalidMatrixLayout)?;
+                // When the existing cache budget covers every possible byte
+                // of this bitmap, no cached page can need eviction. Avoid
+                // maintaining an unused recency order on every bit lookup.
+                // Larger bitmaps keep the same bounded LRU policy.
+                if self
+                    .backing
+                    .as_ref()
+                    .is_some_and(|b| b.cache_limit < self.byte_len)
+                {
+                    store.note_used(page);
+                }
+                return Ok(byte);
+            }
+        }
+        self.uncached_byte(page, within, read)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn uncached_byte(&self, page: u64, within: usize, read: BitmapRead<'_>) -> Result<u8> {
         let store = self.faulted_store(page, read)?;
         match store.pages.get(&page) {
             Some(page) => page
@@ -2146,6 +2217,7 @@ impl SparseBitmap {
         Ok(None)
     }
 
+    #[inline]
     fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool> {
         if ordinal >= self.bit_count {
             return Err(Error::InvalidMatrixLayout);
@@ -2219,7 +2291,7 @@ impl SparseBitmap {
     }
 
     /// Resolves everything one byte write needs that can fail, without making
-    /// the write visible (F-03, invariant 3).
+    /// the write visible (, invariant 3).
     ///
     /// The first write to a page has to allocate that page and reserve a map
     /// slot for it, and both of those can fail. Doing them here, before the
@@ -2267,10 +2339,10 @@ impl SparseBitmap {
                 if within >= existing.bytes.len() {
                     return Err(Error::InvalidMatrixLayout);
                 }
-                // Take unique ownership now. `Arc::make_mut` clones a shared
-                // payload, and a clone is an allocation; doing it here means the
-                // `make_mut` after persistence can only ever be a no-op.
-                let _ = Arc::make_mut(&mut existing.bytes);
+                // Separate shared bytes fallibly before persistence. A refusal
+                // leaves held snapshots intact; commitment only borrows the
+                // unique page and cannot allocate.
+                let _ = crate::fallible::try_make_mut(&mut existing.bytes)?;
                 page_ones = existing.ones;
             }
             None => {
@@ -2293,7 +2365,7 @@ impl SparseBitmap {
                     ReadLimitKey::MatrixBitmapBytes.resource(),
                 )?;
                 fresh = Some(BitmapPage {
-                    bytes: Arc::new(bytes),
+                    bytes: crate::fallible::try_arc(bytes)?,
                     ones: 0,
                     cached: false,
                     // Never linked: `cached: false` keeps it out of the
@@ -2332,10 +2404,10 @@ impl SparseBitmap {
     /// and the map slot reserved by [`Self::prepare_byte_write`], the payload is
     /// uniquely owned, and every count was computed there. This is the step a
     /// caller runs *after* its disk mutation is durable, which is what keeps
-    /// disk and memory in agreement whatever the allocator does (F-03).
+    /// disk and memory in agreement whatever the allocator does.
     ///
     /// The first write to a page materialises it; the write that clears the
-    /// page's final set bit releases it again (PERF-02). The zero check is the
+    /// page's final set bit releases it again. The zero check is the
     /// page's maintained set-bit count, so neither the page nor the map is ever
     /// scanned on the hot path.
     fn commit_byte_write(&mut self, prepared: PreparedByteWrite) -> PageResidencyDelta {
@@ -2351,7 +2423,10 @@ impl SparseBitmap {
             // Unreachable: preparation either found the page or built one.
             return PageResidencyDelta::NONE;
         };
-        if let Some(slot) = Arc::make_mut(&mut page.bytes).get_mut(prepared.within) {
+        if let Some(slot) = Arc::get_mut(&mut page.bytes)
+            .expect("page separated before persistence")
+            .get_mut(prepared.within)
+        {
             *slot = prepared.value;
         }
         page.ones = prepared.page_ones_after;
@@ -2401,7 +2476,7 @@ impl SparseBitmap {
     /// Prepare-then-commit in one step.
     ///
     /// `#[cfg(test)]` deliberately: every production mutation has a disk write
-    /// to order against, so it must hold the two halves apart (F-03). Only the
+    /// to order against, so it must hold the two halves apart. Only the
     /// bitmap's own unit tests, which have no file at all, use the shorthand.
     #[cfg(test)]
     fn set_byte(&mut self, index: u64, value: u8) -> Result<PageResidencyDelta> {
@@ -2556,7 +2631,7 @@ impl SparseBitmap {
         self.store().cached_bytes
     }
 
-    /// Modelled resident cost of this bitmap's page-index tracking (F-03).
+    /// Modelled resident cost of this bitmap's page-index tracking.
     fn resident_index_bytes(&self) -> u64 {
         // No mandatory per-entry residency. The optional directory cache is
         // bounded separately by matrix_directory_cache_bytes, like payload
@@ -2565,7 +2640,7 @@ impl SparseBitmap {
     }
 }
 
-/// F-04, SHAPE B, mechanical enforcement: the CRC-validity bitmap and the proof
+/// SHAPE B, mechanical enforcement: the CRC-validity bitmap and the proof
 /// that it is *complete* evidence, held in one type whose bitmap is unnameable
 /// from the rest of this file.
 ///
@@ -2579,7 +2654,7 @@ impl SparseBitmap {
 ///
 /// A recovery path that reads a clear bit as *proof of absence* and republishes
 /// the result — `rebuild_commit_map_from_crc` — therefore erases committed cells
-/// using evidence the file never supplied. That was F-04.
+/// using evidence the file never supplied. That was.
 ///
 /// Round 12 fixed it with a `crc_valid_complete: bool` beside the bitmap and one
 /// added call to a checking function. Re-verification found that fix *partial*,
@@ -2627,7 +2702,7 @@ impl SparseBitmap {
 /// spec opted into forensic access. Until now that was a `fatal_access_blocked:
 /// bool` field consulted by an `ensure_fatal_access_allowed` helper at nine
 /// call sites plus two more inside `ensure_commit_publishable` and
-/// `prepare_commit_bit` — exactly the configuration F-05 was found in, one file
+/// `prepare_commit_bit` — exactly the configuration  was found in, one file
 /// over: a guard that protects the operations that remember to call it, and
 /// nothing else. Re-verification of round 12 named it as an unclosed instance
 /// of the class the round exists for, and noted that the sweep which produced
@@ -2724,14 +2799,14 @@ pub(crate) mod crc_valid_evidence;
 /// Running total of resident matrix bitmap bytes, checked against
 /// `ReadLimitKey::MatrixBitmapBytes` every time the total grows.
 ///
-/// PERF-02: the budget used to be charged once, up front, as
+/// the budget used to be charged once, up front, as
 /// `2 * block_bitmap_len + commit_map_len` — the dense worst case of a
 /// representation that no longer exists. That refused large matrices on a
 /// cell-count-scaled figure even though a freshly created matrix holds no
 /// resident bitmap bytes at all. The charge now tracks the pages actually
 /// materialised, so the limit means what it says and still fails closed: every
 /// growth is checked before the memory is used.
-/// F-03: page-index tracking is charged here too, so
+/// page-index tracking is charged here too, so
 /// `ReadLimitKey::MatrixBitmapBytes` bounds the whole resident matrix bitmap
 /// footprint — payload pages *and* the structure that names them — rather than
 /// leaving the index outside every runtime limit. The two terms are kept apart
@@ -2892,7 +2967,7 @@ fn read_page_digest_at(reader: MatrixRegionReader<'_>, offset: u64) -> Result<(u
 /// file, and the only construction that would detect a fabricated digest — a
 /// composition over the whole digest array — must be recomputed on every
 /// mutation and on every open, which reintroduces exactly the cell-count-scaled
-/// costs PERF-01 and PERF-02 exist to remove.
+/// costs  and  exist to remove.
 ///
 /// The consequence is bounded and unchanged from the single unprotected commit
 /// checksum this array replaced: an attacker who writes a commit bit together
@@ -2936,7 +3011,7 @@ pub struct MatrixCommitEvent {
     pub slot_len: u64,
 }
 
-/// **Deliberately not `Clone` (round 16).** `#[derive(Clone)]` on the layout
+/// **Deliberately not `Clone` .** `#[derive(Clone)]` on the layout
 /// forced `Clone` on [`FatalAccessGate`], and a clonable gate is an installable
 /// gate: `layout.fatal_access = donor.fatal_access.clone();` copied an
 /// unblocked decision onto a blocked layout in one line. Nothing in the crate
@@ -2953,7 +3028,7 @@ pub struct MatrixLayout {
     read_limits: ReadLimits,
     resident_bitmap_bytes: u64,
     /// Modelled resident cost of every persisted page index this layout tracks
-    /// (F-03). Charged against `ReadLimitKey::MatrixBitmapBytes` together with
+    /// Charged against `ReadLimitKey::MatrixBitmapBytes` together with
     /// `resident_bitmap_bytes`, and released as pages leave the live set.
     resident_page_index_bytes: u64,
     // Precomputed at open time so accessors gate on a single flag instead of
@@ -3010,7 +3085,7 @@ struct MatrixCommitLayout {
     /// `rebuild_commit_map_from_crc` — clear this one field.
     quarantine_finding: Option<MatrixRecoveryFinding>,
     digest_offset: Option<u64>,
-    /// Base offset of this category's persisted page index (PERF-01).
+    /// Base offset of this category's persisted page index.
     index_offset: u64,
 }
 
@@ -3023,9 +3098,9 @@ struct MatrixBlockLayout {
     cell_count: u64,
     crc_offset: Option<u64>,
     crc_valid_offset: Option<u64>,
-    /// Base offset of the validity bitmap's persisted page index (PERF-01).
+    /// Base offset of the validity bitmap's persisted page index.
     crc_valid_index_offset: Option<u64>,
-    /// The CRC-validity bitmap *and* whether it is complete evidence (F-04).
+    /// The CRC-validity bitmap *and* whether it is complete evidence.
     ///
     /// This is not a `SparseBitmap`: the bitmap is unnameable outside
     /// [`mod crc_valid_evidence`](crc_valid_evidence), so no path can read a
@@ -3043,7 +3118,7 @@ struct MatrixAuxLayout {
     byte_len: u64,
 }
 
-/// Where each paged bitmap's persisted page index lives (PERF-01).
+/// Where each paged bitmap's persisted page index lives.
 ///
 /// Region layout: one entry array per commit category, in category order, then
 /// — when checksums are enabled, because that is when the validity bitmaps
@@ -3100,7 +3175,7 @@ impl MatrixLayout {
     /// Charges newly resident bitmap bytes against
     /// `ReadLimitKey::MatrixBitmapBytes` before the memory is taken.
     ///
-    /// F-03: the limit is applied to the payload pages *and* the page-index
+    /// the limit is applied to the payload pages *and* the page-index
     /// tracking that names them, so no part of the resident matrix bitmap
     /// footprint sits outside a runtime resource limit.
     fn charge_resident_bitmap(&mut self, bytes: u64) -> Result<()> {
@@ -3114,7 +3189,7 @@ impl MatrixLayout {
     }
 
     /// Gives back residency a mutation released, so a set/clear cycle returns
-    /// to the budget it started from (PERF-02).
+    /// to the budget it started from.
     fn release_resident_bitmap(&mut self, bytes: u64) {
         if bytes == 0 {
             return;
@@ -3171,10 +3246,20 @@ impl MatrixLayout {
         let block = &self.blocks[block_index];
         let dim0 = self
             .dimension(&block.dimensions[0])
-            .ok_or_else(|| Error::MatrixDimensionMissing(block.dimensions[0].clone()))?;
+            .map(Ok)
+            .unwrap_or_else(|| {
+                Err(Error::MatrixDimensionMissing(
+                    block.dimensions[0].try_clone()?,
+                ))
+            })?;
         let dim1 = self
             .dimension(&block.dimensions[1])
-            .ok_or_else(|| Error::MatrixDimensionMissing(block.dimensions[1].clone()))?;
+            .map(Ok)
+            .unwrap_or_else(|| {
+                Err(Error::MatrixDimensionMissing(
+                    block.dimensions[1].try_clone()?,
+                ))
+            })?;
         if key.scan >= dim0 || key.ch >= dim1 {
             return Err(Error::MatrixKeyOutOfBounds {
                 scan: key.scan,
@@ -3240,7 +3325,7 @@ pub(crate) fn create_layout(
     spec.read_limits
         .check(ReadLimitKey::MatrixSlotRegionLen, slot_region_len)?;
     let block_bitmap_len = matrix_block_bitmap_len(spec, &cell_counts)?;
-    // PERF-02: creation makes no bitmap page resident, so the resident budget
+    // creation makes no bitmap page resident, so the resident budget
     // starts empty and is charged as pages are actually materialised. The
     // cell-count-scaled admission gates that remain (cells, slot region length,
     // metadata bytes, checksum bytes, file length) all describe on-disk
@@ -3303,7 +3388,7 @@ pub(crate) fn create_layout(
     )?;
     for (index, value) in dimensions.iter().enumerate() {
         dimension_index.insert(
-            value.name.clone(),
+            value.name.try_clone()?,
             u16::try_from(index).map_err(|_| Error::InvalidMatrixLayout)?,
         );
     }
@@ -3317,7 +3402,7 @@ pub(crate) fn create_layout(
     let mut next_commit_offset = commit_map_off;
     for (name, _, bit_count) in &commit_plans {
         let len = bit_bytes(*bit_count)?;
-        commit_offsets.insert(name.clone(), (next_commit_offset, len));
+        commit_offsets.insert(name.try_clone()?, (next_commit_offset, len));
         next_commit_offset = next_commit_offset
             .checked_add(len)
             .ok_or(Error::InvalidMatrixLayout)?;
@@ -3408,7 +3493,7 @@ pub(crate) fn create_layout(
         0,
     )?;
 
-    // PERF-02: only the fixed-size descriptor tables and the checksum-region
+    // only the fixed-size descriptor tables and the checksum-region
     // header are written explicitly. The commit maps, per-cell checksums, and
     // validity bitmaps are established as a zero extent by `set_len`, so
     // creation cost does not scale with the cell count. A never-written page is
@@ -3547,7 +3632,7 @@ pub(crate) fn read_layout_at_len(
     // persisted page index and retains no payload page.
     let residency = LazyResidency::declared(spec.read_limits, file)?;
     // Then verification, which is a separate decision and the only reader of the
-    // allocation map. PERF-01/PERF-02: the persisted page index names the pages
+    // allocation map. /: the persisted page index names the pages
     // this matrix has ever published, and one allocation-map query names the
     // pages the filesystem says hold bytes; the pass visits their union, so it
     // never loops over logical pages and never degrades to full logical bitmap
@@ -3557,7 +3642,7 @@ pub(crate) fn read_layout_at_len(
     // would read the answer.
     let verify = spec.read_limits.admit_matrix_metadata_verification();
     let extents = match verify {
-        true => AllocatedExtents::query(file),
+        true => AllocatedExtents::query(file)?,
         false => None,
     };
     record_open_allocation_map(extents.as_ref());
@@ -3623,7 +3708,7 @@ pub(crate) fn write_cell<T: VarlitMatrixBlock>(
     let ordinal = layout.ordinal_for_block(block_index, key)?;
     let offset = layout.slot_offset(block_index, ordinal)?;
     let slot_stride = layout.blocks[block_index].slot_stride;
-    // DEF-02: the slot stride is the hard bound for the encode itself, so a
+    // the slot stride is the hard bound for the encode itself, so a
     // hostile or miswritten `VarlitMatrixBlock` encode can never buffer more
     // than one byte past the stride before the typed error fires. The cap is
     // `slot_stride + 1` (not `slot_stride`) so an encode of exactly one extra
@@ -3859,7 +3944,9 @@ pub(crate) fn read_run_payload<T: VarlitMatrixBlock>(
         return Err(Error::MatrixNotCommitted);
     }
     reader.read_exact_at(layout.slot_offset(block_index, first)?, out)?;
-    if let Some(base) = block.crc_offset {
+    if spec.read_validation().data_crc
+        && let Some(base) = block.crc_offset
+    {
         let mut crcs = [0u8; 4096];
         reader.read_exact_at(
             indexed_crc_offset(base, first)?,
@@ -4000,7 +4087,9 @@ pub(crate) fn read_column_payload<T: VarlitMatrixBlock>(
         stride,
         out,
     )?;
-    if let Some(base) = block.crc_offset {
+    if spec.read_validation().data_crc
+        && let Some(base) = block.crc_offset
+    {
         let mut crcs = [0u8; 4096];
         read_strided_bytes(
             |at, bytes| reader.read_exact_at(at, bytes),
@@ -4166,7 +4255,7 @@ pub(crate) fn clear_category(
 
     // Everything the category held becomes non-resident again: the commit
     // bitmap's payload pages, the validity bitmap this clear drops with them, and
-    // the page-index tracking of both. F-01: both budget terms are totalled
+    // the page-index tracking of both. : both budget terms are totalled
     // *before* anything is cleared, because `SparseBitmap::clear` drops the pages
     // and the index mirror the totals are derived from, and refunding only the
     // payload term left the page-index charge — and the validity bitmap's payload
@@ -4231,11 +4320,11 @@ pub(crate) fn clear_category(
     // post-create zero extent means emptying it too — otherwise every later
     // open would revisit pages the clear has just proven empty.
     //
-    // RULE B, and the reason this needs no F-02 rebuild marker: emptying the
+    // RULE B, and the reason this needs no  rebuild marker: emptying the
     // index before the map it describes is the *safe* direction for a clear.
     // An interruption between the two leaves an index that names nothing and a
     // map whose bytes are unreachable, which is byte-for-byte the outcome the
-    // caller asked for. The destructive-republication window F-02 closes exists
+    // caller asked for. The destructive-republication window  closes exists
     // only where the index has to come back afterwards.
     zero_range(file, index_offset, index_page_array_len(page_count)?)?;
     if let Some(digest_offset) = digest_offset {
@@ -4245,7 +4334,7 @@ pub(crate) fn clear_category(
         if punch_zero_range(file, digest_offset, digest_len)? {
             sparse_zeroing::record(0);
         } else {
-            // F-08: this range is zeroed by an explicit per-page digest loop
+            // this range is zeroed by an explicit per-page digest loop
             // rather than by `zero_range`, so it has to record its own outcome.
             // Without this, a clear whose digest array streamed but whose final
             // map range was removed would report zero streamed bytes.
@@ -4380,45 +4469,63 @@ pub(crate) fn write_aux_at_len(
 }
 
 #[cfg(feature = "mmap")]
-pub(crate) fn cell_payload_parts<T: VarlitMatrixBlock>(
+pub(crate) fn cell_payload_parts<'a, T: VarlitMatrixBlock>(
     spec: FormatSpec,
-    layout: &MatrixLayout,
+    layout: &'a MatrixLayout,
     key: MatrixKey,
     read: BitmapRead<'_>,
-) -> Result<(u64, u64, Option<u64>)> {
-    ensure_matrix_block::<T>(spec)?;
-    if cell_status::<T>(spec, layout, key, read)? == MatrixCellStatus::NotCommitted {
-        return Err(Error::MatrixNotCommitted);
-    }
-    // `cell_status` above has already made the fail-closed refusal; taking the
-    // witness here is what lets this path address the block at all.
-    let allowed = layout.ensure_fatal_access_allowed()?;
+) -> Result<(u64, u64, Option<CellCrc<'a>>)> {
+    // Establish the same gates as cell_status once and retain their geometry.
+    // Calling cell_status here repeated type registration and ordinal lookup.
+    let category = ensure_matrix_block::<T>(spec)?;
+    let allowed = ensure_commit_publishable(layout, category)?;
     let block_index = layout.block_index(&allowed, T::ID)?;
     let ordinal = layout.ordinal_for_block(block_index, key)?;
+    let commit_index = layout.commit_index(&allowed, category)?;
+    if !layout.commits[commit_index].bits.get(ordinal, read)? {
+        return Err(Error::MatrixNotCommitted);
+    }
     let offset = layout.slot_offset(block_index, ordinal)?;
     let block = &layout.blocks[block_index];
-    let crc_offset = block
+    let crc = block
         .crc_offset
-        .map(|crc_offset| indexed_crc_offset(crc_offset, ordinal))
+        .filter(|_| spec.read_validation().data_crc)
+        .map(|base| {
+            Ok::<_, Error>(CellCrc {
+                offset: indexed_crc_offset(base, ordinal)?,
+                block,
+                payload_offset: offset,
+                ordinal,
+            })
+        })
         .transpose()?;
-    Ok((offset, block.slot_stride, crc_offset))
+    Ok((offset, block.slot_stride, crc))
+}
+
+/// The checksum address travels with the evidence required to interpret it.
+/// Both mmap entry points use this verifier rather than checking only the CRC.
+#[cfg(feature = "mmap")]
+pub(crate) struct CellCrc<'a> {
+    pub(crate) offset: u64,
+    block: &'a MatrixBlockLayout,
+    payload_offset: u64,
+    ordinal: u64,
 }
 
 #[cfg(feature = "mmap")]
-pub(crate) fn verify_payload_crc_bytes(
-    payload_offset: u64,
-    payload: &[u8],
-    expected: u32,
-) -> Result<()> {
-    let actual = crc32_bytes(payload)?;
-    if actual != expected {
-        return Err(Error::MatrixChecksumMismatch {
-            offset: payload_offset,
-            expected,
-            actual,
-        });
+impl CellCrc<'_> {
+    pub(crate) fn verify(&self, payload: &[u8], expected: u32, read: BitmapRead<'_>) -> Result<()> {
+        let actual = crc32_bytes(payload)?;
+        require_cell_crc_evidence(self.block, self.ordinal, self.payload_offset, actual, read)?;
+        if actual != expected {
+            return Err(Error::MatrixChecksumMismatch {
+                offset: self.payload_offset,
+                expected,
+                actual,
+            });
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 pub(crate) fn resume_signal(
@@ -4596,7 +4703,7 @@ pub(crate) fn verify_matrix_metadata(
     layout: &MatrixLayout,
     file: &mut impl MatrixIo,
 ) -> Result<MatrixRecoveryReport> {
-    let extents = AllocatedExtents::query(file);
+    let extents = AllocatedExtents::query(file)?;
     let mut buffer = PageVerifyBuffer::new()?;
     let mut fresh = HashMap::new();
     try_reserve_map(
@@ -4619,7 +4726,7 @@ pub(crate) fn verify_matrix_metadata(
             &mut buffer,
         )?;
         if !intact {
-            fresh.insert(commit.name.clone(), commit_map_finding(&commit.name));
+            fresh.insert(commit.name.try_clone()?, commit_map_finding(&commit.name));
         }
     }
     let mut report = report_from(layout, Some(&fresh), BitmapRead::new(file));
@@ -4683,7 +4790,7 @@ fn report_from(
             _ => None,
         })
         .collect::<Vec<_>>();
-    // F-02: a fatal commit-map finding — an interrupted rebuild marker, a torn
+    // a fatal commit-map finding — an interrupted rebuild marker, a torn
     // occupancy header, or an unusable counted entry — means the persisted page
     // index cannot be trusted to name the published set. The recovery that
     // rewrites it is a commit-map rebuild, so the report has to say so instead
@@ -4736,7 +4843,7 @@ fn report_from(
 }
 
 /// Fails this layout closed after a whole-map page-index republication was
-/// interrupted past the point where it published the rebuild marker (F-02).
+/// interrupted past the point where it published the rebuild marker.
 ///
 /// The persisted index no longer describes the published set, and the in-memory
 /// mirror still describes the *previous* one, so any later mutation would write
@@ -4749,7 +4856,7 @@ fn report_from(
 /// relaxes *reading* fatal state, not writing into a half-published index; the
 /// route back is to reopen with forensics and rebuild.
 fn poison_interrupted_rebuild(layout: &mut MatrixLayout, commit_index: usize) {
-    let category = layout.commits[commit_index].name.clone();
+    let category = &layout.commits[commit_index].name;
     layout.crc_findings.push(MatrixRecoveryFinding {
         kind: MatrixCorruptionKind::CommitMap,
         severity: MatrixCorruptionSeverity::Fatal,
@@ -4771,7 +4878,7 @@ pub(crate) fn rebuild_commit_map_from_crc<T: VarlitMatrixBlock>(
     let allowed = layout.ensure_fatal_access_allowed()?;
     let block_index = layout.block_index(&allowed, T::ID)?;
     let block = &layout.blocks[block_index];
-    // F-04: the completeness refusal, and simultaneously the only way to obtain
+    // the completeness refusal, and simultaneously the only way to obtain
     // permission to read a validity bit as evidence. It runs before every
     // fallible step of the rebuild and before the first disk mutation, so a
     // refused rebuild leaves the previous commit view exactly as it was.
@@ -4821,7 +4928,7 @@ pub(crate) fn rebuild_commit_map_from_crc<T: VarlitMatrixBlock>(
         if valid {
             committed += 1;
         }
-        // F-05, invariant 1: the page is charged *before* it is allocated, so
+        // invariant 1: the page is charged *before* it is allocated, so
         // the ceiling is a strict pre-allocation limit rather than one checked a
         // page too late. `materialisation_cost` inspects without allocating, and
         // `commit_byte_write` allocates nothing, so the only allocating step
@@ -4853,7 +4960,7 @@ pub(crate) fn rebuild_commit_map_from_crc<T: VarlitMatrixBlock>(
         .checked_sub(released)
         .ok_or(Error::InvalidMatrixLayout)?;
     let mut destructive = false;
-    // F-10: the map being replaced is *borrowed*, not cloned. The clone that
+    // the map being replaced is *borrowed*, not cloned. The clone that
     // used to stand here was an infallible container allocation on a recovery
     // path where every other allocation returns a typed `AllocationFailed`, and
     // `write_commit_map_pages` only ever reads the previous map's indexed-page
@@ -4869,7 +4976,7 @@ pub(crate) fn rebuild_commit_map_from_crc<T: VarlitMatrixBlock>(
         &mut destructive,
     ) {
         if destructive {
-            // F-02: the rebuild marker is on disk and the entry region is an
+            // the rebuild marker is on disk and the entry region is an
             // unknown subset of the published pages. The next open refuses it,
             // and this session has to refuse it too — the in-memory mirror still
             // describes the *old* index, so an ordinary mutation would republish
@@ -4968,7 +5075,7 @@ pub(crate) fn set_channel_committed(
 /// with it is a type that disagrees with the bytes on disk — which must be
 /// refused rather than decoded into confidently wrong values.
 pub(crate) fn ensure_matrix_block<T: VarlitMatrixBlock>(spec: FormatSpec) -> Result<&'static str> {
-    // DEF-01: run the common registration gate first, exactly like the
+    // run the common registration gate first, exactly like the
     // fixed/variable block paths. It enforces the process-local first-seen
     // schema-fingerprint and keyedness contract, so a manual matrix type
     // with the same shape/stride but different codec/decode semantics is
@@ -5164,7 +5271,7 @@ fn prepare_commit_bit(
     layout.ensure_fatal_access_allowed()?;
     let commit = &mut layout.commits[commit_index];
     if commit.quarantine_finding.is_some() {
-        return Err(Error::MatrixCommitQuarantined(commit.name.clone()));
+        return Err(Error::MatrixCommitQuarantined(commit.name.try_clone()?));
     }
     let bitmap = prepare_bitmap_update(
         &mut commit.bits,
@@ -5174,7 +5281,7 @@ fn prepare_commit_bit(
         value,
         read,
     )?;
-    // PERF-01: only the page holding the mutated byte is rehashed, so the cost
+    // only the page holding the mutated byte is rehashed, so the cost
     // of a commit-bit mutation is bounded by `BITMAP_PAGE_BYTES` regardless of
     // how many bits the category has.
     //
@@ -5261,7 +5368,7 @@ fn record_mutated_page_index(
 }
 
 /// Drops the persisted page index entry for the page holding `byte_index` now
-/// that the page is empty (F-03).
+/// that the page is empty.
 fn release_mutated_page_index(
     layout: &mut MatrixLayout,
     file: &mut impl MatrixIo,
@@ -5331,7 +5438,7 @@ fn apply_commit_bit(
         BitmapRead::new(file),
     )?;
     layout.charge_resident_bitmap(cost)?;
-    // Invariant 3 (F-03). Every step that can fail — the budget charge, the page
+    // Invariant 3. Every step that can fail — the budget charge, the page
     // allocation and map reservation, the page-index publication, the digest
     // write and the bitmap-byte write — happens *before* the memory update that
     // makes the mutation visible, and that update is
@@ -5381,7 +5488,7 @@ fn apply_commit_bit(
     if delta.emptied {
         // The page is now byte-for-byte the zero page, and the bitmap byte
         // that made it so is already durable, so its index entry can go
-        // (F-03). Keyed on `emptied` and not on `released`: a demand-cached
+        // Keyed on `emptied` and not on `released`: a demand-cached
         // page refunds the lazy cache rather than the budget, so it empties
         // with `released == 0` and used to keep its entry forever.
         release_mutated_page_index(
@@ -5406,14 +5513,14 @@ struct CommitMapRegions {
 /// Appends `page` to a page index that is being republished wholesale, without
 /// touching the occupancy header.
 ///
-/// The header is the rebuild marker for the whole of a republication (F-02), so
+/// The header is the rebuild marker for the whole of a republication , so
 /// the per-entry header write that [`record_page_index_entry`] performs would
 /// publish a half-built generation. The caller supplies pages that are distinct
 /// and appends them to an index it has just emptied, so neither the
 /// already-indexed check nor the compaction path of the incremental helper
 /// applies.
 ///
-/// F-03: this used to reserve the mirror slot *after* the entry byte reached the
+/// this used to reserve the mirror slot *after* the entry byte reached the
 /// disk. It goes through [`page_index`] like every other page-index mutation, so
 /// the reservation is a precondition of the write rather than a consequence of
 /// it.
@@ -5433,7 +5540,7 @@ fn republish_page_index_entry(
 /// full-map verification available without ever making a single-bit mutation
 /// cost more than one page — and without a `0..page_count` loop.
 ///
-/// F-02, invariant 2. The persisted page index is the *only* way a reopen with
+/// invariant 2. The persisted page index is the *only* way a reopen with
 /// no filesystem allocation map can find a published page, so emptying it and
 /// refilling it in place opened a window in which an interruption left a valid,
 /// short occupancy count. That state is indistinguishable from "those pages were
@@ -5655,7 +5762,7 @@ fn apply_cell_crc_valid(
     // The validity bitmap's twin of the commit-bit path, with the same
     // prepare-persist-install ordering and the same rollback, for the same
     // reasons and with the same exclusion of a retained page-index entry
-    // (F-03, invariant 3).
+    // (, invariant 3).
     let prepared = match layout.blocks[block_index]
         .crc_valid_bits
         .prepare_byte_write(update.byte_index, update.byte_value, BitmapRead::new(file))
@@ -5703,34 +5810,34 @@ fn verify_cell_crc(
     ordinal: u64,
     payload: &[u8],
 ) -> Result<()> {
+    if layout
+        .read_limits
+        .read_validation
+        .is_some_and(|p| !p.data_crc)
+    {
+        return Ok(());
+    }
     let Some(crc_offset) = layout.blocks[block_index].crc_offset else {
         return Ok(());
     };
-    // PERF-02: the per-cell checksum region is no longer initialised at create,
+    // the per-cell checksum region is no longer initialised at create,
     // so the validity bit is the authority on whether a stored checksum exists.
     // Without it a never-written cell would be checked against a zero extent.
     //
-    // F-04: this is the fail-closed reader. It is the one caller allowed to
+    // this is the fail-closed reader. It is the one caller allowed to
     // consult the validity bitmap without the completeness witness, precisely
     // because `require_meaningful` hands back no bit — an absent one can only
     // become this refusal, never a published commit bit. `actual` is computed
     // once and reused by both refusals, so the fail-closed path costs no extra
     // checksum pass.
     let actual = crc32_bytes(payload)?;
-    if layout.blocks[block_index].crc_valid_offset.is_some() {
-        let offset = layout.slot_offset(block_index, ordinal)?;
-        layout.blocks[block_index]
-            .crc_valid_bits
-            .require_meaningful(
-                ordinal,
-                || Error::MatrixChecksumMismatch {
-                    offset,
-                    expected: 0,
-                    actual,
-                },
-                reader.bitmap_read(),
-            )?;
-    }
+    require_cell_crc_evidence(
+        &layout.blocks[block_index],
+        ordinal,
+        layout.slot_offset(block_index, ordinal)?,
+        actual,
+        reader.bitmap_read(),
+    )?;
     let expected = read_crc_at(reader, indexed_crc_offset(crc_offset, ordinal)?)?;
     if expected != actual {
         return Err(Error::MatrixChecksumMismatch {
@@ -5738,6 +5845,27 @@ fn verify_cell_crc(
             expected,
             actual,
         });
+    }
+    Ok(())
+}
+
+fn require_cell_crc_evidence(
+    block: &MatrixBlockLayout,
+    ordinal: u64,
+    offset: u64,
+    actual: u32,
+    read: BitmapRead<'_>,
+) -> Result<()> {
+    if block.crc_valid_offset.is_some() {
+        block.crc_valid_bits.require_meaningful(
+            ordinal,
+            || Error::MatrixChecksumMismatch {
+                offset,
+                expected: 0,
+                actual,
+            },
+            read,
+        )?;
     }
     Ok(())
 }
@@ -6116,7 +6244,7 @@ fn zero_crc_valid_bitmaps(
             .get(&block.block_id)
             .ok_or(Error::MatrixBlockMissing(block.block_id))?;
         // A freshly created matrix has published nothing, so its empty
-        // validity bitmap is complete evidence by construction (F-04).
+        // validity bitmap is complete evidence by construction.
         bitmaps.insert(block.block_id, CrcValidEvidence::newly_created(cell_count)?);
     }
     Ok(bitmaps)
@@ -6173,17 +6301,9 @@ fn matrix_aux_offsets(spec: FormatSpec, start: u64) -> Result<HashMap<String, (u
 }
 
 fn aux_absolute_offset(aux: &MatrixAuxLayout, offset: u64, len: u64) -> Result<u64> {
-    let end = offset
-        .checked_add(len)
-        .ok_or_else(|| Error::MatrixAuxOutOfBounds {
-            name: aux.name.clone(),
-            offset,
-            len,
-            byte_len: aux.byte_len,
-        })?;
-    if end > aux.byte_len {
+    if offset.checked_add(len).is_none_or(|end| end > aux.byte_len) {
         return Err(Error::MatrixAuxOutOfBounds {
-            name: aux.name.clone(),
+            name: aux.name.try_clone()?,
             offset,
             len,
             byte_len: aux.byte_len,
@@ -6216,7 +6336,7 @@ fn layout_from_parts(
         return Err(Error::InvalidMatrixLayout);
     }
     // A `FatalAccessGate` no longer comes into existence here, and no longer
-    // comes into existence anywhere this function can name (round 16). The
+    // comes into existence anywhere this function can name. The
     // layout is assembled by `fatal_access::assemble_layout` at the end of this
     // function, which derives the gate from the findings the layout is built
     // with: this file scope holds no expression of the gate's type, so it can
@@ -6229,9 +6349,11 @@ fn layout_from_parts(
     for (commit_index, ((name, kind, bit_count), raw_bits)) in
         commit_plans.iter().zip(commit_bits).enumerate()
     {
-        let (map_offset, map_len) = *commit_offsets
-            .get(name)
-            .ok_or_else(|| Error::MatrixCommitMissing(name.clone()))?;
+        let (map_offset, map_len) = *commit_offsets.get(name).ok_or_else(|| {
+            name.try_clone()
+                .map(Error::MatrixCommitMissing)
+                .unwrap_or_else(|error| error)
+        })?;
         if raw_bits.byte_len != map_len {
             return Err(Error::InvalidMatrixLayout);
         }
@@ -6246,7 +6368,7 @@ fn layout_from_parts(
         // itself, because `ones_total` authenticates what it reads.
         let quarantine_finding = commit_findings.remove(name);
         commits.push(MatrixCommitLayout {
-            name: name.clone(),
+            name: name.try_clone()?,
             kind: *kind,
             bit_count: *bit_count,
             map_offset,
@@ -6703,20 +6825,20 @@ impl LazyResidency {
             .checked_mul(BITMAP_PAGE_BYTES)
             .ok_or(Error::InvalidMatrixLayout)?;
         Ok(Self {
-            file: Box::new(file.source()?),
+            file: crate::fallible::try_box(file.source()?)?,
             pool: MatrixReadPool::new(),
             cache_limit,
         })
     }
 
-    fn backing(&self, source: &PagedBitmapSource<'_>) -> LazyBacking {
-        LazyBacking {
-            file: self.file.clone(),
+    fn backing(&self, source: &PagedBitmapSource<'_>) -> Result<LazyBacking> {
+        Ok(LazyBacking {
+            file: self.file.try_clone()?,
             pool: self.pool.clone(),
             base_offset: source.base_offset,
             digest_base: source.digest_base,
             cache_limit: self.cache_limit,
-        }
+        })
     }
 }
 
@@ -6727,9 +6849,9 @@ struct PagedBitmapSink<'a> {
     findings: &'a mut Vec<MatrixRecoveryFinding>,
 }
 
-/// Mechanical enforcement of *where completeness comes from* (round 15).
+/// Mechanical enforcement of *where completeness comes from* .
 ///
-/// F-04's fact — "was this block's validity page index enumerated in full" — is
+/// 's fact — "was this block's validity page index enumerated in full" — is
 /// a derived boolean, and round 14 stored it in [`CrcValidEvidence`] behind a
 /// `pub(super) fn new(bits, complete: bool)`. That closed forgery from outside
 /// the crate and left the mint wide open inside it: one line in this file,
@@ -6739,7 +6861,7 @@ struct PagedBitmapSink<'a> {
 /// ```
 ///
 /// produced a completeness witness for a bitmap nothing had enumerated, which
-/// is F-04 itself with the check spelled out loud instead of omitted.
+/// is  itself with the check spelled out loud instead of omitted.
 ///
 /// Making the *type* unforgeable cannot fix that on its own, because a derived
 /// fact can always be re-asserted by whoever is allowed to state it. The chain
@@ -6755,17 +6877,17 @@ pub(crate) mod page_index_enumeration;
 /// Visits the deduplicated set of pages verification has to look at, without
 /// materialising it.
 ///
-/// PERF-01: it is the union of the persisted page index — the pages this matrix
+/// it is the union of the persisted page index — the pages this matrix
 /// currently holds state in — and, where the platform can answer, the pages the
 /// allocation map reports as holding bytes. The first term keeps the pass bounded
 /// when no allocation map exists; the second is what makes a stray byte written
 /// into a page the matrix never published detectable, and it exists only where
-/// the platform supplies a usable map (F-06). Neither term is derived from the
+/// the platform supplies a usable map. Neither term is derived from the
 /// logical page count. **Preserving the union is not optional**: without its
 /// second term a page nothing ever published is never examined at all, rather
 /// than examined late.
 ///
-/// F-07: the set is a *candidate* set, not a live-state set. For `L` indexed
+/// the set is a *candidate* set, not a live-state set. For `L` indexed
 /// pages and `A` allocation-derived candidates the walk costs `O(L + A)` time and
 /// the caller reads up to `4096` bytes per distinct candidate. `A` follows how
 /// densely the file is allocated, so a dense bitmap extent yields candidates
@@ -6891,7 +7013,7 @@ fn page_bytes_are_authentic(bytes: &[u8], stored: u32, state: u32) -> Result<boo
 /// and the same `intact` answer feeding the same `Recoverable` commit-map
 /// finding; what it no longer does is keep the pages.
 ///
-/// PERF-02: a candidate page is still skipped without I/O when the filesystem
+/// a candidate page is still skipped without I/O when the filesystem
 /// proves that neither the page nor its digest slot has ever been written. Such a
 /// page is `PAGE_STATE_UNINITIALIZED` holding zeros, which is exactly what
 /// reading it would have established, so skipping changes neither the answer nor
@@ -6899,7 +7021,7 @@ fn page_bytes_are_authentic(bytes: &[u8], stored: u32, state: u32) -> Result<boo
 /// is still a candidate, still read, and still reported. That is about the skip
 /// and presupposes the allocation map that produced it; where no map is available
 /// there is nothing to skip and never-indexed pages are not candidates at all
-/// (F-06).
+///
 fn verify_paged_bitmap(
     reader: MatrixRegionReader<'_>,
     extents: Option<&AllocatedExtents>,
@@ -6989,7 +7111,7 @@ fn load_paged_bitmap(
             true
         }
     };
-    bits.backing = Some(source.residency.backing(&source));
+    bits.backing = Some(source.residency.backing(&source)?);
     Ok(LoadedPagedBitmap {
         bits,
         intact,
@@ -7001,7 +7123,7 @@ fn load_paged_bitmap(
 /// about it.
 ///
 /// `intact` is about the bytes that *were* loaded: every visited page agreed
-/// with its stored digest. `index_complete` (F-04) is about the pages that were
+/// with its stored digest. `index_complete`  is about the pages that were
 /// not: it is false when the persisted page index could not be enumerated in
 /// full, so the loaded bitmap is a subset of the published state with the
 /// missing pages reading as clear. The two are separate because a map can be
@@ -7073,7 +7195,7 @@ fn load_commit_bitmaps(
         if !intact {
             verification
                 .commit_findings
-                .insert(name.clone(), commit_map_finding(name));
+                .insert(name.try_clone()?, commit_map_finding(name));
         }
         bitmaps.push(bits);
     }
@@ -7081,7 +7203,7 @@ fn load_commit_bitmaps(
 }
 
 /// Loads every block's CRC-validity bitmap, together with whether each one is
-/// complete evidence (F-04).
+/// complete evidence.
 ///
 /// A validity bitmap is loaded with `digest_base: None`, so its *pages* are
 /// unauthenticated by design, but its persisted page index is checked exactly
@@ -7455,9 +7577,11 @@ fn encode_category_table(
     })?;
     try_reserve_bytes(&mut bytes, expected_len, MATRIX_DESCRIPTOR_RESOURCE)?;
     for (name, kind, bit_count) in commits {
-        let (map_off, map_len) = *offsets
-            .get(name)
-            .ok_or_else(|| Error::MatrixCommitMissing(name.clone()))?;
+        let (map_off, map_len) = *offsets.get(name).ok_or_else(|| {
+            name.try_clone()
+                .map(Error::MatrixCommitMissing)
+                .unwrap_or_else(|error| error)
+        })?;
         write_name(&mut bytes, name)?;
         bytes.push(commit_kind_byte(*kind));
         bytes.extend_from_slice(&[0; 3]);
@@ -7572,7 +7696,7 @@ fn validate_commit_table(
             return Err(Error::InvalidMatrixLayout);
         }
         if offsets
-            .insert(expected_name.clone(), (actual.3, actual.4))
+            .insert(expected_name.try_clone()?, (actual.3, actual.4))
             .is_some()
         {
             return Err(Error::InvalidMatrixLayout);
@@ -8085,7 +8209,7 @@ mod sparse_bitmap_tests {
         );
     }
 
-    /// F-02: the rebuild marker has to be unmistakable, so it must not be a
+    /// the rebuild marker has to be unmistakable, so it must not be a
     /// representable occupancy header at *any* capacity — including the largest
     /// the header can encode, where the count field is saturated.
     #[test]
@@ -8099,7 +8223,7 @@ mod sparse_bitmap_tests {
         assert_eq!(page_index_header_count(0, 8), Some(0));
     }
 
-    /// F-03: preparation does every allocating and fallible step, so the
+    /// preparation does every allocating and fallible step, so the
     /// installation that follows a durable disk write is a pure state update.
     #[test]
     fn a_prepared_byte_write_installs_without_allocating_or_failing() {
@@ -8268,6 +8392,34 @@ mod page_store_lock_audit_tests {
     /// The first bit of `page`, which `backed_bitmap` leaves set.
     fn first_bit_of(page: u64) -> u64 {
         page * BITMAP_PAGE_BYTES * 8
+    }
+
+    #[test]
+    fn bitmap_reads_preserve_small_cache_eviction_without_bookkeeping_when_all_pages_fit() {
+        for budget in [BITMAP_PAGE_BYTES, PAGES * BITMAP_PAGE_BYTES] {
+            let (_directory, _file, map) = backed_bitmap(budget);
+            for page in 0..PAGES {
+                assert!(map.get(first_bit_of(page), BitmapRead::Stored).unwrap());
+            }
+            reset();
+            scaling_counters::set(&scaling_counters::LRU_TOUCH_STEPS, 0);
+            for _ in 0..10 {
+                for page in [3, 1, 2, 0] {
+                    assert!(map.get(first_bit_of(page), BitmapRead::Stored).unwrap());
+                    assert!(!map.get(first_bit_of(page) + 1, BitmapRead::Stored).unwrap());
+                    assert!(map.store().cached_bytes <= budget);
+                }
+            }
+            if budget == PAGES * BITMAP_PAGE_BYTES {
+                assert_eq!(reads(), 0);
+                assert_eq!(
+                    scaling_counters::get_always(&scaling_counters::LRU_TOUCH_STEPS),
+                    0
+                );
+            } else {
+                assert!(reads() > 0, "small cache must keep evicting and faulting");
+            }
+        }
     }
 
     #[test]
@@ -8501,6 +8653,57 @@ mod page_store_lock_audit_tests {
 #[cfg(test)]
 mod page_store_lru_tests {
     use super::*;
+
+    #[test]
+    fn memory_only_recency_trace_preserves_links_accounting_and_writer_pages() {
+        let mut store = PageStore::default();
+        let retained = Arc::new(vec![1u8; 8]);
+        for page in 0..5 {
+            store.pages.insert(
+                page,
+                BitmapPage {
+                    bytes: retained.clone(),
+                    ones: 1,
+                    cached: page != 4,
+                    lru_prev: NO_PAGE,
+                    lru_next: NO_PAGE,
+                },
+            );
+            store.ones += 1;
+            if page != 4 {
+                store.cached_bytes += 8;
+                store.lru_push_back(page);
+            } else {
+                store.charged_bytes += 8;
+            }
+        }
+        let mut model = std::collections::VecDeque::from([0, 1, 2, 3]);
+        for step in 0..64 {
+            let page = (step * 3) % 5;
+            store.note_used(page);
+            if let Some(at) = model.iter().position(|&p| p == page) {
+                model.remove(at);
+                model.push_back(page);
+            }
+            if step % 3 == 0 && !model.is_empty() {
+                let victim = model.pop_front().unwrap();
+                assert!(store.evict_one());
+                assert!(!store.pages.contains_key(&victim));
+            }
+            store.assert_lru_consistent();
+            assert_eq!(store.lru_len(), model.len());
+            assert_eq!(store.lru_head, model.front().copied().unwrap_or(NO_PAGE));
+            assert_eq!(store.lru_tail, model.back().copied().unwrap_or(NO_PAGE));
+            assert_eq!(store.cached_bytes, model.len() as u64 * 8);
+            assert_eq!(store.charged_bytes, 8);
+            assert_eq!(store.ones, model.len() as u64 + 1);
+            assert!(store.pages.contains_key(&4));
+            assert_eq!(Arc::strong_count(&retained), store.pages.len() + 1);
+        }
+        assert!(!store.evict_one());
+        drop(store);
+        assert_eq!(Arc::strong_count(&retained), 1);
+    }
 
     /// Published pages in the fixture. The default demand cache is 512 pages,
     /// so this is the size at which "constant per touch" and "half the cache
@@ -8792,7 +8995,7 @@ fn is_cell_committed_for_test(layout: &MatrixLayout, category: &str, ordinal: u6
         .expect("commit bit")
 }
 
-/// F-02: a failed bitmap mutation must not leave a payload precharge standing.
+/// a failed bitmap mutation must not leave a payload precharge standing.
 ///
 /// `apply_commit_bit` and `apply_cell_crc_valid` charge the page a mutation
 /// would materialise *before* three fallible steps — page-index publication, the
@@ -9054,7 +9257,7 @@ mod mutation_precharge_rollback_tests {
     }
 }
 
-/// F-04: the evidence type's own contract, independent of any file.
+/// the evidence type's own contract, independent of any file.
 ///
 /// The integration proof lives in
 /// `crates/varlit/tests/matrix_integrity_scaling.rs::crc_rebuild_refuses_an_incompletely_loaded_validity_index`
@@ -9187,190 +9390,7 @@ mod crc_valid_evidence_tests {
     }
 }
 
-/// **The in-crate bypass catalogue** (round 15).
-///
-/// Round 14 proved its enforcement types with `trybuild` fixtures under
-/// `crates/varlit/tests/ui/`. Those compile an *outside* crate against
-/// `varlit_core::enforcement_probe`, so they prove that a downstream user cannot
-/// forge a witness — and nothing at all about `varlit-core`, which is where
-/// every historical defect in this class has lived. Re-verification found the
-/// gap by writing one line inside this file.
-///
-/// This module is the missing half. It sits in `matrix.rs`, a sibling of the
-/// enforcement modules, with every privilege a future defect would have. Each
-/// entry below is a bypass that was **compiled and observed to fail**, quoted
-/// with the diagnostic rustc emitted (rustc 1.9x, `cargo test -p varlit-core
-/// --lib`). Uncommenting any of them must reproduce it; if one starts
-/// compiling, the property it names is gone.
-///
-/// ```text
-/// // (1) mint a gate that says "not blocked" and spend its witness — the
-/// //     named hole `FatalAccessGate::new(false).allow()`
-/// let _ = FatalAccessGate::new(false);
-/// //  error[E0599]: no function or associated item named `new` found for
-/// //               struct `fatal_access::FatalAccessGate`
-///
-/// // (2) build the gate by literal instead
-/// let _ = FatalAccessGate { blocked: false };
-/// //  error[E0451]: field `blocked` of struct `fatal_access::FatalAccessGate`
-/// //               is private
-///
-/// // (3) take the witness off a gate of one's own rather than off the layout
-/// let gate = FatalAccessGate::evaluate([fatal_finding()].iter(), spec);
-/// let _ = gate.allow();
-/// //  error[E0599]: no method named `allow` found for struct
-/// //               `fatal_access::FatalAccessGate`
-///
-/// // (4) fabricate the witness directly
-/// let _ = FatalAccessAllowed(());
-/// //  error[E0423]: cannot initialize a tuple struct which contains private
-/// //               fields
-///
-/// // (5) the named hole `CrcValidEvidence::new(..)`
-/// let _ = CrcValidEvidence::new(bits, true);
-/// //  error[E0599]: no function or associated item named `new` found for
-/// //               struct `matrix::crc_valid_evidence::CrcValidEvidence`
-///
-/// // (6) build the evidence by literal instead
-/// let _ = CrcValidEvidence { bits, complete: true };
-/// //  error[E0451]: fields `bits` and `complete` of struct
-/// //               `matrix::crc_valid_evidence::CrcValidEvidence` are private
-///
-/// // (7) mint the enumeration outcome the evidence now demands
-/// let _ = PageIndexEnumeration::fully_enumerated();
-/// //  error[E0624]: associated function `fully_enumerated` is private
-///
-/// // (8) build the enumeration outcome by literal instead
-/// let _ = PageIndexEnumeration { complete: true };
-/// //  error[E0451]: field `complete` of struct
-/// //               `page_index_enumeration::PageIndexEnumeration` is private
-///
-/// // (9) fabricate the completeness witness directly
-/// let _ = crc_valid_evidence::CompleteCrcValidEvidence { bits: &bitmap };
-/// //  error[E0451]: field `bits` of struct `CompleteCrcValidEvidence` is
-/// //               private
-/// ```
-///
-/// **Round 16 entries.** Re-verification of round 15 found that the two named
-/// holes were closed and the *class* was not: six bypasses still compiled
-/// inside `varlit-core`, three of them one or two lines, and two of them
-/// appeared in no report. Each of the following was compiled from a module with
-/// this one's privileges and observed to fail, with the diagnostic quoted.
-///
-/// ```text
-/// // (10) reassign the gate a layout carries — one line, with any
-/// //      `&mut MatrixLayout` in scope, and it undoes `block()`
-/// layout.fatal_access = FatalAccessGate::evaluate(findings.iter(), spec);
-/// //  error[E0624]: associated function `evaluate` is private
-///
-/// // (10b) lift the gate off a layout freshly assembled with no findings
-/// layout.fatal_access = fatal_access::assemble_layout(..).fatal_access;
-/// //  error[E0509]: cannot move out of type `matrix::MatrixLayout`, which
-/// //               implements the `Drop` trait
-///
-/// // (11) clone an unblocked gate off a healthy layout onto a blocked one
-/// layout.fatal_access = donor.fatal_access.clone();
-/// //  error[E0599]: no method named `clone` found for struct
-/// //               `FatalAccessGate`
-///
-/// // (11b) the same by cloning the whole layout and moving the field out
-/// layout.fatal_access = donor.clone().fatal_access;
-/// //  error[E0509]: cannot move out of type `matrix::MatrixLayout`, which
-/// //               implements the `Drop` trait
-///
-/// // (11c) or by swapping it in
-/// core::mem::replace(&mut layout.fatal_access, donor.fatal_access.clone());
-/// //  error[E0599]: no method named `clone` found for struct
-/// //               `FatalAccessGate`
-///
-/// // (12) launder a whole bitmap into F-04 completeness through the one
-/// //      named escape — this one was *executed* by re-verification: a bit
-/// //      set in a bitmap no enumeration produced read back `true` through
-/// //      `CompleteCrcValidEvidence::get`
-/// *evidence.page_index_mirror_mut() = attacker_bits;
-/// //  error[E0614]: type `PageIndexMirror<'_>` cannot be dereferenced
-///
-/// // (12b) or take the raw bitmap borrow back out of the escape
-/// let _bits: &mut SparseBitmap = evidence.page_index_mirror_mut();
-/// //  error[E0308]: mismatched types: expected `&mut SparseBitmap`, found
-/// //               `PageIndexMirror<'_>`
-///
-/// // (13) set a validity bit in place through the escape
-/// block.crc_valid_bits.page_index_mirror_mut().set(0, true);
-/// //  error[E0599]: no method named `set` found for struct
-/// //               `PageIndexMirror<'a>`
-///
-/// // (13b) or read one through it, bypassing the completeness witness
-/// block.crc_valid_bits.page_index_mirror_mut().get(0);
-/// //  error[E0599]: no method named `get` found for struct
-/// //               `PageIndexMirror<'a>`
-///
-/// // (14) install a fabricated bitmap as complete evidence
-/// block.crc_valid_bits = CrcValidEvidence::from_page_index_enumeration(
-///     attacker_bits, PageIndexEnumeration::fully_enumerated());
-/// //  error[E0624]: associated function `fully_enumerated` is private
-/// ```
-///
-/// **What still compiles from inside this file.** Written out rather than
-/// implied, because the failure this round exists to stop is a criterion
-/// reported as met when half of it was. Each of these was compiled from this
-/// module and observed to build:
-///
-/// ```text
-/// // (a) fabricate a bitmap and the bitmap engine's prepared values
-/// let bits = SparseBitmap { bit_count: 0, byte_len: 0, page_count: 0,
-///                           pages: HashMap::new(), ones: 0,
-///                           index_slots: Vec::new(),
-///                           indexed_pages: HashMap::new() };                  // compiles
-/// let update = BitmapByteUpdate { byte_index: 0, byte_offset: 0, byte_value: 0 };  // compiles
-/// let commit = CommitBitUpdate { bitmap: update, digest: None };                   // compiles
-/// let write = PreparedByteWrite { page: 0, within: 0, value: 0, fresh: None, .. }; // compiles
-/// let bit = PreparedWriteBit { cost: 0, write };                                   // compiles
-/// ```
-///
-/// These are `SparseBitmap` and its shape-A prepared values, declared at *file*
-/// scope, so their private fields are nameable from all ~8000 lines of
-/// `matrix.rs`: a fabricated `PreparedByteWrite` claiming `fresh: None` can be
-/// handed to `commit_byte_write` for a page that is not resident. Closing it
-/// means moving `SparseBitmap` and its prepared values into a
-/// `mod sparse_bitmap`, a large refactor of the hot bitmap path,
-/// **not attempted here** — checklist open item 26.
-///
-/// ```text
-/// // (b) install a fabricated bitmap as a commit category's published map
-/// layout.commits[0].bits = attacker_bits;                            // compiles
-///
-/// // (c) replace a block's CRC-validity evidence with a fresh empty one
-/// block.crc_valid_bits = CrcValidEvidence::newly_created(64)?;       // compiles
-///
-/// // (d) build a whole block layout by literal
-/// let _ = MatrixBlockLayout { block_id: 0, .. };                     // compiles
-/// ```
-///
-/// (b) is the one with teeth: commit maps are ordinary `SparseBitmap` fields of
-/// a file-scope struct, so a line in this file can publish a commit view
-/// nothing committed. It is the same shape as (12) above, one level out — the
-/// CRC-validity half is now behind `CrcValidEvidence` and refuses it, the
-/// commit half is not behind anything. Closing it needs `MatrixLayout` and
-/// `MatrixCommitLayout` behind a module boundary (checklist open item 25), so
-/// that `commits` cannot be indexed for mutation from file scope.
-///
-/// (c) and (d) are laundering in the fail-closed direction and are recorded for
-/// completeness rather than as live risk: `newly_created` builds its own empty
-/// map, and an absent validity bit makes `require_meaningful` refuse and
-/// `CompleteCrcValidEvidence::get` answer "not established". Neither can make a
-/// cell look *verified*; that route was (14), and it is refused.
-///
-/// ```text
-/// // (e) a decoy poison flag with 'static lifetime, returnable from a
-/// //     writer's own `poison_flag()`
-/// let _: &'static PoisonFlag = Box::leak(Box::new(PoisonFlag::healthy()));  // compiles
-/// ```
-///
-/// Narrowed in round 15 (the `static DECOY` spelling is E0015) and still open
-/// in this one; caught by a source gate on `poison_flag` impls only. It lives
-/// in `writer_permit.rs` and wants the writer's fields split into a
-/// borrow-disjoint inner struct — checklist open item 21.
+/// Unit tests for private witness construction and refused reservations.
 #[cfg(test)]
 mod bypass_catalogue {
     use super::*;
@@ -9509,3 +9529,111 @@ mod sparse;
 use sparse::*;
 
 pub use sparse::MatrixStorageDiagnostics;
+
+impl TryClone for MatrixDimensionValue {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            name: self.name.try_clone()?,
+            value: self.value,
+        })
+    }
+}
+impl TryClone for MatrixDimensions {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            values: self.values.try_clone()?,
+        })
+    }
+}
+impl TryClone for PackedBitmap {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            bit_len: self.bit_len,
+            bytes: self.bytes.try_clone()?,
+        })
+    }
+}
+impl TryClone for MatrixRecoveryFinding {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            kind: self.kind,
+            severity: self.severity,
+            message: self.message.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for BitmapPage {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            ones: self.ones,
+            cached: self.cached,
+            lru_prev: self.lru_prev,
+            lru_next: self.lru_next,
+            bytes: self.bytes.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for LazyBacking {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            base_offset: self.base_offset,
+            digest_base: self.digest_base,
+            cache_limit: self.cache_limit,
+            file: self.file.try_clone()?,
+            pool: self.pool.clone(),
+        })
+    }
+}
+
+impl TryClone for MatrixCommitLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            kind: self.kind,
+            bit_count: self.bit_count,
+            map_offset: self.map_offset,
+            digest_offset: self.digest_offset,
+            index_offset: self.index_offset,
+            name: self.name.try_clone()?,
+            bits: self.bits.try_clone()?,
+            quarantine_finding: self.quarantine_finding.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for MatrixBlockLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            block_id: self.block_id,
+            slot_stride: self.slot_stride,
+            slot_region_offset: self.slot_region_offset,
+            cell_count: self.cell_count,
+            crc_offset: self.crc_offset,
+            crc_valid_offset: self.crc_valid_offset,
+            crc_valid_index_offset: self.crc_valid_index_offset,
+            crc_valid_bits: self.crc_valid_bits.try_clone()?,
+            current_write_bits: self.current_write_bits.try_clone()?,
+            dimensions: [
+                self.dimensions[0].try_clone()?,
+                self.dimensions[1].try_clone()?,
+            ],
+        })
+    }
+}
+
+impl TryClone for MatrixAuxLayout {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            offset: self.offset,
+            byte_len: self.byte_len,
+            name: self.name.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for MatrixLayout {
+    fn try_clone(&self) -> Result<Self> {
+        fatal_access::try_clone_layout(self)
+    }
+}

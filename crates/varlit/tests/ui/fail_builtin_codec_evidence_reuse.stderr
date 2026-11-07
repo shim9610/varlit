@@ -1,0 +1,8 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail_builtin_codec_evidence_reuse.rs:6:58
+  |
+6 |     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = <u64 as VarlitDecode>::__VARLIT_BUILTIN;
+  |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<BuiltinCodec<Custom>>`, found `Option<BuiltinCodec<u64>>`
+  |
+  = note: expected enum `Option<varlit::BuiltinCodec<Custom>>`
+             found enum `Option<varlit::BuiltinCodec<u64>>`

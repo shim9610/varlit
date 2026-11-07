@@ -246,7 +246,7 @@ impl BitmapDelta {
         };
         let changed = changes.units(index + 8, count * 8, 8)?;
         bits.directory.prepare_stage()?;
-        let mut directory = bits.directory.clone();
+        let mut directory = bits.directory.try_clone()?;
         let mut affected = BitmapDirectory::with_limit(changes.limits.matrix_directory_budget());
         let mut changed_slots = SpillRows::<8>::new(4096);
         let mut update = |slot: u64| -> Result<()> {

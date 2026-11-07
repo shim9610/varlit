@@ -24,7 +24,7 @@ const HEADER_U64_OFFSET: u64 = 24;
 #[cfg(feature = "integrity")]
 const COMMIT_MAP_OFFSET_INDEX: u64 = 6;
 /// Modelled resident cost of tracking one page in a persisted page index
-/// (F-03). The page-index term is charged against the same
+/// The page-index term is charged against the same
 /// `max_matrix_bitmap_bytes` limit as the payload pages, so the whole resident
 /// matrix bitmap footprint is bounded rather than just part of it.
 #[cfg(feature = "integrity")]
@@ -324,7 +324,7 @@ fn hostile_dimension_is_rejected_before_derived_bitmap_or_slot_work() -> varlit:
             .create_with_dims(fixture.path(), dimensions)?,
     );
 
-    // Native file header + 24-byte matrix creation-nonce region (DUR2-03).
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(b"MLIM".len()).expect("magic length");
     let dimension_value_offset = header_offset + VMAT_HEADER_LEN + 2 + 4;
     let mut file = OpenOptions::new().write(true).open(fixture.path())?;
@@ -401,7 +401,7 @@ fn nonzero_vmat_flags_are_rejected_as_noncanonical() -> varlit::Result<()> {
     let dimensions = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
     drop(spec.create_with_dims(fixture.path(), dimensions)?);
 
-    // Native file header + 24-byte matrix creation-nonce region (DUR2-03).
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(spec.magic.len()).expect("magic length");
     let mut file = OpenOptions::new().write(true).open(fixture.path())?;
     file.seek(SeekFrom::Start(header_offset + 6))?;
@@ -423,7 +423,7 @@ fn a_quarantined_commit_map_is_reported_without_being_retained() -> varlit::Resu
     let dimensions = MatrixDimensions::from_pairs([("scan", 4), ("ch", 4)]);
     drop(spec.create_with_dims(fixture.path(), dimensions)?);
 
-    // Native file header + 24-byte matrix creation-nonce region (DUR2-03).
+    // Native file header + 24-byte matrix creation-nonce region.
     let header_offset = 18 + 24 + u64::try_from(spec.magic.len()).expect("magic length");
     let mut file = OpenOptions::new()
         .read(true)
@@ -493,7 +493,7 @@ fn resident_bitmap_budget_is_charged_as_pages_are_materialized() -> varlit::Resu
         varlit::IntegrityPolicy::Crc32,
     )
     .create_writer_with_dims(tight.path(), dimensions.clone())?;
-    // ...but the first write, which materialises the current-write page, must
+    // ..but the first write, which materialises the current-write page, must
     // be refused by that budget.
     let error = match writer.write_matrix_cell(MatrixKey::new(0, 0), &LimitedCell { value: 1 }) {
         Ok(()) => panic!("write unexpectedly fit a zero resident bitmap budget"),

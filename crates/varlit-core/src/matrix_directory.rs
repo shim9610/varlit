@@ -37,7 +37,7 @@ impl DirectDirectory {
         base.checked_add(index_page_array_len(capacity)?)
             .ok_or(Error::InvalidMatrixLayout)?;
         Ok(Self {
-            source: Box::new(source),
+            source: crate::fallible::try_box(source)?,
             pool: MatrixReadPool::new(),
             base,
             capacity,
@@ -67,7 +67,7 @@ impl DirectDirectory {
         &mut self,
         entries: &[(u64, [u8; 8])],
         header: Option<[u8; 8]>,
-    ) {
+    ) -> Result<()> {
         for (at, _) in entries
             .iter()
             .copied()
@@ -75,9 +75,10 @@ impl DirectDirectory {
         {
             let page = (at - self.base) / 4096;
             if let Some(bytes) = self.cache.get_mut().pages.get_mut(&page) {
-                let _ = Arc::make_mut(bytes);
+                let _ = crate::fallible::try_make_mut(bytes)?;
             }
         }
+        Ok(())
     }
     /// Apply only changed words after persistence. No I/O or allocation; the
     /// rest of the bounded cache stays warm across writer metadata updates.
@@ -165,7 +166,7 @@ impl DirectDirectory {
                 resource: "matrix directory cache",
                 requested: 8,
             })?;
-        cache.pages.insert(page, Arc::new(bytes));
+        cache.pages.insert(page, crate::fallible::try_arc(bytes)?);
         cache.order.push_back(page);
         Ok(value)
     }
@@ -253,6 +254,30 @@ impl DirectDirectory {
     }
 }
 
+impl TryClone for DirectoryCache {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            pages: self.pages.try_clone()?,
+            order: self.order.try_clone()?,
+        })
+    }
+}
+
+impl TryClone for DirectDirectory {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            base: self.base,
+            capacity: self.capacity,
+            count: self.count,
+            cache_entries: self.cache_entries,
+            source: self.source.try_clone()?,
+            pool: self.pool.clone(),
+            recent: self.recent.clone(),
+            cache: RefCell::new(self.cache.borrow().try_clone()?),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,7 +310,7 @@ mod tests {
             (directory.reverse_offset(513)?, 1u64.to_le_bytes()),
         ];
         let header = page_index_header_value(2)?.to_le_bytes();
-        directory.prepare_cache_update(&entries, Some(header));
+        directory.prepare_cache_update(&entries, Some(header))?;
         // Preparation separates shared bytes but must not expose a mutation.
         assert_eq!(directory.first(1000, BitmapRead::Stored)?, Some(0));
         for (at, bytes) in entries.iter().copied().chain(Some((0, header))) {

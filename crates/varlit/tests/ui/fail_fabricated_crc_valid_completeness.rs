@@ -1,9 +1,9 @@
-// F-04, mechanical enforcement (round 14).
+// Compile-fail enforcement.
 //
 // `CompleteCrcValidEvidence` is the proof that a block's CRC-validity page
 // index was enumerated in full, and it is the only thing in the crate that can
 // return a validity *bit*. Its sole constructor, `CrcValidEvidence::complete`,
-// IS the F-04 refusal.
+// IS the  refusal.
 //
 // Round 12 tracked completeness in a `bool` beside a plain `SparseBitmap`, so a
 // new consumer that wrote `block.crc_valid_bits.get(ordinal)?` compiled

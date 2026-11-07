@@ -1,7 +1,7 @@
 //! Direct finite-domain tables. Array position is the enum code; no stored keys
 //! or comparison tree. Immutable extents are published only at explicit sync.
 use super::*;
-use std::sync::Arc;
+use crate::fallible::Arc;
 use std::{cell::RefCell, collections::VecDeque, fs::File};
 use tree::{read_at, write_at};
 const MAGIC: &[u8; 8] = b"VIXSLOT1";
@@ -9,6 +9,15 @@ const WIDTH: usize = 64;
 // Offset, sequence, extent and verification flags/CRC. Block IDs come from the
 // schema directory, enum codes from array positions; neither is stored per row.
 const ROW: usize = 40;
+fn oom(_: std::collections::TryReserveError) -> DiskIndexError {
+    std::io::Error::from(std::io::ErrorKind::OutOfMemory).into()
+}
+fn buffer(len: usize) -> DiskIndexResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).map_err(oom)?;
+    bytes.resize(len, 0);
+    Ok(bytes)
+}
 fn pack(value: Option<[u8; LATEST_LEN]>) -> [u8; ROW] {
     let mut row = [0; ROW];
     if let Some(v) = value {
@@ -57,7 +66,7 @@ fn append(file: &File, bytes: &[u8]) -> DiskIndexResult<u64> {
     Ok(offset)
 }
 fn bad() -> DiskIndexError {
-    DiskIndexError::Storage("invalid finite slot table".into())
+    DiskIndexError::CheckpointMismatch("invalid finite slot table")
 }
 #[derive(Clone, Copy, Default)]
 pub(super) struct Root {
@@ -100,12 +109,13 @@ impl Directory {
         {
             return Err(bad());
         }
-        let mut bytes = vec![0; len];
+        let mut bytes = buffer(len)?;
         read_at(file, root.offset, &mut bytes)?;
         if crc32fast::hash(&bytes[..len - 4]) != read_u32(&bytes, len - 4) {
             return Err(bad());
         }
         let mut result = Self::default();
+        result.blocks.try_reserve_exact(blocks).map_err(oom)?;
         let mut pos = 24;
         let mut count = 0u64;
         for _ in 0..blocks {
@@ -126,7 +136,8 @@ impl Directory {
             {
                 return Err(bad());
             }
-            let mut offsets = Vec::with_capacity(chunks);
+            let mut offsets = Vec::new();
+            offsets.try_reserve_exact(chunks).map_err(oom)?;
             for i in 0..chunks {
                 let offset = read_u64(&bytes, pos);
                 pos += 8;
@@ -150,6 +161,22 @@ impl Directory {
             return Err(bad());
         }
         Ok(result)
+    }
+    fn try_clone(&self) -> DiskIndexResult<Self> {
+        let mut blocks = Vec::new();
+        blocks.try_reserve_exact(self.blocks.len()).map_err(oom)?;
+        for b in &self.blocks {
+            let mut chunks = Vec::new();
+            chunks.try_reserve_exact(b.chunks.len()).map_err(oom)?;
+            chunks.extend_from_slice(&b.chunks);
+            blocks.push(Block {
+                id: b.id,
+                len: b.len,
+                used: b.used,
+                chunks,
+            });
+        }
+        Ok(Self { blocks })
     }
     fn find(&self, key: &[u8]) -> DiskIndexResult<Option<(usize, usize)>> {
         if key.len() < 5 || key[0] != 1 {
@@ -194,7 +221,7 @@ impl Reader {
             cache: RefCell::new(Cache::default()),
         }
     }
-    fn directory(&self) -> DiskIndexResult<Directory> {
+    fn ensure_directory(&self) -> DiskIndexResult<()> {
         if self.directory.borrow().is_none() {
             *self.directory.borrow_mut() = Some(Directory::read(
                 &self.file,
@@ -203,7 +230,34 @@ impl Reader {
                 self.budget,
             )?);
         }
-        Ok(self.directory.borrow().as_ref().unwrap().clone())
+        Ok(())
+    }
+    pub(super) fn validate_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
+        // An unpublished/empty table has no rows capable of shadowing a tree.
+        if self.root.offset == 0 {
+            return Ok(());
+        }
+        self.ensure_directory()?;
+        let directory = self.directory.borrow();
+        if directory
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .map(|b| (b.id, b.len as u32))
+            .ne(plan
+                .descriptors()
+                .iter()
+                .filter(|d| d.finite_key_count != 0)
+                .map(|d| (d.block_id, d.finite_key_count)))
+        {
+            return Err(bad());
+        }
+        Ok(())
+    }
+    fn directory(&self) -> DiskIndexResult<Directory> {
+        self.ensure_directory()?;
+        self.directory.borrow().as_ref().unwrap().try_clone()
     }
     pub fn get(&self, key: &[u8]) -> DiskIndexResult<Option<Option<[u8; LATEST_LEN]>>> {
         if self.root.offset == 0 {
@@ -211,7 +265,7 @@ impl Reader {
         }
         // Metadata is small and fixed by the schema. Slot access itself is direct.
         if self.directory.borrow().is_none() {
-            self.directory()?;
+            self.ensure_directory()?;
         }
         let directory = self.directory.borrow();
         let directory = directory.as_ref().unwrap();
@@ -224,30 +278,42 @@ impl Reader {
         if offset == 0 {
             return Ok(Some(None));
         }
-        let mut cache = self.cache.borrow_mut();
-        if !cache.values.contains_key(&offset) {
-            let len = (b.len - chunk * WIDTH).min(WIDTH) * ROW + 4;
-            let mut bytes = vec![0; len];
-            read_at(&self.file, offset, &mut bytes)?;
-            if crc32fast::hash(&bytes[..len - 4]) != read_u32(&bytes, len - 4) {
+        let len = (b.len - chunk * WIDTH).min(WIDTH) * ROW + 4;
+        let start = (code % WIDTH) * ROW;
+        let decode = |bytes: &[u8]| -> DiskIndexResult<Option<Option<[u8; LATEST_LEN]>>> {
+            if bytes.len() != len {
                 return Err(bad());
             }
-            // Reserve half the budget for directory and cache bookkeeping.
-            while cache.bytes + len + 128 > self.budget / 2 {
-                let old = cache.order.pop_front().ok_or_else(bad)?;
-                if let Some(bytes) = cache.values.remove(&old) {
-                    cache.bytes -= bytes.len() + 128;
-                }
-            }
-            cache.bytes += len + 128;
-            cache.values.insert(offset, bytes);
-            cache.order.push_back(offset);
+            Ok(Some(unpack(
+                bytes.get(start..start + ROW).ok_or_else(bad)?,
+                b.id,
+            )?))
+        };
+        let mut cache = self.cache.borrow_mut();
+        // One lookup on a warm cache. The offset alone cannot authenticate a
+        // differently shaped reference in a damaged directory.
+        if let Some(bytes) = cache.values.get(&offset) {
+            return decode(bytes);
         }
-        let start = (code % WIDTH) * ROW;
-        Ok(Some(unpack(
-            &cache.values[&offset][start..start + ROW],
-            b.id,
-        )?))
+        let mut bytes = buffer(len)?;
+        read_at(&self.file, offset, &mut bytes)?;
+        if crc32fast::hash(&bytes[..len - 4]) != read_u32(&bytes, len - 4) {
+            return Err(bad());
+        }
+        let result = decode(&bytes)?;
+        cache.order.try_reserve(1).map_err(oom)?;
+        // Reserve half the budget for directory and cache bookkeeping.
+        while cache.bytes + len + 128 > self.budget / 2 {
+            let old = cache.order.pop_front().ok_or_else(bad)?;
+            if let Some(bytes) = cache.values.remove(&old) {
+                cache.bytes -= bytes.len() + 128;
+            }
+        }
+        // BTreeMap node allocation remains the explicitly deferred collection.
+        cache.values.insert(offset, bytes);
+        cache.order.push_back(offset);
+        cache.bytes += len + 128;
+        Ok(result)
     }
 }
 pub(super) struct Working {
@@ -259,15 +325,23 @@ impl Working {
     pub fn load(reader: &Reader, layout: &[(u32, u32)], budget: usize) -> DiskIndexResult<Self> {
         let mut directory = reader.directory()?;
         if directory.blocks.is_empty() {
-            directory.blocks = layout
-                .iter()
-                .map(|&(id, len)| Block {
+            directory
+                .blocks
+                .try_reserve_exact(layout.len())
+                .map_err(oom)?;
+            for &(id, len) in layout {
+                let mut chunks = Vec::new();
+                chunks
+                    .try_reserve_exact((len as usize).div_ceil(WIDTH))
+                    .map_err(oom)?;
+                chunks.resize((len as usize).div_ceil(WIDTH), 0);
+                directory.blocks.push(Block {
                     id,
                     len: len as usize,
                     used: 0,
-                    chunks: vec![0; (len as usize).div_ceil(WIDTH)],
-                })
-                .collect();
+                    chunks,
+                });
+            }
         }
         if directory
             .blocks
@@ -286,19 +360,30 @@ impl Working {
         }
         let mut values = Vec::new();
         let mut dirty = Vec::new();
+        values
+            .try_reserve_exact(directory.blocks.len())
+            .map_err(oom)?;
+        dirty
+            .try_reserve_exact(directory.blocks.len())
+            .map_err(oom)?;
         for b in &directory.blocks {
-            let mut rows = Vec::with_capacity(b.len);
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(b.len).map_err(oom)?;
             for code in 0..b.len {
-                let mut key = vec![1];
-                key.extend_from_slice(&b.id.to_be_bytes());
-                key.extend_from_slice(&(code as u16).to_le_bytes());
+                let mut key = [0; 7];
+                key[0] = 1;
+                key[1..5].copy_from_slice(&b.id.to_be_bytes());
+                key[5..].copy_from_slice(&(code as u16).to_le_bytes());
                 rows.push(reader.get(&key)?.flatten());
             }
             if rows.iter().filter(|row| row.is_some()).count() != b.used as usize {
                 return Err(bad());
             }
             values.push(rows);
-            dirty.push(vec![false; b.chunks.len()]);
+            let mut changed = Vec::new();
+            changed.try_reserve_exact(b.chunks.len()).map_err(oom)?;
+            changed.resize(b.chunks.len(), false);
+            dirty.push(changed);
         }
         Ok(Self {
             directory,
@@ -354,7 +439,10 @@ impl Working {
                     *changed = false;
                     continue;
                 }
-                let mut bytes = Vec::with_capacity(range.len() * ROW + 4);
+                let mut bytes = Vec::new();
+                bytes
+                    .try_reserve_exact(range.len() * ROW + 4)
+                    .map_err(oom)?;
                 for row in &rows[range] {
                     bytes.extend_from_slice(&pack(*row));
                 }
@@ -365,7 +453,21 @@ impl Working {
             }
         }
         let count = u32::try_from(self.count()).map_err(|_| bad())?;
-        let mut bytes = vec![0; 24];
+        let len = self
+            .directory
+            .blocks
+            .iter()
+            .try_fold(28usize, |n, b| {
+                b.chunks
+                    .len()
+                    .checked_mul(8)
+                    .and_then(|m| m.checked_add(16))
+                    .and_then(|m| n.checked_add(m))
+            })
+            .ok_or_else(bad)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len).map_err(oom)?;
+        bytes.resize(24, 0);
         bytes[..8].copy_from_slice(MAGIC);
         bytes[12..16].copy_from_slice(&(self.directory.blocks.len() as u32).to_le_bytes());
         bytes[16..24].copy_from_slice(&u64::from(count).to_le_bytes());
@@ -385,11 +487,12 @@ impl Working {
         Ok(Root { offset, count })
     }
     pub fn layout(reader: &Reader) -> DiskIndexResult<Vec<(u32, u32)>> {
-        Ok(reader
-            .directory()?
-            .blocks
-            .iter()
-            .map(|b| (b.id, b.len as u32))
-            .collect())
+        reader.ensure_directory()?;
+        let directory = reader.directory.borrow();
+        let blocks = &directory.as_ref().unwrap().blocks;
+        let mut layout = Vec::new();
+        layout.try_reserve_exact(blocks.len()).map_err(oom)?;
+        layout.extend(blocks.iter().map(|b| (b.id, b.len as u32)));
+        Ok(layout)
     }
 }

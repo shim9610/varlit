@@ -1,4 +1,4 @@
-//! SEC-05: a matrix metadata CRC mismatch is recorded as a `Fatal` recovery
+//! a matrix metadata CRC mismatch is recorded as a `Fatal` recovery
 //! finding and must fail closed: default safe accessors return a typed error,
 //! while the explicit `with_matrix_fatal_forensics` opt-in still reads through
 //! and surfaces the full recovery report.
@@ -117,7 +117,7 @@ fn write_committed_cell(spec: FormatSpec, path: &Path, key: MatrixKey, value: u3
 
 fn region_crc_off(path: &Path, spec: FormatSpec) -> u64 {
     // Native file header, then the 24-byte matrix creation-nonce region
-    // (DUR2-03), then the VMAT layout header.
+    // then the VMAT layout header.
     let offset = u64::try_from(spec.magic.len()).expect("magic length") + 18 + 24;
     let mut file = OpenOptions::new()
         .read(true)

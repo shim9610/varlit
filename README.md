@@ -1,635 +1,97 @@
 # Varlit
 
-Current release: **[0.12.1](https://github.com/shim9610/varlit/releases/tag/v0.12.1)**.
+Version: **0.13.0** · Rust **1.95+** · MIT OR Apache-2.0
 
-Formerly Varve. The project was renamed to Varlit in 0.12.0, changing the Rust API
-and package names. Existing versioned file markers remain unchanged.
-
-Varlit is a Rust library for building append-friendly, segment-oriented custom
-binary formats from typed block definitions. It is not one fixed file format.
-The main workflow is format-first: declare a file contract with
-`varlit_format!`, then use the generated typed reader and writer APIs.
-
-For a small, schema-defined keyspace, declare `key_values` or `key_domain`.
-Varlit compiles the permitted value combinations into a two-byte enum, with at
-most 4,096 combinations per block; growing log records remain identified by
-offsets. See [finite schema keys](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md#finite-schema-keys).
-
-The workspace contains:
-
-- `varlit`: public facade crate
-- `varlit-core`: runtime, codecs, file I/O, diagnostics
-- `varlit-macros`: `varlit_format!` and derive support
-
-## What This Is And Is Not Ready For
-
-Read this before adopting. The detail behind every line is in
-**[Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md)**; upgrading from 0.4.0 or 0.3.0
-is covered in **[API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md)**.
-
-For contributions, see [CONTRIBUTING](https://github.com/shim9610/varlit/blob/main/CONTRIBUTING.md)
-and the [Code of Conduct](https://github.com/shim9610/varlit/blob/main/CODE_OF_CONDUCT.md).
-Potential security problems follow the
-[private reporting policy](https://github.com/shim9610/varlit/blob/main/SECURITY.md).
-
-**Ready for:**
-
-- Declaring a custom binary format and getting typed readers and writers for it.
-- Native append-log files with bounded directory buffers and private spills.
-  Directory entries cost **16 bytes per record** — the record's offset and its
-  committed bit — retained in RAM up to the configured budget and spilled beyond
-  it. Everything else is rebuilt from the record when a read asks. By default open
-  scans the whole file to build it, and opt-in policies change that:
-  `segment_on_flush` makes the open walk one record per commit point, and
-  `open_digest_on_flush` plus `open_readonly_lazy` makes it frame one record and
-  build no directory at all, leaving the caller to build only the part it needs
-  with `record_map`. Segment chains that outgrow the current staging buffer fall
-  back to bounded record framing; a small memory budget can increase open I/O.
-- Bounded-memory ingest and indexed point lookup through `VarlitStreamReader`,
-  `VarlitStreamWriter`, `VarlitIndexedReader` and `VarlitIndexedWriter`. These are
-  part of the default public API since 0.10.0, including with
-  `--no-default-features`. Choose these constructors explicitly for large logs;
-  `create_writer` and `open_reader` now spill large directories, but can still scan input at open.
-  See [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) for costs and supported operations.
-- Matrix storage with fixed dimensions or one explicitly growing chunk axis,
-  bounded payload caches and private paged metadata directories. Standard limits
-  no longer impose a 16M-cell cap; sparse filesystem behavior still matters.
-- External keyed merge/compact with bounded buffers and temporary disk storage.
-- Reading a file with hostile-input ceilings applied (`ReadLimits::UNTRUSTED`).
-  The typed refusals and bounded allocations are real and tested: no production
-  read path uses an unknown length as a framing primitive. Lengths, counts and
-  offsets are decoded with checked arithmetic, validated in full against the
-  captured file snapshot or the enclosing slice, charged against the resolved
-  runtime limit for that resource, and only then converted, reserved fallibly,
-  and read as exactly that range. **EOF is not a framing mechanism** — append
-  logs stop at the captured snapshot length and sidecars must match their declared
-  total length exactly. Read the fuzz/Miri/ASan line below before treating this as
-  a hardened surface.
-
-**Not ready for:**
-
-- **Universal performance or filesystem guarantees.** Measurements include
-  Windows and Linux workloads; each result applies to its recorded source,
-  hardware, cache state and filesystem. Source `772f381` passed native
-  Linux, Windows and macOS default/all-feature and bounded-I/O checks in
-  [CI](https://github.com/shim9610/varlit/actions/runs/38570489047).
-  Those checks do not establish filesystem-wide performance or power-loss guarantees.
-- **Matrices on a filesystem that cannot represent holes.** Sparseness is
-  requested best-effort. `matrix_storage_diagnostics()` and `diagnose_file`
-  expose observed capability failures and warnings. On a non-sparse volume the
-  declared extent is really allocated, create cost and open cost become
-  proportional to the *declared* cell count, and `clear_category` writes
-  `cells / 8` bytes when neither the COW adapter nor native hole punching handles
-  the range. Missing capability observations are unknown, not proof of support.
-
-- **Matrices that grow in more than one dimension.** One may be declared
-  growing: `with_growing_matrix_dimension(name, rows_per_chunk)` puts rows past
-  the declared extent in chunk records in the append log, one chunk buffered at
-  a time. It is one dimension — dimension 0 of every matrix block — with its
-  declared value at create pinned to `rows_per_chunk`; every other dimension is
-  fixed at create. Edits append immutable chunk versions; confirmed EOF controls
-  their visibility. History can grow the file until explicit compaction, and
-  ordinary readers remain on their confirmed snapshot until `follow()`.
-- **Frequent matrix opens.** Opening a matrix is not `O(1)`, because by default
-  opening it *verifies* it. Open is independent of file size but proportional to
-  the candidate page set: a matrix with **one live page** still reads about
-  **70 KB over 17 pages** (Windows/NTFS). Declaring
-  `MatrixMetadataVerification::OnDemand` takes that to **32 bytes over 0 pages**,
-  and what you give up is the matrix announcing commit-map damage at open — see
-  the [Capability Boundary](#capability-boundary) below for the exact trade.
-  VMAT v5 OnDemand opens read directory headers without enumerating live pages.
-  Lookups use the original directly addressed metadata, with bounded private
-  caches. The default AtOpen policy still performs the selected verification.
-
-- **Measured petabyte-scale merge throughput.** Merge/compact now spill state
-  and values to private temporary files, but require scratch disk and one
-  operation's decode workspace. Large-scale throughput has not been established.
-- **Channel-selective reads.** Reading a subset of channels without paying full
-  block I/O has been designed but not implemented: there is no `channel_view`
-  type, no DSL key, and no generated method anywhere in the workspace. Nothing
-  about it is callable. One conclusion from that design holds regardless, because
-  it is a property of the current on-disk layout: an interleaved payload cannot be
-  read channel-selectively below full block I/O without re-emitting the payload.
-- **Implicit live views of a file another handle is writing.** Each reader
-  captures a snapshot and advances explicitly with `follow(&mut self)`. Matrix
-  payloads, bitmaps, CRCs and aux data share one confirmed generation; `sync()`
-  publishes it. Matrix storage requires the primary and its `.vmg` companion.
-- **Anything depending on a long fuzz campaign.** Fuzz, Miri and ASan do run
-  on PRs and by manual dispatch, and the Unix code paths are executed rather than merely
-  compiled, which is a change from every release before 0.7.0. What has *not*
-  happened is a campaign: the fuzz job gives each target 90 seconds, and the
-  targets that build a sidecar per input manage about 64 executions per second
-  where the codec target manages 300,000. The smoke run has found defects;
-  passing it does not establish a completed search. See
-  [Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
-
-## What Varlit Provides
-
-- Compile-time format declarations with generated typed reader and writer APIs.
-- Fixed and variable blocks with canonical encoding instead of Rust memory
-  layout copying by default.
-- Append-friendly record framing, offset-chain metadata, commit policies,
-  checksum hooks, keyed collections, and lazy scan/index support.
-- Declarative hostile-input ceilings for file, scan, payload, index, matrix,
-  sidecar, materialization, and mmap resources.
-- Variable payload compression policies that can be declared globally, per
-  block, or left unspecified for caller-defined behavior.
-- Adapter primitives for physical formats that need custom lead-ins, table of
-  contents masks, raw data offsets, next-segment offsets, or externally defined
-  record framing.
-
-## Capability Boundary
-
-Varlit has two API families with different scale contracts. Pick deliberately.
-
-| Family | Entry points | State | Suited to |
-| --- | --- | --- | --- |
-| Native | `VarlitFile`, generated typed readers/writers | bounded directory buffers with private spill files; explicit owned collections still scale with their results | typed records, scan/chain access and matrices |
-| External merge/compact | `merge_keyed_files`, `compact_keyed_file(s)` | bounded buffers, temporary per-key/value state | merging histories with available scratch disk |
-| Stream/indexed (default API) | `VarlitStreamWriter`, `VarlitIndexedWriter`, their readers, and `.vks`/`.vki` sidecars | bounded resident state, sized by declared blocks and bounded buffers | high-rate append and point lookup over data far larger than RAM |
-
-The stream/indexed family supplies bounded ingest and lookup. External merge and
-compact spill state and values to temporary files. Use `*_with_key_limit` for an
-explicit cardinality/work ceiling; `estimate_keyed_merge` reports counts and a
-hypothetical fully resident size, not the current external implementation's peak.
-
-Matrix runs can read consecutive cells into caller-owned buffers with
-`read_matrix_run_into`, `read_matrix_run_bytes_into`, or `read_matrix_row_into`.
-For a segment in the opposite direction, use `read_matrix_column_into` or
-`read_matrix_column_bytes_into`; these hold the second coordinate fixed and
-advance the first, using bounded batches even across growing chunks.
-They batch metadata and payload reads across growing chunks. The second axis in
-`dims = [first, second]` is contiguous: choose the declaration order for row or
-column scans. See [matrix APIs](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) for memory and hole handling.
-
-Matrix (preallocated) storage is a third mode. Its integrity metadata is paged
-and sparse, so create-time metadata I/O and per-mutation integrity cost are
-bounded by the cells actually used rather than by the declared cell count —
-**provided the filesystem represents the unwritten extent as holes.** That is
-requested best-effort at create, so on exFAT/FAT32,
-some network and virtual volumes, or after a copy by a tool that expands holes,
-the declared extent is genuinely allocated and both the create-time and the
-open-time cost can become proportional to the declared cell count instead.
-`matrix_storage_diagnostics()` and `diagnose_file` report observed storage
-capabilities and environment warnings; unknown observations do not promise
-sparse allocation. See [storage diagnostics](https://github.com/shim9610/varlit/blob/main/docs/storage-diagnostics.md).
-
-Standard admission no longer caps matrix dimensions/cells at 16 million or the
-slot region at 8 GiB. Checked format/offset arithmetic and filesystem limits
-remain, and callers may set explicit admission caps. Memory budgets continue to
-limit caches and working buffers; larger directories spill into temporary files.
-
-**Open-time reads are bounded by the candidate *page* count, not by the working
-set, so open is not `O(1)` — but residency is.** An undeclared open resolves to
-`MatrixMetadataResidency::Lazy { DEFAULT_CACHE_BYTES }` plus
-`MatrixMetadataVerification::AtOpen`: it retains **no** commit-map payload, and
-then verifies, which reads the union of the pages named by the persisted page index
-and the pages the platform's allocation map reports as written. Measured: a matrix
-with one live page reads 69,800 bytes over 17 pages, one with 64 live pages reads
-267,800 bytes over 65 pages, and **both hold 0 resident bitmap bytes**. Residency
-afterwards follows the working set exactly — one 4096-byte page per distinct
-commit-map page addressed, evicted LRU at the declared bound — so
-`max_matrix_bitmap_bytes` bounds a cache and a live set wider than it opens
-normally. Declaring `MatrixMetadataVerification::OnDemand` takes the same opens
-down to 32 and 1,040 bytes and 0 pages; what you give up is the matrix announcing
-commit-map damage at open, the whole-category quarantine, and the strict-recovery
-writer gate. VMAT v5 removes the residual full-directory scan from OnDemand
-open: it reads validated directory headers and fetches metadata windows when
-needed. `with_matrix_directory_cache_bytes(bytes)` controls this cache (1 MiB
-per bitmap by default, clamped to the bitmap ceiling); zero disables it.
-Cache misses read the original generation, without creating a temporary index.
-User publication points are unchanged. Earlier byte counts above describe the
-previous representation, not VMAT v5 measurements.
-
-**What `OnDemand` actually costs you, since it is the one knob here worth
-understanding.** The commit-map half of `MatrixRecoveryReport` is produced by the
-verification pass and by nothing else. With verification off, the `Recoverable`
-`MatrixCorruptionKind::CommitMap` finding is not produced, a damaged category is
-not failed closed **as a whole** (`Error::MatrixCommitQuarantined` does not fire,
-so only the pages a read touches refuse), the `RebuildCommitMap` / `ClearCategory`
-recommendations are absent, and a `RecoveryPolicy::Strict` writer is not stopped
-from mutating a category whose commit map holds a damaged page. One class is worse
-than deferred rather than merely later: the candidate set is the persisted page
-index **unioned with** the platform's allocation map, and that second term is the
-only thing that ever examines a page the matrix never published, so **stray bytes
-there are never looked at at all**. `verify_matrix_metadata()` on a reader, writer
-or `VarlitFile` runs the same pass on demand and recovers the findings and the
-recommendations — but not the quarantine and not the writer gate, which are derived
-once, at open. No read answers from unverified bytes under any policy: every page
-faulted in is authenticated against its stored digest first, so this is a choice
-about *when damage is announced*, not about whether bytes are checked. Full table
-in [Known Limitations §1.4](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#14-lazy-is-the-default-verification-is-what-still-happens-at-open).
-
-Matrix dimensions are fixed at create, with one exception: a format may declare
-one of them growing with `with_growing_matrix_dimension(name, rows_per_chunk)`,
-after which rows past the declared extent land in chunk records in the append
-log. Off by default, and byte-identical when not declared.
-
-**Platform support, since it changes the matrix cost model rather than only the
-confidence in it:**
-
-| Target | Status |
-| --- | --- |
-| Windows x86_64 MSVC | native default/all-feature and bounded-I/O checks executed. Historical NTFS measurements retain their recorded scope. |
-| Linux x86_64 | native default/all-feature and bounded-I/O checks executed. Allocation-map and hole-punch calls are implemented; filesystem behavior and measured constants differ from NTFS. |
-| macOS | native default/all-feature and bounded-I/O checks executed. `SEEK_DATA`/`SEEK_HOLE` and `F_PUNCHHOLE` paths are implemented; actual mounted-volume support is reported by storage diagnostics. |
-| Other targets | native allocation-map and hole-punch support may be unavailable. Persisted-index opens remain bounded; clearing can stream zeros. These targets are not qualified by the three-platform CI. |
-
-The executed 0.12.1 product tree (`43308ff`) is recorded in
-[CI](https://github.com/shim9610/varlit/actions/runs/38590083518) and
-[Sanitizers](https://github.com/shim9610/varlit/actions/runs/38590083701).
-This is behavioral qualification on hosted runners, not a benchmark or a promise
-that every filesystem supports sparse allocation and hole punching.
-
-Full numbers, arithmetic you can apply to your own cell count, and the trade-offs
-of each policy are in
-[Known Limitations §1](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#1-matrix-opening-a-matrix-is-not-o1-because-opening-it-verifies-it).
-
-Varlit should own the reusable binary-format mechanics. Application-specific
-meaning, domain transforms, and compatibility with an external specification
-remain caller code.
-
-## Start Here
-
-| Document | Use it for |
-| --- | --- |
-| [Quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md) | shortest path from format declaration to write/read |
-| [Known Limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md) | what a user actually hits: matrix open cost and residency, resident-API scale, unimplemented features, and what is not verified |
-| [How Varlit Works](https://github.com/shim9610/varlit/blob/main/docs/how-it-works.md) | mental model of the declaration, the generated code, append logs, matrix storage, and durability |
-| [API Reference](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) | practical public API map, including the resource-limit surface and the generic adapter toolkit |
-| [Format Author Guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) | policy choices, compression, commit modes, matrix blocks |
-| [Custom Codec Guide](https://github.com/shim9610/varlit/blob/main/docs/custom-codec-guide.md) | writing `VarlitEncode`/`VarlitDecode` for a field type with its own stable wire meaning |
-| [Update And Compact Guide](https://github.com/shim9610/varlit/blob/main/docs/update-compact-guide.md) | keyed put/op/tombstone/compact workflows, and when direct replacement is the right tool instead |
-| [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) | the default stream/indexed APIs, batching, sidecars, recovery, and exact cost model |
-| [Immediate policy](https://github.com/shim9610/varlit/blob/main/docs/immediate-policy.md) | block and value declarations, automatic durability conditions, and explicit `immediate()` |
-| [Durability Model](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) | flush, sync, transaction-marker, matrix, and replacement ordering |
-| [Recovery Model](https://github.com/shim9610/varlit/blob/main/docs/recovery-model.md) | matrix corruption classification, findings, and the primitive recovery actions a caller may apply |
-| [Self-Check Guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md) | deciding whether a failure is format, caller, data, feature, environment, or library |
-| [API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md) | migrating from 0.3.0: new/changed/removed items, behaviour changes at unchanged signatures, and what happens to existing files |
-| [Migration Guide](https://github.com/shim9610/varlit/blob/main/docs/migration-guide.md) | explicit block-version migration, and the wire changes that have no automatic path |
-| [Format Spec](https://github.com/shim9610/varlit/blob/main/docs/spec.md) | the implementation contract: wire layout, versions, adapter boundary, and the obligations each surface carries |
-| [Changelog](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md) | release changes and source-compatibility notes |
-
-That table is the whole published set. The project also keeps internal working
-notes — adversarial review reports, architecture and design studies, a
-contributor invariant checklist, performance and fuzz records, and the routing
-artifacts of each hardening round. Those are development process material and are
-not published. Nothing in the documents above depends on reading them: where a
-published document used to cite one, it now states the substance directly, and
-the assurance those notes record — together with its limits — is summarised under
-[Status](#status) below and in
-[Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
-
-## Add It To Your Project
-
-This checkout contains **Varlit 0.12.1**. Install the facade crate from crates.io:
+Varlit defines typed binary block formats in Rust. Declare the block layouts and
+policies, append application-sized blocks, and let independent readers follow
+published data. The library provides codecs, bounded working buffers, disk
+indexes, explicit durability, recovery and optional compression or memory mapping.
 
 ```toml
 [dependencies]
-varlit = "0.12.1"
+varlit = { version = "0.13.0", features = ["integrity"] }
 ```
 
-For a Git dependency, use the versioned repository release:
+Start with the [quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md), which writes grouped samples
+through the stream API. See [API changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md) when upgrading.
 
-```toml
-[dependencies]
-varlit = { git = "https://github.com/shim9610/varlit.git", tag = "v0.12.1" }
-```
+## Choose the storage path
 
-For local development, use a checkout:
-
-```toml
-[dependencies]
-varlit = { path = "../varlit/crates/varlit" }
-```
-
-Replace the path with the location of your checkout. The GitHub repository is
-[shim9610/varlit](https://github.com/shim9610/varlit); the existing `v0.11.0`
-tag contains the old `varve` packages and cannot provide `varlit`.
-
-The runtime no longer depends on Crossbeam. The matrix writer owns its pending
-page directory and lends it to bitmap reads. See the
-[0.11.0 → 0.12.0 migration notes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#l-0110--0120-varlit-rename)
-for crate imports, derive attributes, codec methods and tool environment names.
-Registry publication remains a separate release step.
-
-Requires Rust **1.95** or newer. Resident, matrix, streaming and indexed APIs
-are included even with `default-features = false`. The removed
-`high-cardinality-dev` feature is no longer accepted; remove it from existing
-Cargo manifests. Optional capabilities remain opt-in:
-
-```toml
-[dependencies.varlit]
-path = "../varlit/crates/varlit"
-features = ["integrity", "compression-zstd"]
-```
-
-| Feature | Turns on |
-| --- | --- |
-| `integrity` | record and matrix cell/commit-map checksum verification |
-| `compression-zstd` | the zstd codec for compressed blocks |
-| `experimental-matrix-reuse` | **experimental**, default-off page reuse with automatic-follow owned reads; see [the guide](https://github.com/shim9610/varlit/blob/main/docs/experimental-matrix-reuse.md) |
-| `mmap` | memory-mapped reads |
-| `zero-copy` | borrowed reads that avoid a copy out of the page cache — also enables `mmap` |
-| `scalable-fault-injection` | test-only fault injection; not for production builds |
-
-[Format Author Guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) says which declaration
-choices require which feature, and what each costs.
-
-## Minimal Shape
-
-```rust
-use varlit::varlit_format;
-
-varlit_format! {
-    pub format AppFormat {
-        magic: b"APP";
-        version: 1;
-        schema_hash: computed;
-        commit: transaction_marker(on_flush);
-
-        blocks {
-            fixed Point(id = 1) {
-                x: u32,
-                y: u32,
-            }
-
-            variable User(id = 2, key = [id]) {
-                id: u64,
-                name: String,
-                flags: u32 = default,
-            }
-        }
-    }
-}
-
-let mut writer = AppFormat::create_writer("app.varlit")?;
-writer.push_point(&Point { x: 1, y: 2 })?;
-writer.push_user(&User { id: 7, name: "Ada".to_string(), flags: 0 })?;
-writer.flush()?;
-
-let reader = AppFormat::open_reader("app.varlit")?;
-let user = reader.users()?.get(&7)?;
-```
-
-The user declares the format and block types. Varlit generates the typed
-methods, block metadata, required field encoding, record headers, commit
-handling, offset-chain metadata, and diagnostics.
-
-Resource limits are runtime policy, not part of the file format. Ordinary
-opens use Varlit's allocation-safe standard policy. Use generated
-`*_with_resource_limits` methods to raise or lower policy for a handle, or the
-legacy `*_with_limits` methods when only fieldwise tightening is desired. An
-optional, partial `limits { ... }` declaration can provide format defaults but
-never becomes a permanent wire-format ceiling.
-
-Three fields on `ReadLimits` are *declarations* rather than ceilings:
-`matrix_metadata_residency`, `matrix_metadata_verification` and, since 0.6.0,
-`integrity_verification`. None has a "tighter" direction to meet, so all three
-compose by precedence instead — and, as of 0.5.0, a **silence never overwrites a
-declaration**. A `*_with_resource_limits` call that does not mention a policy
-leaves the spec's alone; one that does mention it wins. `*_with_limits` keeps the
-spec's and now also takes a runtime one where the spec declared none. Through
-0.4.0 this was broken in both directions: raising
-`max_matrix_bitmap_bytes` alone silently reverted a declared
-`Lazy { cache_bytes }` to the eager policy, discarding the only bound on matrix
-metadata memory and often failing the open on the very admission limit you were
-raising. **If you wrote a workaround for that, it is no longer needed.** There is
-still no `varlit_format!` DSL key for any of the three; declare them on the spec
-with `FormatSpec::with_read_limits` or pass them in a `ReadLimits` value. See
-[Known Limitations §1.6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#16-the-matrix-residency-and-verification-policies-have-no-varlit_format-dsl-key)
-for the two matrix policies.
-
-## Examples
-
-| Example | Role |
-| --- | --- |
-| `crates/varlit/examples/bmp_physical.rs` | Small physical-format adapter proof for BMP-style headers and raw pixel data, verified against Pillow. |
-| `crates/varlit/examples/perf_bench.rs` | Local throughput check for append, open, scan, and block access paths. |
-| `crates/varlit/examples/tdms_physical_reader.rs` | Thin reader entry point for the TDMS physical adapter example. |
-| `crates/varlit/examples/tdms_physical_writer.rs` | Thin writer entry point for the TDMS physical adapter example. |
-| `crates/varlit/examples/tdms_physical_adapter.rs` | CLI wrapper around the TDMS adapter for write, append, read, read-bytes, and inspect flows. |
-| `crates/varlit/examples/tdms_physical/common/adapter.rs` | Large TDMS physical adapter proof using Varlit's generic adapter APIs. |
-| `crates/varlit/examples/tdms_physical/common/example_data.rs` | Multi-channel TDMS scenario fixtures. |
-| `crates/varlit/examples/tdms_physical/common/verify.rs` | Regression checks for TDMS round trips and segment-layout behavior. |
-
-The TDMS example is intentionally larger than a quickstart. Its job is to prove
-that Varlit can support a demanding external binary format without hard-coding
-TDMS-specific behavior into the library. It also acts as a regression harness so
-combined changes do not silently break segment appends, metadata reuse, scalar
-types, or cross-tool compatibility.
-
-The boundary it demonstrates is the general one for external formats. Varlit owns
-the reusable mechanics: declaring and validating file headers, segment lead-ins,
-metadata and raw regions and footers, finalized offsets and segment bounds;
-appending complete segments; and exposing offsets, lengths, field values, byte
-ranges and tolerant scan reports. Above that sit generic adapter primitives —
-tagged-value codecs, chunk index builders over raw regions, segment reducers, and
-adapter self-checks. The adapter author owns the domain meaning: for TDMS that
-means object paths, raw-data-index grammar, property typing, timestamp and
-waveform conversion, scaling, DAQmx raw scalers, interleaving, sidecar policy and
-export. **Varlit provides no TDMS reader or writer**; the files under
-`crates/varlit/examples/` are adapter proofs, not a supported TDMS API.
-
-## Self-Check
-
-Generated formats expose diagnostics and end-to-end self-test helpers:
-
-```rust
-let diagnostics = AppFormat::diagnostics();
-let file_report = AppFormat::diagnose_file("data.varlit");
-let self_test = AppFormat::self_test("self-check.varlit")
-    .with_block(Point { x: 1, y: 2 })
-    .cleanup(true)
-    .run();
-```
-
-These reports classify failures as format definition, caller usage, feature
-gate, file data, environment, or library invariant issues. See
-[Self-Check Guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md).
-
-## Status
-
-Varlit 0.10.0 includes the stream/indexed family in the default, supported
-public API. The former development-only Cargo gate is removed. API
-changes follow the same pre-1.0 minor-version policy as the resident and matrix
-families. Promotion changes API availability; it does not assert completion of
-new endurance, power-loss or device-throughput qualification. As of
-2026-10-03, a 24-hour matrix endurance run is in progress; no completed
-24-hour result is claimed. Long-duration validation is separate from this
-repository release.
-
-The project includes append-log blocks, keyed collections, transaction/footer
-commit policies, schema manifests, diagnostics, merge and compact helpers,
-variable-block compression, matrix storage, mmap, and opt-in zero-copy.
-The historical compatibility evidence below remains limited to the revisions it
-names. Current matrix generations require the primary and its `.vmg` companion;
-older matrix files without that companion need recreation. Older disk-index
-sidecars require explicit rebuild/bootstrap. See the migration guide for limits.
-
-**Four artifact classes are not covered by that statement in 0.9.2.** They are
-rejected with a typed error rather than misread, but two of them hold data and two
-are regenerable, and the difference is what it costs you:
-
-| Class | Outcome | Cost to you |
+| Workload | Start with | Layout choice |
 | --- | --- | --- |
-| **Matrix native file** (`VMAT` v1/v2/v3/v4) | `Error::FormatVersionMismatch { expected: 5, .. }` | **recreate the matrix and copy its contents yourself** — Varlit has no migration tool |
-| **Native file pinned with a computed schema hash** from 0.3.0 or earlier | `Error::SchemaHashMismatch` | **recreate the file, or re-derive the pinned literal** — the hash algorithm changed twice |
-| Matrix sidecar written before sidecar v3 | `Error::MatrixSidecarMismatch("sidecar version")` | regenerate; sidecars are resume state, not data |
-| Stream/indexed primaries and disk sidecars written before the generation nonce | typed refusal; `rebuild_disk_index` for the sidecar | regenerate. Hypothetical in practice — this family never shipped |
+| Append/follow logging | Stream reader/writer | Pack related samples into a block; buffer several blocks per publication |
+| Keyed block lookup | Indexed reader/writer | Use a block key; bounded declared key domains use finite-key tables |
+| Direct grid/cell access | Matrix blocks | Choose dimensions, cell size and generation policy for the access pattern |
+| Small files, direct native record access | Native reader/writer | Open may scan all records and spill directory rows |
 
-See [API Changes](https://github.com/shim9610/varlit/blob/main/docs/api-changes.md#read-this-first-files-written-by-an-older-version),
-[CHANGELOG](https://github.com/shim9610/varlit/blob/main/CHANGELOG.md) and [Migration Guide](https://github.com/shim9610/varlit/blob/main/docs/migration-guide.md).
+Block packing, buffered append batches and publication are separate decisions.
+A batch does not pack independent input records into one encoded block. For
+high-rate acquisition, choose the physical block size first and amortize `sync()`
+over a publication batch. See [batch sizing and routing](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size).
 
-On the evidence behind that table: **no test in the suite opens a file written by an
-older version.** The append-log claim was checked by hand on 2026-07-25 — files
-written by the real 0.1.0 and 0.3.0 builds opened under 0.4.0 with every field
-intact, and a 0.3.0 computed-hash-pinned file was refused as documented — but that
-was a single manual run over a two-field format, and the matrix and sidecar refusal
-rows rest on source inspection alone. See
-[Known Limitations §6.7](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#67-the-backward-compatibility-table-what-is-now-executed-and-what-still-is-not).
-The stream/disk-index API is included in default builds.
-Progress/cancellation, process-interruption recovery, and sidecar robustness
-gates are implemented and executed. On 2026-10-01 the explicit qualification
-campaign also passed on Linux x86_64: four 64-epoch model histories, 64 external
-kill/recovery cycles, and the 10k/100k/1m-key heap budgets. Both sparse positional
-probes ran on tmpfs; the workspace overlay accepted 1 TiB but refused 1 PiB with
-`File too large`. These are sparse address-space checks, not petabyte storage or
-endurance measurements. See the [self-check guide](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md#scalable-io-validation)
-for reproducible commands and the limits of these checks.
+One writer owns mutations. Readers have independent snapshots and caches; use a
+reader per thread and explicitly follow new publications. Multiple producers
+can feed the writer through a bounded queue. Durability and visibility depend on
+the selected policy; [the durability model](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) explains
+`flush`, `sync`, transaction markers and matrix generations.
 
-Earlier 20 GiB load testing found that opening new indexed readers could
-interrupt the sole writer. Reader open now uses read-only confirmed checkpoints
-without writer admission, and the runtime uses Varlit's own index storage.
-Regression tests cover concurrent opens; timed campaigns qualify the exact
-source and binary recorded by their reports, independently of release tags.
+## Features and contracts
 
-The performance checks are in the same position. They are regression guards
-rather than product benchmarks, and **they run in no job**:
-`crates/varlit/tests/perf_smoke.rs` is entirely `#[ignore]`d, as is the
-one-million-key allocator stress probe in
-`crates/varlit/tests/high_cardinality.rs`. Every performance number in this
-documentation therefore comes from a manual run on a named date and host.
-The qualification runner explicitly enforces heap budgets when invoked, but
-the long campaigns are not automatically scheduled in CI.
+| Cargo feature | Use |
+| --- | --- |
+| `integrity` | Stored CRC creation and verification |
+| `compression-zstd` | Zstandard compression and decoding |
+| `mmap` | Mapped byte views with stable backing-file requirements |
+| `zero-copy` | Typed raw views; includes `mmap` |
+| `experimental-matrix-reuse` | Explicit opt-in experimental matrix page reuse |
+| `scalable-fault-injection` | Failure hooks for development and qualification |
 
-On security assurance specifically: an adversarial hostile-input review was
-performed on 2026-07-10 against the pre-0.2 hardening implementation. It treated
-file bytes, matrix metadata, sidecars, file paths and concurrent external
-filesystem activity as untrusted, and the format declaration, generated code and
-custom codec implementations as trusted. Its findings were remediated for 0.2.0
-and the remediation was verified on 2026-07-10 and 2026-07-11 across fail-closed
-resource limits, open-object snapshots, strict recovery classification,
-copy-on-write fixed replacement, canonical decoding, native and matrix structural
-validation, sidecar and lock bounds, and generated API trust boundaries. **That
-review predates 0.4.0 and every hardening round recorded in the changelog.**
+Default features are empty. Stream/indexed APIs and finite keys are available
+without extra feature flags. The experimental page-reuse format has its own
+compatibility rules.
 
-Fuzz, Miri and ASan run on PRs targeting `main` and by manual dispatch
-(`.github/workflows/sanitizers.yml`). These checks were introduced in 0.7.0.
-Read what that buys before relying on it: the fuzz job gives each target **90 seconds**, which is a smoke test and
-not a campaign, and the targets that exercise the sidecar path manage about 64
-executions per second against `codec_arbitrary`'s 300,000. For the full
-assurance picture — including that, and which platform each number came from —
-see [Known Limitations §6](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md#6-not-verified).
+Read validation can select CRC and additional structure checks independently.
+Bounds, resource/decoder limits, finite traversal and publication guards remain
+required. Ordinary opens preserve their existing validation policy. See the
+[read-policy table](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md#read-validation) and [security contract](https://github.com/shim9610/varlit/blob/main/SECURITY.md).
 
-## Local Verification
+Resource limits bound specified resources rather than total process memory.
+Some public convenience allocations and application code remain infallible.
+Mapped backing files must remain stable for the view lifetime. Platform sparse
+allocation and durability depend on the actual filesystem. See
+[known limitations](https://github.com/shim9610/varlit/blob/main/docs/known-limitations.md) before adoption.
 
-```powershell
-cargo fmt --all -- --check
-cargo run -p varlit-test-runner -- test --workspace
-cargo run -p varlit-test-runner -- test --workspace --all-features
-cargo run -p varlit-test-runner -- clippy --workspace --all-targets --all-features -- -D warnings
-```
+## Documentation
 
-The runner gives every command a fresh temporary root, preserves that root on
-failure, and requires verified cleanup on success. Cargo build caches remain
-reusable and are not treated as test data.
+| Guide | Purpose |
+| --- | --- |
+| [Quickstart](https://github.com/shim9610/varlit/blob/main/docs/quickstart.md) | Grouped append and reading published data |
+| [How it works](https://github.com/shim9610/varlit/blob/main/docs/how-it-works.md) | Blocks, generated APIs and storage model |
+| [API reference](https://github.com/shim9610/varlit/blob/main/docs/api-reference.md) | Public operations, errors and resource policies |
+| [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) | Batching, key routing, follow and bounded caches |
+| [Format author guide](https://github.com/shim9610/varlit/blob/main/docs/format-author-guide.md) | Schema, compression and matrix declarations |
+| [Custom codecs](https://github.com/shim9610/varlit/blob/main/docs/custom-codec-guide.md) | Codec identity and allocation accounting |
+| [Durability](https://github.com/shim9610/varlit/blob/main/docs/durability-model.md) / [recovery](https://github.com/shim9610/varlit/blob/main/docs/recovery-model.md) | Publication, failure results and repair |
+| [Update and compact](https://github.com/shim9610/varlit/blob/main/docs/update-compact-guide.md) | Replacement, keyed updates and reclamation |
+| [Chunk range streaming](https://github.com/shim9610/varlit/blob/main/docs/chunk-streaming.md) | Read decoded ranges with fixed caller scratch |
+| [Wire specification](https://github.com/shim9610/varlit/blob/main/docs/spec.md) | Persistent bytes and compatibility obligations |
+| [Migration](https://github.com/shim9610/varlit/blob/main/docs/migration-guide.md) | Version upgrades and explicit conversions |
+| [Self-check](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md) / [verification](https://github.com/shim9610/varlit/blob/main/docs/verification.md) | Diagnostics and qualification commands |
 
-Automatic CI runs only on PRs targeting `main`; manual dispatch remains available.
-Neither a branch push nor merging a checked PR starts a duplicate run. New PR
-commits cancel obsolete runs. Rust, Python and Actions CodeQL results are uploaded
-to code scanning. The stable `ci / required` check rejects any missing, failed,
-cancelled or skipped job group; sanitizer checks remain separate.
+## Performance and verification
 
-The CI configuration (`.github/workflows/ci.yml`) includes native default/all
-tests and bounded-I/O checks on Ubuntu, Windows and macOS. Its other gates include
-`cargo fmt --all -- --check`; a per-feature Clippy matrix with `-D warnings` and `--locked`
-covering no-default-features, default, each optional feature alone
-(`integrity`, `mmap`, `zero-copy`, `compression-zstd`,
-`scalable-fault-injection`, `experimental-matrix-reuse`), and the all-feature workspace union; default and
-all-feature test runs through `varlit-test-runner` so a leaked test artifact
-fails the build; test runs for the two singleton feature configurations that own
-`cfg`-exclusive behaviour (compression without integrity, integrity without
-compression), which the default and all-feature runs both compile out; a job
-pinned to the declared MSRV (1.95.0) that checks and tests against it and fails
-if the pin and the manifests disagree; a `source contents` job checking the
-README and license texts; a `Git consumer + pinned dependency sources` job
-that resolves, compiles and runs an independent downstream Git consumer;
-a `rustdoc (-D warnings)`
-job over the workspace's published documentation surface; a blocking
-`cargo deny` / `cargo audit` supply-chain job; a
-blocking locked fuzz-workspace job (`cargo metadata --locked`, `cargo check
---locked --all-targets`, `cargo audit`, `cargo deny`, and a final
-`git diff --exit-code -- fuzz/Cargo.lock`, in that order, so no step can hide a
-stale lockfile by regenerating it); a renamed-dependency macro fixture; and a
-clean-archive job that builds only the committed tree (`git archive` +
-`cargo metadata`/`cargo check --locked`, including the fuzz workspace and both
-out-of-workspace fixtures) so an uncommitted workspace member cannot pass CI.
+The [current workload comparison](https://github.com/shim9610/varlit/blob/main/docs/performance/workload-storage-20261104/README.md)
+contains grouped logging, arrays, table-oriented cases, concurrent reader progress
+and CPU/memory/storage measurements. Read-policy measurements are included in the
+same report. Results apply to their recorded workloads and environments.
 
-Two of those jobs build crates that deliberately sit outside the workspace,
-because some contracts only exist from a consumer's point of view:
-`tools/rename-fixture` proves the macros work when the `varlit` dependency is
-renamed, and `tools/public-api-fixture` derives fixed, variable, and matrix
-blocks over **every** public codec and field type the documentation lists and
-round-trips each one. The second exists because a mandatory field-codec identity
-contract was once added without any test that a documented public type still
-compiled as a derived field, and it silently broke `ChunkedBytes` and
-`PackedBitmap` fields; nothing inside the workspace noticed, because nothing
-inside the workspace derived a block over the public surface the way a consumer
-does.
+CI covers native Linux, Windows and Intel macOS, feature interactions, external
+API consumers, package archives, CodeQL, Kani and deliberate-defect controls.
+Sanitizers separately runs Miri, ASan/leaks and bounded fuzz smoke. Their scopes
+and exclusions are in the [verification guide](https://github.com/shim9610/varlit/blob/main/docs/verification.md).
 
-Every CI action is pinned to a commit id and every installed cargo tool to an
-exact version, so a future run of the workflow evaluates the same *gate code* it
-evaluates today. That is the whole of the claim: the runner images
-(`ubuntu-latest`, `windows-latest`, `macos-latest`) and the `stable` toolchain every job except
-`msrv (1.95.0)` requests are rolling by design, because catching a break on a
-newer compiler or image is exactly what they are for. A CI run is therefore
-**not** reproducible, and a red run on an unchanged commit is an expected
-outcome rather than a workflow defect. `msrv (1.95.0)` is the only job that
-evaluates a fixed toolchain.
+## Contributing
 
-Source distribution is checked by `source contents`, `clean source archive`,
-and `Git consumer + pinned dependency sources`. The consumer builds and runs
-the public-API fixture from a separate project with a Git dependency on the
-tested Varlit commit and no root `[patch]`. It also checks that redb and Crossbeam
-are absent from the consumer dependency graph. `verified package archives` builds
-and verifies the three publishable `.crate` files, checks their package names and
-licenses, and rejects private process documents. Registry publication is separate.
-`rustdoc (-D warnings)` builds the published documentation surface for all three
-crates with warnings denied.
-
-Job results block merges only where branch protection lists them as required
-status checks; adding a job to the workflow does not by itself make it a gate.
-
-Optional compatibility harnesses use Python reference libraries and require
-Python 3.12 or newer (NumPy 2.5):
-
-```powershell
-.\.venv-tdms\Scripts\python.exe scripts\verify_tdms_with_nptdms.py
-.\.venv-tdms\Scripts\python.exe scripts\verify_nptdms_multichannel_with_varlit.py
-.\.venv-tdms\Scripts\python.exe scripts\verify_bmp_with_pillow.py
-```
-
-## License
-
-Varlit is licensed under either of:
-
-- [MIT License](https://github.com/shim9610/varlit/blob/main/LICENSE-MIT)
-- [Apache License, Version 2.0](https://github.com/shim9610/varlit/blob/main/LICENSE-APACHE)
-
-at your option. See [LICENSE](https://github.com/shim9610/varlit/blob/main/LICENSE) for the short dual-license notice.
-
-See [Scalable I/O](https://github.com/shim9610/varlit/blob/main/docs/scalable-io.md) for native index storage and
-[validation](https://github.com/shim9610/varlit/blob/main/docs/self-check-guide.md#scalable-io-validation) for comparison commands. Runtime redb is removed;
-reader caches are private, confirmed generations work across processes, and
-`compact_index()` explicitly reclaims old index pages after a caller-requested sync.
+See [CONTRIBUTING.md](https://github.com/shim9610/varlit/blob/main/CONTRIBUTING.md), [CODE_OF_CONDUCT.md](https://github.com/shim9610/varlit/blob/main/CODE_OF_CONDUCT.md)
+and [SECURITY.md](https://github.com/shim9610/varlit/blob/main/SECURITY.md). Source and documentation history are retained in
+Git. Varlit was renamed from Varve in 0.12.0; old versioned wire markers remain.

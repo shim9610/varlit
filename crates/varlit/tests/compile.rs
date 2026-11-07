@@ -48,6 +48,8 @@ fn macro_compile_contracts() {
         return;
     }
     let tests = trybuild::TestCases::new();
+    tests.compile_fail("tests/ui/fail_builtin_codec_constructor.rs");
+    tests.compile_fail("tests/ui/fail_builtin_codec_evidence_reuse.rs");
     tests.pass("tests/ui/pass_basic.rs");
     tests.pass("tests/ui/pass_policies.rs");
     tests.pass("tests/ui/pass_format_dsl.rs");
@@ -72,7 +74,7 @@ fn macro_compile_contracts() {
     tests.pass("tests/ui/pass_optional_partial_limits.rs");
     tests.pass("tests/ui/pass_replacement_api.rs");
     tests.pass("tests/ui/pass_packed_bitmap_variable_field.rs");
-    // F-10: matrix field eligibility is decided by the generated `SLOT_STRIDE`
+    // matrix field eligibility is decided by the generated `SLOT_STRIDE`
     // (which resolves `VarlitEncode::WIRE_TYPE`), not by the source spelling, so
     // an alias of a supported scalar compiles.
     tests.pass("tests/ui/pass_matrix_type_alias.rs");
@@ -93,13 +95,13 @@ fn macro_compile_contracts() {
     tests.compile_fail("tests/ui/fail_fixed_default.rs");
     tests.compile_fail("tests/ui/fail_inline_empty_key.rs");
     tests.compile_fail("tests/ui/fail_matrix_unbounded_field.rs");
-    // API-04: a matrix slot needs a stride the compiler knows, and
+    // a matrix slot needs a stride the compiler knows, and
     // `PackedBitmap` encodes a variable byte string, so it is not a fixed-width
     // matrix field — and neither is an unrelated user type that merely shares
     // its name.
     tests.compile_fail("tests/ui/fail_matrix_packed_bitmap_field.rs");
     tests.compile_fail("tests/ui/fail_matrix_shadowed_packed_bitmap.rs");
-    // F-10: the permissive shape check still refuses source forms that can
+    // the permissive shape check still refuses source forms that can
     // never denote a fixed-stride type.
     tests.compile_fail("tests/ui/fail_matrix_tuple_field.rs");
     tests.compile_fail("tests/ui/fail_duplicate_format_key.rs");
@@ -163,7 +165,7 @@ fn mechanical_enforcement_contracts() {
     tests.compile_fail("tests/ui/fail_fabricated_mutation_permit.rs");
     // SHAPE B: a mutation window cannot be opened without the witness.
     tests.compile_fail("tests/ui/fail_unpermitted_mutation_window.rs");
-    // SHAPE B (round 14): the witness names the writer it speaks for, so a
+    // SHAPE B the witness names the writer it speaks for, so a
     // permit taken from one writer cannot be spent on another. The in-crate
     // half of the same fix — that a throwaway `PoisonFlag` cannot mint one at
     // all — is gated by tests/enforcement_gates.rs.
@@ -172,17 +174,17 @@ fn mechanical_enforcement_contracts() {
     // SHAPE A: the post-append mirror install cannot be reached without its
     // reservation.
     tests.compile_fail("tests/ui/fail_fabricated_index_reservation.rs");
-    // F-01 (round 13): a replacement target cannot be addressed without the
+    // a replacement target cannot be addressed without the
     // stored-version refusal that its only constructor performs.
     tests.compile_fail("tests/ui/fail_fabricated_replacement_target.rs");
-    // F-02 (round 13): the permission to rewrite an already-indexed record
+    // the permission to rewrite an already-indexed record
     // cannot be obtained without dropping the block's keyed-tail map.
     tests.compile_fail("tests/ui/fail_fabricated_record_overwrite.rs");
-    // F-04 (round 14): the CRC-validity bitmap cannot be read as evidence of
+    // the CRC-validity bitmap cannot be read as evidence of
     // absence without the completeness witness, and the witness cannot be
     // forged.
     tests.compile_fail("tests/ui/fail_fabricated_crc_valid_completeness.rs");
-    // SHAPE B (round 14): matrix state cannot be addressed without the
+    // SHAPE B matrix state cannot be addressed without the
     // fail-closed fatal-recovery witness, and the witness cannot be forged.
     tests.compile_fail("tests/ui/fail_fabricated_fatal_access.rs");
     // ROUND 15, the minting half of both of the above. Forging a witness was

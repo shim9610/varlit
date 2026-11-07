@@ -253,7 +253,7 @@ varlit_format! {
 }
 
 /// Mirrors the private `INDEX_CHECKPOINT_MIN_RECORDS` floor in varlit-core's
-/// `file.rs`. PERF-02 geometric checkpoint spacing writes the first full index
+/// `file.rs`.  geometric checkpoint spacing writes the first full index
 /// checkpoint only once the live tail has grown by at least this many records,
 /// so checkpoint-mechanism tests must push at least this many blocks.
 const CHECKPOINT_MIN_RECORDS: u32 = 16;
@@ -506,7 +506,7 @@ fn metadata_and_checkpoint_are_written_as_internal_blocks() -> varlit::Result<()
         let mut file = CheckpointFormat::create(&path)?;
         file.write_metadata("creator", b"varlit")?;
         file.write_metadata("creator", b"varlit-2")?;
-        // Geometric checkpoint spacing (PERF-02) writes the first full checkpoint
+        // Geometric checkpoint spacing  writes the first full checkpoint
         // only once the tail grows past INDEX_CHECKPOINT_MIN_RECORDS (16) records.
         for value in 0..CHECKPOINT_MIN_RECORDS {
             file.push(&ContractBlock { value })?;
@@ -646,7 +646,7 @@ fn checkpoint_open_uses_latest_checkpoint_and_scans_tail() -> varlit::Result<()>
     let path = temp_path("checkpoint_tail");
     cleanup(&path);
 
-    // Push enough records to force a full checkpoint on flush (PERF-02 geometric
+    // Push enough records to force a full checkpoint on flush ( geometric
     // spacing), then append a few more before sync so the reopen must both use
     // the checkpoint and scan the tail that follows it.
     let checkpointed = CHECKPOINT_MIN_RECORDS;
@@ -687,7 +687,7 @@ fn corrupt_checkpoint_falls_back_to_full_scan_without_hiding_data() -> varlit::R
     let path = temp_path("checkpoint_corrupt");
     cleanup(&path);
 
-    // Push enough records to force a full checkpoint on flush (PERF-02), then
+    // Push enough records to force a full checkpoint on flush , then
     // corrupt it: the reopen must fall back to a full native scan and still
     // surface every record.
     let record_count = CHECKPOINT_MIN_RECORDS;

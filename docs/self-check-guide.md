@@ -4,7 +4,12 @@ This guide is for application developers who need to decide whether a failure is
 caused by a Varlit library bug, a bad format declaration, a wrong API call, a
 feature flag mismatch, or damaged file bytes.
 
-## Static Format Diagnostics
+## Repository verification
+
+See the [verification guide](verification.md) for native tests, public API
+contracts, Kani, Loom, dependency checks and exact recorded CI results. The
+read-validation, range-streaming and fallible-ownership APIs are available in
+[0.13.0](api-changes.md#0130).
 
 For the repository's portable memory-safety gate, install the qualified Miri
 toolchain and run:
@@ -12,16 +17,21 @@ toolchain and run:
 ```sh
 rustup toolchain install nightly-2026-10-12 --profile minimal --component miri
 python3 scripts/check_miri.py
+python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
 ```
 
 The gate records its toolchain, exact selected tests and complete output in
 `target/miri-report/`. Exclusions and reasons are in
 `scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
+All 55 exclusions also have alternatives and remaining gaps in
+`scripts/miri-exclusion-audit.json`. Alternatives are not equivalent Miri proofs.
 Directory `fsync`, native pathname cleanup and the real-file redb oracle require
 native tests and ASan. Miri does not establish filesystem durability or cover
 the mmap/Windows surface. Default alias and validity checks remain enabled.
 CI also runs the six `codec_array_allocation` integration tests under the same
 interpreter, covering partial drops, array framing and the custom-codec path.
+
+## Static Format Diagnostics
 
 Run diagnostics before creating long-lived files:
 
@@ -219,6 +229,27 @@ writer process-kill recovery, native/redb oracles and bounded memory. Real-file
 runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.
+
+The default concurrent workload reads continuously until the writer finishes.
+It measures saturation behavior, with variable total read work. For a paired
+performance comparison, add `--reader-checks-per-epoch 16384` to an indexed
+concurrent case on both sides. Each mutation epoch overlaps the writer with an
+exact batch per reader, then waits for both to finish. Pinned readers retain
+the original snapshot; following readers use the previous confirmed epoch.
+The runner checks every reader's count and deterministic key/snapshot trace.
+No sleep or additional cache budget is used. Keep the original saturation
+results as well, and record CPU quota/throttling before attributing a wall-time
+difference to the library. The fixed-work completion time includes the wait
+for readers; per-epoch `reader_wait_ns` reports it separately.
+
+Compare reports with `python3 scripts/compare_load.py --before before/report.json
+--after after/report.json`; repeat each flag for separate alternating runs.
+Each side needs at least three samples. The comparator rejects unequal work,
+snapshot traces, CPU quotas or workload settings. By default it fails a greater
+than 5% increase in median completion time, CPU time or bytes written, or in
+maximum observed process RSS. Decide the tolerance before measuring; do not
+raise it or discard slow samples to obtain a pass. This local gate does not
+replace latency-distribution review or account for every source of host noise.
 
 For continuous testing, first inspect the space requirement without running:
 

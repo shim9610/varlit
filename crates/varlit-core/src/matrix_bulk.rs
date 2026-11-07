@@ -247,7 +247,9 @@ impl VarlitFile {
             plan.stride,
             out,
         )?;
-        if let Some(base) = location.crc_offset {
+        if self.spec.read_validation().data_crc
+            && let Some(base) = location.crc_offset
+        {
             let mut crcs = [0u8; RUN_CELLS * 4];
             let offset = base
                 .checked_add(ordinal.checked_mul(4).ok_or(Error::InvalidMatrixChunk)?)
@@ -299,7 +301,7 @@ impl VarlitFile {
                 let at = usize::try_from((ordinal % per + i as u64 * step) * width)
                     .map_err(|_| Error::InvalidMatrixChunk)?;
                 let payload = raw.get(at..at + stride).ok_or(Error::InvalidMatrixChunk)?;
-                if location.cell_crc {
+                if self.spec.read_validation().data_crc && location.cell_crc {
                     let expected = u32::from_le_bytes(
                         raw.get(at + stride..at + stride + 4)
                             .ok_or(Error::InvalidMatrixChunk)?
@@ -587,7 +589,9 @@ impl VarlitFile {
             .ok_or(Error::InvalidMatrixChunk)?;
         self.snapshot.read_exact_at(offset, out)?;
         note_chunk_bytes_read(out.len() as u64);
-        if let Some(base) = location.crc_offset {
+        if self.spec.read_validation().data_crc
+            && let Some(base) = location.crc_offset
+        {
             let mut crcs = [0u8; RUN_CELLS * 4];
             let offset = base
                 .checked_add(ordinal.checked_mul(4).ok_or(Error::InvalidMatrixChunk)?)
@@ -628,7 +632,7 @@ impl VarlitFile {
                 let at = usize::try_from((ordinal % per + i as u64) * width)
                     .map_err(|_| Error::InvalidMatrixChunk)?;
                 let payload = raw.get(at..at + stride).ok_or(Error::InvalidMatrixChunk)?;
-                if location.cell_crc {
+                if self.spec.read_validation().data_crc && location.cell_crc {
                     let crc = raw
                         .get(at + stride..at + stride + 4)
                         .ok_or(Error::InvalidMatrixChunk)?;

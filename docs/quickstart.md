@@ -1,237 +1,89 @@
-# Varlit Quickstart
+# Varlit quickstart
 
-This guide shows the shortest path from format declaration to reading and
-writing a file. For deeper API lists, see `docs/api-reference.md`. For failure
-triage, see `docs/self-check-guide.md`.
+This example stores a stream of numeric samples in application blocks. It uses
+one writer, a buffered append batch and a reader opened while the writer is
+still alive. Install Varlit 0.13.0 with the `integrity` feature as shown in the
+[README](../README.md).
 
-## 1. Declare A Format
-
-Prefer the format-first macro. It generates block structs, typed reader/writer
-wrappers, and the static `FormatSpec`.
+## Write blocks, then read published data
 
 ```rust
-use varlit::varlit_format;
+use varlit::{BatchOptions, StreamOptions, varlit_format};
 
 varlit_format! {
-    pub format AppFormat {
-        magic: b"APP";
+    pub format Capture {
+        magic: b"CAPTURE";
         version: 1;
         endian: little;
-        schema_hash: computed;
-        manifest: embedded;
-        index: [scan_on_open, block_offset_chain, keyed_offset_chain];
-        commit: transaction_marker(on_flush);
-
+        integrity: crc32_with_header;
         blocks {
-            fixed Point(id = 1) {
-                x: u32,
-                y: u32,
-            }
-
-            variable User(id = 2, key = [id]) {
-                id: u64,
-                name: String,
-                flags: u32 = default,
-            }
-        }
-    }
-}
-```
-
-Generated items include:
-
-- `Point`, `User`
-- `AppFormat`
-- `AppFormatReader`, `AppFormatWriter`
-- `AppFormatRead`, `AppFormatWrite`
-- typed methods such as `push_point`, `push_user`, `points`, and `users`
-
-The `limits` block is optional and may contain only the defaults a format author
-wants to suggest. Limits are resolved when a reader or writer is opened; they
-are not encoded into the file or schema. Ordinary opens use an allocation-safe
-standard policy. Use `open_reader_with_resource_limits` or
-`create_writer_with_resource_limits` to raise or lower policy for that handle.
-Legacy `*_with_limits` calls only tighten the resolved policy.
-
-## 2. Self-Check The Format
-
-Run this before wiring Varlit into application logic. It verifies that generated
-APIs, codecs, keyed lookup, and file roundtrip agree for representative values.
-
-```rust
-let report = AppFormat::self_test("app.selfcheck.varlit")
-    .with_block(Point { x: 1, y: 2 })
-    .with_keyed_block(User {
-        id: 7,
-        name: "Ada".to_string(),
-        flags: 0,
-    })
-    .cleanup(true)
-    .run();
-
-assert!(report.passed(), "{report:#?}");
-```
-
-If this fails, inspect `report.steps`. The `domain` field tells you whether to
-look at the format declaration, caller usage, feature flags, file bytes,
-environment, or a possible library invariant.
-
-## 3. Write Data
-
-```rust
-let mut writer = AppFormat::create_writer("app.varlit")?;
-
-writer.push_point(&Point { x: 1, y: 2 })?;
-writer.push_user(&User {
-    id: 7,
-    name: "Ada".to_string(),
-    flags: 0,
-})?;
-
-writer.flush()?; // writes buffered bytes, manifests, checkpoints, commit marker
-writer.sync()?;  // asks the OS for durable persistence
-```
-
-`create_writer` truncates the target file. Use `open_writer` to append to an
-existing file.
-
-Native records can be replaced even when their encoded size changes. Varlit
-streams a new file generation and publishes it atomically; already-open readers
-keep their previous snapshot.
-
-```rust
-writer.replace_user(
-    0,
-    &User {
-        id: 7, // keyed replacement must preserve the key
-        name: "Ada Lovelace".to_string(),
-        flags: 0,
-    },
-)?;
-```
-
-## 4. Read Data
-
-```rust
-let reader = AppFormat::open_reader("app.varlit")?;
-
-let points = reader.points()?;
-let first = points.get(0)?;
-
-let users = reader.users()?;
-let ada = users.get(&7)?;
-```
-
-Readers capture a snapshot at open; `follow(&mut self)` advances it explicitly.
-Use a separate reader per thread. Matrix readers capture one confirmed generation
-for payloads, commit maps, CRCs and aux data, even when the writer overwrites the
-same cells. `sync()` / `immediate()` publish changes; `flush()` alone does not.
-
-Matrix files require their `<primary>.<nonce>.vmg` companion too. It contains
-persistent matrix data, not a cache. See the [durability model](durability-model.md)
-for copying the file pair, configuring private caches and `compact_matrix()`.
-
-## 5. Diagnose Existing Files
-
-```rust
-let report = AppFormat::diagnose_file("app.varlit");
-for item in &report.items {
-    eprintln!("{:?} {:?} {}: {}", item.severity, item.domain, item.code, item.message);
-}
-```
-
-This checks static format health, open compatibility, payload decoding,
-compression/integrity feature gates, embedded manifest consistency, and matrix
-recovery findings when applicable.
-
-## Matrix Quickstart
-
-Matrix blocks are for bounded, runtime-sized grids with direct cell addressing.
-They are not append-log records.
-
-```rust
-use varlit::varlit_format;
-
-varlit_format! {
-    pub format AnalysisFormat {
-        magic: b"ANL";
-        version: 1;
-        limits {
-            record_payload: 67_108_864;
-            materialized_bytes: 268_435_456;
-            matrix_dimension: 16_000_000;
-            matrix_cells: 16_000_000;
-            matrix_bitmap: 64_000_000;
-            matrix_crc: 128_000_000;
-            matrix_metadata: 268_435_456;
-            matrix_slot_region: 8_589_934_592;
-            sidecar: 268_435_456;
-        }
-        endian: little;
-        schema_hash: computed;
-
-        dims {
-            scan: u32,
-            ch: u32,
-        }
-
-        commit: cell_bitmap {
-            keyspace = [scan, ch];
-            categories = [analysis];
-            singles = [master_grid];
-            per_channel = [threshold];
-        };
-
-        aux {
-            thumbnail: 1024,
-        }
-
-        blocks {
-            matrix Cell(id = 10, dims = [scan, ch], category = analysis) {
-                value: u32,
+            variable Frame(id = 1) {
+                first_sample: u64,
+                samples: Vec<u32>,
             }
         }
     }
 }
 
-let dims = AnalysisFormatDims { scan: 2, ch: 3 };
-let mut writer = AnalysisFormat::create_writer_with_dims("analysis.varlit", dims)?;
-let key = CellKey { scan: 1, ch: 2 };
+fn main() -> varlit::Result<()> {
+    // create_stream_writer creates a new capture and truncates an existing path.
+    let path = "capture.varlit";
+    let mut writer = Capture::create_stream_writer(path, StreamOptions::default())?;
 
-writer.write_cell(key, &Cell { value: 99 })?;
-writer.commit_cell(key)?;
-writer.write_thumbnail_aux(0, &[1, 2, 3, 4])?;
-writer.flush()?;
+    // Each physical Frame holds 4,096 samples (about 16 KiB).
+    // The append batch contains 16 Frames, not 65,536 tiny records.
+    let frames = (0..16u64).map(|block| Frame {
+        first_sample: block * 4096,
+        samples: (0..4096u32).collect(),
+    });
+    writer.push_frames(frames, BatchOptions::default())
+        .map_err(|failure| failure.source)?;
+    writer.sync()?;
 
-let mut reader = AnalysisFormat::open_reader("analysis.varlit")?;
-let value = reader.cell(key)?;
-let thumbnail_prefix = reader.read_thumbnail_aux(0, 4)?;
+    let reader = Capture::open_stream_reader(path, StreamOptions::default())?;
+    let mut samples_read = 0;
+    for (block, frame) in reader.frames()?.enumerate() {
+        let frame = frame?;
+        assert_eq!(frame.first_sample, block as u64 * 4096);
+        assert_eq!(frame.samples.len(), 4096);
+        assert!(frame.samples.iter().enumerate().all(|(i, &v)| v == i as u32));
+        samples_read += frame.samples.len();
+    }
+    assert_eq!(samples_read, 65_536);
+    Ok(())
+}
 ```
 
-Matrix reads trust commit bits. Written but uncommitted cells return
-`Error::MatrixNotCommitted`.
+Choose block size from acquisition and query needs. `push_frames` coalesces
+writes but encodes one record per input `Frame`. `sync()` is the publication
+boundary in this stream example. Keep publication frequency appropriate for
+reader latency and durability; large batches delay visibility and retain more
+staging memory. See [batch sizing](scalable-io.md#choose-the-physical-block-before-choosing-the-batch-size).
 
-## Choosing The Right Storage Shape
+## Add readers and producers
 
-| Need | Use |
-| --- | --- |
-| Small fixed-shape records | `fixed` block |
-| Evolvable records with optional/default fields | `variable` block |
-| Latest value by key | `variable` or `fixed` with `key = [...]` |
-| Append-friendly updates | `push`, `push_op`, `delete`, compact later |
-| Bounded direct cell access | `matrix` block |
-| Noncommit preallocated bytes near matrix data | `aux { name: len }` |
+Each reader captures a confirmed snapshot. Move a reader to its worker thread
+before creating typed cursors, and use `follow` or `follow_blocks` to adopt new
+publications. Matrix readers likewise hold one confirmed generation. A reader
+that has not followed keeps its existing view. Readers own their buffers and
+caches independently.
 
-## Minimum Verification Before Real Data
+Feed multiple producers into one writer through a bounded queue. The library
+keeps the single-writer contract; it does not start a writer service or impose
+an application queue. A producer's sample count is separate from the number of
+physical blocks and from the number of publications.
 
-Run:
+## Choose the next guide
 
-```powershell
-cargo fmt --check
-cargo test
-cargo test --all-features
-cargo clippy --all-targets --all-features -- -D warnings
-```
+- Need block-key lookup: use [indexed handles](scalable-io.md), with a group key
+  and slot/range inside the returned block. Declared finite key domains avoid a
+  general key tree where the domain is bounded.
+- Need direct cell addressing: use [matrix declarations](format-author-guide.md)
+  and review their generation and companion-file requirements.
+- Need a small, directly indexed native file: see the [API reference](api-reference.md).
+- Need checks or limits: start with the [read-policy table](api-reference.md#read-validation).
+- Need failure handling: read the [durability model](durability-model.md) before
+  retrying writes, and use [self-check diagnostics](self-check-guide.md).
 
-For format-specific confidence, also add a test in your application that calls
-`YourFormat::self_test(temp_path)` with representative values.
+Explicit verification, recovery, format migration and compaction remain caller
+operations. Read the [known limitations](known-limitations.md) before deploying.

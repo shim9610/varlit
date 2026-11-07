@@ -32,12 +32,16 @@ scalable-fault-injection = [
 ]
 
 [dependencies]
-varlit-core = { path = "../varlit-core", version = "0.12.1" }
-varlit-macros = { path = "../varlit-macros", version = "0.12.1" }
+varlit-core = { path = "../varlit-core", version = "0.13.0" }
+varlit-macros = { path = "../varlit-macros", version = "0.13.0" }
 
 [dev-dependencies]
-redb = { version = "4.3.0", path = "../../vendor/redb" }
+redb = { version = "4.4.0", path = "../../vendor/redb" }
 proptest.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+serde_json = "1.0.151"
+syn = { workspace = true, features = ["visit"] }
 tempfile.workspace = true
 trybuild.workspace = true
 zerocopy = { workspace = true, features = ["derive"] }
@@ -49,3 +53,31 @@ required-features = ["integrity"]
 [[example]]
 name = "matrix_soak"
 required-features = ["integrity"]
+
+[[example]]
+name = "oom_maintenance_load"
+required-features = ["integrity", "compression-zstd"]
+
+[[example]]
+name = "index_validation_load"
+required-features = ["integrity"]
+
+[[example]]
+name = "matrix_mmap_load"
+required-features = ["integrity", "mmap"]
+
+[[example]]
+name = "scan_open_load"
+required-features = ["integrity"]
+
+[[example]]
+name = "record_mark_load"
+required-features = ["integrity"]
+
+[[example]]
+name = "record_mutation_load"
+required-features = ["integrity", "scalable-fault-injection"]
+
+[[example]]
+name = "nonresident_boundary_load"
+required-features = ["integrity", "scalable-fault-injection"]

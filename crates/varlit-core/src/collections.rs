@@ -1,3 +1,4 @@
+use crate::TryClone;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -40,6 +41,17 @@ pub(crate) struct MaterializationBudget {
     remaining: u64,
 }
 
+/// A callback may charge/decode against this ledger, but cannot reset, clone
+/// or replace the underlying budget. The borrow remains private to this module.
+pub(crate) struct DecodeBudget<'a> {
+    budget: &'a mut MaterializationBudget,
+}
+impl DecodeBudget<'_> {
+    pub(crate) fn decode<T: VarlitDecode>(&mut self, bytes: &[u8], endian: Endian) -> Result<T> {
+        self.budget.decode(bytes, endian)
+    }
+}
+
 impl MaterializationBudget {
     pub(crate) fn new(spec: FormatSpec) -> Self {
         let limit = match spec.read_limits.resolve().max_materialized_bytes {
@@ -63,34 +75,38 @@ impl MaterializationBudget {
     }
 
     pub(crate) fn consume(&mut self, bytes: u64) -> Result<()> {
-        if bytes > self.remaining {
-            let consumed = self.limit.checked_sub(self.remaining).ok_or(
-                crate::Error::ResourceArithmeticOverflow {
-                    resource: "materialized bytes",
-                },
-            )?;
-            let actual =
-                consumed
-                    .checked_add(bytes)
-                    .ok_or(crate::Error::ResourceArithmeticOverflow {
-                        resource: "materialized bytes",
-                    })?;
-            return Err(crate::Error::LimitExceeded {
-                resource: ReadLimitKey::MaterializedBytes.resource(),
-                actual,
-                limit: self.limit,
-            });
+        if let Some(next) = crate::decode_state::charge(self.remaining, bytes) {
+            self.remaining = next;
+            return Ok(());
         }
-        self.remaining -= bytes;
-        Ok(())
+        let consumed = self.limit.checked_sub(self.remaining).ok_or(
+            crate::Error::ResourceArithmeticOverflow {
+                resource: "materialized bytes",
+            },
+        )?;
+        let actual =
+            consumed
+                .checked_add(bytes)
+                .ok_or(crate::Error::ResourceArithmeticOverflow {
+                    resource: "materialized bytes",
+                })?;
+        Err(crate::Error::LimitExceeded {
+            resource: ReadLimitKey::MaterializedBytes.resource(),
+            actual,
+            limit: self.limit,
+        })
     }
 
-    pub(crate) fn remaining_policy(&mut self) -> &mut u64 {
-        &mut self.remaining
+    pub(crate) fn decode_view(&mut self) -> DecodeBudget<'_> {
+        DecodeBudget { budget: self }
+    }
+
+    pub(crate) fn remaining(&self) -> u64 {
+        self.remaining
     }
 
     pub(crate) fn decode<T: VarlitDecode>(&mut self, bytes: &[u8], endian: Endian) -> Result<T> {
-        Decoder::decode_from_slice_accounted(bytes, endian, self.remaining_policy())
+        Decoder::decode_from_slice_accounted(bytes, endian, &mut self.remaining)
     }
 }
 
@@ -326,7 +342,7 @@ struct BlockContract {
     keyed: bool,
     /// Declared endian **override**, exactly as
     /// [`crate::VarlitBlock::ENDIAN`] and
-    /// [`FormatSpec::block_identities`] spell it (API-01).
+    /// [`FormatSpec::block_identities`] spell it.
     ///
     /// `None` is not "unknown": it is the positive declaration *"no override —
     /// inherit the format endian"*, which is why it is compared after
@@ -350,7 +366,7 @@ fn check_block_contract<T: VarlitBlock>(spec: FormatSpec, recorded: BlockContrac
             declared: T::SCHEMA_FINGERPRINT,
         });
     }
-    // API-01: every typed encode/decode path resolves the block's byte order
+    // every typed encode/decode path resolves the block's byte order
     // as `T::ENDIAN.unwrap_or(spec.endian)`. Comparing the *resolved* byte
     // order is what makes this total and exact:
     //
@@ -397,4 +413,27 @@ fn ensure_block_contract<T: VarlitBlock>(spec: FormatSpec) -> Result<()> {
     Err(crate::Error::InvalidFormatSpec(
         "typed block access requires a declared block identity",
     ))
+}
+
+#[cfg(kani)]
+#[path = "verification/materialization.rs"]
+mod resource_proofs;
+
+impl<T> TryClone for BlockVec<T> {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            spec: self.spec,
+            snapshot: self.snapshot.clone(),
+            entries: self.entries.try_clone()?,
+            _marker: PhantomData,
+        })
+    }
+}
+impl<K: Eq + Hash + TryClone, T> TryClone for KeyedBlockVec<K, T> {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(Self {
+            inner: self.inner.try_clone()?,
+            by_key: self.by_key.try_clone()?,
+        })
+    }
 }

@@ -265,7 +265,7 @@ fn a_reopened_writer_still_knows_which_segments_it_has() -> varlit::Result<()> {
             "a reopened writer let a `repeat once` segment be written twice; \
              its segment counts did not survive the scan"
         );
-        // ... and an `until_eof` segment is still writable, so the counts are
+        // .. and an `until_eof` segment is still writable, so the counts are
         // not merely refusing everything.
         write_data(&mut writer, 99)?;
         writer.flush()?;

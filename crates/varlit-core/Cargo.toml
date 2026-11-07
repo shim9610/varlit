@@ -35,6 +35,8 @@ scalable-fault-injection = []
 experimental-matrix-reuse = []
 
 [dependencies]
+# Stable fallible shared ownership; no weak references are needed internally.
+triomphe = { version = "=0.1.17", default-features = false, features = ["std"] }
 crc32fast.workspace = true
 memmap2 = { workspace = true, optional = true }
 tempfile.workspace = true
@@ -50,4 +52,15 @@ libc.workspace = true
 
 # redb is only an independent test oracle, never a runtime dependency.
 [dev-dependencies]
-redb = { version = "4.3.0", path = "../../vendor/redb" }
+redb = { version = "4.4.0", path = "../../vendor/redb" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(varlit_loom)'] }
+
+[[example]]
+name = "decompression_load"
+required-features = ["compression-zstd"]
+
+[[example]]
+name = "chunk_stream_load"
+required-features = ["compression-zstd", "integrity"]

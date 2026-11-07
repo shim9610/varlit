@@ -80,24 +80,21 @@ pub use db::{
     UntypedTableHandle,
 };
 pub use error::{
-    BackendError, CommitError, CompactionError, DatabaseError, Error, SavepointError,
+    BackendError, CommitError, CompactionError, CursorError, DatabaseError, Error, SavepointError,
     SetDurabilityError, StorageError, TableError, TransactionError,
 };
 #[cfg(feature = "experimental-api-5")]
 pub use key_range::KeyRange;
-#[cfg(feature = "experimental-api-5")]
-pub use multimap_table::MultimapCursor;
+#[cfg(feature = "experimental-niches")]
+pub use legacy_types::Legacy;
 pub use multimap_table::{
     MultimapRange, MultimapTable, MultimapValue, OwnedMultimapRange, OwnedMultimapValue,
     ReadOnlyMultimapTable, ReadOnlyUntypedMultimapTable, ReadableMultimapTable,
 };
-#[cfg(feature = "experimental-api-5")]
-pub use table::Cursor;
-#[cfg(feature = "experimental_cursor")]
-pub use table::CursorMut;
 pub use table::{
-    Entry, ExtractIf, OccupiedEntry, OwnedAccessGuard, OwnedRange, Range, ReadOnlyTable,
-    ReadOnlyUntypedTable, ReadableTable, ReadableTableMetadata, Table, TableStats, VacantEntry,
+    Cursor, CursorMut, Entry, ExtractIf, OccupiedEntry, OwnedAccessGuard, OwnedRange, Range,
+    ReadOnlyTable, ReadOnlyUntypedTable, ReadableTable, ReadableTableMetadata, Table, TableStats,
+    VacantEntry,
 };
 pub use transactions::{
     DatabaseStats, Durability, ReadTransaction, ReadTransactionWithSavepoint, WriteTransaction,
@@ -119,6 +116,8 @@ pub mod io;
 mod io;
 #[cfg(feature = "experimental-api-5")]
 mod key_range;
+#[cfg(feature = "experimental-niches")]
+mod legacy_types;
 mod multimap_table;
 mod sealed;
 mod sync;
