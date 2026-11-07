@@ -147,7 +147,32 @@ pub trait VarlitEncode {
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()>;
 }
 
+/// Internal evidence for a library-owned codec implementation.
+/// The private invariant field binds the evidence to its exact output type.
+///
+/// Safe downstream code cannot construct evidence or reuse another type's:
+/// ```compile_fail
+/// use varlit_core::BuiltinCodec;
+/// let _: BuiltinCodec<()> = BuiltinCodec { invariant: std::marker::PhantomData };
+/// ```
+/// ```compile_fail
+/// use varlit_core::{BuiltinCodec, Decoder, Result, VarlitDecode, WireType};
+/// struct Custom;
+/// impl VarlitDecode for Custom {
+///     const WIRE_TYPE: WireType = WireType::Unit;
+///     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = <u64 as VarlitDecode>::__VARLIT_BUILTIN;
+///     fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(Self) }
+/// }
+/// ```
+#[doc(hidden)]
+pub struct BuiltinCodec<T> {
+    invariant: std::marker::PhantomData<fn(T) -> T>,
+    callback_free: bool,
+}
+
 pub trait VarlitDecode: Sized {
+    #[doc(hidden)]
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = None;
     const WIRE_TYPE: WireType;
 
     /// Structural identity of the bytes this codec accepts; see
@@ -370,15 +395,86 @@ pub struct Decoder<'a> {
     large_field_ids: Option<HashSet<u32>>,
     materialization_limit: u64,
     materialization_remaining: u64,
+    // A short-lived borrow makes an active callback frame unforgeable by safe
+    // custom codecs, including whole-value replacement with a fresh Decoder.
+    callback_scope: Option<&'a u8>,
+}
+
+// Sealed static adapters keep every extensible trait call inside the checked
+// boundary and let the compiler inline builtin codecs without an FnOnce shim.
+trait DecoderCallback {
+    type Output;
+    const BUILTIN: bool;
+    const CALLBACK_FREE: bool;
+    fn call(decoder: &mut Decoder<'_>) -> Result<Self::Output>;
+}
+struct ValueCallback<T>(std::marker::PhantomData<T>);
+struct ArrayCallback<T, const N: usize>(std::marker::PhantomData<T>);
+impl<T: VarlitDecode> DecoderCallback for ValueCallback<T> {
+    type Output = T;
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call(decoder: &mut Decoder<'_>) -> Result<T> {
+        T::decode_varlit(decoder)
+    }
+}
+impl<T: VarlitDecode, const N: usize> DecoderCallback for ArrayCallback<T, N> {
+    type Output = [T; N];
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call(decoder: &mut Decoder<'_>) -> Result<[T; N]> {
+        T::decode_array(decoder)
+    }
+}
+
+// Nested checked calls already have a short-lived, unforgeable frame borrow.
+// Reuse that decoder instead of moving its field-id set at every scalar call.
+struct CallbackGuard<'d, 'i> {
+    decoder: &'d mut Decoder<'i>,
+    input: &'i [u8],
+    endian: Endian,
+    limit: u64,
+    scope: Option<&'i u8>,
+}
+impl Drop for CallbackGuard<'_, '_> {
+    #[inline]
+    fn drop(&mut self) {
+        *self.decoder = Decoder {
+            input: self.input,
+            endian: self.endian,
+            materialization_limit: self.limit,
+            callback_scope: self.scope,
+            position: self.input.len(),
+            materialization_remaining: 0,
+            small_field_ids: 0,
+            large_field_ids: None,
+        };
+    }
 }
 
 impl<'a> Decoder<'a> {
     pub const STANDARD_MATERIALIZATION_LIMIT: u64 = 1024 * 1024 * 1024;
 
+    #[inline]
     pub fn new(input: &'a [u8], endian: Endian) -> Self {
         Self::new_limited(input, endian, Self::STANDARD_MATERIALIZATION_LIMIT)
     }
 
+    #[inline]
     pub fn new_limited(input: &'a [u8], endian: Endian, materialization_limit: u64) -> Self {
         Self {
             endian,
@@ -388,9 +484,11 @@ impl<'a> Decoder<'a> {
             large_field_ids: None,
             materialization_limit,
             materialization_remaining: materialization_limit,
+            callback_scope: None,
         }
     }
 
+    #[inline(always)]
     pub fn decode_from_slice_limited<T: VarlitDecode>(
         input: &'a [u8],
         endian: Endian,
@@ -406,6 +504,8 @@ impl<'a> Decoder<'a> {
         materialization_remaining: &mut u64,
     ) -> Result<T> {
         let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
+        *materialization_remaining = 0;
         let result = decoder.decode_complete();
         *materialization_remaining = decoder.materialization_remaining;
         result
@@ -425,12 +525,18 @@ impl<'a> Decoder<'a> {
 
     pub fn decode_nested<T: VarlitDecode>(&mut self, input: &[u8]) -> Result<T> {
         let mut nested = Decoder::new_limited(input, self.endian, self.materialization_remaining);
+        self.materialization_remaining = 0;
         let result = nested.decode_complete();
         self.materialization_remaining = nested.materialization_remaining;
         result
     }
 
+    #[inline]
     pub fn charge_materialization(&mut self, bytes: u64, resource: &'static str) -> Result<()> {
+        if let Some(next) = crate::decode_state::charge(self.materialization_remaining, bytes) {
+            self.materialization_remaining = next;
+            return Ok(());
+        }
         let consumed = self
             .materialization_limit
             .checked_sub(self.materialization_remaining)
@@ -438,19 +544,115 @@ impl<'a> Decoder<'a> {
         let actual = consumed
             .checked_add(bytes)
             .ok_or(Error::ResourceArithmeticOverflow { resource })?;
-        if actual > self.materialization_limit {
-            return Err(Error::LimitExceeded {
-                resource,
-                actual,
-                limit: self.materialization_limit,
-            });
-        }
-        self.materialization_remaining -= bytes;
-        Ok(())
+        Err(Error::LimitExceeded {
+            resource,
+            actual,
+            limit: self.materialization_limit,
+        })
     }
 
+    /// Decode one value while preserving this decoder's input and budget authority.
+    ///
+    /// Custom codecs should use this method when composing other codecs. A codec
+    /// that returns with a fresh decoder or violates its cursor/budget boundary
+    /// is rejected. Completed charges survive errors. A callback panic or invalid
+    /// replacement exhausts this frame's input and remaining budget.
+    #[inline(always)]
+    pub fn decode_value<T: VarlitDecode>(&mut self) -> Result<T> {
+        self.with_callback::<ValueCallback<T>>()
+    }
+
+    #[inline(always)]
+    fn with_callback<C: DecoderCallback>(&mut self) -> Result<C::Output> {
+        if C::CALLBACK_FREE || (C::BUILTIN && self.callback_scope.is_some()) {
+            return C::call(self);
+        }
+        if self.callback_scope.is_some() {
+            return self.with_existing_callback::<C>();
+        }
+        let scope = 0u8;
+        let start = self.position;
+        let before = self.materialization_remaining;
+        // Borrow input only for this call. An active frame cannot be retained
+        // in a 'static slot and reused to forge a later invocation's authority.
+        let mut frame = Decoder {
+            endian: self.endian,
+            input: self.input,
+            position: start,
+            small_field_ids: self.small_field_ids,
+            large_field_ids: self.large_field_ids.take(),
+            materialization_limit: self.materialization_limit,
+            materialization_remaining: before,
+            callback_scope: Some(&scope),
+        };
+        // Establish the safe unwind/rejection state before invoking user code.
+        self.position = self.input.len();
+        self.materialization_remaining = 0;
+        let result = C::call(&mut frame);
+        let linked = frame
+            .callback_scope
+            .is_some_and(|actual| std::ptr::eq(actual, &scope))
+            && std::ptr::eq(frame.input, self.input)
+            && frame.endian as u8 == self.endian as u8
+            && frame.materialization_limit == self.materialization_limit;
+        if !crate::decode_state::callback_exit(
+            linked,
+            start,
+            frame.position,
+            self.input.len(),
+            before,
+            frame.materialization_remaining,
+        ) {
+            // Preserve a callback error rather than destroying and replacing
+            // it. Successful values are released before rejecting the frame.
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        self.position = frame.position;
+        self.materialization_remaining = frame.materialization_remaining;
+        self.small_field_ids = frame.small_field_ids;
+        self.large_field_ids = frame.large_field_ids.take();
+        result
+    }
+
+    #[inline(always)]
+    fn with_existing_callback<C: DecoderCallback>(&mut self) -> Result<C::Output> {
+        let input = self.input;
+        let endian = self.endian;
+        let limit = self.materialization_limit;
+        let scope = self.callback_scope;
+        let guard = CallbackGuard {
+            decoder: self,
+            input,
+            endian,
+            limit,
+            scope,
+        };
+        let result = C::call(guard.decoder);
+        // All safe methods preserve the numeric invariant and immutable frame
+        // fields; the MIR closure gate covers every writer. Fresh replacement
+        // cannot reproduce the private, short-lived scope borrow.
+        if !crate::decode_state::same_scope(scope, guard.decoder.callback_scope) {
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        // The guard owns only borrows/scalars. On successful admission its
+        // rollback is unnecessary; forgetting it releases no owned resource.
+        std::mem::forget(guard);
+        result
+    }
+
+    #[inline(always)]
     fn decode_complete<T: VarlitDecode>(&mut self) -> Result<T> {
-        let value = T::decode_varlit(self)?;
+        let value = self.decode_value::<T>()?;
         if self.remaining() != 0 {
             return Err(Error::TrailingBytes {
                 remaining: self.remaining(),
@@ -459,20 +661,21 @@ impl<'a> Decoder<'a> {
         Ok(value)
     }
 
+    #[inline]
     pub fn read_exact(&mut self, len: usize) -> Result<&'a [u8]> {
-        let end = self.position.checked_add(len).ok_or(Error::UnexpectedEof)?;
-        if end > self.input.len() {
-            return Err(Error::UnexpectedEof);
-        }
+        let end = crate::decode_state::read_end(self.position, len, self.input.len())
+            .ok_or(Error::UnexpectedEof)?;
         let bytes = &self.input[self.position..end];
         self.position = end;
         Ok(bytes)
     }
 
+    #[inline]
     pub fn read_u8(&mut self) -> Result<u8> {
         Ok(self.read_exact(1)?[0])
     }
 
+    #[inline]
     pub fn read_u16(&mut self) -> Result<u16> {
         let mut bytes = [0; 2];
         bytes.copy_from_slice(self.read_exact(2)?);
@@ -482,6 +685,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u32(&mut self) -> Result<u32> {
         let mut bytes = [0; 4];
         bytes.copy_from_slice(self.read_exact(4)?);
@@ -491,6 +695,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(self.read_exact(8)?);
@@ -500,6 +705,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u128(&mut self) -> Result<u128> {
         let mut bytes = [0; 16];
         bytes.copy_from_slice(self.read_exact(16)?);
@@ -795,6 +1001,10 @@ impl VarlitEncode for () {
 }
 
 impl VarlitDecode for () {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Unit;
     const SCHEMA_ID: u64 = leaf_schema_id(b"unit");
 
@@ -816,9 +1026,14 @@ macro_rules! unsigned {
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 decoder.$read()
             }
@@ -839,9 +1054,14 @@ macro_rules! signed {
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 Ok(decoder.$read()? as Self)
             }
@@ -860,9 +1080,14 @@ impl VarlitEncode for u8 {
 }
 
 impl VarlitDecode for u8 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::U8;
     const SCHEMA_ID: u64 = leaf_schema_id(b"u8");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         decoder.read_u8()
     }
@@ -898,9 +1123,14 @@ impl VarlitEncode for bool {
 }
 
 impl VarlitDecode for bool {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Bool;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bool");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         match decoder.read_u8()? {
             0 => Ok(false),
@@ -923,9 +1153,14 @@ impl VarlitEncode for f32 {
 }
 
 impl VarlitDecode for f32 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F32;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f32");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u32()?))
     }
@@ -942,9 +1177,14 @@ impl VarlitEncode for f64 {
 }
 
 impl VarlitDecode for f64 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F64;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f64");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u64()?))
     }
@@ -962,9 +1202,14 @@ impl VarlitEncode for Vec<u8> {
 }
 
 impl VarlitDecode for Vec<u8> {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bytes");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         if len > decoder.remaining() {
@@ -996,9 +1241,14 @@ impl VarlitEncode for String {
 }
 
 impl VarlitDecode for String {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::String;
     const SCHEMA_ID: u64 = leaf_schema_id(b"string");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         if len > decoder.remaining() {
@@ -1043,12 +1293,23 @@ impl<T> VarlitDecode for Option<T>
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"option", &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        if bool::decode_varlit(decoder)? {
-            Ok(Some(T::decode_varlit(decoder)?))
+        if decoder.decode_value::<bool>()? {
+            Ok(Some(decoder.decode_value::<T>()?))
         } else {
             Ok(None)
         }
@@ -1102,7 +1363,7 @@ where
 {
     let mut slots: [Option<T>; N] = [const { None }; N];
     for slot in &mut slots {
-        *slot = Some(T::decode_varlit(decoder)?);
+        *slot = Some(decoder.decode_value::<T>()?);
     }
     Ok(slots.map(|value| value.expect("every array slot was filled by the loop above")))
 }
@@ -1134,7 +1395,7 @@ where
             requested: allocation_request::<T>(N),
         })?;
     for _ in 0..N {
-        values.push(T::decode_varlit(decoder)?);
+        values.push(decoder.decode_value::<T>()?);
     }
     values.try_into().map_err(|_| Error::UnexpectedEof)
 }
@@ -1143,11 +1404,22 @@ impl<T, const N: usize> VarlitDecode for [T; N]
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Seq;
     const SCHEMA_ID: u64 = container_schema_id_with_arity(b"array", N as u64, &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        T::decode_array(decoder)
+        decoder.with_callback::<ArrayCallback<T, N>>()
     }
 }
 
@@ -1174,9 +1446,26 @@ where
     K: VarlitDecode + Ord,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"btreemap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_map_count::<K, V>(len, "BTreeMap entries")?;
@@ -1185,10 +1474,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1206,7 +1495,7 @@ where
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
+        let pending_value = decoder.decode_value::<V>()?;
         if values.insert(pending_key, pending_value).is_some() {
             return Err(Error::InvalidCanonicalEncoding("duplicate BTreeMap key"));
         }
@@ -1265,9 +1554,26 @@ where
     K: VarlitDecode + Ord + Eq + Hash,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_hash_map_count::<K, V>(len, "HashMap entries")?;
@@ -1287,10 +1593,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1306,7 +1612,7 @@ where
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
+        let pending_value = decoder.decode_value::<V>()?;
         insert_hash_map_entry(&mut values, pending_key, pending_value)?;
         Ok(values)
     }
@@ -1347,10 +1653,12 @@ macro_rules! vec_seq_codec {
             }
 
             impl VarlitDecode for Vec<$ty> {
+                const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true });
                 const WIRE_TYPE: WireType = WireType::Seq;
                 const SCHEMA_ID: u64 =
                     container_schema_id(b"seq", &[<$ty as VarlitDecode>::SCHEMA_ID]);
 
+                #[inline]
                 fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                     let len = decoder.read_len()?;
                     decoder.preflight_count(
@@ -1365,7 +1673,7 @@ macro_rules! vec_seq_codec {
                         requested: allocation_request::<$ty>(len),
                     })?;
                     for _ in 0..len {
-                        values.push(<$ty>::decode_varlit(decoder)?);
+                        values.push(decoder.decode_value::<$ty>()?);
                     }
                     Ok(values)
                 }
@@ -1562,12 +1870,14 @@ macro_rules! tuple_codec {
         where
             $($name: VarlitDecode),+
         {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true $(&& matches!($name::__VARLIT_BUILTIN, Some(BuiltinCodec { callback_free:true, .. })))+ });
             const WIRE_TYPE: WireType = WireType::Nested;
             const SCHEMA_ID: u64 =
                 container_schema_id(b"tuple", &[$(<$name as VarlitDecode>::SCHEMA_ID),+]);
 
+            #[inline(always)]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-                Ok(($($name::decode_varlit(decoder)?,)+))
+                Ok(($(decoder.decode_value::<$name>()?,)+))
             }
         }
     };

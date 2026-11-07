@@ -28,7 +28,7 @@ def without_generics(text):
     while '::<' in text:
         start = text.index('::<'); depth = 1; end = start + 3
         while depth and end < len(text):
-            depth += (text[end] == '<') - (text[end] == '>')
+            depth += (text[end] == '<') - (text[end] == '>' and text[end-1] != '-')
             end += 1
         if depth:
             raise ValueError('unbalanced generic call target')

@@ -48,6 +48,8 @@ fn macro_compile_contracts() {
         return;
     }
     let tests = trybuild::TestCases::new();
+    tests.compile_fail("tests/ui/fail_builtin_codec_constructor.rs");
+    tests.compile_fail("tests/ui/fail_builtin_codec_evidence_reuse.rs");
     tests.pass("tests/ui/pass_basic.rs");
     tests.pass("tests/ui/pass_policies.rs");
     tests.pass("tests/ui/pass_format_dsl.rs");

@@ -8,6 +8,7 @@ mod chunks;
 mod codec;
 mod collections;
 mod compression_buffers;
+mod decode_state;
 mod diagnostics;
 
 mod disk_index;
@@ -184,3 +185,6 @@ pub(crate) fn scalable_fault_point(point: &'static str) {
     #[cfg(not(feature = "scalable-fault-injection"))]
     let _ = point;
 }
+
+#[doc(hidden)]
+pub use codec::BuiltinCodec;

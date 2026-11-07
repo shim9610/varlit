@@ -207,7 +207,52 @@ fn read_policy_probe(
         .and_then(|reader| reader.read_block_at::<Probe>(offset)))
 }
 
+struct ReplacingCodec;
+impl varlit::VarlitDecode for ReplacingCodec {
+    const WIRE_TYPE: varlit::WireType = varlit::WireType::Nested;
+    fn decode_varlit(d: &mut varlit::Decoder<'_>) -> varlit::Result<Self> {
+        *d = varlit::Decoder::new_limited(&[], varlit::Endian::Little, u64::MAX);
+        Ok(Self)
+    }
+}
+
 const CONTRACTS: &[Contract] = &[
+    contract!("core/codec.rs::codec::VarlitDecode::const:__VARLIT_BUILTIN@902bd1bc3b4320a2",
+        valid { let evidence:Option<varlit::__core::BuiltinCodec<u64>>=<u64 as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_some()); Ok(()) },
+        invalid { let evidence:Option<varlit::__core::BuiltinCodec<ReplacingCodec>>=<ReplacingCodec as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_none()); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::struct:BuiltinCodec@253d4ad21b3759f9",
+        valid { let evidence:Option<varlit::__core::BuiltinCodec<u64>>=<u64 as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_some()); Ok(()) },
+        invalid { let evidence:Option<varlit::__core::BuiltinCodec<ReplacingCodec>>=<ReplacingCodec as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_none()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:BuiltinCodec@49371ea8ff55b020",
+        valid { let evidence:Option<varlit::__core::BuiltinCodec<u64>>=<u64 as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_some()); Ok(()) },
+        invalid { let evidence:Option<varlit::__core::BuiltinCodec<ReplacingCodec>>=<ReplacingCodec as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_none()); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::Decoder < 'a >::fn:decode_value@7a987c34ca158f10",
+        valid { let bytes=7u64.to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<u64>()?,7); Ok(()) },
+        invalid { let mut d=varlit::Decoder::new_limited(&[],varlit::Endian::Little,8); assert!(d.decode_value::<ReplacingCodec>().is_err()); assert_eq!(d.materialization_remaining(),0); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:unsigned@c3911cf13072ec65", generated "decode_value",
+        valid { let bytes=7u64.to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<u64>()?,7); Ok(()) },
+        invalid { let mut d=varlit::Decoder::new(&[0;7],varlit::Endian::Little); assert!(d.decode_value::<u64>().is_err()); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:signed@2b2247a26cddb1a0", generated "decode_value",
+        valid { let bytes=(-7i64).to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<i64>()?,-7); Ok(()) },
+        invalid { let mut d=varlit::Decoder::new(&[0;7],varlit::Endian::Little); assert!(d.decode_value::<i64>().is_err()); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:tuple_codec@1c32925194107c29", generated "decode_value",
+        valid { let bytes=varlit::encode_to_vec(&(7u64,8u64),varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<(u64,u64)>()?,(7,8)); Ok(()) },
+        invalid { let bytes=7u64.to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert!(d.decode_value::<(u64,ReplacingCodec)>().is_err()); Ok(()) }
+    ),
+    contract!("core/codec.rs::codec::macro:vec_seq_codec@bdf64ac8b7fee908", generated "decode_value",
+        valid { let bytes=varlit::encode_to_vec(&vec![7u64,8],varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<Vec<u64>>()?,vec![7,8]); Ok(()) },
+        invalid { let bytes=u64::MAX.to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert!(d.decode_value::<Vec<u64>>().is_err()); Ok(()) }
+    ),
+    contract!("macros/modules/block_derive.rs::block_derive::generator:expand_varlit_block@70c504f79f64e854", generated "decode_value",
+        valid { let bytes=varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<Probe>()?,Probe{value:7}); Ok(()) },
+        invalid { let bytes=varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes[..bytes.len()-1],varlit::Endian::Little); assert!(d.decode_value::<Probe>().is_err()); Ok(()) }
+    ),
     contract!("core/format.rs::format::ReadValidation::const:FULL@65630b1aec77469e",
         valid { assert_eq!(read_policy_probe(varlit::ReadValidation::FULL, false, false)??, Probe { value: 19 }); Ok(()) },
         invalid { let result = read_policy_probe(varlit::ReadValidation::FULL, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
@@ -795,7 +840,12 @@ fn missing_contracts(
             return Err(format!("duplicate contract: {}", contract.symbol));
         }
         let Some(surface) = current.get(contract.symbol) else {
-            return Err(format!("stale contract/signature: {}", contract.symbol));
+            let stem = contract.symbol.split('@').next().unwrap();
+            let candidates: Vec<_> = current.keys().filter(|id| id.starts_with(stem)).collect();
+            return Err(format!(
+                "stale contract/signature: {}; current candidates: {candidates:?}",
+                contract.symbol
+            ));
         };
         check_registration(surface, contract)?;
         covered.insert(contract.symbol.into());
@@ -849,6 +899,12 @@ fn execute(contracts: &[Contract]) -> TestResult {
 #[test]
 fn every_new_interface_has_executed_validation_contracts() -> TestResult {
     let current = inventory();
+    if let Some(output) = std::env::var_os("VARLIT_API_CATALOGUE_OUT") {
+        std::fs::write(
+            output,
+            serde_json::to_vec_pretty(&current.keys().collect::<Vec<_>>())?,
+        )?;
+    }
     let snapshot = include_str!("support/validation_legacy.txt");
     let lines: Vec<_> = snapshot
         .lines()

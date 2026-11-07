@@ -79,7 +79,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-**67 harnesses in 14 contract groups**. Both default and all-feature builds must
+**76 harnesses in 15 contract groups**. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -97,7 +97,8 @@ A zero-harness run fails.
 | Chunk parser | 6 | Header/entry/table extent and complete-validator positive witness |
 | Materialization | 2 | Budget transition |
 | Index visits | 4 | Decreasing traversal fuel and child height |
-| Decoder memory | 8 | Charge/transfer, HashMap reservation accounting and complete bounded byte-vector decode |
+| Decoder memory | 13 | Charge/transfer, bounded byte-vector decode, arbitrary callback effects and active-frame induction |
+| Decoder transitions | 4 | Three full-width numeric contracts and a two-object scope identity model |
 | Fallible ownership | 16 | Refusal, partial cleanup and bounded clone/owner models |
 | Scalar owner memory | 2 | Selected scalar Box validity and refusal-before-initialization |
 | Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
@@ -143,6 +144,53 @@ refusal-before-initialization harness, with positive/negative controls.
 Whole-owner initialization/value-validity proofs remain in the separately planned
 library; they are not counted as a completed Varlit guarantee.
 
+## Closed decoder state transitions
+
+The [state contract](verification/state-transitions.md) defines the decoder and
+collection-budget invariants, initialization, permitted transitions and callback
+boundary. Kani checks full-width scalar contracts and the actual callback driver.
+The compiler gate discovers writes and mutable loans to these owners across the
+compiled core, including generic bodies; it does not maintain a hand-written list
+of routes from each API. Eleven state writers must remain registered with proofs.
+New writers, raw aliases, escaping mutable fields, unchecked codec dispatch and
+unmodeled aggregate captures fail. Native syntax checks retain field privacy,
+layout, scope authority and sealed callback adapters. Compiler controls deliberately
+break these rules and the connection between helper results and committed stores.
+
+This combines semantic transition proofs with structural mutation coverage.
+The inductive argument also uses Rust's safe aliasing, privacy and lifetime rules;
+the gate is not a verified Rust alias analyzer or a whole-program refinement proof.
+The decoder closure covers default and all-feature Linux MIR. Publication, index,
+compression and ownership contracts retain their separately listed scopes.
+
+### Decoder boundary performance
+
+An equal-work local comparison against `4eef673` used rebuilt release binaries,
+three alternating pairs per workload and six separate resource probes. Each
+storage run wrote 512 MiB in 16 MiB epochs. Offline cases scanned data and made
+128 point reads and 16 range reads; each live reader verified all 512 MiB.
+Native/indexed groups were 64 KiB, streaming groups 1 MiB.
+
+| Workload | Median wall seconds, before → after | Aggregate CPU seconds, before → after | Sampled peak aggregate PSS MiB, before → after |
+| --- | ---: | ---: | ---: |
+| Native access, one reader | 0.841 → 0.841 | 0.573 → 0.583 | 23.09 → 22.92 |
+| Indexed access, four readers | 0.870 → 0.844 | 0.953 → 0.879 | 45.30 → 45.05 |
+| Live stream, one writer/four readers | 0.598 → 0.592 | 0.940 → 0.920 | 25.92 → 25.93 |
+
+PSS means proportional set size. The largest wall increase was +0.03%; the
+largest CPU increase was +1.64%. Final physical file allocation matched in each
+pair; one native resource probe observed an additional transient 4 KiB. The
+50 ms probes observed no private temporary-directory or deleted-open workload
+storage. Peaks shorter than that interval remain outside the sample guarantee.
+Caps stayed at 4 CPU /16 GiB RAM /32 GiB filesystem.
+
+A separate complete-decode campaign used 20 million iterations per run, with
+independent checksums consuming every field. Scalar, custom scalar, nested
+8-field tuple and custom tuple median times decreased by 74.6%, 35.9%, 60.2%
+and 42.8%. Inlining checked primitives and sharing one outer custom-code frame
+removed redundant work. These short local comparisons describe the measured
+workloads, not a bound for every downstream codec or machine.
+
 ## Production callers and future changes
 
 The source-wide `proof_coverage` integration test inventories all three published
@@ -173,8 +221,10 @@ export RUSTUP_TOOLCHAIN=1.95.0
 cargo test --locked -p varlit --test proof_coverage
 cargo rustc --locked -p varlit-core --lib -- --emit=mir=target/default-callers.mir
 python3 scripts/check_proof_bindings.py --mir target/default-callers.mir --features default --output target/default-bindings.json
+python3 scripts/check_state_transitions.py --mir target/default-callers.mir --features default --output target/default-state.json
 cargo rustc --locked -p varlit-core --lib --all-features -- --emit=mir=target/all-callers.mir
 python3 scripts/check_proof_bindings.py --mir target/all-callers.mir --features all --output target/all-bindings.json
+python3 scripts/check_state_transitions.py --mir target/all-callers.mir --features all --output target/all-state.json
 python3 -m unittest discover -s scripts/tests -p test_proof_bindings.py
 ```
 

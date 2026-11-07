@@ -1,0 +1,9 @@
+error[E0451]: fields `invariant` and `callback_free` of struct `varlit::BuiltinCodec` are private
+ --> tests/ui/fail_builtin_codec_constructor.rs:5:9
+  |
+4 |     let _evidence = BuiltinCodec::<()> {
+  |                     ------------------ in this type
+5 |         invariant: std::marker::PhantomData,
+  |         ^^^^^^^^^ private field
+6 |         callback_free: true,
+  |         ^^^^^^^^^^^^^ private field

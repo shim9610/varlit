@@ -53,6 +53,7 @@ fn checker_rejects_reintroduced_bypasses_independent_of_formatting() {
         "#[cfg(any(test, feature = \"mmap\"))] fn read() { read_native_record_header(file, 0); }",
         "#[cfg(not(test))] fn read() { read_native_record_header(file, 0); }",
         "impl Reader { fn read(&self) { spec.with_integrity_policy(None); } }",
+        "#[cfg(any(kani, feature = \"mmap\"))] fn read() { spec.endian = Endian::Little; }",
     ] {
         assert!(
             !fixture(source).errors.is_empty(),
@@ -63,6 +64,7 @@ fn checker_rejects_reintroduced_bypasses_independent_of_formatting() {
         r#"
         #[cfg(all(test, feature = "integrity"))]
         mod tests { fn fixture() { spec.with_integrity_policy(None); } }
+        #[cfg(kani)] mod proofs { fn havoc() { decoder.endian = Endian::Big; } }
         fn read() {
             // read_native_record_header(file, 0)
             let text = "spec.with_integrity_policy(None)";

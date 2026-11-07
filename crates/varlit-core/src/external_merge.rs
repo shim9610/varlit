@@ -385,7 +385,7 @@ where
                 crate::codec::encode_into_limited(
                     &key,
                     spec.endian,
-                    *budget.remaining_policy(),
+                    budget.remaining(),
                     "materialized bytes",
                     &mut encoded,
                 )?;

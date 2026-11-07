@@ -777,7 +777,7 @@ type ExtractTombstoneUpdate = fn(
     FormatSpec,
     &RecordIndexEntry,
     &[u8],
-    &mut MaterializationBudget,
+    crate::collections::DecodeBudget<'_>,
     usize,
 ) -> crate::Result<DiskIndexUpdate>;
 
@@ -1376,7 +1376,7 @@ pub(crate) fn extract_plan_update(
             spec,
             entry,
             key_payload,
-            &mut budget,
+            budget.decode_view(),
             max_key_bytes,
         )?))
     } else {
@@ -1431,7 +1431,7 @@ fn extract_descriptor_tombstone<T>(
     spec: FormatSpec,
     entry: &RecordIndexEntry,
     key_payload: &[u8],
-    budget: &mut MaterializationBudget,
+    mut budget: crate::collections::DecodeBudget<'_>,
     max_key_bytes: usize,
 ) -> crate::Result<DiskIndexUpdate>
 where
