@@ -27,6 +27,7 @@ def baseline_harnesses(manifest):
         ('spill_file::proofs::', 'spill_file::proofs::'),
         ('disk_index::tree::resource_proofs::', 'tree::resource_proofs::'),
         ('codec::resource_proofs::', 'decoder::resource_proofs::'),
+        ('decode_state::proofs::', 'decode_state::proofs::'),
     ]
     expected = []
     for production, scratch in prefixes:
@@ -79,6 +80,7 @@ def decoder_fixture():
     structure = source[start:source.index("impl<'a> Decoder", start)]
     methods = ['new', 'new_limited', 'decode_from_slice_accounted', 'remaining',
                'decode_nested', 'charge_materialization', 'decode_complete',
+               'decode_value','with_callback','with_existing_callback',
                'read_exact', 'read_u8', 'read_u64', 'preflight_count',
                'screen_map_wire_length', 'preflight_hash_map_count']
     # new/new_limited also name Encoder methods: search only the Decoder impl.
@@ -91,12 +93,13 @@ def decoder_fixture():
     standard = re.search(r'const STANDARD_MATERIALIZATION_LIMIT:[^;]+;', source).group()
     group = re.search(r'const HASH_TABLE_GROUP_BYTES:[^;]+;', source).group() + re.search(r'const MAP_PREALLOCATION_ENTRIES:[^;]+;', source).group()
     return ("use std::collections::HashSet; use std::mem::{size_of,align_of};\n"
-            "#[derive(Clone, Copy)] enum Endian { Little, Big }\n"
+            "#[derive(Clone, Copy, PartialEq, Eq)] enum Endian { Little, Big }\n"
             "enum Error { UnexpectedEof, InvalidUtf8, TrailingBytes { remaining: usize },"
             "InvalidCanonicalEncoding(&'static str), ResourceArithmeticOverflow { resource: &'static str },"
             "LimitExceeded { resource: &'static str, actual: u64, limit: u64 } }\n"
             "type Result<T> = std::result::Result<T,Error>;\n" + wire + structure +
-            "trait VarlitDecode: Sized { const WIRE_TYPE: WireType; fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self>; }\n"
+            "struct BuiltinCodec<T> { invariant: std::marker::PhantomData<fn(T)->T>, callback_free: bool }\n"
+            "trait VarlitDecode: Sized { const __VARLIT_BUILTIN:Option<BuiltinCodec<Self>>=None; const WIRE_TYPE: WireType; fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self>; fn decode_array<const N:usize>(_:&mut Decoder<'_>)->Result<[Self;N]>{ panic!(\"array callback outside extracted resource scope\") } }\n"
             "impl VarlitDecode for () { const WIRE_TYPE: WireType = WireType::Unit; fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(()) } }\n"
             "impl<'a> Decoder<'a> {" + standard + methods_text + "}\n" + group +
             body('minimum_wire_size') + body('hash_table_reservation_bytes') + body('hash_map_decode_reservation_bytes') +
@@ -118,10 +121,10 @@ def bindings():
 
 
 MUTATIONS = [
-    ('decoder-charge-omitted', 'decoder.rs', 'self.materialization_remaining -= bytes;', 'let _ = bytes;',
+    ('decoder-charge-omitted', 'decoder.rs', 'self.materialization_remaining = next;', 'let _ = next;',
      'full_width_decoder_charge_preserves_budget_on_failure', 'failed decoder charge replenished or consumed budget'),
     ('zero-width-charge-omitted', 'decoder.rs', 'materialized_entry_bytes.max(1)', 'materialized_entry_bytes',
-     'full_width_collection_preflight_bounds_zero_width_work', 'collection preflight differs from wide oracle'),
+     'full_width_collection_preflight_bounds_zero_width_work', 'if accepted { budget - charge as u64 } else { budget }'),
     ('nested-error-refunds-charge', 'decoder.rs', 'self.materialization_remaining = nested.materialization_remaining;', 'let _ = nested.materialization_remaining;',
      'nested_failure_cannot_refund_a_successful_charge', 'nested error refunded charge'),
     ('accounted-error-refunds-charge', 'decoder.rs', '*materialization_remaining = decoder.materialization_remaining;', 'let _ = decoder.materialization_remaining;',
@@ -205,6 +208,7 @@ def main():
     prefix = directory[prefix_start:directory.index('fn invalid_boundary()',prefix_start)]
     originals = {
         'decoder.rs': decoder_fixture(),
+        'decode_state.rs': (SRC/'decode_state.rs').read_text(),
         'compression_steps.rs': (SRC/'compression_steps.rs').read_text(),
         'spill_file.rs': 'use std::io;\n'+function(spill,'check_extent')+'\n'+function(spill,'limited_write_all')+'\n#[cfg(kani)]\n#[path="verification/spill.rs"]\nmod proofs;\n',
         'uniform.rs': prefix,
@@ -217,9 +221,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='varlit-resource-proofs-') as tmp:
         crate = Path(tmp); (crate/'src/verification').mkdir(parents=True)
         (crate/'Cargo.toml').write_text('[package]\nname="resource-negative-controls"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lints.rust]\nunexpected_cfgs={level="warn",check-cfg=["cfg(kani)"]}\n')
-        (crate/'src/lib.rs').write_text('mod compression_steps;\nmod spill_file;\nmod tree;\nmod chunks;\nmod compression_buffers {pub(crate) use crate::chunks::compression_buffers::validate_frame_output_len;}\nmod uniform;\nmod decoder;\n')
+        (crate/'src/lib.rs').write_text('mod compression_steps;\nmod spill_file;\nmod tree;\nmod chunks;\nmod compression_buffers {pub(crate) use crate::chunks::compression_buffers::validate_frame_output_len;}\nmod uniform;\nmod decoder;\nmod decode_state;\n')
         for path, content in originals.items(): (crate/'src'/path).write_text(content)
-        for name in ['compression','spill','traversal','uniform_prefix','decoder','chunk_contracts','compression_contracts','traversal_contracts']:
+        for name in ['compression','spill','traversal','uniform_prefix','decoder','chunk_contracts','compression_contracts','traversal_contracts','decode_transitions']:
             (crate/f'src/verification/{name}.rs').write_bytes((SRC/f'verification/{name}.rs').read_bytes())
         cmd = ['cargo','kani','--manifest-path',str(crate/'Cargo.toml'),'--default-unwind','5','-Z','function-contracts','-Z','stubbing']
         def run(name, command):

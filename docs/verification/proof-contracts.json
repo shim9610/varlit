@@ -211,25 +211,30 @@
       "harnesses": [
         "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure",
         "codec::resource_proofs::full_width_collection_preflight_bounds_zero_width_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_small_wire_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_above_input_wire_work",
         "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
         "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
         "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
         "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables",
         "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds",
-        "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges"
+        "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+        "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+        "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+        "codec::caller_proofs::active_callback_step_preserves_invariant_or_rejects_replacement"
       ],
       "sources": [
         "crates/varlit-core/src/codec.rs",
         "crates/varlit-core/src/verification/decoder.rs",
         "crates/varlit-core/src/verification/decoder_callers.rs"
       ],
-      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting; actual complete Vec<u8> decode, arbitrary u64 declared length/budget, at most4 payload bytes and symbolic reservation refusal; actual nested two-stage charged callback with 0..18 input bytes, both endians and unchanged parent frame",
-      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom codecs. Hash table layout bound assumes the documented supported std layout. No global process OOM claim. Caller decode proof assumes a contract-obeying allocator and the independently checked standard empty-Vec model; it does not model arbitrary T. Unqualified allocated-String experiments are excluded: verifier timeout/memory exhaustion is not a library OOM or a successful proof.",
+      "scope": "full-width charge/count arithmetic; 64-byte cursor/preflight input; actual nested/accounted transfer with a returning charged callback; two-table HashMap reservation accounting; actual complete Vec<u8> decode, arbitrary u64 declared length/budget, at most4 payload bytes and symbolic reservation refusal; actual nested two-stage charged callback with 0..18 input bytes, both endians and unchanged parent frame; root callback numeric havoc and active safe-primitive induction over four-byte backing, full-width cursor/budget and changed scope/input identities; collection preflight exhaustively partitions wire width into zero, 1..64 and >64 with the same full-width count/entry/budget and u128 oracle",
+      "limits": "BTreeMap excluded. Does not model actual allocator/hashbrown/C allocation or arbitrary custom-code allocation/termination. Numeric callback effects are separately over-approximated; safe active-frame mutation also relies on Rust privacy/lifetimes and the structural closure gate. Hash table layout bound assumes the documented supported std layout. No global process OOM claim. Caller decode proof assumes a contract-obeying allocator and the independently checked standard empty-Vec model; it does not model arbitrary T. Unqualified allocated-String experiments are excluded: verifier timeout/memory exhaustion is not a library OOM or a successful proof.",
       "specification": {
-        "requires": "Reachable cursor/budget invariant; custom codec returns normally and honors read/charge interface; allocator obeys Rust contract.",
-        "ensures": "Byte decode allocates only for input- and budget-admitted lengths; complete byte results consume exactly the supplied input.",
-        "on_error": "Byte reservation refusal and short input return errors; two-stage callback failures, short reads and trailing bytes do not refund completed charges.",
-        "frame": "Nested decode preserves parent input/cursor/limit; only its remaining budget is transferred back on both outcomes.",
+        "requires": "Reachable cursor/budget invariant and a returning callback. Budget-to-allocation claims require custom allocation to use the read/charge interface and a Rust-contract-obeying allocator.",
+        "ensures": "Byte decode allocates only for input- and budget-admitted lengths; complete byte results consume exactly the supplied input. Root callback admission cannot expand budget, retreat/escape cursor or replace frame identity; an active safe read/charge/replacement step preserves the invariant or rejects.",
+        "on_error": "Byte reservation refusal and short input return errors; two-stage callback failures, short reads and trailing bytes do not refund completed charges. Invalid replacement is rejected with exhausted authority; callback unwind is checked separately by native tests.",
+        "frame": "Nested decode preserves parent input/cursor/limit; only its remaining budget is transferred back on both outcomes. Callback admission retains original input identity, endian and limit.",
         "progress": "Length/count arithmetic is full-width; actual byte decode payload is bounded to four bytes; two-stage callback input is at most 18 bytes."
       }
     },
@@ -326,6 +331,28 @@
         "frame": "No private row/offset proof is synthesized from a sequence candidate alone.",
         "progress": "One subtraction/conversion step; membership still requires the real offset comparison."
       }
+    },
+    {
+      "id": "decode-state-transitions",
+      "harnesses": [
+        "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
+        "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects"
+      ],
+      "sources": [
+        "crates/varlit-core/src/decode_state.rs",
+        "crates/varlit-core/src/verification/decode_transitions.rs"
+      ],
+      "scope": "Full-width scalar transition contracts, independent of physical input/container length",
+      "limits": "Actual storage/callback binding is checked separately; no allocator or OS model",
+      "specification": {
+        "requires": "Valid unsigned values, booleans and optional shared byte references; no assumed file validity.",
+        "ensures": "Charges and cursor steps return exactly the admitted state; callback exit requires origin, bounded cursor and non-increasing budget.",
+        "on_error": "Rejected transitions have no committed state.",
+        "frame": "Pure scalar decisions.",
+        "progress": "Successful nonzero charge/read strictly reduces its remaining extent."
+      }
     }
   ],
   "executable_contracts": [
@@ -374,6 +401,38 @@
       "target": "disk_index::tree::height_matches",
       "reference": "height_matches",
       "proof": "disk_index::tree::contract_proofs::height_contract_is_total_and_exact",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::charge",
+      "reference": "charge",
+      "proof": "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::read_end",
+      "reference": "read_end",
+      "proof": "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::callback_exit",
+      "reference": "callback_exit",
+      "proof": "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
+      "annotations": [
+        "ensures"
+      ]
+    },
+    {
+      "target": "decode_state::same_scope",
+      "reference": "same_scope",
+      "proof": "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects",
       "annotations": [
         "ensures"
       ]

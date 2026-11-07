@@ -28,6 +28,10 @@ error-handling changes.
 - Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
   through caller-owned scratch. The scratch never grows; overlapping chunks
   are checked completely, and callback output is provisional until success.
+- Add `Decoder::decode_value` and use it for library-owned codec composition.
+  Reject whole-decoder replacement, retain completed charges on errors and
+  exhaust callback authority on unwind. Add exact scalar transition contracts
+  and compiler checks for state writes, mutable loans and callback routing.
 - Add `TryClone`, `try_box`, `try_box_uninit`, `try_box_with` and
   `ScanCancellationToken::try_new`. Supported allocation refusals return errors
   with partial-output cleanup. Existing infallible APIs remain available.

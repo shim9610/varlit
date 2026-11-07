@@ -153,3 +153,171 @@ fn nested_two_stage_contract_preserves_parent_and_committed_charges() {
     assert_eq!(result.is_ok(), success);
     std::mem::forget(result);
 }
+
+/// Over-approximate a returning callback's scalar effects, including effects
+/// unavailable through the safe public API. No particular callback path is
+/// enumerated: every numeric post-state and linkage outcome is symbolic.
+static OTHER_SCOPE: u8 = 0;
+static OTHER_INPUT: [u8; 4] = [1, 2, 3, 4];
+static mut EXPECTED_ACCEPTED: bool = false;
+static mut EXPECTED_OK: bool = false;
+static mut EXPECTED_POSITION: usize = 0;
+static mut EXPECTED_REMAINING: u64 = 0;
+struct ScalarEffects;
+impl VarlitDecode for ScalarEffects {
+    const WIRE_TYPE: WireType = WireType::Nested;
+    fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self> {
+        let scope = d.callback_scope.unwrap();
+        let input = d.input;
+        let endian = d.endian;
+        let limit = d.materialization_limit;
+        let before = d.materialization_remaining;
+        let start = d.position;
+        d.position = kani::any();
+        d.materialization_remaining = kani::any();
+        d.materialization_limit = kani::any();
+        if kani::any() {
+            d.callback_scope = None;
+        } else if kani::any() {
+            d.callback_scope = Some(&OTHER_SCOPE);
+        }
+        if kani::any() {
+            d.input = &[];
+        } else if kani::any() {
+            d.input = &OTHER_INPUT;
+        }
+        if kani::any() {
+            d.endian = Endian::Big;
+        }
+        let ok: bool = kani::any();
+        let accepted = d.callback_scope.is_some_and(|p| std::ptr::eq(p, scope))
+            && std::ptr::eq(d.input, input)
+            && d.endian == endian
+            && d.materialization_limit == limit
+            && d.position as u128 >= start as u128
+            && d.position as u128 <= input.len() as u128
+            && d.materialization_remaining as u128 <= before as u128;
+        unsafe {
+            EXPECTED_ACCEPTED = accepted;
+            EXPECTED_OK = accepted && ok;
+            EXPECTED_POSITION = d.position;
+            EXPECTED_REMAINING = d.materialization_remaining;
+        }
+        if ok {
+            Ok(Self)
+        } else {
+            Err(Error::InvalidUtf8)
+        }
+    }
+}
+#[kani::proof]
+#[kani::unwind(6)]
+fn arbitrary_returning_callback_preserves_the_owned_numeric_invariant() {
+    let limit: u64 = kani::any();
+    let remaining: u64 = kani::any();
+    let start: usize = kani::any();
+    kani::assume(remaining <= limit && start <= 4);
+    let input = [1u8, 2, 3, 4];
+    let mut d = Decoder::new_limited(&input, Endian::Little, limit);
+    d.position = start;
+    d.materialization_remaining = remaining;
+    let result = d.decode_value::<ScalarEffects>();
+    assert_eq!(result.is_ok(), unsafe { EXPECTED_OK });
+    assert_eq!(
+        d.position,
+        if unsafe { EXPECTED_ACCEPTED } {
+            unsafe { EXPECTED_POSITION }
+        } else {
+            input.len()
+        }
+    );
+    assert_eq!(
+        d.materialization_remaining,
+        if unsafe { EXPECTED_ACCEPTED } {
+            unsafe { EXPECTED_REMAINING }
+        } else {
+            0
+        }
+    );
+    assert_eq!(d.materialization_limit, limit);
+    assert!(
+        d.materialization_remaining <= remaining,
+        "callback expanded the owned budget"
+    );
+    assert!(
+        d.position >= start && d.position <= input.len(),
+        "callback escaped the owned input"
+    );
+    assert_eq!(d.input.as_ptr(), input.as_ptr());
+    assert_eq!(d.input.len(), input.len());
+    assert_eq!(d.endian, Endian::Little);
+    std::mem::forget(result);
+}
+struct ReplaceFrame;
+impl VarlitDecode for ReplaceFrame {
+    const WIRE_TYPE: WireType = WireType::Nested;
+    fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self> {
+        *d = Decoder::new_limited(&[], Endian::Little, kani::any());
+        Ok(Self)
+    }
+}
+#[kani::proof]
+fn safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode() {
+    let budget: u64 = kani::any();
+    let mut remaining = budget;
+    let result =
+        Decoder::decode_from_slice_accounted::<ReplaceFrame>(&[], Endian::Little, &mut remaining);
+    assert!(result.is_err(), "safe replacement was accepted");
+    assert_eq!(remaining, 0);
+    std::mem::forget(result);
+    let mut parent = Decoder::new_limited(&[], Endian::Little, budget);
+    let result = parent.decode_nested::<ReplaceFrame>(&[]);
+    assert!(result.is_err());
+    assert_eq!(parent.materialization_remaining(), 0);
+    std::mem::forget(result);
+}
+
+/// An arbitrary legal primitive transition is the inductive step for callbacks
+/// confined to the public API. Whole replacement is a separate operation and
+/// must be rejected even when every public setting is identical.
+struct SafeTransition;
+impl VarlitDecode for SafeTransition {
+    const WIRE_TYPE: WireType = WireType::Nested;
+    fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self> {
+        match kani::any::<u8>() % 3 {
+            0 => {
+                d.read_exact(kani::any())?;
+            }
+            1 => {
+                d.charge_materialization(kani::any(), "inductive callback")?;
+            }
+            _ => {
+                *d = Decoder::new_limited(&[], Endian::Little, kani::any());
+            }
+        }
+        Ok(Self)
+    }
+}
+#[kani::proof]
+#[kani::unwind(6)]
+fn active_callback_step_preserves_invariant_or_rejects_replacement() {
+    let limit: u64 = kani::any();
+    let remaining: u64 = kani::any();
+    let start: usize = kani::any();
+    kani::assume(remaining <= limit && start <= 4);
+    let input = [1u8, 2, 3, 4];
+    let marker = 0u8;
+    let mut d = Decoder::new_limited(&input, Endian::Little, limit);
+    d.callback_scope = Some(&marker);
+    d.position = start;
+    d.materialization_remaining = remaining;
+    let result = d.decode_value::<SafeTransition>();
+    assert_eq!(d.materialization_limit, limit);
+    assert!(d.materialization_remaining <= remaining);
+    assert!(d.position >= start && d.position <= input.len());
+    assert_eq!(d.input.as_ptr(), input.as_ptr());
+    assert_eq!(d.input.len(), input.len());
+    assert_eq!(d.endian, Endian::Little);
+    assert!(d.callback_scope.is_some_and(|p| std::ptr::eq(p, &marker)));
+    std::mem::forget(result);
+}

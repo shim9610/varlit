@@ -15,6 +15,7 @@ damaged metadata that an older reader accepted.
 | `ReadValidation` and `ReadLimits::with_read_validation` | Select data CRC and additional structure checks independently; leave unset to retain existing behavior |
 | `ReadLimits::read_validation` and `effective_read_validation` | Inspect the optional override and resolve record-payload checks against the stored integrity policy |
 | `ChunkedBytes::decoded_len` and `stream_range` | Read a selected decoded range with a fixed caller buffer after whole-output admission/refusal |
+| `Decoder::decode_value` | Compose custom codecs with checked decoder identity and retained input/budget authority |
 | `TryClone::{try_clone, try_clone_slice}` | Clone supported owned values with allocation refusal and partial-output cleanup |
 | `try_box`, `try_box_uninit`, `try_box_with` | Return Box allocation refusal; optionally reserve before initialization |
 | `ScanCancellationToken::try_new` | Create a cancellation token with a fallible shared allocation |
@@ -25,6 +26,26 @@ damaged metadata that an older reader accepted.
 `new`/`default` and convenience builders keep their original contracts. Internal
 shared owners now use fallible allocation through a private `triomphe` dependency;
 no dependency-specific owner type is exposed in place of a public std `Arc`.
+
+### Composing custom decoders
+
+Use `decoder.decode_value::<T>()?` to compose codecs. Library-owned containers and
+generated codecs use this boundary, including custom `decode_array` overrides.
+Completed charges remain spent on ordinary errors. Replacing the borrowed decoder
+with a fresh value is rejected even when the public settings match. Invalid
+replacement or a panicking callback exhausts that frame's cursor and budget;
+catching the panic cannot refund them. Nested decoding preserves the parent's
+input. Accounted decoding exhausts the shared ledger before entering a callback
+and restores only the admitted remaining amount on return.
+
+Existing trait implementations keep compiling. The hidden defaulted
+`VarlitDecode::__VARLIT_BUILTIN` constant and opaque `BuiltinCodec<T>` evidence are
+reserved for library-owned implementations; safe downstream code cannot construct
+or transfer evidence to a different type. This removes redundant checks around
+built-in scalar composition without skipping input/resource validation. Directly
+calling `T::decode_varlit` remains possible and places composition responsibility
+on that caller. User callback allocation, termination and destructor behavior are
+outside this boundary's guarantee. See the [state contract](verification/state-transitions.md).
 
 ### Selecting read checks
 

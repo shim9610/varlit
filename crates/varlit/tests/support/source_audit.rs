@@ -541,7 +541,14 @@ impl Audit {
 
 impl<'ast> Visit<'ast> for Audit {
     fn visit_item(&mut self, item: &'ast Item) {
-        if !test_only(attrs(item)) {
+        // Kani modules intentionally mutate private state in adversarial
+        // harnesses. Keep them in proof inventories, but not runtime policy
+        // rules. Only the exact cfg(kani) exclusion is recognized here.
+        let kani_only = attrs(item).iter().any(|attr| {
+            attr.path().is_ident("cfg")
+                && matches!(attr.parse_args::<Meta>(), Ok(Meta::Path(path)) if path.is_ident("kani"))
+        });
+        if !test_only(attrs(item)) && (self.inventory_only || !kani_only) {
             visit::visit_item(self, item);
         }
     }

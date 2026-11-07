@@ -949,8 +949,8 @@ impl crate::VarlitDecode for PackedBitmap {
     const SCHEMA_ID: u64 = PACKED_BITMAP_SCHEMA_ID;
 
     fn decode_varlit(decoder: &mut crate::Decoder<'_>) -> Result<Self> {
-        let bit_len = <u64 as crate::VarlitDecode>::decode_varlit(decoder)?;
-        let bytes = <Vec<u8> as crate::VarlitDecode>::decode_varlit(decoder)?;
+        let bit_len = decoder.decode_value::<u64>()?;
+        let bytes = decoder.decode_value::<Vec<u8>>()?;
         // Ordinary malformed codec input, so an ordinary decode error: this
         // type is accepted in plain variable fields and must not report a
         // matrix-layout fault there.

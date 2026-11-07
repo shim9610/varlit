@@ -75,8 +75,10 @@ jobs:
           mkdir -p target/verification
           features=()
           if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
+          cargo test --locked -p varlit --test state_closure
           cargo rustc --locked -p varlit-core --lib "${features[@]}" -- --emit=mir=target/verification/callers.mir
           python3 scripts/check_proof_bindings.py --mir target/verification/callers.mir --features '${{ matrix.features }}' --output target/verification/caller-contracts.json
+          python3 scripts/check_state_transitions.py --mir target/verification/callers.mir --features '${{ matrix.features }}' --output target/verification/state-transitions.json
       - name: Check every registered core proof, including unwinding assertions
         run: |
           set -o pipefail

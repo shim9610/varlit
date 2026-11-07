@@ -227,7 +227,7 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
     let fixed_decode = descriptors.iter().map(|field| {
         let name = &field.name;
         let ty = &field.ty;
-        quote!(#name: <#ty as ::varlit::__core::VarlitDecode>::decode_varlit(decoder)?)
+        quote!(#name: decoder.decode_value::<#ty>()?)
     });
 
     let variable_encode = descriptors.iter().map(|field| {

@@ -12,6 +12,8 @@ spec.loader.exec_module(gate)
 
 
 class CallerBindingTests(unittest.TestCase):
+    def test_generic_function_types_do_not_terminate_generic_arguments(self):
+        self.assertEqual(gate.without_generics('Thing::<fn(u64) -> u64>::method::<Option<u8>>'), 'Thing::method')
     @classmethod
     def setUpClass(cls):
         cls.compiler = ['rustup', 'run', '1.95.0', 'rustc']

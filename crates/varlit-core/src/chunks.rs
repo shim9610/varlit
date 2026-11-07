@@ -432,7 +432,7 @@ impl VarlitDecode for ChunkedBytes {
     const SCHEMA_ID: u64 = CHUNKED_BYTES_SCHEMA_ID;
 
     fn decode_varlit(decoder: &mut crate::Decoder<'_>) -> Result<Self> {
-        Self::from_encoded(Vec::<u8>::decode_varlit(decoder)?)
+        Self::from_encoded(decoder.decode_value::<Vec<u8>>()?)
     }
 }
 

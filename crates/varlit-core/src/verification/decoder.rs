@@ -25,10 +25,8 @@ fn full_width_decoder_charge_preserves_budget_on_failure() {
     std::mem::forget(decoder);
 }
 
-#[kani::proof]
-fn full_width_collection_preflight_bounds_zero_width_work() {
+fn check_collection_preflight(wire: usize) {
     let count: usize = kani::any();
-    let wire: usize = kani::any();
     let entry: usize = kani::any();
     let budget: u64 = kani::any();
     let input = [0u8; 64];
@@ -58,6 +56,26 @@ fn full_width_collection_preflight_bounds_zero_width_work() {
     }
     std::mem::forget(result);
     std::mem::forget(decoder);
+}
+
+// Exhaustive partition of the full usize wire domain. Count, entry size and
+// budget remain full-width in every case; the independent u128 oracle above
+// is unchanged. Splitting avoids one large multiply/divide SAT search.
+#[kani::proof]
+fn full_width_collection_preflight_bounds_zero_width_work() {
+    check_collection_preflight(0);
+}
+#[kani::proof]
+fn full_width_collection_preflight_bounds_small_wire_work() {
+    let wire: usize = kani::any();
+    kani::assume(wire > 0 && wire <= 64);
+    check_collection_preflight(wire);
+}
+#[kani::proof]
+fn full_width_collection_preflight_bounds_above_input_wire_work() {
+    let wire: usize = kani::any();
+    kani::assume(wire > 64);
+    check_collection_preflight(wire);
 }
 
 #[kani::proof]
