@@ -384,7 +384,9 @@
         ]
       },
       "required_harnesses": [
-        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic"
+        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic",
+        "native_layout::generated_file_proofs::successful_native_header_roundtrips_all_fields",
+        "native_layout::generated_file_proofs::valid_native_footer_roundtrips_all_fields"
       ]
     },
     "observed-prefix": {

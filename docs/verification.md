@@ -55,6 +55,41 @@ python3 -m unittest discover -s scripts/tests
 python3 scripts/check_storage_contracts.py --output target/storage-contracts
 ```
 
+## Successfully generated files
+
+The producer/consumer contract applies to successfully published writer output
+that is read without external modification, with the matching format, schema,
+endianness and codec contracts. Required companion files must remain together.
+Reader limits must admit the requested operation; allocation or I/O failures may
+still return their documented errors. Publication visibility and `sync()`
+durability retain the contracts of the selected storage mode. A successful
+buffered write alone is not a completed publication.
+
+Two Kani harnesses call the actual native record header/footer encoders and
+decoders. Every scalar retains its full Rust range. Header encoding requires
+`offset + 32 + payload_len + footer_len` to fit in `u64`. Each present footer
+predecessor must be nonzero and earlier than the current record. Within those
+domains, decoding accepts the encoder output and reproduces every field; header
+decoding consumes exactly 32 bytes. An independent wire oracle checks the fixed
+field positions and little-endian bytes, so a shared encoder/decoder mistake
+cannot pass by round-tripping itself. Reachability checks include an empty payload,
+the maximum representable physical end, and both absent and present footer links.
+The 32-byte framing bounds implementation loops, not payload size or file length.
+
+These are framing proofs, not a proof of every successful file operation or
+payload codec. The generated-file integration regression covers fixed and
+variable derived blocks, both endians, scalar bit patterns, field IDs across the
+small/large-ID boundary, nested values, publication, writer resume and compatible
+CRC/structure read policies. Existing stream/index lifecycle and matrix-reader
+regressions cover their respective storage routes. User-defined codecs must
+fulfil their own encoding/decoding contracts; a library API cannot certify
+arbitrary custom payload bytes merely because it wrote them.
+
+Malformed or truncated inputs remain covered by the resource, corruption,
+failure-injection and fuzz suites above. Their tested resistance is separate
+from the successful-output framing proofs. Existing read-policy bounds and
+publication guards remain enabled.
+
 ## Coverage
 
 CI uses Rust 1.95.0 with `llvm-tools-preview` and `cargo-llvm-cov 0.9.1`.
@@ -79,7 +114,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-**76 harnesses in 15 contract groups**. Both default and all-feature builds must
+**78 harnesses in 15 contract groups**. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -88,7 +123,7 @@ A zero-harness run fails.
 
 | Contract group | Harnesses | Main scope |
 | --- | ---: | --- |
-| Record extent | 1 | Full-width checked address arithmetic |
+| Record extent and native framing | 3 | Full-width checked address arithmetic and actual header/footer producer-consumer pairs |
 | Observed prefix | 4 | Prefix transitions; bounded membership/truncation models |
 | Publication metadata | 5 | Typed frontier/checkpoint validation and actual 24-byte frontier decoder |
 | Publication protocol | 9 | Abstract I/O effects and inductive frontier invariants |

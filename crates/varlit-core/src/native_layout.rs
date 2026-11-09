@@ -1920,3 +1920,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(kani)]
+#[path = "verification/generated_file.rs"]
+mod generated_file_proofs;

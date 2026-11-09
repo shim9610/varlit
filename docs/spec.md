@@ -17,6 +17,9 @@ and compile-time schema validation.
 
 ## Wire Contract
 
+- Successful writer output and compatible reader expectations are specified in
+  [the generated-file contract](verification.md#successfully-generated-files),
+  including publication, codec, reader-limit and companion-file conditions.
 - `ReadValidation` is runtime read policy and is not stored or included in a
   schema fingerprint. It selects optional data CRC and additional structure
   checks; bounds, resource/decoder limits and publication guards remain required.

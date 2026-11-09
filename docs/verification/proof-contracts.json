@@ -3,20 +3,24 @@
     {
       "id": "record-extent",
       "harnesses": [
-        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic"
+        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic",
+        "native_layout::generated_file_proofs::successful_native_header_roundtrips_all_fields",
+        "native_layout::generated_file_proofs::valid_native_footer_roundtrips_all_fields"
       ],
       "sources": [
         "crates/varlit-core/src/verification/record_extent.rs",
-        "crates/varlit-core/src/file.rs"
+        "crates/varlit-core/src/file.rs",
+        "crates/varlit-core/src/native_layout.rs",
+        "crates/varlit-core/src/verification/generated_file.rs"
       ],
-      "scope": "full-width arithmetic",
-      "limits": "No filesystem or allocation model",
+      "scope": "full-width checked record extents and actual 32-byte native header/footer producer-consumer pairs",
+      "limits": "Framing scalars retain their full Rust ranges. Header physical end must fit u64; present footer links must be nonzero and backward. Fixed framing loops are bounded, with unwinding assertions enabled. Does not prove whole-file, payload-codec, filesystem or foreign-compression correctness.",
       "specification": {
-        "requires": "Valid Rust field values; no assumed file validity.",
-        "ensures": "Returned end equals the full-width header+payload+footer sum exactly when representable.",
-        "on_error": "Overflow returns an error.",
-        "frame": "Record fields are unchanged.",
-        "progress": "One checked arithmetic step."
+        "requires": "Valid Rust scalars. Header offset + header length + payload length + footer length fits u64. Each present footer predecessor is nonzero and less than the record offset. Slice I/O uses the standard-library model.",
+        "ensures": "Checked extents match independent u128 arithmetic. Actual native header/footer encoders match fixed wire positions and little-endian bytes independently of the shared role table. Their paired decoders accept those bytes with every field unchanged and consume exactly the 32-byte header.",
+        "on_error": "Checked extent overflow returns an error. The producer-consumer harnesses cover the stated successful-input domain, not arbitrary malformed input.",
+        "frame": "Encoding/decoding changes only the supplied fixed framing buffer/cursor, not payload bytes or published file state.",
+        "progress": "Fixed 32-byte framing, independent of declared payload length and file record count."
       }
     },
     {
