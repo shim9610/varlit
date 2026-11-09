@@ -11,6 +11,9 @@ preserved. Update the Cargo dependency requirement to `0.13.0` to use this relea
 See the [upgrade notes](docs/api-changes.md#0130) for API selection and
 error-handling changes.
 
+- Add explicit typed file inspection and strict application self-test qualification.
+  Generated registries include user-defined block types; incomplete coverage is
+  reported rather than accepted. See the [setup template](docs/self-check-guide.md#application-qualification-template).
 - Organize native file operations into focused implementation files while
   retaining their logical module and private boundary. Consolidate current
   documentation and keep superseded audit/release evidence in Git history.

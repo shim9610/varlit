@@ -140,7 +140,7 @@ macro_rules! contract {
     };
 }
 
-#[derive(Debug, PartialEq, varlit::VarlitBlock)]
+#[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "fixed")]
 struct Probe {
     value: u64,
@@ -216,7 +216,153 @@ impl varlit::VarlitDecode for ReplacingCodec {
     }
 }
 
+varlit::varlit_format! {
+    struct QualificationProbe {
+        magic: b"QUALIFY"; version: 1; endian: little; schema_hash: computed;
+        integrity: crc32_with_header; blocks: [Probe];
+    }
+}
+
+fn qualification_probe(
+    damaged: bool,
+) -> Result<varlit::FileCheckReport, Box<dyn std::error::Error>> {
+    use std::io::{Seek, SeekFrom, Write};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("qualify.varlit");
+    let mut writer = QualificationProbe::create(&path)?;
+    let entry = writer.push_info(&Probe { value: 19 })?;
+    let offset = writer.record_entry_at(entry.record_offset)?.payload_offset;
+    writer.sync()?;
+    drop(writer);
+    if damaged {
+        let mut bytes = std::fs::OpenOptions::new().write(true).open(&path)?;
+        bytes.seek(SeekFrom::Start(offset))?;
+        bytes.write_all(&[0x7f])?;
+    }
+    Ok(QualificationProbe::check_file(&path)?)
+}
+
 const CONTRACTS: &[Contract] = &[
+    contract!("core/conformance.rs::conformance::FileCheck::field:block_id@fed9d3e59fe29e18",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.block_id, Some(1)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.block_id, Some(1)); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:code@a29a3e1b26944a31",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.code, "block.typed_payloads"); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.code, "block.typed_payloads"); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:error@f1c4c51ad2c3dca4",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert!(c.error.is_none()); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert!(c.error.is_some()); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:message@a29a3e1b26944a31",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.message, "check completed"); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert!(!c.message.is_empty()); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:offset@0504e5cb6c5993db",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert!(c.offset.is_some()); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert!(c.offset.is_some()); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:records_checked@4d35d3193e8d66f2",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.records_checked, 1); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.records_checked, 0); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheck::field:status@b264600bb885d58f",
+        valid { let report = qualification_probe(false)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.status, varlit::FileCheckStatus::Passed); Ok(()) },
+        invalid { let report = qualification_probe(true)?; let c = report.checks().iter().find(|c| c.block_id == Some(1)).unwrap(); assert_eq!(c.status, varlit::FileCheckStatus::Violated); assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckReport::fn:checks@2119a90258941a3e",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.error.is_none())); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.error.is_some())); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckReport::fn:passed@fc2e046a72543323",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckReport::fn:preconditions@a9b749d031dc723d",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(!report.preconditions().is_empty()); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(!report.preconditions().is_empty()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckStatus::variant:NotApplicable@99e9951548b15d3f",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::NotApplicable)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::NotApplicable)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckStatus::variant:Passed@f39e32f2714673d9",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Violated)); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Violated)); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckStatus::variant:Unverified@c94578030c702562",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Unverified)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let report = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Unverified)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::FileCheckStatus::variant:Violated@fedc9a584729feb7",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Violated)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Violated)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::RecordValidator::fn:keyed@80f13f289fc95211",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(OwnershipIndex::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::keyed::<OwnedEntry>()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::keyed::<OwnedEntry>()])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::RecordValidator::fn:of@dff8df83dcb8825e",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::RecordValidator::fn:requiring_disk_index@e957c756694053c1",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>().requiring_disk_index()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); assert!(r.checks().iter().any(|c| c.code == "sidecar.coherence" && c.status == varlit::FileCheckStatus::Unverified)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>().requiring_disk_index(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::enum:FileCheckStatus@cbf29ce484222325",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Violated)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Violated)); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::fn:check_file@b1b57b61204f2e51",
+        valid { let dir = tempfile::tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); let r = varlit::check_file(QualificationProbe::spec(), &path, &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.passed()); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); let r = varlit::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[])?; assert!(!r.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::struct:FileCheck@cbf29ce484222325",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); let c: &varlit::FileCheck = &report.checks()[0]; assert_eq!(c.status, varlit::FileCheckStatus::Passed); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); let c: &varlit::FileCheck = report.checks().iter().find(|c| c.error.is_some()).unwrap(); assert_eq!(c.status, varlit::FileCheckStatus::Violated); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::struct:FileCheckReport@cbf29ce484222325",
+        valid { let report: varlit::FileCheckReport = qualification_probe(false)?; assert!(report.passed()); Ok(()) },
+        invalid { let report: varlit::FileCheckReport = qualification_probe(true)?; assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/conformance.rs::conformance::struct:RecordValidator@cbf29ce484222325",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/diagnostics.rs::diagnostics::FormatSelfTest::fn:run_strict@47cc67381b8bce09",
+        valid { let dir = tempfile::tempdir()?; let r = QualificationProbe::self_test(dir.path().join("ok")).with_block(Probe { value: 1 }).cleanup(true).run_strict(); assert!(r.passed(), "{r:#?}"); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let r = QualificationProbe::self_test(dir.path().join("missing")).run_strict(); assert!(!r.passed()); assert!(!dir.path().join("missing").exists()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:FileCheck@86941e1d8527cdb2",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); let c: &varlit::FileCheck = &report.checks()[0]; assert_eq!(c.status, varlit::FileCheckStatus::Passed); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); let c: &varlit::FileCheck = report.checks().iter().find(|c| c.error.is_some()).unwrap(); assert_eq!(c.status, varlit::FileCheckStatus::Violated); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:FileCheckReport@6df6600a85461108",
+        valid { let report: varlit::FileCheckReport = qualification_probe(false)?; assert!(report.passed()); Ok(()) },
+        invalid { let report: varlit::FileCheckReport = qualification_probe(true)?; assert!(!report.passed()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:FileCheckStatus@71ad0e33bf874f7c",
+        valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Violated)); Ok(()) },
+        invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Violated)); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:RecordValidator@69fcf6ce187a63bd",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:check_file@b50c368a3166740f",
+        valid { let dir = tempfile::tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); let r = varlit::check_file(QualificationProbe::spec(), &path, &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.passed()); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); let r = varlit::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[])?; assert!(!r.passed()); Ok(()) }
+    ),
+    contract!("core/traits.rs::traits::VarlitBlock::const:__VARLIT_RECORD_VALIDATOR@9de51896de2574bb",
+        valid { let dir = tempfile::tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[<Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let v = <Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@d153ebf947c54d34", generated "check_file",
+        valid { let dir = tempfile::tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); Ok(()) },
+        invalid { let dir = tempfile::tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); Ok(()) }
+    ),
     contract!("core/codec.rs::codec::VarlitDecode::const:__VARLIT_BUILTIN@902bd1bc3b4320a2",
         valid { let evidence:Option<varlit::__core::BuiltinCodec<u64>>=<u64 as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_some()); Ok(()) },
         invalid { let evidence:Option<varlit::__core::BuiltinCodec<ReplacingCodec>>=<ReplacingCodec as varlit::VarlitDecode>::__VARLIT_BUILTIN; assert!(evidence.is_none()); Ok(()) }
@@ -249,7 +395,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let bytes=varlit::encode_to_vec(&vec![7u64,8],varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<Vec<u64>>()?,vec![7,8]); Ok(()) },
         invalid { let bytes=u64::MAX.to_le_bytes(); let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert!(d.decode_value::<Vec<u64>>().is_err()); Ok(()) }
     ),
-    contract!("macros/modules/block_derive.rs::block_derive::generator:expand_varlit_block@70c504f79f64e854", generated "decode_value",
+    contract!("macros/modules/block_derive.rs::block_derive::generator:expand_varlit_block@e94efcb3d4fc7112", generated "decode_value",
         valid { let bytes=varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes,varlit::Endian::Little); assert_eq!(d.decode_value::<Probe>()?,Probe{value:7}); Ok(()) },
         invalid { let bytes=varlit::encode_to_vec(&Probe{value:7},varlit::Endian::Little)?; let mut d=varlit::Decoder::new(&bytes[..bytes.len()-1],varlit::Endian::Little); assert!(d.decode_value::<Probe>().is_err()); Ok(()) }
     ),

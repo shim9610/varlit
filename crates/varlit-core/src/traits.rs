@@ -44,6 +44,10 @@ pub trait VarlitBlock: VarlitEncode + VarlitDecode {
         Self::SCHEMA_FINGERPRINT,
     );
     const FIELDS: &'static [FieldDescriptor] = &[];
+
+    /// Typed dispatch used only by the explicit file-check utility.
+    #[doc(hidden)]
+    const __VARLIT_RECORD_VALIDATOR: crate::RecordValidator = crate::RecordValidator::of::<Self>();
 }
 
 /// Compile-time proof that a keyed implementation agrees with its declared

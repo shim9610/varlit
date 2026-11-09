@@ -127,6 +127,101 @@ report. The consequence is no longer invisible — the next run's re-acquisition
 fails loudly — but a caller that never runs the self-test still gets no signal
 from that path.
 
+## Application qualification template
+
+No Kani, Lean or compiler plugin is required in an application. Add `tempfile`
+as a development dependency, then adapt the runnable
+[`check_format` example](../crates/varlit/examples/check_format.rs) to your
+actual `varlit_format!` declaration. In this repository, run:
+
+```sh
+cargo run --locked -p varlit --example check_format
+```
+
+In your application's `tests/format_check.rs`, provide at least one value for
+every declared block. Use boundary values and representative nested data as
+additional samples:
+
+```rust
+#[test]
+fn application_format_roundtrips() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let samples = AppFormat::self_test(directory.path().join("samples.varlit"))
+        .with_block(Point { x: u64::MAX, y: i64::MIN })
+        .with_keyed_block(Reading { station: 42, samples: vec![0, 1, u64::MAX] })
+        .cleanup(true)
+        .run_strict();
+    assert!(samples.passed(), "{samples:#?}");
+    Ok(())
+}
+```
+
+Run `cargo test --test format_check` in that project and in its CI.
+`run_strict()` requires a value roundtrip sample for every declared block,
+strict read checks, no unresolved format warnings and no skipped steps. A missing
+sample names the block ID and fails before any file is created. Uncommitted-cell
+and auxiliary-byte probes do not replace value samples. Existing `run()` keeps
+its permissive behavior. Matrix samples use `with_dims` and
+`with_matrix_cell`; they test the supplied cells, not every matrix coordinate.
+
+### Inspect an API-produced artifact
+
+After explicitly publishing writes and closing the writer, inspect the actual
+output with the same format:
+
+```rust
+let report = AppFormat::check_file("output.varlit")?;
+for condition in report.checks() {
+    println!("{} {:?} block={:?} offset={:?}: {} {:?}",
+        condition.code, condition.status, condition.block_id, condition.offset,
+        condition.message, condition.error);
+}
+assert!(report.passed(), "{report:#?}");
+```
+
+The macro registers every declared block type automatically, including
+user-derived types. This read-only check validates native structure, schema
+pinning, embedded manifest identity when present, stored cyclic redundancy
+checks (CRCs), complete typed payload decoding and keyed predecessor identity.
+It includes nonresident records. An ordinary trusted-read policy cannot disable
+these explicit checks. Physical bytes beyond the inspected publication prevent
+a pass. No writer lock is acquired, removed or repaired.
+
+| Status | Meaning |
+| --- | --- |
+| `Passed` | This condition completed for the inspected bytes |
+| `Violated` | A required condition failed; inspect the error and location |
+| `Unverified` | Coverage or prerequisites are missing, or inspection was refused/interrupted |
+| `NotApplicable` | The format does not require this condition, such as a data CRC it does not store |
+
+`passed()` requires every condition to be `Passed` or `NotApplicable`.
+No observed records for a declared type, disabled/mismatched computed schema
+pinning, an existing writer marker, or insufficient resource limits cannot
+silently pass. Use a fixture containing every block to qualify the whole
+format; an incomplete fixture is not thereby a corrupt file. To inspect
+legitimate larger records, supply finite limits with
+`AppFormat::check_file_with_resource_limits(path, limits)`.
+
+Full matrix-cell payload coverage, custom physical-layout payload mappings and
+declared disk-index companion coherence currently report `Unverified`. Custom
+physical layout headers and segment structure are still inspected. Runtime
+sidecar plans attached outside the format declaration are not discovered; this
+checker does not qualify those application-owned companions.
+
+The file and its companions must remain unchanged throughout inspection; marker
+absence alone cannot establish this. Custom codec/key callbacks must terminate,
+respect Rust safety and avoid modifying the inspected files. Catchable callback
+panics produce `Unverified`; aborts and nonterminating callbacks cannot be
+recovered by this API. Read `report.preconditions()` with the results.
+
+These are explicit, potentially full-file checks, outside ordinary reads and
+appends. Work includes the native structural/CRC walks and typed decoding;
+scratch is reused between records, while decoded values and custom keys use
+their normal codec allocation contracts. No constant-time or total process-memory
+bound is implied. A sample pass establishes only those sample roundtrips; an
+artifact pass applies only to that inspection under its listed preconditions.
+Neither is a formal proof for all values, future mutations or crash durability.
+
 ## Resource-Limit Failures
 
 Resource errors are policy results, not automatically library defects:

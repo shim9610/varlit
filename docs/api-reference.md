@@ -139,6 +139,8 @@ the macro generates:
 | `AppFormat::diagnostics()` | static format diagnostics |
 | `AppFormat::diagnose_file(path)` | read-only file diagnostics |
 | `AppFormat::self_test(path)` | build an end-to-end self-test |
+| `AppFormat::check_file(path)` | explicit typed inspection with automatic block registration |
+| `AppFormat::check_file_with_resource_limits(path, limits)` | inspect with finite caller-selected resource limits |
 
 `AppFormat::create` and `create_writer` create-or-truncate the path. For callers
 that must prove they created and own the file (diagnostic scaffolding, self-test
@@ -1784,6 +1786,10 @@ Normal typed reads reject block-version mismatch. Migration is explicit.
 | `diagnostics()` | static spec report |
 | `diagnose_file(path)` | actual file report |
 | `self_test(path)` | disposable roundtrip builder |
+| `check_file(path)` | generated typed inspection of a quiescent file; missing coverage cannot pass |
+| `check_file_with_resource_limits(path, limits)` | same inspection with finite runtime limits |
+| `FileCheckReport::{checks, preconditions, passed}` | condition results, external preconditions and strict aggregate result |
+| `FormatSelfTest::run_strict()` | all block samples required; warnings and skips fail |
 | `FormatSelfTest::with_block(value)` | append/read sample block |
 | `with_keyed_block(value)` | append/read keyed sample |
 | `with_dims(dims)` | matrix runtime dimensions |
@@ -1791,6 +1797,10 @@ Normal typed reads reject block-version mismatch. Migration is explicit.
 | `with_uncommitted_matrix_cell(key, value)` | verify uncommitted read rejection |
 | `with_matrix_aux(name, offset, bytes)` | write/read aux sample |
 | `cleanup(true)` | after the run, remove only files the run itself created (its native file and `.lock`), verified by object identity |
+
+See the [application qualification template](self-check-guide.md#application-qualification-template)
+for setup, status meanings and unsupported inspection routes. This is an opt-in
+inspection API, separate from ordinary I/O and formal verification.
 
 Report domains:
 

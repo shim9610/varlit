@@ -85,6 +85,13 @@ regressions cover their respective storage routes. User-defined codecs must
 fulfil their own encoding/decoding contracts; a library API cannot certify
 arbitrary custom payload bytes merely because it wrote them.
 
+Application developers can run the [qualification template](self-check-guide.md#application-qualification-template)
+with ordinary `cargo test`; it needs no proof-tool installation. `run_strict()`
+requires every declared type's sample. Generated `check_file()` registers the
+format's typed decoders and reports violated or unverified conditions for a
+particular quiescent artifact. These runtime checks do not extend the framing
+proof to arbitrary codecs or establish all assumptions of a whole-program proof.
+
 Malformed or truncated inputs remain covered by the resource, corruption,
 failure-injection and fuzz suites above. Their tested resistance is separate
 from the successful-output framing proofs. Existing read-policy bounds and

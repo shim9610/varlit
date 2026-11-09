@@ -420,6 +420,12 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         }
     };
 
+    let record_validator = if is_keyed {
+        quote!(::varlit::__core::RecordValidator::keyed::<Self>())
+    } else {
+        quote!(::varlit::__core::RecordValidator::of::<Self>())
+    };
+
     Ok(quote! {
         #(#codec_identity_asserts)*
 
@@ -453,6 +459,7 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             const FIELDS: &'static [::varlit::__core::FieldDescriptor] = &[
                 #(#field_descriptors,)*
             ];
+            const __VARLIT_RECORD_VALIDATOR: ::varlit::__core::RecordValidator = #record_validator;
         }
 
         #keyed_impl

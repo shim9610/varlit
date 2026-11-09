@@ -12,6 +12,8 @@ damaged metadata that an older reader accepted.
 
 | Addition | Application use |
 | --- | --- |
+| Generated `check_file`, `check_file_with_resource_limits`; `FileCheckReport` | Inspect API-produced files with automatic typed registry coverage and explicit violated/unverified conditions |
+| `FormatSelfTest::run_strict` | Require every declared block sample, strict read checks, no warnings or skipped steps; existing `run` is preserved |
 | `ReadValidation` and `ReadLimits::with_read_validation` | Select data CRC and additional structure checks independently; leave unset to retain existing behavior |
 | `ReadLimits::read_validation` and `effective_read_validation` | Inspect the optional override and resolve record-payload checks against the stored integrity policy |
 | `ChunkedBytes::decoded_len` and `stream_range` | Read a selected decoded range with a fixed caller buffer after whole-output admission/refusal |

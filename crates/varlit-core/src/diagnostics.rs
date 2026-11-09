@@ -194,6 +194,7 @@ impl FormatSelfTestReport {
 type Probe = Box<dyn Fn(&mut VarlitFile) -> Result<()> + 'static>;
 
 struct SelfTestCase {
+    value_block: Option<u32>,
     name: String,
     write: Option<Probe>,
     read: Option<Probe>,
@@ -239,6 +240,7 @@ impl FormatSelfTest {
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("block {} ordinal {}", T::ID, ordinal),
             write: Some(Box::new(move |file| {
                 file.push(&write_value)?;
@@ -270,6 +272,7 @@ impl FormatSelfTest {
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("keyed block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
                 // keyed self-test writes go through the maintaining
@@ -299,6 +302,7 @@ impl FormatSelfTest {
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("matrix block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
                 file.write_matrix_cell(key, &write_value)?;
@@ -328,6 +332,7 @@ impl FormatSelfTest {
         T: VarlitMatrixBlock + Clone + Debug + 'static,
     {
         self.cases.push(SelfTestCase {
+            value_block: None,
             name: format!("uncommitted matrix block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
                 file.write_matrix_cell(key, &value)?;
@@ -364,6 +369,7 @@ impl FormatSelfTest {
         let payload = payload.into();
         let expected = payload.clone();
         self.cases.push(SelfTestCase {
+            value_block: None,
             name: format!(
                 "matrix aux {name} range {offset}..{}",
                 offset + payload.len() as u64
@@ -384,10 +390,62 @@ impl FormatSelfTest {
     }
 
     pub fn run(self) -> FormatSelfTestReport {
+        self.run_inner(false)
+    }
+
+    /// Requires a value sample for every declared block, strict read checks,
+    /// no format warnings, and no skipped steps. This qualifies the supplied
+    /// samples; it does not prove the codecs for every possible input value.
+    pub fn run_strict(mut self) -> FormatSelfTestReport {
+        if self.spec.validate().is_ok() {
+            self.spec = self.spec.with_strict_read_validation();
+        }
+        let mut report = self.run_inner(true);
+        if report
+            .steps
+            .iter()
+            .any(|step| step.status == SelfTestStepStatus::Skipped)
+        {
+            report.steps.push(SelfTestStepReport::failed(
+                "coverage.skipped",
+                DiagnosticDomain::CallerUsage,
+                "required self-test steps were skipped",
+                None,
+            ));
+        }
+        report
+    }
+
+    fn run_inner(self, strict: bool) -> FormatSelfTestReport {
         let mut report = FormatSelfTestReport {
             diagnostics: diagnose_spec(self.spec),
             steps: Vec::new(),
         };
+        if strict {
+            for block in self.spec.blocks {
+                if !self
+                    .cases
+                    .iter()
+                    .any(|case| case.value_block == Some(block.id))
+                {
+                    report.steps.push(SelfTestStepReport::failed(
+                        format!("coverage.block.{}", block.id), DiagnosticDomain::CallerUsage,
+                        format!("no value roundtrip sample supplied for declared block {} ({})", block.id, block.name),
+                        Some("register with_block, with_keyed_block or with_matrix_cell for this type".to_string()),
+                    ));
+                }
+            }
+            if self.spec.blocks.is_empty() || report.diagnostics.warnings().next().is_some() {
+                report.steps.push(SelfTestStepReport::failed(
+                    "coverage.format", DiagnosticDomain::FormatDefinition,
+                    "strict qualification requires a nonempty registry and no unresolved format warnings",
+                    Some("inspect report.diagnostics before running the I/O probes".to_string()),
+                ));
+            }
+            if report.failures().next().is_some() {
+                return report;
+            }
+        }
         if !report.diagnostics.passed() {
             report.steps.push(SelfTestStepReport::skipped(
                 "create",

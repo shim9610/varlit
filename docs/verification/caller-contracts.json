@@ -65,6 +65,16 @@
       "callers": {
         "default": [
           {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut std::fs::File, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:71a615c990b82902]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
@@ -221,6 +231,16 @@
           }
         ],
         "all": [
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
           {
             "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut std::fs::File, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:71a615c990b82902]",
             "target": "file::RecordIndexEntry::checked_physical_end",

@@ -125,6 +125,17 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
             )
         }
     });
+    let record_validators = blocks.iter().map(|block| {
+        let requires_disk = inline_blocks.iter().any(|inline| {
+            matches!(inline.key_index, KeyIndexChoice::Disk)
+                && matches!(block, Type::Path(path) if path.qself.is_none() && path.path.get_ident() == Some(&inline.name))
+        });
+        if requires_disk {
+            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR.requiring_disk_index())
+        } else {
+            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR)
+        }
+    });
 
     let duplicate_asserts = pairwise(&blocks).into_iter().map(|(left, right)| {
         quote! {
@@ -886,6 +897,24 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 path: P,
             ) -> ::varlit::__core::FormatDiagnostics {
                 Self::spec().diagnose_file(path)
+            }
+
+            /// Explicitly checks a quiescent file with every declared block type.
+            /// Missing coverage cannot pass. See `FileCheckReport` for scope
+            /// and external callback/file-stability preconditions.
+            pub fn check_file<P: AsRef<::std::path::Path>>(
+                path: P,
+            ) -> ::varlit::__core::Result<::varlit::__core::FileCheckReport> {
+                Self::check_file_with_resource_limits(path, Self::spec().read_limits)
+            }
+
+            /// Checks with explicit finite runtime limits. Stored CRC and
+            /// structural checks remain required regardless of read policy.
+            pub fn check_file_with_resource_limits<P: AsRef<::std::path::Path>>(
+                path: P,
+                limits: ::varlit::__core::ResourceLimits,
+            ) -> ::varlit::__core::Result<::varlit::__core::FileCheckReport> {
+                ::varlit::__core::check_file(Self::spec().with_resource_limits(limits), path, &[#(#record_validators,)*])
             }
 
             pub fn self_test<P: AsRef<::std::path::Path>>(

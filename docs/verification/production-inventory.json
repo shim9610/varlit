@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "63e6a2bfea3ecc35",
-    "count": 3291
+    "catalogue": "8e6e1f265b2e4d5e",
+    "count": 3306
   },
   "schema": 1,
   "sources": {
@@ -373,8 +373,9 @@
     "crates/varlit-core/src/collections.rs": "4f7695544aa02eb7",
     "crates/varlit-core/src/compression_buffers.rs": "23f33b59bb1de046",
     "crates/varlit-core/src/compression_steps.rs": "168aea74dc67a36e",
+    "crates/varlit-core/src/conformance.rs": "b647381ab2902bc2",
     "crates/varlit-core/src/decode_state.rs": "c9c4d05e6ef86f32",
-    "crates/varlit-core/src/diagnostics.rs": "5e929b1e70f23c97",
+    "crates/varlit-core/src/diagnostics.rs": "82a84ba36fc06bc8",
     "crates/varlit-core/src/disk_index.rs": "cbc75a6389430423",
     "crates/varlit-core/src/disk_index/oracle.rs": "3393c8ce061bc0c6",
     "crates/varlit-core/src/disk_index/publication_proofs.rs": "d8ae5c075cbe3b14",
@@ -410,7 +411,7 @@
     "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
     "crates/varlit-core/src/indexed.rs": "13bdf0168987d4ac",
     "crates/varlit-core/src/layout.rs": "5c4edc36cb05d54b",
-    "crates/varlit-core/src/lib.rs": "5293a700080417c3",
+    "crates/varlit-core/src/lib.rs": "8577bd05f8ae5bf5",
     "crates/varlit-core/src/matrix.rs": "84371794d74511fd",
     "crates/varlit-core/src/matrix/crc_valid_evidence.rs": "bc9bd30b4250c7e6",
     "crates/varlit-core/src/matrix/fatal_access.rs": "a2e9db1625ccc7a1",
@@ -438,7 +439,7 @@
     "crates/varlit-core/src/spill_file.rs": "102d7a32c1811ec3",
     "crates/varlit-core/src/spill_rows.rs": "7d52652d3c977107",
     "crates/varlit-core/src/stream.rs": "292b6c639758618c",
-    "crates/varlit-core/src/traits.rs": "875c0702ecbc27f8",
+    "crates/varlit-core/src/traits.rs": "e229910acbb4d215",
     "crates/varlit-core/src/verification/buffered_row.rs": "f55517868cadee1c",
     "crates/varlit-core/src/verification/chunk_contracts.rs": "8acb0884ec8b8aa0",
     "crates/varlit-core/src/verification/chunks.rs": "c8d6a441f094b935",
@@ -458,8 +459,8 @@
     "crates/varlit-macros/Cargo.toml": "e37aa72ddb6adb38",
     "crates/varlit-macros/src/finite_key.rs": "5eb3e859ce9b37fd",
     "crates/varlit-macros/src/lib.rs": "850307c2b46a97ac",
-    "crates/varlit-macros/src/modules/block_derive.rs": "46337001a686f640",
-    "crates/varlit-macros/src/modules/format_emit.rs": "abaae96e97bebe80",
+    "crates/varlit-macros/src/modules/block_derive.rs": "0ed5296d38d84dd2",
+    "crates/varlit-macros/src/modules/format_emit.rs": "402f8002b8d50967",
     "crates/varlit-macros/src/modules/format_parse.rs": "9a5b46ae5d9466d6",
     "crates/varlit/Cargo.toml": "7ba8f0fe214f6113",
     "crates/varlit/src/lib.rs": "c5a0e57d89a99987"

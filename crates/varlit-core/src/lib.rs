@@ -8,6 +8,7 @@ mod chunks;
 mod codec;
 mod collections;
 mod compression_buffers;
+mod conformance;
 mod decode_state;
 mod diagnostics;
 
@@ -92,6 +93,9 @@ pub use codec::{
     encode_to_vec, read_field_header, write_field,
 };
 pub use collections::{BlockIter, BlockVec, KeyedBlockVec};
+#[doc(hidden)]
+pub use conformance::RecordValidator;
+pub use conformance::{FileCheck, FileCheckReport, FileCheckStatus, check_file};
 pub use diagnostics::{
     Diagnostic, DiagnosticDomain, DiagnosticSeverity, FormatDiagnostics, FormatSelfTest,
     FormatSelfTestReport, SelfTestStepReport, SelfTestStepStatus, classify_error, diagnose_file,
