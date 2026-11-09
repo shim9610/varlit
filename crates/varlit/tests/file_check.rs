@@ -604,3 +604,118 @@ fn physical_layout_checks_structure_without_claiming_raw_type_coverage() -> varl
     );
     Ok(())
 }
+
+#[test]
+fn delete_then_reinsert_uses_the_tombstone_key_as_predecessor() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("delete-reinsert.varlit");
+    populate(Chained::spec(), &path)?;
+    {
+        let mut file = VarlitFile::open(Chained::spec(), &path)?;
+        file.delete::<Reading>(&varlit::VarlitKeyedBlock::key(&Reading {
+            station: 9,
+            samples: vec![],
+        }))?;
+        file.push_keyed(&Reading {
+            station: 9,
+            samples: vec![5, 7],
+        })?;
+        file.sync()?;
+    }
+    let report = Chained::check_file(&path)?;
+    assert!(report.passed(), "{report:#?}");
+    Ok(())
+}
+
+#[test]
+fn malformed_standalone_tombstone_payload_does_not_pass() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("bad-tombstone.varlit");
+    populate(Chained::spec(), &path)?;
+    let offset = {
+        let mut file = VarlitFile::open(Chained::spec(), &path)?;
+        let key = varlit::VarlitKeyedBlock::key(&Reading {
+            station: 9,
+            samples: vec![],
+        });
+        let tombstone = file.delete_info::<Reading>(&key)?;
+        file.sync()?;
+        file.record_entry_at(tombstone.record_offset)?
+            .payload_offset
+    };
+    let mut bytes = std::fs::OpenOptions::new().write(true).open(&path)?;
+    bytes.seek(SeekFrom::Start(offset + 4))?;
+    bytes.write_all(&u64::MAX.to_le_bytes())?;
+    drop(bytes);
+    let report = Chained::check_file(&path)?;
+    assert!(!report.passed());
+    assert!(
+        report
+            .checks()
+            .iter()
+            .any(|c| c.block_id == Some(2) && c.status == FileCheckStatus::Violated),
+        "{report:#?}"
+    );
+    Ok(())
+}
+
+impl varlit::VarlitMerge for Reading {
+    type Op = u64;
+    fn apply_op(&mut self, op: u64) -> varlit::Result<()> {
+        self.samples.push(op);
+        Ok(())
+    }
+}
+
+#[test]
+fn unregistered_merge_operation_codec_is_explicitly_unverified() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("operation.varlit");
+    populate(Chained::spec(), &path)?;
+    {
+        let mut file = VarlitFile::open(Chained::spec(), &path)?;
+        let key = varlit::VarlitKeyedBlock::key(&Reading {
+            station: 9,
+            samples: vec![],
+        });
+        file.push_op::<Reading>(&key, &7)?;
+        file.sync()?;
+    }
+    let report = Chained::check_file(&path)?;
+    assert!(!report.passed());
+    assert!(
+        report
+            .checks()
+            .iter()
+            .any(|c| c.code == "registry.complete" && c.status == FileCheckStatus::Unverified),
+        "{report:#?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_tombstone_does_not_replace_a_required_value_sample() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("tombstone-only.varlit");
+    {
+        let mut file = VarlitFile::create(Chained::spec(), &path)?;
+        file.push(&Point { x: 1, y: 2 })?;
+        file.push(&Flag { value: true })?;
+        let key = varlit::VarlitKeyedBlock::key(&Reading {
+            station: 9,
+            samples: vec![],
+        });
+        file.delete::<Reading>(&key)?;
+        file.sync()?;
+    }
+    let report = Chained::check_file(&path)?;
+    assert!(!report.passed());
+    let block = report
+        .checks()
+        .iter()
+        .find(|c| c.block_id == Some(2))
+        .unwrap();
+    assert_eq!(block.records_checked, 0);
+    assert_eq!(block.status, FileCheckStatus::Unverified, "{report:#?}");
+    Ok(())
+}

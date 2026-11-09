@@ -183,7 +183,7 @@ The macro registers every declared block type automatically, including
 user-derived types. This read-only check validates native structure, schema
 pinning, embedded manifest identity when present, stored cyclic redundancy
 checks (CRCs), complete typed payload decoding and keyed predecessor identity.
-It includes nonresident records. An ordinary trusted-read policy cannot disable
+It includes nonresident records and typed tombstone keys, including delete/reinsert chains. An ordinary trusted-read policy cannot disable
 these explicit checks. Physical bytes beyond the inspected publication prevent
 a pass. No writer lock is acquired, removed or repaired.
 
@@ -203,7 +203,9 @@ legitimate larger records, supply finite limits with
 `AppFormat::check_file_with_resource_limits(path, limits)`.
 
 Full matrix-cell payload coverage, custom physical-layout payload mappings and
-declared disk-index companion coherence currently report `Unverified`. Custom
+declared disk-index companion coherence currently report `Unverified`.
+Merge-operation keys and envelopes are inspected, but their separate operation
+codecs are not registered and therefore also prevent a pass. Custom
 physical layout headers and segment structure are still inspected. Runtime
 sidecar plans attached outside the format declaration are not discovered; this
 checker does not qualify those application-owned companions.

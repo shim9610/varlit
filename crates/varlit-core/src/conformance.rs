@@ -149,11 +149,10 @@ fn decode_keyed_record<T: VarlitKeyedBlock>(
     entry: &RecordIndexEntry,
     scratch: &mut Vec<u8>,
 ) -> Result<()> {
-    let value = file.decode_block_into::<T>(entry, scratch)?;
+    let current = decode_keyed_key::<T>(file, entry, scratch)?;
     if let Some(offset) = entry.prev_same_key_offset {
-        let current = value.key();
-        drop(value);
-        let previous = file.read_block_at::<T>(offset)?.key();
+        let previous = file.record_entry_at(offset)?;
+        let previous = decode_keyed_key::<T>(file, &previous, scratch)?;
         if current != previous {
             return Err(Error::InvalidCanonicalEncoding(
                 "keyed predecessor belongs to a different key",
@@ -161,6 +160,40 @@ fn decode_keyed_record<T: VarlitKeyedBlock>(
         }
     }
     Ok(())
+}
+
+fn decode_keyed_key<T: VarlitKeyedBlock>(
+    file: &VarlitFile,
+    entry: &RecordIndexEntry,
+    scratch: &mut Vec<u8>,
+) -> Result<T::Key> {
+    if entry.block_id == T::ID {
+        return Ok(file.decode_block_into::<T>(entry, scratch)?.key());
+    }
+    if entry.block_version != 1 || entry.flags != crate::file::RECORD_FLAG_INTERNAL {
+        return Err(Error::CorruptTail {
+            offset: entry.record_offset,
+        });
+    }
+    let spec = file.spec();
+    let logical_len = entry.logical_payload_len_snapshot(spec, file.snapshot())?;
+    let mut budget = crate::collections::MaterializationBudget::new(spec);
+    budget.consume(logical_len)?;
+    entry.read_logical_payload_snapshot_into(spec, file.snapshot(), scratch)?;
+    let key = match entry.block_id {
+        crate::file::TOMBSTONE_BLOCK_ID => {
+            crate::native_layout::decode_native_internal_key_envelope(scratch, T::ID)?
+        }
+        crate::file::OP_BLOCK_ID => {
+            crate::native_layout::decode_native_internal_op_envelope(scratch, T::ID)?
+                .map(|(key, _)| key)
+        }
+        _ => None,
+    }
+    .ok_or(Error::InvalidCanonicalEncoding(
+        "keyed predecessor belongs to another block",
+    ))?;
+    budget.decode(key, spec.endian)
 }
 
 struct Registered<'a> {
@@ -176,6 +209,7 @@ struct Registered<'a> {
 /// throughout the call. Custom codec/key callbacks must terminate and satisfy
 /// their own contracts; this checker does not sandbox application code.
 ///
+/// Separate merge-operation codecs are not registered and report `Unverified`.
 /// Matrix cell payloads and custom physical-layout payload mappings currently
 /// report `Unverified`. Their bytes are not silently treated as typed records.
 /// A declared block with no inspected records also reports `Unverified`: use
@@ -423,6 +457,7 @@ pub fn check_file<P: AsRef<Path>>(
             check.status = FileCheckStatus::Unverified;
             check.message = "matrix cell payload coverage requires a matrix-specific check";
         } else if check.records_checked == 0 && check.error.is_none() {
+            check.status = FileCheckStatus::Unverified;
             check.message = "no records of this declared type were inspected; add a fixture sample";
         }
     }
@@ -436,14 +471,49 @@ fn check_entry(
     report: &mut FileCheckReport,
     scratch: &mut Vec<u8>,
 ) {
-    let Ok(at) = registry.binary_search_by_key(&entry.block_id, |r| r.validator.id) else {
-        if !crate::file::INTERNAL_BLOCK_IDS.contains(&entry.block_id) {
-            report.checks[3].offset = Some(entry.record_offset);
-            report.checks[3].fail(Error::UnregisteredBlock(entry.block_id));
+    let internal_key = matches!(
+        entry.block_id,
+        crate::file::TOMBSTONE_BLOCK_ID | crate::file::OP_BLOCK_ID
+    );
+    let owner = if internal_key {
+        if entry.block_id == crate::file::OP_BLOCK_ID && report.checks[3].error.is_none() {
+            report.checks[3].status = FileCheckStatus::Unverified;
+            report.checks[3].message =
+                "merge-operation payload codecs are not registered by this checker";
         }
-        return; // Internal records are handled by the native reader/CRC walk.
+        let owner = entry
+            .read_logical_payload_snapshot_into(file.spec(), file.snapshot(), scratch)
+            .and_then(|()| {
+                let bytes = scratch.get(..4).ok_or(Error::UnexpectedEof)?;
+                Ok(u32::from_le_bytes(
+                    bytes.try_into().map_err(|_| Error::UnexpectedEof)?,
+                ))
+            });
+        match owner {
+            Ok(owner) => owner,
+            Err(e) => {
+                report.checks[3].offset = Some(entry.record_offset);
+                report.checks[3].fail(e);
+                return;
+            }
+        }
+    } else {
+        entry.block_id
+    };
+    let Ok(at) = registry.binary_search_by_key(&owner, |r| r.validator.id) else {
+        if internal_key || !crate::file::INTERNAL_BLOCK_IDS.contains(&entry.block_id) {
+            report.checks[3].block_id = Some(owner);
+            report.checks[3].offset = Some(entry.record_offset);
+            report.checks[3].fail(Error::UnregisteredBlock(owner));
+        }
+        return; // Other internal records are handled by the native reader/CRC walk.
     };
     let registered = &registry[at];
+    if internal_key && !registered.validator.keyed_links && report.checks[3].error.is_none() {
+        report.checks[3].status = FileCheckStatus::Unverified;
+        report.checks[3].message = "manual keyed block has no typed internal-key checker";
+        return;
+    }
     let check = &mut report.checks[registered.check];
     if check.error.is_some() {
         return;
@@ -453,7 +523,9 @@ fn check_entry(
         (registered.validator.decode)(file, entry, scratch)
     })) {
         Ok(Ok(())) => {
-            check.records_checked += 1;
+            if !internal_key {
+                check.records_checked += 1;
+            }
             if file.spec().index_policy.keyed_offset_chain && !registered.validator.keyed_links {
                 check.message = "manual keyed block has no keyed predecessor checker";
             } else {

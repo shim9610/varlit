@@ -65,12 +65,12 @@
       "callers": {
         "default": [
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:b163ad9ea706b6b5]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:b163ad9ea706b6b5]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -232,12 +232,12 @@
         ],
         "all": [
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:b163ad9ea706b6b5]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:4bfcc66bb60f3a1d]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:b163ad9ea706b6b5]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -921,6 +921,11 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:4f461837badfef3d]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "decode_stream_tombstone_key(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry) -> std::result::Result<Option<<T as traits::VarlitKeyedBlock>::Key>, error::Error> [body:9767037a6a4f3734]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1094,6 +1099,11 @@
           },
           {
             "caller": "consume_manifest_items(_1: &mut collections::MaterializationBudget, _2: usize) -> std::result::Result<(), error::Error> [body:51fe474d4b82ad7c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:4f461837badfef3d]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
