@@ -230,7 +230,9 @@ def main():
             with (out/(name+'.log')).open('w') as log:
                 code = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300).returncode
             return code, (out/(name+'.log')).read_text()
-        code, log = run('baseline',cmd)
+        # Match the full-crate suite's two workers within the existing runner
+        # budget. Each deliberately mutated fixture remains sequential below.
+        code, log = run('baseline',cmd+['--jobs','2','--output-format','terse'])
         if code:
             raise RuntimeError('unmodified resource proofs failed')
         report['baseline_harnesses'] = validate(log, expected)
