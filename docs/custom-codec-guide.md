@@ -190,7 +190,7 @@ impl VarlitDecode for Samples {
 }
 ```
 
-### Prove it with a negative self-test
+### Test allocation accounting with a negative control
 
 A codec that charges correctly and one that does not are indistinguishable on
 well-formed input: both round-trip. The difference is only visible when the
@@ -226,8 +226,9 @@ fn samples_refuse_to_materialize_past_the_budget() {
 ```
 
 Delete the `charge_materialization` line and the first assertion fails with
-`Ok(..)`. That failure is the whole point of the test: it is the only automated
-signal that distinguishes a charged codec from an uncharged one.
+`Ok(..)`. This regression detects the omitted charge for the tested value and
+limit. It does not establish correct allocation accounting for every value or
+branch of a custom codec.
 
 ## Codec Rules
 

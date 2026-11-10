@@ -60,9 +60,12 @@ for item in &report.items {
 }
 ```
 
-This opens the file read-only, validates record payloads logically, checks
-compression and CRC feature gates, compares embedded manifests when present, and
-reports matrix recovery findings.
+This opens the file read-only, reads logical payload bytes for records in the
+resident directory under the format's ordinary read policy, checks compression
+and CRC feature gates, compares embedded manifests when present, and reports
+matrix recovery findings. It does not decode application types or certify
+coverage of all records. Use the [application qualification template](#application-qualification-template)
+for registered typed decoding and explicit coverage results.
 
 ## End-To-End Self Test
 
@@ -183,8 +186,9 @@ The macro registers every declared block type automatically, including
 user-derived types. This read-only check validates native structure, schema
 pinning, embedded manifest identity when present, stored cyclic redundancy
 checks (CRCs), complete typed payload decoding and keyed predecessor identity.
-It includes nonresident records and typed tombstone keys, including delete/reinsert chains. An ordinary trusted-read policy cannot disable
-these explicit checks. Physical bytes beyond the inspected publication prevent
+It includes nonresident records and typed tombstone keys, including
+delete/reinsert chains. An ordinary trusted-read policy cannot disable these
+explicit checks. Physical bytes beyond the inspected publication prevent
 a pass. No writer lock is acquired, removed or repaired.
 
 | Status | Meaning |
@@ -258,7 +262,7 @@ python -m venv .venv-tdms
 
 The TDMS harnesses check Varlit-authored example files against `npTDMS` and
 `npTDMS`-authored scalar type matrix files against a Varlit-based example
-adapter. The covered TDMS proof set includes signed/unsigned integer widths,
+adapter. The tested TDMS cases include signed/unsigned integer widths,
 single/double floats, booleans, strings, timestamps, complex single/double
 floats, changed raw-data-index segments, `same-as-previous` raw-index reuse,
 mixed objects in one segment, and Varlit append into an npTDMS-authored file.
@@ -268,8 +272,9 @@ npTDMS-authored direction omits those two because npTDMS 1.11.0 does not author
 them correctly through its normal `ChannelObject` writer path. The BMP harness
 checks a non-TDMS layout in both directions with Pillow.
 
-For TDMS-style work, remember that the repository contains adapter proofs, not
-a Varlit-provided TDMS reader/writer. Varlit owns the generic physical-layout
+For TDMS-style work, the repository contains adapter interoperability examples
+and tests, not a Varlit-provided TDMS reader/writer. Varlit owns the generic
+physical-layout
 capabilities — declaring headers, lead-ins, metadata and raw regions and footers,
 validating literal and caller fields, finalized offsets and segment bounds,
 appending complete segments, and exposing offsets, lengths, byte ranges and

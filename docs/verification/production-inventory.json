@@ -358,7 +358,7 @@
     }
   },
   "functions": {
-    "catalogue": "9f2e5a9099133ff2",
+    "catalogue": "bda1e1803b96bca8",
     "count": 3307
   },
   "schema": 1,
@@ -391,7 +391,7 @@
     "crates/varlit-core/src/fallible/proofs.rs": "ce2f7f38c0326c02",
     "crates/varlit-core/src/file.rs": "895cb991e4638bd9",
     "crates/varlit-core/src/file/append.rs": "8018d1e1904c3a5f",
-    "crates/varlit-core/src/file/directory.rs": "eb72064fb942a68a",
+    "crates/varlit-core/src/file/directory.rs": "7643298139c448d0",
     "crates/varlit-core/src/file/follow.rs": "ac8a7ce913fe84a0",
     "crates/varlit-core/src/file/header_codec.rs": "d9d21f61120ad441",
     "crates/varlit-core/src/file/header_slots.rs": "a4e10995167ef8a0",

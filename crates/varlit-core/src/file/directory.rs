@@ -68,8 +68,9 @@ impl VarlitFile {
 
     /// Fills the caller's buffer with every metadata pair.
     ///
-    /// `out` is cleared and then extended, so a caller that reuses one buffer
-    /// across calls allocates once and never again.
+    /// `out` is cleared and then extended. Sufficient outer capacity can be
+    /// reused; metadata names and values still allocate separately, and a
+    /// larger result may grow the buffer.
     pub fn all_metadata_into(&self, out: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
         self.all_metadata_into_in(self.resident_directory("all_metadata")?, out)
     }
@@ -293,9 +294,9 @@ impl VarlitFile {
     /// `TRUSTED` accepts the supplied metadata while retaining extent and
     /// allocation limits.
     ///
-    /// **The entry is not trusted.** It is the caller's, so it may name
-    /// anything: an extent past the end of the snapshot is refused, and bytes
-    /// that do not match the entry's checksum are refused. What it cannot do is
+    /// The caller supplies the entry. Snapshot extent checks remain mandatory;
+    /// checksum mismatches are refused when the read policy verifies data CRCs.
+    /// `TRUSTED` skips optional frame and data CRC checks. An entry cannot
     /// reach outside this file — every offset is validated against this
     /// handle's snapshot bounds — so the worst a wrong entry buys is an error
     /// or some other record of the same file.
@@ -321,10 +322,9 @@ impl VarlitFile {
     /// bytes through the caller's buffer.
     ///
     /// `scratch` is scratch, not output: the decoded value is returned and the
-    /// buffer keeps the last record's bytes. Reusing it across a walk is the
-    /// difference between one allocation and one per record — which is what
-    /// makes "cache the index, then read through it" cost no more than the
-    /// reads themselves.
+    /// buffer keeps the last record's bytes. Sufficient scratch capacity can
+    /// be reused for uncompressed payloads. Larger payloads may grow it;
+    /// decompression and decoding owned values may allocate separately.
     ///
     /// Refuses an entry whose block id or version is not `T`'s, exactly as
     /// [`read_block_at`](Self::read_block_at) does. Unlike `read_block_at` it
@@ -1115,10 +1115,8 @@ impl VarlitFile {
 
     /// Fills the caller's buffer with the record index.
     ///
-    /// `out` is cleared and then extended, so a caller that reuses one buffer
-    /// across calls allocates once and never again. The same shape the append
-    /// path uses for record staging, and for the same reason: the library does
-    /// not get to decide where the caller's data lives.
+    /// `out` is cleared and then extended. Sufficient capacity is reused;
+    /// a larger index may grow the buffer. This is not a fixed-capacity API.
     ///
     /// The copy is charged against `ReadLimitKey::IndexBytes`, like the index
     /// it copies.

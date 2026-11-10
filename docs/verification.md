@@ -4,11 +4,12 @@ This guide follows the current repository. The documentation gate rejects repeat
 report sections, checks local links and executes the grouped-block quickstart from
 its actual Markdown source. Historical reports identify the
 revision they tested; a successful older run is not a result for a newer commit.
-The production runtime at `851836e` passed all **69 CI jobs** and all **three
-Sanitizers jobs**:
+The recorded runtime candidate at `b61dbc4` passed all **69 CI jobs** and all
+**three Sanitizers jobs**. These are results for that revision, not automatic
+qualification of later commits:
 
-- [CI, including the strict required gate](https://github.com/shim9610/varlit/actions/runs/41892694910)
-- [Miri, AddressSanitizer/leaks and fuzz smoke](https://github.com/shim9610/varlit/actions/runs/41892694877)
+- [CI, including the strict required gate](https://github.com/shim9610/varlit/actions/runs/42667478631)
+- [Miri, AddressSanitizer/leaks and fuzz smoke](https://github.com/shim9610/varlit/actions/runs/42667478504)
 
 `ci / required` includes native tests, feature interactions, executable API
 contracts, storage/resource contracts, package/docs checks, CodeQL, dependency

@@ -492,7 +492,7 @@ resident index size; use `ReadLimits::UNTRUSTED` for input you did not produce.
 `max_file_len` is accepted and inert — nothing enforces a file-length ceiling;
 see [Known Limitations](known-limitations.md).
 
-The petabyte-scale path is [Scalable Stream And Indexed
+For bounded-directory workloads, use [Scalable Stream And Indexed
 Handles](#scalable-stream-and-indexed-handles) below, available by default. `VarlitReader` is a snapshot as of its own open: records
 another handle appends afterwards are not visible until it advances with
 `follow()` or is reopened. See
@@ -500,17 +500,18 @@ another handle appends afterwards are not visible until it advances with
 
 ### Reads that fill a buffer you own
 
-Every read that returns a collection has an `_into` twin taking the buffer
-instead. `out` is cleared and then filled, so a caller that reuses one buffer
-across calls or across files allocates once and never again. The allocating form
-stays as a thin wrapper — nothing breaks.
+The collection reads listed below accept reusable caller-owned buffers.
+`out` is cleared and then filled. Reusing sufficient capacity can avoid growing
+the outer buffer, but larger results may reserve more space, and decoded values,
+metadata entries and internal scratch may allocate separately. These `Vec` and
+`HashMap` APIs do not impose a fixed-capacity, no-growth contract.
 
 | allocating | caller-supplied |
 | --- | --- |
 | `index_entries()` | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
 | `all_metadata()` | `all_metadata_into(&mut Vec<(String, Vec<u8>)>)` |
 | `blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
-| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record; bounded by your buffer, not by the file |
+| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output; not a bounded-memory iterator |
 | `blocks_migrated::<F, T, M>()` | `blocks_migrated_into::<F, T, M>(&mut Vec<T>)` |
 | `keyed_blocks::<T>()` | `keyed_blocks_into::<T>(&mut Vec<RecordIndexEntry>, &mut HashMap<..>)` |
 | `materialized_keyed_blocks::<T>()` | `materialized_keyed_blocks_into::<T>(&mut HashMap<..>)` |
@@ -530,13 +531,13 @@ Reading one record you already hold an entry for, into a buffer you own:
 
 | API | Meaning |
 | --- | --- |
-| `read_payload_into(&entry, &mut Vec<u8>)` | stored bytes, checksum-verified |
+| `read_payload_into(&entry, &mut Vec<u8>)` | stored bytes, checked under the selected read policy |
 | `read_logical_payload_into(&entry, &mut Vec<u8>)` | decompressed if the record is compressed |
 | `decode_block_into::<T>(&entry, &mut scratch)` | decode, reading the bytes through `scratch` |
 
 All three are bound to this open handle's snapshot, not to a path. The entry is
-yours and is therefore not trusted: an extent past the snapshot is refused, and
-bytes that do not match the entry's checksum are refused.
+yours and is therefore not trusted: an extent past the snapshot is refused.
+Checksum mismatches are refused when the selected read policy verifies data CRCs.
 
 ### Reads resolved through a directory you supply
 
@@ -596,9 +597,11 @@ the map is alive.
 
 A second question resumes where the first stopped, and `find` searches what is
 already framed before it reads anything, so asking twice costs the records
-between the two answers. `release()` is the bounded-memory pass: `fill_to(k)`,
-use them, `release()`, repeat — memory is your `k` entries however long the
-file is, and no record is read twice.
+between the two answers. For an incremental directory pass, use `fill_to(k)`,
+process the entries, then `release()` and repeat. This bounds retained directory
+entries by the chosen batch; buffer capacity and fixed scratch add to that
+storage. The framing cursor advances without rescanning the released prefix.
+Payload reads are separate work.
 
 Measured on a 50,000-record, 31 MB file, wanting ten records at position 25,000:
 
@@ -1151,81 +1154,25 @@ Matrix API exists on `VarlitFile`, `VarlitReader`, `VarlitWriter`, and generated
 typed wrappers.
 
 **Matrix reads take `&self`.** `read_matrix_cell`, `matrix_cell_payload`,
-`read_matrix_aux`, `matrix_aux_len` and `matrix_cell_status` all borrow the
-handle shared, on all three handle types. They read through positional I/O
-(`pread` / `seek_read`) over immutable state, so no cursor moves: several
-threads may read through **one** handle concurrently, and
-`VarlitReader`, `VarlitFile` and `VarlitWriter` are `Sync` and `Send` by derivation
-— there is no `unsafe impl` for any of them. Existing callers holding a
-`let mut reader` keep compiling. Writes are unaffected and still take
-`&mut self`. `copy_matrix_cell_bytes_from` also takes its *source* handle by
-shared reference.
+`read_matrix_aux`, `matrix_aux_len` and `matrix_cell_status` borrow their handle
+by shared reference. Writes and `follow()` still require `&mut self`.
+`copy_matrix_cell_bytes_from` also borrows its source handle by shared reference.
+A shared borrow does not make the handle safe to share between threads.
 
-Sharing a handle is also **faster** than not sharing it was, which is a separate
-claim from the type signature and is measured rather than argued. On Windows,
-`ReadFile` against a synchronous handle serialises on the kernel file object, so
-`&self` alone would give the *right* to share a handle and none of the
-throughput: four threads through one handle measured 0.27x of a single thread
-(91,137 vs 343,285 cell reads/s, `IntegrityPolicy::Crc32`). Varlit therefore
-hands each reading thread its own file object, derived from the open handle with
-`ReOpenFile` — no path, so no re-resolution — the first time that thread reads
-that file. After it, the same measurement is 568,397 reads/s on four threads
-against 256,559 on one (2.2x), matching what four separately-opened readers
-achieve. The handles are read-only (`FILE_GENERIC_READ`), never escape the
-module that owns them, and are closed when the file handle is dropped. On Unix
-`pread` does not serialise, so no extra descriptor is opened at all.
+Reader handles are `Send + !Sync`: each reading thread owns a reader and its
+private caches, and creates its cursors there. Bitmap caches use owner-local
+`RefCell`; there is no bitmap mutex or shared Windows handle registry. Each
+query reads the captured confirmed generation, including cache misses.
+`follow(&mut self)` adopts a later generation explicitly. Old readers never
+delay publication or compaction.
 
-**Those throughput figures are a recorded historical measurement, not a gate.**
-They were taken on this project's Windows development host, no test re-checks
-them, and nothing fails if they move. The rustdoc on `MatrixReadPool` records
-its own run of the same comparison — 327,037 reads/s on one thread against
-593,337 on four (1.81x) — and the two differ because wall-clock throughput on a
-shared desktop differs between runs.
-
-**What the suite gates is a counted invariant, not a wall-clock ratio.**
-`crates/varlit/tests/matrix_concurrent_reads.rs` does not assert scaling in wall
-clock. It measures the 1-vs-N ratio and prints it on every run, decides nothing
-by it, and keeps the strict form of it `#[ignore]`d. Split by what a green run
-establishes:
-
-| Contract | Status | Where |
-| --- | --- | --- |
-| Matrix reads issued while a commit-map page-store lock was held is **zero**, and reads issued at all is nonzero. Single-threaded, decided by control flow rather than by the clock, so platform- and load-independent. A fifth test issues a read under the lock deliberately and requires the counter to reach 1, so the zeros are not vacuous; two more require the demand fault-in and the whole-map aggregate to read through the private-handle pool their backing already holds | gate, every run, **every feature configuration** (these counters are `cfg(test)`) | `varlit-core`'s `matrix::page_store_lock_audit_tests`, five tests |
-| The same lock invariant through the public read path: N threads on one handle, a one-page demand cache against four live commit-map pages, preceded by a single-threaded warm-up that establishes that fault-in reads happened at all | gate, on runs with `scalable-fault-injection` (the public counters are behind it) | `no_read_is_issued_while_a_bitmap_page_store_lock_is_held` |
-| The five matrix read entry points compile against `&self` on `VarlitReader`, `VarlitFile` and `VarlitWriter`, and all three are `Send + Sync` | gate, every run | `every_matrix_read_entry_point_takes_a_shared_borrow`, `the_reader_handle_is_sync_and_send` |
-| Four threads sharing one handle each read the right cell value, under `IntegrityPolicy::None` and, where the feature is on, `Crc32` | gate, every run | `threads_sharing_one_handle_read_every_cell_correctly` |
-| 1 thread against N threads through one handle, total reads held fixed at 24,000 | **measured, printed, not a gate** — the line it prints is labelled `MEASUREMENT ONLY` | `report_the_scaling_of_one_shared_handle` |
-| The same comparison asserted at `ratio <= 1.0` | **`#[ignore]`d manual benchmark**, run deliberately on an idle host: `cargo test -p varlit --test matrix_concurrent_reads -- --ignored --nocapture` | `shared_handle_scaling_beats_one_thread_on_an_idle_host` |
-
-One wall-clock ratio is still asserted on every run, and it is in another file:
-`matrix_lazy_residency.rs`'s
-`concurrent_lazy_readers_are_not_serialised_behind_the_page_store` holds
-`ratio <= 1.0` for the lazy fault-in path.
-
-The eager ratio stopped being a gate because it could not fail for the reason it
-was written. It measures between 0.31x and 0.34x on the Windows development
-host, and the round that added the private per-thread handles recorded 1.55x
-with them disabled — but two consecutive `ubuntu-latest` runs of identical,
-healthy code reported 2.14x and 1.43x, and no threshold loose enough to survive
-that spread would still catch the 1.55x convoy it exists to find. The counted
-invariant replaced it because a read issued inside the critical section is a
-property of one thread's control flow: decidable with no second thread, no
-contention, and no quiet machine.
-
-**Every throughput number above is a Windows number, and the private-handle pool
-is `#[cfg(windows)]`.** The Unix path — a shared handle plus `pread` — is
-executed but not measured: CI runs the suite on `ubuntu-latest` as well as
-`windows-latest`, so the path runs there and the counted lock invariant is
-enforced there. The only Unix figures on record are the two ratios above, 2.14x
-and 1.43x; no Unix throughput has ever been published, and the `#[ignore]`d
-threshold has never been run on Unix. See
-[Known Limitations §6.1](known-limitations.md#61-the-unix-code-paths-and-what-the-first-linux-run-found).
-
-Matrix readers are `Send + !Sync`, with one reader and private caches per
-thread. Bitmap caches use owner-local `RefCell`; there is no bitmap mutex or
-shared Windows handle registry. Queries take `&self`. Each query reads the
-captured confirmed generation, including cache misses. `follow(&mut self)` adopts
-a later generation explicitly. Old readers never delay publication or compaction.
+`crates/varlit/tests/matrix_concurrent_reads.rs` checks the shared-borrow entry
+points, `Send` handle bounds and correct cell values through independent readers.
+`report_the_scaling_of_independent_handles` reports a timing comparison without
+asserting a speedup. The ignored
+`independent_reader_scaling_beats_one_thread_on_an_idle_host` is a manual
+benchmark, not a CI performance guarantee. Historical shared-handle throughput
+figures do not describe the current ownership model.
 
 The generation page cache defaults to 2 MiB and is configured at open with
 `ReadLimits::with_matrix_generation_cache_bytes(bytes)` (zero disables it).
@@ -1697,10 +1644,10 @@ safe window APIs stay memory-safe through these enforced invariants:
 6. Raw zero-copy access additionally validates registration, block kind,
    version, endian, exact size, and alignment before creating a typed reference.
 
-This is a conditional safety proof, not a claim that Varlit can police arbitrary
-external processes. If a caller cannot control every writer, it must use owned
-reads such as `blocks::<T>()`, `read_payload`, or matrix typed reads instead of
-mmap.
+These invariants describe the intended safety argument under the unsafe API's
+preconditions; they are not a machine-checked proof of the mmap implementation.
+If a caller cannot control every writer, it must use owned reads such as
+`blocks::<T>()`, `read_payload`, or matrix typed reads instead of mmap.
 
 ## Compression API
 

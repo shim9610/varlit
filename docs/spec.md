@@ -383,7 +383,7 @@ and compile-time schema validation.
   metadata/raw boundaries, whose ToC/version fields are visible through
   `LayoutSegmentInfo`, and whose mixed raw channel bytes are sliced by
   adapter-owned chunk metadata.
-- The TDMS-style physical writer example is an external adapter proof, not a
+- The TDMS-style physical writer example tests an external adapter; it is not a
   Varlit-provided TDMS feature. It produces a three-segment scalar type matrix
   using Varlit's generated layout APIs plus adapter toolkit helpers, then
   reopens it with `open_layout_writer` to append another segment. The optional
