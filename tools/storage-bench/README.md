@@ -118,8 +118,14 @@ The `payload` and `writer` binaries support focused diagnostics. Retain data CRC
 structure checks and publication guards according to the selected profile;
 independent policy comparisons do not make different integrity contracts equal.
 
-`analyze_grouped.py`, `analyze_read_validation.py` and `integrate_report.py` remain
-available for newly collected, explicitly identified cohorts. The HTML file here
+`analyze_grouped.py` and `analyze_read_validation.py` remain available for newly
+collected, explicitly identified cohorts. The HTML file here
 is a generator template containing `__DATA__`, not a published benchmark result.
 Do not mix cloud observations with the future local cohort or publish performance
 conclusions before reviewing its controls and resource measurements.
+
+Keep run output outside the checkout or under ignored `target/` / `results/`
+directories. Logs, measurements, recovery archives and compiler extracts are not
+versioned source. Store shared evidence in CI artifacts or external storage;
+do not keep backup branches containing repeated archive snapshots. The obsolete
+integrator for the withdrawn, dated cloud cohorts has been removed.

@@ -10,6 +10,24 @@ __pycache__/
 *.bak
 .DS_Store
 
+# Reproducible runs belong in ignored output directories or CI artifacts.
+/formal-recovery/
+/benchmark-results/
+/performance-results/
+/docs/performance/
+/docs/verification/*-20??????/
+*.tar
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.tgz
+*.zip
+*.7z
+*.ullbc
+*.ullbc.gz
+*.llbc
+*.mir
+
 # Internal working documents: adversarial review reports, per-worker notes, and
 # the routing/draft/validation artifacts of the hardening rounds. These are
 # development process material, not part of what the project publishes, and they
