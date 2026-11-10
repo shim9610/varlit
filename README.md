@@ -80,10 +80,9 @@ allocation and durability depend on the actual filesystem. See
 
 ## Performance and verification
 
-The [current workload comparison](https://github.com/shim9610/varlit/blob/main/docs/performance/workload-storage-20261104/README.md)
-contains grouped logging, arrays, table-oriented cases, concurrent reader progress
-and CPU/memory/storage measurements. Read-policy measurements are included in the
-same report. Results apply to their recorded workloads and environments.
+Published performance results are deferred pending a controlled local rerun.
+The [benchmark harness](tools/storage-bench/README.md) retains workload definitions
+and execution instructions; cloud measurements are not used for performance claims.
 
 CI covers native Linux, Windows and Intel macOS, feature interactions, external
 API consumers, package archives, CodeQL, Kani and deliberate-defect controls.

@@ -443,17 +443,11 @@ do not.**
   internal *segment* record covering the records that commit point added, chained
   to the previous one through the record footer's `prev_same_block_offset`. Open
   confirms a record footer at the end of the file and walks that chain backwards,
-  reading one record per commit point and **no data record at all**. Measured on
-  one Linux host with a commit point every 256 records: an 852 MB, 200,000-record
-  file opens in 370 ms chained against 5,867 ms scanning, framing 782 records
-  instead of 200,782. What it removes is the open-time walk, not the directory:
-  the directory it produces has the same bounded-buffer/spill policy as a scan.
+  reading one record per commit point instead of scanning data-record headers.
+  The resulting directory uses the same bounded-buffer/spill policy as a scan.
   A chain whose decoded staging exceeds the current buffer falls back to bounded
-  record framing; the historical timings above do not cover that fallback. Its cost is on disk — a segment
-  carries an index entry per record it covers, so the file grows with the
-  record count (measured: +3.67 MB on a 31 MB, 50,000-record file). **A writing
-  session must end
-  with `flush` or `commit`** — a data record at the end of the file leaves open
+  record framing. Segment payloads add disk storage proportional to their covered
+  record count. **A writing session must end with `flush` or `commit`** — a data record at the end of the file leaves open
   no chain to start from, and it silently scans instead. See [Known Limitations
   §2.1](known-limitations.md#21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index)
   for the full table, the other costs, and every fallback.
@@ -603,16 +597,6 @@ entries by the chosen batch; buffer capacity and fixed scratch add to that
 storage. The framing cursor advances without rescanning the released prefix.
 Payload reads are separate work.
 
-Measured on a 50,000-record, 31 MB file, wanting ten records at position 25,000:
-
-| route | read syscalls |
-| --- | --- |
-| `index_entries_into` (all `N`) then read | 100,238 |
-| `blocks::<T>()` then `get(i)` ×10 | 100,238 |
-| `scan()`, break at 25,010 | 50,028 |
-| `record_map` `fill_to(25_010)` then read | 50,058 |
-| `record_map` `find` the first record | **13** |
-
 **What a partial index does not check.** A full open validates sequence
 uniqueness across every record in the file; a map validates nothing beyond the
 prefix it has read. A duplicate sequence past the stopping point is not detected
@@ -658,21 +642,6 @@ the file: the three facts an open needs that live in no single record — where
 the committed file ends, what sequence the next append takes, and where each
 block's newest record sits. `IndexPolicy::with_open_digest_on_flush(true)`
 writes them at each commit point.
-
-Measured, 50,000 records / 31 MB:
-
-| open | read syscalls | bytes read | file overhead |
-| --- | --- | --- | --- |
-| `open_readonly` (scan) | 100,316 | 3,207,102 | — |
-| `open_readonly` (segment chain) | 516 | 7,332,522 | +3.67 MB |
-| `open_readonly_lazy` (digest) | **20** | **516** | **+12.8 KB** |
-
-The last column is how a format chooses between the two tail records. A segment
-writes an entry per record it covers, so its overhead grows with the file; a
-digest writes twelve bytes per distinct block id, so the 12.8 KB above is a
-hundred flushes' worth and would be the same at a billion records. What a
-segment buys for its size is an open that *builds the index*; a digest
-deliberately does not, and pairs with `record_map` instead.
 
 The handle keeps no directory. `blocks`, `scan` and `keyed_blocks` return
 `Error::NoResidentDirectory` and are answered through `with_directory(&map)`;
@@ -1026,7 +995,7 @@ Manual `VarlitBlock` implementations must state
 generated blocks already provide the exact value.
 
 See [Scalable Stream And Disk-Index I/O](scalable-io.md) for declarations,
-mode selection, durability ordering, checked extent types, and measured costs.
+mode selection, durability ordering and checked extent types.
 
 `scan()` yields entries whose physical payload can be read through
 `RecordIndexEntry`. Use `read_payload_limited(path, physical_limit)` for a

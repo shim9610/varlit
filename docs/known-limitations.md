@@ -188,6 +188,6 @@ exclusions retain native/ASan alternatives and explicit gaps. Fuzz smoke runs ar
 finite campaigns. Process kills do not simulate loss of the OS page cache.
 See the [verification guide](verification.md), live CI artifacts and manifests.
 
-The [current performance report](performance/workload-storage-20261104/README.md)
-retains measured regressions and calibration limits. Older audit and benchmark
-material is available in [Git history](https://github.com/shim9610/varlit/tree/9343ea1754947d3af8e03dfa525d6ba5af856008/docs).
+Performance qualification is pending a controlled local rerun. The current tree
+retains the [benchmark harness](../tools/storage-bench/README.md), without cloud
+results or performance conclusions. Historical material remains in Git history.

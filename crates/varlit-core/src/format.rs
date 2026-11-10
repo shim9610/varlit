@@ -376,9 +376,6 @@ const _: () = assert!(
 /// independently chooses which optional checks run; with both off, `AtOpen`
 /// does not force an otherwise unnecessary verification scan. Recovery and
 /// explicit verification still use their strict contracts.
-///
-/// Measured on Linux x86_64, cold cache, one 2,052 MB file of 50,000 records:
-/// open took 7,096 ms verifying at open and 3,621 ms not verifying at open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IntegrityVerification {
@@ -2533,8 +2530,8 @@ impl FormatSpec {
     /// Compresses each matrix block's slot region inside a chunk record.
     ///
     /// A chunk is written whole, so an unfilled one costs its full size on
-    /// disk — measured identical at 5% and 100% filled. This is the knob for
-    /// that, and the only other one is `rows_per_chunk`.
+    /// disk regardless of occupancy. Compression and `rows_per_chunk` control
+    /// that storage tradeoff.
     ///
     /// **What it costs is one sub-block decode per cell read** instead of a
     /// `stride`-byte positional read. Only the *slot regions* are compressed:

@@ -320,8 +320,8 @@ const MATRIX_CHUNK_FLAG_CELL_CRC: u16 = 0x0001;
 /// Prefix flag: every block's slot region is a sub-block index followed by
 /// compressed sub-blocks, rather than plain cells.
 ///
-/// A chunk is written whole, so an unfilled one costs its full size — measured
-/// identical at 5% and 100% filled. Only the slot regions are compressed: the
+/// A chunk is written whole, including its unfilled slots. Only the slot regions
+/// are compressed: the
 /// prefix, the descriptors, the commit maps and the checksum tables stay plain,
 /// so addressing a cell, reading its commit bit and checking its checksum are
 /// unchanged, and only the `stride`-byte positional read becomes a sub-block
@@ -1929,9 +1929,7 @@ fn encode_compressed_slots(
 ///
 /// **The checksum travels with its cell.** Compressing only the slot region
 /// left the per-cell checksum table — four bytes per cell, all zeros for every
-/// never-written cell — as the dominant term: measured 1,606,396 B plain
-/// against 1,083,604 B with slots-only compression, a 33% saving where the
-/// slots alone are half the file. Packing each cell beside its checksum makes
+/// never-written cell — uncompressed. Packing each cell beside its checksum makes
 /// one decode yield both and lets the zeros collapse together.
 const fn compressed_cell_width(stride: u64, cell_crc: bool) -> u64 {
     if cell_crc {

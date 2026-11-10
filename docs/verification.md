@@ -206,34 +206,6 @@ the gate is not a verified Rust alias analyzer or a whole-program refinement pro
 The decoder closure covers default and all-feature Linux MIR. Publication, index,
 compression and ownership contracts retain their separately listed scopes.
 
-### Decoder boundary performance
-
-An equal-work local comparison against `4eef673` used rebuilt release binaries,
-three alternating pairs per workload and six separate resource probes. Each
-storage run wrote 512 MiB in 16 MiB epochs. Offline cases scanned data and made
-128 point reads and 16 range reads; each live reader verified all 512 MiB.
-Native/indexed groups were 64 KiB, streaming groups 1 MiB.
-
-| Workload | Median wall seconds, before → after | Aggregate CPU seconds, before → after | Sampled peak aggregate PSS MiB, before → after |
-| --- | ---: | ---: | ---: |
-| Native access, one reader | 0.841 → 0.841 | 0.573 → 0.583 | 23.09 → 22.92 |
-| Indexed access, four readers | 0.870 → 0.844 | 0.953 → 0.879 | 45.30 → 45.05 |
-| Live stream, one writer/four readers | 0.598 → 0.592 | 0.940 → 0.920 | 25.92 → 25.93 |
-
-PSS means proportional set size. The largest wall increase was +0.03%; the
-largest CPU increase was +1.64%. Final physical file allocation matched in each
-pair; one native resource probe observed an additional transient 4 KiB. The
-50 ms probes observed no private temporary-directory or deleted-open workload
-storage. Peaks shorter than that interval remain outside the sample guarantee.
-Caps stayed at 4 CPU /16 GiB RAM /32 GiB filesystem.
-
-A separate complete-decode campaign used 20 million iterations per run, with
-independent checksums consuming every field. Scalar, custom scalar, nested
-8-field tuple and custom tuple median times decreased by 74.6%, 35.9%, 60.2%
-and 42.8%. Inlining checked primitives and sharing one outer custom-code frame
-removed redundant work. These short local comparisons describe the measured
-workloads, not a bound for every downstream codec or machine.
-
 ## Production callers and future changes
 
 The source-wide `proof_coverage` integration test inventories all three published
@@ -424,7 +396,7 @@ advisories do not certify local patches or dependency source correctness.
 CodeQL runs Rust, Python and Actions queries with a strict Static Analysis
 Results Interchange Format (SARIF) result gate.
 Extraction/macro limitations remain visible; behavioral and generated-API tests
-are still necessary. See [the retained CodeQL follow-up](performance/read-validation-20261104/README.md#ci-evidence-follow-up).
+are still necessary.
 
 Six CycloneDX 1.5 JSON inventories cover the three publishable crates with default
 and all-feature resolution across Cargo targets. Build dependencies are included;
@@ -438,11 +410,10 @@ cargo fetch --locked
 python3 scripts/generate_sbom.py
 ```
 
-## Performance evidence
+## Local performance measurement
 
-Use the [combined workload report](performance/workload-storage-20261104/README.md)
-for grouped items, mixed logging, arrays, table-oriented cases and read-policy
-comparisons. Reports retain CPU, memory, temporary storage, failed measurements
-and calibration limits under unchanged budgets. Instrumented verification runs
-are not performance measurements; a CI pass does not turn an unqualified timing
-comparison into a pass.
+Cloud performance reports and their generated datasets have been removed from
+the current tree. Performance conclusions are deferred pending a controlled local
+rerun. The [benchmark harness](../tools/storage-bench/README.md) retains workloads,
+correctness oracles and execution instructions. Instrumented verification runs
+and CI success do not establish performance qualification.

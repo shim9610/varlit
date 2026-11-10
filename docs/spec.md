@@ -559,8 +559,7 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   file the matrix region sits between the header and the append log, so both the
   coverage a writer records and the boundary the walk demands the oldest link
   reach are `MatrixLayout::append_log_start()`. A matrix format may declare
-  `segment_on_flush` and gets the same chain; measured on a 4x4 matrix with 128
-  append-log records over 8 commit points, open framed 8 records.
+  `segment_on_flush` and gets the same segment-chain traversal.
 
 ### Open Digest
 
@@ -647,9 +646,8 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   record scan and produces the identical answer. Only `MissingResourceLimit` and
   `TrustedUnboundedRequiresExplicitApi` propagate, for the reason they propagate
   out of the segment walk. `open_readonly_lazy_with_report` returns
-  `LazyOpenSource::{Digest, FullScan}` so the fallback is observable — the two
-  differ by about four orders of magnitude in read syscalls and by nothing at
-  all in the answer.
+  `LazyOpenSource::{Digest, FullScan}` so the fallback is observable. Both routes
+  must produce the same logical answer; their metadata-read work differs.
 - A writer that stops without a commit point leaves a data record at the end of
   the file, so the probe finds no digest and the next open scans. This is the
   fallback, not an error, but it costs the whole benefit.

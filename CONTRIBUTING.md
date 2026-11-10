@@ -91,9 +91,9 @@ tests and duplicated assertions do not add coverage. New failure tests should
 check recovery/retry and retained-reader state where relevant.
 
 Keep the root README and quickstart focused on recommended application patterns.
-Maintain current contracts in the reference guides and current measurements in
-the combined performance report. Historical release notes, audit narratives and
-superseded raw evidence belong in Git history. Link the original revision when
-historical evidence is needed. `scripts/check_docs.py --quickstart` rejects repeated
+Maintain current contracts in the reference guides. Performance results are
+pending a controlled local rerun; keep the benchmark harness and its execution
+instructions without publishing cloud measurements. Historical release notes,
+audit narratives and superseded raw evidence belong in Git history. `scripts/check_docs.py --quickstart` rejects repeated
 report sections, checks local links and executes the example taken directly from
 the guide.

@@ -17,8 +17,8 @@ Opt-in policies narrow that gap without closing it. `segment_on_flush` makes
 open frame one record per commit point instead of one per record;
 `open_digest_on_flush` plus `VarlitFile::open_readonly_lazy` makes open frame one
 record and retain **nothing**, leaving the caller to build only the part of the
-index its question needs with `record_map`. Measured on a 50,000-record file:
-100,316 read syscalls at open by default, 516 chained, 20 from a digest.
+index its question needs with `record_map`. These policies change which metadata
+is read at open; benchmark results are pending a controlled local rerun.
 
 Ordinary keyed merge/compact also spills bounded index buffers, but still needs
 scratch disk and per-record decoding workspace. A `record_map` walk remains a
@@ -33,8 +33,7 @@ the immediate cost to reduce.
 > Repository release and long-duration load qualification are tracked separately.
 > A release tag does not establish a completed endurance test.
 > Explicit `compact_index()` reclaims obsolete companion pages; whole-native-log
-> keyed merge/compact uses bounded buffers and private spill files. The historical load and
-> sparse-offset measurements apply to their recorded revisions and filesystems.
+> keyed merge/compact uses bounded buffers and private spill files.
 > See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
 
@@ -141,9 +140,8 @@ out a Cartesian product. Every code has a fixed **u16 / 2-byte** representation,
 even for a small enum. This bounds generated-code/compiler cost without
 introducing width transitions. It is a policy limit, not the u16 numeric limit.
 A 4,096-variant integration test compiles the actual enum and checks every
-combination. The initial incremental dev test build took 3.26 s with a maximum
-child-process RSS of about 640 MiB; dependencies were already built. This is
-one environment measurement, not a universal compile-time guarantee.
+combination. Compile-time and memory comparisons require measurements on the
+application's toolchain and host.
 
 Supported domain fields are `u8/u16/u32/u64`, `i8/i16/i32/i64`, `bool`, and
 `String` (literal labels; conversion takes `&str`). Type aliases, expressions,
@@ -372,12 +370,7 @@ invalidate captured records. Existing mappings never grow; follow publications
 and map new windows or take a new snapshot. Whole-prefix snapshots copy the
 captured index when rebuilt; record windows avoid that repeated full-index copy.
 Growing matrix layouts require their own stricter mapping contract. See
-[mmap safety](../SECURITY.md#mapped-files-and-external-modification) and
-the [live mmap comparison](performance/workload-storage-20261104/README.md#sqlite-mmap-and-append-only-readers).
-
-See the [grouped-item benchmark](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/performance/grouped-storage-20261104/README.md)
-for separately counted items, blocks and publications, concurrent-reader
-measurements and the comparison with individually framed controls.
+[mmap safety](../SECURITY.md#mapped-files-and-external-modification).
 
 `BatchOptions` bounds transient native buffering:
 
@@ -803,22 +796,9 @@ This prevents a malicious file from turning a claimed extent into an unchecked
 slice or claim-sized allocation. It does not authenticate a file. CRC is an
 integrity/error-detection policy, not a cryptographic authenticity mechanism.
 
-## Historical Regression Baseline
+## Local regression probe
 
-On the Windows development host on 2026-07-17, the release-mode million unique
-composite-key probe reported:
-
-| Measurement | Result |
-| --- | ---: |
-| append | 4.072 s, about 245,600 records/s |
-| native `write_all` calls | 62 |
-| `sync()` | 116.2 ms |
-| clean indexed reopen | 9.35 ms |
-| 10,000 point lookups | 141.5 ms |
-| allocator peak delta | 12,346,781 bytes |
-
-These are regression values for one machine, not cross-platform guarantees.
-Run the probe with:
+Run the ignored probe locally to collect results for the current host:
 
 ```powershell
 cargo test --release -p varlit `

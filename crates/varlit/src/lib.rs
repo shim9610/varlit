@@ -120,7 +120,7 @@
 //! | `durability-model.md` | what `flush`, `sync`, and `commit_durable` promise |
 //! | `recovery-model.md` | how damaged files are classified and what may be rebuilt |
 //! | `scalable-io.md` | the default streaming and disk-index path |
-//! | `known-limitations.md` | the scale contracts, their measured bounds, and what is not verified |
+//! | `known-limitations.md` | the scale contracts, resource budgets, and what is not verified |
 //! | `migration-guide.md` | version-to-version behaviour changes |
 //!
 //! [`ChunkedBytes`]: crate::ChunkedBytes
