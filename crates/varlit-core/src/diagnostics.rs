@@ -940,7 +940,8 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::NoResidentDirectory { .. }
         // Caller usage rather than file data: the file is fine, and so is the
         // directory — they just belong to different generations of it.
-        | Error::DirectoryDoesNotDescribeThisFile { .. } => DiagnosticDomain::CallerUsage,
+        | Error::DirectoryDoesNotDescribeThisFile { .. }
+        | Error::LazyOpenVerificationRequiresScan => DiagnosticDomain::CallerUsage,
 
         Error::StreamingUnsupported => DiagnosticDomain::FeatureGate,
 
@@ -1025,7 +1026,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::AdapterUnsupportedType { .. }
         | Error::AdapterInvalidLength { .. } => DiagnosticDomain::FileData,
 
-        Error::DiskIndex(_) => DiagnosticDomain::FileData,
+        Error::DiskIndex(_) | Error::LazyOpenMetadataUnavailable { .. } => DiagnosticDomain::FileData,
 
         Error::WriterLockBreakRefused(_)
         | Error::BufferTooSmall { .. }
@@ -1041,6 +1042,12 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
 }
 
 pub fn error_hint(error: &Error) -> &'static str {
+    if matches!(
+        error,
+        Error::LazyOpenMetadataUnavailable { .. } | Error::LazyOpenVerificationRequiresScan
+    ) {
+        return "no full scan was attempted; explicitly choose a scanning open or lazy_or_scan if appropriate";
+    }
     // A stale or foreign sidecar has one documented recovery, so it earns a
     // variant-specific hint instead of the generic file-data one.
 

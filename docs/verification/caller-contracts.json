@@ -1741,12 +1741,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:47e45026e0153d3b]",
+            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:59b174ebbdedc695]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:63c78895044a49c4]",
+            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:de8d7f93f9332a95]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -1913,12 +1913,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:47e45026e0153d3b]",
+            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:59b174ebbdedc695]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:63c78895044a49c4]",
+            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:de8d7f93f9332a95]",
             "target": "try_box",
             "result": "model/caller-specific"
           },

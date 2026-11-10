@@ -17,6 +17,12 @@ Ordinary opens retain their existing validation policy. Review the
 [0.13.0 API changes](api-changes.md#0130) before selecting read checks or adding
 allocation-failure retries, particularly after a write may have been published.
 
+Native lazy opens now return metadata errors without automatically scanning.
+Use `*_lazy_or_scan[_with_report]` to retain the former behavior, or match the
+error and explicitly call `VarlitFile::open_readonly_scan` / `open_scan`.
+Strict lazy open selects header tails when declared, otherwise the trailing
+digest. See [lazy-open changes](api-changes.md#lazy-open-and-explicit-scan-selection).
+
 <a id="060-pre-10-wire-changes"></a>
 
 ## Pre-1.0 Wire Changes Since 0.6.0

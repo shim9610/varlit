@@ -866,7 +866,178 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_lazy_or_scan@b67fa4b69671d7fd",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_lazy_or_scan(spec, &path);
+            assert!(result?.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_lazy_or_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_lazy_or_scan_with_report@86dfac747b0f39f9",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_lazy_or_scan_with_report(spec, &path);
+            let (file, route) = result?; assert_eq!(route, varlit::LazyOpenSource::FullScan); assert!(file.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_lazy_or_scan_with_report(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_readonly_lazy_or_scan@b26b72e4ed052eac",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_readonly_lazy_or_scan(spec, &path);
+            assert!(result?.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_readonly_lazy_or_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_readonly_lazy_or_scan_with_report@0197d791d06f9d16",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path);
+            let (file, route) = result?; assert_eq!(route, varlit::LazyOpenSource::FullScan); assert!(file.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_readonly_scan@d4e1e84b92bcf335",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_readonly_scan(spec, &path);
+            assert!(result?.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_readonly_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitFile::fn:open_scan@be289bb319408808",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitFile::open_scan(spec, &path);
+            assert!(result?.block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:open_lazy_or_scan@b67fa4b69671d7fd",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitWriter::open_lazy_or_scan(spec, &path);
+            assert!(result?.into_inner().block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitWriter::open_lazy_or_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:open_lazy_or_scan_with_report@86dfac747b0f39f9",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitWriter::open_lazy_or_scan_with_report(spec, &path);
+            let (file, route) = result?; assert_eq!(route, varlit::LazyOpenSource::FullScan); assert!(file.into_inner().block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitWriter::open_lazy_or_scan_with_report(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:open_scan@be289bb319408808",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            let result = varlit::VarlitWriter::open_scan(spec, &path);
+            assert!(result?.into_inner().block_tail_offset(1).is_some());
+            Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitWriter::open_scan(spec, path.with_extension("missing")),
+                Err(varlit::Error::Io(ref error)) if error.kind() == std::io::ErrorKind::NotFound));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::Error::variant:LazyOpenMetadataUnavailable@540105b595b44cdf",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(true)?;
+            let result = varlit::VarlitFile::open_readonly_lazy(spec, &path);
+            assert!(!matches!(result, Err(varlit::Error::LazyOpenMetadataUnavailable { .. })));
+            result?; Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(false)?;
+            assert!(matches!(varlit::VarlitFile::open_readonly_lazy(spec, &path),
+                Err(varlit::Error::LazyOpenMetadataUnavailable { metadata: varlit::LazyOpenSource::Digest })));
+            Ok(())
+        }
+    ),
+    contract!("core/error.rs::error::Error::variant:LazyOpenVerificationRequiresScan@17c2504a486e68d9",
+        valid {
+            let (_directory, path, spec) = lazy_open_fixture(true)?;
+            let result = varlit::VarlitFile::open_readonly_lazy(spec, &path);
+            assert!(!matches!(result, Err(varlit::Error::LazyOpenVerificationRequiresScan)));
+            result?; Ok(())
+        },
+        invalid {
+            let (_directory, path, spec) = lazy_open_fixture(true)?;
+            let spec = spec.with_read_limits(spec.read_limits.with_integrity_verification(varlit::IntegrityVerification::AtOpen));
+            assert!(matches!(varlit::VarlitFile::open_readonly_lazy(spec, &path),
+                Err(varlit::Error::LazyOpenVerificationRequiresScan)));
+            Ok(())
+        }
+    ),
 ];
+
+fn lazy_open_fixture(
+    summary: bool,
+) -> Result<(tempfile::TempDir, std::path::PathBuf, varlit::FormatSpec), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("lazy-contract.varlit");
+    let spec = ProbeFormat::spec()
+        .with_index_policy(varlit::IndexPolicy::BlockOffsetChain.with_open_digest_on_flush(summary))
+        .with_commit_policy(varlit::CommitPolicy::RecordFooter);
+    let mut writer = spec.create(&path)?;
+    writer.push(&Probe { value: 7 })?;
+    writer.flush()?;
+    drop(writer);
+    Ok((directory, path, spec))
+}
 
 #[derive(Default)]
 struct Evidence {

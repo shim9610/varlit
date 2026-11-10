@@ -743,12 +743,8 @@ use native_rewrite::{IndexPayload, OffsetRemap, RewriteDirectory};
 #[path = "external_merge.rs"]
 mod external_merge;
 
-/// Which route [`VarlitFile::open_readonly_lazy`] actually took.
-///
-/// Both open the same file and answer the same reads. They differ by roughly
-/// four orders of magnitude in syscalls, which is a difference a caller that
-/// asked for the lazy open is entitled to notice rather than infer from a
-/// stopwatch.
+/// Summary source used by a lazy open, or the scan taken by an explicit
+/// `*_lazy_or_scan_with_report` call. Strict lazy opens never report `FullScan`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LazyOpenSource {
     /// The tail table in the *file header* was read and the file corroborated
@@ -758,9 +754,9 @@ pub enum LazyOpenSource {
     /// The route [`IndexPolicy::header_tails`] exists for: unlike the digest,
     /// nothing appended to the file can move this table or bury it.
     HeaderTails,
-    /// The digest at the end of the file was read. No record was framed.
+    /// The trailing digest record was framed; no user records were scanned.
     Digest,
-    /// No usable digest, so every record was framed. Correct, and expensive.
+    /// Explicit automatic-fallback mode reconstructed state by scanning.
     FullScan,
 }
 
@@ -2613,16 +2609,25 @@ impl KeyedTailMap {
         if self.spilled.is_none() {
             self.spilled = Some(crate::disk_index::ScratchIndex::new(0)?);
         }
-        let updates = self
-            .offsets
-            .iter()
-            .map(|(key, &offset)| {
-                let mut row = [0; 52];
-                row[..8].copy_from_slice(&offset.to_le_bytes());
-                Ok((key.try_clone()?, row))
-            })
-            .collect::<Result<_>>()?;
-        self.spilled.as_mut().unwrap().apply(&updates)?;
+        let requested =
+            allocation_bytes::<(Vec<u8>, [u8; 52])>(self.offsets.len(), "keyed tail spill batch")?;
+        let mut updates = Vec::new();
+        updates
+            .try_reserve_exact(self.offsets.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "keyed tail spill batch",
+                requested,
+            })?;
+        for (key, &offset) in &self.offsets {
+            let mut row = [0; 52];
+            row[..8].copy_from_slice(&offset.to_le_bytes());
+            updates.push((key.try_clone()?, row));
+        }
+        updates.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        self.spilled
+            .as_mut()
+            .unwrap()
+            .apply_iter(updates.iter().map(|(key, row)| (key, row)))?;
         self.offsets.clear();
         self.key_payload_bytes = 0;
         Ok(())
@@ -3637,12 +3642,35 @@ impl VarlitWriter {
         })
     }
 
+    /// See [`VarlitFile::open_scan`].
+    pub fn open_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
+        Ok(Self {
+            file: VarlitFile::open_scan(spec, path)?,
+        })
+    }
+
     /// See [`VarlitFile::open_lazy_with_report`].
     pub fn open_lazy_with_report<P: AsRef<Path>>(
         spec: FormatSpec,
         path: P,
     ) -> Result<(Self, LazyOpenSource)> {
         let (file, source) = VarlitFile::open_lazy_with_report(spec, path)?;
+        Ok((Self { file }, source))
+    }
+
+    /// See [`VarlitFile::open_lazy_or_scan`].
+    pub fn open_lazy_or_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
+        Ok(Self {
+            file: VarlitFile::open_lazy_or_scan(spec, path)?,
+        })
+    }
+
+    /// See [`VarlitFile::open_lazy_or_scan_with_report`].
+    pub fn open_lazy_or_scan_with_report<P: AsRef<Path>>(
+        spec: FormatSpec,
+        path: P,
+    ) -> Result<(Self, LazyOpenSource)> {
+        let (file, source) = VarlitFile::open_lazy_or_scan_with_report(spec, path)?;
         Ok((Self { file }, source))
     }
 

@@ -2543,3 +2543,49 @@ fn replace_block_finds_predecessors_without_rescanning_the_prefix() -> Result<()
     );
     Ok(())
 }
+#[test]
+fn keyed_tail_spill_allocation_failures_preserve_entries_and_retry() -> Result<()> {
+    let mut failures = 0;
+    let mut completed = false;
+    for at in 1..128 {
+        let mut tails = KeyedTailMap {
+            spilled: Some(crate::disk_index::ScratchIndex::new(0)?),
+            ..Default::default()
+        };
+        for key in 0..8u64 {
+            tails.offsets.try_reserve(1).unwrap();
+            tails.insert(key.to_be_bytes().to_vec(), key + 100);
+        }
+        let charge = tails.key_payload_bytes;
+        let outcome = crate::pib_probe::with_allocation_refusal(at, || tails.spill());
+        if outcome.is_err() {
+            failures += 1;
+            assert_eq!(tails.offsets.len(), 8);
+            assert_eq!(tails.key_payload_bytes, charge);
+            // Failed batches cannot publish a partial scratch-index root.
+            for key in 0..8u64 {
+                assert!(
+                    tails
+                        .spilled
+                        .as_ref()
+                        .unwrap()
+                        .get(&key.to_be_bytes())?
+                        .is_none()
+                );
+            }
+            tails.spill()?;
+        } else {
+            completed = true;
+        }
+        assert!(tails.offsets.is_empty());
+        assert_eq!(tails.key_payload_bytes, 0);
+        for key in 0..8u64 {
+            assert_eq!(tails.get(&key.to_be_bytes())?, Some(key + 100));
+        }
+        if completed {
+            break;
+        }
+    }
+    assert!(completed && failures >= 9);
+    Ok(())
+}

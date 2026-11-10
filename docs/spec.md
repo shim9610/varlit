@@ -642,15 +642,20 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   verifies. The payload's trailing self offset must equal that record offset,
   the block ids must ascend strictly, and every tail offset must name a position
   at or after the append-log start and strictly before the digest.
-- A digest that fails any of this is not an error: open falls back to the full
-  record scan and produces the identical answer. Only `MissingResourceLimit` and
-  `TrustedUnboundedRequiresExplicitApi` propagate, for the reason they propagate
-  out of the segment walk. `open_readonly_lazy_with_report` returns
-  `LazyOpenSource::{Digest, FullScan}` so the fallback is observable. Both routes
-  must produce the same logical answer; their metadata-read work differs.
-- A writer that stops without a commit point leaves a data record at the end of
-  the file, so the probe finds no digest and the next open scans. This is the
-  fallback, not an error, but it costs the whole benefit.
+- Strict lazy open returns errors without scanning. It selects header tails when
+  declared, otherwise the trailing digest. Unavailable summary metadata returns
+  `LazyOpenMetadataUnavailable`; AtOpen verification returns
+  `LazyOpenVerificationRequiresScan`. Specific I/O, allocation, checksum and
+  resource errors propagate unchanged.
+- The caller can explicitly reconstruct state with `open_readonly_scan` or
+  `open_scan`. These operations also return errors if reconstruction fails.
+  `*_lazy_or_scan[_with_report]` preserves the former automatic behavior:
+  header tails, then digest, then scanning, with `LazyOpenSource::FullScan`
+  reported only by that explicitly selected automatic mode.
+- A writer that stops without a commit point can leave data past the digest.
+  Strict lazy open returns an error; the caller decides whether to perform
+  scanning recovery. Writer scanning can truncate an uncommitted tail, while
+  a failed metadata-only open does not truncate it.
 - `replace_block` re-encodes every digest payload against the published
   generation's offsets, as it does every segment payload. A digest payload is
   block tails and a self offset, and a rewrite moves both; copying it would

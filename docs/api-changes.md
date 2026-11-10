@@ -29,6 +29,25 @@ damaged metadata that an older reader accepted.
 shared owners now use fallible allocation through a private `triomphe` dependency;
 no dependency-specific owner type is exposed in place of a public std `Arc`.
 
+### Lazy open and explicit scan selection
+
+`VarlitFile::open_readonly_lazy`, `VarlitFile::open_lazy`, their report variants,
+and the `VarlitWriter` lazy facade now return errors without an automatic full
+scan. This is a behavior change with unchanged signatures and file bytes.
+The selected summary is header tails when declared, otherwise the trailing digest.
+
+Callers can match `LazyOpenMetadataUnavailable { metadata }` or
+`LazyOpenVerificationRequiresScan` and choose `open_readonly_scan` / `open_scan`.
+Other errors retain their variants. Directory-free `reopen_readonly` uses the
+same strict lazy policy. Explicit scans also return errors on failure;
+a writer scan can perform normal uncommitted-tail recovery.
+
+To retain the previous automatic behavior, use `open_readonly_lazy_or_scan` or
+`open_lazy_or_scan`, optionally suffixed `_with_report`. These opt-in APIs can
+report `LazyOpenSource::FullScan`. Normal native `open`/`open_readonly` scan APIs
+and stream/indexed constructors retain their existing selection and return types.
+See the [API contract](api-reference.md#an-open-that-reads-no-record).
+
 ### Composing custom decoders
 
 Use `decoder.decode_value::<T>()?` to compose codecs. Library-owned containers and

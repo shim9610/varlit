@@ -130,7 +130,7 @@ fn the_option_is_inert_when_it_is_off() -> varlit::Result<()> {
 
     // And a file with no digest opens lazily by falling back, with the same
     // answer the scan gives.
-    let (file, source) = VarlitFile::open_readonly_lazy_with_report(plain_spec(), &off)?;
+    let (file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(plain_spec(), &off)?;
     assert_eq!(source, LazyOpenSource::FullScan);
     assert_eq!(
         file.block_tail_offset(Line::ID),
@@ -281,7 +281,7 @@ fn a_record_appended_past_the_digest_falls_back() -> varlit::Result<()> {
         std::mem::forget(writer);
     }
 
-    let (_file, source) = VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (_file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, LazyOpenSource::FullScan);
     // The uncommitted record is outside the committed boundary either way, so
     // the fallback answers exactly what a scan of the same file answers.
@@ -318,7 +318,7 @@ fn a_rotted_digest_falls_back_instead_of_lying() -> varlit::Result<()> {
         file.sync_all()?;
         drop(file);
 
-        let (_handle, source) = VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+        let (_handle, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
         assert_eq!(
             source,
             LazyOpenSource::FullScan,
@@ -820,5 +820,129 @@ fn a_real_digest_sets_the_sequence_flag_and_carries_its_own_sequence() -> varlit
     // the fields above were read from where the layout puts them.
     let tails = u32::from_le_bytes(payload[16..20].try_into().expect("four bytes"));
     assert_eq!(payload.len(), 20 + 12 * tails as usize + 8);
+    Ok(())
+}
+
+/// Metadata-only errors must not start the scanner or modify the primary.
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_failure_is_typed_and_scan_is_an_explicit_choice() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-no-digest.varlit");
+    let spec = plain_spec();
+    write_lines(spec, &path, 4096, 128)?;
+    let original = std::fs::read(&path)?;
+    let (result, frames) = framed(|| VarlitFile::open_readonly_lazy(spec, &path));
+    assert!(matches!(
+        result,
+        Err(varlit::Error::LazyOpenMetadataUnavailable {
+            metadata: LazyOpenSource::Digest,
+        })
+    ));
+    assert!(frames <= 1, "metadata failure scanned {frames} records");
+    let (result, frames) = framed(|| VarlitWriter::open_lazy(spec, &path));
+    assert!(matches!(
+        result,
+        Err(varlit::Error::LazyOpenMetadataUnavailable { .. })
+    ));
+    assert!(frames <= 1);
+    assert_eq!(std::fs::read(&path)?, original);
+    // Failure released the writer lock, and scanning is caller-selected.
+    let mut writer = VarlitWriter::open_scan(spec, &path)?;
+    writer.push(&Line { value: 8192 })?;
+    writer.flush()?;
+    drop(writer);
+    let (reader, frames) = framed(|| VarlitFile::open_readonly_scan(spec, &path));
+    assert!(frames >= 4096);
+    assert!(reader?.block_tail_offset(Line::ID).is_some());
+    let (_, route) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
+    let (_, route) = VarlitWriter::open_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
+    Ok(())
+}
+
+#[test]
+fn strict_lazy_preserves_io_errors_and_releases_writer_lock() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("absent.varlit");
+    for result in [
+        VarlitFile::open_readonly_lazy(digest_spec(), &path),
+        VarlitFile::open_lazy(digest_spec(), &path),
+    ] {
+        assert!(matches!(result, Err(varlit::Error::Io(ref error))
+            if error.kind() == std::io::ErrorKind::NotFound));
+    }
+    // Lock markers can persist; successful subsequent create proves release.
+    write_lines(digest_spec(), &path, 32, 16)?;
+    let writer = VarlitWriter::open_lazy(digest_spec(), &path)?;
+    assert!(matches!(
+        VarlitWriter::open_lazy(digest_spec(), &path),
+        Err(varlit::Error::WriterLockHeld(_))
+    ));
+    drop(writer);
+    VarlitWriter::open_lazy(digest_spec(), &path)?;
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_at_open_verification_requests_scan_without_doing_it() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-verification.varlit");
+    let spec = digest_spec();
+    write_lines(spec, &path, 128, 64)?;
+    let strict = spec.with_read_limits(
+        spec.read_limits
+            .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
+    );
+    for writer in [false, true] {
+        let (result, frames) = framed(|| {
+            if writer {
+                VarlitFile::open_lazy(strict, &path)
+            } else {
+                VarlitFile::open_readonly_lazy(strict, &path)
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(varlit::Error::LazyOpenVerificationRequiresScan)
+        ));
+        assert_eq!(frames, 0);
+    }
+    VarlitFile::open_readonly_scan(strict, &path)?;
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_bad_digest_returns_error_without_scanning() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-bad-digest.varlit");
+    let spec = digest_spec();
+    write_lines(spec, &path, 1024, 64)?;
+    let len = std::fs::metadata(&path)?.len();
+    let mut disk = OpenOptions::new().read(true).write(true).open(&path)?;
+    disk.seek(SeekFrom::Start(len - 45))?;
+    let mut byte = [0];
+    std::io::Read::read_exact(&mut disk, &mut byte)?;
+    disk.seek(SeekFrom::Start(len - 45))?;
+    disk.write_all(&[byte[0] ^ 1])?;
+    drop(disk);
+    let original = std::fs::read(&path)?;
+    for writer in [false, true] {
+        let (result, frames) = framed(|| {
+            if writer {
+                VarlitFile::open_lazy(spec, &path)
+            } else {
+                VarlitFile::open_readonly_lazy(spec, &path)
+            }
+        });
+        assert!(result.is_err());
+        assert!(frames <= 1, "bad digest caused {frames} frames");
+    }
+    assert_eq!(std::fs::read(&path)?, original);
+    let (_, route) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
     Ok(())
 }

@@ -1,5 +1,34 @@
 // Native file lifecycle operations.
 
+fn lazy_metadata_error(error: Error, source: LazyOpenSource) -> Error {
+    match error {
+        Error::InvalidIndexSegment => Error::LazyOpenMetadataUnavailable { metadata: source },
+        other => other,
+    }
+}
+
+fn ensure_lazy_verification_policy(spec: FormatSpec) -> Result<()> {
+    if spec.read_limits.read_validation != Some(crate::ReadValidation::TRUSTED)
+        && spec.read_limits.resolve().effective_integrity_verification()
+            == IntegrityVerification::AtOpen
+    {
+        return Err(Error::LazyOpenVerificationRequiresScan);
+    }
+    Ok(())
+}
+
+fn ensure_lazy_writer_policy(spec: FormatSpec) -> Result<()> {
+    for (enabled, policy) in [
+        (spec.index_policy.checkpoint_on_flush, "checkpoint_on_flush"),
+        (spec.index_policy.segment_on_flush, "segment_on_flush"),
+    ] {
+        if enabled {
+            return Err(Error::LazyWriterIndexPolicy { policy });
+        }
+    }
+    Ok(())
+}
+
 impl VarlitFile {
     pub fn create<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
         Self::create_impl(spec, path.as_ref(), false)
@@ -284,6 +313,12 @@ impl VarlitFile {
         Self::open_with_lock_policy(spec, path, WriterLockBreakPolicy::Refuse)
     }
 
+    /// Explicitly reconstructs writer state using the normal scanning open.
+    /// Like [`Self::open`], this can recover/truncate an uncommitted tail.
+    pub fn open_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
+        Self::open(spec, path)
+    }
+
     /// Opens a read-write handle, scanning into the caller's buffer.
     ///
     /// See [`open_readonly_with_scratch`](Self::open_readonly_with_scratch):
@@ -430,6 +465,13 @@ impl VarlitFile {
         Self::open_readonly_inner(spec, path, &mut scratch, DirectoryRetention::Keep)
     }
 
+    /// Explicitly reconstructs read-only state by scanning, keeping no directory.
+    /// Returns scan/I/O/resource errors; never changes the input file.
+    pub fn open_readonly_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
+        let mut scratch = BufferedScan::new(spec);
+        Self::open_readonly_inner(spec, path, &mut scratch, DirectoryRetention::None)
+    }
+
     /// Opens a read-only handle, scanning into the caller's buffer.
     ///
     /// `scratch` is where the open path builds the entries it reads out of the
@@ -544,58 +586,58 @@ impl VarlitFile {
         })
     }
 
-    /// Opens read-only **without reading the records at all**, using the open
-    /// digest at the end of the file.
+    /// Opens read-only using only the selected summary metadata, without a full scan.
     ///
-    /// The three facts an open needs — where the committed file ends, the next
-    /// append's sequence, each block's newest record — are the by-product of
-    /// walking every record, and that walk is the only reason an open that keeps
-    /// no index still reads the whole file. `IndexPolicy::open_digest_on_flush`
-    /// writes them down at each commit point; this reads them back.
+    /// Uses the header-tail table when declared, otherwise the trailing digest.
+    /// Returns errors directly; never substitutes a full scan or another summary
+    /// source after an error. `LazyOpenMetadataUnavailable` means the selected
+    /// summary is missing, stale or structurally invalid. I/O, allocation,
+    /// checksum and resource errors retain their existing variants.
     ///
-    /// Measured, 50,000 records:
+    /// The handle keeps no directory. Use `block_chain`, `block_tail_offset`,
+    /// `read_block_at`, entry-taking `_into` reads, or `record_map` as appropriate.
+    /// Position-based operations require a caller-provided directory.
     ///
-    /// | open | read syscalls | bytes read | file overhead |
-    /// | --- | --- | --- | --- |
-    /// | `open_readonly` (scan) | 100,316 | 3,207,102 | — |
-    /// | `open_readonly` (segment chain) | 516 | 7,332,522 | +3.67 MB |
-    /// | this, from a digest | **20** | **516** | **+12.8 KB** |
-    ///
-    /// The last column is the one that decides which of the two tail records a
-    /// format wants. A segment writes an entry per record it covers, so its
-    /// overhead grows with the file; a digest writes twelve bytes per distinct
-    /// block id, so the 12.8 KB above is a hundred flushes' worth and would be
-    /// the same at a billion records. What the segment buys for its size is an
-    /// open that *builds the index*; a digest deliberately does not.
-    ///
-    /// The handle keeps **no directory**, because there is none to keep — no
-    /// record was framed. Position-based reads (`blocks`, `scan`,
-    /// `keyed_blocks`) refuse with `NoResidentDirectory` naming
-    /// [`with_directory`](Self::with_directory), and the index the caller
-    /// actually needs is built with [`record_map`](Self::record_map), which
-    /// walks only as far as the question. That pairing is the point: an open
-    /// that reads nothing, and an index that reads only what was asked for.
-    ///
-    /// What still works with no directory at all, because none of it goes
-    /// through positions: [`block_chain`](Self::block_chain) and
-    /// [`block_tail_offset`](Self::block_tail_offset) — the digest carries the
-    /// tails, which is why it carries them — [`read_block_at`](Self::read_block_at),
-    /// and every `_into` read that takes an entry.
-    ///
-    /// **Falls back to the full scan** when the file has no usable digest: one
-    /// written before the option was enabled, one whose writer appended past
-    /// its last commit, one truncated or rotted. That is not an error — the
-    /// file is readable and this opens it — but it is the difference between
-    /// eleven syscalls and a hundred thousand, so
-    /// [`open_readonly_lazy_with_report`](Self::open_readonly_lazy_with_report)
-    /// says which happened.
+    /// After an error, callers may explicitly choose [`Self::open_readonly_scan`]
+    /// or [`Self::open_readonly_lazy_or_scan`]. AtOpen full-payload verification
+    /// returns `LazyOpenVerificationRequiresScan` without starting a scan.
     pub fn open_readonly_lazy<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
         Ok(Self::open_readonly_lazy_with_report(spec, path)?.0)
     }
 
     /// [`open_readonly_lazy`](Self::open_readonly_lazy), and which of the two
-    /// routes it took.
+    /// metadata sources it used; this API never reports `FullScan`.
     pub fn open_readonly_lazy_with_report<P: AsRef<Path>>(
+        spec: FormatSpec,
+        path: P,
+    ) -> Result<(Self, LazyOpenSource)> {
+        let spec = spec.resolve_entrypoint();
+        spec.validate()?;
+        ensure_native_open_limits(spec)?;
+        ensure_lazy_verification_policy(spec)?;
+        let source = if spec.index_policy.header_tails {
+            LazyOpenSource::HeaderTails
+        } else {
+            LazyOpenSource::Digest
+        };
+        let file = Self::open_readonly_from_digest(spec, path.as_ref(), source)
+            .map_err(|error| lazy_metadata_error(error, source))?;
+        Ok((file, source))
+    }
+
+    /// Opens from metadata, falling back to a full scan on failure.
+    /// This explicitly preserves the former `open_readonly_lazy` behavior.
+    pub fn open_readonly_lazy_or_scan<P: AsRef<Path>>(
+        spec: FormatSpec,
+        path: P,
+    ) -> Result<Self> {
+        Ok(Self::open_readonly_lazy_or_scan_with_report(spec, path)?.0)
+    }
+
+    /// Like [`Self::open_readonly_lazy_or_scan`], reporting the route taken.
+    /// Metadata errors other than missing-limit/authorization errors can cause
+    /// a scan; its result is returned. Use strict lazy open to retain that error.
+    pub fn open_readonly_lazy_or_scan_with_report<P: AsRef<Path>>(
         spec: FormatSpec,
         path: P,
     ) -> Result<(Self, LazyOpenSource)> {
@@ -633,47 +675,55 @@ impl VarlitFile {
         }
     }
 
-    /// Opens a **read-write** handle from the digest, without scanning.
+    /// Opens a writer using only the selected summary metadata, without a full scan.
     ///
-    /// The writer twin of [`open_readonly_lazy`](Self::open_readonly_lazy), and
-    /// the half that was missing. Every other writer open calls `load_index`
-    /// with `ScanIntent::Writer`, so it is `O(records)` in time and in retained
-    /// memory at any file size — which put the standing "TB-scale files must
-    /// work, memory bounded by the working set" requirement on the read side
-    /// only, while the workload that requirement names as primary is
-    /// continuous append, and a continuous appender reopens its writer on every
-    /// restart.
+    /// Like [`Self::open_readonly_lazy`], returns metadata/I/O/allocation errors
+    /// directly. A failed metadata open does not truncate the native tail; its
+    /// writer lock is released. No resident directory is built.
     ///
-    /// **Falls back to the scanning open** on any file whose digest is not
-    /// usable, exactly as the read-only route does, and
-    /// [`open_lazy_with_report`](Self::open_lazy_with_report) says which
-    /// happened.
-    ///
-    /// # What this handle does not have
-    ///
-    /// No resident directory, the same as the read-only digest open:
-    /// `blocks::<T>()` refuses with `NoResidentDirectory` and
-    /// [`record_map`](Self::record_map) is the way to walk records. Appending
-    /// is unaffected — the append path maintains `block_tails` and the sequence
-    /// itself, and the digest supplied both.
-    ///
-    /// # Why `checkpoint_on_flush` and `segment_on_flush` are refused
-    ///
-    /// Not because their state is hard to recover — that was the reading of
-    /// `open_readonly_from_digest`'s comment about the walk, and it is the
-    /// wrong one. `CheckpointCadence` is two `usize`s and `SegmentCursor`'s
-    /// `next_position` is *a position in the resident index*. Both records
-    /// serialize that index: a checkpoint writes the whole of it, a segment one
-    /// entry per record. A handle that keeps no index has nothing to write, so
-    /// the cadence is not approximate here, it has no referent. Refusing the
-    /// combination at open is honest where writing nothing would leave files
-    /// that open slower than their spec claims.
+    /// Checkpoint/segment-on-flush policies are refused because they serialize
+    /// a directory this handle does not retain. AtOpen verification requires an
+    /// explicit scan. Choose [`Self::open_scan`] to reconstruct writer state, or
+    /// [`Self::open_lazy_or_scan`] to retain automatic fallback behavior.
     pub fn open_lazy<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
         Ok(Self::open_lazy_with_report(spec, path)?.0)
     }
 
-    /// [`open_lazy`](Self::open_lazy), and which of the two routes it took.
+    /// [`open_lazy`](Self::open_lazy), and the selected summary source.
     pub fn open_lazy_with_report<P: AsRef<Path>>(
+        spec: FormatSpec,
+        path: P,
+    ) -> Result<(Self, LazyOpenSource)> {
+        let spec = spec.resolve_entrypoint();
+        spec.validate()?;
+        ensure_native_open_limits(spec)?;
+        ensure_lazy_verification_policy(spec)?;
+        ensure_lazy_writer_policy(spec)?;
+        let source = if spec.index_policy.header_tails {
+            LazyOpenSource::HeaderTails
+        } else {
+            LazyOpenSource::Digest
+        };
+        let path = path.as_ref();
+        let lock = WriterLock::acquire(path)?;
+        let (file, lock) = with_writer_lock_value(lock, |lock| {
+            Self::open_writer_from_digest(spec, path, lock, source)
+                .map_err(|error| lazy_metadata_error(error, source))
+        })?;
+        let mut file = file;
+        file._lock = Some(lock);
+        Ok((file, source))
+    }
+
+    /// Opens a writer from metadata, falling back to a scanning open on failure.
+    /// This explicitly preserves the former `open_lazy` behavior, including
+    /// normal scanning-writer recovery of the uncommitted tail.
+    pub fn open_lazy_or_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
+        Ok(Self::open_lazy_or_scan_with_report(spec, path)?.0)
+    }
+
+    /// Like [`Self::open_lazy_or_scan`], reporting the route taken.
+    pub fn open_lazy_or_scan_with_report<P: AsRef<Path>>(
         spec: FormatSpec,
         path: P,
     ) -> Result<(Self, LazyOpenSource)> {

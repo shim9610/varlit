@@ -635,7 +635,9 @@ Refused (`InvalidFormatSpec`) without `liveness: footer_flags`, for custom
 physical layouts and for matrix storage; refused (`NoResidentDirectory`) on a
 handle that keeps no directory.
 
-### An open that reads no record
+<a id="an-open-that-reads-no-record"></a>
+
+### Metadata-only open and explicit scans
 
 `open_readonly_lazy(spec, path)` opens from the **open digest** at the end of
 the file: the three facts an open needs that live in no single record — where
@@ -649,11 +651,45 @@ The handle keeps no directory. `blocks`, `scan` and `keyed_blocks` return
 `_into` read need no directory and work directly — which is what the block tails
 are in the digest for.
 
-**It falls back to the full scan** for a file with no usable digest: one written
-before the option was enabled, one whose writer appended past its last commit,
-one truncated or rotted. That is not an error and the answer is identical, but
-it is four orders of magnitude, so `open_readonly_lazy_with_report` returns
-`LazyOpenSource::{Digest, FullScan}` rather than leaving it to a stopwatch.
+Lazy open never starts a full scan after a metadata error. It uses the header
+tail table when declared, otherwise the trailing digest. The selected source
+must be usable; it does not silently switch sources after failure.
+
+| API | On unusable summary metadata |
+| --- | --- |
+| `VarlitFile::open_readonly_lazy[_with_report]` | Return an error; no scan |
+| `VarlitFile::open_lazy[_with_report]`, `VarlitWriter::open_lazy[_with_report]` | Return an error and release the writer lock; no scan or native-tail truncation |
+| `VarlitFile::open_readonly_scan` | Explicitly reconstruct read-only state without retaining a directory |
+| `VarlitFile::open_scan`, `VarlitWriter::open_scan` | Explicitly use normal scanning-writer recovery, including uncommitted-tail truncation |
+| `*_lazy_or_scan[_with_report]` | Preserve the former automatic summary-to-scan behavior |
+
+`Error::LazyOpenMetadataUnavailable { metadata }` identifies a missing, stale or
+structurally invalid selected summary. This intentionally does not claim to
+distinguish missing metadata from all possible corruption without scanning.
+Specific I/O, allocation, checksum, schema and resource errors are propagated.
+`LazyOpenVerificationRequiresScan` means the configured AtOpen payload
+verification requires a scanning API. A strict successful report is
+`LazyOpenSource::HeaderTails` or `Digest`; only the explicit automatic mode can
+report `FullScan`. Scanning can also fail and returns its own error.
+
+The `*_lazy_or_scan` APIs preserve legacy recovery: they try header tails, then
+the trailing digest, then a scanning open. Except for the existing missing-limit
+and trusted-unbounded authorization refusals, metadata errors can be replaced by
+the scan result. Select strict lazy open when the original error must be retained.
+
+```rust,no_run
+# fn open(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<varlit::VarlitFile> {
+use varlit::{Error, VarlitFile};
+match VarlitFile::open_readonly_lazy(spec, path) {
+    Ok(reader) => Ok(reader),
+    Err(Error::LazyOpenMetadataUnavailable { .. }) => {
+        // Application policy explicitly permits reconstruction here.
+        VarlitFile::open_readonly_scan(spec, path)
+    }
+    Err(error) => Err(error),
+}
+# }
+```
 
 The option requires `block_offset_chain` and composes with both
 `segment_on_flush` and `checkpoint_on_flush` — the three answer different

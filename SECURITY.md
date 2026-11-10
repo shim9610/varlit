@@ -109,6 +109,13 @@ concurrent files, allocation granularity and other users of the volume also
 consume space. Genuine filesystem-full and partial-write errors still propagate.
 
 This policy does not cap database size or require spills beside the database.
+`STANDARD` intentionally permits very large total files and scan workloads.
+A hostile but admissible file can therefore consume substantial CPU, I/O and
+temporary storage even while working buffers stay bounded. Applications accepting
+untrusted files should select work limits, concurrent-job budgets and aggregate
+storage quotas for their environment before opening or explicitly scanning them.
+Strict lazy open never substitutes a full scan after a metadata error; select
+`*_lazy_or_scan` only when automatic reconstruction is intended.
 Publication/replacement files that must be atomically renamed remain beside their
 destination and are outside this disposable-spill policy. Temporary storage on
 `tmpfs` consumes system memory that process resident-set size (RSS) does not fully

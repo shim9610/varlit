@@ -1423,15 +1423,21 @@ pub(super) struct HeaderTailsSlot {
 /// A slot that fails anything here is skipped rather than refused: the region
 /// is overwritten in place, so a half-written slot is an expected state and the
 /// answer to it is the other slot, or the scan.
-pub(super) fn decode_header_tails_slots(payload: &[u8]) -> Vec<HeaderTailsSlot> {
+pub(super) fn decode_header_tails_slots(payload: &[u8]) -> Result<Vec<HeaderTailsSlot>> {
     let mut slots: Vec<HeaderTailsSlot> = Vec::new();
     if payload.is_empty() || !payload.len().is_multiple_of(HEADER_TAILS_SLOTS) {
-        return slots;
+        return Ok(slots);
     }
     let slot_len = payload.len() / HEADER_TAILS_SLOTS;
     if slot_len < HEADER_TAILS_SLOT_HEADER_LEN + HEADER_TAILS_SLOT_TRAILER_LEN {
-        return slots;
+        return Ok(slots);
     }
+    slots
+        .try_reserve_exact(HEADER_TAILS_SLOTS)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "header tail slots",
+            requested: (HEADER_TAILS_SLOTS * size_of::<HeaderTailsSlot>()) as u64,
+        })?;
     for index in 0..HEADER_TAILS_SLOTS {
         let slot = &payload[index * slot_len..(index + 1) * slot_len];
         let body = &slot[..slot_len - HEADER_TAILS_SLOT_TRAILER_LEN];
@@ -1440,9 +1446,7 @@ pub(super) fn decode_header_tails_slots(payload: &[u8]) -> Vec<HeaderTailsSlot> 
         // The one check that separates a torn write from a good one. The slot's
         // length never changes, so without this a half-written slot frames
         // perfectly and names records that are not where it says.
-        let Ok(computed) = crc32_bytes(body) else {
-            continue;
-        };
+        let computed = crc32_bytes(body)?;
         if computed != u32::from_le_bytes(recorded) {
             continue;
         }
@@ -1468,9 +1472,12 @@ pub(super) fn decode_header_tails_slots(payload: &[u8]) -> Vec<HeaderTailsSlot> 
         // `corroborate_header_tails`), but it is kept here because its
         // `generation` is what the next write has to advance past.
         let mut tails: Vec<(u32, u64)> = Vec::new();
-        if tails.try_reserve_exact(count).is_err() {
-            continue;
-        }
+        tails
+            .try_reserve_exact(count)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "header tail entries",
+                requested: (count * size_of::<(u32, u64)>()) as u64,
+            })?;
         let mut previous: Option<u32> = None;
         let mut ordered = true;
         for entry in 0..count {
@@ -1497,7 +1504,7 @@ pub(super) fn decode_header_tails_slots(payload: &[u8]) -> Vec<HeaderTailsSlot> 
         });
     }
     slots.sort_unstable_by_key(|slot| std::cmp::Reverse(slot.generation));
-    slots
+    Ok(slots)
 }
 
 /// Adopt the newest header tail table the *file* corroborates, or fail into the
@@ -1544,12 +1551,11 @@ pub(super) fn read_header_tails(
         .get(extent.payload_in_extensions..extent.payload_in_extensions + extent.payload_len)
         .ok_or(Error::InvalidIndexSegment)?;
 
-    for slot in decode_header_tails_slots(payload) {
-        if let Some(digest) = corroborate_header_tails(spec, file, append_start, file_len, &slot)
-            .ok()
-            .flatten()
-        {
-            return Ok(digest);
+    for slot in decode_header_tails_slots(payload)? {
+        match corroborate_header_tails(spec, file, append_start, file_len, &slot) {
+            Ok(Some(digest)) => return Ok(digest),
+            Ok(None) => {}
+            Err(error) => return Err(error),
         }
     }
     Err(Error::InvalidIndexSegment)
@@ -1639,7 +1645,7 @@ pub(super) fn corroborate_header_tails(
 
 /// Picks which of the two lazy routes reads the block tails.
 ///
-/// Both answer the same three facts and both fail into the scan; they differ in
+/// Both answer the same three facts and return errors to the caller; they differ in
 /// where the answer is stored and therefore in what can hide it. Kept as one
 /// dispatch so the two open sites stay identical either way.
 pub(super) fn read_lazy_block_tails(
@@ -1667,8 +1673,7 @@ pub(super) fn read_lazy_block_tails(
             read_header_tails(spec, file, append_start, file_len, header_len, extensions)
         }
         LazyOpenSource::Digest => read_open_digest(spec, file, append_start, file_len),
-        // The scan is not a route this reaches: it is the fallback the callers
-        // take when both of the above fail.
+        // Scanning is selected by a separate entry point, never by this parser.
         LazyOpenSource::FullScan => Err(Error::InvalidIndexSegment),
     }
 }

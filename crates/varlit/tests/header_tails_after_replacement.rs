@@ -72,12 +72,12 @@ fn build(path: &std::path::Path) -> varlit::Result<()> {
     Ok(())
 }
 
-/// Append through a **lazy** writer, then scan. The scan is the oracle: it
+/// Append through the explicitly selected lazy-or-scan writer, then scan. The scan is the oracle: it
 /// recounts, so it refuses exactly when the mark sent the writer onto a
 /// sequence that was already taken.
 fn append_lazily_then_scan(path: &std::path::Path) -> varlit::Result<usize> {
     {
-        let mut writer = VarlitWriter::open_lazy(spec(), path)?;
+        let mut writer = VarlitWriter::open_lazy_or_scan(spec(), path)?;
         writer.push(&Sample { value: 7777 })?;
         writer.flush()?;
     }
@@ -158,7 +158,7 @@ fn the_fast_route_pauses_for_exactly_one_open() -> varlit::Result<()> {
     let path = directory.path().join("route.varlit");
     build(&path)?;
     let source = |path: &std::path::Path| -> varlit::Result<LazyOpenSource> {
-        Ok(VarlitFile::open_readonly_lazy_with_report(spec(), path)?.1)
+        Ok(VarlitFile::open_readonly_lazy_or_scan_with_report(spec(), path)?.1)
     };
 
     assert_eq!(source(&path)?, LazyOpenSource::HeaderTails);

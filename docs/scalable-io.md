@@ -17,7 +17,10 @@ Opt-in policies narrow that gap without closing it. `segment_on_flush` makes
 open frame one record per commit point instead of one per record;
 `open_digest_on_flush` plus `VarlitFile::open_readonly_lazy` makes open frame one
 record and retain **nothing**, leaving the caller to build only the part of the
-index its question needs with `record_map`. These policies change which metadata
+index its question needs with `record_map`. Lazy open returns errors without
+automatic scanning; explicitly choose `open_readonly_scan` / `open_scan`, or
+`*_lazy_or_scan[_with_report]` for the former automatic recovery behavior.
+These policies change which metadata
 is read at open; benchmark results are pending a controlled local rerun.
 
 Ordinary keyed merge/compact also spills bounded index buffers, but still needs

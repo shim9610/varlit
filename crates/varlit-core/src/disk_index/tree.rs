@@ -887,17 +887,17 @@ pub(super) fn apply(
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
 ) -> DiskIndexResult<Root> {
-    apply_with_limit(file, reader, root, updates, None)
+    apply_with_limit(file, reader, root, updates.iter(), None)
 }
 
-pub(super) fn apply_with_limit(
+pub(super) fn apply_with_limit<'a>(
     file: &File,
     reader: &Reader,
     root: Root,
-    updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+    updates: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; LATEST_LEN])>,
     maximum: Option<u64>,
 ) -> DiskIndexResult<Root> {
-    if updates.is_empty() {
+    if updates.len() == 0 {
         return Ok(root);
     }
     let mut writer = Writer {
@@ -908,7 +908,7 @@ pub(super) fn apply_with_limit(
     };
     let mut sorted = Vec::new();
     sorted.try_reserve_exact(updates.len()).map_err(oom)?;
-    sorted.extend(updates.iter());
+    sorted.extend(updates);
     let updates = sorted;
     let height = if root.offset == 0 {
         0

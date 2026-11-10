@@ -773,7 +773,8 @@ fn lazy_open_honors_explicit_at_open_verification() -> varlit::Result<()> {
         spec.read_limits
             .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
     );
-    let (reader, source) = varlit::VarlitFile::open_readonly_lazy_with_report(strict, &path)?;
+    let (reader, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(strict, &path)?;
     assert_eq!(source, varlit::LazyOpenSource::FullScan);
     drop(reader);
     let mut file = std::fs::OpenOptions::new().write(true).open(&path)?;
@@ -781,11 +782,11 @@ fn lazy_open_honors_explicit_at_open_verification() -> varlit::Result<()> {
     file.write_all(&2u64.to_le_bytes())?;
     drop(file);
     assert!(matches!(
-        varlit::VarlitFile::open_readonly_lazy_with_report(strict, &path),
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(strict, &path),
         Err(varlit::Error::ChecksumMismatch { .. })
     ));
     assert!(matches!(
-        varlit::VarlitFile::open_lazy_with_report(strict, &path),
+        varlit::VarlitFile::open_lazy_or_scan_with_report(strict, &path),
         Err(varlit::Error::ChecksumMismatch { .. })
     ));
     Ok(())

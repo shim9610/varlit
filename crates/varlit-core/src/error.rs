@@ -7,6 +7,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The selected lazy-open metadata is absent, stale or structurally invalid.
+    /// No full scan was attempted. Choose an explicit scan or `lazy_or_scan` API
+    /// if reconstruction is appropriate. Specific I/O/allocation/checksum errors
+    /// are returned directly instead of being converted into this variant.
+    #[error("lazy-open metadata {metadata:?} is unavailable; no full scan was attempted")]
+    LazyOpenMetadataUnavailable { metadata: crate::LazyOpenSource },
+
+    /// AtOpen payload verification cannot be fulfilled by metadata-only open.
+    #[error("AtOpen integrity verification requires an explicit scanning open")]
+    LazyOpenVerificationRequiresScan,
+
     /// Detailed error allocation failed. This inline context preserves whether
     /// an append/publication happened or is uncertain; do not blindly retry it.
     #[error("could not allocate detailed error after {context:?}")]
@@ -587,8 +598,8 @@ pub enum Error {
     /// leave files that open slower than their spec says they should.
     ///
     /// A segment and a digest solve the same problem: what an open needs that
-    /// lives in no single record. Pick one. The table in
-    /// `VarlitFile::open_readonly_lazy` measures both.
+    /// lives in no single record. Select a scanning/indexed writer when
+    /// checkpoint or segment serialization is required.
     #[error(
         "a lazy writer open cannot serve {policy}, which serializes the resident index it does \
          not keep; a digest and an index segment answer the same question, so declare one"

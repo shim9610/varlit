@@ -400,7 +400,7 @@ impl VarlitFile {
                     extent.payload_in_extensions..extent.payload_in_extensions + extent.payload_len,
                 )
                 .ok_or(Error::InvalidCompressionHeader)?;
-            decode_header_tails_slots(payload)
+            decode_header_tails_slots(payload)?
                 .iter()
                 .map(|slot| slot.generation)
                 .max()

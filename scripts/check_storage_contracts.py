@@ -10,6 +10,10 @@ import sys
 from qualify_scalable import ROOT, classify, run_command, source_identity
 
 CASES = [
+    ("keyed-spill-refusal", "varlit-core", None, "file::tests::keyed_tail_spill_allocation_failures_preserve_entries_and_retry", False, None),
+    ("strict-lazy-choice", "varlit", "open_digest", "strict_lazy_failure_is_typed_and_scan_is_an_explicit_choice", False, None),
+    ("strict-lazy-corruption", "varlit", "open_digest", "strict_lazy_bad_digest_returns_error_without_scanning", False, None),
+    ("strict-lazy-header", "varlit", "header_tail_region", "strict_cold_header_returns_its_source_without_scanning", False, None),
     ("compound-read", "varlit-core", None, "disk_index::tree::corruption_guards::hostile_child_with_short_reads_io_errors_and_allocation_refusal_recovers", False, "COMPOUND_READ trials=160 retries=160 bounded=true strict_and_trusted=true"),
     ("failed-swmr", "varlit", "publication_failure_results", "enabled::failed_writer_preserves_concurrent_readers_and_retry_after_recovery", False, "FAILED_SWMR readers=8 probes=2048 retained_cursors=8 recovered=true"),
     ("snapshot-owner-release", "varlit-core", None, "disk_index::storage::failure_tests::failed_resume_releases_writer_lock_while_snapshot_owners_survive", False, None),

@@ -704,7 +704,8 @@ fn a_byte_past_the_commit_point_takes_the_table_out_of_use() -> varlit::Result<(
     let path = directory.path().join("appended.varlit");
     write_samples(on_spec(), &path, 200)?;
 
-    let (before, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (before, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     let expected = before.block_tail_offset(Sample::ID);
     drop(before);
@@ -714,7 +715,8 @@ fn a_byte_past_the_commit_point_takes_the_table_out_of_use() -> varlit::Result<(
         .open(&path)?
         .write_all(&[0u8])?;
 
-    let (after, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (after, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -790,7 +792,8 @@ fn a_table_naming_an_older_commit_marker_is_refused() -> varlit::Result<()> {
         "the stale table names a marker from before the later commits",
     );
 
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -890,7 +893,7 @@ fn commit_offset_must_name_a_commit_marker() -> varlit::Result<()> {
     });
     std::fs::write(&path, &bytes)?;
 
-    let (_, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (_, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -938,7 +941,8 @@ fn a_tail_naming_another_blocks_record_is_refused() -> varlit::Result<()> {
     });
     std::fs::write(&path, &bytes)?;
 
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -990,7 +994,8 @@ fn a_torn_slot_is_skipped_and_the_other_one_answers() -> varlit::Result<()> {
         tear_slot(&mut bytes, at, torn);
         let one = directory.path().join(format!("torn-{torn}.varlit"));
         std::fs::write(&one, &bytes)?;
-        let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &one)?;
+        let (file, source) =
+            varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &one)?;
         assert_eq!(
             source,
             varlit::LazyOpenSource::HeaderTails,
@@ -1007,7 +1012,8 @@ fn a_torn_slot_is_skipped_and_the_other_one_answers() -> varlit::Result<()> {
     }
     let both = directory.path().join("torn-both.varlit");
     std::fs::write(&both, &bytes)?;
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &both)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &both)?;
     assert_eq!(source, varlit::LazyOpenSource::FullScan);
     assert_eq!(file.block_tail_offset(Sample::ID), expected);
 
@@ -1024,7 +1030,8 @@ fn a_torn_slot_is_skipped_and_the_other_one_answers() -> varlit::Result<()> {
     }
     let padded = directory.path().join("torn-padding.varlit");
     std::fs::write(&padded, &bytes)?;
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &padded)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &padded)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -1243,7 +1250,8 @@ fn a_replacement_publishes_a_cold_region() -> varlit::Result<()> {
     );
 
     // And the file is still readable, by the route the cold region forces.
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(source, varlit::LazyOpenSource::FullScan);
     let scanned = varlit::VarlitFile::open_readonly(on_spec(), &path)?;
     for block in [Sample::ID, Note::ID] {
@@ -1286,7 +1294,7 @@ fn an_explicit_marker_format_resumes_from_the_header() -> varlit::Result<()> {
     drop(writer);
 
     // Committed and nothing after it: the table describes the file exactly.
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (file, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     let scanned = varlit::VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
@@ -1306,7 +1314,7 @@ fn an_explicit_marker_format_resumes_from_the_header() -> varlit::Result<()> {
     writer.flush()?;
     drop(writer);
 
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (file, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -1325,7 +1333,7 @@ fn an_explicit_marker_format_resumes_from_the_header() -> varlit::Result<()> {
     let mut writer = varlit::VarlitWriter::open(spec, &path)?;
     writer.commit()?;
     drop(writer);
-    let (_, source) = varlit::VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (_, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     Ok(())
 }
@@ -1732,7 +1740,8 @@ fn each_field_the_slot_decoder_checks_takes_the_table_out_of_use() -> varlit::Re
             .path()
             .join(format!("{}.varlit", name.replace(' ', "-")));
         std::fs::write(&one, &bytes)?;
-        let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &one)?;
+        let (file, source) =
+            varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &one)?;
         assert_eq!(
             source,
             varlit::LazyOpenSource::FullScan,
@@ -1777,7 +1786,7 @@ fn an_overflow_slot_is_not_adopted() -> varlit::Result<()> {
     std::fs::write(&overflowed, &bytes)?;
 
     let (file, source) =
-        varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &overflowed)?;
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &overflowed)?;
     assert_eq!(source, varlit::LazyOpenSource::FullScan);
     assert_eq!(file.block_tail_offset(Sample::ID), expected);
     Ok(())
@@ -1984,7 +1993,8 @@ fn an_in_place_replacement_retires_the_warm_region() -> varlit::Result<()> {
 
     // Retiring the table is not allowed to cost a fact: the open falls back to
     // the scan and answers exactly what it answered before.
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (file, source) =
+        varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(source, varlit::LazyOpenSource::FullScan);
     assert_eq!(file.block_tail_offset(Sample::ID), expected);
 
@@ -2003,7 +2013,7 @@ fn an_in_place_replacement_retires_the_warm_region() -> varlit::Result<()> {
         !warm(&std::fs::read(&path)?).is_empty(),
         "the next commit rewarms the region",
     );
-    let (_, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
+    let (_, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(on_spec(), &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     Ok(())
 }
@@ -2063,7 +2073,8 @@ mod crc32_with_header {
         let path = directory.path().join("header-crc.varlit");
         super::write_samples(spec, &path, 200)?;
 
-        let (lazy, source) = varlit::VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+        let (lazy, source) =
+            varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
         assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
 
         let scanned = varlit::VarlitFile::open_readonly(spec, &path)?;
@@ -2088,7 +2099,7 @@ mod crc32_with_header {
         std::fs::write(&damaged, &bytes)?;
         assert!(
             !matches!(
-                varlit::VarlitFile::open_readonly_lazy_with_report(spec, &damaged),
+                varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &damaged),
                 Ok((_, varlit::LazyOpenSource::HeaderTails)),
             ),
             "a damaged commit marker must take the table out of use",
@@ -2144,7 +2155,7 @@ fn a_file_with_an_uncommitted_tail_is_truncated_by_the_scan() -> varlit::Result<
 
     // A lazy writer open must not take the table — and the open that answers
     // instead is the one that truncates.
-    let (writer, source) = varlit::VarlitFile::open_lazy_with_report(spec, &path)?;
+    let (writer, source) = varlit::VarlitFile::open_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(
         source,
         varlit::LazyOpenSource::FullScan,
@@ -2160,12 +2171,40 @@ fn a_file_with_an_uncommitted_tail_is_truncated_by_the_scan() -> varlit::Result<
 
     // And with the tail gone the table describes the file again, so the next
     // open is fast: the fallback is a one-time cost, not a permanent demotion.
-    let (file, source) = varlit::VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (file, source) = varlit::VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     let scanned = varlit::VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
         file.block_tail_offset(Sample::ID),
         scanned.block_tail_offset(Sample::ID),
     );
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_cold_header_returns_its_source_without_scanning() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-cold.varlit");
+    drop(varlit::VarlitFile::create(on_spec(), &path)?);
+    let before = std::fs::read(&path)?;
+    for writer in [false, true] {
+        let framed = varlit::VarlitFile::records_framed();
+        let result = if writer {
+            varlit::VarlitFile::open_lazy(on_spec(), &path)
+        } else {
+            varlit::VarlitFile::open_readonly_lazy(on_spec(), &path)
+        };
+        assert!(matches!(
+            result,
+            Err(varlit::Error::LazyOpenMetadataUnavailable {
+                metadata: varlit::LazyOpenSource::HeaderTails,
+            })
+        ));
+        assert_eq!(varlit::VarlitFile::records_framed(), framed);
+    }
+    assert_eq!(std::fs::read(&path)?, before);
+    let (_, source) = varlit::VarlitFile::open_lazy_or_scan_with_report(on_spec(), &path)?;
+    assert_eq!(source, varlit::LazyOpenSource::FullScan);
     Ok(())
 }

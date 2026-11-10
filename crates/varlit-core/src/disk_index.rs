@@ -3664,6 +3664,13 @@ impl ScratchIndex {
         result.map_err(index_error)
     }
     pub(crate) fn apply(&mut self, values: &BTreeMap<Vec<u8>, [u8; 52]>) -> crate::Result<()> {
+        self.apply_iter(values.iter())
+    }
+    /// Updates must be unique and in ascending key order.
+    pub(crate) fn apply_iter<'a>(
+        &mut self,
+        values: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; 52])>,
+    ) -> crate::Result<()> {
         // A refused limited batch must not consume the remaining scratch
         // allowance with unpublished nodes. Preserve all pre-existing clones.
         let prior = self
