@@ -894,7 +894,7 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
-    contract!("core/file.rs::file::VarlitFile::fn:open_readonly_lazy_or_scan@b26b72e4ed052eac",
+    contract!("core/file.rs::file::VarlitFile::fn:open_readonly_lazy_or_scan@a6d84ace33390fb0",
         valid {
             let (_directory, path, spec) = lazy_open_fixture(false)?;
             let result = varlit::VarlitFile::open_readonly_lazy_or_scan(spec, &path);

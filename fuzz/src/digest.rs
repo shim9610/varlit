@@ -26,7 +26,7 @@
 use std::fs;
 use std::path::Path;
 
-use varlit::{FormatSpec, VarlitBlock, VarlitFile, varlit_format};
+use varlit::{FormatSpec, LazyOpenSource, VarlitBlock, VarlitFile, varlit_format};
 
 varlit_format! {
     pub format FuzzDigestFormat {
@@ -245,14 +245,19 @@ pub fn run_digest(data: &[u8]) {
 /// [`Oracle::Appended`] — and for truncation and rot the requirement is that
 /// the path be sound, which the sanitizers and the read-back below judge.
 ///
-/// One property holds in *every* mode: **the lazy open may not fail where the
-/// scan succeeds.** `open_readonly_lazy_with_report`'s contract is that every
-/// digest failure short of a spec-level refusal falls back to exactly the scan
+/// In explicit automatic mode, the lazy-or-scan open may not fail where the
+/// scan succeeds. `open_readonly_lazy_or_scan_with_report` preserves the
+/// contract that every digest failure short of a spec-level refusal falls back to exactly the scan
 /// — so on a file the scan can read, `Err` is not a permitted degradation, it
 /// is the fallback broken. The first version of this function excused those
 /// errors in every mode, which would have hidden a lazy open regressed to
 /// erroring on every valid file.
 fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
+    compare_route(spec, path, oracle, true);
+    compare_route(spec, path, oracle, false);
+}
+
+fn compare_route(spec: FormatSpec, path: &Path, oracle: Oracle, strict: bool) {
     // The scan is read first and is never allowed to be the thing that changed
     // the file — `open_readonly` does not recover in place, so both routes see
     // identical bytes.
@@ -268,16 +273,31 @@ fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
         // succeed — a digest at the end is checksummed independently of the
         // mid-file damage that stopped the scan — so nothing further is owed
         // beyond not misbehaving, which libFuzzer's sanitizers judge.
-        let _ = VarlitFile::open_readonly_lazy_with_report(spec, path);
+        if strict {
+            let _ = VarlitFile::open_readonly_lazy_with_report(spec, path);
+        } else {
+            let _ = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, path);
+        }
         return;
     };
 
-    let (file, source) = match VarlitFile::open_readonly_lazy_with_report(spec, path) {
-        Ok(opened) => opened,
-        Err(error) => panic!(
-            "the lazy open failed where the scan succeeds; its fallback is that scan: {error:?}"
-        ),
+    let opened = if strict {
+        VarlitFile::open_readonly_lazy_with_report(spec, path)
+    } else {
+        VarlitFile::open_readonly_lazy_or_scan_with_report(spec, path)
     };
+    let (file, source) = match opened {
+        Ok(opened) => opened,
+        // Strict metadata open can reject a damaged/stale summary even when
+        // reconstruction succeeds. The pristine fixture must still open.
+        Err(_) if strict && oracle != Oracle::Pristine => return,
+        Err(error) => {
+            panic!("open (strict={strict}) failed on a required successful path: {error:?}")
+        }
+    };
+    if strict {
+        assert_ne!(source, LazyOpenSource::FullScan);
+    }
 
     let line_tail = file.block_tail_offset(DigestLine::ID);
     let note_tail = file.block_tail_offset(DigestNote::ID);

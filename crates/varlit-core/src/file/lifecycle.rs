@@ -9,7 +9,10 @@ fn lazy_metadata_error(error: Error, source: LazyOpenSource) -> Error {
 
 fn ensure_lazy_verification_policy(spec: FormatSpec) -> Result<()> {
     if spec.read_limits.read_validation != Some(crate::ReadValidation::TRUSTED)
-        && spec.read_limits.resolve().effective_integrity_verification()
+        && spec
+            .read_limits
+            .resolve()
+            .effective_integrity_verification()
             == IntegrityVerification::AtOpen
     {
         return Err(Error::LazyOpenVerificationRequiresScan);
@@ -627,10 +630,7 @@ impl VarlitFile {
 
     /// Opens from metadata, falling back to a full scan on failure.
     /// This explicitly preserves the former `open_readonly_lazy` behavior.
-    pub fn open_readonly_lazy_or_scan<P: AsRef<Path>>(
-        spec: FormatSpec,
-        path: P,
-    ) -> Result<Self> {
+    pub fn open_readonly_lazy_or_scan<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
         Ok(Self::open_readonly_lazy_or_scan_with_report(spec, path)?.0)
     }
 

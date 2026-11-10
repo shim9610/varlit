@@ -769,8 +769,15 @@ fn a_reopen_keeps_the_route_the_handle_was_using() -> varlit::Result<()> {
 
     let mut scratch = Vec::new();
     let bare = varlit::VarlitFile::open_readonly_without_directory(spec(), &path, &mut scratch)?;
+    // No summary was written. Reopening a directory-free handle now reports
+    // that condition instead of silently rebuilding it by scanning.
     assert!(matches!(
-        bare.reopen_readonly()?.blocks::<Reading>(),
+        bare.reopen_readonly(),
+        Err(varlit::Error::LazyOpenMetadataUnavailable { .. })
+    ));
+    let reopened = varlit::VarlitFile::open_readonly_scan(spec(), &path)?;
+    assert!(matches!(
+        reopened.blocks::<Reading>(),
         Err(varlit::Error::NoResidentDirectory { .. })
     ));
     Ok(())
