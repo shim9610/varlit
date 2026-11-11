@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use varlit::{
     BatchOptions, BlockDescriptor, BlockKind, DiskIndexBatchOptions, DiskIndexOptions,
     DiskIndexPlan, DiskIndexedBlock, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
-    ManifestPolicy, ReadLimits, RecoveryPolicy, StreamOptions, VarlitBlock, VarlitIndexedReader,
-    VarlitIndexedWriter, VarlitStreamReader, VarlitStreamWriter,
+    ManifestPolicy, ReadLimits, RecoveryPolicy, StreamOptions, VarlitBlock, VarlitEmpty,
+    VarlitIndexedReader, VarlitIndexedWriter, VarlitStreamReader, VarlitStreamWriter,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -335,8 +335,10 @@ fn check_point(
     epoch: u64,
 ) -> Result<Duration> {
     let started = Instant::now();
-    let actual = reader.get::<Record>(&key)?;
+    let mut found = Record::empty();
+    let present = reader.get::<Record>(&key, &mut found)?;
     let elapsed = started.elapsed();
+    let actual = present.then_some(found);
     match (config.expected(key, epoch), actual) {
         (None, None) => Ok(()),
         (Some(generation), Some(record))
@@ -440,12 +442,13 @@ fn stream_worker(
     let mut scans = 0;
     while !stop.load(Ordering::Acquire) {
         let mut ordinal = 0;
-        for value in reader.blocks::<StreamRecord>()? {
+        let mut blocks = reader.blocks::<StreamRecord>()?;
+        let mut record = StreamRecord::empty();
+        while blocks.next_into(&mut record)? {
             if stop.load(Ordering::Acquire) {
                 break;
             }
             let now = Instant::now();
-            let record = value?;
             if record.key != u64::MAX {
                 if record.key != config.key_at(ordinal)
                     || record.generation != ordinal / config.per_epoch()
@@ -782,18 +785,21 @@ fn verify(config: &Config, bank: &Payloads) -> Result<()> {
         "stream" => {
             let reader =
                 VarlitStreamReader::open(config.spec(), config.path(), config.stream_options())?;
-            for value in reader.blocks::<StreamRecord>()? {
-                let r = value?;
+            let mut blocks = reader.blocks::<StreamRecord>()?;
+            let mut r = StreamRecord::empty();
+            while blocks.next_into(&mut r)? {
                 check(Record {
                     key: r.key,
                     generation: r.generation,
-                    payload: r.payload,
+                    payload: r.payload.clone(),
                 })?;
             }
         }
         _ => {
-            for value in indexed_reader(config)?.blocks::<Record>()? {
-                check(value?)?;
+            let mut blocks = indexed_reader(config)?.blocks::<Record>()?;
+            let mut value = Record::empty();
+            while blocks.next_into(&mut value)? {
+                check(value.clone())?;
             }
         }
     }
@@ -859,9 +865,10 @@ fn random_read(config: &Config, bank: &Payloads) -> Result<()> {
 fn probe(config: &Config) -> Result<()> {
     match indexed_reader(config) {
         Ok(reader) => {
-            let marker = reader
-                .get::<Record>(&u64::MAX)?
-                .ok_or("missing publication marker")?;
+            let mut marker = Record::empty();
+            if !reader.get::<Record>(&u64::MAX, &mut marker)? {
+                return Err("missing publication marker".into());
+            }
             println!(
                 "{{\"event\":\"process_probe\",\"status\":\"opened\",\"epoch\":{}}}",
                 marker.generation
@@ -901,10 +908,11 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
         config.plan(),
     )?;
     probe_child("writer")?;
-    let base_generation = indexed_reader(config)?
-        .get::<Record>(&u64::MAX)?
-        .ok_or("load file has no confirmed marker")?
-        .generation;
+    let mut marker = Record::empty();
+    if !indexed_reader(config)?.get::<Record>(&u64::MAX, &mut marker)? {
+        return Err("load file has no confirmed marker".into());
+    }
+    let base_generation = marker.generation;
     let final_generation = base_generation
         .checked_add(1000)
         .ok_or("marker generation overflow")?;
@@ -922,6 +930,7 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
                     let mut counts = BTreeMap::<String, u64>::new();
                     let mut retained = indexed_reader(config)?;
                     let mut previous = base_generation;
+                    let mut marker = Record::empty();
                     loop {
                         let done = stop.load(Ordering::Acquire);
                         let fresh = indexed_reader(config)?;
@@ -929,9 +938,11 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
                         check_point(&fresh, config, bank, 1, config.epochs() - 1)?;
                         retained.follow()?;
                         *counts.entry("followed".into()).or_default() += 1;
-                        let generation = retained
-                            .get::<Record>(&u64::MAX)?
-                            .map_or(0, |r| r.generation);
+                        let generation = if retained.get::<Record>(&u64::MAX, &mut marker)? {
+                            marker.generation
+                        } else {
+                            0
+                        };
                         if generation < previous || generation > final_generation {
                             return Err(
                                 "following reader observed invalid marker generation".into()

@@ -12,9 +12,8 @@ pub(crate) enum CheckpointKind {
 #[derive(Clone, Copy)]
 pub(crate) enum CheckpointStep {
     Body,
-    DataSync,
     SelectHead,
-    Head(bool),
+    Head,
     HeadSync,
 }
 
@@ -23,18 +22,16 @@ pub(crate) fn checkpoint<E>(
     kind: CheckpointKind,
     mut io: impl FnMut(CheckpointStep) -> Result<(), E>,
 ) -> Result<(), E> {
+    // One barrier per confirmed publication. The confirmed head names the
+    // checksum of every sidecar byte appended since the previous confirmed
+    // checkpoint, so a head that reached storage without its generation is
+    // detected and the other (older, durable) confirmed slot is used. Dirty and
+    // working checkpoints are not barriers: a crashed generation is recovered
+    // from the newest confirmed checkpoint, whatever reached storage after it.
     io(CheckpointStep::Body)?;
-    let durable = !matches!(kind, CheckpointKind::Working);
-    if durable {
-        io(CheckpointStep::DataSync)?;
-    }
     io(CheckpointStep::SelectHead)?;
-    io(CheckpointStep::Head(false))?;
-    if durable {
-        io(CheckpointStep::HeadSync)?;
-    }
+    io(CheckpointStep::Head)?;
     if matches!(kind, CheckpointKind::Confirmed) {
-        io(CheckpointStep::Head(true))?;
         io(CheckpointStep::HeadSync)?;
     }
     Ok(())

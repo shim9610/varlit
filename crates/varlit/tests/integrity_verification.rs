@@ -23,7 +23,9 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use varlit::{Error, IntegrityVerification, ReadLimits, VarlitBlock, VarlitFile, varlit_format};
+use varlit::{
+    Error, IntegrityVerification, ReadLimits, VarlitBlock, VarlitEmpty, VarlitFile, varlit_format,
+};
 
 varlit_format! {
     pub format Guarded {
@@ -155,9 +157,10 @@ fn on_demand_opens_the_same_corrupt_file_and_still_refuses_the_bad_record() {
     let blocks = reader.blocks::<Line>().expect("blocks");
     let mut refused = 0;
     let mut read_ok = 0;
+    let mut out = Line::empty();
     for index in 0..blocks.len() {
-        match blocks.get(index) {
-            Ok(Some(_)) => read_ok += 1,
+        match blocks.get(index, &mut out) {
+            Ok(true) => read_ok += 1,
             Err(Error::ChecksumMismatch { .. }) => refused += 1,
             other => panic!("unexpected result at {index}: {other:?}"),
         }

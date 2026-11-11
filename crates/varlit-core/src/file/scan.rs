@@ -255,14 +255,20 @@ pub(super) fn read_record_entry_at(
     }
 
     if entry.block_id == COMMIT_BLOCK_ID {
-        if entry.payload_len != COMMIT_PAYLOAD_MAGIC.len() as u64 {
-            return Err(Error::InvalidCommitMarker { offset });
-        }
-        let mut payload = [0; COMMIT_PAYLOAD_MAGIC.len()];
-        file.seek(SeekFrom::Start(entry.payload_offset))?;
-        file.read_exact(&mut payload)?;
-        if &payload != COMMIT_PAYLOAD_MAGIC {
-            return Err(Error::InvalidCommitMarker { offset });
+        // A single-barrier format writes the v2 marker, which names the
+        // records it commits; every other format writes the bare magic.
+        if spec.commit_policy.single_barrier() {
+            read_commit_marker_v2(file, &entry)?;
+        } else {
+            if entry.payload_len != COMMIT_PAYLOAD_MAGIC.len() as u64 {
+                return Err(Error::InvalidCommitMarker { offset });
+            }
+            let mut payload = [0; COMMIT_PAYLOAD_MAGIC.len()];
+            file.seek(SeekFrom::Start(entry.payload_offset))?;
+            file.read_exact(&mut payload)?;
+            if &payload != COMMIT_PAYLOAD_MAGIC {
+                return Err(Error::InvalidCommitMarker { offset });
+            }
         }
     }
 
@@ -567,26 +573,71 @@ pub(crate) fn prepare_stream_user_record_into<T: VarlitBlock>(
         .read_limits
         .require(ReadLimitKey::LogicalPayloadLen)?
         .unwrap_or(u64::MAX);
-    let logical = encode_to_vec_limited(
-        value,
+    if T::KIND == BlockKind::Variable && variable_compression_for_block(spec, T::ID).is_some() {
+        // A compressed record needs the logical bytes apart from the stored
+        // bytes, so it keeps its own staging buffer.
+        let logical = encode_to_vec_limited(
+            value,
+            endian,
+            logical_limit,
+            ReadLimitKey::LogicalPayloadLen.resource(),
+        )?;
+        let stored = prepare_user_record_payload(spec, T::ID, T::KIND, &logical)?;
+        return prepare_stream_record_into(
+            spec,
+            T::ID,
+            T::VERSION,
+            stored.flags,
+            stored.uncompressed_len_hint,
+            &stored.bytes,
+            sequence,
+            record_offset,
+            prev_same_block_offset,
+            prev_same_key_offset,
+            out,
+        );
+    }
+    // Uncompressed: encode the payload straight into `out` behind a header
+    // placeholder. On any error `out` is restored to its length on entry.
+    let start = out.len();
+    out.try_reserve(RECORD_HEADER_LEN as usize)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "record buffer",
+            requested: RECORD_HEADER_LEN,
+        })?;
+    out.resize(start + RECORD_HEADER_LEN as usize, 0);
+    let mut encoder = crate::codec::Encoder::new_limited_appending(
         endian,
         logical_limit,
         ReadLimitKey::LogicalPayloadLen.resource(),
-    )?;
-    let stored = prepare_user_record_payload(spec, T::ID, T::KIND, &logical)?;
-    prepare_stream_record_into(
-        spec,
-        T::ID,
-        T::VERSION,
-        stored.flags,
-        stored.uncompressed_len_hint,
-        &stored.bytes,
-        sequence,
-        record_offset,
-        prev_same_block_offset,
-        prev_same_key_offset,
-        out,
-    )
+        std::mem::take(out),
+    );
+    let encoded = value.encode_varlit(&mut encoder);
+    let (buffer, finished) = encoder.into_buffer_and_result();
+    *out = buffer;
+    let result = encoded.and(finished).and_then(|()| {
+        spec.read_limits.check(
+            ReadLimitKey::LogicalPayloadLen,
+            (out.len() - start - RECORD_HEADER_LEN as usize) as u64,
+        )?;
+        finish_stream_record_in_place(
+            spec,
+            T::ID,
+            T::VERSION,
+            0,
+            0,
+            sequence,
+            record_offset,
+            prev_same_block_offset,
+            prev_same_key_offset,
+            out,
+            start,
+        )
+    });
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
 }
 
 /// The owning form. Only the in-crate probe and the unit tests below want a
@@ -770,6 +821,58 @@ pub(super) fn prepare_stream_record_into(
     prev_same_key_offset: Option<u64>,
     out: &mut Vec<u8>,
 ) -> Result<PreparedRecordParts> {
+    let start = out.len();
+    let staged = (RECORD_HEADER_LEN as usize)
+        .checked_add(payload.len())
+        .ok_or(Error::ResourceArithmeticOverflow {
+            resource: "record buffer length",
+        })?;
+    // `try_reserve`, not `_exact`: `out` outlives this record.
+    out.try_reserve(staged)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "record buffer",
+            requested: staged as u64,
+        })?;
+    out.resize(start + RECORD_HEADER_LEN as usize, 0);
+    out.extend_from_slice(payload);
+    let result = finish_stream_record_in_place(
+        spec,
+        block_id,
+        block_version,
+        flags,
+        uncompressed_len_hint,
+        sequence,
+        record_offset,
+        prev_same_block_offset,
+        prev_same_key_offset,
+        out,
+        start,
+    );
+    if result.is_err() {
+        out.truncate(start);
+    }
+    result
+}
+
+/// Completes a record staged at `out[start..]` as a zeroed header followed by
+/// its payload: validates the limits, computes the footer and checksum, writes
+/// the header in place and appends the footer. The caller restores `out` to
+/// `start` on error.
+#[allow(clippy::too_many_arguments)]
+fn finish_stream_record_in_place(
+    spec: FormatSpec,
+    block_id: u32,
+    block_version: u16,
+    flags: u16,
+    uncompressed_len_hint: u32,
+    sequence: u64,
+    record_offset: u64,
+    prev_same_block_offset: Option<u64>,
+    prev_same_key_offset: Option<u64>,
+    out: &mut Vec<u8>,
+    start: usize,
+) -> Result<PreparedRecordParts> {
+    let payload_start = start + RECORD_HEADER_LEN as usize;
     let prev_same_block_offset = spec
         .index_policy
         .block_offset_chain
@@ -780,6 +883,7 @@ pub(super) fn prepare_stream_record_into(
         .keyed_offset_chain
         .then_some(prev_same_key_offset)
         .flatten();
+    let payload = &out[payload_start..];
     let payload_len =
         u64::try_from(payload.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
     spec.read_limits
@@ -831,25 +935,13 @@ pub(super) fn prepare_stream_record_into(
         record_offset,
         record_footer_len(spec),
     )?;
-    let total_len = header
-        .len()
-        .checked_add(payload.len())
-        .and_then(|len| len.checked_add(footer.len()))
-        .ok_or(Error::ResourceArithmeticOverflow {
-            resource: "record buffer length",
-        })?;
-    // `try_reserve` and not `try_reserve_exact`: `out` is the caller's buffer
-    // and outlives this record, so exact-fitting it to one record is what would
-    // make the next record reallocate. A fresh `Vec` reserves exactly `total_len`
-    // on its first record either way, because `try_reserve` on an empty `Vec`
-    // asks the allocator for what was requested.
-    out.try_reserve(total_len)
+    let total_len = out.len() - start + footer.len();
+    out.try_reserve(footer.len())
         .map_err(|_| Error::AllocationFailed {
             resource: "record buffer",
-            requested: total_len as u64,
+            requested: footer.len() as u64,
         })?;
-    out.extend_from_slice(&header);
-    out.extend_from_slice(payload);
+    out[start..payload_start].copy_from_slice(&header);
     out.extend_from_slice(footer);
     Ok(PreparedRecordParts {
         len: total_len,
@@ -1256,6 +1348,33 @@ pub(super) fn load_generation_index<B: ScanBuffer>(
     pages: Option<&crate::matrix_generation::MatrixFile>,
 ) -> Result<ScannedIndex> {
     let end = pages.map_or(file.metadata()?.len(), |p| p.head().native_eof);
+    let scanned = load_generation_index_to(spec, file, header_len, intent, out, end)?;
+    if !spec.commit_policy.single_barrier() {
+        return Ok(scanned);
+    }
+    // A single-barrier commit is only a commit point once its transaction
+    // verifies. If it does not, the file ends where the last transaction known
+    // to be durable ends: rescan to there, so every open (and a writer's tail
+    // truncation) sees exactly that prefix.
+    let Some(marker) = scanned.block_tails()?.tail(COMMIT_BLOCK_ID) else {
+        return Ok(scanned);
+    };
+    match verify_single_barrier_commit(spec, file, header_len, end, marker)? {
+        None => Ok(scanned),
+        Some(durable_end) => {
+            load_generation_index_to(spec, file, header_len, intent, out, durable_end)
+        }
+    }
+}
+
+fn load_generation_index_to<B: ScanBuffer>(
+    spec: FormatSpec,
+    file: &mut File,
+    header_len: u64,
+    intent: ScanIntent,
+    out: &mut B,
+    end: u64,
+) -> Result<ScannedIndex> {
     out.reset();
     if segment_chain_open_is_allowed(spec, intent)
         && let Some(scanned) = out.segments(spec, file, header_len, end)?
@@ -1668,14 +1787,181 @@ pub(super) fn read_lazy_block_tails(
         return Err(Error::InvalidIndexSegment);
     }
 
-    match source {
+    let digest = match source {
         LazyOpenSource::HeaderTails => {
             read_header_tails(spec, file, append_start, file_len, header_len, extensions)
         }
         LazyOpenSource::Digest => read_open_digest(spec, file, append_start, file_len),
         // Scanning is selected by a separate entry point, never by this parser.
         LazyOpenSource::FullScan => Err(Error::InvalidIndexSegment),
+    }?;
+    // A summary names the newest marker but not whether its transaction
+    // reached storage whole. Verify it; a failure is refused so the scan
+    // fallback decides where the file really ends.
+    if spec.commit_policy.single_barrier()
+        && let Some(marker) = digest.block_tails.tail(COMMIT_BLOCK_ID)
+        && verify_single_barrier_commit(spec, file, append_start, file_len, marker)?.is_some()
+    {
+        return Err(Error::InvalidIndexSegment);
     }
+    Ok(digest)
+}
+
+/// The v2 commit marker payload: magic, the newest marker known durable when
+/// it was written (`u64::MAX` for none), and the count and checksum chain of
+/// every record after that marker's commit point up to this marker.
+pub(crate) const COMMIT_MARKER_V2_MAGIC: &[u8; 4] = b"VCM2";
+pub(crate) const COMMIT_MARKER_V2_LEN: usize = 28;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CommitMarkerV2 {
+    pub(crate) anchor: Option<u64>,
+    pub(crate) count: u64,
+    pub(crate) chain: u64,
+}
+
+impl CommitMarkerV2 {
+    pub(crate) fn encode(self, endian: crate::Endian) -> [u8; COMMIT_MARKER_V2_LEN] {
+        let word = |v: u64| match endian {
+            crate::Endian::Little => v.to_le_bytes(),
+            crate::Endian::Big => v.to_be_bytes(),
+        };
+        let mut out = [0u8; COMMIT_MARKER_V2_LEN];
+        out[..4].copy_from_slice(COMMIT_MARKER_V2_MAGIC);
+        out[4..12].copy_from_slice(&word(self.anchor.unwrap_or(u64::MAX)));
+        out[12..20].copy_from_slice(&word(self.count));
+        out[20..28].copy_from_slice(&word(self.chain));
+        out
+    }
+
+    fn decode(bytes: &[u8; COMMIT_MARKER_V2_LEN], endian: crate::Endian) -> Option<Self> {
+        if &bytes[..4] != COMMIT_MARKER_V2_MAGIC {
+            return None;
+        }
+        let word = |at: usize| {
+            let raw: [u8; 8] = bytes[at..at + 8].try_into().expect("8 bytes");
+            match endian {
+                crate::Endian::Little => u64::from_le_bytes(raw),
+                crate::Endian::Big => u64::from_be_bytes(raw),
+            }
+        };
+        let anchor = word(4);
+        Some(Self {
+            anchor: (anchor != u64::MAX).then_some(anchor),
+            count: word(12),
+            chain: word(20),
+        })
+    }
+}
+
+/// Folds one record into a transaction's checksum chain. Order-sensitive, so
+/// a reordered, missing, repeated or substituted record changes the result.
+pub(crate) fn fold_commit_chain(chain: u64, offset: u64, sequence: u64, checksum: u32) -> u64 {
+    let mut x = chain ^ offset.rotate_left(17) ^ sequence.rotate_left(41) ^ u64::from(checksum);
+    // splitmix64 finaliser
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+fn read_commit_marker_v2(
+    file: &mut (impl Read + Seek),
+    entry: &RecordIndexEntry,
+) -> Result<CommitMarkerV2> {
+    let invalid = Error::InvalidCommitMarker {
+        offset: entry.record_offset,
+    };
+    if entry.payload_len != COMMIT_MARKER_V2_LEN as u64 {
+        return Err(invalid);
+    }
+    let mut payload = [0; COMMIT_MARKER_V2_LEN];
+    file.seek(SeekFrom::Start(entry.payload_offset))?;
+    file.read_exact(&mut payload)?;
+    // The marker's own checksum has been verified by whoever framed it, so a
+    // payload that does not decode was written by something else.
+    CommitMarkerV2::decode(&payload, crate::Endian::Little).ok_or(invalid)
+}
+
+/// Verifies the transaction a single-barrier marker commits.
+///
+/// Returns `None` when every record after the marker's durable anchor (past
+/// that anchor's own segment/digest suffix) up to the marker frames, passes
+/// its full checksum, and matches the marker's count and checksum chain.
+/// Otherwise returns `Some(end)`: the offset where the anchor's commit point
+/// ends, which is the newest prefix known to have reached storage whole. Only
+/// the transactions after the anchor can have been torn: the anchor was
+/// written before a completed storage barrier.
+pub(super) fn verify_single_barrier_commit(
+    spec: FormatSpec,
+    file: &mut File,
+    append_start: u64,
+    file_len: u64,
+    marker_offset: u64,
+) -> Result<Option<u64>> {
+    let checks = ScanChecks {
+        partial_boundary: None,
+        checksum_boundary: None,
+        verify_checksums: true,
+    };
+    let mut accounting = ScanAccounting::default();
+    let mut read = |file: &mut File, offset: u64| -> Result<Option<RecordIndexEntry>> {
+        match read_record_entry_at(spec, file, file_len, offset, checks, &mut accounting) {
+            Ok(RecordRead::Entry(entry)) => Ok(Some(entry)),
+            Ok(_) => Ok(None),
+            // I/O and resource refusals are reported; every other failure is
+            // bytes that do not frame or verify, which is the torn
+            // transaction this exists to find.
+            Err(
+                error @ (Error::Io(_)
+                | Error::LimitExceeded { .. }
+                | Error::AllocationFailed { .. }
+                | Error::ResourceArithmeticOverflow { .. }),
+            ) => Err(error),
+            Err(_) => Ok(None),
+        }
+    };
+    let Some(marker) = read(file, marker_offset)? else {
+        return Ok(Some(append_start));
+    };
+    let summary = read_commit_marker_v2(file, &marker)?;
+    // Where the anchor's commit point ends: its marker, then the segment and
+    // digest a commit point writes behind it.
+    let mut start = append_start;
+    if let Some(anchor) = summary.anchor {
+        if anchor >= marker_offset {
+            return Ok(Some(append_start));
+        }
+        let Some(entry) = read(file, anchor)? else {
+            return Ok(Some(append_start));
+        };
+        if entry.block_id != COMMIT_BLOCK_ID {
+            return Ok(Some(append_start));
+        }
+        start = entry.checked_physical_end()?;
+        while start < marker_offset {
+            let Some(entry) = read(file, start)? else {
+                break;
+            };
+            if !matches!(entry.block_id, SEGMENT_BLOCK_ID | OPEN_DIGEST_BLOCK_ID) {
+                break;
+            }
+            start = entry.checked_physical_end()?;
+        }
+    }
+    let durable_end = start;
+    let (mut cursor, mut count, mut chain) = (start, 0u64, 0u64);
+    while cursor < marker_offset {
+        let Some(entry) = read(file, cursor)? else {
+            return Ok(Some(durable_end));
+        };
+        chain = fold_commit_chain(chain, entry.record_offset, entry.sequence, entry.checksum);
+        count += 1;
+        cursor = entry.checked_physical_end()?;
+    }
+    if cursor != marker_offset || count != summary.count || chain != summary.chain {
+        return Ok(Some(durable_end));
+    }
+    Ok(None)
 }
 
 pub(super) fn read_open_digest(

@@ -734,15 +734,52 @@ impl<T> StreamingBlocks<T> {
     }
 }
 
-impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
-    type Item = Result<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
+impl<T: VarlitBlock> StreamingBlocks<T> {
+    /// Decodes the next record of `T` into `out`, reusing what it owns.
+    ///
+    /// Returns `false` at the end of the snapshot, leaving `out` untouched. A
+    /// returned error ends the walk (the cursor is then unusable for
+    /// following); `out` is valid but unspecified.
+    pub fn next_into(&mut self, out: &mut T) -> Result<bool> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        if !self.advance(&mut budget)? {
+            return Ok(false);
         }
-        // The scanner must not checksum payloads: the typed decode below owns
-        // the single, checksum-verified payload read.
+        let decoded = budget.decode_into(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian), out);
+        self.settle(decoded).map(|()| true)
+    }
+
+    /// The next record as a fresh value; crate tests only.
+    #[cfg(test)]
+    pub(crate) fn next_value(&mut self) -> Option<Result<T>> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        match self.advance(&mut budget) {
+            Ok(false) => None,
+            Err(error) => Some(Err(error)),
+            Ok(true) => {
+                let decoded = budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian));
+                Some(self.settle(decoded))
+            }
+        }
+    }
+
+    /// A decode error ends the walk like any other error.
+    fn settle<R>(&mut self, result: Result<R>) -> Result<R> {
+        if result.is_err() {
+            self.finished = true;
+            self.failed = true;
+        }
+        result
+    }
+
+    /// Finds the next record of `T`, charges its logical length to `budget`
+    /// and reads it once (checksummed) into `self.payload`. `false` at the end.
+    fn advance(&mut self, budget: &mut MaterializationBudget) -> Result<bool> {
+        if self.finished {
+            return Ok(false);
+        }
+        // The scanner must not checksum payloads: the typed decode owns the
+        // single, checksum-verified payload read.
         debug_assert!(
             !self.scanner.verifies_checksums(),
             "streaming typed scan requires a frame-only scanner",
@@ -752,12 +789,12 @@ impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
                 Ok(Some(entry)) => entry,
                 Ok(None) => {
                     self.finished = true;
-                    return None;
+                    return Ok(false);
                 }
                 Err(error) => {
                     self.finished = true;
                     self.failed = true;
-                    return Some(Err(error));
+                    return Err(error);
                 }
             };
             if entry.block_id != T::ID {
@@ -766,32 +803,37 @@ impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
             if entry.block_version != T::VERSION {
                 self.finished = true;
                 self.failed = true;
-                return Some(Err(Error::BlockVersionMismatch {
+                return Err(Error::BlockVersionMismatch {
                     block_id: T::ID,
                     expected: T::VERSION,
                     actual: entry.block_version,
-                }));
+                });
             }
-            let result = (|| {
-                let logical_len =
-                    entry.logical_payload_len_snapshot(self.spec, self.scanner.snapshot())?;
-                let mut budget = MaterializationBudget::new(self.spec);
-                budget.consume(logical_len)?;
-                // The single payload read: verifies the record checksum over
-                // the in-memory buffer and hands that buffer to typed decode.
+            let read = match entry.logical_payload_len_snapshot(self.spec, self.scanner.snapshot())
+            {
+                Ok(logical_len) => budget.consume(logical_len),
+                Err(error) => Err(error),
+            };
+            // The single payload read: verifies the record checksum over the
+            // in-memory buffer that typed decode then reads.
+            let read = read.and_then(|()| {
                 entry.read_logical_payload_snapshot_into(
                     self.spec,
                     self.scanner.snapshot(),
                     &mut self.payload,
-                )?;
-                budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian))
-            })();
-            if result.is_err() {
-                self.finished = true;
-                self.failed = true;
-            }
-            return Some(result);
+                )
+            });
+            return self.settle(read).map(|()| true);
         }
+    }
+}
+
+/// Crate tests walk a cursor as an iterator of fresh values.
+#[cfg(test)]
+impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
+    type Item = Result<T>;
+    fn next(&mut self) -> Option<Result<T>> {
+        self.next_value()
     }
 }
 
@@ -2863,7 +2905,7 @@ mod tests {
     /// standing.
     #[test]
     fn bootstrap_retires_a_sidecar_published_for_a_replaced_primary() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = crate::diagnostics::private_tempdir()?;
         let path = directory.path().join("replaced-bootstrap.varlit");
         let replacement = directory.path().join("replacement.varlit");
         let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
@@ -3076,6 +3118,111 @@ mod tests {
         let values = blocks.collect::<Result<Vec<_>>>()?;
         assert_eq!(values.len(), 129);
         assert_eq!(values.last(), Some(&TestBlock(128)));
+        Ok(())
+    }
+
+    /// A variable payload large enough to exercise the bulk vector codec.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct SamplesBlock(Vec<u16>);
+
+    impl VarlitEncode for SamplesBlock {
+        const WIRE_TYPE: WireType = WireType::Seq;
+
+        fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+            self.0.encode_varlit(encoder)
+        }
+    }
+
+    impl VarlitDecode for SamplesBlock {
+        const WIRE_TYPE: WireType = WireType::Seq;
+
+        fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+            Ok(Self(Vec::<u16>::decode_varlit(decoder)?))
+        }
+    }
+
+    impl VarlitBlock for SamplesBlock {
+        const ID: u32 = 17;
+        const VERSION: u16 = 1;
+        const KIND: BlockKind = BlockKind::Variable;
+        const ENDIAN: Option<Endian> = None;
+        const IS_KEYED: bool = false;
+        const SCHEMA_FINGERPRINT: u64 = 0x5354_5245_414D_0117;
+    }
+
+    /// In-place staging must produce exactly the bytes of the owning form,
+    /// whatever already sits in the chunk buffer.
+    #[test]
+    fn in_place_record_staging_matches_the_owning_form() -> Result<()> {
+        for policy in [IndexPolicy::ScanOnOpen, IndexPolicy::BlockOffsetChain] {
+            let spec = spec(policy, CommitPolicy::None);
+            let value = SamplesBlock((0..5000u16).map(|v| v.wrapping_mul(31)).collect());
+            for prefix in [0usize, 1, 333] {
+                let mut out = vec![0xEE; prefix];
+                let parts = prepare_stream_user_record_into(
+                    spec,
+                    &value,
+                    9,
+                    4096,
+                    Some(64),
+                    None,
+                    &mut out,
+                )?;
+                let owned = prepare_stream_user_record(spec, &value, 9, 4096, Some(64), None)?;
+                assert_eq!(&out[..prefix], &vec![0xEE; prefix][..]);
+                assert_eq!(&out[prefix..], &owned.bytes[..]);
+                assert_eq!(parts.len, owned.bytes.len());
+                assert_eq!(parts.checksum, owned.checksum);
+                assert_eq!(parts.info, owned.info);
+            }
+            let small = TestBlock(7);
+            let mut out = vec![1, 2, 3];
+            prepare_stream_user_record_into(spec, &small, 1, 100, None, None, &mut out)?;
+            let owned = prepare_stream_user_record(spec, &small, 1, 100, None, None)?;
+            assert_eq!(&out[3..], &owned.bytes[..]);
+        }
+        Ok(())
+    }
+
+    /// An over-limit payload is refused like the owning form and leaves the
+    /// chunk buffer exactly as it was.
+    #[test]
+    fn in_place_record_staging_restores_the_buffer_on_a_limit_failure() -> Result<()> {
+        let value = SamplesBlock(vec![5; 100]);
+        let logical = 8 + 2 * 100;
+        for limit in [0u64, 7, 8, 100, logical - 1, logical] {
+            let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None)
+                .with_resource_limits(ReadLimits::MISSING.with_max_logical_payload_len(limit));
+            let mut out = vec![9u8; 40];
+            let staged = prepare_stream_user_record_into(spec, &value, 1, 0, None, None, &mut out);
+            let owned = prepare_stream_user_record(spec, &value, 1, 0, None, None);
+            match (staged, owned) {
+                (Ok(_), Ok(owned)) => {
+                    assert_eq!(limit, logical);
+                    assert_eq!(&out[40..], &owned.bytes[..]);
+                }
+                (
+                    Err(Error::LimitExceeded {
+                        actual: a,
+                        limit: la,
+                        resource: ra,
+                    }),
+                    Err(Error::LimitExceeded {
+                        actual: b,
+                        limit: lb,
+                        resource: rb,
+                    }),
+                ) => {
+                    assert_eq!((a, la, ra), (b, lb, rb), "limit {limit}");
+                    assert_eq!(out, vec![9u8; 40], "buffer must be restored");
+                }
+                (staged, owned) => panic!(
+                    "limit {limit}: staged {:?} vs owned {:?}",
+                    staged.err(),
+                    owned.err()
+                ),
+            }
+        }
         Ok(())
     }
 

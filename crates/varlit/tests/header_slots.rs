@@ -22,7 +22,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use varlit::{Error, VarlitBlock, varlit_format};
+use varlit::{Error, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable")]
@@ -195,7 +195,7 @@ fn a_declared_region_is_reserved_at_create() {
     assert_eq!(file.header_slots_used().expect("used"), 0);
     assert_eq!(file.header_slots_free_bytes().expect("free"), 256);
     assert_eq!(
-        file.read_header_block::<Watermark>().expect("read"),
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
         None,
         "a fresh region holds nothing"
     );
@@ -208,7 +208,10 @@ fn an_undeclared_region_reports_no_capacity() {
     let file = Plain::create(&path).expect("create");
 
     assert_eq!(file.header_slots_capacity(), 0);
-    assert_eq!(file.read_header_block::<Watermark>().expect("read"), None);
+    assert_eq!(
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
+        None
+    );
     assert!(matches!(
         file_write(file, &watermark("x")),
         Err(Error::InvalidFormatSpec(_))
@@ -228,7 +231,7 @@ fn a_written_block_survives_a_reopen() {
         file.write_header_block(&watermark("first"))
             .expect("write header block");
         assert_eq!(
-            file.read_header_block::<Watermark>().expect("read"),
+            filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
             Some(watermark("first")),
             "the writer sees its own write"
         );
@@ -236,7 +239,7 @@ fn a_written_block_survives_a_reopen() {
 
     let reopened = Rolling::open(&path).expect("open");
     assert_eq!(
-        reopened.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reopened.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("first")),
         "the write reached the disk, not only the cached header"
     );
@@ -263,7 +266,7 @@ fn rewriting_a_block_does_not_consume_more_of_the_region() {
         "a rewrite replaces the entry rather than appending one",
     );
     assert_eq!(
-        file.read_header_block::<Watermark>().expect("read"),
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("first")),
     );
 }
@@ -279,7 +282,10 @@ fn removing_a_block_frees_its_bytes() {
 
     file.remove_header_block::<Watermark>().expect("remove");
     assert_eq!(file.header_slots_used().expect("used"), 0);
-    assert_eq!(file.read_header_block::<Watermark>().expect("read"), None);
+    assert_eq!(
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
+        None
+    );
     file.remove_header_block::<Watermark>()
         .expect("removing what is not there succeeds");
 }
@@ -306,7 +312,7 @@ fn the_region_does_not_move_the_append_log() {
     let samples = file.blocks::<Sample>().expect("read records");
     assert_eq!(samples.len(), 1);
     assert_eq!(
-        samples.get(0).expect("get").expect("a Sample").value,
+        sample_at(&samples, 0).value,
         7,
         "the record written before the edit still reads back",
     );
@@ -315,7 +321,7 @@ fn the_region_does_not_move_the_append_log() {
     file.flush().expect("flush");
     let samples = file.blocks::<Sample>().expect("read records");
     assert_eq!(samples.len(), 2);
-    assert_eq!(samples.get(1).expect("get").expect("a Sample").value, 8);
+    assert_eq!(sample_at(&samples, 1).value, 8);
 }
 
 #[test]
@@ -346,7 +352,7 @@ fn a_block_that_does_not_fit_is_refused_before_anything_is_written() {
         "a refused write leaves the region as it was",
     );
     assert_eq!(
-        file.read_header_block::<Watermark>().expect("read"),
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("keep me")),
     );
 }
@@ -409,8 +415,7 @@ fn rolling_integrity_catches_a_corrupted_region() {
     corrupt_region_byte(&path);
 
     let file = Rolling::open(&path).expect("open still succeeds; the region is not the header");
-    let err = file
-        .read_header_block::<Watermark>()
+    let err = filled(|out| file.read_header_block::<Watermark>(out))
         .expect_err("a corrupted region must be reported");
     assert!(
         matches!(err, Error::ChecksumMismatch { .. }),
@@ -432,7 +437,7 @@ fn integrity_none_ignores_a_corrupted_region() {
     // The exemption is the whole point: the checksum is written but never
     // consulted, so a changed byte is a changed value and not an error. It is
     // still structurally valid, so the changed scalar remains readable.
-    let read = file.read_header_block::<Watermark>();
+    let read = filled(|out| file.read_header_block::<Watermark>(out));
     assert!(
         read.is_ok(),
         "integrity: none must not verify; got {:?}",
@@ -461,7 +466,7 @@ fn sealed_integrity_refuses_writes_after_the_seal() {
         "expected InvalidFormatSpec, got {err:?}"
     );
     assert_eq!(
-        file.read_header_block::<Watermark>().expect("read"),
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("before")),
         "the sealed value is what was there when it was sealed",
     );
@@ -473,7 +478,7 @@ fn sealed_integrity_refuses_writes_after_the_seal() {
         "the seal is on the disk, not in the handle",
     );
     assert_eq!(
-        reopened.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reopened.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("before")),
     );
 }
@@ -514,8 +519,7 @@ fn a_sealed_region_is_verified_on_read() {
     corrupt_region_byte(&path);
 
     let file = Sealing::open(&path).expect("open");
-    let err = file
-        .read_header_block::<Watermark>()
+    let err = filled(|out| file.read_header_block::<Watermark>(out))
         .expect_err("a sealed region must be verified");
     assert!(
         matches!(err, Error::ChecksumMismatch { .. }),
@@ -538,7 +542,7 @@ fn an_unsealed_region_is_not_verified_under_sealed_integrity() {
     // difference between `sealed` and `rolling`, stated as a test so that
     // making `sealed` verify early would fail here rather than pass silently.
     let file = Sealing::open(&path).expect("open");
-    assert!(file.read_header_block::<Watermark>().is_ok());
+    assert!(filled(|out| file.read_header_block::<Watermark>(out)).is_ok());
 }
 
 // A format whose `replace` routes to `replace_block`, which republishes the
@@ -596,7 +600,7 @@ fn the_region_survives_a_republishing_replacement() {
     file.replace(0, &Sample { value: 99 }).expect("replace");
 
     assert_eq!(
-        file.read_header_block::<Watermark>().expect("read"),
+        filled(|out| file.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("carried")),
         "the writer's own handle still sees the region after a republish",
     );
@@ -604,13 +608,13 @@ fn the_region_survives_a_republishing_replacement() {
     drop(file);
     let reopened = Republishing::open(&path).expect("open");
     assert_eq!(
-        reopened.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reopened.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("carried")),
         "and so does the published generation on disk",
     );
     let samples = reopened.blocks::<Sample>().expect("read records");
     assert_eq!(
-        samples.get(0).expect("get").expect("a Sample").value,
+        sample_at(&samples, 0).value,
         99,
         "the replacement itself landed, so this is a file that really changed",
     );
@@ -634,7 +638,7 @@ fn a_region_written_after_a_replacement_is_still_editable() {
 
     let reopened = Republishing::open(&path).expect("open");
     assert_eq!(
-        reopened.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reopened.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("after")),
     );
 }
@@ -655,7 +659,7 @@ fn a_reader_opened_before_a_write_does_not_see_it() {
 
     let reader = Rolling::open_readonly(&path).expect("open reader");
     assert_eq!(
-        reader.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reader.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("first")),
     );
 
@@ -665,7 +669,7 @@ fn a_reader_opened_before_a_write_does_not_see_it() {
         .expect("write");
 
     assert_eq!(
-        reader.read_header_block::<Watermark>().expect("read"),
+        filled(|out| reader.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("first")),
         "the already-open reader still sees the region as it was at its open",
     );
@@ -673,7 +677,7 @@ fn a_reader_opened_before_a_write_does_not_see_it() {
     drop(reader);
     let fresh = Rolling::open_readonly(&path).expect("open a fresh reader");
     assert_eq!(
-        fresh.read_header_block::<Watermark>().expect("read"),
+        filled(|out| fresh.read_header_block::<Watermark>(out)).expect("read"),
         Some(watermark("second")),
         "a reader opened after the write sees it",
     );
@@ -717,7 +721,7 @@ fn valid_checksum_cannot_authorize_duplicate_or_undeclared_header_entries() -> v
         std::fs::write(&path, &bytes)?;
         let reader = Rolling::open_readonly(&path)?;
         assert!(matches!(
-            reader.read_header_block::<Watermark>(),
+            filled(|out| reader.read_header_block::<Watermark>(out)),
             Err(Error::InvalidCanonicalEncoding(_))
         ));
         drop(reader);
@@ -733,4 +737,18 @@ fn valid_checksum_cannot_authorize_duplicate_or_undeclared_header_entries() -> v
         assert_eq!(std::fs::read(&path)?, before);
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read and reports `None` when the slot is empty.
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+fn sample_at(samples: &varlit::BlockVec<Sample>, index: usize) -> Sample {
+    let mut out = Sample::empty();
+    assert!(samples.get(index, &mut out).expect("get"), "a Sample");
+    out
 }

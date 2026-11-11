@@ -87,6 +87,21 @@ varlit_format! {
         }
     }
 }
+/// Reads one record into a fresh caller-owned value and returns its `value`.
+macro_rules! text_value {
+    ($read:expr, $key:expr) => {{
+        let mut out = Text::empty();
+        assert!($read.get_text($key, &mut out)?, "record present");
+        out.value
+    }};
+}
+macro_rules! number_value {
+    ($read:expr, $key:expr) => {{
+        let mut out = Number::empty();
+        assert!($read.get_number($key, &mut out)?, "record present");
+        out.value
+    }};
+}
 fn allocation_error<T>(result: &Result<T>) -> bool {
     matches!(result, Err(Error::AllocationFailed { .. }))
         || matches!(result, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::OutOfMemory)
@@ -133,9 +148,9 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
         let read = OomIndex::open_indexed_reader(&path, options)?;
         let (result, _) = measure(1, usize::MAX, || -> Result<u64> {
             if long {
-                Ok(read.get_text(key)?.unwrap().value)
+                Ok(text_value!(read, key))
             } else {
-                Ok(read.get_number(&1500)?.unwrap().value)
+                Ok(number_value!(read, &1500))
             }
         });
         assert_eq!(result?, if long { 50 } else { 1500 });
@@ -148,9 +163,9 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
             let read = OomIndex::open_indexed_reader(&path, options)?;
             let (result, _) = measure(1, nth, || -> Result<u64> {
                 if long {
-                    Ok(read.get_text(key)?.unwrap().value)
+                    Ok(text_value!(read, key))
                 } else {
-                    Ok(read.get_number(&1500)?.unwrap().value)
+                    Ok(number_value!(read, &1500))
                 }
             });
             assert!(
@@ -158,9 +173,9 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
                 "lookup did not return an allocation error at {nth}/{allocations}, long={long}"
             );
             let retried = if long {
-                read.get_text(key)?.unwrap().value
+                text_value!(read, key)
             } else {
-                read.get_number(&1500)?.unwrap().value
+                number_value!(read, &1500)
             };
             assert_eq!(retried, if long { 50 } else { 1500 });
             total += 1;
@@ -192,13 +207,8 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
     assert_eq!(large_allocations, 0, "batch staging was allocated again");
     writer.sync()?;
     let read = OomIndex::open_indexed_reader(&path, options)?;
-    assert_eq!(
-        read.get_text(&format!("batch-{prefix}-0500"))?
-            .unwrap()
-            .value,
-        501
-    );
-    assert_eq!(read.get_number(&4000)?.unwrap().value, 8);
+    assert_eq!(text_value!(read, &format!("batch-{prefix}-0500")), 501);
+    assert_eq!(number_value!(read, &4000), 8);
     println!("INDEX_BATCH_REUSE repeated batch and single put share staging");
     scan_tail_allocation_refusal_returns_an_error()?;
     Ok(())

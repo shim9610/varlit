@@ -291,7 +291,32 @@ impl VarlitIndexedReader {
         Ok(pointer.entry)
     }
 
-    pub fn get<T>(&self, key: &T::Key) -> Result<Option<T>>
+    /// [`Self::get`] as a fresh value; crate tests only.
+    #[cfg(test)]
+    pub(crate) fn get_value<T>(&self, key: &T::Key) -> Result<Option<T>>
+    where
+        T: VarlitKeyedBlock,
+        T::Key: VarlitDiskKey,
+    {
+        self.ensure_indexed::<T>()?;
+        let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
+        match pointer.entry {
+            DiskIndexEntry::Missing => Ok(None),
+            DiskIndexEntry::Tombstone { .. } => {
+                self.validate_candidate::<T>(key, pointer)?;
+                Ok(None)
+            }
+            DiskIndexEntry::Put { .. } => {
+                let entry = self.put_candidate_entry(pointer)?;
+                self.decode_put_entry::<T>(key, &entry).map(Some)
+            }
+        }
+    }
+
+    /// Decodes the latest value for `key` into `out`, reusing what it owns.
+    /// Returns `false` (with `out` untouched) when the key is absent or its
+    /// latest entry is a tombstone. On error `out` is valid but unspecified.
+    pub fn get<T>(&self, key: &T::Key, out: &mut T) -> Result<bool>
     where
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
@@ -301,12 +326,16 @@ impl VarlitIndexedReader {
         self.ensure_indexed::<T>()?;
         let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
         match pointer.entry {
-            DiskIndexEntry::Missing => Ok(None),
+            DiskIndexEntry::Missing => Ok(false),
             DiskIndexEntry::Tombstone { .. } => {
                 self.validate_candidate::<T>(key, pointer)?;
-                Ok(None)
+                Ok(false)
             }
-            DiskIndexEntry::Put { .. } => Ok(Some(self.decode_put_candidate::<T>(key, pointer)?)),
+            DiskIndexEntry::Put { .. } => {
+                let entry = self.put_candidate_entry(pointer)?;
+                self.decode_put_entry_into::<T>(key, &entry, out)?;
+                Ok(true)
+            }
         }
     }
 
@@ -457,11 +486,7 @@ impl VarlitIndexedReader {
         Ok(())
     }
 
-    fn decode_put_candidate<T>(&self, key: &T::Key, pointer: DiskIndexRecordPointer) -> Result<T>
-    where
-        T: VarlitKeyedBlock,
-        T::Key: VarlitDiskKey,
-    {
+    fn put_candidate_entry(&self, pointer: DiskIndexRecordPointer) -> Result<RecordIndexEntry> {
         let (offset, expected_sequence) = match pointer.entry {
             DiskIndexEntry::Put {
                 record_offset,
@@ -477,24 +502,61 @@ impl VarlitIndexedReader {
                 "candidate sequence does not match native record",
             ));
         }
-        self.decode_put_entry::<T>(key, &entry)
+        Ok(entry)
     }
 
+    /// Decodes a put candidate as a fresh value; used only to validate a
+    /// candidate whose value the caller does not want.
     fn decode_put_entry<T>(&self, key: &T::Key, entry: &RecordIndexEntry) -> Result<T>
     where
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
+        let mut budget = MaterializationBudget::new(self.stream.spec());
+        let payload = self.read_put_payload::<T>(entry, &mut budget)?;
+        let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(self.stream.spec().endian))?;
+        self.check_put_key(&value, key)?;
+        Ok(value)
+    }
+
+    fn decode_put_entry_into<T>(
+        &self,
+        key: &T::Key,
+        entry: &RecordIndexEntry,
+        out: &mut T,
+    ) -> Result<()>
+    where
+        T: VarlitKeyedBlock,
+        T::Key: VarlitDiskKey,
+    {
+        let mut budget = MaterializationBudget::new(self.stream.spec());
+        let payload = self.read_put_payload::<T>(entry, &mut budget)?;
+        budget.decode_into(
+            &payload,
+            T::ENDIAN.unwrap_or(self.stream.spec().endian),
+            out,
+        )?;
+        self.check_put_key(out, key)
+    }
+
+    fn read_put_payload<T: VarlitKeyedBlock>(
+        &self,
+        entry: &RecordIndexEntry,
+        budget: &mut MaterializationBudget,
+    ) -> Result<Vec<u8>> {
         if entry.block_id != T::ID || entry.block_version != T::VERSION {
             return Err(index_invariant("put candidate targets the wrong block"));
         }
         let logical_len =
             entry.logical_payload_len_snapshot(self.stream.spec(), self.stream.snapshot())?;
-        let mut budget = MaterializationBudget::new(self.stream.spec());
         budget.consume(logical_len)?;
-        let payload =
-            entry.read_logical_payload_snapshot(self.stream.spec(), self.stream.snapshot())?;
-        let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(self.stream.spec().endian))?;
+        entry.read_logical_payload_snapshot(self.stream.spec(), self.stream.snapshot())
+    }
+
+    fn check_put_key<T>(&self, value: &T, key: &T::Key) -> Result<()>
+    where
+        T: VarlitKeyedBlock,
+    {
         if self
             .stream
             .spec()
@@ -505,7 +567,7 @@ impl VarlitIndexedReader {
         {
             return Err(index_invariant("put candidate key mismatch"));
         }
-        Ok(value)
+        Ok(())
     }
 }
 
@@ -2255,7 +2317,7 @@ mod tests {
 
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(
-            reader.get::<Item>(&11)?,
+            reader.get_value::<Item>(&11)?,
             Some(Item {
                 key: 11,
                 value: "second".into()
@@ -2271,7 +2333,7 @@ mod tests {
         writer.sync()?;
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&11)?, None);
+        assert_eq!(reader.get_value::<Item>(&11)?, None);
         drop(reader);
 
         fs::remove_file(sidecar_path(&path))?;
@@ -2287,7 +2349,7 @@ mod tests {
         writer.sync()?;
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&11)?, None);
+        assert_eq!(reader.get_value::<Item>(&11)?, None);
         Ok(())
     }
 
@@ -2341,7 +2403,7 @@ mod tests {
         crate::file::reset_stream_io_counters();
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
-        assert_eq!(reader.get::<Item>(&64)?, Some(values[64].clone()));
+        assert_eq!(reader.get_value::<Item>(&64)?, Some(values[64].clone()));
         assert_eq!(crate::file::stream_io_counters(), (0, 0, 1));
         crate::file::reset_stream_io_counters();
         assert!(matches!(
@@ -2471,8 +2533,8 @@ mod tests {
         );
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&1)?.unwrap().value, "published");
-        assert_eq!(reader.get::<Item>(&2)?, None);
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "published");
+        assert_eq!(reader.get_value::<Item>(&2)?, None);
         drop(VarlitIndexedWriter::open(
             spec(),
             &path,
@@ -2510,8 +2572,8 @@ mod tests {
         assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert!(reader.get::<Item>(&1)?.is_some());
-        assert_eq!(reader.get::<Item>(&2)?, None);
+        assert!(reader.get_value::<Item>(&1)?.is_some());
+        assert_eq!(reader.get_value::<Item>(&2)?, None);
         Ok(())
     }
 
@@ -2553,7 +2615,7 @@ mod tests {
     /// sidecar the replacement generation brought with it.
     #[test]
     fn rebuild_retires_a_sidecar_published_for_a_replaced_primary() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = crate::diagnostics::private_tempdir()?;
         let path = directory.path().join("replaced-rebuild.varlit");
         let replacement = directory.path().join("rebuild-replacement.varlit");
         let options = DiskIndexOptions::default();
@@ -2628,7 +2690,7 @@ mod tests {
         // Five user records plus the internal creation-nonce record.
         assert_eq!(report.records, 6);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&4)?.unwrap().value, "value-4");
+        assert_eq!(reader.get_value::<Item>(&4)?.unwrap().value, "value-4");
         Ok(())
     }
 
@@ -2651,7 +2713,7 @@ mod tests {
             ..options
         };
         let reader = VarlitIndexedReader::open(spec(), &path, bounded, index_plan())?;
-        assert_eq!(reader.get::<Item>(&1)?.unwrap().value, "value");
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "value");
         Ok(())
     }
 
@@ -2669,20 +2731,20 @@ mod tests {
         // Independent handles share one process-local database, so a reader
         // opens beside a synced writer and serves the committed state.
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&1)?.unwrap().value, "one");
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "one");
         // Reader validation uses the saved root without entering write admission.
         writer.push_info(&Item {
             key: 2,
             value: "two".into(),
         })?;
         let during = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(during.get::<Item>(&1)?.unwrap().value, "one");
-        assert!(during.get::<Item>(&2)?.is_none());
+        assert_eq!(during.get_value::<Item>(&1)?.unwrap().value, "one");
+        assert!(during.get_value::<Item>(&2)?.is_none());
         // The pre-existing reader keeps serving its pinned snapshot.
-        assert_eq!(reader.get::<Item>(&1)?.unwrap().value, "one");
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "one");
         writer.sync()?;
         let fresh = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(fresh.get::<Item>(&2)?.unwrap().value, "two");
+        assert_eq!(fresh.get_value::<Item>(&2)?.unwrap().value, "two");
         Ok(())
     }
 
@@ -2714,8 +2776,8 @@ mod tests {
         // One decode per tombstone record, not one per plan descriptor.
         assert_eq!(crate::disk_index::tombstone_key_decode_calls(), 2);
         let reader = VarlitIndexedReader::open(spec_multi(), &path, options, plan_multi())?;
-        assert_eq!(reader.get::<Item>(&1)?, None);
-        assert_eq!(reader.get::<Item2>(&2)?, None);
+        assert_eq!(reader.get_value::<Item>(&1)?, None);
+        assert_eq!(reader.get_value::<Item2>(&2)?, None);
         // Tombstoned keys stay in the latest table: capacity follows K-ever.
         assert_eq!(reader.historical_distinct_keys()?, 2);
         Ok(())
@@ -2825,8 +2887,8 @@ mod tests {
         assert_eq!(crate::disk_index::plan_payload_reads(), 3);
 
         let reader = VarlitIndexedReader::open(spec_crc(), &path, options, plan_crc())?;
-        assert_eq!(reader.get::<Item>(&1)?, None);
-        assert_eq!(reader.get::<Item>(&2)?.unwrap().value, "indexed-two");
+        assert_eq!(reader.get_value::<Item>(&1)?, None);
+        assert_eq!(reader.get_value::<Item>(&2)?.unwrap().value, "indexed-two");
         Ok(())
     }
 
@@ -2942,7 +3004,7 @@ mod tests {
                 reader.verify_all(),
                 Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))
             ));
-            let result = reader.get::<Item>(&value.key);
+            let result = reader.get_value::<Item>(&value.key);
             assert!(
                 matches!(result, Err(Error::UnknownRecordFlags(UNKNOWN_FLAG))),
                 "indexed get must reject unknown flags with UnknownRecordFlags under {integrity:?}"
@@ -3026,7 +3088,7 @@ mod tests {
         writer.sync()?;
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(reader.get::<Item>(&9)?.unwrap().value, "single-9");
+        assert_eq!(reader.get_value::<Item>(&9)?.unwrap().value, "single-9");
         Ok(())
     }
 }

@@ -161,7 +161,7 @@ fn a_sparse_rebuild_reads_only_the_slots_its_evidence_names() -> varlit::Result<
     // map is identical" is not satisfied by a rebuild that lost the payload.
     for ordinal in [0u64, 1, WRITTEN - 1] {
         assert_eq!(
-            reader.read_matrix_cell::<RebuildCell>(key(ordinal))?,
+            filled_out(|o| reader.read_matrix_cell::<RebuildCell>(key(ordinal), o))?,
             RebuildCell {
                 value: u32::try_from(ordinal + 1).expect("ordinal fits u32"),
             }
@@ -197,4 +197,23 @@ fn a_dense_rebuild_claims_no_saving_it_does_not_make() -> varlit::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

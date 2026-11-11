@@ -59,13 +59,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let before = std::fs::metadata(disk_index_sidecar_path(&path))?.len();
     let reader = Load::open_indexed_reader(&path, options)?;
     // Prime exactly the same cache once before the timed repeated misses.
+    // Caller-owned outputs, reused across every lookup.
+    let mut slot = Slot::empty();
+    let mut text = Text::empty();
+    let mut number = Number::empty();
     if mode == "finite" {
         for code in (1..4096).step_by(2) {
-            assert!(
-                reader
-                    .get_slot(&SlotKey::from_code(code).unwrap())?
-                    .is_none()
-            );
+            assert!(!reader.get_slot(&SlotKey::from_code(code).unwrap(), &mut slot)?);
         }
     }
     let keys: Vec<_> = if mode == "long" {
@@ -84,15 +84,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     } else {
         for i in 0..operations {
             let none = if mode == "finite" {
-                reader
-                    .get_slot(&SlotKey::from_code(((i * 137) % 2048 * 2 + 1) as u16).unwrap())?
-                    .is_none()
+                !reader.get_slot(
+                    &SlotKey::from_code(((i * 137) % 2048 * 2 + 1) as u16).unwrap(),
+                    &mut slot,
+                )?
             } else if mode == "long" {
-                reader.get_text(&keys[(i * 137) % keys.len()])?.is_none()
+                !reader.get_text(&keys[(i * 137) % keys.len()], &mut text)?
             } else {
-                reader
-                    .get_number(&((i * 137 % count * 2 + 1) as u64))?
-                    .is_none()
+                !reader.get_number(&((i * 137 % count * 2 + 1) as u64), &mut number)?
             };
             missing += usize::from(black_box(none));
         }

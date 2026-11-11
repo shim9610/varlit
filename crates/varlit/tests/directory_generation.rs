@@ -25,7 +25,20 @@
 
 #![cfg(feature = "scalable-fault-injection")]
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{BlockVec, VarlitBlock, VarlitEmpty, varlit_format};
+
+/// Every record of the collection, decoded through one reused value.
+fn collect_all<T: VarlitBlock + VarlitEmpty + Clone>(
+    blocks: BlockVec<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut cursor = blocks.cursor();
+    let mut value = T::empty();
+    let mut all = Vec::new();
+    while cursor.next_into(&mut value)? {
+        all.push(value.clone());
+    }
+    Ok(all)
+}
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -86,10 +99,7 @@ fn a_directory_from_a_superseded_generation_is_refused() -> varlit::Result<()> {
     // The directory the host already has, built against this generation.
     let mut held = Vec::new();
     old.index_entries_into(&mut held)?;
-    let truth: Vec<Reading> = old
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let truth: Vec<Reading> = collect_all(old.blocks::<Reading>()?)?;
     assert_eq!(truth.len(), COUNT as usize);
 
     // Generation N+1: a longer label moves every record after it.
@@ -116,11 +126,7 @@ fn a_directory_from_a_superseded_generation_is_refused() -> varlit::Result<()> {
 
     // The old handle is untouched and still correct about its own generation:
     // the stale directory is only stale relative to the *reopened* handle.
-    let through_old: Vec<Reading> = old
-        .with_directory(&held)?
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let through_old: Vec<Reading> = collect_all(old.with_directory(&held)?.blocks::<Reading>()?)?;
     assert_eq!(through_old, truth, "the directory still fits its own file");
 
     // And the pairing that is wrong must say so rather than answering. The
@@ -148,11 +154,7 @@ fn a_directory_from_this_generation_still_reads() -> varlit::Result<()> {
     let mut held = Vec::new();
     file.index_entries_into(&mut held)?;
 
-    let through: Vec<Reading> = file
-        .with_directory(&held)?
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let through: Vec<Reading> = collect_all(file.with_directory(&held)?.blocks::<Reading>()?)?;
     assert_eq!(through.len(), COUNT as usize);
 
     // A *subset* is a legitimate directory — a caller may hand over the records
@@ -160,11 +162,10 @@ fn a_directory_from_this_generation_still_reads() -> varlit::Result<()> {
     // the entries actually present have to still be where they say they are.
     let subset: Vec<varlit::RecordIndexEntry> = held.iter().skip(3).cloned().collect();
     let expected = subset.len();
-    let by_hand: Vec<Reading> = file
-        .with_directory(subset.as_slice())?
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let by_hand: Vec<Reading> = collect_all(
+        file.with_directory(subset.as_slice())?
+            .blocks::<Reading>()?,
+    )?;
     assert!(by_hand.len() <= expected);
 
     // An empty directory describes nothing, so there is nothing to disagree

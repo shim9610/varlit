@@ -1,6 +1,6 @@
 //! Fixed-work reads of an editable header; includes checksum and decoding.
 use std::{hint::black_box, time::Instant};
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 #[derive(VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "fixed")]
 struct Meta {
@@ -348,8 +348,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = Header::open_readonly(&path)?;
     let start = Instant::now();
     let mut total = 0;
+    let mut meta = Meta::empty();
     for _ in 0..reads {
-        total += black_box(reader.read_header_block::<Meta>()?.unwrap().value);
+        assert!(reader.read_header_block::<Meta>(&mut meta)?);
+        total += black_box(meta.value);
     }
     assert_eq!(total, 7 * reads);
     println!(
@@ -497,8 +499,10 @@ fn many(reads: u64, shuffled: bool) -> Result<(), Box<dyn std::error::Error>> {
     let reader = ManyHeader::open_readonly(&path)?;
     let start = Instant::now();
     let mut total = 0;
+    let mut meta = Meta63::empty();
     for _ in 0..reads {
-        total += black_box(reader.read_header_block::<Meta63>()?.unwrap().value);
+        assert!(reader.read_header_block::<Meta63>(&mut meta)?);
+        total += black_box(meta.value);
     }
     assert_eq!(total, 7 * reads);
     println!(

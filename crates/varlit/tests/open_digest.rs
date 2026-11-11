@@ -229,7 +229,8 @@ fn the_block_chain_still_walks_from_a_digest_open() -> varlit::Result<()> {
     let mut notes = 0usize;
     for step in file.block_chain(Note::ID)? {
         let entry = step?;
-        let note: Note = file.read_block_at::<Note>(entry.record_offset)?;
+        let note: Note =
+            filled_out(|o| file.read_block_at::<Note>(entry.record_offset, &mut Vec::new(), o))?;
         assert!(note.body.starts_with("note "));
         notes += 1;
     }
@@ -690,8 +691,13 @@ fn a_replacement_generation_re_encodes_the_digest() -> varlit::Result<()> {
         scanned.block_tail_offset(Note::ID)
     );
     // And the tails point into the rewritten generation, not the old one.
-    let note: Note =
-        handle.read_block_at::<Note>(handle.block_tail_offset(Note::ID).expect("a note tail"))?;
+    let note: Note = filled_out(|o| {
+        handle.read_block_at::<Note>(
+            handle.block_tail_offset(Note::ID).expect("a note tail"),
+            &mut Vec::new(),
+            o,
+        )
+    })?;
     assert_eq!(note.body, "y");
 
     // The writer's own state survived the rebind: the next commit point closes
@@ -750,8 +756,8 @@ fn a_reader_that_does_not_declare_the_digest_still_reads_the_file() -> varlit::R
 
     // And the values decode.
     let lines = unaware.blocks::<Line>()?;
-    assert_eq!(lines.get(0)?, Some(Line { value: 0 }));
-    assert_eq!(lines.get(119)?, Some(Line { value: 119 }));
+    assert_eq!(filled(|o| lines.get(0, o))?, Some(Line { value: 0 }));
+    assert_eq!(filled(|o| lines.get(119, o))?, Some(Line { value: 119 }));
     Ok(())
 }
 
@@ -945,4 +951,23 @@ fn strict_lazy_bad_digest_returns_error_without_scanning() -> varlit::Result<()>
     let (_, route) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(route, LazyOpenSource::FullScan);
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

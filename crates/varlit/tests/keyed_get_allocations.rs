@@ -21,7 +21,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use varlit::{DiskIndexOptions, varlit_format};
+use varlit::{DiskIndexOptions, VarlitEmpty, varlit_format};
 
 struct CountingAllocator;
 
@@ -124,13 +124,14 @@ fn string_key_get_allocations() -> varlit::Result<u64> {
 
     let reader = StringKeyFormat::open_indexed_reader(&path, options())?;
     // Warm whatever the first lookup builds lazily.
-    let _ = reader.get_doc(&label(0))?;
+    let mut out = Doc::empty();
+    let _ = reader.get_doc(&label(0), &mut out)?;
     let keys: Vec<String> = (0..RECORDS).map(label).collect();
 
     let start = allocations();
     for key in &keys {
-        let found = reader.get_doc(key)?;
-        assert!(found.is_some(), "the fixture lost a record");
+        let found = reader.get_doc(key, &mut out)?;
+        assert!(found, "the fixture lost a record");
     }
     Ok(allocations() - start)
 }
@@ -150,12 +151,13 @@ fn scalar_key_get_allocations() -> varlit::Result<u64> {
     drop(writer);
 
     let reader = ScalarKeyFormat::open_indexed_reader(&path, options())?;
-    let _ = reader.get_row(&0)?;
+    let mut out = Row::empty();
+    let _ = reader.get_row(&0, &mut out)?;
 
     let start = allocations();
     for ordinal in 0..RECORDS {
-        let found = reader.get_row(&ordinal)?;
-        assert!(found.is_some(), "the fixture lost a record");
+        let found = reader.get_row(&ordinal, &mut out)?;
+        assert!(found, "the fixture lost a record");
     }
     Ok(allocations() - start)
 }
@@ -280,10 +282,11 @@ fn staging_a_record_for_append_does_not_allocate_per_record() -> varlit::Result<
     // or reorder anything.
     for path in [&single_path, &batch_path] {
         let reader = ScalarKeyFormat::open_indexed_reader(path, options())?;
+        let mut row = Row::empty();
         for id in 0..=N {
+            assert!(reader.get_row(&id, &mut row)?, "record present");
             assert_eq!(
-                reader.get_row(&id)?.expect("record present").value,
-                id,
+                row.value, id,
                 "record {id} did not survive staging in {path:?}"
             );
         }
@@ -341,10 +344,11 @@ fn a_run_of_scalable_appends_pays_no_per_record_metadata_syscall() -> varlit::Re
     writer.sync()?;
     drop(writer);
     let reader = ScalarKeyFormat::open_indexed_reader(&path, options())?;
+    let mut row = Row::empty();
     for id in 0..=N {
+        assert!(reader.get_row(&id, &mut row)?, "record present");
         assert_eq!(
-            reader.get_row(&id)?.expect("record present").value,
-            id,
+            row.value, id,
             "record {id} did not survive the witness-bound snapshot"
         );
     }

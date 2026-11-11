@@ -106,7 +106,8 @@ impl Matrix {
     }
     pub fn refresh(&mut self) -> Result<Head> {
         self.f.follow()?;
-        let r = self.f.read_matrix_cell::<Root>(k(0))?;
+        let mut r = Root::empty();
+        self.f.read_matrix_cell::<Root>(k(0), &mut r)?;
         let h = Head {
             key: 0,
             txns: r.txns,
@@ -118,8 +119,10 @@ impl Matrix {
         Ok(h)
     }
     pub fn consume(&self, old: &Head, h: &Head, o: &mut Oracle, c: &Config) -> Result<()> {
+        let mut l = Log::empty();
+        let mut found = Cell::empty();
         for n in old.txns..h.txns {
-            let l = self.f.read_matrix_cell::<Log>(k(n))?;
+            self.f.read_matrix_cell::<Log>(k(n), &mut l)?;
             o.metadata(&Metadata {
                 txid: l.txid,
                 source: l.source,
@@ -153,7 +156,7 @@ impl Matrix {
                 };
                 o.row(&r);
                 if c.lookups {
-                    let found = self.f.read_matrix_cell::<Cell>(k(r.id))?;
+                    self.f.read_matrix_cell::<Cell>(k(r.id), &mut found)?;
                     assert_eq!(found, v);
                     o.lookup_count += 1;
                 }

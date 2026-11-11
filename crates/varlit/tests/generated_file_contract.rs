@@ -80,11 +80,11 @@ fn assert_values(reader: &VarlitFile, count: usize) -> varlit::Result<()> {
     assert_eq!(captures.len(), count);
     for epoch in 0..count {
         let (expected_scalar, expected_capture) = values(epoch);
-        let actual = scalars.get(epoch)?.expect("published scalar");
+        let actual = filled(|o| scalars.get(epoch, o))?.expect("published scalar");
         assert_eq!(actual.unsigned, expected_scalar.unsigned);
         assert_eq!(actual.signed, expected_scalar.signed);
         assert_eq!(actual.float.to_bits(), expected_scalar.float.to_bits());
-        assert_eq!(captures.get(epoch)?, Some(expected_capture));
+        assert_eq!(filled(|o| captures.get(epoch, o))?, Some(expected_capture));
     }
     Ok(())
 }
@@ -157,4 +157,23 @@ fn successful_native_files_keep_values_across_reopen_and_read_policies() -> varl
         }
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

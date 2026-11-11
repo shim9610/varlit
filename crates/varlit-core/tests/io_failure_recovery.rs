@@ -244,7 +244,8 @@ fn kernel_failure_child() -> Result<()> {
                 }
                 expected.push(record);
                 let reader = VarlitFile::open_readonly(spec, &path)?;
-                let actual: Vec<_> = reader.blocks::<Record>()?.iter().collect::<Result<_>>()?;
+                let mut actual = Vec::new();
+                reader.decode_blocks_into::<Record>(&mut actual)?;
                 assert!(
                     actual == expected,
                     "reopen disagreed after {stream}/{footer}/{cut}"
@@ -285,13 +286,9 @@ fn kernel_failure_child() -> Result<()> {
         drop(writer);
         let reader = VarlitFile::open_readonly(spec, &path)?;
         assert!(reader.record_is_dead(entry.record_offset)?);
-        assert_eq!(
-            reader
-                .blocks::<Record>()?
-                .iter()
-                .collect::<Result<Vec<_>>>()?,
-            vec![value]
-        );
+        let mut actual = Vec::new();
+        reader.decode_blocks_into::<Record>(&mut actual)?;
+        assert_eq!(actual, vec![value]);
     }
     // Refuse an incomplete temporary boundary-directory spill before the
     // source record is touched, then resume the same proof on the same handle.

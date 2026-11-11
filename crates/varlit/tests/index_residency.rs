@@ -207,7 +207,9 @@ fn a_non_resident_block_is_readable_through_the_chain_alone() -> varlit::Result<
     let mut read_back = Vec::new();
     for step in file.block_chain(70)? {
         let entry = step?;
-        read_back.push(file.read_block_at::<Line>(entry.record_offset)?);
+        read_back.push(filled_out(|o| {
+            file.read_block_at::<Line>(entry.record_offset, &mut Vec::new(), o)
+        })?);
     }
     read_back.reverse();
     assert_eq!(
@@ -375,7 +377,10 @@ fn a_non_resident_block_still_appends_and_survives_a_reopen() -> varlit::Result<
     let read = every.blocks::<Line>()?;
     assert_eq!(read.len(), 48);
     for value in 0..48u32 {
-        assert_eq!(read.get(value as usize)?, Some(Line { value }));
+        assert_eq!(
+            filled(|o| read.get(value as usize, o))?,
+            Some(Line { value })
+        );
     }
     Ok(())
 }
@@ -641,4 +646,23 @@ fn follow_refuses_nonresident_sequences_older_than_its_snapshot() -> varlit::Res
         Some(first.record_offset)
     );
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

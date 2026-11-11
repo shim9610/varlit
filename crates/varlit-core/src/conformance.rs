@@ -141,7 +141,7 @@ fn decode_record<T: VarlitBlock>(
     entry: &RecordIndexEntry,
     scratch: &mut Vec<u8>,
 ) -> Result<()> {
-    file.decode_block_into::<T>(entry, scratch).map(|_| ())
+    file.decode_block_owned::<T>(entry, scratch).map(|_| ())
 }
 
 fn decode_keyed_record<T: VarlitKeyedBlock>(
@@ -168,7 +168,7 @@ fn decode_keyed_key<T: VarlitKeyedBlock>(
     scratch: &mut Vec<u8>,
 ) -> Result<T::Key> {
     if entry.block_id == T::ID {
-        return Ok(file.decode_block_into::<T>(entry, scratch)?.key());
+        return Ok(file.decode_block_owned::<T>(entry, scratch)?.key());
     }
     if entry.block_version != 1 || entry.flags != crate::file::RECORD_FLAG_INTERNAL {
         return Err(Error::CorruptTail {

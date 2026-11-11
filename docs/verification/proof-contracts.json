@@ -73,7 +73,7 @@
       "harnesses": [
         "publication_protocol::proofs::commit_survives_every_io_failure_effect",
         "publication_protocol::proofs::successful_commit_is_reachable_and_durable",
-        "publication_protocol::proofs::nonconfirmed_publications_do_not_use_a_second_head",
+        "publication_protocol::proofs::every_publication_writes_one_head_and_only_confirmed_syncs_once",
         "publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync",
         "publication_protocol::proofs::follow_error_preserves_the_entire_reader",
         "publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition",
@@ -225,6 +225,7 @@
         "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
         "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
         "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+        "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_an_in_place_decode",
         "codec::caller_proofs::active_callback_step_preserves_invariant_or_rejects_replacement"
       ],
       "sources": [

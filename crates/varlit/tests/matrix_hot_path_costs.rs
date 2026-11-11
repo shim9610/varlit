@@ -30,7 +30,8 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
     MatrixBlockDescriptor, MatrixCellStatus, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, MatrixMetadataResidency,
-    MatrixMetadataVerification, MatrixRecoveryReport, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixMetadataVerification, MatrixRecoveryReport, ReadLimits, VarlitBlock, VarlitEmpty,
+    VarlitMatrixBlock,
 };
 
 const PAGE_BYTES: u64 = 4096;
@@ -329,8 +330,10 @@ fn writing_a_fresh_cell_stores_no_bitmap_byte_and_committing_it_stores_every_one
                 MatrixCellStatus::Committed,
                 "{integrity:?}: cell {ordinal} lost its commit bit"
             );
+            let mut cell = HotCell::empty();
+            reader.read_matrix_cell::<HotCell>(key(ordinal), &mut cell)?;
             assert_eq!(
-                reader.read_matrix_cell::<HotCell>(key(ordinal))?,
+                cell,
                 HotCell {
                     value: u32::try_from(ordinal + 1).expect("ordinal fits u32")
                 }
@@ -443,9 +446,10 @@ fn a_bitmap_byte_that_does_not_change_hashes_no_page() -> varlit::Result<()> {
 /// about to be refused never has a CRC written for it — the ordering the
 /// separate probe used to give for free.
 ///
-/// What remains, and is not this: `write_cell` holds the payload and could hand
-/// its checksum forward, so a cell this session wrote need not be read back at
-/// all. That is the 128 below, and it is still there.
+/// A cell this session wrote is not read back at all: `write_cell` and
+/// `write_cell_payload` hold the payload and record its checksum as they write
+/// it, so the commit has nothing to compute. Only a cell written by another
+/// session pays the single checksum pass.
 ///
 /// The read-back is per *slot*, so it scales with `SLOT_STRIDE` and not with the
 /// cell count — which is why the assertions below are written as multiples of
@@ -490,16 +494,9 @@ fn committing_a_cell_reads_its_slot_back_once_per_pass_that_needs_it() -> varlit
         "writing a cell read {on_write} slot bytes back; the payload is in hand there"
     );
     assert_eq!(
-        same_session,
-        CELLS * STRIDE,
-        "a cell this session wrote was read back {same_session} bytes; the zero probe is \
-         skipped on the session write bit, so this must be the checksum pass alone"
-    );
-    assert_eq!(
-        other_session, same_session,
-        "a cell this session did not write was read back {other_session} bytes against \
-         {same_session} for one it did; the zero probe and the checksum pass read the same \
-         slot and must do it in one pass, not two"
+        same_session, 0,
+        "a cell this session wrote was read back {same_session} bytes; its checksum was \
+         recorded when it was written"
     );
     assert_eq!(
         other_session,

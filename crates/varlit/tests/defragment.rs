@@ -22,7 +22,7 @@
 
 #![cfg(feature = "integrity")]
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -70,19 +70,28 @@ fn chain_values(path: &std::path::Path) -> varlit::Result<Vec<u64>> {
     for entry in file.block_chain(Reading::ID)? {
         let entry = entry?;
         let mut scratch = Vec::new();
-        let reading: Reading = file.decode_block_into(&entry, &mut scratch)?;
+        let mut reading = Reading::empty();
+        file.decode_block_into(&entry, &mut scratch, &mut reading)?;
         values.push(reading.value);
     }
     values.reverse();
     Ok(values)
 }
 
+fn collect_readings(file: &varlit::VarlitFile) -> varlit::Result<Vec<Reading>> {
+    let blocks = file.blocks::<Reading>()?;
+    let mut cursor = blocks.cursor();
+    let mut reading = Reading::empty();
+    let mut all = Vec::new();
+    while cursor.next_into(&mut reading)? {
+        all.push(reading.clone());
+    }
+    Ok(all)
+}
+
 fn read_values(path: &std::path::Path) -> varlit::Result<Vec<u64>> {
     let file = varlit::VarlitFile::open_readonly(spec(), path)?;
-    Ok(file
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<Vec<Reading>>>()?
+    Ok(collect_readings(&file)?
         .into_iter()
         .map(|reading| reading.value)
         .collect())
@@ -173,10 +182,7 @@ fn a_reader_open_across_the_republish_keeps_its_generation() -> varlit::Result<(
     let offsets = build(&path)?;
 
     let held = varlit::VarlitFile::open_readonly(spec(), &path)?;
-    let before: Vec<Reading> = held
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let before: Vec<Reading> = collect_readings(&held)?;
     assert_eq!(before.len(), 10);
 
     let mut writer = varlit::VarlitWriter::open(Defrag::spec(), &path)?;
@@ -188,10 +194,7 @@ fn a_reader_open_across_the_republish_keeps_its_generation() -> varlit::Result<(
     drop(writer);
 
     // Whole, unchanged, and no error — the old object is unlinked but alive.
-    let after: Vec<Reading> = held
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let after: Vec<Reading> = collect_readings(&held)?;
     assert_eq!(after, before);
     // And it can be told that it is no longer current.
     assert!(!held.is_current()?);

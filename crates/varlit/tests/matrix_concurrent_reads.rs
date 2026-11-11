@@ -10,8 +10,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use varlit::{
     BlockDescriptor, BlockKind, Endian, FormatSpec, IndexPolicy, MatrixAuxDescriptor,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
-    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitEmpty, VarlitFile,
+    VarlitMatrixBlock, VarlitReader, VarlitWriter,
 };
+
+/// Owned-result shim over the caller-owned-output `read_matrix_cell`.
+trait ReadShared {
+    fn read_shared(&self, key: MatrixKey) -> varlit::Result<SharedCell>;
+}
+
+macro_rules! read_shared_impl {
+    ($($handle:ty),+) => {$(
+        impl ReadShared for $handle {
+            fn read_shared(&self, key: MatrixKey) -> varlit::Result<SharedCell> {
+                let mut out = SharedCell::empty();
+                self.read_matrix_cell::<SharedCell>(key, &mut out)?;
+                Ok(out)
+            }
+        }
+    )+};
+}
+read_shared_impl!(VarlitReader, VarlitWriter, VarlitFile);
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -182,24 +201,14 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
         let mut writer = spec.open_writer(fixture.path())?;
         writer.clear_matrix_cell::<SharedCell>(MatrixKey::new(0, 0))?;
         // Fault page 1, evicting the modified page 0 from the one-page cache.
-        assert_eq!(
-            writer
-                .read_matrix_cell::<SharedCell>(MatrixKey::new(1, 0))?
-                .value,
-            10
-        );
+        assert_eq!(writer.read_shared(MatrixKey::new(1, 0))?.value, 10);
 
         let mut writer = std::thread::spawn(move || -> varlit::Result<_> {
             assert_eq!(
                 writer.matrix_cell_status::<SharedCell>(MatrixKey::new(0, 0))?,
                 varlit::MatrixCellStatus::NotCommitted,
             );
-            assert_eq!(
-                writer
-                    .read_matrix_cell::<SharedCell>(MatrixKey::new(0, 1))?
-                    .value,
-                10
-            );
+            assert_eq!(writer.read_shared(MatrixKey::new(0, 1))?.value, 10);
             assert_eq!(
                 writer.matrix_resume_signal(SharedCell::CATEGORY)?,
                 varlit::MatrixResumeSignal::Partial {
@@ -218,13 +227,8 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
             );
             writer.write_matrix_cell(MatrixKey::new(0, 2), &SharedCell { value: 20 })?;
             writer.commit_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?;
-            writer.read_matrix_cell::<SharedCell>(MatrixKey::new(2, 0))?;
-            assert_eq!(
-                writer
-                    .read_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?
-                    .value,
-                20
-            );
+            writer.read_shared(MatrixKey::new(2, 0))?;
+            assert_eq!(writer.read_shared(MatrixKey::new(0, 2))?.value, 20);
             writer.sync()?;
             writer.compact_matrix()?;
             Ok(writer)
@@ -233,26 +237,13 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
         .expect("writer thread panicked")?;
 
         // The pre-publication reader still sees its own generation.
-        assert_eq!(
-            old.read_matrix_cell::<SharedCell>(MatrixKey::new(0, 0))?
-                .value,
-            10
-        );
+        assert_eq!(old.read_shared(MatrixKey::new(0, 0))?.value, 10);
         old.follow()?;
-        assert_eq!(
-            old.read_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?
-                .value,
-            20
-        );
+        assert_eq!(old.read_shared(MatrixKey::new(0, 2))?.value, 20);
 
         writer.clear_matrix_cell::<SharedCell>(MatrixKey::new(0, 1))?;
-        writer.read_matrix_cell::<SharedCell>(MatrixKey::new(1, 0))?;
-        assert_eq!(
-            writer
-                .read_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?
-                .value,
-            20
-        );
+        writer.read_shared(MatrixKey::new(1, 0))?;
+        assert_eq!(writer.read_shared(MatrixKey::new(0, 2))?.value, 20);
         assert_eq!(
             writer.matrix_cell_status::<SharedCell>(MatrixKey::new(0, 1))?,
             varlit::MatrixCellStatus::NotCommitted,
@@ -277,11 +268,7 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
             old.matrix_cell_status::<SharedCell>(MatrixKey::new(0, 1))?,
             varlit::MatrixCellStatus::NotCommitted,
         );
-        assert_eq!(
-            old.read_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?
-                .value,
-            20
-        );
+        assert_eq!(old.read_shared(MatrixKey::new(0, 2))?.value, 20);
     }
     Ok(())
 }
@@ -296,7 +283,7 @@ fn dirty_matrix_mapping_faults_bitmap_pages_from_its_copied_image() -> varlit::R
         writer.clear_matrix_cell::<SharedCell>(MatrixKey::new(0, 0))?;
         writer.write_matrix_cell(MatrixKey::new(0, 2), &SharedCell { value: 20 })?;
         writer.commit_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?;
-        writer.read_matrix_cell::<SharedCell>(MatrixKey::new(1, 0))?;
+        writer.read_shared(MatrixKey::new(1, 0))?;
         // SAFETY: this fixture has no other writer and makes no mutation,
         // publication or replacement until the mapping is explicitly dropped.
         let mapped = unsafe { writer.mmap_matrix()? };
@@ -327,7 +314,7 @@ fn dirty_matrix_mapping_faults_bitmap_pages_from_its_copied_image() -> varlit::R
 /// `&mut self` on any of these entry points is a build failure, not a
 /// silently-accepted regression.
 fn read_everything(reader: &varlit::VarlitReader, key: MatrixKey) -> varlit::Result<u32> {
-    let typed = reader.read_matrix_cell::<SharedCell>(key)?;
+    let typed = reader.read_shared(key)?;
     let payload = reader.matrix_cell_payload::<SharedCell>(key)?;
     let aux = reader.read_matrix_aux("thumbnail", 0, 8)?;
     let aux_len = reader.matrix_aux_len("thumbnail")?;
@@ -346,7 +333,7 @@ fn read_everything_through_writer(
     writer: &varlit::VarlitWriter,
     key: MatrixKey,
 ) -> varlit::Result<u32> {
-    let typed = writer.read_matrix_cell::<SharedCell>(key)?;
+    let typed = writer.read_shared(key)?;
     let payload = writer.matrix_cell_payload::<SharedCell>(key)?;
     let aux = writer.read_matrix_aux("thumbnail", 0, 8)?;
     let aux_len = writer.matrix_aux_len("thumbnail")?;
@@ -360,7 +347,7 @@ fn read_everything_through_writer(
 
 /// And on the general handle.
 fn read_everything_through_file(file: &varlit::VarlitFile, key: MatrixKey) -> varlit::Result<u32> {
-    let typed = file.read_matrix_cell::<SharedCell>(key)?;
+    let typed = file.read_shared(key)?;
     let payload = file.matrix_cell_payload::<SharedCell>(key)?;
     let aux = file.read_matrix_aux("thumbnail", 0, 8)?;
     let aux_len = file.matrix_aux_len("thumbnail")?;
@@ -442,9 +429,7 @@ fn independent_readers_read_every_cell_correctly() -> varlit::Result<()> {
                         let ordinal = (step + (thread as u64) * 7) % (SIDE * SIDE);
                         let (scan, ch) = (ordinal / SIDE, ordinal % SIDE);
                         let key = MatrixKey::new(scan, ch);
-                        let cell = reader
-                            .read_matrix_cell::<SharedCell>(key)
-                            .expect("concurrent typed read");
+                        let cell = reader.read_shared(key).expect("concurrent typed read");
                         assert_eq!(
                             cell.value,
                             cell_value(scan, ch),
@@ -741,9 +726,7 @@ fn timed_reads(
                     for step in 0..per_thread {
                         let ordinal = (step + (thread as u64) * 13) % (SIDE * SIDE);
                         let key = MatrixKey::new(ordinal / SIDE, ordinal % SIDE);
-                        let cell = reader
-                            .read_matrix_cell::<SharedCell>(key)
-                            .expect("concurrent read");
+                        let cell = reader.read_shared(key).expect("concurrent read");
                         assert_eq!(cell.value, cell_value(ordinal / SIDE, ordinal % SIDE));
                     }
                 })

@@ -41,7 +41,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use varlit::{
-    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, VarlitBlock, VarlitDecode,
+    ChunkedBytes, CompressionLevel, Endian, PackedBitmap, VarlitBlock, VarlitDecode, VarlitEmpty,
     VarlitEncode, decode_from_slice, encode_to_vec, varlit_format,
 };
 
@@ -452,30 +452,44 @@ fn check_format_roundtrip(dir: &std::path::Path) {
 
     // Matrix reads take `&self`, so this binding no longer needs `mut`.
     let reader = PublicApiFormat::open_reader(&path).expect("reopen");
-    let native = PublicApiFormat::spec().open_reader(&path).expect("native reader");
+    let native = PublicApiFormat::spec()
+        .open_reader(&path)
+        .expect("native reader");
     let storage: Option<varlit::MatrixStorageDiagnostics> = native.matrix_storage_diagnostics();
     assert!(storage.is_some());
-    let samples: Vec<Sample> = reader
-        .samples()
-        .expect("fixed collection")
-        .iter()
-        .collect::<Result<_, _>>()
-        .expect("read fixed blocks");
+    let mut samples: Vec<Sample> = Vec::new();
+    let mut sample_out = Sample::empty();
+    let sample_blocks = reader.samples().expect("fixed collection");
+    let mut sample_cursor = sample_blocks.cursor();
+    while sample_cursor
+        .next_into(&mut sample_out)
+        .expect("read fixed blocks")
+    {
+        samples.push(sample_out.clone());
+    }
     assert_eq!(samples, vec![sample]);
     // A keyed variable block reads back through `KeyedBlockVec`, so both the
     // keyed lookup and the underlying block view are exercised.
     let keyed = reader.records().expect("variable collection");
-    assert_eq!(
-        keyed.get(&record.id).expect("keyed lookup"),
-        Some(record.clone())
+    let mut record_out = Record::empty();
+    assert!(
+        keyed
+            .get(&record.id, &mut record_out)
+            .expect("keyed lookup")
     );
-    let records: Vec<Record> = keyed
-        .as_blocks()
-        .iter()
-        .collect::<Result<_, _>>()
-        .expect("read variable blocks");
+    assert_eq!(record_out, record);
+    let mut records: Vec<Record> = Vec::new();
+    let mut record_cursor = keyed.as_blocks().cursor();
+    while record_cursor
+        .next_into(&mut record_out)
+        .expect("read variable blocks")
+    {
+        records.push(record_out.clone());
+    }
     assert_eq!(records, vec![record]);
-    assert_eq!(reader.cell(key).expect("read matrix cell"), cell);
+    let mut cell_out = Cell::empty();
+    reader.cell(key, &mut cell_out).expect("read matrix cell");
+    assert_eq!(cell_out, cell);
     let mut run = vec![cell.clone()];
     reader
         .cell_run_into(key, &mut run)
@@ -521,11 +535,14 @@ fn check_scalable_roundtrip(dir: &std::path::Path) {
         .push_scalable_item(&ScalableItem { key: 7, value: 2 })
         .unwrap();
     let dirty = ScalableFixture::open_indexed_reader(&path, options).unwrap();
-    assert_eq!(dirty.get_scalable_item(&7).unwrap().unwrap().value, 1);
+    let mut item = ScalableItem::empty();
+    assert!(dirty.get_scalable_item(&7, &mut item).unwrap());
+    assert_eq!(item.value, 1);
     assert!(reader.release_snapshot());
     writer.immediate().unwrap();
     reader.follow().unwrap();
-    assert_eq!(reader.get_scalable_item(&7).unwrap().unwrap().value, 2);
+    assert!(reader.get_scalable_item(&7, &mut item).unwrap());
+    assert_eq!(item.value, 2);
     assert!(reader.snapshot_status().unwrap().pinned);
     println!("  scalable OK: embedded backend, Dirty read, release/follow, reader-local status");
 }
@@ -534,10 +551,8 @@ fn main() {
     check_every_public_codec();
     check_derived_blocks();
 
-    let dir = std::env::temp_dir().join(format!(
-        "varlit-public-api-fixture-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("varlit-public-api-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fixture temp dir");
     let result = std::panic::catch_unwind(|| {
         check_format_roundtrip(&dir);
@@ -587,7 +602,11 @@ mod experimental_reuse_fixture {
             w.delete::<Cell>(MatrixKey::new(5000, 0)).unwrap();
             w.sync().unwrap();
             let r = MatrixReader::open(spec, &path, dims.clone(), options).unwrap();
-            assert!(r.get::<Cell>(MatrixKey::new(5000, 0)).is_err());
+            let mut cell_out = Cell { value: 0 };
+            assert!(
+                r.get::<Cell>(MatrixKey::new(5000, 0), &mut cell_out)
+                    .is_err()
+            );
         }
     }
 }

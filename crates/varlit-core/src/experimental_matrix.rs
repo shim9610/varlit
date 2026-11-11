@@ -1444,16 +1444,18 @@ impl MatrixReader {
         })
     }
     /// Reads one cell; reuse readers retry automatically when its generation changes.
-    pub fn get<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
+    /// Decodes into `out`, reusing what it owns.
+    pub fn get<T: VarlitMatrixBlock>(&self, key: MatrixKey, out: &mut T) -> Result<()> {
         match &self.inner {
-            ReaderInner::Native(r) => Ok(r.read_matrix_cell(key)?),
+            ReaderInner::Native(r) => Ok(r.read_matrix_cell(key, out)?),
             ReaderInner::Reuse(r) => {
                 let b = r.geometry.block::<T>()?;
                 let bytes = r.read(b, key, 1)?;
-                Ok(Decoder::decode_from_slice_limited(
+                Ok(Decoder::decode_from_slice_limited_into(
                     &bytes,
                     T::ENDIAN.unwrap_or(r.geometry.spec.endian),
                     r.decode_budget(bytes.len() as u64)?,
+                    out,
                 )?)
             }
         }

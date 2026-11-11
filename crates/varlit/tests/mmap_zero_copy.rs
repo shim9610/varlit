@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use varlit::{
-    Endian, Error, ReadLimits, RecordIndexEntry, VarlitBlock, decode_from_slice, varlit_format,
+    Endian, Error, ReadLimits, RecordIndexEntry, VarlitBlock, VarlitEmpty, decode_from_slice,
+    varlit_format,
 };
 
 #[cfg(feature = "zero-copy")]
@@ -338,8 +339,9 @@ fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> 
             // The default OnDemand policy deliberately opens the damaged file.
             // Every path returning its payload must nevertheless reject it.
             let reader = spec.open_readonly(&path)?;
+            let mut point = RawPoint::empty();
             assert!(matches!(
-                reader.blocks::<RawPoint>()?.get(0),
+                reader.blocks::<RawPoint>()?.get(0, &mut point),
                 Err(Error::ChecksumMismatch { .. })
             ));
             // SAFETY: the damaged file remains immutable throughout these maps.

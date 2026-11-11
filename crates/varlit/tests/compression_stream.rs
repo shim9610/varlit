@@ -5,8 +5,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use varlit::{
     CommitPolicy, CompressionHeaderMode, CompressionPolicy, DiskIndexOptions, DiskIndexPlan,
     DiskIndexedBlock, Error, FormatSpec, IntegrityPolicy, StreamOptions, VariableCompression,
-    VarlitBlock, VarlitIndexedReader, VarlitIndexedWriter, VarlitStreamReader, VarlitStreamWriter,
-    disk_index_sidecar_path, rebuild_disk_index, varlit_format,
+    VarlitBlock, VarlitEmpty, VarlitIndexedReader, VarlitIndexedWriter, VarlitStreamReader,
+    VarlitStreamWriter, disk_index_sidecar_path, rebuild_disk_index, varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -27,6 +27,11 @@ varlit_format! {
     }
 }
 
+/// Looks `key` up through a fresh output value.
+fn fetch(reader: &VarlitIndexedReader, key: u64) -> varlit::Result<Option<Item>> {
+    let mut out = Item::empty();
+    Ok(reader.get::<Item>(&key, &mut out)?.then_some(out))
+}
 fn specs() -> impl Iterator<Item = FormatSpec> {
     [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader]
         .into_iter()
@@ -83,19 +88,21 @@ fn compressed_crc_stream_preserves_format_contract_and_checks_payloads() -> varl
             writer.sync()?;
         }
         let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
-        assert_eq!(
-            reader
-                .blocks::<Item>()?
-                .collect::<varlit::Result<Vec<_>>>()?,
-            [value]
-        );
+        let mut blocks = reader.blocks::<Item>()?;
+        let mut item = Item::empty();
+        let mut all = Vec::new();
+        while blocks.next_into(&mut item)? {
+            all.push(item.clone());
+        }
+        assert_eq!(all, [value]);
         assert_eq!(reader.verify_all()?, 2);
         let event = reader.events()?.last().unwrap()?;
         // Only owned reads are live; corrupt after opening so the per-record
         // check, rather than the sidecar's generation witness, sees the damage.
         corrupt_payload(&path, event.payload_offset + event.payload_len - 1)?;
+        let mut damaged = Item::empty();
         assert!(matches!(
-            reader.blocks::<Item>()?.next().unwrap(),
+            reader.blocks::<Item>()?.next_into(&mut damaged),
             Err(Error::ChecksumMismatch { .. })
         ));
         assert!(matches!(
@@ -138,8 +145,8 @@ fn compressed_crc_rebuild_preserves_format_contract_and_checks_payloads() -> var
         assert_eq!(rebuild_disk_index(spec, &path, options, plan)?.records, 4);
         {
             let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-            assert_eq!(reader.get::<Item>(&7)?, Some(value));
-            assert_eq!(reader.get::<Item>(&8)?, None);
+            assert_eq!(fetch(&reader, 7)?, Some(value));
+            assert_eq!(fetch(&reader, 8)?, None);
         }
         std::fs::remove_file(disk_index_sidecar_path(&path))?;
         corrupt_payload(&path, payload_offset)?;
@@ -177,7 +184,7 @@ fn embedded_manifest_leaves_capacity_for_creation_and_tombstone_tails() -> varli
             writer.sync()?;
         }
         let mut reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-        assert_eq!(reader.get::<Item>(&value.id)?, None);
+        assert_eq!(fetch(&reader, value.id)?, None);
         {
             let mut writer = VarlitIndexedWriter::open(spec, &path, options, plan)?;
             writer.push_info(&value)?;
@@ -185,12 +192,12 @@ fn embedded_manifest_leaves_capacity_for_creation_and_tombstone_tails() -> varli
             writer.compact_index()?;
         }
         reader.follow()?;
-        assert_eq!(reader.get::<Item>(&value.id)?, Some(value.clone()));
+        assert_eq!(fetch(&reader, value.id)?, Some(value.clone()));
         drop(reader);
         std::fs::remove_file(disk_index_sidecar_path(&path))?;
         assert_eq!(rebuild_disk_index(spec, &path, options, plan)?.records, 5);
         let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-        assert_eq!(reader.get::<Item>(&value.id)?, Some(value));
+        assert_eq!(fetch(&reader, value.id)?, Some(value));
     }
     Ok(())
 }

@@ -1,4 +1,4 @@
-use varlit::{MatrixDimensions, MatrixKey, varlit_format};
+use varlit::{MatrixDimensions, MatrixKey, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format Storage {
         magic: b"MATCAP01"; version: 1; endian: little;
@@ -36,7 +36,9 @@ fn observations_survive_reopen_without_changing_reads() -> varlit::Result<()> {
     );
     for _ in 0..32 {
         assert_eq!(reader.matrix_storage_diagnostics(), Some(reopened));
-        assert_eq!(reader.read_matrix_cell::<Cell>(at)?.value, 91);
+        let mut cell = Cell::empty();
+        reader.read_matrix_cell::<Cell>(at, &mut cell)?;
+        assert_eq!(cell.value, 91);
     }
     let report = varlit::diagnose_file(spec, &path);
     assert!(
@@ -79,7 +81,9 @@ fn missing_allocation_map_warns_without_rejecting_the_file() -> varlit::Result<(
             .unwrap()
             .allocation_map_available
     );
-    assert_eq!(reader.read_matrix_cell::<Cell>(at)?.value, 91);
+    let mut cell = Cell::empty();
+    reader.read_matrix_cell::<Cell>(at, &mut cell)?;
+    assert_eq!(cell.value, 91);
     let report = varlit::diagnose_file(spec, &path);
     let warning = report
         .items

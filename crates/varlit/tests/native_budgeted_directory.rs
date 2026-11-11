@@ -20,7 +20,12 @@ fn values(file: &VarlitFile) -> varlit::Result<Vec<u64>> {
     for event in file.scan() {
         let event = event?;
         if event.block_id == Point::ID {
-            out.push(file.read_block_at::<Point>(event.record_offset)?.value);
+            out.push(
+                filled_out(|o| {
+                    file.read_block_at::<Point>(event.record_offset, &mut Vec::new(), o)
+                })?
+                .value,
+            );
         }
     }
     Ok(out)
@@ -57,4 +62,23 @@ fn tiny_directory_budget_covers_append_dirty_open_follow_and_reopen() -> varlit:
     reader.follow()?;
     assert_eq!(values(&reader)?, (0..301).collect::<Vec<_>>());
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

@@ -27,7 +27,26 @@
 
 #![cfg(feature = "integrity")]
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
+
+/// Every record of a block collection, in order, through the caller-owned cursor.
+fn collect<T: VarlitBlock + VarlitEmpty + Clone>(
+    blocks: varlit::BlockVec<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut all = Vec::new();
+    let mut item = T::empty();
+    let mut cursor = blocks.cursor();
+    while cursor.next_into(&mut item)? {
+        all.push(item.clone());
+    }
+    Ok(all)
+}
+
+fn read_reading(file: &varlit::VarlitFile, offset: u64) -> varlit::Result<Reading> {
+    let mut reading = Reading::empty();
+    file.read_block_at::<Reading>(offset, &mut Vec::new(), &mut reading)?;
+    Ok(reading)
+}
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -347,10 +366,7 @@ fn a_marked_record_stays_readable_and_says_it_is_dead() -> varlit::Result<()> {
     }
 
     // Advisory: the record is still there, still read back, still correct.
-    let readings: Vec<Reading> = file
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let readings = collect(file.blocks::<Reading>()?)?;
     assert_eq!(readings.len(), 6);
     assert_eq!(readings[2], Reading { value: 2 });
     Ok(())
@@ -438,10 +454,7 @@ fn defragment_refuses_dead_commit_without_publishing() -> varlit::Result<()> {
     assert_eq!(std::fs::read(&path)?, before);
     drop(writer);
     let reopened = On::spec().open_readonly(&path)?;
-    assert_eq!(
-        reopened.read_block_at::<Reading>(offset)?,
-        Reading { value: 42 }
-    );
+    assert_eq!(read_reading(&reopened, offset)?, Reading { value: 42 });
     Ok(())
 }
 
@@ -502,8 +515,11 @@ fn defragment_preserves_active_readers_on_the_old_generation() -> varlit::Result
                     let opened = On::spec().open_readonly(path);
                     ready.wait();
                     let reader = opened?;
+                    let mut scratch = Vec::new();
+                    let mut reading = Reading::empty();
                     for _ in 0..10_000 {
-                        assert_eq!(reader.read_block_at::<Reading>(offset)?.value, 42);
+                        reader.read_block_at::<Reading>(offset, &mut scratch, &mut reading)?;
+                        assert_eq!(reading.value, 42);
                     }
                     Ok(())
                 })
@@ -698,10 +714,7 @@ fn a_crashed_tail_is_marked_dead_instead_of_truncated() -> varlit::Result<()> {
     // marker cannot retroactively commit anything.
     assert!(std::fs::metadata(&path)?.len() > with_tail);
     let file = varlit::VarlitFile::open_readonly(Marked::spec(), &path)?;
-    let readings: Vec<Reading> = file
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let readings = collect(file.blocks::<Reading>()?)?;
     assert_eq!(readings.len(), 7, "all seven records survived");
     assert!(records(&file)? >= 7);
     for (index, offset) in tail.iter().enumerate() {
@@ -840,19 +853,13 @@ fn marking_between_appends_preserves_records_and_a_live_reader() -> varlit::Resu
     writer.flush()?;
     assert!(reader.record_is_dead(first.record_offset)?);
     assert_eq!(
-        reader
-            .blocks::<Reading>()?
-            .iter()
-            .collect::<varlit::Result<Vec<_>>>()?,
+        collect(reader.blocks::<Reading>()?)?,
         vec![Reading { value: 11 }]
     );
     drop(writer);
     let reopened = varlit::VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
-        reopened
-            .blocks::<Reading>()?
-            .iter()
-            .collect::<varlit::Result<Vec<_>>>()?,
+        collect(reopened.blocks::<Reading>()?)?,
         vec![Reading { value: 11 }, Reading { value: 22 }]
     );
     assert!(reopened.record_is_dead(first.record_offset)?);
@@ -945,10 +952,9 @@ fn boundary_proof_reuses_reverse_random_repeated_and_failed_requests() -> varlit
             writer.mark_record_dead(offsets[123])?;
             assert!(VarlitFile::take_record_entry_faults() < 12);
             assert!(held.record_is_dead(offsets[123])?);
-            assert_eq!(
-                held.read_block_at::<Embedded>(offsets[123])?.bytes.len(),
-                123 * 37 % 271
-            );
+            let mut embedded = Embedded::empty();
+            held.read_block_at::<Embedded>(offsets[123], &mut Vec::new(), &mut embedded)?;
+            assert_eq!(embedded.bytes.len(), 123 * 37 % 271);
         }
     }
     Ok(())

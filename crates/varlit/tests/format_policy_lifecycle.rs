@@ -18,6 +18,20 @@ struct Item {
 varlit_format! { struct Format {
     magic: b"POLICIES"; version: 1; endian: little; blocks: [Item];
 } }
+/// Drains the rest of the walk into a `Vec`, through one reused value.
+fn collect_rest(cursor: &mut StreamingBlocks<Item>) -> varlit::Result<Vec<Item>> {
+    let mut out = Item::empty();
+    let mut all = Vec::new();
+    while cursor.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
+}
+/// Looks `key` up through a fresh output value.
+fn fetch(reader: &VarlitIndexedReader, key: u64) -> varlit::Result<Option<Item>> {
+    let mut out = Item::empty();
+    Ok(reader.get::<Item>(&key, &mut out)?.then_some(out))
+}
 fn item(id: u64, byte: u8) -> Item {
     Item {
         id,
@@ -43,13 +57,16 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     writer.sync()?;
     let mut reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
     let mut cursor = reader.blocks::<Item>()?;
-    assert_eq!(cursor.next().unwrap()?, item(1, 41));
-    assert!(cursor.next().is_none());
+    let mut next = Item::empty();
+    assert!(cursor.next_into(&mut next)?);
+    assert_eq!(next, item(1, 41));
+    assert!(!cursor.next_into(&mut next)?);
     writer.push_info(&item(2, 42))?;
     writer.sync()?;
     reader.follow_blocks(&mut cursor)?;
-    assert_eq!(cursor.next().unwrap()?, item(2, 42));
-    assert!(cursor.next().is_none());
+    assert!(cursor.next_into(&mut next)?);
+    assert_eq!(next, item(2, 42));
+    assert!(!cursor.next_into(&mut next)?);
     writer.compact_index()?;
     reader.follow_blocks(&mut cursor)?;
     drop(writer);
@@ -58,8 +75,9 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     writer.sync()?;
     drop(writer);
     reader.follow_blocks(&mut cursor)?;
-    assert_eq!(cursor.next().unwrap()?, item(3, 43));
-    assert!(cursor.next().is_none());
+    assert!(cursor.next_into(&mut next)?);
+    assert_eq!(next, item(3, 43));
+    assert!(!cursor.next_into(&mut next)?);
     drop(cursor);
     drop(reader);
     let mut state = path.as_os_str().to_owned();
@@ -72,9 +90,7 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     );
     let reader = VarlitStreamReader::open(spec, &path, options)?;
     assert_eq!(
-        reader
-            .blocks::<Item>()?
-            .collect::<varlit::Result<Vec<_>>>()?,
+        collect_rest(&mut reader.blocks::<Item>()?)?,
         [item(1, 41), item(2, 42), item(3, 43)]
     );
     assert_eq!(reader.verify_all()?, expected);
@@ -84,9 +100,7 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     };
     let limited = VarlitStreamReader::open(spec, &path, tight)?;
     assert!(matches!(
-        limited
-            .blocks::<Item>()?
-            .collect::<varlit::Result<Vec<_>>>(),
+        collect_rest(&mut limited.blocks::<Item>()?),
         Err(Error::LimitExceeded { .. })
     ));
     let wrong = spec
@@ -118,15 +132,15 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
     writer.push_info(&item(1, 41))?;
     writer.sync()?;
     let mut reader = VarlitIndexedReader::open(spec, &path, DiskIndexOptions::default(), plan)?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, 41)));
+    assert_eq!(fetch(&reader, 1)?, Some(item(1, 41)));
     writer.push_info(&item(1, 42))?;
     writer.push_info(&item(2, 43))?;
     writer.delete_info::<Item>(&2)?;
     writer.sync()?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, 41)));
+    assert_eq!(fetch(&reader, 1)?, Some(item(1, 41)));
     reader.follow()?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, 42)));
-    assert_eq!(reader.get::<Item>(&2)?, None);
+    assert_eq!(fetch(&reader, 1)?, Some(item(1, 42)));
+    assert_eq!(fetch(&reader, 2)?, None);
     writer.compact_index()?;
     reader.follow()?;
     drop(writer);
@@ -135,7 +149,7 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
     writer.sync()?;
     drop(writer);
     reader.follow()?;
-    assert_eq!(reader.get::<Item>(&3)?, Some(item(3, 44)));
+    assert_eq!(fetch(&reader, 3)?, Some(item(3, 44)));
     drop(reader);
     std::fs::remove_file(disk_index_sidecar_path(&path))?;
     let expected = 6 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
@@ -144,9 +158,9 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
         expected
     );
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, 42)));
-    assert_eq!(reader.get::<Item>(&2)?, None);
-    assert_eq!(reader.get::<Item>(&3)?, Some(item(3, 44)));
+    assert_eq!(fetch(&reader, 1)?, Some(item(1, 42)));
+    assert_eq!(fetch(&reader, 2)?, None);
+    assert_eq!(fetch(&reader, 3)?, Some(item(3, 44)));
     assert_eq!(reader.verify_all()?, expected);
     let tight = DiskIndexOptions {
         limits: ResourceLimits::MISSING.with_max_logical_payload_len(32),
@@ -154,7 +168,7 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
     };
     let limited = VarlitIndexedReader::open(spec, &path, tight, plan)?;
     assert!(matches!(
-        limited.get::<Item>(&1),
+        fetch(&limited, 1),
         Err(Error::LimitExceeded { .. })
     ));
     Ok(())
@@ -187,21 +201,35 @@ fn format_policies_survive_stream_and_index_lifecycles() -> TestResult {
                             // Exercise their rejection instead of filtering them out.
                             let dir = tempfile::tempdir()?;
                             let path = dir.path().join("unsupported.varlit");
-                            assert!(matches!(
-                                VarlitStreamWriter::create(spec, &path, StreamOptions::default()),
-                                Err(Error::StreamingUnsupported)
-                            ));
+                            // A single-barrier marker without header checksums
+                            // is refused as a format before the stream API is
+                            // asked about it.
+                            let invalid_spec = commit.single_barrier()
+                                && integrity != IntegrityPolicy::Crc32WithHeader;
+                            let refused =
+                                VarlitStreamWriter::create(spec, &path, StreamOptions::default());
+                            assert!(
+                                matches!(refused, Err(Error::StreamingUnsupported))
+                                    || (invalid_spec
+                                        && matches!(refused, Err(Error::InvalidFormatSpec(_)))),
+                                "{:?}",
+                                refused.as_ref().err()
+                            );
                             const BLOCKS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
                             let plan = DiskIndexPlan::canonical(spec, BLOCKS)?;
-                            assert!(matches!(
-                                VarlitIndexedWriter::create(
-                                    spec,
-                                    &path,
-                                    DiskIndexOptions::default(),
-                                    plan
-                                ),
-                                Err(Error::StreamingUnsupported)
-                            ));
+                            let refused = VarlitIndexedWriter::create(
+                                spec,
+                                &path,
+                                DiskIndexOptions::default(),
+                                plan,
+                            );
+                            assert!(
+                                matches!(refused, Err(Error::StreamingUnsupported))
+                                    || (invalid_spec
+                                        && matches!(refused, Err(Error::InvalidFormatSpec(_)))),
+                                "{:?}",
+                                refused.as_ref().err()
+                            );
                             unsupported += 1;
                             continue;
                         }

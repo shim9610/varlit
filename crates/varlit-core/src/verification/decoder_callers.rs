@@ -277,6 +277,33 @@ fn safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode() {
     std::mem::forget(result);
 }
 
+/// The in-place path goes through the same frame: whole replacement inside a
+/// default `decode_varlit_into` (which decodes through `decode_value`) or inside
+/// an overriding one is rejected and cannot refund or forge budget.
+struct ReplaceInto;
+impl VarlitDecode for ReplaceInto {
+    const WIRE_TYPE: WireType = WireType::Nested;
+    fn decode_varlit(_d: &mut Decoder<'_>) -> Result<Self> {
+        Ok(Self)
+    }
+    fn decode_varlit_into(_out: &mut Self, d: &mut Decoder<'_>) -> Result<()> {
+        *d = Decoder::new_limited(&[], Endian::Little, kani::any());
+        Ok(())
+    }
+}
+#[kani::proof]
+fn safe_whole_value_replacement_cannot_escape_an_in_place_decode() {
+    let budget: u64 = kani::any();
+    let mut parent = Decoder::new_limited(&[], Endian::Little, budget);
+    let mut out = ReplaceFrame;
+    assert!(parent.decode_nested_into(&[], &mut out).is_err());
+    assert_eq!(parent.materialization_remaining(), 0);
+    let mut parent = Decoder::new_limited(&[], Endian::Little, budget);
+    let mut out = ReplaceInto;
+    assert!(parent.decode_nested_into(&[], &mut out).is_err());
+    assert_eq!(parent.materialization_remaining(), 0);
+}
+
 /// An arbitrary legal primitive transition is the inductive step for callbacks
 /// confined to the public API. Whole replacement is a separate operation and
 /// must be rejected even when every public setting is identical.

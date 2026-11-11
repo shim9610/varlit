@@ -57,7 +57,7 @@
 
 use std::collections::HashMap;
 
-use varlit::{VarlitBlock, VarlitMerge, VarlitMigration, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, VarlitMerge, VarlitMigration, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable", key = "id")]
@@ -173,7 +173,8 @@ fn a_reused_buffer_is_cut_to_each_record_and_never_carries_the_last_one() -> var
 
         // The decoded value must be the one that was written, which is the part
         // a leftover tail would corrupt even if the length happened to match.
-        let note: Note = file.decode_block_into(entry, &mut payload)?;
+        let mut note = Note::empty();
+        file.decode_block_into(entry, &mut payload, &mut note)?;
         assert_eq!(note.body.as_str(), BODIES[seen]);
         assert_eq!(note.id, seen as u64);
         seen += 1;
@@ -232,9 +233,10 @@ fn decode_block_into_refuses_an_entry_of_another_block() -> varlit::Result<()> {
     // The entry is the caller's, so decoding it as the wrong type must be
     // refused rather than reinterpreted.
     let mut scratch = Vec::new();
+    let mut wrong = Note::empty();
     assert!(
         matches!(
-            file.decode_block_into::<Note>(tick_entry, &mut scratch),
+            file.decode_block_into::<Note>(tick_entry, &mut scratch, &mut wrong),
             Err(varlit::Error::UnregisteredBlock(id)) if id == Tick::ID
         ),
         "decoding a Tick entry as a Note must be refused by block id"
@@ -329,16 +331,30 @@ fn block_vec_get_into_matches_get_and_reuses_the_buffer() -> varlit::Result<()> 
     let notes = file.blocks::<Note>()?;
 
     let mut scratch = dirty(&0u8);
+    let mut via_into = Note::empty();
+    let mut via_get = Note::empty();
     for index in 0..notes.len() {
-        assert_eq!(notes.get_into(index, &mut scratch)?, notes.get(index)?);
+        assert!(notes.get_into(index, &mut scratch, &mut via_into)?);
+        assert!(notes.get(index, &mut via_get)?);
+        assert_eq!(via_into, via_get);
     }
-    assert_eq!(notes.get_into(notes.len(), &mut scratch)?, None);
+    // Past the end reports false and leaves the caller's value untouched.
+    let before = via_into.clone();
+    assert!(!notes.get_into(notes.len(), &mut scratch, &mut via_into)?);
+    assert_eq!(via_into, before);
 
-    // `iter()` is `get_into` over one buffer; it must agree with `get(i)`.
-    let iterated = notes.iter().collect::<varlit::Result<Vec<_>>>()?;
-    let indexed = (0..notes.len())
-        .map(|i| notes.get(i).map(|v| v.expect("in range")))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    // The cursor is `get_into` over one buffer; it must agree with `get(i)`.
+    let mut iterated = Vec::new();
+    let mut cursor = notes.cursor();
+    let mut item = Note::empty();
+    while cursor.next_into(&mut item)? {
+        iterated.push(item.clone());
+    }
+    let mut indexed = Vec::new();
+    for i in 0..notes.len() {
+        assert!(notes.get(i, &mut item)?, "in range");
+        indexed.push(item.clone());
+    }
     assert_eq!(iterated, indexed);
     Ok(())
 }

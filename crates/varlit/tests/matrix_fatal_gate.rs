@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, MatrixBlockDescriptor,
     MatrixCommitDescriptor, MatrixCommitKind, MatrixCorruptionKind, MatrixCorruptionSeverity,
-    MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock,
+    MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitEmpty,
     VarlitMatrixBlock,
 };
 
@@ -173,8 +173,9 @@ fn fatal_metadata_crc_blocks_default_reads_and_writes() {
         let reader = spec
             .open_reader(fixture.path())
             .expect("default open still surfaces the recovery report");
+        let mut out = GateCell::empty();
         assert!(matches!(
-            reader.read_matrix_cell::<GateCell>(key),
+            reader.read_matrix_cell::<GateCell>(key, &mut out),
             Err(Error::MatrixFatalCorruption)
         ));
         assert!(matches!(
@@ -224,12 +225,11 @@ fn forensic_opt_in_reads_through_and_surfaces_fatal_finding() {
     let reader = forensic
         .open_reader(fixture.path())
         .expect("open forensic reader");
-    assert_eq!(
-        reader
-            .read_matrix_cell::<GateCell>(key)
-            .expect("forensic read of committed cell"),
-        GateCell { value: 11 }
-    );
+    let mut out = GateCell::empty();
+    reader
+        .read_matrix_cell::<GateCell>(key, &mut out)
+        .expect("forensic read of committed cell");
+    assert_eq!(out, GateCell { value: 11 });
     assert!(
         has_fatal_header_finding(&reader.matrix_recovery_report()),
         "forensic access must still surface the fatal finding"
@@ -244,12 +244,11 @@ fn uncorrupted_file_is_unaffected_by_the_fatal_gate() {
     write_committed_cell(spec, fixture.path(), key, 11);
 
     let reader = spec.open_reader(fixture.path()).expect("open clean reader");
-    assert_eq!(
-        reader
-            .read_matrix_cell::<GateCell>(key)
-            .expect("read clean cell"),
-        GateCell { value: 11 }
-    );
+    let mut out = GateCell::empty();
+    reader
+        .read_matrix_cell::<GateCell>(key, &mut out)
+        .expect("read clean cell");
+    assert_eq!(out, GateCell { value: 11 });
     let report = reader.matrix_recovery_report();
     assert!(
         !has_fatal_header_finding(&report),

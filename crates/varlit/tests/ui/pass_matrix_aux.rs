@@ -1,4 +1,4 @@
-use varlit::{MatrixCellStatus, ReadLimits, varlit_format};
+use varlit::{MatrixCellStatus, ReadLimits, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format MatrixAuxFormat {
@@ -44,7 +44,8 @@ varlit_format! {
 fn assert_reader_api<R: MatrixAuxFormatRead>(reader: &mut R) -> varlit::Result<()> {
     let _ = reader.thumbnail_aux_len()?;
     let _ = reader.read_thumbnail_aux(0, 4)?;
-    let _ = reader.aux_cell(AuxCellKey { scan: 0, ch: 0 });
+    let mut cell = AuxCell::empty();
+    let _ = reader.aux_cell(AuxCellKey { scan: 0, ch: 0 }, &mut cell);
     Ok(())
 }
 

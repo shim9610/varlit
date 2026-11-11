@@ -121,16 +121,16 @@ fn native_and_indexed_reads_refuse_allocation_and_retry_in_every_mode() -> Resul
             .with_resource_limits(limits(p))
             .open_reader(&path)?;
         let blocks = r.blocks::<Item>()?;
-        let (failed, denied) = deny_large(|| blocks.get(0));
+        let (failed, denied) = deny_large(|| opt(|o| blocks.get(0, o)));
         assert!(failed.is_err());
         assert!(denied > 0);
-        assert_eq!(blocks.get(0)?, Some(value.clone()));
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(value.clone()));
         let r =
             VarlitIndexedReader::open(Log::spec(), &indexed, options(p), Log::disk_index_plan()?)?;
-        let (failed, denied) = deny_large(|| r.get::<Item>(&4));
+        let (failed, denied) = deny_large(|| opt(|o| r.get::<Item>(&4, o)));
         assert!(failed.is_err());
         assert!(denied > 0);
-        assert_eq!(r.get::<Item>(&4)?, Some(value.clone()));
+        assert_eq!(opt(|o| r.get::<Item>(&4, o))?, Some(value.clone()));
     }
     Ok(())
 }
@@ -153,7 +153,7 @@ fn payload_damage_and_explicit_verification_have_distinct_contracts() -> Result<
         let r = Log::spec()
             .with_resource_limits(limits(p))
             .open_reader(&path)?;
-        let got = r.blocks::<Item>()?.get(0);
+        let got = opt(|o| r.blocks::<Item>()?.get(0, o));
         assert_eq!(got.is_err(), p.data_crc, "{p:?}: {got:?}");
         assert!(
             r.verify_all().is_err(),
@@ -193,12 +193,15 @@ fn eight_independent_readers_keep_pending_edits_hidden_in_every_mode() -> Result
                 for id in 0..visible {
                     // Refusal in one reader must preserve its generation and leave
                     // the other readers and the next writer publication usable.
-                    let (failed, denied) = deny_large(|| r.get::<Item>(&id));
+                    let (failed, denied) = deny_large(|| opt(|o| r.get::<Item>(&id, o)));
                     assert!(failed.is_err());
                     assert!(denied > 0);
-                    assert_eq!(r.get::<Item>(&id)?.unwrap().bytes, vec![id as u8; 65_537]);
+                    assert_eq!(
+                        opt(|o| r.get::<Item>(&id, o))?.unwrap().bytes,
+                        vec![id as u8; 65_537]
+                    );
                 }
-                assert_eq!(r.get::<Item>(&pending)?, None);
+                assert_eq!(opt(|o| r.get::<Item>(&pending, o))?, None);
                 ack.send(()).unwrap();
             }
             Ok(())
@@ -268,8 +271,7 @@ fn matrix_scalar_run_column_and_mmap_honor_crc_choice_and_visibility() -> Result
             .with_resource_limits(limits(p))
             .open_reader(&path)?;
         assert_eq!(
-            r.read_matrix_cell::<GridCell>(MatrixKey::new(0, 0))
-                .is_err(),
+            val(|o| r.read_matrix_cell::<GridCell>(MatrixKey::new(0, 0), o)).is_err(),
             p.data_crc
         );
         let mut row = [GridCell { value: 0 }, GridCell { value: 0 }];
@@ -284,7 +286,7 @@ fn matrix_scalar_run_column_and_mmap_honor_crc_choice_and_visibility() -> Result
             p.data_crc
         );
         assert!(matches!(
-            r.read_matrix_cell::<GridCell>(MatrixKey::new(1, 1)),
+            val(|o| r.read_matrix_cell::<GridCell>(MatrixKey::new(1, 1), o)),
             Err(Error::MatrixNotCommitted)
         ));
         #[cfg(feature = "mmap")]
@@ -328,12 +330,12 @@ fn compressed_indexed_reads_keep_decoder_budgets_for_every_header_and_mode() -> 
         }
         for p in POLICIES {
             let r = VarlitIndexedReader::open(spec, &path, options(p), plan)?;
-            assert_eq!(r.get::<Item>(&7)?, Some(value.clone()));
+            assert_eq!(opt(|o| r.get::<Item>(&7, o))?, Some(value.clone()));
             let mut limited = options(p);
             limited.limits = limited.limits.with_max_logical_payload_len(100);
             let r = VarlitIndexedReader::open(spec, &path, limited, plan)?;
             assert!(matches!(
-                r.get::<Item>(&7),
+                opt(|o| r.get::<Item>(&7, o)),
                 Err(Error::LimitExceeded { .. })
             ));
         }
@@ -403,12 +405,12 @@ fn delete_reinsert_and_retained_snapshots_keep_their_confirmed_values() -> Resul
     w.delete_info::<Item>(&7)?;
     for r in &mut readers {
         r.follow()?;
-        assert_eq!(r.get::<Item>(&7)?.unwrap().bytes, vec![11; 32]);
+        assert_eq!(opt(|o| r.get::<Item>(&7, o))?.unwrap().bytes, vec![11; 32]);
     }
     w.sync()?;
     for r in &mut readers {
         r.follow()?;
-        assert_eq!(r.get::<Item>(&7)?, None);
+        assert_eq!(opt(|o| r.get::<Item>(&7, o))?, None);
         assert!(matches!(
             r.lookup::<Item>(&7)?,
             DiskIndexEntry::Tombstone { .. }
@@ -420,16 +422,18 @@ fn delete_reinsert_and_retained_snapshots_keep_their_confirmed_values() -> Resul
     })?;
     for r in &mut readers {
         r.follow()?;
-        assert_eq!(r.get::<Item>(&7)?, None);
+        assert_eq!(opt(|o| r.get::<Item>(&7, o))?, None);
     }
     w.sync()?;
     for r in &mut readers {
         r.follow()?;
-        assert_eq!(r.get::<Item>(&7)?.unwrap().bytes, vec![22; 32]);
+        assert_eq!(opt(|o| r.get::<Item>(&7, o))?.unwrap().bytes, vec![22; 32]);
     }
     for mut pin in pins {
-        assert_eq!(pin.next().unwrap()?.bytes, vec![11; 32]);
-        assert!(pin.next().is_none());
+        let mut item = Item::empty();
+        assert!(pin.next_into(&mut item)?);
+        assert_eq!(item.bytes, vec![11; 32]);
+        assert!(!pin.next_into(&mut item)?);
     }
     Ok(())
 }
@@ -469,4 +473,23 @@ fn mapped_windows_trust_captured_framing_but_keep_extent_checks() -> Result<()> 
         assert!(unsafe { r.mmap_payload_window(&forged) }.is_err());
     }
     Ok(())
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Decodes into a fresh caller-owned value.
+fn val<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<()>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
 }

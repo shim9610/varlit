@@ -191,7 +191,9 @@ fn failed_error_boxes_preserve_the_committed_matrix_event() -> Result<()> {
         assert_eq!(state.denied, 0);
         drop(writer);
         let reader = spec.open_reader(&path)?;
-        assert_eq!(reader.read_matrix_cell::<GeneratedCell>(key)?.value, 57);
+        let mut cell = GeneratedCell::empty();
+        reader.read_matrix_cell::<GeneratedCell>(key, &mut cell)?;
+        assert_eq!(cell.value, 57);
         assert_eq!(
             reader.matrix_cell_status::<GeneratedCell>(key)?,
             MatrixCellStatus::Committed
@@ -223,7 +225,9 @@ fn error_reservation_refusal_happens_before_matrix_mutation() -> Result<()> {
             MatrixCellStatus::NotCommitted
         );
         writer.write_matrix_cell_durable(key, &GeneratedCell { value: 57 }, |_| Ok(()))?;
-        assert_eq!(writer.read_matrix_cell::<GeneratedCell>(key)?.value, 57);
+        let mut cell = GeneratedCell::empty();
+        writer.read_matrix_cell::<GeneratedCell>(key, &mut cell)?;
+        assert_eq!(cell.value, 57);
     }
     Ok(())
 }
@@ -242,7 +246,9 @@ fn mmap_layout_clone_refusal_preserves_the_reader_and_retries() -> Result<()> {
     writer.write_matrix_cell_durable(key, &GeneratedCell { value: 57 }, |_| Ok(()))?;
     drop(writer);
     let reader = spec.open_reader(&path)?;
-    assert_eq!(reader.read_matrix_cell::<GeneratedCell>(key)?.value, 57);
+    let mut cell = GeneratedCell::empty();
+    reader.read_matrix_cell::<GeneratedCell>(key, &mut cell)?;
+    assert_eq!(cell.value, 57);
     let clone = || -> Result<()> {
         // SAFETY: this test owns the directory; the only writer was closed.
         // Nothing mutates/truncates the file while these mappings exist.
@@ -265,7 +271,9 @@ fn mmap_layout_clone_refusal_preserves_the_reader_and_retries() -> Result<()> {
         );
         assert!(state.denied > 0);
         assert_eq!(state.live, 0, "partial clone leaked at {at}");
-        assert_eq!(reader.read_matrix_cell::<GeneratedCell>(key)?.value, 57);
+        let mut cell = GeneratedCell::empty();
+        reader.read_matrix_cell::<GeneratedCell>(key, &mut cell)?;
+        assert_eq!(cell.value, 57);
         clone()?;
     }
     println!(

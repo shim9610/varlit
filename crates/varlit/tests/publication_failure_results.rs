@@ -22,8 +22,8 @@ mod enabled {
         BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, DiskIndexBatchOptions,
         DiskIndexOptions, DiskIndexPlan, DiskIndexedBlock, Encoder, Endian, Error, FormatSpec,
         IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result,
-        StreamOptions, TransactionMarkerMode, VarlitBlock, VarlitDecode, VarlitEncode, VarlitFile,
-        VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader,
+        StreamOptions, TransactionMarkerMode, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode,
+        VarlitFile, VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader,
         VarlitStreamWriter, WireType, disk_index_sidecar_path,
     };
 
@@ -51,6 +51,18 @@ mod enabled {
     struct FaultRecord {
         key: u64,
         value: u64,
+    }
+
+    impl VarlitEmpty for FaultRecord {
+        fn empty() -> Self {
+            Self { key: 0, value: 0 }
+        }
+    }
+
+    /// Looks `key` up through a fresh output value.
+    fn fetch(reader: &VarlitIndexedReader, key: u64) -> Result<Option<FaultRecord>> {
+        let mut out = FaultRecord::empty();
+        Ok(reader.get::<FaultRecord>(&key, &mut out)?.then_some(out))
     }
 
     impl FaultRecord {
@@ -179,9 +191,14 @@ mod enabled {
     }
 
     fn read_stream(path: &Path) -> Result<Vec<FaultRecord>> {
-        VarlitStreamReader::open(stream_spec(), path, stream_options())?
-            .blocks::<FaultRecord>()?
-            .collect()
+        let mut blocks = VarlitStreamReader::open(stream_spec(), path, stream_options())?
+            .blocks::<FaultRecord>()?;
+        let mut record = FaultRecord::empty();
+        let mut records = Vec::new();
+        while blocks.next_into(&mut record)? {
+            records.push(record);
+        }
+        Ok(records)
     }
 
     /// Reads the durable stream contents, restoring the checkpoint first when
@@ -249,7 +266,9 @@ mod enabled {
             1,
             "the committed record must be visible to a reader after a clean exit"
         );
-        assert_eq!(committed.get(0)?, Some(FaultRecord::ok(7)));
+        let mut record = FaultRecord::empty();
+        assert!(committed.get(0, &mut record)?);
+        assert_eq!(record, FaultRecord::ok(7));
         Ok(())
     }
 
@@ -309,7 +328,7 @@ mod enabled {
         drop(writer);
         let reader =
             VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(reader.get::<FaultRecord>(&2)?, Some(FaultRecord::ok(2)));
+        assert_eq!(fetch(&reader, 2)?, Some(FaultRecord::ok(2)));
         Ok(())
     }
 
@@ -458,9 +477,9 @@ mod enabled {
         drop(recovered);
         let reader =
             VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(reader.get::<FaultRecord>(&0)?, Some(FaultRecord::ok(0)));
-        assert_eq!(reader.get::<FaultRecord>(&1)?, Some(FaultRecord::ok(1)));
-        assert_eq!(reader.get::<FaultRecord>(&3)?, None);
+        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
+        assert_eq!(fetch(&reader, 1)?, Some(FaultRecord::ok(1)));
+        assert_eq!(fetch(&reader, 3)?, None);
         Ok(())
     }
 
@@ -487,10 +506,8 @@ mod enabled {
                 // retain its complete original generation throughout.
                 let mut intact = true;
                 for _ in 0..256 {
-                    intact &= reader
-                        .get::<FaultRecord>(&0)?
-                        .is_some_and(|v| v == FaultRecord::ok(0));
-                    intact &= reader.get::<FaultRecord>(&2)?.is_none();
+                    intact &= fetch(&reader, 0)?.is_some_and(|v| v == FaultRecord::ok(0));
+                    intact &= fetch(&reader, 2)?.is_none();
                 }
                 barrier.wait();
                 barrier.wait();
@@ -500,14 +517,17 @@ mod enabled {
                 barrier.wait();
                 assert!(intact);
                 followed?;
-                assert_eq!(reader.get::<FaultRecord>(&4)?, Some(FaultRecord::ok(4)));
-                assert_eq!(reader.get::<FaultRecord>(&2)?, None);
+                assert_eq!(fetch(&reader, 4)?, Some(FaultRecord::ok(4)));
+                assert_eq!(fetch(&reader, 2)?, None);
                 drop(reader);
                 // Cursor is now the last owner of this old snapshot.
-                assert_eq!(
-                    cursor?.collect::<Result<Vec<_>>>()?,
-                    vec![FaultRecord::ok(0), FaultRecord::ok(1)]
-                );
+                let mut cursor = cursor?;
+                let mut record = FaultRecord::empty();
+                let mut old_generation = Vec::new();
+                while cursor.next_into(&mut record)? {
+                    old_generation.push(record);
+                }
+                assert_eq!(old_generation, vec![FaultRecord::ok(0), FaultRecord::ok(1)]);
                 Ok(())
             }));
         }
@@ -783,10 +803,10 @@ mod enabled {
         drop(recovered);
         let reader =
             VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(reader.get::<FaultRecord>(&0)?, Some(FaultRecord::ok(0)));
+        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
         for key in 1..=4 {
             assert_eq!(
-                reader.get::<FaultRecord>(&key)?,
+                fetch(&reader, key)?,
                 None,
                 "no mutation after the rollback failure may be in the file"
             );
@@ -841,7 +861,7 @@ mod enabled {
         drop(recovered);
         let reader =
             VarlitIndexedReader::open(indexed_spec(), &path, disk_options(), index_plan())?;
-        assert_eq!(reader.get::<FaultRecord>(&0)?, Some(FaultRecord::ok(0)));
+        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
         Ok(())
     }
 
@@ -878,7 +898,7 @@ mod enabled {
         assert_eq!(read_stream(&stream_path)?, vec![FaultRecord::ok(0)]);
         let reader =
             VarlitIndexedReader::open(indexed_spec(), &indexed_path, disk_options(), index_plan())?;
-        assert_eq!(reader.get::<FaultRecord>(&0)?, Some(FaultRecord::ok(0)));
+        assert_eq!(fetch(&reader, 0)?, Some(FaultRecord::ok(0)));
         assert!(
             ENCODE_CALLS.get() > 0,
             "the fault-capable encoder must actually be exercised"

@@ -159,6 +159,10 @@ fn callback_adapters_are_private_and_exhaustively_sealed() {
     }
     assert_eq!(
         adapters,
-        std::collections::BTreeSet::from(["ValueCallback<T>".into(), "ArrayCallback<T,N>".into()])
+        std::collections::BTreeSet::from([
+            "ValueCallback<T>".into(),
+            "ArrayCallback<T,N>".into(),
+            "IntoCallback<'o,T>".into(),
+        ])
     );
 }

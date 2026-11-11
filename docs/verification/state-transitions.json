@@ -77,6 +77,15 @@
             "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode"
           ]
         },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::decode_nested_into": {
+          "fields": [
+            "materialization_remaining"
+          ],
+          "proofs": [
+            "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_an_in_place_decode"
+          ]
+        },
         "codec::<impl at crates/varlit-core/src/codec.rs>::charge_materialization": {
           "fields": [
             "materialization_remaining"
@@ -343,6 +352,18 @@
       "target": "codec::Decoder::decode_from_slice_accounted",
       "owner": "materialization",
       "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into",
+      "target": "Decoder::decode_from_slice_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into",
+      "target": "codec::Decoder::decode_from_slice_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
     }
   ],
   "callback_boundaries": [
@@ -352,6 +373,6 @@
   "callback_adapters": [
     "codec::<impl at crates/varlit-core/src/codec.rs>::call"
   ],
-  "adapter_count": 2,
+  "adapter_count": 3,
   "builtin_evidence": true
 }

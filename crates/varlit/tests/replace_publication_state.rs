@@ -59,6 +59,8 @@ mod classification {
 mod enabled {
     use std::sync::Mutex;
 
+    use super::opt;
+
     use varlit::scalable_fault::{FAULT_ENV, TRACE_ENV, arm_from_env};
     use varlit::{
         BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
@@ -86,6 +88,12 @@ mod enabled {
 
         fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
             Ok(Self(u64::decode_varlit(decoder)?))
+        }
+    }
+
+    impl varlit::VarlitEmpty for PubRecord {
+        fn empty() -> Self {
+            Self(0)
         }
     }
 
@@ -149,9 +157,9 @@ mod enabled {
         // Publication already happened: the pathname resolves to the new
         // generation even though the caller saw an error.
         assert_eq!(
-            VarlitFile::open_readonly(spec(), &path)?
+            opt(|o| VarlitFile::open_readonly(spec(), &path)?
                 .blocks::<PubRecord>()?
-                .get(0)?,
+                .get(0, o))?,
             Some(PubRecord(2))
         );
 
@@ -164,8 +172,8 @@ mod enabled {
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
         let blocks = reopened.blocks::<PubRecord>()?;
-        assert_eq!(blocks.get(0)?, Some(PubRecord(2)));
-        assert_eq!(blocks.get(1)?, Some(PubRecord(3)));
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(2)));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(3)));
         Ok(())
     }
 
@@ -213,7 +221,10 @@ mod enabled {
         // The injected fault fired before the publication was attempted, so
         // the target pathname still resolves to the previous generation.
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        assert_eq!(reopened.blocks::<PubRecord>()?.get(0)?, Some(PubRecord(1)),);
+        assert_eq!(
+            opt(|o| reopened.blocks::<PubRecord>()?.get(0, o))?,
+            Some(PubRecord(1)),
+        );
         Ok(())
     }
 
@@ -234,8 +245,8 @@ mod enabled {
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
         let blocks = reopened.blocks::<PubRecord>()?;
-        assert_eq!(blocks.get(0)?, Some(PubRecord(5)));
-        assert_eq!(blocks.get(1)?, Some(PubRecord(6)));
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(5)));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(6)));
         Ok(())
     }
 
@@ -293,6 +304,7 @@ mod enabled {
 /// a *supported* opt-out from header-level schema locking, which is exactly
 /// what the specs below use.
 mod cross_version_and_keyed_refusals {
+    use super::opt;
     use varlit::{
         BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
         IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result, VarlitBlock,
@@ -320,6 +332,12 @@ mod cross_version_and_keyed_refusals {
 
                 fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                     Ok(Self(u64::decode_varlit(decoder)?))
+                }
+            }
+
+            impl varlit::VarlitEmpty for $name {
+                fn empty() -> Self {
+                    Self(0)
                 }
             }
 
@@ -409,7 +427,10 @@ mod cross_version_and_keyed_refusals {
     /// can decode: a refused replacement leaves nothing behind.
     fn assert_still_v1(path: &std::path::Path) -> Result<()> {
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), path)?;
-        assert_eq!(reader.blocks::<RecordV1>()?.get(0)?, Some(RecordV1(1)));
+        assert_eq!(
+            opt(|o| reader.blocks::<RecordV1>()?.get(0, o))?,
+            Some(RecordV1(1))
+        );
         Ok(())
     }
 
@@ -546,8 +567,14 @@ mod cross_version_and_keyed_refusals {
         }
 
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), &path)?;
-        assert_eq!(reader.blocks::<RecordV1>()?.get(0)?, Some(RecordV1(1)));
-        assert_eq!(reader.blocks::<RecordV1>()?.get(1)?, Some(RecordV1(2)));
+        assert_eq!(
+            opt(|o| reader.blocks::<RecordV1>()?.get(0, o))?,
+            Some(RecordV1(1))
+        );
+        assert_eq!(
+            opt(|o| reader.blocks::<RecordV1>()?.get(1, o))?,
+            Some(RecordV1(2))
+        );
         Ok(())
     }
 
@@ -571,6 +598,12 @@ mod cross_version_and_keyed_refusals {
             Ok(Self {
                 key: u64::decode_varlit(decoder)?,
             })
+        }
+    }
+
+    impl varlit::VarlitEmpty for KeyedRecord {
+        fn empty() -> Self {
+            Self { key: 0 }
         }
     }
 
@@ -683,8 +716,18 @@ mod cross_version_and_keyed_refusals {
         let reader = VarlitFile::open_readonly(keyed_spec(), &path)?;
         let blocks = reader.blocks::<KeyedRecord>()?;
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks.get(0)?, Some(KeyedRecord { key: 5 }));
-        assert_eq!(blocks.get(1)?, Some(KeyedRecord { key: 5 }));
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(KeyedRecord { key: 5 }));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(KeyedRecord { key: 5 }));
         Ok(())
     }
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

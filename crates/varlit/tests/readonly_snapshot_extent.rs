@@ -29,7 +29,9 @@
 
 use std::path::{Path, PathBuf};
 
-use varlit::{BlockResidencyDescriptor, CommitPolicy, FormatSpec, VarlitBlock, varlit_format};
+use varlit::{
+    BlockResidencyDescriptor, CommitPolicy, FormatSpec, VarlitBlock, VarlitEmpty, varlit_format,
+};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 70, version = 1, kind = "fixed")]
@@ -106,9 +108,12 @@ fn a_markerless_read_only_handle_reaches_every_non_resident_record() -> varlit::
 
     let file = markerless_lean().open_readonly(&path)?;
     let mut walked = Vec::new();
+    let mut scratch = Vec::new();
+    let mut line = Line::empty();
     for step in file.block_chain(Line::ID)? {
         let entry = step?;
-        walked.push(file.read_block_at::<Line>(entry.record_offset)?);
+        file.read_block_at::<Line>(entry.record_offset, &mut scratch, &mut line)?;
+        walked.push(line.clone());
     }
     walked.reverse();
     assert_eq!(
@@ -169,8 +174,11 @@ fn an_uncommitted_tail_stays_outside_the_read_only_snapshot() -> varlit::Result<
     );
     // The first uncommitted record starts where the committed bytes end, and
     // must be outside the snapshot.
+    let mut scratch = Vec::new();
+    let mut line = Line::empty();
     assert!(
-        file.read_block_at::<Line>(committed_physical).is_err(),
+        file.read_block_at::<Line>(committed_physical, &mut scratch, &mut line)
+            .is_err(),
         "the snapshot must stop at the commit boundary, not at the physical end",
     );
     Ok(())
@@ -206,9 +214,11 @@ fn a_torn_trailing_record_leaves_the_snapshot_at_the_last_complete_one() -> varl
 
     let file = spec.open_readonly(&path)?;
     let mut walked = 0usize;
+    let mut scratch = Vec::new();
+    let mut line = Line::empty();
     for step in file.block_chain(Line::ID)? {
         let entry = step?;
-        file.read_block_at::<Line>(entry.record_offset)?;
+        file.read_block_at::<Line>(entry.record_offset, &mut scratch, &mut line)?;
         walked += 1;
     }
     assert_eq!(
@@ -217,7 +227,8 @@ fn a_torn_trailing_record_leaves_the_snapshot_at_the_last_complete_one() -> varl
         "the walk must reach every complete record and stop there",
     );
     assert!(
-        file.read_block_at::<Line>(last_offset).is_err(),
+        file.read_block_at::<Line>(last_offset, &mut scratch, &mut line)
+            .is_err(),
         "the torn record must be outside the snapshot even though its bytes are in the file",
     );
     Ok(())
@@ -257,13 +268,16 @@ fn without_residency_the_snapshot_still_ends_at_the_last_index_entry() -> varlit
         // range stops exactly at the last one: reading a record framed at
         // `expected_len` fails, and there is either nothing there or an
         // uncommitted record that must stay invisible.
+        let mut scratch = Vec::new();
+        let mut line = Line::empty();
         for entry in entries {
             if entry.block_id == Line::ID {
-                file.read_block_at::<Line>(entry.record_offset)?;
+                file.read_block_at::<Line>(entry.record_offset, &mut scratch, &mut line)?;
             }
         }
         assert!(
-            file.read_block_at::<Line>(expected_len).is_err(),
+            file.read_block_at::<Line>(expected_len, &mut scratch, &mut line)
+                .is_err(),
             "{name}: nothing past the last index entry may be readable",
         );
 

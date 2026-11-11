@@ -105,6 +105,12 @@ pub struct Reader {
     metas: StreamingBlocks<Metadata>,
     heads: StreamingBlocks<Head>,
     head: Head,
+    // Caller-owned decode targets, reused across every record of the hot loops.
+    frame: Frame,
+    row: Row,
+    meta: Metadata,
+    found_frame: Frame,
+    found_row: Row,
     fc: u64,
     rc: u64,
     mc: u64,
@@ -150,6 +156,11 @@ impl Reader {
             metas,
             heads,
             head: Head::default(),
+            frame: Frame::empty(),
+            row: Row::empty(),
+            meta: Metadata::empty(),
+            found_frame: Frame::empty(),
+            found_row: Row::empty(),
             fc: 0,
             rc: 0,
             mc: 0,
@@ -159,13 +170,13 @@ impl Reader {
         match &mut self.f {
             File::Indexed(f) => {
                 f.follow()?;
-                self.head = f.get::<Head>(&0)?.ok_or("missing head")?;
+                if !f.get::<Head>(&0, &mut self.head)? {
+                    return Err("missing head".into());
+                }
             }
             File::Stream(f) => {
                 f.follow_blocks(&mut self.heads)?;
-                for h in self.heads.by_ref() {
-                    self.head = h?;
-                }
+                while self.heads.next_into(&mut self.head)? {}
             }
         }
         assert!(self.head.valid());
@@ -190,12 +201,18 @@ impl Reader {
         follow!(&mut self.rows);
         follow!(&mut self.metas);
         while self.fc < h.frames {
-            let v = self.frames.next().ok_or("short frame prefix")??;
-            o.frame(&v);
+            if !self.frames.next_into(&mut self.frame)? {
+                return Err("short frame prefix".into());
+            }
+            let v = &self.frame;
+            o.frame(v);
             if c.lookups {
                 if let File::Indexed(r) = &self.f {
                     let k = (v.scan, v.frame);
-                    let found = r.get::<Frame>(&k)?.ok_or("missing key")?;
+                    if !r.get::<Frame>(&k, &mut self.found_frame)? {
+                        return Err("missing key".into());
+                    }
+                    let found = &self.found_frame;
                     assert_eq!(found.id, v.id);
                     assert_eq!(found.payload, v.payload);
                     o.point_payload(v.id, &found.payload);
@@ -207,11 +224,17 @@ impl Reader {
             self.fc += 1;
         }
         while self.rc < h.rows {
-            let v = self.rows.next().ok_or("short row prefix")??;
-            o.row(&v);
+            if !self.rows.next_into(&mut self.row)? {
+                return Err("short row prefix".into());
+            }
+            let v = &self.row;
+            o.row(v);
             if c.lookups {
                 if let File::Indexed(r) = &self.f {
-                    assert_eq!(r.get::<Row>(&v.id)?.ok_or("missing row")?, v);
+                    if !r.get::<Row>(&v.id, &mut self.found_row)? {
+                        return Err("missing row".into());
+                    }
+                    assert_eq!(&self.found_row, v);
                     o.lookup_count += 1;
                 } else {
                     return Err("stream has no arbitrary-key lookup".into());
@@ -220,8 +243,10 @@ impl Reader {
             self.rc += 1;
         }
         while self.mc < h.metas {
-            let v = self.metas.next().ok_or("short metadata prefix")??;
-            o.metadata(&v);
+            if !self.metas.next_into(&mut self.meta)? {
+                return Err("short metadata prefix".into());
+            }
+            o.metadata(&self.meta);
             self.mc += 1;
         }
         Ok(())

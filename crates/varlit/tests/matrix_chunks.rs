@@ -25,8 +25,38 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     LazyOpenSource, MatrixBlockDescriptor, MatrixCellStatus, MatrixCommitDescriptor,
     MatrixCommitKind, MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, ReadLimits,
-    VarlitBlock, VarlitFile, VarlitMatrixBlock, VarlitWriter,
+    VarlitBlock, VarlitEmpty, VarlitFile, VarlitMatrixBlock, VarlitWriter,
 };
+
+/// The old by-value cell read, over the caller-owned-output API: every call
+/// decodes into a fresh `T`.
+trait CellValue {
+    fn cell_value<T: VarlitMatrixBlock + VarlitEmpty>(&self, key: MatrixKey) -> varlit::Result<T>;
+}
+
+impl CellValue for VarlitFile {
+    fn cell_value<T: VarlitMatrixBlock + VarlitEmpty>(&self, key: MatrixKey) -> varlit::Result<T> {
+        let mut out = T::empty();
+        self.read_matrix_cell::<T>(key, &mut out)?;
+        Ok(out)
+    }
+}
+
+impl CellValue for varlit::VarlitReader {
+    fn cell_value<T: VarlitMatrixBlock + VarlitEmpty>(&self, key: MatrixKey) -> varlit::Result<T> {
+        let mut out = T::empty();
+        self.read_matrix_cell::<T>(key, &mut out)?;
+        Ok(out)
+    }
+}
+
+impl CellValue for VarlitWriter {
+    fn cell_value<T: VarlitMatrixBlock + VarlitEmpty>(&self, key: MatrixKey) -> varlit::Result<T> {
+        let mut out = T::empty();
+        self.read_matrix_cell::<T>(key, &mut out)?;
+        Ok(out)
+    }
+}
 
 const CHANNELS: u64 = 8;
 const ROWS_PER_CHUNK: u64 = 4;
@@ -239,7 +269,7 @@ fn rows_past_the_declared_extent_are_written_and_read_back() -> varlit::Result<(
         for ch in 0..CHANNELS {
             let expected = (row * CHANNELS + ch) as u32 + 1;
             assert_eq!(
-                reader.read_matrix_cell::<Sample>(key(row, ch))?,
+                reader.cell_value::<Sample>(key(row, ch))?,
                 Sample { value: expected },
                 "row {row} ch {ch}",
             );
@@ -312,16 +342,13 @@ fn a_block_that_never_arrived_reads_as_absent_across_a_write() -> varlit::Result
     }
 
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 42 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 42 });
     assert_eq!(
         reader.matrix_cell_status::<Marker>(cell)?,
         MatrixCellStatus::NotCommitted,
     );
     assert!(matches!(
-        reader.read_matrix_cell::<Marker>(cell),
+        reader.cell_value::<Marker>(cell),
         Err(Error::MatrixNotCommitted),
     ));
     Ok(())
@@ -385,16 +412,10 @@ fn a_write_into_a_written_chunk_appends_a_generation() -> varlit::Result<()> {
     let reader = growing_spec().open_reader(path.path())?;
     // The new cell, and the one that was already there: a rewrite carries the
     // whole chunk, so losing the untouched cell is the way this fails.
+    assert_eq!(reader.cell_value::<Sample>(late)?, Sample { value: 3 });
+    assert_eq!(reader.cell_value::<Sample>(first)?, Sample { value: 1 });
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(late)?,
-        Sample { value: 3 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(first)?,
-        Sample { value: 1 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK * 2, 0))?,
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK * 2, 0))?,
         Sample { value: 2 }
     );
     Ok(())
@@ -426,10 +447,7 @@ fn a_written_chunk_cell_can_be_overwritten_with_a_new_value() -> varlit::Result<
     drop(writer);
 
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 22 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 22 });
     Ok(())
 }
 
@@ -459,14 +477,8 @@ fn a_skipped_chunk_can_be_filled_in_after_a_later_one_was_written() -> varlit::R
         writer.sync()?;
     }
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(skipped)?,
-        Sample { value: 11 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(late)?,
-        Sample { value: 33 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(skipped)?, Sample { value: 11 });
+    assert_eq!(reader.cell_value::<Sample>(late)?, Sample { value: 33 });
     Ok(())
 }
 
@@ -503,10 +515,7 @@ fn reading_one_cell_does_not_read_the_chunk() -> varlit::Result<()> {
 
     let reader = spec.open_reader(path.path())?;
     let before = VarlitFile::chunk_bytes_read();
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 77 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 77 });
     let read = VarlitFile::chunk_bytes_read() - before;
 
     // Measured 2026-08-04: 189 bytes — a 40-byte prefix, 64 bytes of block
@@ -644,7 +653,7 @@ fn a_writer_reads_back_what_it_just_wrote_into_the_open_chunk() -> varlit::Resul
     writer.commit_matrix_cell::<Sample>(cell)?;
 
     assert_eq!(
-        writer.read_matrix_cell::<Sample>(cell)?,
+        writer.cell_value::<Sample>(cell)?,
         Sample { value: 5 },
         "the writer must see its own committed cell before it is written",
     );
@@ -660,10 +669,7 @@ fn a_writer_reads_back_what_it_just_wrote_into_the_open_chunk() -> varlit::Resul
     // And the same three answers after the write, from the same handle.
     writer.flush()?;
     writer.sync()?;
-    assert_eq!(
-        writer.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 5 }
-    );
+    assert_eq!(writer.cell_value::<Sample>(cell)?, Sample { value: 5 });
     assert_eq!(
         writer.matrix_cell_status::<Sample>(cell)?,
         MatrixCellStatus::Committed,
@@ -684,7 +690,7 @@ fn an_uncommitted_write_to_the_open_chunk_reads_as_absent() -> varlit::Result<()
         MatrixCellStatus::NotCommitted,
     );
     assert!(matches!(
-        writer.read_matrix_cell::<Sample>(cell),
+        writer.cell_value::<Sample>(cell),
         Err(Error::MatrixNotCommitted),
     ));
     Ok(())
@@ -705,10 +711,7 @@ fn the_payload_write_entry_point_routes_like_the_typed_one() -> varlit::Result<(
     drop(writer);
 
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 7 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 7 });
     Ok(())
 }
 
@@ -753,7 +756,7 @@ fn both_spellings_of_a_cell_clear_reach_a_written_chunk() -> varlit::Result<()> 
             MatrixCellStatus::NotCommitted,
         );
     }
-    assert_eq!(reader.read_matrix_cell::<Sample>(far)?, Sample { value: 5 });
+    assert_eq!(reader.cell_value::<Sample>(far)?, Sample { value: 5 });
     Ok(())
 }
 
@@ -863,18 +866,9 @@ fn a_reopened_writer_edits_a_chunk_written_by_the_previous_handle() -> varlit::R
     drop(writer);
 
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(first)?,
-        Sample { value: 1 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(second)?,
-        Sample { value: 7 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(later)?,
-        Sample { value: 9 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(first)?, Sample { value: 1 });
+    assert_eq!(reader.cell_value::<Sample>(second)?, Sample { value: 7 });
+    assert_eq!(reader.cell_value::<Sample>(later)?, Sample { value: 9 });
     Ok(())
 }
 
@@ -917,7 +911,7 @@ fn a_truncated_dirty_tail_preserves_the_confirmed_chunk_generation() -> varlit::
         std::fs::write(&copy, &source[..cut])?;
         std::fs::copy(&log, dir.path().join(format!("cut-{cut}.varlit{suffix}")))?;
         let reader = spec.open_reader(&copy)?;
-        assert_eq!(reader.read_matrix_cell::<Sample>(old)?.value, 1);
+        assert_eq!(reader.cell_value::<Sample>(old)?.value, 1);
         assert_eq!(
             reader.matrix_cell_status::<Sample>(dirty)?,
             MatrixCellStatus::NotCommitted
@@ -927,13 +921,8 @@ fn a_truncated_dirty_tail_preserves_the_confirmed_chunk_generation() -> varlit::
         recovered.write_matrix_cell(old, &Sample { value: 4 })?;
         recovered.commit_matrix_cell::<Sample>(old)?;
         recovered.sync()?;
-        assert_eq!(reader.read_matrix_cell::<Sample>(old)?.value, 1);
-        assert_eq!(
-            spec.open_reader(&copy)?
-                .read_matrix_cell::<Sample>(old)?
-                .value,
-            4
-        );
+        assert_eq!(reader.cell_value::<Sample>(old)?.value, 1);
+        assert_eq!(spec.open_reader(&copy)?.cell_value::<Sample>(old)?.value, 4);
     }
     Ok(())
 }
@@ -962,14 +951,8 @@ fn a_zero_valued_cell_can_be_committed() -> varlit::Result<()> {
         writer.sync()?;
     }
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(region)?,
-        Sample { value: 0 }
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(chunked)?,
-        Sample { value: 0 },
-    );
+    assert_eq!(reader.cell_value::<Sample>(region)?, Sample { value: 0 });
+    assert_eq!(reader.cell_value::<Sample>(chunked)?, Sample { value: 0 },);
     Ok(())
 }
 
@@ -1005,10 +988,7 @@ fn write_then_flush_then_commit_keeps_the_write() -> varlit::Result<()> {
         writer.sync()?;
     }
     let reader = growing_spec().open_reader(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 33 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 33 });
     Ok(())
 }
 
@@ -1053,10 +1033,7 @@ fn a_zero_valued_chunk_cell_commits_after_a_flush() -> varlit::Result<()> {
             reader.matrix_cell_status::<Sample>(cell)?,
             MatrixCellStatus::Committed,
         );
-        assert_eq!(
-            reader.read_matrix_cell::<Sample>(cell)?,
-            Sample { value: 0 }
-        );
+        assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 0 });
     }
     Ok(())
 }
@@ -1097,10 +1074,7 @@ fn sync_makes_a_committed_chunked_cell_durable() -> varlit::Result<()> {
     writer.sync()?;
 
     let reader = growing_spec().open_readonly(path.path())?;
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(cell)?,
-        Sample { value: 12 }
-    );
+    assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 12 });
     Ok(())
 }
 
@@ -1383,11 +1357,11 @@ fn a_chunked_read_does_not_pay_for_records_it_does_not_touch() -> varlit::Result
         let cell = key(ROWS_PER_CHUNK, 0);
         // Warm the directory so this measures the steady state, which is what
         // a per-read walk would dominate.
-        reader.read_matrix_cell::<Sample>(cell)?;
+        reader.cell_value::<Sample>(cell)?;
         let before = VarlitFile::chunk_bytes_read();
         let start = Instant::now();
         for _ in 0..reads {
-            reader.read_matrix_cell::<Sample>(cell)?;
+            reader.cell_value::<Sample>(cell)?;
         }
         let elapsed = start.elapsed().as_secs_f64();
         Ok((VarlitFile::chunk_bytes_read() - before, elapsed))
@@ -1501,7 +1475,7 @@ fn compressed_chunks_read_back_every_cell() -> varlit::Result<()> {
     for row in 0..rows {
         for ch in 0..CHANNELS {
             assert_eq!(
-                reader.read_matrix_cell::<Sample>(key(row, ch))?,
+                reader.cell_value::<Sample>(key(row, ch))?,
                 Sample {
                     value: (row * CHANNELS + ch) as u32 + 1
                 },
@@ -1597,7 +1571,7 @@ fn a_corrupted_compressed_sub_block_is_refused() -> varlit::Result<()> {
 
     let reader = compressed_spec().open_reader(path.path())?;
     assert!(
-        reader.read_matrix_cell::<Sample>(cell).is_err(),
+        reader.cell_value::<Sample>(cell).is_err(),
         "a corrupted compressed sub-block must not decode to data",
     );
     Ok(())
@@ -1636,12 +1610,9 @@ fn a_compressed_read_costs_one_sub_block_not_the_chunk() -> varlit::Result<()> {
             writer.sync()?;
         }
         let reader = spec.open_reader(path)?;
-        reader.read_matrix_cell::<Sample>(cell)?;
+        reader.cell_value::<Sample>(cell)?;
         let before = VarlitFile::chunk_bytes_read();
-        assert_eq!(
-            reader.read_matrix_cell::<Sample>(cell)?,
-            Sample { value: 77 }
-        );
+        assert_eq!(reader.cell_value::<Sample>(cell)?, Sample { value: 77 });
         Ok(VarlitFile::chunk_bytes_read() - before)
     }
 
@@ -1745,7 +1716,7 @@ fn a_flipped_bit_in_a_written_chunk_is_refused_not_returned() -> varlit::Result<
     let reader = growing_spec().open_reader(path.path())?;
     assert!(
         matches!(
-            reader.read_matrix_cell::<Sample>(cell),
+            reader.cell_value::<Sample>(cell),
             Err(Error::MatrixChecksumMismatch { .. }),
         ),
         "a corrupted chunk cell must be refused, not returned",
@@ -1779,7 +1750,7 @@ fn a_format_without_integrity_stores_no_chunk_checksums() -> varlit::Result<()> 
         .with_integrity_policy(IntegrityPolicy::None)
         .open_reader(without.path())?;
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))?,
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0))?,
         Sample { value: 1 },
     );
     Ok(())
@@ -1799,7 +1770,7 @@ fn a_crafted_block_count_cannot_make_the_reader_allocate() -> varlit::Result<()>
 
     let reader = growing_spec().open_reader(path.path())?;
     assert!(matches!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0)),
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0)),
         Err(Error::InvalidMatrixChunk),
     ));
     Ok(())
@@ -1825,7 +1796,7 @@ fn a_crafted_commit_length_cannot_read_outside_the_record() -> varlit::Result<()
 
     let reader = growing_spec().open_reader(path.path())?;
     assert!(matches!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0)),
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0)),
         Err(Error::InvalidMatrixChunk),
     ));
     Ok(())
@@ -1843,7 +1814,7 @@ fn a_crafted_cell_count_cannot_outrun_its_commit_map() -> varlit::Result<()> {
 
     let reader = growing_spec().open_reader(path.path())?;
     assert!(matches!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0)),
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0)),
         Err(Error::InvalidMatrixChunk),
     ));
     Ok(())
@@ -1871,7 +1842,7 @@ fn a_chunk_written_under_a_different_rows_per_chunk_is_refused() -> varlit::Resu
     let other = base_spec().with_growing_matrix_dimension("scan", ROWS_PER_CHUNK * 2);
     let reader = other.open_reader(path.path())?;
     assert!(matches!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK * 2, 0)),
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK * 2, 0)),
         Err(Error::InvalidMatrixChunk),
     ));
     Ok(())
@@ -1894,7 +1865,7 @@ fn a_crafted_stride_or_cell_count_is_refused() -> varlit::Result<()> {
         let reader = growing_spec().open_reader(path.path())?;
         assert!(
             matches!(
-                reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0)),
+                reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0)),
                 Err(Error::InvalidMatrixChunk),
             ),
             "a crafted {name} must be refused",
@@ -1923,11 +1894,7 @@ fn a_truncated_chunk_payload_is_refused() -> varlit::Result<()> {
     // Open may refuse outright (the framing no longer adds up) or may open and
     // refuse the read. Either is acceptable; returning a value is not.
     if let Ok(reader) = growing_spec().open_reader(path.path()) {
-        assert!(
-            reader
-                .read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))
-                .is_err(),
-        );
+        assert!(reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0)).is_err(),);
     }
     Ok(())
 }
@@ -2006,7 +1973,7 @@ fn a_type_that_disagrees_with_the_schema_is_refused_on_a_chunked_row() -> varlit
     // The region row is the control: this is the refusal that already worked.
     assert!(
         matches!(
-            reader.read_matrix_cell::<SampleV2>(key(0, 0)),
+            reader.cell_value::<SampleV2>(key(0, 0)),
             Err(Error::BlockVersionMismatch { block_id, .. }) if block_id == Sample::ID
         ),
         "the region row accepted a type that disagrees with the schema"
@@ -2015,7 +1982,7 @@ fn a_type_that_disagrees_with_the_schema_is_refused_on_a_chunked_row() -> varlit
     // returned `Ok(SampleV2 { .. })`.
     assert!(
         matches!(
-            reader.read_matrix_cell::<SampleV2>(key(ROWS_PER_CHUNK, 0)),
+            reader.cell_value::<SampleV2>(key(ROWS_PER_CHUNK, 0)),
             Err(Error::BlockVersionMismatch { block_id, .. }) if block_id == Sample::ID
         ),
         "a chunked row decoded a type the file's schema does not describe"
@@ -2052,12 +2019,12 @@ fn a_quarantined_category_refuses_a_chunked_row_as_it_refuses_a_region_row() -> 
     let reader = growing_spec().open_readonly(path.path())?;
     let quarantined = |result: varlit::Result<Sample>| matches!(result, Err(Error::MatrixCommitQuarantined(name)) if name == Sample::CATEGORY);
     assert!(
-        quarantined(reader.read_matrix_cell::<Sample>(key(0, 0))),
+        quarantined(reader.cell_value::<Sample>(key(0, 0))),
         "the fixture did not produce a quarantine on the region row"
     );
     // The whole finding, in one line: this used to return the cell's bytes.
     assert!(
-        quarantined(reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))),
+        quarantined(reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 0))),
         "a quarantined category was still readable through a chunked row"
     );
     assert!(
@@ -2149,7 +2116,7 @@ fn clearing_a_category_does_not_write_a_dead_chunk() -> varlit::Result<()> {
 
     let reader = growing_spec().open_reader(path.path())?;
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 1))?,
+        reader.cell_value::<Sample>(key(ROWS_PER_CHUNK, 1))?,
         Sample { value: 4 },
         "the row written after the clear did not survive"
     );
@@ -2240,7 +2207,7 @@ fn a_lazy_writer_refuses_a_chunked_row_instead_of_duplicating_its_record() -> va
     }
     let reader = spec.open_reader(path.path())?;
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(chunked)?,
+        reader.cell_value::<Sample>(chunked)?,
         Sample { value: 5 },
         "the committed cell must survive the lazy handle",
     );

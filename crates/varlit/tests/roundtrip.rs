@@ -100,11 +100,11 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
     let file = TestFormat::open_readonly(&path)?;
     let points = file.blocks::<Point>()?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?, Some(Point { x: 10, y: 20 }));
+    assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 10, y: 20 }));
 
     let users = file.keyed_blocks::<User>()?;
     assert_eq!(
-        users.get(&(7, 82))?,
+        opt(|o| users.get(&(7, 82), o))?,
         Some(User {
             fixture_key: 7,
             region: 82,
@@ -114,7 +114,7 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
 
     let nested = file.blocks::<Nested>()?;
     assert_eq!(
-        nested.get(0)?,
+        opt(|o| nested.get(0, o))?,
         Some(Nested {
             point: Point { x: 1, y: 2 },
             score: -5,
@@ -140,7 +140,10 @@ fn low_level_native_entrypoints_resolve_missing_runtime_policy() -> varlit::Resu
         file.spec().read_limits.max_records,
         varlit::ReadLimit::Finite(u64::MAX)
     );
-    assert_eq!(file.blocks::<Point>()?.get(0)?, Some(Point { x: 1, y: 2 }));
+    assert_eq!(
+        opt(|o| file.blocks::<Point>()?.get(0, o))?,
+        Some(Point { x: 1, y: 2 })
+    );
 
     cleanup(&path);
     Ok(())
@@ -166,11 +169,11 @@ fn reader_writer_handles_cover_common_workflow() -> varlit::Result<()> {
     let reader = TestFormat::open_reader(&path)?;
     assert_eq!(reader.mode(), varlit::OpenMode::ReadOnly);
     assert_eq!(
-        reader.blocks::<Point>()?.get(0)?,
+        opt(|o| reader.blocks::<Point>()?.get(0, o))?,
         Some(Point { x: 44, y: 55 })
     );
     assert_eq!(
-        reader.keyed_blocks::<User>()?.get(&(8, 1))?,
+        opt(|o| reader.keyed_blocks::<User>()?.get(&(8, 1), o))?,
         Some(User {
             fixture_key: 8,
             region: 1,
@@ -196,7 +199,7 @@ fn fixed_replace_publishes_copy_on_write_generation() -> varlit::Result<()> {
 
     let file = TestFormat::open_readonly(&path)?;
     let points = file.blocks::<Point>()?;
-    assert_eq!(points.get(0)?, Some(Point { x: 3, y: 4 }));
+    assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 3, y: 4 }));
 
     cleanup(&path);
     Ok(())
@@ -231,16 +234,19 @@ fn variable_replace_rewrite_preserves_records_and_cleans_temp() -> varlit::Resul
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<Point>()?.get(0)?, Some(Point { x: 1, y: 2 }));
     assert_eq!(
-        file.blocks::<Nested>()?.get(0)?,
+        opt(|o| file.blocks::<Point>()?.get(0, o))?,
+        Some(Point { x: 1, y: 2 })
+    );
+    assert_eq!(
+        opt(|o| file.blocks::<Nested>()?.get(0, o))?,
         Some(Nested {
             point: Point { x: 3, y: 4 },
             score: 5,
         })
     );
     assert_eq!(
-        file.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| file.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
             fixture_key: 7,
             region: 82,
@@ -288,7 +294,7 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
     assert!(grown.new_physical_len > grown.old_physical_len);
     assert_eq!(file.index_entries()[1].sequence, 1);
     assert_eq!(
-        old_reader.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| old_reader.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
             fixture_key: 7,
             region: 82,
@@ -320,14 +326,17 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
 
     let reopened = TestFormat::open_readonly(&path)?;
     assert_eq!(
-        reopened.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| reopened.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
             fixture_key: 7,
             region: 82,
             name: "x".to_string(),
         })
     );
-    assert_eq!(reopened.keyed_blocks::<User>()?.get(&(8, 82))?, None);
+    assert_eq!(
+        opt(|o| reopened.keyed_blocks::<User>()?.get(&(8, 82), o))?,
+        None
+    );
 
     cleanup(&path);
     Ok(())
@@ -389,7 +398,7 @@ fn typed_decode_charges_nested_allocations_to_handle_budget() -> varlit::Result<
         .with_max_materialized_bytes(payload_len + value.name.len() as u64 - 1);
     let file = TestFormat::open_readonly_with_resource_limits(&path, limits)?;
     assert!(matches!(
-        file.blocks::<User>()?.get(0),
+        opt(|o| file.blocks::<User>()?.get(0, o)),
         Err(varlit::Error::LimitExceeded {
             resource: "string",
             actual,
@@ -522,16 +531,16 @@ fn keyed_merge_applies_put_op_and_tombstone_by_sequence() -> varlit::Result<()> 
     let users = merged.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(1, 82))?,
+        opt(|o| users.get(&(1, 82), o))?,
         Some(User {
             fixture_key: 1,
             region: 82,
             name: "renamed".to_string(),
         })
     );
-    assert_eq!(users.get(&(2, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(2, 82), o))?, None);
     assert_eq!(
-        users.get(&(3, 82))?,
+        opt(|o| users.get(&(3, 82), o))?,
         Some(User {
             fixture_key: 3,
             region: 82,
@@ -574,7 +583,10 @@ fn merge_uses_shard_order_before_local_sequence() -> varlit::Result<()> {
 
     merge_keyed_files::<User, _>(TestFormat::spec(), &base, &[&delta], &output)?;
     let merged = TestFormat::open_readonly(&output)?;
-    assert_eq!(merged.keyed_blocks::<User>()?.get(&(9, 82))?, None);
+    assert_eq!(
+        opt(|o| merged.keyed_blocks::<User>()?.get(&(9, 82), o))?,
+        None
+    );
 
     cleanup(&base);
     cleanup(&delta);
@@ -641,7 +653,7 @@ fn keyed_blocks_hide_same_file_tombstoned_keys() -> varlit::Result<()> {
     let file = TestFormat::open_readonly(&path)?;
     let users = file.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 0);
-    assert_eq!(users.get(&(12, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(12, 82), o))?, None);
     assert_eq!(users.as_blocks().len(), 1);
 
     cleanup(&path);
@@ -703,16 +715,16 @@ fn compact_keyed_file_writes_only_final_keyed_state() -> varlit::Result<()> {
     let users = compacted.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(20, 82))?,
+        opt(|o| users.get(&(20, 82), o))?,
         Some(User {
             fixture_key: 20,
             region: 82,
             name: "after-op".to_string(),
         })
     );
-    assert_eq!(users.get(&(21, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(21, 82), o))?, None);
     assert_eq!(
-        users.get(&(22, 82))?,
+        opt(|o| users.get(&(22, 82), o))?,
         Some(User {
             fixture_key: 22,
             region: 82,
@@ -785,16 +797,16 @@ fn compact_keyed_files_materializes_base_and_delta_shards() -> varlit::Result<()
     let users = compacted.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(30, 82))?,
+        opt(|o| users.get(&(30, 82), o))?,
         Some(User {
             fixture_key: 30,
             region: 82,
             name: "delta".to_string(),
         })
     );
-    assert_eq!(users.get(&(31, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(31, 82), o))?, None);
     assert_eq!(
-        users.get(&(32, 82))?,
+        opt(|o| users.get(&(32, 82), o))?,
         Some(User {
             fixture_key: 32,
             region: 82,
@@ -1029,4 +1041,14 @@ fn cleanup(path: &PathBuf) {
     let mut lock = path.as_os_str().to_os_string();
     lock.push(".lock");
     let _ = remove_file(PathBuf::from(lock));
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

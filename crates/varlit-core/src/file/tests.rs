@@ -1292,7 +1292,7 @@ fn replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot() -> R
         .expect("rewritten tail");
     assert_eq!(tail.record_offset, translated_tail);
     assert_eq!(tail.prev_same_block_offset, Some(grown.record_offset));
-    assert_eq!(old_values.get(0)?, Some(ReplaceString("a".into())));
+    assert_eq!(old_values.get_value(0)?, Some(ReplaceString("a".into())));
 
     let shrunk = writer.replace_block(0, &ReplaceString(String::new()))?;
     assert_eq!(shrunk.sequence, sequence);
@@ -1303,11 +1303,11 @@ fn replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot() -> R
 
     let reopened = VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
-        reopened.blocks::<ReplaceString>()?.get(0)?,
+        reopened.blocks::<ReplaceString>()?.get_value(0)?,
         Some(ReplaceString("y".into()))
     );
     assert_eq!(
-        reopened.blocks::<ReplaceString>()?.get(1)?,
+        reopened.blocks::<ReplaceString>()?.get_value(1)?,
         Some(ReplaceString("tail".into()))
     );
     assert_no_rewrite_temps(directory.path())?;
@@ -1410,13 +1410,16 @@ fn replace_block_preserves_transaction_visibility_and_next_sequence() -> Result<
     assert_eq!(info.sequence, 0);
     assert_eq!(writer.sequence_state.available()?, next_sequence);
     assert_eq!(
-        old_reader.blocks::<ReplaceString>()?.get(0)?,
+        old_reader.blocks::<ReplaceString>()?.get_value(0)?,
         Some(ReplaceString("committed-old".into()))
     );
     let new_reader = VarlitFile::open_readonly(spec, &path)?;
     let visible = new_reader.blocks::<ReplaceString>()?;
     assert_eq!(visible.len(), 1);
-    assert_eq!(visible.get(0)?, Some(ReplaceString("committed-new".into())));
+    assert_eq!(
+        visible.get_value(0)?,
+        Some(ReplaceString("committed-new".into()))
+    );
     assert_eq!(writer.push(&ReplaceTestBlock { value: 11 })?, next_sequence);
     Ok(())
 }
@@ -1436,13 +1439,13 @@ fn replacement_publish_rebind_failure_is_explicit_and_poisoned() -> Result<()> {
         Err(Error::PublishedButRebindFailed { sequence: 0, .. })
     ));
     assert_eq!(
-        old_reader.blocks::<ReplaceString>()?.get(0)?,
+        old_reader.blocks::<ReplaceString>()?.get_value(0)?,
         Some(ReplaceString("old".into()))
     );
     assert_eq!(
         VarlitFile::open_readonly(spec, &path)?
             .blocks::<ReplaceString>()?
-            .get(0)?,
+            .get_value(0)?,
         Some(ReplaceString("new and longer".into()))
     );
     assert!(matches!(writer.flush(), Err(Error::WriterPoisoned("file"))));
@@ -1675,7 +1678,7 @@ fn partial_matrix_overwrite_is_withdrawn_and_poisons_writer() -> Result<()> {
         MatrixCellStatus::NotCommitted
     );
     assert!(matches!(
-        reopened.read_matrix_cell::<MatrixTestCell>(key),
+        reopened.read_matrix_cell::<MatrixTestCell>(key, &mut MatrixTestCell { value: 0 }),
         Err(Error::MatrixNotCommitted)
     ));
     Ok(())
@@ -1733,11 +1736,14 @@ fn assert_publish_rebind_failure(rewrite: bool) -> Result<()> {
         other => panic!("unexpected publication error: {other:?}"),
     }
 
-    assert_eq!(old_blocks.get(0)?, Some(ReplaceTestBlock { value: 1 }));
+    assert_eq!(
+        old_blocks.get_value(0)?,
+        Some(ReplaceTestBlock { value: 1 })
+    );
     assert_eq!(
         VarlitFile::open_readonly(spec, &path)?
             .blocks::<ReplaceTestBlock>()?
-            .get(0)?,
+            .get_value(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert!(matches!(
@@ -1840,7 +1846,7 @@ fn assert_double_publication_fault_reports_both_facts(api: ReplacementApi) -> Re
     assert_eq!(
         VarlitFile::open_readonly(spec, &path)?
             .blocks::<ReplaceTestBlock>()?
-            .get(0)?,
+            .get_value(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert!(matches!(
@@ -2536,9 +2542,12 @@ fn replace_block_finds_predecessors_without_rescanning_the_prefix() -> Result<()
     let replaced = VarlitFile::open_readonly(spec, &path)?;
     let values = replaced.blocks::<ReplaceString>()?;
     assert_eq!(values.len() as u64, RECORDS);
-    assert_eq!(values.get(0)?.expect("record 0").0, "replaced");
+    assert_eq!(values.get_value(0)?.expect("record 0").0, "replaced");
     assert_eq!(
-        values.get(RECORDS as usize - 1)?.expect("last record").0,
+        values
+            .get_value(RECORDS as usize - 1)?
+            .expect("last record")
+            .0,
         format!("v{}", RECORDS - 1),
     );
     Ok(())

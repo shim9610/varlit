@@ -1,4 +1,6 @@
 use std::fs::{remove_file, write};
+#[path = "common/private_tempdir.rs"]
+mod private_tempdir;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -273,7 +275,7 @@ fn self_test_cleanup_removes_files_created_by_the_run() {
 fn self_test_cleanup_refuses_a_directory_other_users_can_write() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().expect("private temp directory");
+    let directory = private_tempdir::private_tempdir().expect("private temp directory");
     let shared = directory.path().join("shared");
     std::fs::create_dir(&shared).expect("create the shared directory");
     // World-writable and *not* sticky: any local user could rename another
@@ -710,7 +712,7 @@ impl AsRef<std::path::Path> for TempPath {
 }
 
 fn temp_path(name: &str) -> TempPath {
-    let dir = tempfile::tempdir().expect("create per-test temp directory");
+    let dir = private_tempdir::private_tempdir().expect("create per-test temp directory");
     let path = dir.path().join(format!(
         "varlit_self_check_{name}_{}.vrv",
         std::process::id()

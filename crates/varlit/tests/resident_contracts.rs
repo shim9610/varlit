@@ -18,7 +18,7 @@ use std::path::Path;
 
 #[cfg(feature = "scalable-fault-injection")]
 use varlit::VarlitFile;
-use varlit::{Error, varlit_format};
+use varlit::{Error, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format ResidentChainFormat {
@@ -118,6 +118,19 @@ fn chain(path: &Path, block_id: u32) -> varlit::Result<Vec<ChainLink>> {
             )
         })
         .collect())
+}
+
+/// Decodes every record of `blocks` (as the old iterator did) and counts them.
+fn count_blocks<T: varlit::VarlitBlock + VarlitEmpty>(
+    blocks: varlit::BlockVec<T>,
+) -> varlit::Result<usize> {
+    let mut cursor = blocks.cursor();
+    let mut out = T::empty();
+    let mut count = 0;
+    while cursor.next_into(&mut out)? {
+        count += 1;
+    }
+    Ok(count)
 }
 
 fn assert_keyed_chain_rejection(error: &Error) {
@@ -1096,10 +1109,8 @@ fn generated_keyed_writer_spills_tails_for_puts_and_tombstones() -> varlit::Resu
     writer.flush()?;
     drop(writer);
     let file = GeneratedTailBudgetFormat::open(&path)?;
-    let values: Vec<Tracked> = file
-        .blocks::<Tracked>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let mut values: Vec<Tracked> = Vec::new();
+    file.decode_blocks_into(&mut values)?;
     assert_eq!(values.len(), 34);
     assert_eq!(values.last(), Some(&Tracked { id: 4, value: 3 }));
     Ok(())
@@ -1176,7 +1187,7 @@ fn generated_keyed_writer_opens_above_the_tail_cache_budget() -> varlit::Result<
     drop(writer);
     let file = unlimited::GeneratedTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        file.blocks::<unlimited::Tracked>()?.iter().count() as u64,
+        count_blocks::<unlimited::Tracked>(file.blocks::<unlimited::Tracked>()?)? as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1213,7 +1224,7 @@ fn owned_tail_map_is_limited_but_writer_tail_cache_can_spill() -> varlit::Result
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        file.blocks::<unlimited::Budgeted>()?.iter().count() as u64,
+        count_blocks::<unlimited::Budgeted>(file.blocks::<unlimited::Budgeted>()?)? as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1236,7 +1247,10 @@ fn a_small_reopened_tail_cache_can_grow_beyond_its_budget() -> varlit::Result<()
     file.flush()?;
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
-    assert_eq!(file.blocks::<unlimited::Budgeted>()?.iter().count(), 65);
+    assert_eq!(
+        count_blocks::<unlimited::Budgeted>(file.blocks::<unlimited::Budgeted>()?)?,
+        65
+    );
     Ok(())
 }
 

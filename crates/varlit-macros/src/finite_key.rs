@@ -397,6 +397,12 @@ impl FiniteKey {
                     ::varlit::__core::VarlitEncode::encode_varlit(&self.code(), encoder)
                 }
             }
+            impl ::varlit::__core::VarlitEmpty for #name {
+                fn empty() -> Self {
+                    Self::ALL[0]
+                }
+            }
+
             impl ::varlit::__core::VarlitDecode for #name {
                 const WIRE_TYPE: ::varlit::__core::WireType = ::varlit::__core::WireType::U16;
                 const SCHEMA_ID: u64 = #schema_id;

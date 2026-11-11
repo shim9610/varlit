@@ -29,7 +29,9 @@
 
 #![cfg(all(feature = "integrity", feature = "scalable-fault-injection"))]
 
-use varlit::{Error, FormatSpec, LazyOpenSource, VarlitBlock, VarlitFile, varlit_format};
+use varlit::{
+    Error, FormatSpec, LazyOpenSource, VarlitBlock, VarlitEmpty, VarlitFile, varlit_format,
+};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -200,9 +202,20 @@ fn a_file_with_segments_still_resumes_from_the_header() -> varlit::Result<()> {
     }
     // Not merely equal to the other handle's numbers — each frames a record of
     // its own block, read back through the header route's own handle.
-    let reading: Reading = lazy.read_block_at(lazy.block_tail_offset(Reading::ID).unwrap())?;
+    let mut scratch = Vec::new();
+    let mut reading = Reading::empty();
+    lazy.read_block_at(
+        lazy.block_tail_offset(Reading::ID).unwrap(),
+        &mut scratch,
+        &mut reading,
+    )?;
     assert_eq!(reading.value, 199);
-    let label: Label = lazy.read_block_at(lazy.block_tail_offset(Label::ID).unwrap())?;
+    let mut label = Label::empty();
+    lazy.read_block_at(
+        lazy.block_tail_offset(Label::ID).unwrap(),
+        &mut scratch,
+        &mut label,
+    )?;
     assert_eq!(label.text, "mark 199");
     Ok(())
 }

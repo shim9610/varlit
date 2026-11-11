@@ -10,7 +10,16 @@ use varlit::{
     IntegrityPolicy, LayoutPlanFieldSource, LayoutPlanFieldType, LayoutPlanLen, LayoutPlanPartKind,
     ManifestPolicy, ReadLimits, RecoveryPolicy, VariableCompression, encode_to_vec,
 };
+#[cfg(feature = "compression-zstd")]
+use varlit::{BlockVec, VarlitEmpty};
 use varlit::{ChunkedBytes, Error, VarlitBlock, varlit_format};
+
+/// Record 0 of `blocks`, decoded into a fresh value.
+#[cfg(feature = "compression-zstd")]
+fn first_of<T: VarlitBlock + VarlitEmpty>(blocks: BlockVec<T>) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(blocks.get(0, &mut out)?.then_some(out))
+}
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 600, version = 1, kind = "variable")]
@@ -290,8 +299,8 @@ fn record_explicit_variable_blocks_roundtrip_with_physical_scan() -> varlit::Res
     }
 
     let file = RecordCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
-    assert_eq!(file.blocks::<FixedBlock>()?.get(0)?, Some(fixed));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
+    assert_eq!(first_of(file.blocks::<FixedBlock>()?)?, Some(fixed));
 
     cleanup(&path);
     Ok(())
@@ -317,7 +326,7 @@ fn mmap_windows_expose_physical_compressed_payloads() -> varlit::Result<()> {
         .block_payload_window::<CompressibleBlock>(0)?
         .expect("compressed payload window");
     assert_eq!(&window[..4], b"VCMP");
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
 
     drop(mmap);
     drop(file);
@@ -382,7 +391,7 @@ fn file_explicit_uses_varlit2_header_and_raw_compressed_payload() -> varlit::Res
         )));
 
     let file = FileExplicitCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
 
     cleanup(&path);
     Ok(())
@@ -415,7 +424,7 @@ fn file_explicit_with_record_footer_uses_varlit3_header_and_extensions() -> varl
     assert_eq!(inspected.segments[0].segment_start, 56);
 
     let file = FileExplicitFooterCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
 
     cleanup(&path);
     Ok(())
@@ -439,7 +448,7 @@ fn format_contract_requires_computed_schema_hash() -> varlit::Result<()> {
         file.flush()?;
     }
     let file = spec.open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
 
     cleanup(&path);
     Ok(())
@@ -490,7 +499,7 @@ fn block_specific_record_explicit_compression_overrides_global_none() -> varlit:
     }
 
     let file = spec.open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(value));
     cleanup(&path);
     Ok(())
 }
@@ -570,7 +579,7 @@ fn compressed_checkpoint_and_rewrite_preserve_length_hint() -> varlit::Result<()
     }
     {
         let mut file = CheckpointCompressionFormat::open(&path)?;
-        assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(first));
+        assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(first));
         file.replace_rewrite(0, &second)?;
         file.flush()?;
         let entries = file.index_entries();
@@ -583,7 +592,7 @@ fn compressed_checkpoint_and_rewrite_preserve_length_hint() -> varlit::Result<()
     }
 
     let file = CheckpointCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(second));
+    assert_eq!(first_of(file.blocks::<CompressibleBlock>()?)?, Some(second));
 
     cleanup(&path);
     Ok(())

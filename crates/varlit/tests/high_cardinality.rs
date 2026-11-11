@@ -133,10 +133,10 @@ fn generated_indexed_api_stays_key_map_free_and_preserves_latest_values() -> var
     drop(stream_writer);
     let stream_reader =
         CardinalityFormat::open_stream_reader(&stream_path, varlit::StreamOptions::default())?;
-    let runs = stream_reader
-        .metadatas()?
-        .map(|value| value.map(|metadata| metadata.run))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    let runs = collect_stream(stream_reader.metadatas()?)?
+        .into_iter()
+        .map(|metadata| metadata.run)
+        .collect::<Vec<_>>();
     assert_eq!(runs, [1, 2]);
 
     let path = directory.path().join("cardinality.varlit");
@@ -189,18 +189,18 @@ fn generated_indexed_api_stays_key_map_free_and_preserves_latest_values() -> var
         },
     )?;
     for key in [0, 1, 4_999, 9_999] {
-        let value = reader.get_frame(&(key / 100, key))?.expect("indexed value");
+        let value = filled(|o| reader.get_frame(&(key / 100, key), o))?.expect("indexed value");
         if key == 4_999 {
             assert_eq!(value.payload, b"latest");
         } else {
             assert_eq!(value.payload, key.to_le_bytes());
         }
     }
-    assert!(reader.get_frame(&(50, 5_000))?.is_none());
-    let metadata_runs = reader
-        .metadatas()?
-        .map(|value| value.map(|metadata| metadata.run))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    assert!(filled(|o| reader.get_frame(&(50, 5_000), o))?.is_none());
+    let metadata_runs = collect_stream(reader.metadatas()?)?
+        .into_iter()
+        .map(|metadata| metadata.run)
+        .collect::<Vec<_>>();
     assert_eq!(metadata_runs, [42, 43, 44]);
     assert_eq!(reader.resident_state().retained_key_entries, 0);
     Ok(())
@@ -436,12 +436,10 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
     let open_elapsed = open_started.elapsed();
     let lookup_started = Instant::now();
     for key in (0..records).step_by((records / 10_000).max(1) as usize) {
-        let value = reader
-            .get_frame(&(key / 1000, key))?
-            .expect("persisted key");
+        let value = filled(|o| reader.get_frame(&(key / 1000, key), o))?.expect("persisted key");
         assert_eq!(value.payload, key.to_le_bytes());
     }
-    assert!(reader.get_frame(&(records / 1000, records))?.is_none());
+    assert!(filled(|o| reader.get_frame(&(records / 1000, records), o))?.is_none());
     assert_eq!(reader.resident_state().retained_key_entries, 0);
     let lookup_elapsed = lookup_started.elapsed();
     let peak = peak_delta(baseline);
@@ -910,4 +908,36 @@ fn steady_state_generated_keyed_appends_do_not_grow_resident_memory() -> varlit:
         "every key must still resolve after the steady-state run",
     );
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Drains a streaming walk into an owned `Vec`, reusing one decode target.
+#[allow(dead_code)]
+fn collect_stream<T: varlit::VarlitBlock + varlit::VarlitEmpty + Clone>(
+    mut stream: varlit::StreamingBlocks<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut out = T::empty();
+    let mut all = Vec::new();
+    while stream.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
 }

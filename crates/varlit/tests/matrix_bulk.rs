@@ -236,7 +236,7 @@ fn chunk_run_reads_metadata_per_batch_instead_of_per_cell() -> varlit::Result<()
     }
     w.sync()?;
     let r = spec.open_reader(&path)?;
-    r.read_matrix_cell::<Cell>(key(7 * 1024, 1024))?; // directory setup is charged separately
+    filled_out(|o| r.read_matrix_cell::<Cell>(key(7 * 1024, 1024), o))?; // directory setup is charged separately
     let before = varlit::VarlitFile::chunk_bytes_read();
     let mut out = vec![Cell { value: 0 }; 1024];
     r.read_matrix_run_into(key(7 * 1024, 1024), &mut out)?;
@@ -529,7 +529,7 @@ fn column_chunk_metadata_is_batched_and_payload_amplification_is_bounded() -> va
         }
         w.sync()?;
         let r = spec.open_reader(&path)?;
-        r.read_matrix_cell::<Cell>(MatrixKey::new(256, width - 1))?;
+        filled_out(|o| r.read_matrix_cell::<Cell>(MatrixKey::new(256, width - 1), o))?;
         let before = varlit::VarlitFile::chunk_bytes_read();
         let mut out = vec![Cell { value: 0 }; 256];
         r.read_matrix_column_into(MatrixKey::new(256, width - 1), &mut out)?;
@@ -542,4 +542,23 @@ fn column_chunk_metadata_is_batched_and_payload_amplification_is_bounded() -> va
         assert_eq!(out[255].value, 511);
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

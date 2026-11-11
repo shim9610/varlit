@@ -83,9 +83,19 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             DiskIndexOptions::default(),
                             plan,
                         )?;
-                        assert_eq!(reader.read_block_at::<Blob>(entry.record_offset)?, value);
-                        assert_eq!(indexed.get::<Blob>(&7)?, Some(value.clone()));
-                        assert_eq!(indexed.blocks::<Blob>()?.next().unwrap()?, value);
+                        let mut got = Blob::empty();
+                        let mut scratch = Vec::new();
+                        reader.read_block_at::<Blob>(
+                            entry.record_offset,
+                            &mut scratch,
+                            &mut got,
+                        )?;
+                        assert_eq!(got, value);
+                        assert!(indexed.get::<Blob>(&7, &mut got)?);
+                        assert_eq!(got, value);
+                        let mut stream = indexed.blocks::<Blob>()?;
+                        assert!(stream.next_into(&mut got)?);
+                        assert_eq!(got, value);
                         let mut stored = Vec::new();
                         reader.read_payload_into(&entry, &mut stored)?;
                         {
@@ -122,12 +132,16 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                         drop(file);
                         rejected(
                             "typed positional",
-                            reader.read_block_at::<Blob>(entry.record_offset),
+                            reader.read_block_at::<Blob>(
+                                entry.record_offset,
+                                &mut scratch,
+                                &mut got,
+                            ),
                             &mut checks,
                         );
                         rejected(
                             "typed collection",
-                            reader.blocks::<Blob>()?.get(0),
+                            reader.blocks::<Blob>()?.get(0, &mut got),
                             &mut checks,
                         );
                         rejected(
@@ -140,11 +154,15 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                             reader.read_logical_payload_into(&entry, &mut Vec::new()),
                             &mut checks,
                         );
-                        rejected("indexed get", indexed.get::<Blob>(&7), &mut checks);
+                        rejected(
+                            "indexed get",
+                            indexed.get::<Blob>(&7, &mut got),
+                            &mut checks,
+                        );
                         rejected("indexed lookup", indexed.lookup::<Blob>(&7), &mut checks);
                         rejected(
                             "streaming decode",
-                            indexed.blocks::<Blob>()?.next().unwrap(),
+                            indexed.blocks::<Blob>()?.next_into(&mut got),
                             &mut checks,
                         );
                         // The damaged bytes remain immutable for all subsequent mappings.

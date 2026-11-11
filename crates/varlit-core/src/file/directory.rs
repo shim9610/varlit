@@ -229,7 +229,15 @@ impl VarlitFile {
     /// The companion to [`Self::block_chain`]: the walk yields offsets and
     /// entries, this turns one into a value. Positional and `&self`, so a
     /// non-resident block is read without anything entering the resident index.
-    pub fn read_block_at<T: VarlitBlock>(&self, record_offset: u64) -> Result<T> {
+    ///
+    /// `out` receives the value, reusing what it owns; `scratch` receives the
+    /// record's bytes. On error `out` is valid but unspecified.
+    pub fn read_block_at<T: VarlitBlock>(
+        &self,
+        record_offset: u64,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+    ) -> Result<()> {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         let entry = read_record_entry_positional(self.spec, &self.snapshot, record_offset)?;
         if entry.block_id != T::ID {
@@ -245,8 +253,8 @@ impl VarlitFile {
         let mut budget = MaterializationBudget::new(self.spec);
         let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
         budget.consume(logical_len)?;
-        let payload = entry.read_logical_payload_snapshot(self.spec, &self.snapshot)?;
-        budget.decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))
+        entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, scratch)?;
+        budget.decode_into(scratch, T::ENDIAN.unwrap_or(self.spec.endian), out)
     }
 
     /// Frames the record at `record_offset` into its index entry.
@@ -321,10 +329,11 @@ impl VarlitFile {
     /// Decodes a record the caller already holds an entry for, reading its
     /// bytes through the caller's buffer.
     ///
-    /// `scratch` is scratch, not output: the decoded value is returned and the
-    /// buffer keeps the last record's bytes. Sufficient scratch capacity can
-    /// be reused for uncompressed payloads. Larger payloads may grow it;
-    /// decompression and decoding owned values may allocate separately.
+    /// The value is decoded into `out`, reusing the vectors and strings it
+    /// already owns; `scratch` keeps the last record's bytes. With both
+    /// buffers reused, a steady walk of same-shaped uncompressed records
+    /// allocates nothing; decompression may still allocate. On error `out` is
+    /// valid but unspecified.
     ///
     /// Refuses an entry whose block id or version is not `T`'s, exactly as
     /// [`read_block_at`](Self::read_block_at) does. Unlike `read_block_at` it
@@ -334,7 +343,31 @@ impl VarlitFile {
         &self,
         entry: &RecordIndexEntry,
         scratch: &mut Vec<u8>,
+        out: &mut T,
+    ) -> Result<()> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        self.read_block_payload::<T>(entry, scratch, &mut budget)?;
+        budget.decode_into(scratch, T::ENDIAN.unwrap_or(self.spec.endian), out)
+    }
+
+    /// [`Self::decode_block_into`] as a fresh value, for crate checks that
+    /// discard it.
+    pub(crate) fn decode_block_owned<T: VarlitBlock>(
+        &self,
+        entry: &RecordIndexEntry,
+        scratch: &mut Vec<u8>,
     ) -> Result<T> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        self.read_block_payload::<T>(entry, scratch, &mut budget)?;
+        budget.decode(scratch, T::ENDIAN.unwrap_or(self.spec.endian))
+    }
+
+    fn read_block_payload<T: VarlitBlock>(
+        &self,
+        entry: &RecordIndexEntry,
+        scratch: &mut Vec<u8>,
+        budget: &mut MaterializationBudget,
+    ) -> Result<()> {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         if entry.block_id != T::ID {
             return Err(Error::UnregisteredBlock(entry.block_id));
@@ -346,11 +379,10 @@ impl VarlitFile {
                 actual: entry.block_version,
             });
         }
-        let mut budget = MaterializationBudget::new(self.spec);
         let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
         budget.consume(logical_len)?;
         entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, scratch)?;
-        budget.decode(scratch, T::ENDIAN.unwrap_or(self.spec.endian))
+        Ok(())
     }
 
     /// This handle's own record directory, or the typed refusal that says who
@@ -610,7 +642,10 @@ impl VarlitFile {
 
     /// Decodes **every** record of type `T` into the caller's buffer.
     ///
-    /// `out` is cleared and then extended.
+    /// `out` ends holding exactly the decoded records. Elements it already
+    /// held are decoded into, so their vectors and strings are reused; it
+    /// only grows past its old length. On error it holds the records decoded
+    /// before the failing one.
     ///
     /// **Not the `_into` twin of [`blocks`](Self::blocks), and named so it
     /// cannot be mistaken for one.** `blocks()` returns a lazy collection whose
@@ -638,7 +673,21 @@ impl VarlitFile {
     ) -> Result<()> {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         crate::collections::ensure_resident_block::<T>(self.spec)?;
-        out.clear();
+        // Elements already in `out` are decoded into (keeping what they own);
+        // only records beyond its length are pushed. Truncated to the filled
+        // prefix on every exit.
+        let mut filled = 0usize;
+        let result = self.decode_blocks_fill(dir, out, &mut filled);
+        out.truncate(filled);
+        result
+    }
+
+    fn decode_blocks_fill<T: VarlitBlock, D: RecordDirectory + ?Sized>(
+        &self,
+        dir: &D,
+        out: &mut Vec<T>,
+        filled: &mut usize,
+    ) -> Result<()> {
         let mut budget = MaterializationBudget::new(self.spec);
         let mut payload = Vec::new();
         for position in 0..dir.record_count() {
@@ -657,17 +706,23 @@ impl VarlitFile {
                 });
             }
             // One record's materialization at a time, exactly as `BlockVec::get`
-            // and `BlockIter::next` charge it: the ceiling bounds one payload,
-            // not the sum over the walk.
+            // and `BlockCursor::next_into` charge it: the ceiling bounds one
+            // payload, not the sum over the walk.
             budget.reset();
             let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
             budget.consume(logical_len)?;
             entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
-            out.try_reserve(1).map_err(|_| Error::AllocationFailed {
-                resource: "decoded blocks",
-                requested: logical_len,
-            })?;
-            out.push(budget.decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))?);
+            let endian = T::ENDIAN.unwrap_or(self.spec.endian);
+            if let Some(slot) = out.get_mut(*filled) {
+                budget.decode_into(&payload, endian, slot)?;
+            } else {
+                out.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                    resource: "decoded blocks",
+                    requested: logical_len,
+                })?;
+                out.push(budget.decode(&payload, endian)?);
+            }
+            *filled += 1;
         }
         Ok(())
     }
@@ -1105,6 +1160,15 @@ impl VarlitFile {
     /// takes the caller's buffer instead and is the form to use in a loop: the
     /// storage is the caller's business, and a library that decides it for them
     /// allocates once per call for no reason.
+    /// How many records the resident directory holds — the positions
+    /// [`Self::mmap_payload_range`](VarlitFile::mmap_payload_range) and the
+    /// index views address. Copies nothing.
+    ///
+    /// A lazily opened handle keeps no directory and is refused by name.
+    pub fn record_count(&self) -> Result<usize> {
+        Ok(self.resident_directory("record_count")?.len())
+    }
+
     pub fn index_entries(&self) -> IndexEntries {
         let mut entries = Vec::new();
         // The infallible surface is kept because 100-odd call sites read it as

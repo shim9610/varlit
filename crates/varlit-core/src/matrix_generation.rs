@@ -10,6 +10,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 const PAGE: usize = 4096;
+/// Pages read by one coalesced positional read (1 MiB).
+const MAX_RUN: usize = 256;
 const FANOUT: usize = 128;
 const HEADER: u64 = 3 * PAGE as u64;
 const HEAD_MAGIC: &[u8; 8] = b"VMGHEAD1";
@@ -138,6 +140,41 @@ struct Entry {
     offset: u64,
     crc: u32,
 }
+#[derive(Debug)]
+struct DirtyPage {
+    stamp: u64,
+    bytes: Box<[u8; PAGE]>,
+    /// Which bytes of `bytes` were written. `None` once every byte is: the
+    /// page's earlier content is then never read. Otherwise that content is
+    /// merged under the written bytes when the page is read or written back.
+    written: Option<Box<[u64; PAGE / 64]>>,
+}
+impl DirtyPage {
+    fn mark(&mut self, start: usize, end: usize) {
+        let Some(bits) = self.written.as_mut() else {
+            return;
+        };
+        for i in start..end {
+            bits[i / 64] |= 1 << (i % 64);
+        }
+        if bits.iter().all(|w| *w == u64::MAX) {
+            self.written = None;
+        }
+    }
+    /// Lays the written bytes over `base` (the page's earlier content).
+    fn overlay(&self, base: &mut [u8; PAGE]) {
+        match &self.written {
+            None => base.copy_from_slice(&self.bytes[..]),
+            Some(bits) => {
+                for i in 0..PAGE {
+                    if bits[i / 64] & (1 << (i % 64)) != 0 {
+                        base[i] = self.bytes[i];
+                    }
+                }
+            }
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Head {
     pub generation: u64,
@@ -158,6 +195,17 @@ struct Cache {
 #[derive(Debug, Default)]
 struct Working {
     pages: BTreeMap<u64, Entry>,
+    /// CRCs of pending pages whose whole content was produced in memory and
+    /// not modified in place since; publication uses them instead of reading
+    /// the page back. Never holds more keys than `pages`.
+    fresh_crc: BTreeMap<u64, u32>,
+    /// Partially written pages held in memory and written once, when the
+    /// pending directory spills (always before publication). Bounded by
+    /// `MatrixFile::dirty_page_budget`; every read of this view sees them.
+    dirty: BTreeMap<u64, DirtyPage>,
+    /// Recency clock for `dirty`; the least recently written page is the one
+    /// written out when the budget is full.
+    dirty_clock: u64,
     // Private, immutable directory pages spilled without publishing a head.
     // A reader clone always keeps the confirmed head instead of this root.
     spilled: Option<(u64, u64)>,
@@ -288,6 +336,20 @@ impl View {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
         if let Some(working) = &self.working
+            && let Some(buffer) = working.dirty.get(&page)
+        {
+            if buffer.written.is_some() {
+                self.page_beneath(page, bytes)?;
+            }
+            buffer.overlay(bytes);
+            return Ok(());
+        }
+        self.page_beneath(page, bytes)
+    }
+    /// The page as the log and base region hold it, ignoring buffered writes.
+    fn page_beneath(&self, page: u64, bytes: &mut [u8; PAGE]) -> io::Result<()> {
+        let at = page * PAGE as u64;
+        if let Some(working) = &self.working
             && let Some(entry) = working.pages.get(&page)
         {
             let entry = *entry;
@@ -336,6 +398,29 @@ impl View {
         }
         while !bytes.is_empty() {
             let within = at as usize % PAGE;
+            // Whole pages go straight into the caller's buffer. A range with a
+            // partial first or last page is read as the covering pages in one
+            // positional read instead, so its edge pages do not each cost a
+            // separate read.
+            if within == 0
+                && bytes.len() >= 2 * PAGE
+                && (bytes.len().is_multiple_of(PAGE) || bytes.len() > MAX_RUN * PAGE)
+            {
+                let n = self.read_published_run(at / PAGE as u64, bytes)?;
+                if n != 0 {
+                    at += n as u64;
+                    bytes = &mut bytes[n..];
+                    continue;
+                }
+            }
+            if (within + bytes.len()).div_ceil(PAGE) >= 2 {
+                let n = self.read_covering_run(at, bytes)?;
+                if n != 0 {
+                    at += n as u64;
+                    bytes = &mut bytes[n..];
+                    continue;
+                }
+            }
             let n = bytes.len().min(PAGE - within);
             let mut page = [0; PAGE];
             self.page(at / PAGE as u64, &mut page)?;
@@ -344,6 +429,90 @@ impl View {
             bytes = &mut bytes[n..];
         }
         Ok(())
+    }
+    /// Collects up to `limit` published pages from `first` that sit back to
+    /// back in the log and are not cached, into `entries`. Returns how many;
+    /// a writer view always yields zero (its pages take the per-page path).
+    fn published_run(
+        &self,
+        first: u64,
+        limit: usize,
+        entries: &mut [Entry; MAX_RUN],
+    ) -> io::Result<usize> {
+        if self.working.is_some() {
+            return Ok(0);
+        }
+        let (_, end) = self.root_end();
+        let limit = limit.min(MAX_RUN);
+        let mut run = 0usize;
+        while run < limit {
+            let entry = self.entry(first + run as u64)?;
+            let offset = entry.offset;
+            let valid = offset >= HEADER
+                && offset.is_multiple_of(PAGE as u64)
+                && offset.checked_add(PAGE as u64).is_some_and(|v| v <= end);
+            let contiguous = run == 0 || offset == entries[0].offset + (run * PAGE) as u64;
+            let cached = self
+                .cache
+                .borrow()
+                .pages
+                .contains_key(&(offset, Some(entry.crc)));
+            if !valid || !contiguous || cached {
+                break;
+            }
+            entries[run] = entry;
+            run += 1;
+        }
+        Ok(run)
+    }
+    /// Reads a run of whole published pages that sit back to back in the log
+    /// with one positional read straight into `out`, then checks every page's
+    /// CRC exactly as [`Self::page`] does. Returns the bytes read; zero when the
+    /// first two pages do not qualify (writer views, cached, base or zero pages
+    /// take the per-page path).
+    fn read_published_run(&self, first: u64, out: &mut [u8]) -> io::Result<usize> {
+        let mut entries = [Entry::default(); MAX_RUN];
+        let run = self.published_run(first, out.len() / PAGE, &mut entries)?;
+        if run < 2 {
+            return Ok(0);
+        }
+        let bytes = &mut out[..run * PAGE];
+        read_at(&self.log, entries[0].offset, bytes)?;
+        for (page, entry) in bytes.as_chunks::<PAGE>().0.iter().zip(&entries[..run]) {
+            if checksum(page) != entry.crc {
+                return Err(bad("matrix generation page checksum mismatch"));
+            }
+        }
+        Ok(run * PAGE)
+    }
+    /// Like [`Self::read_published_run`] for a range that starts or ends inside
+    /// a page: reads the covering whole pages with one positional read into a
+    /// bounded scratch buffer (at most [`MAX_RUN`] pages), checks every page's
+    /// CRC, and copies the requested bytes. Returns the bytes copied into `out`;
+    /// zero when fewer than two covering pages qualify or the scratch cannot be
+    /// allocated, in which case the caller takes the per-page path.
+    fn read_covering_run(&self, at: u64, out: &mut [u8]) -> io::Result<usize> {
+        let within = at as usize % PAGE;
+        let span = (within + out.len()).div_ceil(PAGE);
+        let mut entries = [Entry::default(); MAX_RUN];
+        let run = self.published_run(at / PAGE as u64, span, &mut entries)?;
+        if run < 2 {
+            return Ok(0);
+        }
+        let mut scratch = Vec::new();
+        if scratch.try_reserve_exact(run * PAGE).is_err() {
+            return Ok(0);
+        }
+        scratch.resize(run * PAGE, 0);
+        read_at(&self.log, entries[0].offset, &mut scratch)?;
+        for (page, entry) in scratch.as_chunks::<PAGE>().0.iter().zip(&entries[..run]) {
+            if checksum(page) != entry.crc {
+                return Err(bad("matrix generation page checksum mismatch"));
+            }
+        }
+        let n = (run * PAGE - within).min(out.len());
+        out[..n].copy_from_slice(&scratch[within..within + n]);
+        Ok(n)
     }
     /// Compare immutable radix roots. Equal physical pointers identify an entire
     /// unchanged subtree, but only within the same compaction epoch.
@@ -565,6 +734,14 @@ pub(crate) struct MatrixFile {
     cursor: u64,
     path: PathBuf,
     creation_id: [u8; 16],
+    /// Pages of partial writes buffered until the next spill (0 = write
+    /// through, the historical behaviour).
+    /// Known end of the generation log, or `u64::MAX` when it must be asked
+    /// for. This writer is the log's only appender; a failed append forgets it.
+    log_end: std::sync::atomic::AtomicU64,
+    /// Reusable buffer that joins a boundary page with the run after it.
+    staging: Vec<u8>,
+    dirty_page_budget: usize,
     max_pending: usize,
 }
 impl MatrixFile {
@@ -654,6 +831,9 @@ impl MatrixFile {
             path,
             creation_id,
             max_pending,
+            dirty_page_budget: 0,
+            staging: Vec::new(),
+            log_end: std::sync::atomic::AtomicU64::new(u64::MAX),
         })
     }
     fn write_head(file: &File, head: Head) -> io::Result<()> {
@@ -933,20 +1113,40 @@ impl MatrixFile {
                 .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?,
             creation_id: old.creation_id,
             max_pending: old.max_pending,
+            dirty_page_budget: old.dirty_page_budget,
+            staging: Vec::new(),
+            log_end: std::sync::atomic::AtomicU64::new(u64::MAX),
         })
     }
     fn append_page(&self, bytes: &[u8; PAGE]) -> io::Result<u64> {
+        self.append_pages(bytes)
+    }
+    /// Appends whole pages at the next page-aligned end of the log in one
+    /// write; returns the offset of the first.
+    fn append_pages(&self, bytes: &[u8]) -> io::Result<u64> {
+        debug_assert!(!bytes.is_empty() && bytes.len().is_multiple_of(PAGE));
         let file = self
             .writer
             .as_ref()
             .ok_or(io::ErrorKind::PermissionDenied)?;
-        let len = file.metadata()?.len();
+        use std::sync::atomic::Ordering;
+        let known = self.log_end.load(Ordering::Relaxed);
+        let len = if known == u64::MAX {
+            file.metadata()?.len()
+        } else {
+            known
+        };
         let offset = len
             .checked_add(PAGE as u64 - 1)
             .ok_or_else(|| bad("matrix log overflow"))?
             / PAGE as u64
             * PAGE as u64;
-        write_at(file, offset, bytes)?;
+        if let Err(error) = write_at(file, offset, bytes) {
+            self.log_end.store(u64::MAX, Ordering::Relaxed);
+            return Err(error);
+        }
+        self.log_end
+            .store(offset + bytes.len() as u64, Ordering::Relaxed);
         Ok(offset)
     }
     fn update_node(&self, root: u64, height: u8, updates: &[(u64, Entry)]) -> io::Result<u64> {
@@ -986,6 +1186,7 @@ impl MatrixFile {
     /// Bound working RAM independently of transaction size. Spilled roots are
     /// never installed in either on-disk head until explicit publication.
     fn spill_pending(&mut self) -> io::Result<()> {
+        self.flush_dirty()?;
         let file = self
             .writer
             .as_ref()
@@ -1001,9 +1202,13 @@ impl MatrixFile {
         for (&page, &entry) in &working.pages {
             let mut value = entry;
             if value.offset > 1 {
-                let mut bytes = [0; PAGE];
-                read_at(file, value.offset, &mut bytes)?;
-                value.crc = checksum(&bytes);
+                if let Some(&crc) = working.fresh_crc.get(&page) {
+                    value.crc = crc;
+                } else {
+                    let mut bytes = [0; PAGE];
+                    read_at(file, value.offset, &mut bytes)?;
+                    value.crc = checksum(&bytes);
+                }
             }
             updates.push((page, value));
         }
@@ -1012,7 +1217,100 @@ impl MatrixFile {
         let working = self.view.working.as_mut().unwrap();
         working.spilled = Some((root, end));
         working.pages.clear();
+        working.fresh_crc.clear();
         Ok(())
+    }
+    /// Pages of partial writes to hold in memory until the next spill. The
+    /// caller derives it from the existing limits; it never exceeds the
+    /// pending-page limit, so buffered pages always fit the directory budget.
+    pub(crate) fn set_dirty_page_budget(&mut self, pages: usize) {
+        self.dirty_page_budget = pages.min(self.max_pending.max(1));
+    }
+    /// Writes every buffered page once, in page order, and records its CRC
+    /// from the bytes in hand. Runs before every spill, hence before every
+    /// publication.
+    fn flush_dirty(&mut self) -> io::Result<()> {
+        let Some(working) = self.view.working.as_mut() else {
+            return Ok(());
+        };
+        if working.dirty.is_empty() {
+            return Ok(());
+        }
+        let dirty = std::mem::take(&mut working.dirty);
+        self.write_back_all(dirty.into_iter().collect())
+    }
+    /// Writes buffered pages out: pages already pending in place, new pages
+    /// appended back to back with one write. CRCs come from the bytes in hand.
+    fn write_back_all(&mut self, victims: Vec<(u64, DirtyPage)>) -> io::Result<()> {
+        let mut appended: Vec<u8> = Vec::new();
+        let mut appended_pages: Vec<u64> = Vec::new();
+        appended
+            .try_reserve(victims.len() * PAGE)
+            .map_err(io::Error::other)?;
+        appended_pages
+            .try_reserve(victims.len())
+            .map_err(io::Error::other)?;
+        for (page, buffer) in victims {
+            let mut bytes = [0u8; PAGE];
+            if buffer.written.is_some() {
+                self.view.page_beneath(page, &mut bytes)?;
+            }
+            buffer.overlay(&mut bytes);
+            let existing = self
+                .view
+                .working
+                .as_ref()
+                .unwrap()
+                .pages
+                .get(&page)
+                .copied()
+                .filter(|e| e.offset > 1);
+            if let Some(entry) = existing {
+                write_at(self.writer.as_ref().unwrap(), entry.offset, &bytes)?;
+                let working = self.view.working.as_mut().unwrap();
+                working.fresh_crc.insert(page, checksum(&bytes));
+            } else {
+                appended.extend_from_slice(&bytes);
+                appended_pages.push(page);
+            }
+        }
+        if !appended.is_empty() {
+            let offset = self.append_pages(&appended)?;
+            let working = self.view.working.as_mut().unwrap();
+            for (i, (page, bytes)) in appended_pages
+                .iter()
+                .zip(appended.as_chunks::<PAGE>().0)
+                .enumerate()
+            {
+                working.pages.insert(
+                    *page,
+                    Entry {
+                        offset: offset + (i * PAGE) as u64,
+                        crc: 0,
+                    },
+                );
+                working.fresh_crc.insert(*page, checksum(bytes.as_slice()));
+            }
+        }
+        Ok(())
+    }
+    /// Writes out the least recently written half of the buffer at once.
+    fn evict_dirty(&mut self) -> io::Result<()> {
+        let working = self.view.working.as_mut().unwrap();
+        let mut order: Vec<(u64, u64)> = Vec::new();
+        order
+            .try_reserve(working.dirty.len())
+            .map_err(io::Error::other)?;
+        order.extend(working.dirty.iter().map(|(&page, d)| (d.stamp, page)));
+        order.sort_unstable();
+        let count = order.len().div_ceil(2);
+        let mut victims = Vec::new();
+        victims.try_reserve(count).map_err(io::Error::other)?;
+        for (_, page) in order.into_iter().take(count) {
+            let buffer = working.dirty.remove(&page).unwrap();
+            victims.push((page, buffer));
+        }
+        self.write_back_all(victims)
     }
     fn reserve_pending(&mut self, page: u64) -> io::Result<()> {
         let working = self
@@ -1020,7 +1318,9 @@ impl MatrixFile {
             .working
             .as_ref()
             .ok_or(io::ErrorKind::PermissionDenied)?;
-        if !working.pages.contains_key(&page) && working.pages.len() >= self.max_pending.max(1) {
+        if !working.pages.contains_key(&page)
+            && working.pages.len() + working.dirty.len() >= self.max_pending.max(1)
+        {
             self.spill_pending()?;
         }
         Ok(())
@@ -1032,6 +1332,7 @@ impl MatrixFile {
             .as_ref()
             .ok_or(io::ErrorKind::PermissionDenied)?;
         if working.pages.is_empty()
+            && working.dirty.is_empty()
             && working.spilled.is_none()
             && self.view.head.native_eof == native_eof
         {
@@ -1121,6 +1422,9 @@ impl MatrixFile {
             path: self.path.try_clone()?,
             creation_id: self.creation_id,
             max_pending: self.max_pending,
+            dirty_page_budget: self.dirty_page_budget,
+            staging: Vec::new(),
+            log_end: std::sync::atomic::AtomicU64::new(u64::MAX),
         };
         self.view.walk(
             self.view.head.root,
@@ -1168,6 +1472,8 @@ impl MatrixFile {
         if len == 0 {
             return Ok(());
         }
+        // Clearing works on written pages; settle buffered partial writes first.
+        self.flush_dirty()?;
         let end = offset
             .checked_add(len)
             .filter(|n| *n <= self.view.len)
@@ -1212,12 +1518,9 @@ impl MatrixFile {
             let start = offset.saturating_sub(base) as usize;
             let stop = ((end - base).min(PAGE as u64)) as usize;
             if start == 0 && stop == PAGE {
-                self.view
-                    .working
-                    .as_mut()
-                    .unwrap()
-                    .pages
-                    .insert(page, Entry { offset: 1, crc: 0 });
+                let working = self.view.working.as_mut().unwrap();
+                working.pages.insert(page, Entry { offset: 1, crc: 0 });
+                working.fresh_crc.remove(&page);
             } else {
                 let mut bytes = [0; PAGE];
                 self.view.page(page, &mut bytes)?;
@@ -1231,12 +1534,10 @@ impl MatrixFile {
                 } else {
                     self.append_page(&bytes)?
                 };
-                self.view
-                    .working
-                    .as_mut()
-                    .unwrap()
-                    .pages
-                    .insert(page, Entry { offset: at, crc: 0 });
+                let working = self.view.working.as_mut().unwrap();
+                working.pages.insert(page, Entry { offset: at, crc: 0 });
+                // The page now holds exactly `bytes`.
+                working.fresh_crc.insert(page, checksum(&bytes));
             }
         }
         Ok(())
@@ -1278,25 +1579,173 @@ impl Write for MatrixFile {
             .ok_or(io::ErrorKind::PermissionDenied)?;
         while !bytes.is_empty() {
             let page = self.cursor / PAGE as u64;
+            if self.cursor.is_multiple_of(PAGE as u64) && bytes.len() >= PAGE {
+                // Whole pages: their old content is irrelevant, so nothing is
+                // read back and nothing is merged. Write a run of new pages in
+                // one call, stopping where the per-page path would spill the
+                // pending directory, so the log layout is unchanged.
+                self.reserve_pending(page)?;
+                let working = self.view.working.as_ref().unwrap();
+                let room = self
+                    .max_pending
+                    .max(1)
+                    .saturating_sub(working.pages.len())
+                    .max(1);
+                let mut run = 0usize;
+                while (run + 1) * PAGE <= bytes.len()
+                    && run < room
+                    && working
+                        .pages
+                        .get(&(page + run as u64))
+                        .is_none_or(|e| e.offset <= 1)
+                {
+                    run += 1;
+                }
+                if run > 0 {
+                    // Keep the log in page order: a completed buffered page
+                    // right before this run (the boundary page a previous,
+                    // unaligned cell left) goes out in the same write, ahead of
+                    // the run, so a cell's pages stay contiguous for later
+                    // reads. The two are joined in a reusable staging buffer:
+                    // one portable positional write, no vectored I/O.
+                    let mut lead: Option<(u64, DirtyPage)> = None;
+                    if let Some(prev) = page.checked_sub(1) {
+                        let working = self.view.working.as_mut().unwrap();
+                        let ready = working
+                            .dirty
+                            .get(&prev)
+                            .is_some_and(|d| d.written.is_none())
+                            && working.pages.get(&prev).is_none_or(|e| e.offset <= 1);
+                        if ready {
+                            lead = Some((prev, working.dirty.remove(&prev).unwrap()));
+                        }
+                    }
+                    if let Some((prev, buffer)) = lead {
+                        let data = &bytes[..run * PAGE];
+                        let mut staging = std::mem::take(&mut self.staging);
+                        staging.clear();
+                        if let Err(error) = staging.try_reserve(PAGE + data.len()) {
+                            // Put the boundary page back; nothing was written.
+                            let working = self.view.working.as_mut().unwrap();
+                            working.dirty.insert(prev, buffer);
+                            self.staging = staging;
+                            return Err(io::Error::other(error));
+                        }
+                        staging.extend_from_slice(&buffer.bytes[..]);
+                        staging.extend_from_slice(data);
+                        let appended = self.append_pages(&staging);
+                        let offset = match appended {
+                            Ok(offset) => offset,
+                            Err(error) => {
+                                let working = self.view.working.as_mut().unwrap();
+                                working.dirty.insert(prev, buffer);
+                                self.staging = staging;
+                                return Err(error);
+                            }
+                        };
+                        let working = self.view.working.as_mut().unwrap();
+                        for (i, chunk) in staging.as_chunks::<PAGE>().0.iter().enumerate() {
+                            let at = prev + i as u64;
+                            working.pages.insert(
+                                at,
+                                Entry {
+                                    offset: offset + (i * PAGE) as u64,
+                                    crc: 0,
+                                },
+                            );
+                            working.fresh_crc.insert(at, checksum(chunk.as_slice()));
+                            working.dirty.remove(&at);
+                        }
+                        self.staging = staging;
+                        self.cursor += data.len() as u64;
+                        bytes = &bytes[data.len()..];
+                        continue;
+                    }
+                    let data = &bytes[..run * PAGE];
+                    let offset = self.append_pages(data)?;
+                    let working = self.view.working.as_mut().unwrap();
+                    for (i, chunk) in data.as_chunks::<PAGE>().0.iter().enumerate() {
+                        let at = page + i as u64;
+                        working.pages.insert(
+                            at,
+                            Entry {
+                                offset: offset + (i * PAGE) as u64,
+                                crc: 0,
+                            },
+                        );
+                        working.fresh_crc.insert(at, checksum(chunk.as_slice()));
+                        // Fully overwritten: a buffered older version must not
+                        // be flushed over it.
+                        working.dirty.remove(&at);
+                    }
+                    self.cursor += data.len() as u64;
+                    bytes = &bytes[data.len()..];
+                    continue;
+                }
+            }
+            let within = self.cursor as usize % PAGE;
+            let n = bytes.len().min(PAGE - within);
+            if self.dirty_page_budget != 0 {
+                let working = self.view.working.as_mut().unwrap();
+                working.dirty_clock += 1;
+                let stamp = working.dirty_clock;
+                if let Some(buffer) = working.dirty.get_mut(&page) {
+                    buffer.bytes[within..within + n].copy_from_slice(&bytes[..n]);
+                    buffer.mark(within, within + n);
+                    buffer.stamp = stamp;
+                    self.cursor += n as u64;
+                    bytes = &bytes[n..];
+                    continue;
+                }
+                if working.dirty.len() >= self.dirty_page_budget {
+                    self.evict_dirty()?;
+                }
+                self.reserve_pending(page)?;
+                // The page's earlier content is not read here; if these writes
+                // end up covering every byte it never is.
+                let mut buffer = crate::fallible::try_box([0u8; PAGE]).map_err(io::Error::other)?;
+                buffer[within..within + n].copy_from_slice(&bytes[..n]);
+                let written =
+                    crate::fallible::try_box([0u64; PAGE / 64]).map_err(io::Error::other)?;
+                let mut dirty = DirtyPage {
+                    stamp,
+                    bytes: buffer,
+                    written: Some(written),
+                };
+                dirty.mark(within, within + n);
+                if within != 0 && within + n != PAGE {
+                    // A small write inside the page (metadata): complete the
+                    // buffer now, once, so later reads are served from it.
+                    let mut base = [0u8; PAGE];
+                    self.view.page_beneath(page, &mut base)?;
+                    dirty.overlay(&mut base);
+                    dirty.bytes.copy_from_slice(&base);
+                    dirty.written = None;
+                }
+                let working = self.view.working.as_mut().unwrap();
+                working.dirty.insert(page, dirty);
+                // Its log copy (if any) is superseded until it is written back.
+                working.fresh_crc.remove(&page);
+                self.cursor += n as u64;
+                bytes = &bytes[n..];
+                continue;
+            }
             self.reserve_pending(page)?;
             let file = self.writer.as_ref().unwrap();
             let working = self.view.working.as_ref().unwrap();
-            let within = self.cursor as usize % PAGE;
-            let n = bytes.len().min(PAGE - within);
             let current = working.pages.get(&page).copied();
             if let Some(entry) = current.filter(|e| e.offset > 1) {
                 write_at(file, entry.offset + within as u64, &bytes[..n])?;
+                // Modified in place: its CRC is recomputed at publication.
+                self.view.working.as_mut().unwrap().fresh_crc.remove(&page);
             } else {
                 let mut buffer = [0; PAGE];
                 self.view.page(page, &mut buffer)?;
                 buffer[within..within + n].copy_from_slice(&bytes[..n]);
                 let offset = self.append_page(&buffer)?;
-                self.view
-                    .working
-                    .as_mut()
-                    .unwrap()
-                    .pages
-                    .insert(page, Entry { offset, crc: 0 });
+                let working = self.view.working.as_mut().unwrap();
+                working.pages.insert(page, Entry { offset, crc: 0 });
+                working.fresh_crc.insert(page, checksum(&buffer));
             }
             self.cursor += n as u64;
             bytes = &bytes[n..];
@@ -1746,6 +2195,178 @@ mod tests {
         );
         assert!(old.changed_pages(&compacted).is_err());
     }
+    /// A buffered partial write followed by a whole-page write over the same
+    /// page: the whole-page bytes must win after publication.
+    #[test]
+    fn a_whole_page_write_supersedes_a_buffered_partial_write() {
+        let len = 8 * PAGE as u64;
+        let (_dir, path, base, mut store) = fixture(len);
+        store.set_dirty_page_budget(16);
+        store.seek(SeekFrom::Start(3 * PAGE as u64 + 10)).unwrap();
+        store.write_all(&[1; 20]).unwrap();
+        store.seek(SeekFrom::Start(2 * PAGE as u64)).unwrap();
+        store.write_all(&vec![2; 4 * PAGE]).unwrap();
+        // A later partial write lands on the whole-page version.
+        store.seek(SeekFrom::Start(4 * PAGE as u64 + 5)).unwrap();
+        store.write_all(&[3; 5]).unwrap();
+        store.publish(len).unwrap();
+        let reopened = MatrixFile::open(&path, &base, [7; 16], false, 65536).unwrap();
+        let mut bytes = vec![0; 4 * PAGE];
+        reopened
+            .view
+            .read_exact_at(2 * PAGE as u64, &mut bytes)
+            .unwrap();
+        let mut expected = vec![2; 4 * PAGE];
+        expected[2 * PAGE + 5..2 * PAGE + 10].fill(3);
+        assert!(bytes == expected);
+    }
+
+    /// An unaligned cell boundary: page 1 is completed in the buffer by a tail
+    /// and a head write, then a whole-page run starts at page 2. The boundary
+    /// page goes out with the run, in page order and contiguous in the log.
+    #[test]
+    fn a_completed_boundary_page_is_written_with_the_following_run() {
+        let len = 8 * PAGE as u64;
+        let (_dir, path, base, mut store) = fixture(len);
+        store.set_dirty_page_budget(16);
+        store.seek(SeekFrom::Start(PAGE as u64 + 100)).unwrap();
+        store.write_all(&vec![4; PAGE - 100]).unwrap();
+        store.seek(SeekFrom::Start(PAGE as u64)).unwrap();
+        store.write_all(&[5; 100]).unwrap();
+        store.seek(SeekFrom::Start(2 * PAGE as u64)).unwrap();
+        store.write_all(&vec![6; 3 * PAGE]).unwrap();
+        {
+            let working = store.view.working.as_ref().unwrap();
+            assert!(
+                working.dirty.is_empty(),
+                "the boundary page went out with the run"
+            );
+            let offsets: Vec<u64> = (1..5).map(|p| working.pages[&p].offset).collect();
+            assert!(
+                offsets.windows(2).all(|w| w[1] == w[0] + PAGE as u64),
+                "{offsets:?}"
+            );
+        }
+        store.publish(len).unwrap();
+        let reopened = MatrixFile::open(&path, &base, [7; 16], false, 65536).unwrap();
+        let mut bytes = vec![0; 4 * PAGE];
+        reopened
+            .view
+            .read_exact_at(PAGE as u64, &mut bytes)
+            .unwrap();
+        let mut expected = vec![6; 4 * PAGE];
+        expected[..100].fill(5);
+        expected[100..PAGE].fill(4);
+        assert!(bytes == expected);
+    }
+
+    /// A session whose only change is a buffered partial write must still
+    /// publish it.
+    #[test]
+    fn a_publication_of_only_buffered_writes_is_not_skipped() {
+        let len = 8 * PAGE as u64;
+        let (_dir, path, base, mut store) = fixture(len);
+        store.set_dirty_page_budget(16);
+        store.seek(SeekFrom::Start(100)).unwrap();
+        store.write_all(&[9; 10]).unwrap();
+        store.publish(len).unwrap();
+        let reopened = MatrixFile::open(&path, &base, [7; 16], false, 65536).unwrap();
+        let mut bytes = [0; 10];
+        reopened.view.read_exact_at(100, &mut bytes).unwrap();
+        assert_eq!(bytes, [9; 10]);
+    }
+
+    /// Whole-page runs, in-place partial edits of those pages, zeroed ranges
+    /// and unaligned writes, with a tiny pending budget so runs are cut where
+    /// the directory spills. Every published page CRC is checked on reopen, so
+    /// a CRC remembered for a page whose bytes later changed fails here.
+    #[test]
+    fn whole_page_runs_keep_published_page_crcs_exact() {
+        let len = if cfg!(miri) {
+            16 * PAGE as u64 + 37
+        } else {
+            512 * PAGE as u64 + 37
+        };
+        for (max_pending, dirty) in [
+            (1usize, 0usize),
+            (3, 0),
+            (65536, 0),
+            (3, 2),
+            (65536, 2),
+            (65536, 1000),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("matrix.varlit");
+            let base = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .unwrap();
+            base.set_len(len).unwrap();
+            let mut store = MatrixFile::create(&path, &base, len, [7; 16], max_pending).unwrap();
+            store.set_dirty_page_budget(dirty);
+            let mut model = vec![0u8; len as usize];
+            let mut state = 0x51ce_b00c_u64;
+            let mut next = || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                state >> 17
+            };
+            let pages = (len as usize) / PAGE;
+            for round in 0..if cfg!(miri) { 2 } else { 6 } {
+                for _ in 0..8 {
+                    let kind = next() % 4;
+                    let fill = (next() as u8) | 1;
+                    let (at, n) = match kind {
+                        // A run of whole, aligned pages.
+                        0 => {
+                            let first = next() as usize % (pages - 1);
+                            let count = 1 + next() as usize % (pages - first).min(9);
+                            (first * PAGE, count * PAGE)
+                        }
+                        // An in-place edit inside one page.
+                        1 => {
+                            let at = next() as usize % (model.len() - 100);
+                            (at, 1 + next() as usize % 100)
+                        }
+                        // Whole pages plus a ragged tail.
+                        2 => {
+                            let first = next() as usize % (pages - 3);
+                            (first * PAGE, 2 * PAGE + 1 + next() as usize % 100)
+                        }
+                        // Unaligned start spanning pages.
+                        _ => {
+                            let at = next() as usize % (model.len() - 3 * PAGE);
+                            (at, PAGE + next() as usize % (2 * PAGE))
+                        }
+                    };
+                    if kind == 3 && next() % 2 == 0 {
+                        store.zero(at as u64, n as u64).unwrap();
+                        model[at..at + n].fill(0);
+                    } else {
+                        store.seek(SeekFrom::Start(at as u64)).unwrap();
+                        store.write_all(&vec![fill; n]).unwrap();
+                        model[at..at + n].fill(fill);
+                    }
+                }
+                // The writer's own view, with buffered and partly written pages.
+                let mut own = vec![0; model.len()];
+                store.view.read_exact_at(0, &mut own).unwrap();
+                assert!(own == model, "writer view, round {round}, dirty {dirty}");
+                store.publish(len).unwrap();
+                let reopened = MatrixFile::open(&path, &base, [7; 16], false, 65536).unwrap();
+                let mut bytes = vec![0; model.len()];
+                reopened.view.read_exact_at(0, &mut bytes).unwrap();
+                assert!(
+                    bytes == model,
+                    "round {round}, max_pending {max_pending}, dirty {dirty}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction() {
         // Preserve cross-page 6000-byte edits, old roots, cache-off/cache-on

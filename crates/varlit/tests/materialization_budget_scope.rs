@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use varlit::{Error, FormatSpec, ReadLimits, VarlitBlock, varlit_format};
+use varlit::{Error, FormatSpec, ReadLimits, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable")]
@@ -122,16 +122,26 @@ fn iter_and_a_get_loop_bound_the_same_thing() -> varlit::Result<()> {
     let blocks = file.blocks::<Blob>()?;
     assert_eq!(blocks.len(), 10);
 
-    let by_index = (0..blocks.len())
-        .map(|index| blocks.get(index))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    let mut by_index = Vec::new();
+    let mut item = Blob::empty();
+    for index in 0..blocks.len() {
+        assert!(blocks.get(index, &mut item)?);
+        by_index.push(item.clone());
+    }
     assert_eq!(by_index.len(), 10);
 
-    let by_iter = blocks.iter().collect::<varlit::Result<Vec<_>>>()?;
-    assert_eq!(by_iter.len(), 10, "iter() must reach the end of the block");
+    let mut by_iter = Vec::new();
+    let mut cursor = blocks.cursor();
+    while cursor.next_into(&mut item)? {
+        by_iter.push(item.clone());
+    }
     assert_eq!(
-        by_iter,
-        by_index.into_iter().flatten().collect::<Vec<_>>(),
+        by_iter.len(),
+        10,
+        "cursor() must reach the end of the block"
+    );
+    assert_eq!(
+        by_iter, by_index,
         "the two walks must yield the same values, not merely the same count",
     );
 
@@ -158,14 +168,16 @@ fn a_ceiling_below_one_record_still_refuses_the_first_item() -> varlit::Result<(
     let file = capped(512).open_readonly(&path)?;
     let blocks = file.blocks::<Blob>()?;
 
-    let from_get = blocks.get(0).expect_err("get must refuse the first record");
+    let mut item = Blob::empty();
+    let from_get = blocks
+        .get(0, &mut item)
+        .expect_err("get must refuse the first record");
     assert!(is_materialization_refusal(&from_get), "{from_get:?}");
 
     let from_iter = blocks
-        .iter()
-        .next()
-        .expect("the iterator must yield an item")
-        .expect_err("iter must refuse the first record");
+        .cursor()
+        .next_into(&mut item)
+        .expect_err("cursor must refuse the first record");
     assert!(is_materialization_refusal(&from_iter), "{from_iter:?}");
 
     cleanup(&path);

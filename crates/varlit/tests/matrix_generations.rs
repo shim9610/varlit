@@ -34,8 +34,7 @@ fn directory_budgets_preserve_snapshots_follow_and_compaction() -> varlit::Resul
             }
             reader.follow()?;
             assert_eq!(
-                reader
-                    .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))?
+                filled_out(|o| reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?
                     .value,
                 0
             );
@@ -46,9 +45,18 @@ fn directory_budgets_preserve_snapshots_follow_and_compaction() -> varlit::Resul
             let cold = spec.open_reader(&path)?;
             for i in 0..96 {
                 let key = varlit::MatrixKey::new(i * 32768, 0);
-                assert_eq!(held.read_matrix_cell::<Cell>(key)?.value, i);
-                assert_eq!(reader.read_matrix_cell::<Cell>(key)?.value, i + 100);
-                assert_eq!(cold.read_matrix_cell::<Cell>(key)?.value, i + 100);
+                assert_eq!(
+                    filled_out(|o| held.read_matrix_cell::<Cell>(key, o))?.value,
+                    i
+                );
+                assert_eq!(
+                    filled_out(|o| reader.read_matrix_cell::<Cell>(key, o))?.value,
+                    i + 100
+                );
+                assert_eq!(
+                    filled_out(|o| cold.read_matrix_cell::<Cell>(key, o))?.value,
+                    i + 100
+                );
             }
             writer.clear_matrix_category("data")?;
             writer.sync()?;
@@ -86,22 +94,22 @@ fn dirty_overwrites_and_aux_remain_invisible_until_sync_and_follow() -> varlit::
     writer.write_note_aux(0, &[1, 2, 3])?;
     writer.sync()?;
     let mut old = Generations::open_reader(&path)?;
-    assert_eq!(old.cell(key)?.value, 100);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 100);
     writer.write_cell(key, &Cell { value: 200 })?;
-    assert_eq!(old.cell(key)?.value, 100);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 100);
     writer.commit_cell(key)?;
     writer.write_note_aux(0, &[4, 5, 6])?;
     writer.flush()?;
     let dirty = Generations::open_reader(&path)?;
-    assert_eq!(dirty.cell(key)?.value, 100);
+    assert_eq!(filled_out(|o| dirty.cell(key, o))?.value, 100);
     assert_eq!(dirty.read_note_aux(0, 3)?, [1, 2, 3]);
     old.follow()?;
-    assert_eq!(old.cell(key)?.value, 100);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 100);
     writer.sync()?;
-    assert_eq!(old.cell(key)?.value, 100);
-    assert_eq!(dirty.cell(key)?.value, 100);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 100);
+    assert_eq!(filled_out(|o| dirty.cell(key, o))?.value, 100);
     old.follow()?;
-    assert_eq!(old.cell(key)?.value, 200);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 200);
     assert_eq!(old.read_note_aux(0, 3)?, [4, 5, 6]);
     assert_eq!(old.cell_status(key)?, MatrixCellStatus::Committed);
     Ok(())
@@ -137,14 +145,16 @@ fn readers_keep_one_generation_across_concurrent_overwrites_and_clear() -> varli
                     ready.wait();
                     for _ in 0..200 {
                         reader.follow().unwrap();
-                        let a = reader
-                            .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))
-                            .unwrap()
-                            .value;
-                        let b = reader
-                            .read_matrix_cell::<Cell>(varlit::MatrixKey::new(1023, 1))
-                            .unwrap()
-                            .value;
+                        let a = filled_out(|o| {
+                            reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o)
+                        })
+                        .unwrap()
+                        .value;
+                        let b = filled_out(|o| {
+                            reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(1023, 1), o)
+                        })
+                        .unwrap()
+                        .value;
                         assert_eq!(
                             a, b,
                             "two cells must come from the same captured generation"
@@ -167,16 +177,12 @@ fn readers_keep_one_generation_across_concurrent_overwrites_and_clear() -> varli
         let mut reader = spec.open_reader(&path)?;
         writer.clear_matrix_category("data")?;
         assert_eq!(
-            reader
-                .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))?
-                .value,
+            filled_out(|o| reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?.value,
             40
         );
         writer.sync()?;
         assert_eq!(
-            reader
-                .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))?
-                .value,
+            filled_out(|o| reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?.value,
             40
         );
         reader.follow()?;
@@ -204,10 +210,10 @@ fn reopened_writer_discards_unpublished_matrix_changes() -> varlit::Result<()> {
     drop(writer);
     let writer = Generations::open_writer(&path)?;
     assert_eq!(
-        writer
+        filled_out(|o| writer
             .inner()
-            .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))?
-            .value,
+            .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?
+        .value,
         17
     );
     Ok(())
@@ -237,14 +243,14 @@ fn compaction_preserves_old_readers_and_follow_crosses_the_replacement() -> varl
     writer.compact_matrix()?;
     let after = log.metadata()?.len();
     assert!(after < before / 2);
-    assert_eq!(old.cell(key)?.value, 1);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 1);
     old.follow()?;
-    assert_eq!(old.cell(key)?.value, 29);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 29);
     writer.write_cell(key, &Cell { value: 30 })?;
     writer.commit_cell(key)?;
     writer.sync()?;
     old.follow()?;
-    assert_eq!(old.cell(key)?.value, 30);
+    assert_eq!(filled_out(|o| old.cell(key, o))?.value, 30);
     Ok(())
 }
 
@@ -302,8 +308,8 @@ fn crashes_at_every_publication_boundary_keep_a_complete_generation() -> varlit:
         );
         assert_eq!(std::fs::read_to_string(trace)?, stage);
         let reader = Generations::open_reader(&path)?;
-        let a = reader.cell(CellKey { scan: 0, ch: 0 })?.value;
-        let b = reader.cell(CellKey { scan: 0, ch: 1 })?.value;
+        let a = filled_out(|o| reader.cell(CellKey { scan: 0, ch: 0 }, o))?.value;
+        let b = filled_out(|o| reader.cell(CellKey { scan: 0, ch: 1 }, o))?.value;
         assert_eq!(a, b, "{stage}: mixed cell generations");
         assert_eq!(reader.read_note_aux(0, 1)?, [a as u8]);
         if ["data", "index", "data_sync", "head_prefix"].contains(&stage) {
@@ -319,7 +325,10 @@ fn crashes_at_every_publication_boundary_keep_a_complete_generation() -> varlit:
         recovered.write_cell(CellKey { scan: 0, ch: 0 }, &Cell { value: 3 })?;
         recovered.commit_cell(CellKey { scan: 0, ch: 0 })?;
         recovered.sync()?;
-        assert_eq!(reader.cell(CellKey { scan: 0, ch: 0 })?.value, a);
+        assert_eq!(
+            filled_out(|o| reader.cell(CellKey { scan: 0, ch: 0 }, o))?.value,
+            a
+        );
     }
     Ok(())
 }
@@ -337,14 +346,12 @@ fn explicit_immediate_publishes_and_cache_capacity_is_configurable() -> varlit::
     writer.immediate()?;
     assert_eq!(reader.cell_status(key)?, MatrixCellStatus::NotCommitted);
     reader.follow()?;
-    assert_eq!(reader.cell(key)?.value, 77);
+    assert_eq!(filled_out(|o| reader.cell(key, o))?.value, 77);
     for cache in [0, 4096, 65536] {
         let limits = varlit::ReadLimits::STANDARD.with_matrix_generation_cache_bytes(cache);
         let reader = Generations::spec().open_reader_with_resource_limits(&path, limits)?;
         assert_eq!(
-            reader
-                .read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0))?
-                .value,
+            filled_out(|o| reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?.value,
             77
         );
         assert_eq!(
@@ -389,7 +396,7 @@ fn publication_error_child() -> varlit::Result<()> {
     ));
     let reader = Generations::open_reader(&path)?;
     assert_eq!(
-        reader.cell(CellKey { scan: 0, ch: 0 })?.value,
+        filled_out(|o| reader.cell(CellKey { scan: 0, ch: 0 }, o))?.value,
         if ["head", "head_sync"].contains(&stage.as_str()) {
             2
         } else {
@@ -456,11 +463,17 @@ fn matrix_only_sync_never_publishes_a_native_tail_that_recovery_will_truncate() 
         writer.push(&Log { value: 2 })?;
         writer.sync()?;
         old.follow()?;
-        assert_eq!(old.read_matrix_cell::<Cell>(key)?.value, 2);
+        assert_eq!(
+            filled_out(|o| old.read_matrix_cell::<Cell>(key, o))?.value,
+            2
+        );
         assert_eq!(old.blocks::<Log>()?.len(), 1);
         drop(writer);
         let mut recovered = spec.open_writer(&path)?;
-        assert_eq!(recovered.read_matrix_cell::<Cell>(key)?.value, 2);
+        assert_eq!(
+            filled_out(|o| recovered.read_matrix_cell::<Cell>(key, o))?.value,
+            2
+        );
         let reopened = spec.open_reader(&path)?;
         assert_eq!(reopened.blocks::<Log>()?.len(), 1);
         recovered.push(&Log { value: 3 })?;
@@ -522,7 +535,10 @@ fn skipped_generations_update_growing_shrinking_and_reordered_bitmap_indexes() -
                         fresh.matrix_cell_status::<Cell>(key)?
                     );
                     if let Some(value) = expected {
-                        assert_eq!(reader.read_matrix_cell::<Cell>(key)?.value, *value);
+                        assert_eq!(
+                            filled_out(|o| reader.read_matrix_cell::<Cell>(key, o))?.value,
+                            *value
+                        );
                     } else {
                         assert_eq!(
                             reader.matrix_cell_status::<Cell>(key)?,
@@ -556,7 +572,7 @@ fn follow_verifies_only_changed_pages_and_rebuilds_only_after_compaction() -> va
         writer.sync()?;
         let mut reader = spec.open_reader(&path)?;
         let warm = varlit::MatrixKey::new((live_pages - 1) * 32768, 0);
-        reader.read_matrix_cell::<Cell>(warm)?;
+        filled_out(|o| reader.read_matrix_cell::<Cell>(warm, o))?;
         let mut follow_us = Vec::new();
         let mut open_us = Vec::new();
         for value in 1..=12 {
@@ -575,7 +591,7 @@ fn follow_verifies_only_changed_pages_and_rebuilds_only_after_compaction() -> va
                 "follow must not verify {live_pages} unchanged live pages"
             );
             Counters::reset_matrix_integrity_counters();
-            reader.read_matrix_cell::<Cell>(warm)?;
+            filled_out(|o| reader.read_matrix_cell::<Cell>(warm, o))?;
             assert_eq!(
                 Counters::matrix_lazy_fault_bytes_read(),
                 0,
@@ -584,7 +600,10 @@ fn follow_verifies_only_changed_pages_and_rebuilds_only_after_compaction() -> va
             let start = std::time::Instant::now();
             let fresh = spec.open_reader(&path)?;
             open_us.push(start.elapsed().as_micros());
-            assert_eq!(fresh.read_matrix_cell::<Cell>(key)?.value, value);
+            assert_eq!(
+                filled_out(|o| fresh.read_matrix_cell::<Cell>(key, o))?.value,
+                value
+            );
         }
         follow_us.sort_unstable();
         open_us.sort_unstable();
@@ -635,15 +654,27 @@ fn tiny_bitmap_budget_follows_growing_and_shrinking_indexes() -> varlit::Result<
     writer.sync()?;
     reader.follow()?;
     assert_ne!(reader.matrix_generation(), generation);
-    assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 2);
-    assert_eq!(reader.read_matrix_cell::<Cell>(second)?.value, 3);
+    assert_eq!(
+        filled_out(|o| reader.read_matrix_cell::<Cell>(first, o))?.value,
+        2
+    );
+    assert_eq!(
+        filled_out(|o| reader.read_matrix_cell::<Cell>(second, o))?.value,
+        3
+    );
     // Small metadata budgets do not turn file growth into an open/follow refusal.
     let reopened = spec.open_reader_with_resource_limits(&path, limits)?;
-    assert_eq!(reopened.read_matrix_cell::<Cell>(second)?.value, 3);
+    assert_eq!(
+        filled_out(|o| reopened.read_matrix_cell::<Cell>(second, o))?.value,
+        3
+    );
     writer.clear_matrix_cell::<Cell>(second)?;
     writer.sync()?;
     reader.follow()?;
-    assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 2);
+    assert_eq!(
+        filled_out(|o| reader.read_matrix_cell::<Cell>(first, o))?.value,
+        2
+    );
     assert_eq!(
         reader.matrix_cell_status::<Cell>(second)?,
         MatrixCellStatus::NotCommitted
@@ -690,10 +721,19 @@ fn default_matrix_admission_is_independent_of_the_working_set() -> varlit::Resul
         );
         writer.sync()?;
         reader.follow()?;
-        assert_eq!(reader.read_matrix_cell::<Cell>(first)?.value, 1);
-        assert_eq!(reader.read_matrix_cell::<Cell>(last)?.value, 2);
+        assert_eq!(
+            filled_out(|o| reader.read_matrix_cell::<Cell>(first, o))?.value,
+            1
+        );
+        assert_eq!(
+            filled_out(|o| reader.read_matrix_cell::<Cell>(last, o))?.value,
+            2
+        );
         let reopened = spec.open_reader(&path)?;
-        assert_eq!(reopened.read_matrix_cell::<Cell>(last)?.value, 2);
+        assert_eq!(
+            filled_out(|o| reopened.read_matrix_cell::<Cell>(last, o))?.value,
+            2
+        );
     }
     Ok(())
 }
@@ -728,8 +768,14 @@ fn follow_spills_many_changed_bitmap_slots_without_publishing_dirty_state() -> v
     let cold = spec.open_reader_with_resource_limits(&path, limits)?;
     for page in 0..PAGES {
         let key = varlit::MatrixKey::new(page * 32768, 0);
-        assert_eq!(reader.read_matrix_cell::<Cell>(key)?.value, page + 1);
-        assert_eq!(cold.read_matrix_cell::<Cell>(key)?.value, page + 1);
+        assert_eq!(
+            filled_out(|o| reader.read_matrix_cell::<Cell>(key, o))?.value,
+            page + 1
+        );
+        assert_eq!(
+            filled_out(|o| cold.read_matrix_cell::<Cell>(key, o))?.value,
+            page + 1
+        );
     }
     Ok(())
 }
@@ -764,11 +810,11 @@ fn damaged_new_root_does_not_partially_advance_the_reader() -> varlit::Result<()
     log.write_all(&[saved[0] ^ 1, saved[1], saved[2], saved[3]])?;
     assert!(reader.follow().is_err());
     assert_eq!(reader.matrix_generation(), generation);
-    assert_eq!(reader.cell(key)?.value, 1);
+    assert_eq!(filled_out(|o| reader.cell(key, o))?.value, 1);
     log.seek(SeekFrom::Start(checksum))?;
     log.write_all(&saved)?;
     reader.follow()?;
-    assert_eq!(reader.cell(key)?.value, 2);
+    assert_eq!(filled_out(|o| reader.cell(key, o))?.value, 2);
     Ok(())
 }
 
@@ -866,9 +912,9 @@ fn on_demand_open_reads_no_page_list_even_with_zero_directory_cache() -> varlit:
             for page in [pages - 1, 0, pages / 2, pages - 1] {
                 Counters::reset_matrix_integrity_counters();
                 assert_eq!(
-                    reader
-                        .read_matrix_cell::<Cell>(varlit::MatrixKey::new(page * 32768, 0))?
-                        .value,
+                    filled_out(|o| reader
+                        .read_matrix_cell::<Cell>(varlit::MatrixKey::new(page * 32768, 0), o))?
+                    .value,
                     page
                 );
                 assert!(
@@ -880,9 +926,10 @@ fn on_demand_open_reads_no_page_list_even_with_zero_directory_cache() -> varlit:
             writer.clear_matrix_cell::<Cell>(removed)?;
             // A freshly opened reader still binds the old confirmed metadata.
             assert_eq!(
-                spec.open_reader(&path)?
-                    .read_matrix_cell::<Cell>(removed)?
-                    .value,
+                filled_out(|o| spec
+                    .open_reader(&path)?
+                    .read_matrix_cell::<Cell>(removed, o))?
+                .value,
                 pages / 2
             );
             writer.sync()?;
@@ -892,7 +939,10 @@ fn on_demand_open_reads_no_page_list_even_with_zero_directory_cache() -> varlit:
                 MatrixCellStatus::NotCommitted
             );
             let tail = varlit::MatrixKey::new((pages - 1) * 32768, 0);
-            assert_eq!(reader.read_matrix_cell::<Cell>(tail)?.value, pages - 1);
+            assert_eq!(
+                filled_out(|o| reader.read_matrix_cell::<Cell>(tail, o))?.value,
+                pages - 1
+            );
         }
         assert_eq!(open_bytes[0], open_bytes[1]);
         assert!(
@@ -901,4 +951,23 @@ fn on_demand_open_reads_no_page_list_even_with_zero_directory_cache() -> varlit:
         );
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

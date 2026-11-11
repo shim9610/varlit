@@ -130,13 +130,14 @@ impl VarlitFile {
 
     /// Reads a header-declared block out of the editable region.
     ///
-    /// `Ok(None)` means no block with this id has been written — which is what
-    /// a freshly created file answers for every declared id. Takes `&self` and
+    /// Decodes into `out`, reusing what it owns, and returns `true`. `false`
+    /// (with `out` untouched) means no block with this id has been written —
+    /// which is what a freshly created file answers for every declared id. Takes `&self` and
     /// performs no I/O: the region is part of the header this handle already
     /// holds, so this is a decode of bytes in memory.
-    pub fn read_header_block<T: VarlitBlock>(&self) -> Result<Option<T>> {
+    pub fn read_header_block<T: VarlitBlock>(&self, out: &mut T) -> Result<bool> {
         let Some((view, _)) = self.header_slots_view()? else {
-            return Ok(None);
+            return Ok(false);
         };
         if !self.spec.header_slots.permits(T::ID) {
             return Err(Error::InvalidFormatSpec(
@@ -156,7 +157,7 @@ impl VarlitFile {
             },
         )?;
         let Some((version, payload)) = found else {
-            return Ok(None);
+            return Ok(false);
         };
         if version != T::VERSION {
             return Err(Error::BlockVersionMismatch {
@@ -165,9 +166,12 @@ impl VarlitFile {
                 actual: version,
             });
         }
-        MaterializationBudget::new(self.spec)
-            .decode::<T>(payload, T::ENDIAN.unwrap_or(self.spec.endian))
-            .map(Some)
+        MaterializationBudget::new(self.spec).decode_into::<T>(
+            payload,
+            T::ENDIAN.unwrap_or(self.spec.endian),
+            out,
+        )?;
+        Ok(true)
     }
 
     /// Writes a header-declared block into the editable region, replacing any
@@ -538,6 +542,23 @@ impl VarlitFile {
 
     fn write_commit_marker(&mut self) -> Result<AppendInfo> {
         self.check_write()?;
+        if self.spec.commit_policy.single_barrier() {
+            // The marker names what it commits. A handle's first record
+            // establishes its anchor, so do that before reading the scope.
+            let mut permit = self.ensure_write()?;
+            if !permit.commit_scope_initialized() {
+                permit.initialize_commit_scope()?;
+            }
+            let payload = permit.commit_scope_marker().encode(crate::Endian::Little);
+            return permit.write_record_with_prev_key(
+                COMMIT_BLOCK_ID,
+                1,
+                RECORD_FLAG_INTERNAL,
+                0,
+                &payload,
+                None,
+            );
+        }
         self.ensure_write()?.write_record_with_prev_key(
             COMMIT_BLOCK_ID,
             1,

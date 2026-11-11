@@ -32,7 +32,7 @@
 //! # Getting started
 //!
 //! ```
-//! use varlit::varlit_format;
+//! use varlit::{VarlitEmpty, varlit_format};
 //!
 //! varlit_format! {
 //!     pub format AppFormat {
@@ -70,9 +70,12 @@
 //! }
 //!
 //! let reader = AppFormat::open_reader(&path)?;
-//! let points: Vec<Point> = reader.points()?.iter().collect::<varlit::Result<_>>()?;
+//! let mut points: Vec<Point> = Vec::new();
+//! reader.points_decoded_into(&mut points)?; // decodes into a Vec you own
 //! assert_eq!(points, vec![Point { x: 1, y: 2 }]);
-//! assert_eq!(reader.users()?.get(&7)?.unwrap().name, "Ada");
+//! let mut user = User::empty(); // reads decode into a value you own
+//! assert!(reader.users()?.get(&7, &mut user)?);
+//! assert_eq!(user.name, "Ada");
 //! # std::fs::remove_dir_all(&dir).unwrap();
 //! # Ok(())
 //! # }

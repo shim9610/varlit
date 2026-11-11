@@ -31,7 +31,7 @@ const PAGE_BYTES: u64 = 4096;
 const NATIVE_PREFIX_LEN: u64 = 18 + 24;
 /// Current on-disk matrix layout version (v4 gives the persisted page index a
 /// validated occupancy header and makes it the live set, not the history).
-const VMAT_VERSION: u16 = 5;
+const VMAT_VERSION: u16 = 6;
 /// One persisted page-index slot.
 const PAGE_INDEX_SLOT_LEN: u64 = 8;
 
@@ -563,7 +563,7 @@ fn published_page_corruption_is_detected_without_an_allocation_map() -> varlit::
         CELLS
     );
     assert_eq!(
-        writer.read_matrix_cell::<ScalingCell>(key(3))?,
+        filled_out(|o| writer.read_matrix_cell::<ScalingCell>(key(3), o))?,
         ScalingCell { value: 4 }
     );
     writer.sync()?;
@@ -764,7 +764,7 @@ fn category_clear_refunds_payload_and_page_index_residency_every_cycle() -> varl
         assert_eq!(index_peak, index_baseline, "paged mirror grew in RAM");
         for ordinal in PAGE_ORDINALS {
             assert_eq!(
-                writer.read_matrix_cell::<ScalingCell>(key(ordinal))?.value,
+                filled_out(|o| writer.read_matrix_cell::<ScalingCell>(key(ordinal), o))?.value,
                 6
             );
         }
@@ -1196,7 +1196,7 @@ fn published_page_corruption_is_detected_and_rebuild_recovers() -> varlit::Resul
         CELLS
     );
     assert_eq!(
-        writer.read_matrix_cell::<ScalingCell>(key(3))?,
+        filled_out(|o| writer.read_matrix_cell::<ScalingCell>(key(3), o))?,
         ScalingCell { value: 4 }
     );
     assert!(
@@ -1271,7 +1271,7 @@ fn slot_corruption_still_rejects_a_committed_cell_read() -> varlit::Result<()> {
 
     let reader = spec().open_reader(&path)?;
     assert!(matches!(
-        reader.read_matrix_cell::<ScalingCell>(key(0)),
+        filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(0), o)),
         Err(Error::MatrixChecksumMismatch { .. })
     ));
     Ok(())
@@ -1735,7 +1735,10 @@ fn failed_direct_directory_removal_cannot_publish_mismatched_metadata() -> varli
         );
         assert_eq!(page_index_state(&path, 3), prior);
         for ordinal in PAGE_ORDINALS {
-            assert_eq!(held.read_matrix_cell::<ScalingCell>(key(ordinal))?.value, 7);
+            assert_eq!(
+                filled_out(|o| held.read_matrix_cell::<ScalingCell>(key(ordinal), o))?.value,
+                7
+            );
         }
     }
     {
@@ -1746,9 +1749,7 @@ fn failed_direct_directory_removal_cannot_publish_mismatched_metadata() -> varli
     }
     let reader = open_without_allocation_map(&path, false)?;
     assert_eq!(
-        reader
-            .read_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[1]))?
-            .value,
+        filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(PAGE_ORDINALS[1]), o))?.value,
         7
     );
     for ordinal in [PAGE_ORDINALS[0], PAGE_ORDINALS[2]] {
@@ -1870,14 +1871,14 @@ fn crc_rebuild_refuses_an_incompletely_loaded_validity_index() -> varlit::Result
     //     into a typed checksum refusal; it can never turn one into published
     //     state, because the evidence type hands it no bit to publish.
     let reader = open_without_allocation_map(&path, true)?;
-    let unreadable = reader.read_matrix_cell::<ScalingCell>(key(SECOND));
+    let unreadable = filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(SECOND), o));
     assert!(
         matches!(unreadable, Err(Error::MatrixFatalCorruption)),
         "a cell whose validity page was never loaded was read as if its stored \
          checksum had been established: {unreadable:?}"
     );
     assert_eq!(
-        reader.read_matrix_cell::<ScalingCell>(key(FIRST + 1))?,
+        filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(FIRST + 1), o))?,
         ScalingCell { value: 9 },
         "the fail-closed reader refused a cell whose validity page *was* loaded"
     );
@@ -2146,7 +2147,7 @@ fn measured_resident_bitmap_bytes_against_the_ceiling() -> varlit::Result<()> {
                 reader.matrix_cell_status::<ScalingCell>(key(ordinal))?,
                 MatrixCellStatus::Committed
             );
-            let _cell = reader.read_matrix_cell::<ScalingCell>(key(ordinal))?;
+            let _cell = filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(ordinal), o))?;
         }
         Ok(MatrixRecoveryReport::matrix_lazy_cached_bitmap_bytes())
     };
@@ -2208,7 +2209,7 @@ fn on_demand_directory_damage_is_detected_by_access_scrub_and_rebuild() -> varli
     );
     let reader = lazy.open_reader(&path)?;
     assert!(matches!(
-        reader.read_matrix_cell::<ScalingCell>(key(32768)),
+        filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(32768), o)),
         Err(Error::MatrixFatalCorruption)
     ));
     let report = reader.verify_matrix_metadata()?;
@@ -2241,7 +2242,7 @@ fn mmap_reads_require_crc_validity_even_when_the_stored_crc_matches() -> varlit:
     patch_byte(&path, validity, 2);
     let reader = spec().open_reader(&path)?;
     assert!(matches!(
-        reader.read_matrix_cell::<ScalingCell>(key(0)),
+        filled_out(|o| reader.read_matrix_cell::<ScalingCell>(key(0), o)),
         Err(Error::MatrixChecksumMismatch { .. })
     ));
     // SAFETY: all fixture mutation precedes the mapping; it stays immutable.
@@ -2258,4 +2259,23 @@ fn mmap_reads_require_crc_validity_even_when_the_stored_crc_matches() -> varlit:
     let valid = unsafe { reader.mmap_matrix_cell::<ScalingCell>(key(1)) }?;
     assert_eq!(valid.as_bytes(), &2u32.to_le_bytes());
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

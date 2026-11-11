@@ -5,7 +5,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "integrity")]
 use varlit::ReadLimits;
-use varlit::{Error, RecoveryPolicy, VarlitBlock, VarlitFile, VarlitMerge, varlit_format};
+use varlit::{
+    BlockVec, Error, RecoveryPolicy, VarlitBlock, VarlitEmpty, VarlitFile, VarlitMerge,
+    varlit_format,
+};
+
+/// Record 0 of `blocks`, decoded into a fresh value.
+fn first_value(blocks: &BlockVec<NativeValue>) -> varlit::Result<Option<NativeValue>> {
+    let mut out = NativeValue::empty();
+    Ok(blocks.get(0, &mut out)?.then_some(out))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, VarlitBlock)]
 #[varlit(id = 901, version = 1, kind = "fixed")]
@@ -130,14 +139,12 @@ fn native_reader_and_lazy_collection_stay_on_original_path_generation() -> varli
     std::fs::rename(&replacement, &path)?;
 
     assert_eq!(
-        reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&reader.blocks::<NativeValue>()?)?,
         Some(NativeValue { value: 10 })
     );
-    assert_eq!(lazy.get(0)?, Some(NativeValue { value: 10 }));
+    assert_eq!(first_value(&lazy)?, Some(NativeValue { value: 10 }));
     assert_eq!(
-        NativeSecurityFormat::open_readonly(&path)?
-            .blocks::<NativeValue>()?
-            .get(0)?,
+        first_value(&NativeSecurityFormat::open_readonly(&path)?.blocks::<NativeValue>()?)?,
         Some(NativeValue { value: 20 })
     );
 
@@ -161,15 +168,13 @@ fn fixed_cow_preserves_old_reader_and_supports_record_footers() -> varlit::Resul
         writer.flush()?;
     }
 
-    assert_eq!(old_lazy.get(0)?, Some(NativeValue { value: 1 }));
+    assert_eq!(first_value(&old_lazy)?, Some(NativeValue { value: 1 }));
     assert_eq!(
-        old_reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&old_reader.blocks::<NativeValue>()?)?,
         Some(NativeValue { value: 1 })
     );
     assert_eq!(
-        NativeSecurityFormat::open_readonly(&path)?
-            .blocks::<NativeValue>()?
-            .get(0)?,
+        first_value(&NativeSecurityFormat::open_readonly(&path)?.blocks::<NativeValue>()?)?,
         Some(NativeValue { value: 2 })
     );
 
@@ -194,7 +199,7 @@ fn exclusive_in_place_replace_is_explicitly_not_snapshot_safe() -> varlit::Resul
     writer.flush()?;
 
     assert_eq!(
-        old_reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&old_reader.blocks::<NativeValue>()?)?,
         Some(NativeValue { value: 3 })
     );
 
@@ -303,10 +308,9 @@ fn keyed_tombstone_order_uses_sequence_before_physical_ordinal() -> varlit::Resu
     }
 
     let reader = NativeSecurityFormat::open_readonly(&path)?;
-    assert_eq!(
-        reader.keyed_blocks::<KeyedValue>()?.get(&7)?,
-        Some(KeyedValue { id: 7, value: 3 })
-    );
+    let mut keyed = KeyedValue::empty();
+    assert!(reader.keyed_blocks::<KeyedValue>()?.get(&7, &mut keyed)?);
+    assert_eq!(keyed, KeyedValue { id: 7, value: 3 });
     assert_eq!(
         reader.materialized_keyed_blocks::<KeyedValue>()?.get(&7),
         Some(&KeyedValue { id: 7, value: 3 })

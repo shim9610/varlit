@@ -1,4 +1,6 @@
 use std::io::{Seek, SeekFrom, Write};
+#[path = "common/private_tempdir.rs"]
+mod private_tempdir;
 use std::sync::atomic::{AtomicBool, Ordering};
 use varlit::{FileCheckStatus, VarlitBlock, VarlitFile, varlit_format};
 
@@ -40,7 +42,7 @@ fn populate(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<
 
 #[test]
 fn generated_registry_checks_every_user_type_and_preserves_file() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("file.varlit");
     populate(CheckedFormat::spec(), &path)?;
     let before = std::fs::read(&path)?;
@@ -62,7 +64,7 @@ fn generated_registry_checks_every_user_type_and_preserves_file() -> varlit::Res
 
 #[test]
 fn missing_samples_fail_strict_mode_before_creating_any_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir::private_tempdir().unwrap();
     let path = dir.path().join("sample.varlit");
     let report = CheckedFormat::self_test(&path)
         .with_block(Point { x: 1, y: 2 })
@@ -84,7 +86,7 @@ fn missing_samples_fail_strict_mode_before_creating_any_file() {
 
 #[test]
 fn complete_sample_template_roundtrips_all_declared_types() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir::private_tempdir().unwrap();
     let report = CheckedFormat::self_test(dir.path().join("sample.varlit"))
         .with_block(Point { x: 1, y: -2 })
         .with_keyed_block(Reading {
@@ -99,7 +101,7 @@ fn complete_sample_template_roundtrips_all_declared_types() {
 
 #[test]
 fn structurally_readable_but_invalid_bool_names_block_and_offset() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("bad.varlit");
     let offset = populate(CheckedFormat::spec(), &path)?;
     let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
@@ -121,7 +123,7 @@ fn structurally_readable_but_invalid_bool_names_block_and_offset() -> varlit::Re
 
 #[test]
 fn missing_validator_or_missing_file_data_never_passes() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("file.varlit");
     populate(CheckedFormat::spec(), &path)?;
     let missing = varlit::check_file(
@@ -164,7 +166,7 @@ fn missing_validator_or_missing_file_data_never_passes() -> varlit::Result<()> {
 
 #[test]
 fn active_writer_is_unverified_and_is_not_touched() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("busy.varlit");
     let writer = CheckedFormat::create(&path)?;
     let report = CheckedFormat::check_file(&path)?;
@@ -181,7 +183,7 @@ fn active_writer_is_unverified_and_is_not_touched() -> varlit::Result<()> {
 
 #[test]
 fn derived_key_checker_rejects_a_predecessor_for_another_key() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("wrong-key.varlit");
     {
         let mut writer = VarlitFile::create(Chained::spec(), &path)?;
@@ -219,7 +221,7 @@ fn derived_key_checker_rejects_a_predecessor_for_another_key() -> varlit::Result
 
 #[test]
 fn exhausted_budget_is_unverified_instead_of_success() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("limited.varlit");
     populate(CheckedFormat::spec(), &path)?;
     let report = CheckedFormat::check_file_with_resource_limits(
@@ -239,7 +241,7 @@ fn exhausted_budget_is_unverified_instead_of_success() -> varlit::Result<()> {
 
 #[test]
 fn nonresident_records_are_decoded_too() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("nonresident.varlit");
     let spec = Chained::spec().with_block_residency(&[varlit::BlockResidencyDescriptor {
         block_id: 3,
@@ -273,6 +275,11 @@ fn nonresident_records_are_decoded_too() -> varlit::Result<()> {
 static PANIC_DECODE: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Callback(u64);
+impl varlit::VarlitEmpty for Callback {
+    fn empty() -> Self {
+        Self(0)
+    }
+}
 impl varlit::VarlitEncode for Callback {
     const WIRE_TYPE: varlit::WireType = varlit::WireType::U64;
     const SCHEMA_ID: u64 = 123456;
@@ -300,7 +307,7 @@ varlit_format! {
 
 #[test]
 fn codec_panic_cannot_be_overwritten_by_a_later_success() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("callback.varlit");
     {
         let mut file = CallbackFormat::create(&path)?;
@@ -330,7 +337,7 @@ fn trusted_read_policy_does_not_disable_stored_crc_verification() -> varlit::Res
             integrity: crc32; blocks: [Point, Reading, Flag];
         }
     }
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("crc.varlit");
     let offset = populate(CrcFormat::spec(), &path)?;
     let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
@@ -390,7 +397,7 @@ varlit_format! {
 
 #[test]
 fn manual_decoder_must_consume_the_complete_payload() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("trailing.varlit");
     {
         let mut file = TrailingFormat::create(&path)?;
@@ -428,7 +435,7 @@ varlit_format! {
 
 #[test]
 fn declared_disk_companion_is_not_silently_certified() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("disk.varlit");
     {
         let mut file = VarlitFile::create(DiskChecked::spec(), &path)?;
@@ -459,7 +466,7 @@ varlit_format! {
 
 #[test]
 fn published_prefix_does_not_certify_unpublished_tail_bytes() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("partial-publication.varlit");
     populate(BufferedPublication::spec(), &path)?;
     {
@@ -493,7 +500,7 @@ varlit_format! {
 
 #[test]
 fn matrix_samples_work_but_uninspected_cell_payloads_are_not_certified() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
+    let dir = private_tempdir::private_tempdir()?;
     let path = dir.path().join("matrix.varlit");
     let dims = varlit::MatrixDimensions::from_pairs([("row", 2), ("col", 2)]);
     let samples = MatrixChecked::self_test(&path)
@@ -517,7 +524,7 @@ fn matrix_samples_work_but_uninspected_cell_payloads_are_not_certified() -> varl
 
 #[test]
 fn schema_warnings_do_not_become_a_strict_pass() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir::private_tempdir().unwrap();
     let path = dir.path().join("unbound.varlit");
     let spec = varlit::FormatSpec {
         schema_hash: 0,
@@ -555,7 +562,7 @@ varlit_format! {
 
 #[test]
 fn physical_layout_checks_structure_without_claiming_raw_type_coverage() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("physical.bin");
     {
         let mut writer = PhysicalChecked::create_layout_writer(&path)?;
@@ -607,7 +614,7 @@ fn physical_layout_checks_structure_without_claiming_raw_type_coverage() -> varl
 
 #[test]
 fn delete_then_reinsert_uses_the_tombstone_key_as_predecessor() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("delete-reinsert.varlit");
     populate(Chained::spec(), &path)?;
     {
@@ -629,7 +636,7 @@ fn delete_then_reinsert_uses_the_tombstone_key_as_predecessor() -> varlit::Resul
 
 #[test]
 fn malformed_standalone_tombstone_payload_does_not_pass() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("bad-tombstone.varlit");
     populate(Chained::spec(), &path)?;
     let offset = {
@@ -669,7 +676,7 @@ impl varlit::VarlitMerge for Reading {
 
 #[test]
 fn unregistered_merge_operation_codec_is_explicitly_unverified() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("operation.varlit");
     populate(Chained::spec(), &path)?;
     {
@@ -695,7 +702,7 @@ fn unregistered_merge_operation_codec_is_explicitly_unverified() -> varlit::Resu
 
 #[test]
 fn a_tombstone_does_not_replace_a_required_value_sample() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("tombstone-only.varlit");
     {
         let mut file = VarlitFile::create(Chained::spec(), &path)?;

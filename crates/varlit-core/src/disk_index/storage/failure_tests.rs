@@ -56,16 +56,31 @@ fn torn_publication_heads_never_invent_a_confirmed_generation() {
             );
         }
     }
-    // A checksummed durable head with missing checkpoint bytes is corruption,
-    // even if another older confirmed root would still be readable.
+    // A head whose generation did not fully reach storage is a publication
+    // whose barrier was interrupted: it is never adopted, and the older
+    // confirmed root, which the publication never overwrote, is.
     for cut in old.end..new.end {
         let mut image = after.clone();
         let slot = CONFIRMED[0] as usize;
         image[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
         image.truncate(cut as usize);
-        assert!(
-            open_image(&image).is_err(),
-            "accepted missing durable bytes at {cut}"
+        let actual = open_image(&image).unwrap();
+        assert_eq!(
+            actual.offset, old.offset,
+            "adopted missing generation bytes at {cut}"
+        );
+        assert_eq!(actual.metadata, old.metadata);
+    }
+    // The same for generation bytes that are present but not the ones written.
+    for at in old.end..new.end {
+        let mut image = after.clone();
+        let slot = CONFIRMED[0] as usize;
+        image[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
+        image[at as usize] ^= 0x40;
+        let actual = open_image(&image).unwrap();
+        assert_eq!(
+            actual.offset, old.offset,
+            "adopted damaged generation byte {at}"
         );
     }
     let mut image = after.clone();
@@ -173,6 +188,8 @@ fn divergent_clean_heads_require_sync_before_writer_resume() {
     assert_eq!(store.confirmed().unwrap().offset, new.offset);
 }
 
+/// The copy of a completed head is written only after its barrier returned,
+/// so matching copies still prove the head durable and need no resume sync.
 #[test]
 fn matching_clean_heads_do_not_add_a_resume_sync() {
     let (_, after, _, _) = images();

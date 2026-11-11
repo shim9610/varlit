@@ -528,31 +528,44 @@ impl VarlitFile {
             // Bounded exactly as the region path bounds it : one byte
             // past the stride is enough to report the true length, and no
             // further buffering is possible whatever the encode does.
-            let encoded = match crate::codec::encode_to_vec_limited(
+            // Encoded into the writer's reusable scratch rather than a fresh
+            // `Vec` per cell; the buffer is restored on every path.
+            let mut encoded = std::mem::take(&mut self.record_buffer);
+            let result = match crate::codec::encode_into_limited(
                 value,
                 T::ENDIAN.unwrap_or(self.spec.endian),
                 stride.saturating_add(1),
                 "matrix chunk slot payload",
+                &mut encoded,
             ) {
-                Ok(encoded) => encoded,
-                Err(Error::LimitExceeded { actual, .. }) => {
-                    return Err(Error::MatrixSizeMismatch {
-                        expected: stride,
-                        actual,
-                    });
+                Ok(()) => {
+                    // One body, shared with `write_matrix_cell_payload`. This
+                    // branch used to keep its own copy of the store, and when
+                    // the write bitmap arrived only the shared one learned to
+                    // set it — so the typed write silently stopped marking
+                    // cells written.
+                    let _ = (position, ordinal);
+                    self.write_chunk_cell_payload::<T>(key, chunk_index, local_row, &encoded)
                 }
-                Err(error) => return Err(error),
+                Err(Error::LimitExceeded { actual, .. }) => Err(Error::MatrixSizeMismatch {
+                    expected: stride,
+                    actual,
+                }),
+                Err(error) => Err(error),
             };
-            // One body, shared with `write_matrix_cell_payload`. This branch
-            // used to keep its own copy of the store, and when the write
-            // bitmap arrived only the shared one learned to set it — so the
-            // typed write silently stopped marking cells written.
-            let _ = (position, ordinal);
-            return self.write_chunk_cell_payload::<T>(key, chunk_index, local_row, &encoded);
+            self.record_buffer = encoded;
+            return result;
         }
         let result = {
             let matrix = self.matrix.as_mut().ok_or(Error::MatrixLayoutMissing)?;
-            crate::matrix::write_cell(self.spec, matrix, self.file.matrix_region(), key, value)
+            crate::matrix::write_cell(
+                self.spec,
+                matrix,
+                self.file.matrix_region(),
+                key,
+                value,
+                &mut self.record_buffer,
+            )
         };
         self.finish_matrix_mutation(result)
     }
@@ -1430,7 +1443,13 @@ impl VarlitFile {
         Ok(())
     }
 
-    pub fn read_matrix_cell<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
+    /// Decodes one committed cell into `out`, reusing what it owns. On error
+    /// `out` is valid but unspecified.
+    pub fn read_matrix_cell<T: VarlitMatrixBlock>(
+        &self,
+        key: MatrixKey,
+        out: &mut T,
+    ) -> Result<()> {
         if let Some((chunk_index, local_row)) = self.chunk_for_row(key.scan) {
             let payload = self.read_chunk_cell_payload::<T>(key, chunk_index, local_row)?;
             // Bounded exactly as the region twin bounds it (`matrix::read_cell`):
@@ -1448,14 +1467,21 @@ impl VarlitFile {
                     resource: "materialized bytes",
                 },
             )?;
-            return crate::codec::Decoder::decode_from_slice_limited(
+            return crate::codec::Decoder::decode_from_slice_limited_into(
                 &payload,
                 T::ENDIAN.unwrap_or(self.spec.endian),
                 decode_limit,
+                out,
             );
         }
         let matrix = self.matrix.as_ref().ok_or(Error::MatrixLayoutMissing)?;
-        crate::matrix::read_cell(self.spec, matrix, self.file.matrix_region_reader(), key)
+        crate::matrix::read_cell(
+            self.spec,
+            matrix,
+            self.file.matrix_region_reader(),
+            key,
+            out,
+        )
     }
 
     /// Whether a chunked cell has a committed value.

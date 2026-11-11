@@ -597,6 +597,8 @@ pub(super) fn commit_policy_byte(policy: CommitPolicy) -> u8 {
         CommitPolicy::RecordFooter => 2,
         CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::OnFlush) => 3,
         CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::Explicit) => 4,
+        CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::OnFlushSingleBarrier) => 5,
+        CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::ExplicitSingleBarrier) => 6,
     }
 }
 
@@ -609,6 +611,12 @@ pub(super) fn commit_policy_from_byte(value: u8) -> Result<CommitPolicy> {
         )),
         4 => Ok(CommitPolicy::TransactionMarker(
             crate::TransactionMarkerMode::Explicit,
+        )),
+        5 => Ok(CommitPolicy::TransactionMarker(
+            crate::TransactionMarkerMode::OnFlushSingleBarrier,
+        )),
+        6 => Ok(CommitPolicy::TransactionMarker(
+            crate::TransactionMarkerMode::ExplicitSingleBarrier,
         )),
         _ => Err(Error::InvalidSchemaManifest),
     }
@@ -811,6 +819,31 @@ pub(super) fn record_logical_len_from_parts(
         });
     }
     Ok(logical_len)
+}
+
+#[cfg(feature = "mmap")]
+/// The decompressed length a compressed record declares, read from its
+/// physical bytes (or the entry's hint) without decompressing, so a reader can
+/// admit it against its limits first.
+pub(super) fn compressed_logical_len(
+    spec: FormatSpec,
+    entry: &RecordIndexEntry,
+    physical_payload: &[u8],
+) -> Result<u64> {
+    validate_record_entry(&spec, entry)?;
+    let compression = variable_compression_for_block(spec, entry.block_id)
+        .ok_or(Error::InvalidCompressionHeader)?;
+    match compression.header_mode {
+        CompressionHeaderMode::RecordExplicit => {
+            decode_compression_envelope(physical_payload).map(|(_, len, _)| len)
+        }
+        CompressionHeaderMode::FileExplicit | CompressionHeaderMode::FormatContract => {
+            if entry.uncompressed_len_hint == 0 {
+                return Err(Error::InvalidCompressionHeader);
+            }
+            Ok(u64::from(entry.uncompressed_len_hint))
+        }
+    }
 }
 
 pub(super) fn decode_record_payload(

@@ -104,6 +104,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     ..Reply::default()
                 };
                 let mut scratch = Vec::new();
+                let mut data = Blob::empty();
                 let before = frames();
                 for chunk in chunks {
                     // The writer has committed this chunk already. follow may
@@ -116,8 +117,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         let entry = reader
                             .record_entry_at(item.offset)
                             .expect("published record");
-                        let data: Blob = reader
-                            .decode_block_into(&entry, &mut scratch)
+                        reader
+                            .decode_block_into(&entry, &mut scratch, &mut data)
                             .expect("decode");
                         assert_eq!(data.bytes.len(), payload);
                         assert!(data.bytes.iter().all(|&b| b == (item.sequence % 251) as u8));

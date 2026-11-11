@@ -102,6 +102,7 @@ impl VarlitFile {
             block_tails: BlockTails::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
@@ -230,6 +231,7 @@ impl VarlitFile {
             matrix_pending_limit(spec),
         )?;
         matrix_pages.set_cache_bytes(spec.read_limits.matrix_generation_cache_budget());
+        matrix_pages.set_dirty_page_budget(matrix_dirty_page_budget(spec, &matrix));
         matrix_pages.set_traversal_bytes(limit_or_max(
             spec.read_limits.require(ReadLimitKey::ScanBytes)?,
         ));
@@ -250,6 +252,7 @@ impl VarlitFile {
             block_tails: BlockTails::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
@@ -426,6 +429,7 @@ impl VarlitFile {
             chunk_directory: std::cell::OnceCell::new(),
             segment_cursor,
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
@@ -577,6 +581,7 @@ impl VarlitFile {
             chunk_directory: std::cell::OnceCell::new(),
             segment_cursor,
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
@@ -851,6 +856,7 @@ impl VarlitFile {
             open_chunk: None,
             chunk_directory: std::cell::OnceCell::new(),
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             // The file ends with a digest describing everything before it, so
@@ -916,6 +922,7 @@ impl VarlitFile {
             open_chunk: None,
             chunk_directory: std::cell::OnceCell::new(),
             uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
             appended_since_digest: false,
@@ -1028,6 +1035,7 @@ impl VarlitFile {
                 chunk_directory: std::cell::OnceCell::new(),
                 segment_cursor,
                 uncommitted_since_commit: false,
+            commit_scope: CommitScope::FRESH,
                 record_buffer: Vec::new(),
                 immediate_state: Default::default(),
                 appended_since_digest: false,

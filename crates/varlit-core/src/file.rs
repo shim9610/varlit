@@ -1264,8 +1264,9 @@ impl<D: RecordDirectory + ?Sized> DirectoryRead<'_, D> {
         &self,
         entry: &RecordIndexEntry,
         scratch: &mut Vec<u8>,
-    ) -> Result<T> {
-        self.file.decode_block_into::<T>(entry, scratch)
+        out: &mut T,
+    ) -> Result<()> {
+        self.file.decode_block_into::<T>(entry, scratch, out)
     }
 }
 
@@ -2782,7 +2783,60 @@ fn take_injected_commit_durability_failure() -> Result<()> {
     Ok(())
 }
 
+/// The records a single-barrier commit marker names.
+///
+/// Counts and chains every record appended after the newest marker known to
+/// be durable (the anchor) and that marker's segment/digest suffix — exactly
+/// the run `scan::verify_single_barrier_commit` walks. The anchor moves only
+/// when a `commit_durable` barrier completes, so a crash can tear nothing
+/// before it.
 #[derive(Clone, Copy, Debug)]
+pub(crate) struct CommitScope {
+    /// Whether this handle has established its anchor. A handle starts with
+    /// one storage barrier so that whatever an earlier handle left without one
+    /// is durable before anything names it as the anchor.
+    initialized: bool,
+    anchor: Option<u64>,
+    count: u64,
+    chain: u64,
+}
+
+impl CommitScope {
+    pub(crate) const FRESH: Self = Self {
+        initialized: false,
+        anchor: None,
+        count: 0,
+        chain: 0,
+    };
+
+    fn note(&mut self, entry: &RecordIndexEntry) {
+        self.count += 1;
+        self.chain = scan::fold_commit_chain(
+            self.chain,
+            entry.record_offset,
+            entry.sequence,
+            entry.checksum,
+        );
+    }
+
+    fn anchor_at(&mut self, marker_offset: Option<u64>) {
+        *self = Self {
+            initialized: true,
+            anchor: marker_offset,
+            count: 0,
+            chain: 0,
+        };
+    }
+
+    pub(crate) fn marker(&self) -> scan::CommitMarkerV2 {
+        scan::CommitMarkerV2 {
+            anchor: self.anchor,
+            count: self.count,
+            chain: self.chain,
+        }
+    }
+}
+
 struct AppendSnapshot {
     /// The end of file this append starts from, and the offset a rollback both
     /// truncates to and leaves the handle at.
@@ -2815,6 +2869,9 @@ struct AppendSnapshot {
     /// table exists to reach, so that combination disabled the feature for its
     /// own purpose.
     appended_since_digest: bool,
+    /// The records a single-barrier commit marker will name; see
+    /// [`CommitScope`].
+    commit_scope: CommitScope,
     /// The block id of the newest resident entry, maintained at the single
     /// index append site.
     ///
@@ -3043,6 +3100,9 @@ pub struct VarlitFile {
     /// table exists to reach, so that combination disabled the feature for its
     /// own purpose.
     appended_since_digest: bool,
+    /// The records a single-barrier commit marker will name; see
+    /// [`CommitScope`].
+    commit_scope: CommitScope,
     /// The block id of the newest resident entry, maintained at the single
     /// index append site.
     ///
@@ -3165,8 +3225,8 @@ impl VarlitReader {
     ///
     /// `&self` and no I/O: the region is part of the header this handle already
     /// read at open, which is what makes it usable as a seed for a walk.
-    pub fn read_header_block<T: VarlitBlock>(&self) -> Result<Option<T>> {
-        self.file.read_header_block::<T>()
+    pub fn read_header_block<T: VarlitBlock>(&self, out: &mut T) -> Result<bool> {
+        self.file.read_header_block::<T>(out)
     }
 
     /// The declared size of the editable header region; `0` when undeclared.
@@ -3335,8 +3395,9 @@ impl VarlitReader {
         &self,
         entry: &RecordIndexEntry,
         scratch: &mut Vec<u8>,
-    ) -> Result<T> {
-        self.file.decode_block_into::<T>(entry, scratch)
+        out: &mut T,
+    ) -> Result<()> {
+        self.file.decode_block_into::<T>(entry, scratch, out)
     }
 
     pub fn key_tail_offsets<T>(&self) -> Result<HashMap<T::Key, u64>>
@@ -3356,8 +3417,12 @@ impl VarlitReader {
         self.file.key_tail_offsets_into::<T>(out)
     }
 
-    pub fn read_matrix_cell<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
-        self.file.read_matrix_cell(key)
+    pub fn read_matrix_cell<T: VarlitMatrixBlock>(
+        &self,
+        key: MatrixKey,
+        out: &mut T,
+    ) -> Result<()> {
+        self.file.read_matrix_cell(key, out)
     }
 
     /// See [`VarlitFile::read_matrix_run_into`].
@@ -3530,6 +3595,28 @@ impl VarlitReader {
     pub unsafe fn mmap_payloads(&self) -> Result<MmapPayloads> {
         // SAFETY: The caller accepts the complete file-backed mapping contract.
         unsafe { self.file.mmap_payloads() }
+    }
+
+    /// How many records the resident directory holds; see
+    /// [`VarlitFile::record_count`].
+    pub fn record_count(&self) -> Result<usize> {
+        self.file.record_count()
+    }
+
+    #[cfg(feature = "mmap")]
+    /// Maps only the records at resident positions `records`; see
+    /// [`VarlitFile::mmap_payload_range`].
+    ///
+    /// # Safety
+    ///
+    /// The same contract as [`Self::mmap_payloads`], for the mapped records.
+    pub unsafe fn mmap_payload_range(
+        &self,
+        records: std::ops::Range<usize>,
+    ) -> Result<MmapPayloads> {
+        // SAFETY: The caller accepts the file-backed mapping contract for the
+        // mapped records.
+        unsafe { self.file.mmap_payload_range(records) }
     }
 
     #[cfg(feature = "mmap")]
@@ -3755,8 +3842,8 @@ impl VarlitWriter {
     /// offset into the region is what lets a later reader seed a walk without
     /// rebuilding an index. Reaching `write_header_block` used to mean
     /// `into_inner`, which ends the writer.
-    pub fn read_header_block<T: VarlitBlock>(&self) -> Result<Option<T>> {
-        self.file.read_header_block::<T>()
+    pub fn read_header_block<T: VarlitBlock>(&self, out: &mut T) -> Result<bool> {
+        self.file.read_header_block::<T>(out)
     }
 
     /// Writes a block into the editable header region, replacing any earlier
@@ -3839,8 +3926,9 @@ impl VarlitWriter {
         &self,
         entry: &RecordIndexEntry,
         scratch: &mut Vec<u8>,
-    ) -> Result<T> {
-        self.file.decode_block_into::<T>(entry, scratch)
+        out: &mut T,
+    ) -> Result<()> {
+        self.file.decode_block_into::<T>(entry, scratch, out)
     }
 
     pub fn key_tail_offsets<T>(&self) -> Result<HashMap<T::Key, u64>>
@@ -4183,8 +4271,12 @@ impl VarlitWriter {
             .write_matrix_cell_durable_with_barrier(key, value, barrier, hook)
     }
 
-    pub fn read_matrix_cell<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
-        self.file.read_matrix_cell(key)
+    pub fn read_matrix_cell<T: VarlitMatrixBlock>(
+        &self,
+        key: MatrixKey,
+        out: &mut T,
+    ) -> Result<()> {
+        self.file.read_matrix_cell(key, out)
     }
 
     /// See [`VarlitFile::read_matrix_run_into`].
@@ -6005,6 +6097,26 @@ pub(crate) fn read_file_header_parts(
     }
 }
 
+/// Pages of partial (metadata) writes a matrix writer buffers until the next
+/// spill: the layout's metadata size plus slack for slot-edge pages, within the
+/// existing `max_matrix_metadata_bytes` limit. `MatrixFile` further caps it at
+/// the pending-page limit.
+fn matrix_dirty_page_budget(spec: FormatSpec, layout: &crate::matrix::MatrixLayout) -> usize {
+    const PAGE: u64 = 4096;
+    const SLACK_PAGES: u64 = 64;
+    let wanted = layout
+        .metadata_bytes()
+        .div_ceil(PAGE)
+        .saturating_add(SLACK_PAGES);
+    let allowed = spec
+        .read_limits
+        .require(ReadLimitKey::MatrixMetadataBytes)
+        .ok()
+        .flatten()
+        .map_or(u64::MAX, |bytes| bytes / PAGE);
+    usize::try_from(wanted.min(allowed)).unwrap_or(usize::MAX)
+}
+
 fn matrix_pending_limit(spec: FormatSpec) -> usize {
     // Charge a conservative 128 bytes of directory metadata per dirty page.
     spec.read_limits
@@ -6054,6 +6166,7 @@ fn read_matrix_layout_if_needed(
     let layout = crate::matrix::read_layout_at_len(spec, &mut pages, layout_start, confirmed_len)?;
     if writable {
         file.set_len(pages.head().native_eof)?;
+        pages.set_dirty_page_budget(matrix_dirty_page_budget(spec, &layout));
     }
     Ok(Some((layout, nonce, pages)))
 }
@@ -7324,6 +7437,24 @@ impl FileMutationPermit<'_> {
     /// is precisely the defect  was in `stream.rs`. It now demands the
     /// [`MutationPermit`] instead, so the check is the caller's precondition
     /// and the compiler enforces that every route to an append has made it.
+    fn commit_scope_initialized(&self) -> bool {
+        self.commit_scope.initialized
+    }
+
+    /// One barrier per handle: what an earlier handle left unsynced is made
+    /// durable before the newest marker becomes this handle's anchor.
+    fn initialize_commit_scope(&mut self) -> Result<()> {
+        self.file.flush()?;
+        self.file.sync_all()?;
+        let anchor = self.block_tails.tail(COMMIT_BLOCK_ID);
+        self.commit_scope.anchor_at(anchor);
+        Ok(())
+    }
+
+    fn commit_scope_marker(&self) -> scan::CommitMarkerV2 {
+        self.commit_scope.marker()
+    }
+
     fn write_record_with_prev_key(
         &mut self,
         block_id: u32,
@@ -7349,6 +7480,9 @@ impl FileMutationPermit<'_> {
         self.spec
             .read_limits
             .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
+        if self.spec.commit_policy.single_barrier() && !self.commit_scope.initialized {
+            self.initialize_commit_scope()?;
+        }
 
         let record_count =
             self.index
@@ -7401,6 +7535,7 @@ impl FileMutationPermit<'_> {
             previous_block_tail: self.block_tails.tail(block_id),
             uncommitted_since_commit: self.uncommitted_since_commit,
             appended_since_digest: self.appended_since_digest,
+            commit_scope: self.commit_scope,
             last_resident_block_id: self.last_resident_block_id,
         };
         let record_offset = snapshot.eof;
@@ -7555,6 +7690,9 @@ impl FileMutationPermit<'_> {
             drop(index_slot);
         }
         self.block_tails.note_appended(block_id, record_offset);
+        if self.spec.commit_policy.single_barrier() {
+            self.commit_scope.note(&entry);
+        }
         // The marker itself clears the flag; a segment record is written after
         // the marker it certifies and must not set it again, or a repeated idle
         // flush would write marker, segment, marker, segment forever.

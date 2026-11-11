@@ -1764,6 +1764,12 @@ impl IndexPolicy {
 pub enum TransactionMarkerMode {
     OnFlush,
     Explicit,
+    /// [`Self::OnFlush`] with a single-barrier durable commit; see
+    /// [`CommitPolicy::single_barrier`].
+    OnFlushSingleBarrier,
+    /// [`Self::Explicit`] with a single-barrier durable commit; see
+    /// [`CommitPolicy::single_barrier`].
+    ExplicitSingleBarrier,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1781,7 +1787,32 @@ impl CommitPolicy {
     pub const fn marker_on_flush(self) -> bool {
         matches!(
             self,
-            Self::TransactionMarker(TransactionMarkerMode::OnFlush)
+            Self::TransactionMarker(
+                TransactionMarkerMode::OnFlush | TransactionMarkerMode::OnFlushSingleBarrier
+            )
+        )
+    }
+
+    /// Whether `commit_durable` makes a transaction durable with one storage
+    /// barrier instead of two.
+    ///
+    /// The ordered commit syncs the transaction's records, then writes the
+    /// marker and syncs again, so a durable marker always follows durable
+    /// records. A single-barrier commit writes records and marker and syncs
+    /// once; storage may then persist the marker without some of the records
+    /// before it. The marker therefore names the records it commits (where
+    /// they start, how many, and a chain of their checksums), every open
+    /// verifies the newest transaction against it before treating that marker
+    /// as a commit point, and a transaction that fails is not committed. The
+    /// mode requires `IntegrityPolicy::Crc32WithHeader`, so every byte of
+    /// every record is under a checksum that open can check.
+    pub const fn single_barrier(self) -> bool {
+        matches!(
+            self,
+            Self::TransactionMarker(
+                TransactionMarkerMode::OnFlushSingleBarrier
+                    | TransactionMarkerMode::ExplicitSingleBarrier
+            )
         )
     }
 
@@ -3564,6 +3595,22 @@ impl FormatSpec {
         // `count = 0` after five flushes — and the option costs its bytes and
         // its schema hash while doing nothing. Refusing it is what keeps a
         // capability a capability.
+        if self.commit_policy.single_barrier()
+            && self.integrity_policy != IntegrityPolicy::Crc32WithHeader
+        {
+            return Err(Error::InvalidFormatSpec(
+                "a single-barrier commit requires crc32_with_header integrity",
+            ));
+        }
+        // `MarkTail` keeps a crashed writer's tail by committing it. Under a
+        // single barrier that tail may be torn, so it is truncated instead.
+        if self.commit_policy.single_barrier()
+            && matches!(self.recovery_policy, RecoveryPolicy::MarkTail)
+        {
+            return Err(Error::InvalidFormatSpec(
+                "a single-barrier commit cannot use mark_tail recovery",
+            ));
+        }
         if self.index_policy.header_tails && !self.commit_policy.is_transaction_marker() {
             return Err(Error::InvalidFormatSpec(
                 "header_tails requires a transaction_marker commit policy",
@@ -4165,6 +4212,8 @@ const fn commit_policy_hash_byte(policy: CommitPolicy) -> u8 {
         CommitPolicy::RecordFooter => 2,
         CommitPolicy::TransactionMarker(TransactionMarkerMode::OnFlush) => 3,
         CommitPolicy::TransactionMarker(TransactionMarkerMode::Explicit) => 4,
+        CommitPolicy::TransactionMarker(TransactionMarkerMode::OnFlushSingleBarrier) => 5,
+        CommitPolicy::TransactionMarker(TransactionMarkerMode::ExplicitSingleBarrier) => 6,
     }
 }
 

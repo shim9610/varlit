@@ -67,6 +67,23 @@ impl Drop for Window {
         DENY_GE.store(usize::MAX, Relaxed);
     }
 }
+/// Owned-result shim over the caller-owned-output `read_block_at`.
+trait ReadAt {
+    fn read_at<T: VarlitBlock + VarlitEmpty>(&self, offset: u64) -> Result<T>;
+}
+macro_rules! read_at_impl {
+    ($($handle:ty),+) => {$(
+        impl ReadAt for $handle {
+            fn read_at<T: VarlitBlock + VarlitEmpty>(&self, offset: u64) -> Result<T> {
+                let mut out = T::empty();
+                self.read_block_at::<T>(offset, &mut Vec::new(), &mut out)?;
+                Ok(out)
+            }
+        }
+    )+};
+}
+read_at_impl!(VarlitFile);
+
 fn measure<T>(threshold: usize, nth: usize, op: impl FnOnce() -> T) -> (T, usize) {
     let baseline = LIVE.load(Relaxed);
     PEAK.store(baseline, Relaxed);
@@ -291,18 +308,21 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
     let (usage, peak) = measure(60000, 1, || reader.header_slots_used());
     assert!(usage? > 32768);
     assert!(peak < 1024, "checksum copied the whole header: {peak}");
+    let mut header = Blob::empty();
     assert!(matches!(
-        reader.read_header_block::<Blob>(),
+        reader.read_header_block::<Blob>(&mut header),
         Err(Error::LimitExceeded { .. })
     ));
     drop(reader);
     let mut writer = spec.open(&header_path)?;
-    let old = writer.read_header_block::<Blob>()?.unwrap().bytes;
+    assert!(writer.read_header_block::<Blob>(&mut header)?);
+    let old = header.bytes.clone();
     let (refused, _) = measure(60000, 1, || {
         writer.write_header_block(&Blob { bytes: Vec::new() })
     });
     assert!(matches!(refused, Err(Error::AllocationFailed { .. })));
-    assert_eq!(writer.read_header_block::<Blob>()?.unwrap().bytes, old);
+    assert!(writer.read_header_block::<Blob>(&mut header)?);
+    assert_eq!(header.bytes, old);
     drop(writer);
 
     let compressed_path = dir.path().join("compressed.varlit");
@@ -320,7 +340,10 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &compressed_path, StreamOptions::default())?;
-    let (result, _) = measure(65536, 1, || reader.blocks::<Blob>()?.next().unwrap());
+    let (result, _) = measure(65536, 1, || -> Result<bool> {
+        let mut out = Blob::empty();
+        reader.blocks::<Blob>()?.next_into(&mut out)
+    });
     assert!(
         matches!(result, Err(Error::AllocationFailed { .. })),
         "native decompression must be fallible"
@@ -376,13 +399,8 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
             "rewrite scratch refusal must be reported as an allocation error"
         );
         assert!(held.is_current()?);
-        assert_eq!(writer.read_block_at::<Point>(first)?.value, 0);
-        assert_eq!(
-            spec.open_readonly(&path)?
-                .read_block_at::<Point>(first)?
-                .value,
-            0
-        );
+        assert_eq!(writer.read_at::<Point>(first)?.value, 0);
+        assert_eq!(spec.open_readonly(&path)?.read_at::<Point>(first)?.value, 0);
         let (result, peak) = measure(usize::MAX, 1, || {
             writer.replace_block(0, &Point { value: 42 })
         });
@@ -391,11 +409,11 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
             peak < 256 * 1024,
             "rewrite scratch grew with cardinality {count}: {peak}"
         );
-        assert_eq!(held.read_block_at::<Point>(first)?.value, 0);
-        assert_eq!(writer.read_block_at::<Point>(first)?.value, 42);
+        assert_eq!(held.read_at::<Point>(first)?.value, 0);
+        assert_eq!(writer.read_at::<Point>(first)?.value, 42);
         let appended = writer.push_info(&Point { value: 777 })?.record_offset;
         writer.sync()?;
-        assert_eq!(writer.read_block_at::<Point>(appended)?.value, 777);
+        assert_eq!(writer.read_at::<Point>(appended)?.value, 777);
         let (result, peak) = measure(usize::MAX, 1, || writer.defragment());
         result?;
         assert!(
@@ -404,15 +422,11 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
         );
         drop(writer);
         assert_eq!(
-            spec.open_readonly(&path)?
-                .read_block_at::<Point>(first)?
-                .value,
+            spec.open_readonly(&path)?.read_at::<Point>(first)?.value,
             42
         );
         assert_eq!(
-            spec.open_readonly(&path)?
-                .read_block_at::<Point>(appended)?
-                .value,
+            spec.open_readonly(&path)?.read_at::<Point>(appended)?.value,
             777
         );
     }
@@ -434,7 +448,7 @@ fn rewrite_read_directory_refusal_keeps_a_usable_generation() -> Result<()> {
             if event.block_id != Blob::ID {
                 continue;
             }
-            let block = reader.read_block_at::<Blob>(event.record_offset)?;
+            let block = reader.read_at::<Blob>(event.record_offset)?;
             let expected = if seen == 1000 {
                 vec![77; 29]
             } else {

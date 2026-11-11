@@ -147,6 +147,13 @@ pub enum Error {
         snapshot_len: u64,
     },
 
+    #[error("record range {start}..{end} is outside the {records} resident records")]
+    MmapRecordRangeOutOfBounds {
+        start: usize,
+        end: usize,
+        records: usize,
+    },
+
     #[error("missing required field {field} ({field_id})")]
     MissingField { field: &'static str, field_id: u32 },
 

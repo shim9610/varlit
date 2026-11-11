@@ -32,7 +32,8 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     MatrixBlockDescriptor, MatrixCellStatus, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, MatrixMetadataResidency,
-    MatrixMetadataVerification, MatrixRecoveryReport, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixMetadataVerification, MatrixRecoveryReport, ReadLimits, VarlitBlock, VarlitEmpty,
+    VarlitMatrixBlock,
 };
 
 const PAGE_BYTES: u64 = 4096;
@@ -565,10 +566,11 @@ fn a_lazily_opened_matrix_answers_exactly_what_a_verified_one_does() -> varlit::
             );
             if expected == MatrixCellStatus::Committed {
                 committed += 1;
-                assert_eq!(
-                    lazy.read_matrix_cell::<LazyCell>(key(ordinal))?,
-                    verified.read_matrix_cell::<LazyCell>(key(ordinal))?
-                );
+                let mut from_lazy = LazyCell::empty();
+                let mut from_verified = LazyCell::empty();
+                lazy.read_matrix_cell::<LazyCell>(key(ordinal), &mut from_lazy)?;
+                verified.read_matrix_cell::<LazyCell>(key(ordinal), &mut from_verified)?;
+                assert_eq!(from_lazy, from_verified);
             }
         }
     }
@@ -618,9 +620,10 @@ fn an_unpublished_page_is_not_the_same_as_an_uncached_one() -> varlit::Result<()
         reader.matrix_cell_status::<LazyCell>(key(4 * CELLS_PER_PAGE))?,
         MatrixCellStatus::NotCommitted
     );
+    let mut out = LazyCell::empty();
     assert!(matches!(
         reader
-            .read_matrix_cell::<LazyCell>(key(4 * CELLS_PER_PAGE))
+            .read_matrix_cell::<LazyCell>(key(4 * CELLS_PER_PAGE), &mut out)
             .err(),
         Some(Error::MatrixNotCommitted)
     ));
@@ -1442,9 +1445,10 @@ fn an_emptied_commit_page_releases_its_persisted_index_entry() -> varlit::Result
             MatrixCellStatus::NotCommitted,
             "clearing the commit bit lost the cell instead of uncommitting it"
         );
+        let mut out = LazyCell::empty();
         assert!(
             matches!(
-                reader.read_matrix_cell::<LazyCell>(key(page * CELLS_PER_PAGE)),
+                reader.read_matrix_cell::<LazyCell>(key(page * CELLS_PER_PAGE), &mut out),
                 Err(Error::MatrixNotCommitted)
             ),
             "an uncommitted cell answered a read after its page index was released"

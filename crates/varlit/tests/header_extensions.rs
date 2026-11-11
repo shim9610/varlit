@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use varlit::{Error, VarlitBlock, varlit_format};
+use varlit::{Error, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "fixed")]
@@ -105,8 +105,10 @@ fn an_unknown_block_is_skipped_at_open() -> varlit::Result<()> {
     let file = PlainFormat::open_readonly(&path)?;
     let blocks = file.blocks::<Sample>()?;
     assert_eq!(blocks.len(), 8);
+    let mut got = Sample::empty();
     for value in 0..8u64 {
-        assert_eq!(blocks.get(value as usize)?, Some(Sample { value }));
+        assert!(blocks.get(value as usize, &mut got)?);
+        assert_eq!(got, Sample { value });
     }
     drop(file);
 
@@ -154,8 +156,11 @@ fn a_rewrite_writes_the_unknown_block_back() -> varlit::Result<()> {
     let file = PlainFormat::open_readonly(&path)?;
     let blocks = file.blocks::<Sample>()?;
     assert_eq!(blocks.len(), 4);
-    assert_eq!(blocks.get(1)?, Some(Sample { value: 99 }));
-    assert_eq!(blocks.get(3)?, Some(Sample { value: 3 }));
+    let mut got = Sample::empty();
+    assert!(blocks.get(1, &mut got)?);
+    assert_eq!(got, Sample { value: 99 });
+    assert!(blocks.get(3, &mut got)?);
+    assert_eq!(got, Sample { value: 3 });
 
     cleanup(&path);
     Ok(())

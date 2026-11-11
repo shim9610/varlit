@@ -86,6 +86,12 @@ impl VarlitDecode for MatrixCell {
     }
 }
 
+impl varlit::VarlitEmpty for MatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for MatrixCell {
     const ID: u32 = 100;
     const VERSION: u16 = 1;
@@ -121,6 +127,12 @@ impl VarlitDecode for BadSizedCell {
         Ok(Self {
             value: u64::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for BadSizedCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -169,6 +181,12 @@ impl VarlitDecode for ChunkedOversizedCell {
     }
 }
 
+impl varlit::VarlitEmpty for ChunkedOversizedCell {
+    fn empty() -> Self {
+        Self
+    }
+}
+
 impl VarlitBlock for ChunkedOversizedCell {
     const ID: u32 = MatrixCell::ID;
     const VERSION: u16 = MatrixCell::VERSION;
@@ -207,6 +225,12 @@ impl VarlitDecode for OtherMatrixCell {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for OtherMatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -517,11 +541,11 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
             MatrixCellStatus::Committed
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1), o))?,
             MatrixCell { value: 21 }
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1), o))?,
             MatrixCell { value: 0 }
         );
         assert_eq!(
@@ -529,14 +553,14 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
             MatrixCellStatus::NotCommitted
         );
         assert!(matches!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0)),
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0), o)),
             Err(Error::MatrixNotCommitted)
         ));
         assert!(reader.is_matrix_single_committed("master_grid")?);
         assert!(reader.is_matrix_channel_committed("threshold", 1)?);
         assert!(!reader.is_matrix_channel_committed("threshold", 0)?);
         assert_eq!(
-            reader.blocks::<LogPoint>()?.get(0)?,
+            opt(|o| reader.blocks::<LogPoint>()?.get(0, o))?,
             Some(LogPoint { value: 99 })
         );
     }
@@ -566,7 +590,7 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
     {
         let reader = spec.open_reader(&path)?;
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1), o))?,
             MatrixCell { value: 22 }
         );
         assert_eq!(
@@ -610,7 +634,7 @@ fn matrix_write_cell_bounds_hostile_encode_at_the_slot_stride() -> varlit::Resul
 
     let reader = spec.open_reader(&path)?;
     assert_eq!(
-        reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?,
+        val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0), o))?,
         MatrixCell { value: 5 }
     );
     drop(reader);
@@ -713,7 +737,10 @@ fn format_first_matrix_dsl_generates_typed_api() -> varlit::Result<()> {
             reader.generated_cell_status(key)?,
             MatrixCellStatus::Committed
         );
-        assert_eq!(reader.generated_cell(key)?, GeneratedCell { value: 42 });
+        assert_eq!(
+            val(|o| reader.generated_cell(key, o))?,
+            GeneratedCell { value: 42 }
+        );
         assert!(reader.is_master_grid_committed()?);
         assert!(reader.is_threshold_committed(1)?);
         assert!(!reader.is_threshold_committed(0)?);
@@ -812,7 +839,7 @@ fn matrix_p1_p2_extension_points_are_usable() -> varlit::Result<()> {
             7u32.to_le_bytes()
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 1), o))?,
             MatrixCell { value: 3 }
         );
     }
@@ -868,7 +895,7 @@ fn matrix_durable_barrier_observes_data_then_commit_sync_then_hook() -> varlit::
             MatrixCellStatus::Committed
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0), o))?,
             MatrixCell { value: 11 }
         );
     }
@@ -1144,7 +1171,7 @@ fn matrix_byte_copy_migration_scaffold_copies_compatible_committed_slot() -> var
     {
         let reader = target_spec.open_reader(&target_path)?;
         assert_eq!(
-            reader.read_matrix_cell::<OtherMatrixCell>(key)?,
+            val(|o| reader.read_matrix_cell::<OtherMatrixCell>(key, o))?,
             OtherMatrixCell { value: 123 }
         );
     }
@@ -1454,7 +1481,7 @@ fn matrix_commit_map_crc_corruption_reports_recoverable_region_and_rebuilds() ->
             MatrixCellStatus::Committed
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0), o))?,
             MatrixCell { value: 11 }
         );
         assert_eq!(
@@ -1495,7 +1522,7 @@ fn matrix_slot_crc_corruption_rejects_committed_cell_read() -> varlit::Result<()
     {
         let reader = spec.open_reader(&path)?;
         assert!(matches!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1)),
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1), o)),
             Err(Error::MatrixChecksumMismatch { .. })
         ));
         assert!(matches!(
@@ -1551,7 +1578,7 @@ fn matrix_crc_rebuild_preserves_committed_zero_payloads() -> varlit::Result<()> 
     {
         let reader = spec.open_reader(&path)?;
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(zero_key)?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(zero_key, o))?,
             MatrixCell { value: 0 }
         );
     }
@@ -1731,4 +1758,23 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
         "the rustdoc on write_matrix_cell_durable is the copy a user reads from \
          `cargo doc`; it must carry the same scope as the documents"
     );
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Decodes into a fresh caller-owned value.
+fn val<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<()>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
 }

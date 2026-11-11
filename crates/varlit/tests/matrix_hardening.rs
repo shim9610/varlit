@@ -249,7 +249,7 @@ fn fresh_reader_rejects_uncommitted_matrix_overwrite() {
         MatrixCellStatus::NotCommitted
     );
     assert!(matches!(
-        reader.read_matrix_cell::<PrimaryCell>(key),
+        filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(key, o)),
         Err(Error::MatrixNotCommitted)
     ));
 }
@@ -722,7 +722,7 @@ fn corrupt_commit_maps_are_quarantined_until_whole_category_recovery() {
             Err(Error::MatrixCommitQuarantined(name)) if name == "analysis"
         ));
         assert!(matches!(
-            reader.read_matrix_cell::<PrimaryCell>(committed_key),
+            filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(committed_key, o)),
             Err(Error::MatrixCommitQuarantined(name)) if name == "analysis"
         ));
         assert!(
@@ -788,8 +788,7 @@ fn corrupt_commit_maps_are_quarantined_until_whole_category_recovery() {
             .open_reader(fixture.path())
             .expect("open recovered matrix");
         assert_eq!(
-            reader
-                .read_matrix_cell::<PrimaryCell>(replacement_key)
+            filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(replacement_key, o))
                 .expect("read replacement cell"),
             PrimaryCell { value: 22 }
         );
@@ -842,8 +841,7 @@ fn valid_commit_visibility_and_wire_bytes_are_unchanged_by_open() {
     {
         let reader = spec.open_reader(fixture.path()).expect("open valid matrix");
         assert_eq!(
-            reader
-                .read_matrix_cell::<PrimaryCell>(key)
+            filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(key, o))
                 .expect("read visible cell"),
             PrimaryCell { value: 77 }
         );
@@ -955,7 +953,7 @@ fn damaged_page_index_blocks_cell_access_without_forensics() {
         "a zeroed page-index entry inside the counted prefix went unreported"
     );
     assert!(matches!(
-        reader.read_matrix_cell::<PrimaryCell>(key),
+        filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(key, o)),
         Err(Error::MatrixFatalCorruption)
     ));
 }
@@ -1048,7 +1046,7 @@ fn interrupted_rebuild_marker_is_reported_fatal_and_recommends_a_rebuild() {
         .open_reader(fixture.path())
         .expect("open marked matrix");
     assert!(matches!(
-        reader.read_matrix_cell::<PrimaryCell>(key),
+        filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(key, o)),
         Err(Error::MatrixFatalCorruption)
     ));
 }
@@ -1121,7 +1119,26 @@ fn a_cell_write_refused_by_the_bitmap_budget_leaves_the_slot_unwritten() {
         MatrixCellStatus::NotCommitted
     );
     assert!(matches!(
-        reader.read_matrix_cell::<PrimaryCell>(refused),
+        filled_out(|o| reader.read_matrix_cell::<PrimaryCell>(refused, o)),
         Err(Error::MatrixNotCommitted)
     ));
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

@@ -127,12 +127,17 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         writer.defragment()?.records_dropped
     };
     let seconds = start.elapsed().as_secs_f64();
-    assert_eq!(held.read_block_at::<Item>(first)?.value, 0);
+    let mut scratch = Vec::new();
+    let mut probe = Item::empty();
+    held.read_block_at::<Item>(first, &mut scratch, &mut probe)?;
+    assert_eq!(probe.value, 0);
     let expected = if mode == "replace" { u64::MAX } else { 0 };
-    assert_eq!(writer.read_block_at::<Item>(first)?.value, expected);
+    writer.read_block_at::<Item>(first, &mut scratch, &mut probe)?;
+    assert_eq!(probe.value, expected);
     drop(writer);
     let reopened = spec.open_readonly(&path)?;
-    assert_eq!(reopened.read_block_at::<Item>(first)?.value, expected);
+    reopened.read_block_at::<Item>(first, &mut scratch, &mut probe)?;
+    assert_eq!(probe.value, expected);
     let expected_dropped = if complex { (count - 1) / 7 } else { 0 };
     assert!(
         dropped == expected_dropped,

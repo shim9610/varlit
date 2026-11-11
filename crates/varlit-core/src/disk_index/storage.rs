@@ -14,6 +14,10 @@ thread_local! {
 
 const MAGIC: &[u8; 8] = b"VARVEIX5";
 const HEAD_MAGIC: &[u8; 8] = b"VIXHEAD1";
+/// A head that also names the checksum of its generation's sidecar bytes:
+/// everything appended since the previous confirmed checkpoint, up to the end
+/// of the checkpoint it points at. Written by single-barrier publication.
+const HEAD_MAGIC_V2: &[u8; 8] = b"VIXHEAD2";
 const ROOT_MAGIC: &[u8; 8] = b"VIXROOT4";
 const ROOT_HEADER: usize = 352;
 // Independently synced heads occupy separate 4096-byte regions.
@@ -38,6 +42,10 @@ pub(super) struct Store {
     writer: Option<WriterFile>,
     pub path: PathBuf,
     options: DiskIndexOptions,
+    /// The newest confirmed head whose generation this handle has already
+    /// checked, as its checkpoint offset (0 for none). Heads only move forward,
+    /// so a generation is read for its checksum once per handle.
+    verified_head: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -77,21 +85,57 @@ pub(super) use crate::publication_protocol::CheckpointKind as Publication;
 struct Head {
     offset: u64,
     end: u64,
+    /// `(region_start, crc32 of [region_start, end))` for a v2 head.
+    region: Option<(u64, u32)>,
+}
+
+fn encode_head(head: Head) -> [u8; 64] {
+    let mut bytes = [0; 64];
+    bytes[8..16].copy_from_slice(&head.offset.to_le_bytes());
+    bytes[16..24].copy_from_slice(&head.end.to_le_bytes());
+    match head.region {
+        None => {
+            bytes[..8].copy_from_slice(HEAD_MAGIC);
+            let checksum = crc32fast::hash(&bytes[..28]);
+            bytes[28..32].copy_from_slice(&checksum.to_le_bytes());
+        }
+        Some((start, crc)) => {
+            bytes[..8].copy_from_slice(HEAD_MAGIC_V2);
+            bytes[24..32].copy_from_slice(&start.to_le_bytes());
+            bytes[32..36].copy_from_slice(&crc.to_le_bytes());
+            let checksum = crc32fast::hash(&bytes[..60]);
+            bytes[60..64].copy_from_slice(&checksum.to_le_bytes());
+        }
+    }
+    bytes
 }
 
 // Shared by file-backed recovery and portable corruption checks.
 fn parse_head(bytes: &[u8; 64]) -> Option<Head> {
-    if &bytes[..8] != HEAD_MAGIC
-        || bytes[24..28] != [0; 4]
-        || bytes[32..] != [0; 32]
-        || crc32fast::hash(&bytes[..28]) != read_u32(bytes, 28)
-    {
+    let region = if &bytes[..8] == HEAD_MAGIC {
+        if bytes[24..28] != [0; 4]
+            || bytes[32..] != [0; 32]
+            || crc32fast::hash(&bytes[..28]) != read_u32(bytes, 28)
+        {
+            return None;
+        }
+        None
+    } else if &bytes[..8] == HEAD_MAGIC_V2 {
+        if bytes[36..60] != [0; 24] || crc32fast::hash(&bytes[..60]) != read_u32(bytes, 60) {
+            return None;
+        }
+        Some((read_u64(bytes, 24), read_u32(bytes, 32)))
+    } else {
         return None;
-    }
+    };
     let head = Head {
         offset: read_u64(bytes, 8),
         end: read_u64(bytes, 16),
+        region,
     };
+    if region.is_some_and(|(start, _)| start < FILE_HEADER as u64 || start > head.offset) {
+        return None;
+    }
     if head.offset < FILE_HEADER as u64
         || head
             .end
@@ -142,6 +186,7 @@ impl Store {
             writer,
             path: path.to_path_buf(),
             options,
+            verified_head: std::sync::atomic::AtomicU64::new(0),
         };
         if create {
             let writer = result.writer()?;
@@ -281,11 +326,21 @@ impl Store {
     fn latest(&self, confirmed_only: bool) -> DiskIndexResult<Checkpoint> {
         // Retry only an incomplete publication. Old immutable checkpoints remain readable.
         for _ in 0..8 {
-            let mut heads = [(Head { offset: 0, end: 0 }, false); 5];
+            let mut heads = [(
+                Head {
+                    offset: 0,
+                    end: 0,
+                    region: None,
+                },
+                false,
+            ); 5];
             let mut head_count = 0;
             let mut has_confirmed_head = false;
+            // Only confirmed heads are barriers. A dirty head is written
+            // without one: a crashed generation is recovered from the newest
+            // confirmed checkpoint whether or not its dirty head survived.
             for (slot, durable) in CONFIRMED.into_iter().map(|s| (s, true)).chain(
-                [(WORKING[0], false), (WORKING[1], false), (DIRTY, true)]
+                [(WORKING[0], false), (WORKING[1], false), (DIRTY, false)]
                     .into_iter()
                     .filter(|_| !confirmed_only),
             ) {
@@ -306,7 +361,33 @@ impl Store {
             }
             let heads = &mut heads[..head_count];
             heads.sort_unstable_by_key(|(head, _)| std::cmp::Reverse(head.offset));
+            // The newest confirmed head is the only one whose barrier a crash
+            // can have interrupted: every older one was synced before the next
+            // generation began. A v2 head proves its generation reached storage
+            // whole; one that does not is skipped for the older confirmed head.
+            let newest_confirmed = heads
+                .iter()
+                .filter(|(_, durable)| *durable)
+                .map(|(head, _)| head.offset)
+                .max();
+            // Both slots naming the newest generation means its barrier
+            // completed (the copy is written only afterwards): a checksum
+            // failure there is damage to durable data, never a torn write.
+            let copies = heads
+                .iter()
+                .filter(|(head, durable)| *durable && Some(head.offset) == newest_confirmed)
+                .count();
             for &(head, durable) in heads.iter() {
+                if durable
+                    && Some(head.offset) == newest_confirmed
+                    && head.region.is_some()
+                    && !self.generation_intact(head)?
+                {
+                    if copies > 1 {
+                        return Err(corrupt("durable generation fails its checksum"));
+                    }
+                    continue;
+                }
                 match self.at(head.offset) {
                     Ok(checkpoint)
                         if checkpoint.end == head.end
@@ -326,6 +407,44 @@ impl Store {
             std::hint::spin_loop();
         }
         Err(DiskIndexError::MetadataMissing)
+    }
+    /// The confirmed slot holding the newest head a crash cannot have torn,
+    /// with that head: the newer slot unless its generation fails its
+    /// checksum, then the older one.
+    fn durable_confirmed_slot(&self) -> DiskIndexResult<Option<(u64, Head)>> {
+        let mut found = [None, None];
+        for (i, slot) in CONFIRMED.into_iter().enumerate() {
+            found[i] = self.head(slot)?.map(|head| (slot, head));
+        }
+        let (newer, older) = match found {
+            [Some(a), Some(b)] if a.1.offset >= b.1.offset => (Some(a), Some(b)),
+            [Some(a), Some(b)] => (Some(b), Some(a)),
+            [one, None] | [None, one] => (one, None),
+        };
+        match newer {
+            Some((slot, head)) if self.generation_intact(head)? => Ok(Some((slot, head))),
+            Some(_) => Ok(older),
+            None => Ok(None),
+        }
+    }
+    /// Whether every sidecar byte of a v2 head's generation matches the
+    /// checksum the head names. Read once per head per handle.
+    fn generation_intact(&self, head: Head) -> DiskIndexResult<bool> {
+        use std::sync::atomic::Ordering;
+        let Some((start, expected)) = head.region else {
+            return Ok(true);
+        };
+        if self.verified_head.load(Ordering::Relaxed) == head.offset {
+            return Ok(true);
+        }
+        if self.file.metadata()?.len() < head.end {
+            return Ok(false);
+        }
+        let intact = region_crc(&self.file, start, head.end, None)? == expected;
+        if intact {
+            self.verified_head.store(head.offset, Ordering::Relaxed);
+        }
+        Ok(intact)
     }
     pub fn current(&self) -> DiskIndexResult<Checkpoint> {
         self.latest(false)
@@ -426,12 +545,28 @@ impl Store {
         let end = offset
             .checked_add(len as u64)
             .ok_or_else(|| corrupt("checkpoint extent overflow"))?;
-        let mut head = [0; 64];
-        head[..8].copy_from_slice(HEAD_MAGIC);
-        head[8..16].copy_from_slice(&offset.to_le_bytes());
-        head[16..24].copy_from_slice(&end.to_le_bytes());
-        let checksum = crc32fast::hash(&head[..28]);
-        head[28..32].copy_from_slice(&checksum.to_le_bytes());
+        // A confirmed head names its whole generation: every byte appended
+        // since the previous confirmed checkpoint, then this body.
+        // The slot holding the newest durable confirmed head is never the one
+        // overwritten, so a crash in this publication always leaves it.
+        let anchor = if matches!(publication, Publication::Confirmed) {
+            self.durable_confirmed_slot()?
+        } else {
+            None
+        };
+        let region = if matches!(publication, Publication::Confirmed) {
+            let start = anchor
+                .map_or(FILE_HEADER as u64, |(_, head)| head.end)
+                .min(offset);
+            Some((start, region_crc(&self.file, start, offset, Some(&bytes))?))
+        } else {
+            None
+        };
+        let head = encode_head(Head {
+            offset,
+            end,
+            region,
+        });
         let mut slot = 0;
         use crate::publication_protocol::CheckpointStep;
         crate::publication_protocol::checkpoint(publication, |step| -> DiskIndexResult<()> {
@@ -447,32 +582,21 @@ impl Store {
                     write_at(file, offset, &bytes)?;
                     crate::scalable_fault_point("checkpoint.record_write");
                 }
-                CheckpointStep::DataSync => {
-                    crate::scalable_fault_point("checkpoint.data_sync");
-                    file.sync_data()?;
-                    crate::scalable_fault_point("checkpoint.data_sync");
-                }
                 CheckpointStep::SelectHead => {
                     slot = match publication {
                         Publication::Dirty => DIRTY,
-                        Publication::Confirmed | Publication::Working => {
-                            let slots = if matches!(publication, Publication::Confirmed) {
-                                CONFIRMED
-                            } else {
-                                WORKING
-                            };
-                            let first = self.head(slots[0])?.map_or(0, |h| h.offset);
-                            let second = self.head(slots[1])?.map_or(0, |h| h.offset);
-                            slots[crate::publication_protocol::older_head(first, second)]
+                        Publication::Confirmed => match anchor {
+                            Some((kept, _)) => CONFIRMED[usize::from(kept == CONFIRMED[0])],
+                            None => CONFIRMED[0],
+                        },
+                        Publication::Working => {
+                            let first = self.head(WORKING[0])?.map_or(0, |h| h.offset);
+                            let second = self.head(WORKING[1])?.map_or(0, |h| h.offset);
+                            WORKING[crate::publication_protocol::older_head(first, second)]
                         }
                     };
                 }
-                CheckpointStep::Head(second) => {
-                    let slot = if second {
-                        CONFIRMED[usize::from(slot == CONFIRMED[0])]
-                    } else {
-                        slot
-                    };
+                CheckpointStep::Head => {
                     #[cfg(feature = "scalable-fault-injection")]
                     if crate::scalable_fault::is_armed() {
                         crate::scalable_fault_point("checkpoint.head_prefix");
@@ -491,6 +615,19 @@ impl Store {
             }
             Ok(())
         })?;
+        // The barrier above made the head durable in one slot. A second copy
+        // goes into the other slot without a barrier of its own: the next
+        // publication's barrier (or writeback) persists it, so a completed
+        // generation keeps two copies against the loss of one head without a
+        // second sync per publication. Overwriting the older anchor is safe
+        // now: the new head is already durable. A failed copy changes nothing
+        // the next publication does not redo, so it is not an error.
+        if matches!(publication, Publication::Confirmed) {
+            let copy = CONFIRMED[usize::from(slot == CONFIRMED[0])];
+            crate::scalable_fault_point("checkpoint.head_copy");
+            let _ = write_at(file, copy, &head);
+            crate::scalable_fault_point("checkpoint.head_copy");
+        }
         Ok(Checkpoint {
             offset,
             end,
@@ -513,4 +650,22 @@ impl Store {
             slots: base.root.slots,
         })
     }
+}
+
+/// crc32 of the file bytes `[start, end)`, followed by `tail` when given (the
+/// body about to be written at `end`).
+fn region_crc(file: &File, start: u64, end: u64, tail: Option<&[u8]>) -> DiskIndexResult<u32> {
+    let mut hasher = crc32fast::Hasher::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut at = start;
+    while at < end {
+        let n = usize::try_from((end - at).min(buffer.len() as u64)).unwrap_or(buffer.len());
+        read_at(file, at, &mut buffer[..n])?;
+        hasher.update(&buffer[..n]);
+        at += n as u64;
+    }
+    if let Some(tail) = tail {
+        hasher.update(tail);
+    }
+    Ok(hasher.finalize())
 }

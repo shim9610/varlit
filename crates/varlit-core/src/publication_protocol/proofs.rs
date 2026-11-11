@@ -40,6 +40,8 @@ impl Fault {
 struct Medium {
     primary_synced: bool,
     body_complete: bool,
+    /// Whether the generation's sidecar bytes reached storage. A persisted new
+    /// head is adopted only when this holds: the head names their checksum.
     body_synced: bool,
     selected: bool,
     first: usize,
@@ -68,59 +70,53 @@ impl Medium {
             fault: Fault::arbitrary(),
         }
     }
+    /// The new generation as a reader or a recovery would adopt it: a new head
+    /// whose generation verifies. In memory that needs the complete body; on
+    /// storage it needs the body to have reached storage too.
+    fn visible_new(&self) -> bool {
+        self.heads.contains(&Head::New) && self.body_complete
+    }
+    fn durable_new(&self) -> bool {
+        self.persisted.contains(&Head::New) && self.body_complete && self.body_synced
+    }
     fn check(&self) {
         // A reader can run after each partial effect, including before an error
         // return. Power loss can expose either persisted head independently.
-        assert!(self.heads.iter().any(|h| *h != Head::Torn));
-        assert!(self.persisted.iter().any(|h| *h != Head::Torn));
+        // The newest prior anchor is never the slot written, so it survives
+        // every effect, in memory and on storage.
         let newest = self.old_offsets[0].max(self.old_offsets[1]);
         for heads in [self.heads, self.persisted] {
             assert!(
-                heads[0] == Head::New
-                    || heads[1] == Head::New
-                    || (heads[0] == Head::Old && self.old_offsets[0] == newest)
+                (heads[0] == Head::Old && self.old_offsets[0] == newest)
                     || (heads[1] == Head::Old && self.old_offsets[1] == newest),
                 "newest prior anchor was destroyed"
             );
         }
-        for head in [
-            self.heads[0],
-            self.heads[1],
-            self.persisted[0],
-            self.persisted[1],
-        ] {
-            if head == Head::New {
-                assert!(
-                    self.primary_synced,
-                    "head exposed before primary durability"
-                );
-                assert!(
-                    self.body_complete && self.body_synced,
-                    "head exposed before checkpoint durability"
-                );
-            }
+        if self.visible_new() || self.durable_new() {
+            assert!(
+                self.primary_synced,
+                "generation adopted before primary durability"
+            );
         }
     }
     fn checkpoint_step(&mut self, step: CheckpointStep) -> Result<(), ()> {
         let (effect, complete, failed) = self.fault.begin();
         if effect {
             match step {
-                CheckpointStep::Body => self.body_complete = complete,
-                CheckpointStep::DataSync => {
-                    if complete || kani::any() {
-                        self.body_synced = self.body_complete;
-                        // sync_data covers the whole sidecar, including any
-                        // prior head whose final sync was interrupted.
-                        self.persisted = self.heads;
+                CheckpointStep::Body => {
+                    self.body_complete = complete;
+                    // Background writeback may persist the body at any time.
+                    if complete && kani::any() {
+                        self.body_synced = true;
                     }
                 }
                 CheckpointStep::SelectHead => {
                     self.first = older_head(self.old_offsets[0], self.old_offsets[1]);
                     self.selected = complete;
                 }
-                CheckpointStep::Head(second) => {
+                CheckpointStep::Head => {
                     assert!(self.selected);
-                    let slot = if second { 1 - self.first } else { self.first };
+                    let slot = self.first;
                     self.heads[slot] = if complete { Head::New } else { Head::Torn };
                     // Background writeback may persist none, a torn prefix, or
                     // the complete write; partial writes cannot invent completion.
@@ -130,6 +126,8 @@ impl Medium {
                 }
                 CheckpointStep::HeadSync => {
                     if complete || kani::any() {
+                        // sync_data covers the whole sidecar: body and head.
+                        self.body_synced = self.body_complete;
                         self.persisted = self.heads;
                     }
                 }
@@ -166,10 +164,7 @@ impl Medium {
             }
             CommitStep::Poison => self.poisoned = true,
             CommitStep::Finish => {
-                assert!(
-                    self.persisted == [Head::New; 2],
-                    "acknowledged an undurable commit"
-                );
+                assert!(self.durable_new(), "acknowledged an undurable commit");
                 self.finished = true;
             }
         }
@@ -197,42 +192,40 @@ fn successful_commit_is_reachable_and_durable() {
     medium.fault.at = u8::MAX;
     assert!(commit(|step| medium.commit_step(step)).is_ok());
     assert!(medium.finished && medium.primary_synced && medium.body_synced);
-    assert!(medium.heads == [Head::New; 2] && medium.persisted == [Head::New; 2]);
+    assert!(medium.heads[medium.first] == Head::New && medium.persisted[medium.first] == Head::New);
+    assert!(medium.heads[1 - medium.first] == Head::Old);
 }
 
 #[kani::proof]
 #[kani::unwind(10)]
-fn nonconfirmed_publications_do_not_use_a_second_head() {
-    let working: bool = kani::any();
-    let kind = if working {
-        CheckpointKind::Working
-    } else {
-        CheckpointKind::Dirty
+fn every_publication_writes_one_head_and_only_confirmed_syncs_once() {
+    let choice: u8 = kani::any();
+    let kind = match choice % 3 {
+        0 => CheckpointKind::Working,
+        1 => CheckpointKind::Dirty,
+        _ => CheckpointKind::Confirmed,
     };
     let mut body = false;
-    let mut synced = false;
     let mut heads = 0;
     let mut syncs = 0;
     let result: Result<(), ()> = checkpoint(kind, |step| {
         match step {
             CheckpointStep::Body => body = true,
-            CheckpointStep::DataSync => {
-                assert!(body);
-                synced = true;
-            }
             CheckpointStep::SelectHead => assert!(body),
-            CheckpointStep::Head(second) => {
-                assert!(!second);
-                assert!(working || synced);
+            CheckpointStep::Head => {
+                assert!(body);
                 heads += 1;
             }
-            CheckpointStep::HeadSync => syncs += 1,
+            CheckpointStep::HeadSync => {
+                assert!(heads == 1);
+                syncs += 1;
+            }
         }
         Ok(())
     });
     assert!(result.is_ok());
     assert_eq!(heads, 1);
-    assert_eq!(syncs, u8::from(!working));
+    assert_eq!(syncs, u8::from(matches!(kind, CheckpointKind::Confirmed)));
 }
 
 #[kani::proof]
@@ -338,12 +331,12 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
                 if medium.primary_synced {
                     state.durable = state.working;
                 }
-                state.confirmed = if medium.heads.contains(&Head::New) {
+                state.confirmed = if medium.visible_new() {
                     state.working
                 } else {
                     old
                 };
-                state.persisted = if medium.persisted.contains(&Head::New) {
+                state.persisted = if medium.durable_new() {
                     state.working
                 } else {
                     old
@@ -452,7 +445,7 @@ fn poisoned_writer_never_reaches_publication() {
 fn resumed_writer_cannot_acknowledge_a_volatile_head() {
     let mut medium = Medium::new(false, false);
     let _ = commit(|step| medium.commit_step(step));
-    let visible_new = medium.heads.contains(&Head::New);
+    let visible_new = medium.visible_new();
     // A process restart preserves visible heads, even when the old writer
     // returned no acknowledgement. Body/primary dependencies are already synced.
     let encode = |head, slot| match head {
@@ -463,18 +456,16 @@ fn resumed_writer_cannot_acknowledge_a_volatile_head() {
     let first = encode(medium.heads[0], 0);
     let second = encode(medium.heads[1], 1);
     let failed: bool = kani::any();
-    let persisted = Cell::new(medium.persisted);
+    let persisted = Cell::new(medium.durable_new());
     let ready = resume(first, second, || {
         if !failed || kani::any() {
-            persisted.set(medium.heads);
+            // sync_data covers every byte the visible generation names.
+            persisted.set(visible_new);
         }
         if failed { Err(()) } else { Ok(()) }
     });
     // A clean/no-write sync may acknowledge the view only after successful resume.
     if ready.is_ok() && visible_new {
-        assert!(
-            persisted.get().contains(&Head::New),
-            "resumed writer acknowledged volatile head"
-        );
+        assert!(persisted.get(), "resumed writer acknowledged volatile head");
     }
 }

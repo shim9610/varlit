@@ -235,18 +235,9 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         let ty = &field.ty;
         let field_id = field.field_id;
         quote! {
-            // the nested field encoder inherits the parent encoder's
-            // remaining output budget, so a limit-bounded writer entry point
-            // surfaces its typed limit error before an oversized field is
-            // ever fully buffered, instead of after staging the whole child
-            // encoding.
-            let payload = encoder.encode_nested_to_vec(&self.#name)?;
-            ::varlit::__core::write_field(
-                encoder,
-                #field_id,
-                <#ty as ::varlit::__core::VarlitEncode>::WIRE_TYPE,
-                &payload,
-            )?;
+            // Encoded straight into the parent buffer (length patched after),
+            // bounded by the parent encoder's own limit: no per-field buffer.
+            ::varlit::__core::encode_field_in_place::<#ty>(encoder, #field_id, &self.#name)?;
         }
     });
 
@@ -292,6 +283,63 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         }
     });
 
+    // In-place decoding into an existing value (reusing what its fields own).
+    let fixed_decode_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        quote!(decoder.decode_value_into(&mut out.#name)?;)
+    });
+    let seen_vars = descriptors.iter().map(|field| {
+        let var = seen_ident(&field.name);
+        quote!(let mut #var = false;)
+    });
+    let match_arms_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let ty = &field.ty;
+        let field_id = field.field_id;
+        let field_name = field.name.to_string();
+        quote! {
+            #field_id => {
+                if header.wire_type != <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE {
+                    return Err(::varlit::__core::Error::WireTypeMismatch {
+                        field: #field_name,
+                        expected: <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE,
+                        actual: header.wire_type,
+                    });
+                }
+                decoder.decode_nested_into(payload, &mut out.#name)?;
+                #var = true;
+            }
+        }
+    });
+    let finish_fields_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let field_id = field.field_id;
+        let field_name = name.to_string();
+        if field.default {
+            quote! {
+                if !#var {
+                    out.#name = ::core::default::Default::default();
+                }
+            }
+        } else {
+            quote! {
+                if !#var {
+                    return Err(::varlit::__core::Error::MissingField {
+                        field: #field_name,
+                        field_id: #field_id,
+                    });
+                }
+            }
+        }
+    });
+    let empty_fields = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let ty = &field.ty;
+        quote!(#name: <#ty as ::varlit::__core::VarlitEmpty>::empty())
+    });
+
     let encode_body = quote! {
         match <Self as ::varlit::__core::VarlitBlock>::KIND {
             ::varlit::__core::BlockKind::Fixed | ::varlit::__core::BlockKind::Matrix => {
@@ -321,6 +369,29 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                     }
                 }
                 ::core::result::Result::Ok(Self { #(#build_fields,)* })
+            }
+            ::varlit::__core::BlockKind::Internal => unreachable!("user blocks cannot be internal"),
+        }
+    };
+
+    let decode_into_body = quote! {
+        match <Self as ::varlit::__core::VarlitBlock>::KIND {
+            ::varlit::__core::BlockKind::Fixed | ::varlit::__core::BlockKind::Matrix => {
+                #(#fixed_decode_into)*
+                ::core::result::Result::Ok(())
+            }
+            ::varlit::__core::BlockKind::Variable => {
+                #(#seen_vars)*
+                while decoder.remaining() > 0 {
+                    let header = ::varlit::__core::read_field_header(decoder)?;
+                    let payload = decoder.read_exact(header.payload_len as usize)?;
+                    match header.field_id {
+                        #(#match_arms_into)*
+                        _ => {}
+                    }
+                }
+                #(#finish_fields_into)*
+                ::core::result::Result::Ok(())
             }
             ::varlit::__core::BlockKind::Internal => unreachable!("user blocks cannot be internal"),
         }
@@ -445,6 +516,19 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             fn decode_varlit(decoder: &mut ::varlit::__core::Decoder<'_>) -> ::varlit::__core::Result<Self> {
                 #decode_body
             }
+
+            fn decode_varlit_into(
+                out: &mut Self,
+                decoder: &mut ::varlit::__core::Decoder<'_>,
+            ) -> ::varlit::__core::Result<()> {
+                #decode_into_body
+            }
+        }
+
+        impl ::varlit::__core::VarlitEmpty for #ident {
+            fn empty() -> Self {
+                Self { #(#empty_fields,)* }
+            }
         }
 
         impl ::varlit::__core::VarlitBlock for #ident {
@@ -469,6 +553,11 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
 
 pub(super) fn option_ident(name: &Ident) -> Ident {
     format_ident!("__varlit_field_{}", name)
+}
+
+/// Presence flag for a variable field during an in-place decode.
+pub(super) fn seen_ident(name: &Ident) -> Ident {
+    format_ident!("__varlit_seen_{}", name)
 }
 
 /// Deterministic fingerprint of the canonical block schema, emitted as a const

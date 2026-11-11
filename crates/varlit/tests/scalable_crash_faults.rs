@@ -17,9 +17,10 @@ mod enabled {
         BatchOptions, BlockDescriptor, BlockKind, Decoder, DiskIndexBatchOptions, DiskIndexOptions,
         DiskIndexPlan, DiskIndexedBlock, Encoder, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
         ManifestPolicy, ReadLimits, RecoveryPolicy, Result as VarlitResult, StreamOptions,
-        VarlitBlock, VarlitDecode, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
-        VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType, WriterLockBreakPolicy,
-        bootstrap_stream_checkpoint, clear_stale_writer_lock, rebuild_disk_index,
+        VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitIndexedReader,
+        VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType,
+        WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock,
+        rebuild_disk_index,
     };
 
     mod histories {
@@ -88,6 +89,12 @@ mod enabled {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct StreamRecord(u64);
 
+    impl VarlitEmpty for StreamRecord {
+        fn empty() -> Self {
+            Self(0)
+        }
+    }
+
     impl VarlitEncode for StreamRecord {
         const WIRE_TYPE: WireType = WireType::U64;
 
@@ -117,6 +124,12 @@ mod enabled {
     struct IndexedRecord {
         key: u64,
         value: u64,
+    }
+
+    impl VarlitEmpty for IndexedRecord {
+        fn empty() -> Self {
+            Self { key: 0, value: 0 }
+        }
     }
 
     impl VarlitEncode for IndexedRecord {
@@ -776,9 +789,15 @@ mod enabled {
     }
 
     fn read_stream(root: &Path) -> VarlitResult<Vec<StreamRecord>> {
-        VarlitStreamReader::open(stream_spec(), native_path(root), stream_options())?
-            .blocks::<StreamRecord>()?
-            .collect()
+        let mut blocks =
+            VarlitStreamReader::open(stream_spec(), native_path(root), stream_options())?
+                .blocks::<StreamRecord>()?;
+        let mut record = StreamRecord::empty();
+        let mut records = Vec::new();
+        while blocks.next_into(&mut record)? {
+            records.push(record);
+        }
+        Ok(records)
     }
 
     fn read_indexed(
@@ -792,9 +811,10 @@ mod enabled {
             index_plan(),
         )?;
         let mut values = Vec::new();
+        let mut value = IndexedRecord::empty();
         for key in keys {
-            if let Some(value) = reader.get::<IndexedRecord>(&key)? {
-                values.push(value);
+            if reader.get::<IndexedRecord>(&key, &mut value)? {
+                values.push(value.clone());
             }
         }
         Ok(values)

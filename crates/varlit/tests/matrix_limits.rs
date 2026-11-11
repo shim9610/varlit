@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, MatrixAuxDescriptor,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
-    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitEmpty, VarlitMatrixBlock,
 };
 // No helper names a residency policy any more: 0.5.0 removed
 // `MatrixMetadataResidency::EagerVerified`, so residency is always the bounded
@@ -387,8 +387,9 @@ fn cell_reads_check_materialization_limit_before_allocating_slot_bytes() -> varl
         .expect_err("slot payload must be rejected before its four-byte allocation");
     expect_limit(error, "materialized bytes", 3);
 
+    let mut cell = LimitedCell::empty();
     let error = reader
-        .read_matrix_cell::<LimitedCell>(key)
+        .read_matrix_cell::<LimitedCell>(key, &mut cell)
         .expect_err("typed cell must be rejected before its four-byte allocation");
     expect_limit(error, "materialized bytes", 3);
     Ok(())
@@ -524,11 +525,8 @@ fn resident_bitmap_budget_is_charged_as_pages_are_materialized() -> varlit::Resu
         varlit::IntegrityPolicy::Crc32,
     )
     .open_readonly(roomy.path())?;
-    assert_eq!(
-        reader
-            .read_matrix_cell::<LimitedCell>(MatrixKey::new(0, 0))?
-            .value,
-        1
-    );
+    let mut cell = LimitedCell::empty();
+    reader.read_matrix_cell::<LimitedCell>(MatrixKey::new(0, 0), &mut cell)?;
+    assert_eq!(cell.value, 1);
     Ok(())
 }

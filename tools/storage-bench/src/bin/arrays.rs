@@ -574,9 +574,14 @@ enum Reader {
     MatrixOwned(VarlitFile),
     Hdf(Hdf),
     Matrix(MmapMatrix),
-    Native(VarlitFile, Vec<RecordIndexEntry>, bool),
-    Stream(VarlitStreamReader, StreamingBlocks<Chunk>),
-    Index(VarlitIndexedReader, Option<StreamingBlocks<KeyChunk>>),
+    // The trailing value is the caller-owned decode target, kept alive across reads.
+    Native(VarlitFile, Vec<RecordIndexEntry>, bool, Chunk),
+    Stream(VarlitStreamReader, StreamingBlocks<Chunk>, Chunk),
+    Index(
+        VarlitIndexedReader,
+        Option<StreamingBlocks<KeyChunk>>,
+        KeyChunk,
+    ),
     Sql(Sql),
 }
 impl Reader {
@@ -624,7 +629,7 @@ impl Reader {
                 )?;
                 let mut entries = Vec::new();
                 f.block_entries_into::<Chunk>(&mut entries)?;
-                Self::Native(f, entries, mode == "native-view")
+                Self::Native(f, entries, mode == "native-view", Chunk::empty())
             }
             "native-window" => {
                 let f = VarlitFile::open_readonly(
@@ -644,7 +649,7 @@ impl Reader {
                 )?;
                 {
                     let iter = f.blocks::<Chunk>()?;
-                    Self::Stream(f, iter)
+                    Self::Stream(f, iter, Chunk::empty())
                 }
             }
             "indexed" => Self::Index(
@@ -655,6 +660,7 @@ impl Reader {
                     plan(),
                 )?,
                 None,
+                KeyChunk::empty(),
             ),
             "sql-columns" | "sql-chunks" => {
                 Self::Sql(Sql::open(p, mode == "sql-columns", g, page, mmap, false))
@@ -664,11 +670,11 @@ impl Reader {
     }
     fn scan_begin(&mut self) {
         match self {
-            Self::Stream(f, iter) => {
+            Self::Stream(f, iter, _) => {
                 *iter = f.blocks::<Chunk>().expect("reset immutable stream cursor");
             }
             Self::Sql(s) => s.scan_begin(),
-            Self::Index(f, iter) => {
+            Self::Index(f, iter, _) => {
                 *iter = Some(f.blocks::<KeyChunk>().expect("indexed scan cursor"))
             }
             _ => {}
@@ -683,10 +689,12 @@ impl Reader {
             s.range(first, out);
             return Ok(());
         }
-        if let Self::Stream(_, iter) = self {
+        if let Self::Stream(_, iter, c) = self {
             let mut done = 0;
             while done < out.len() {
-                let c = iter.next().ok_or("short stream")??;
+                if !iter.next_into(c)? {
+                    return Err("short stream".into());
+                }
                 assert_eq!(c.first as usize, first + done / SAMPLE);
                 let n = c.data.len();
                 assert!(n <= out.len() - done);
@@ -749,7 +757,7 @@ impl Reader {
                     assert_eq!(b.len(), g);
                     out[done..done + n].copy_from_slice(&b[offset..offset + n]);
                 }
-                Self::Native(f, e, view) => {
+                Self::Native(f, e, view, c) => {
                     if *view {
                         f.read_logical_payload_into(&e[chunk], scratch)?;
                         let (key, b) = borrowed(scratch)?;
@@ -757,14 +765,16 @@ impl Reader {
                         assert_eq!(b.len(), g);
                         out[done..done + n].copy_from_slice(&b[offset..offset + n]);
                     } else {
-                        let c: Chunk = f.decode_block_into(&e[chunk], scratch)?;
+                        f.decode_block_into::<Chunk>(&e[chunk], scratch, c)?;
                         assert_eq!(c.first as usize, start);
                         assert_eq!(c.data.len(), g);
                         out[done..done + n].copy_from_slice(&c.data[offset..offset + n]);
                     }
                 }
-                Self::Index(f, _) => {
-                    let c: KeyChunk = f.get(&(start as u64))?.ok_or("missing chunk")?;
+                Self::Index(f, _, c) => {
+                    if !f.get::<KeyChunk>(&(start as u64), c)? {
+                        return Err("missing chunk".into());
+                    }
                     assert_eq!(c.first as usize, start);
                     out[done..done + n].copy_from_slice(&c.data[offset..offset + n]);
                 }
@@ -799,10 +809,12 @@ impl Reader {
             }
             return Ok(());
         }
-        if let Self::Index(_, Some(iter)) = self {
+        if let Self::Index(_, Some(iter), c) = self {
             let mut done = 0;
             while done < out.len() {
-                let c = iter.next().ok_or("short indexed scan")??;
+                if !iter.next_into(c)? {
+                    return Err("short indexed scan".into());
+                }
                 assert_eq!(c.first as usize, first + done / SAMPLE);
                 let n = c.data.len();
                 out[done..done + n].copy_from_slice(&c.data);
@@ -819,7 +831,7 @@ impl Reader {
     }
     fn follow_native(&mut self, expected: usize) -> R<()> {
         let (f, entries) = match self {
-            Self::Native(f, entries, _) | Self::NativeWindow(f, entries, _) => (f, entries),
+            Self::Native(f, entries, _, _) | Self::NativeWindow(f, entries, _) => (f, entries),
             _ => return Err("not an append-only native reader".into()),
         };
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
@@ -853,7 +865,7 @@ impl Reader {
         if let Self::Sql(s) = self {
             s.query_begin();
         }
-        if let Self::Index(_, iter) = self {
+        if let Self::Index(_, iter, _) = self {
             *iter = None;
         }
     }
@@ -1097,8 +1109,8 @@ fn live_reader(
     let mut r = Reader::open(reader_mode, path, g, page, mmap)?;
     match &mut r {
         Reader::Hdf(h) => assert_eq!(h.rows, 0),
-        Reader::Stream(_, iter) => assert!(iter.next().is_none()),
-        Reader::Native(_, entries, _) | Reader::NativeWindow(_, entries, _) => {
+        Reader::Stream(_, iter, c) => assert!(!iter.next_into(c)?),
+        Reader::Native(_, entries, _, _) | Reader::NativeWindow(_, entries, _) => {
             assert!(entries.is_empty())
         }
         Reader::Sql(s) => {
@@ -1149,10 +1161,10 @@ fn live_reader(
         let phase = Instant::now();
         match &mut r {
             Reader::Hdf(h) => h.follow(),
-            Reader::Stream(f, iter) => {
+            Reader::Stream(f, iter, _) => {
                 f.follow_blocks(iter)?;
             }
-            Reader::Native(_, _, _) | Reader::NativeWindow(_, _, _) => {
+            Reader::Native(_, _, _, _) | Reader::NativeWindow(_, _, _) => {
                 r.follow_native((off + EPOCH) / g)?;
             }
             Reader::Sql(s) => {

@@ -100,11 +100,16 @@ use inner::{
     Scoped, ScopedLayout, ScopedLayoutChunkLayoutFields, ScopedLayoutChunkLayoutWrite, ScopedRead,
     ScopedUser, ScopedWrite,
 };
+use varlit::VarlitEmpty as _;
 
 /// Generic over the generated read trait: the trait must be nameable at the
 /// same visibility as the reader that implements it.
 fn latest_name<R: ScopedRead>(reader: &R, key: u64) -> varlit::Result<Option<String>> {
-    Ok(reader.scoped_users()?.get(&key)?.map(|user| user.name))
+    let mut user = ScopedUser::empty();
+    Ok(reader
+        .scoped_users()?
+        .get(&key, &mut user)?
+        .then_some(user.name))
 }
 
 #[test]

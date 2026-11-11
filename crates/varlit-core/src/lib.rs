@@ -89,10 +89,11 @@ pub use adapter::{
 };
 pub use chunks::ChunkedBytes;
 pub use codec::{
-    Decoder, Encoder, FieldHeader, VarlitDecode, VarlitEncode, WireType, decode_from_slice,
-    encode_to_vec, read_field_header, write_field,
+    Decoder, Encoder, FieldHeader, VarlitDecode, VarlitEmpty, VarlitEncode, WireType,
+    decode_from_slice, decode_from_slice_into, encode_field_in_place, encode_to_vec,
+    read_field_header, write_field,
 };
-pub use collections::{BlockIter, BlockVec, KeyedBlockVec};
+pub use collections::{BlockCursor, BlockVec, KeyedBlockVec};
 #[doc(hidden)]
 pub use conformance::RecordValidator;
 pub use conformance::{FileCheck, FileCheckReport, FileCheckStatus, check_file};

@@ -85,6 +85,12 @@ impl VarlitDecode for PlainMirror {
     }
 }
 
+impl varlit::VarlitEmpty for PlainMirror {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for PlainMirror {
     const ID: u32 = 60;
     const VERSION: u16 = 1;
@@ -119,6 +125,12 @@ impl VarlitDecode for PlainImpostor {
     }
 }
 
+impl varlit::VarlitEmpty for PlainImpostor {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for PlainImpostor {
     const ID: u32 = 60;
     const VERSION: u16 = 1;
@@ -149,6 +161,15 @@ impl VarlitDecode for KeyedDenier {
 
     fn decode_varlit(_decoder: &mut Decoder<'_>) -> varlit::Result<Self> {
         unreachable!("registration must fail before any decode")
+    }
+}
+
+impl varlit::VarlitEmpty for KeyedDenier {
+    fn empty() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+        }
     }
 }
 
@@ -190,6 +211,15 @@ impl VarlitDecode for KeyedMirror {
             id: inner.id,
             name: inner.name,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for KeyedMirror {
+    fn empty() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+        }
     }
 }
 
@@ -276,6 +306,12 @@ impl VarlitDecode for MatrixImpostorCell {
     }
 }
 
+impl varlit::VarlitEmpty for MatrixImpostorCell {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for MatrixImpostorCell {
     const ID: u32 = <MatrixGenCell as VarlitBlock>::ID;
     const VERSION: u16 = <MatrixGenCell as VarlitBlock>::VERSION;
@@ -350,7 +386,7 @@ fn correct_manual_mirror_still_registers() -> varlit::Result<()> {
 
     let mirrored = file.blocks::<PlainMirror>()?;
     assert_eq!(mirrored.len(), 1);
-    assert_eq!(mirrored.get(0)?, Some(PlainMirror { value: 7 }));
+    assert_eq!(opt(|o| mirrored.get(0, o))?, Some(PlainMirror { value: 7 }));
 
     cleanup(&path);
     Ok(())
@@ -442,7 +478,7 @@ fn keyed_mirror_with_agreeing_keyedness_registers_and_reads() -> varlit::Result<
     let keyed = file.keyed_blocks::<KeyedMirror>()?;
     assert_eq!(keyed.len(), 1);
     assert_eq!(
-        keyed.get(&5)?,
+        opt(|o| keyed.get(&5, o))?,
         Some(KeyedMirror {
             id: 5,
             name: "beta".to_string(),
@@ -492,13 +528,11 @@ fn matrix_impostor_same_stride_read_is_rejected() -> varlit::Result<()> {
 
     let reader = InvariantMatrixFormat::spec().open_reader(&path)?;
     assert_eq!(
-        reader.read_matrix_cell::<MatrixGenCell>(MatrixKey::new(0, 0))?,
+        val(|o| reader.read_matrix_cell::<MatrixGenCell>(MatrixKey::new(0, 0), o))?,
         MatrixGenCell { value: 41 }
     );
     assert_matrix_impostor_rejected(
-        reader
-            .read_matrix_cell::<MatrixImpostorCell>(MatrixKey::new(0, 0))
-            .map(|_| ()),
+        val(|o| reader.read_matrix_cell::<MatrixImpostorCell>(MatrixKey::new(0, 0), o)).map(|_| ()),
     );
 
     cleanup(&path);
@@ -612,6 +646,12 @@ impl VarlitDecode for OrderedImpostor {
     }
 }
 
+impl varlit::VarlitEmpty for OrderedImpostor {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for OrderedImpostor {
     const ID: u32 = 63;
     const VERSION: u16 = 1;
@@ -654,7 +694,7 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     file.push(&Ordered { value: 7 })?;
     file.flush()?;
     assert_eq!(
-        file.blocks::<Ordered>()?.get(0)?,
+        opt(|o| file.blocks::<Ordered>()?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
     drop(file);
@@ -662,7 +702,7 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     // Reopening keeps the same verdict in both directions.
     let reopened = OrderInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        reopened.blocks::<Ordered>()?.get(0)?,
+        opt(|o| reopened.blocks::<Ordered>()?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
     assert_rejected(reopened.blocks::<OrderedImpostor>().map(|_| ()));
@@ -742,6 +782,12 @@ impl VarlitDecode for BigCellInheritedEndian {
     }
 }
 
+impl varlit::VarlitEmpty for BigCellInheritedEndian {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for BigCellInheritedEndian {
     const ID: u32 = 64;
     const VERSION: u16 = 1;
@@ -773,6 +819,12 @@ impl VarlitDecode for BigCellExplicitLittle {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for BigCellExplicitLittle {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -808,6 +860,12 @@ impl VarlitDecode for BigCellAgreeingMirror {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for BigCellAgreeingMirror {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -864,7 +922,7 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
 
     let file = EndianInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        file.blocks::<BigCell>()?.get(0)?,
+        opt(|o| file.blocks::<BigCell>()?.get(0, o))?,
         Some(BigCell { value: VALUE })
     );
 
@@ -877,11 +935,11 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
     let mirrored = file.blocks::<BigCellAgreeingMirror>()?;
     assert_eq!(mirrored.len(), 1);
     assert_eq!(
-        mirrored.get(0)?,
+        opt(|o| mirrored.get(0, o))?,
         Some(BigCellAgreeingMirror { value: VALUE })
     );
     assert_ne!(
-        mirrored.get(0)?,
+        opt(|o| mirrored.get(0, o))?,
         Some(BigCellAgreeingMirror { value: SWAPPED }),
         "a byte-swapped read must be impossible on this path"
     );
@@ -933,6 +991,12 @@ impl VarlitDecode for CacheProbe {
         Ok(Self {
             value: u64::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for CacheProbe {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -1148,4 +1212,23 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
     cleanup(&short_path);
     cleanup(&long_path);
     Ok(())
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Decodes into a fresh caller-owned value.
+fn val<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<()>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
 }

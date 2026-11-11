@@ -45,6 +45,15 @@ impl VarlitDecode for Item {
     }
 }
 
+impl varlit::VarlitEmpty for Item {
+    fn empty() -> Self {
+        Self {
+            key: 0,
+            value: String::new(),
+        }
+    }
+}
+
 impl VarlitBlock for Item {
     const ID: u32 = 71;
     const VERSION: u16 = 1;
@@ -225,7 +234,7 @@ fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<
     {
         let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
         assert_eq!(
-            reader.get::<Item>(&10)?,
+            filled(|o| reader.get::<Item>(&10, o))?,
             Some(item(10, "fixed-width-value"))
         );
         assert_eq!(reader.historical_distinct_keys()?, 2);
@@ -274,10 +283,10 @@ fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<
     assert_eq!(report.records, 3);
     let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
     assert_eq!(
-        reader.get::<Item>(&20)?,
+        filled(|o| reader.get::<Item>(&20, o))?,
         Some(item(20, "fixed-width-value"))
     );
-    assert_eq!(reader.get::<Item>(&10)?, None);
+    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
     assert_eq!(reader.historical_distinct_keys()?, 2);
     Ok(())
 }
@@ -411,7 +420,7 @@ fn rewrite_that_shares_the_generation_window_is_still_refused() -> Result<()> {
     {
         let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
         assert_eq!(
-            reader.get::<Item>(&10)?,
+            filled(|o| reader.get::<Item>(&10, o))?,
             Some(item(10, "fixed-width-value"))
         );
     }
@@ -443,10 +452,10 @@ fn rewrite_that_shares_the_generation_window_is_still_refused() -> Result<()> {
     rebuild_disk_index(spec(), &first, options, plan())?;
     let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
     assert_eq!(
-        reader.get::<Item>(&20)?,
+        filled(|o| reader.get::<Item>(&20, o))?,
         Some(item(20, "fixed-width-value"))
     );
-    assert_eq!(reader.get::<Item>(&10)?, None);
+    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
     assert_eq!(reader.historical_distinct_keys()?, historical_before);
     Ok(())
 }
@@ -605,7 +614,10 @@ fn matching_descriptor_plan_still_builds_and_indexes() -> Result<()> {
     let path = directory.path().join("valid-plan.varlit");
     build_primary(&path, [5, 6])?;
     let reader = VarlitIndexedReader::open(spec(), &path, DiskIndexOptions::default(), plan())?;
-    assert_eq!(reader.get::<Item>(&5)?, Some(item(5, "fixed-width-value")));
+    assert_eq!(
+        filled(|o| reader.get::<Item>(&5, o))?,
+        Some(item(5, "fixed-width-value"))
+    );
     Ok(())
 }
 
@@ -685,8 +697,14 @@ fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primar
         damaged[4096 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
         let reader = VarlitIndexedReader::open(spec(), &path, options, plan())?;
-        assert_eq!(reader.get::<Item>(&10)?, Some(item(10, "confirmed")));
-        assert_eq!(reader.get::<Item>(&11)?, Some(item(11, "confirmed")));
+        assert_eq!(
+            filled(|o| reader.get::<Item>(&10, o))?,
+            Some(item(10, "confirmed"))
+        );
+        assert_eq!(
+            filled(|o| reader.get::<Item>(&11, o))?,
+            Some(item(11, "confirmed"))
+        );
         drop(reader);
         damaged[8192 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
@@ -706,8 +724,33 @@ fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primar
             damaged,
             "recovery republished a stale checkpoint"
         );
-        assert_eq!(pinned.get::<Item>(&10)?, Some(item(10, "confirmed")));
-        assert_eq!(pinned.get::<Item>(&11)?, Some(item(11, "confirmed")));
+        assert_eq!(
+            filled(|o| pinned.get::<Item>(&10, o))?,
+            Some(item(10, "confirmed"))
+        );
+        assert_eq!(
+            filled(|o| pinned.get::<Item>(&11, o))?,
+            Some(item(11, "confirmed"))
+        );
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

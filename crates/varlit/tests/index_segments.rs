@@ -22,10 +22,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use varlit::{
-    BlockDescriptor, BlockKind, COMMIT_BLOCK_ID, CommitPolicy, Endian, FormatSpec, IndexPolicy,
-    IntegrityPolicy, MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind,
+    BlockDescriptor, BlockKind, BlockVec, COMMIT_BLOCK_ID, CommitPolicy, Endian, FormatSpec,
+    IndexPolicy, IntegrityPolicy, MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, RecordIndexEntry, SEGMENT_BLOCK_ID,
-    TransactionMarkerMode, VarlitBlock, VarlitMatrixBlock, varlit_format,
+    TransactionMarkerMode, VarlitBlock, VarlitEmpty, VarlitMatrixBlock, varlit_format,
 };
 // Only the frame-counted tests below open a file through this type directly.
 #[cfg(feature = "scalable-fault-injection")]
@@ -35,6 +35,12 @@ use varlit::VarlitFile;
 #[varlit(id = 60, version = 1, kind = "fixed")]
 struct Line {
     value: u32,
+}
+
+/// Record `index` of `blocks`, decoded into a fresh value.
+fn line_at(blocks: &BlockVec<Line>, index: usize) -> varlit::Result<Option<Line>> {
+    let mut out = Line::empty();
+    Ok(blocks.get(index, &mut out)?.then_some(out))
 }
 
 varlit_format! {
@@ -281,7 +287,7 @@ fn every_record_survives_the_chained_open() -> varlit::Result<()> {
     let blocks = file.blocks::<Line>()?;
     assert_eq!(blocks.len() as u32, lines);
     for value in 0..lines {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -314,7 +320,7 @@ fn a_writer_reopen_keeps_appending_a_valid_chain() -> varlit::Result<()> {
     let blocks = file.blocks::<Line>()?;
     assert_eq!(blocks.len(), 48);
     for value in 0..48u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -470,7 +476,7 @@ fn a_chain_past_the_segment_ceiling_still_opens() -> varlit::Result<()> {
         "the scan fallback must index every record"
     );
     for value in 0..12u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     // And a writer open must not refuse it either.
     let mut writer = capped.open(&path)?;
@@ -886,7 +892,7 @@ fn flush_survives_a_checkpoint_that_cannot_fit() -> varlit::Result<()> {
     let blocks = file.blocks::<Line>()?;
     assert_eq!(blocks.len(), 64);
     for value in 0..64u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     // Skipped, not written badly: no checkpoint record is in the file at all.
     assert!(
@@ -976,9 +982,9 @@ fn a_re_encoded_checkpoint_still_validates_strictly() -> varlit::Result<()> {
     let file = GapFormat::open_readonly(&path)?;
     let blocks = file.blocks::<Line>()?;
     assert_eq!(blocks.len(), 64);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..64u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1017,9 +1023,9 @@ fn an_in_place_replacement_is_refused() -> varlit::Result<()> {
     let reopened = segment_spec().open_readonly(&path)?;
     let blocks = reopened.blocks::<Line>()?;
     assert_eq!(blocks.len(), 16);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..16u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1059,9 +1065,9 @@ fn a_replacement_generation_re_encodes_the_chain() -> varlit::Result<()> {
     );
     let blocks = file.blocks::<Line>()?;
     assert_eq!(blocks.len(), 25);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..25u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1218,8 +1224,8 @@ fn a_chained_file_opens_without_scanning_it_whatever_the_reader_declared() -> va
     );
     for position in 0..by_chain.len() {
         assert_eq!(
-            by_chain.get(position)?,
-            by_scan.get(position)?,
+            line_at(&by_chain, position)?,
+            line_at(&by_scan, position)?,
             "the two open paths disagreed at record {position}"
         );
     }

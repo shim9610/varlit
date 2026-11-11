@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Instant,
 };
-use varlit::{MatrixCellStatus, MatrixKey, ReadLimits, VarlitReader, varlit_format};
+use varlit::{MatrixCellStatus, MatrixKey, ReadLimits, VarlitEmpty, VarlitReader, varlit_format};
 
 varlit_format! {
     pub format Soak {
@@ -56,8 +56,10 @@ fn check(reader: &VarlitReader, row: u32, epoch: u64, groups: u64) -> Result {
             reader.matrix_cell_status::<Cell>(key)?,
             MatrixCellStatus::Committed
         );
+        let mut cell = Cell::empty();
+        reader.read_matrix_cell::<Cell>(key, &mut cell)?;
         assert_eq!(
-            reader.read_matrix_cell::<Cell>(key)?.payload,
+            cell.payload,
             payload(row, v),
             "mixed/corrupt generation row={row} epoch={epoch} version={v}"
         );

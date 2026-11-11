@@ -1,7 +1,29 @@
 use std::fs::remove_file;
 use std::path::PathBuf;
 
-use varlit::{CommitPolicy, IndexPolicy, TransactionMarkerMode, VarlitBlock, varlit_format};
+use varlit::{
+    BlockVec, CommitPolicy, IndexPolicy, KeyedBlockVec, TransactionMarkerMode, VarlitBlock,
+    VarlitEmpty, VarlitKeyedBlock, varlit_format,
+};
+
+/// Owned-result shim over the caller-owned-output `KeyedBlockVec::get`.
+fn get_keyed<K, T>(blocks: &KeyedBlockVec<K, T>, key: &K) -> varlit::Result<Option<T>>
+where
+    K: Eq + std::hash::Hash + Clone,
+    T: VarlitKeyedBlock<Key = K> + VarlitEmpty,
+{
+    let mut out = T::empty();
+    Ok(blocks.get(key, &mut out)?.then_some(out))
+}
+
+/// Owned-result shim over the caller-owned-output `BlockVec::get`.
+fn get_at<T: VarlitBlock + VarlitEmpty>(
+    blocks: &BlockVec<T>,
+    index: usize,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(blocks.get(index, &mut out)?.then_some(out))
+}
 
 const TDMS_OBJECT_FILE: u8 = 0;
 const TDMS_OBJECT_GROUP: u8 = 1;
@@ -110,7 +132,7 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
     let segments = reader.tdms_segments()?;
     assert_eq!(segments.len(), 2);
     assert_eq!(
-        segments.get(0)?,
+        get_at(&segments, 0)?,
         Some(TdmsSegment {
             segment_index: 0,
             toc_mask: 0x1110,
@@ -119,7 +141,7 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
         })
     );
     assert_eq!(
-        segments.get(1)?,
+        get_at(&segments, 1)?,
         Some(TdmsSegment {
             segment_index: 1,
             toc_mask: 0x1108,
@@ -130,9 +152,12 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
 
     let objects = reader.tdms_objects()?;
     assert_eq!(objects.len(), 3);
-    assert_eq!(objects.get(&s("/"))?.unwrap().kind, TDMS_OBJECT_FILE);
     assert_eq!(
-        objects.get(&s("/'Measured Data'"))?,
+        get_keyed(&objects, &s("/"))?.unwrap().kind,
+        TDMS_OBJECT_FILE
+    );
+    assert_eq!(
+        get_keyed(&objects, &s("/'Measured Data'"))?,
         Some(TdmsObject {
             path: s("/'Measured Data'"),
             kind: TDMS_OBJECT_GROUP,
@@ -141,7 +166,7 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
         })
     );
     assert_eq!(
-        objects.get(&s("/'Measured Data'/'Amplitude'"))?,
+        get_keyed(&objects, &s("/'Measured Data'/'Amplitude'"))?,
         Some(TdmsObject {
             path: s("/'Measured Data'/'Amplitude'"),
             kind: TDMS_OBJECT_CHANNEL,
@@ -153,41 +178,44 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
     let properties = reader.tdms_properties()?;
     assert_eq!(properties.len(), 6);
     assert_eq!(
-        properties.get(&(s("/"), s("title")))?.unwrap().string_value,
+        get_keyed(&properties, &(s("/"), s("title")))?
+            .unwrap()
+            .string_value,
         "Varlit TDMS-style adapter model smoke"
     );
     assert_eq!(
-        properties
-            .get(&(s("/'Measured Data'/'Amplitude'"), s("unit")))?
+        get_keyed(&properties, &(s("/'Measured Data'/'Amplitude'"), s("unit")))?
             .unwrap()
             .string_value,
         "mV"
     );
     assert_eq!(
-        properties
-            .get(&(s("/'Measured Data'/'Amplitude'"), s("wf_start_time")))?
-            .unwrap()
-            .timestamp_seconds,
+        get_keyed(
+            &properties,
+            &(s("/'Measured Data'/'Amplitude'"), s("wf_start_time"))
+        )?
+        .unwrap()
+        .timestamp_seconds,
         3_786_912_000
     );
     assert!(
-        properties
-            .get(&(s("/'Measured Data'"), s("calibrated")))?
+        get_keyed(&properties, &(s("/'Measured Data'"), s("calibrated")))?
             .unwrap()
             .bool_value
     );
     assert_eq!(
-        properties
-            .get(&(s("/'Measured Data'"), s("sample_rate_hz")))?
+        get_keyed(&properties, &(s("/'Measured Data'"), s("sample_rate_hz")))?
             .unwrap()
             .float_value,
         1_000.0
     );
     assert_eq!(
-        properties
-            .get(&(s("/'Measured Data'/'Amplitude'"), s("sample_count")))?
-            .unwrap()
-            .int_value,
+        get_keyed(
+            &properties,
+            &(s("/'Measured Data'/'Amplitude'"), s("sample_count"))
+        )?
+        .unwrap()
+        .int_value,
         10
     );
 
@@ -195,14 +223,15 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
     assert_eq!(chunks.len(), 2);
     let mut samples = Vec::new();
     let mut expected_start = 0;
-    for chunk in chunks.as_blocks().iter() {
-        let chunk = chunk?;
+    let mut chunk = TdmsChannelChunk::empty();
+    let mut cursor = chunks.as_blocks().cursor();
+    while cursor.next_into(&mut chunk)? {
         assert_eq!(chunk.group, "Measured Data");
         assert_eq!(chunk.channel, "Amplitude");
         assert_eq!(chunk.start_index, expected_start);
         assert_eq!(chunk.data_type, TDMS_CHANNEL_F64);
         expected_start += chunk.values_f64.len() as u64;
-        samples.extend(chunk.values_f64);
+        samples.extend_from_slice(&chunk.values_f64);
     }
     assert_eq!(expected_start, 10);
     assert_eq!(

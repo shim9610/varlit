@@ -304,7 +304,7 @@ def inspect(text,manifest,proofs):
                 stripped=line.strip()
                 # Raw trait calls and function-item dispatch must reach the
                 # checked boundary. Implementations themselves are not calls.
-                if re.search(r'\b(?:decode_varlit|decode_array)\b',stripped):
+                if re.search(r'\b(?:decode_varlit|decode_varlit_into|decode_array)\b',stripped):
                     adapter=f['name'] in manifest.get('callback_adapters',[])
                     if not (adapter and invocation and stripped==body.strip().splitlines()[-1].strip()):
                         raise ValueError('unchecked codec callback dispatch: '+f['name'])
@@ -357,10 +357,15 @@ def inspect(text,manifest,proofs):
                 if mutable_whole and invocation['target'] not in mutable_targets and not (
                         re.fullmatch(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+',invocation['target'])
                         and len(unique_names.get(invocation['target'].rsplit('::',1)[-1],set()))==1
-                        and invocation['target'].rsplit('::',1)[-1] in mutable_targets):
+                        and invocation['target'].rsplit('::',1)[-1] in mutable_targets) and not (
+                        # A crate trait call (`<Vec<u16> as FillFixedVec>::fill_fixed`) whose
+                        # every same-named definition is itself a checked owner writer.
+                        re.fullmatch(r'<[^\n]+ as [A-Za-z_]\w*>::[A-Za-z_]\w*',invocation['target'])
+                        and unique_names.get(invocation['target'].rsplit('::',1)[-1])
+                        and unique_names[invocation['target'].rsplit('::',1)[-1]]<=mutable_targets):
                     callback=((f['name'] in manifest.get('callback_boundaries',[])
                               and 'DecoderCallback' in invocation['target'] and invocation['target'].endswith('::call'))
-                              or (f['name'] in manifest.get('callback_adapters',[]) and re.search(r'::decode_(?:varlit|array)$',invocation['target'])))
+                              or (f['name'] in manifest.get('callback_adapters',[]) and re.search(r'::decode_(?:varlit|varlit_into|array)$',invocation['target'])))
                     if not callback:
                         raise ValueError('unmodeled mutable-owner call: '+f['name']+' '+invocation['target'])
                 # Mutable projections can only enter a registered semantic

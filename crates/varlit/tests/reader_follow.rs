@@ -14,7 +14,17 @@
 
 #![cfg(all(feature = "integrity", feature = "scalable-fault-injection"))]
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
+
+/// `read_block_at` into a fresh value, returned by value for the asserts.
+fn read_at<T: VarlitBlock + VarlitEmpty>(
+    file: &varlit::VarlitFile,
+    offset: u64,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    file.read_block_at::<T>(offset, &mut Vec::new(), &mut out)?;
+    Ok(out)
+}
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -120,7 +130,7 @@ fn a_handle_catches_up_to_records_written_after_it_opened() -> varlit::Result<()
     // Not merely equal counts: the newest record reads back through the
     // followed handle, which is the read the old snapshot would have refused.
     let tail = reader.block_tail_offset(Label::ID).expect("a Label");
-    let label: Label = reader.read_block_at(tail)?;
+    let label: Label = read_at(&reader, tail)?;
     assert_eq!(label.text, "after");
     Ok(())
 }
@@ -312,7 +322,7 @@ fn a_follow_does_not_cross_a_republished_generation() -> varlit::Result<()> {
     let mut reader = varlit::VarlitFile::open_readonly(spec(), &path)?;
     let held = records(&reader)?;
     let held_tail = reader.block_tail_offset(Reading::ID).expect("a Reading");
-    let held_value: Reading = reader.read_block_at(held_tail)?;
+    let held_value: Reading = read_at(&reader, held_tail)?;
 
     // Republish the pathname with a longer record, so every offset moves.
     let mut writer = varlit::VarlitWriter::open(spec(), &path)?;
@@ -339,13 +349,15 @@ fn a_follow_does_not_cross_a_republished_generation() -> varlit::Result<()> {
     assert_eq!(reader.block_tail_offset(Reading::ID), Some(held_tail));
     // The decisive read: that offset means something different in the new file,
     // and the handle must still resolve it against the old one.
-    let now: Reading = reader.read_block_at(held_tail)?;
+    let now: Reading = read_at(&reader, held_tail)?;
     assert_eq!(
         now, held_value,
         "the old generation is still whole and still this handle's",
     );
-    let label: Label =
-        reader.read_block_at(reader.block_tail_offset(Label::ID).expect("a Label"))?;
+    let label: Label = read_at(
+        &reader,
+        reader.block_tail_offset(Label::ID).expect("a Label"),
+    )?;
     assert_eq!(label.text, "original");
     Ok(())
 }
@@ -449,7 +461,7 @@ fn a_block_with_no_record_in_the_followed_range_keeps_its_tail() -> varlit::Resu
         Some(label_tail),
         "the Label has no record in the followed range and must keep its tail",
     );
-    let label: Label = reader.read_block_at(label_tail)?;
+    let label: Label = read_at(&reader, label_tail)?;
     assert_eq!(label.text, "only one, and before the reader opens");
 
     // And the chain from that tail is still walkable, which is what the tail is
@@ -732,9 +744,9 @@ fn reopen_moves_to_the_current_generation_without_disturbing_the_old() -> varlit
 
     // Both alive and both correct, each about its own generation.
     assert_eq!(old.block_tail_offset(Reading::ID), Some(old_tail));
-    let old_label: Label = old.read_block_at(old.block_tail_offset(Label::ID).unwrap())?;
+    let old_label: Label = read_at(&old, old.block_tail_offset(Label::ID).unwrap())?;
     assert_eq!(old_label.text, "original");
-    let new_label: Label = new.read_block_at(new.block_tail_offset(Label::ID).unwrap())?;
+    let new_label: Label = read_at(&new, new.block_tail_offset(Label::ID).unwrap())?;
     assert!(new_label.text.starts_with("a replacement"));
 
     let fresh = varlit::VarlitFile::open_readonly(spec(), &path)?;
@@ -954,7 +966,7 @@ fn a_handle_that_never_follows_reads_on_without_being_told() -> varlit::Result<(
     let viewer = varlit::VarlitFile::open_readonly(spec(), &path)?;
     let held = records(&viewer)?;
     let held_tail = viewer.block_tail_offset(Reading::ID).expect("a Reading");
-    let held_value: Reading = viewer.read_block_at(held_tail)?;
+    let held_value: Reading = read_at(&viewer, held_tail)?;
 
     let mut writer = varlit::VarlitWriter::open(spec(), &path)?;
     writer.replace_block(
@@ -969,8 +981,8 @@ fn a_handle_that_never_follows_reads_on_without_being_told() -> varlit::Result<(
     // generation. No error, no warning, nothing in the values themselves.
     assert_eq!(records(&viewer)?, held);
     assert_eq!(viewer.block_tail_offset(Reading::ID), Some(held_tail));
-    assert_eq!(viewer.read_block_at::<Reading>(held_tail)?, held_value);
-    let label: Label = viewer.read_block_at(viewer.block_tail_offset(Label::ID).unwrap())?;
+    assert_eq!(read_at::<Reading>(&viewer, held_tail)?, held_value);
+    let label: Label = read_at(&viewer, viewer.block_tail_offset(Label::ID).unwrap())?;
     assert_eq!(label.text, "original");
     assert!(!viewer.blocks::<Reading>()?.is_empty());
 
@@ -984,7 +996,7 @@ fn a_handle_that_never_follows_reads_on_without_being_told() -> varlit::Result<(
         fresh.block_tail_offset(Reading::ID),
         viewer.block_tail_offset(Reading::ID),
     );
-    let fresh_label: Label = fresh.read_block_at(fresh.block_tail_offset(Label::ID).unwrap())?;
+    let fresh_label: Label = read_at(&fresh, fresh.block_tail_offset(Label::ID).unwrap())?;
     assert!(fresh_label.text.starts_with("a replacement"));
     Ok(())
 }
@@ -1045,7 +1057,7 @@ fn a_shrunk_pathname_leaves_a_held_generation_whole() -> varlit::Result<()> {
     // The old object is unlinked but alive, so the handle still reads all of
     // it — the bytes are gone from the directory listing, not from the disk.
     assert!(viewer.blocks::<Reading>()?.len() >= 200);
-    let held: Label = viewer.read_block_at(viewer.block_tail_offset(Label::ID).unwrap())?;
+    let held: Label = read_at(&viewer, viewer.block_tail_offset(Label::ID).unwrap())?;
     assert_eq!(held.text.len(), 4_000);
     drop(viewer);
     Ok(())

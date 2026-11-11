@@ -1,5 +1,5 @@
 #![cfg(feature = "integrity")]
-use varlit::{DiskIndexOptions, varlit_format};
+use varlit::{DiskIndexOptions, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format AuditFinite {
         magic:b"AUDITFIN";version:1;schema_hash:computed;index:keyed_offset_chain;integrity:crc32;
@@ -77,7 +77,11 @@ fn aliased_finite_extents_return_errors_through_public_reads() -> varlit::Result
     let checkpoint_at = bytes.len() as u64;
     bytes.extend_from_slice(&checkpoint);
     let end = bytes.len() as u64;
+    // A forged head in the plain (v1) format, which names no generation
+    // checksum: the audit is about aliased extents, not the head.
     for at in [4096usize, 8192] {
+        bytes[at..at + 64].fill(0);
+        bytes[at..at + 8].copy_from_slice(b"VIXHEAD1");
         bytes[at + 8..at + 16].copy_from_slice(&checkpoint_at.to_le_bytes());
         bytes[at + 16..at + 24].copy_from_slice(&end.to_le_bytes());
         let crc = crc32(&bytes[at..at + 28]);
@@ -85,33 +89,25 @@ fn aliased_finite_extents_return_errors_through_public_reads() -> varlit::Result
     }
     std::fs::write(&sidecar, bytes)?;
     let reader = AuditFinite::open_indexed_reader(&path, options)?;
-    assert_eq!(
-        reader
-            .get_short(&ShortKey::from_code(0).unwrap())?
-            .unwrap()
-            .value,
-        10
-    );
+    let mut short = Short::empty();
+    let mut long = Long::empty();
+    assert!(reader.get_short(&ShortKey::from_code(0).unwrap(), &mut short)?);
+    assert_eq!(short.value, 10);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        reader.get_long(&LongKey::from_code(1).unwrap())
+        reader.get_long(&LongKey::from_code(1).unwrap(), &mut long)
     }));
     assert!(outcome.is_ok(), "malformed slot references must not panic");
     assert!(
         outcome.unwrap().is_err(),
         "inconsistent cached extent must be rejected"
     );
-    assert_eq!(
-        reader
-            .get_short(&ShortKey::from_code(0).unwrap())?
-            .unwrap()
-            .value,
-        10
-    );
+    assert!(reader.get_short(&ShortKey::from_code(0).unwrap(), &mut short)?);
+    assert_eq!(short.value, 10);
     // The reverse cache warm-up must reject the inconsistent shape too.
     let reverse = AuditFinite::open_indexed_reader(&path, options)?;
-    assert!(reverse.get_long(&LongKey::from_code(2).unwrap())?.is_none());
+    assert!(!reverse.get_long(&LongKey::from_code(2).unwrap(), &mut long)?);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        reverse.get_short(&ShortKey::from_code(0).unwrap())
+        reverse.get_short(&ShortKey::from_code(0).unwrap(), &mut short)
     }));
     assert!(result.is_ok());
     assert!(result.unwrap().is_err());
@@ -144,6 +140,7 @@ fn failed_follow_of_checksums_valid_metadata_preserves_real_readers()
             .map(|_| VarlitIndexedReader::open(spec, &path, options, plan))
             .collect::<varlit::Result<Vec<_>>>()?;
         let pin = VarlitIndexedReader::open(spec, &path, options, plan)?;
+        let mut got = Short::empty();
         let held = pin.committed_len();
         writer.push_info(&Short { key, value: 20 })?;
         writer.sync()?;
@@ -178,21 +175,27 @@ fn failed_follow_of_checksums_valid_metadata_preserves_real_readers()
             assert!(reader.follow().is_err());
             assert_eq!(reader.committed_len(), held);
             assert_eq!(reader.resident_state(), *state);
-            assert_eq!(reader.get::<Short>(&key)?.unwrap().value, 10);
+            assert!(reader.get::<Short>(&key, &mut got)?);
+            assert_eq!(got.value, 10);
         }
         std::fs::write(&sidecar, valid)?;
         for (reader, status) in readers.iter_mut().zip(statuses) {
             assert_eq!(reader.snapshot_status()?, status);
             reader.follow()?;
-            assert_eq!(reader.get::<Short>(&key)?.unwrap().value, 20);
+            assert!(reader.get::<Short>(&key, &mut got)?);
+            assert_eq!(got.value, 20);
         }
-        for cursor in cursors {
-            let items = cursor.collect::<varlit::Result<Vec<_>>>()?;
+        for mut cursor in cursors {
+            let mut items = Vec::new();
+            while cursor.next_into(&mut got)? {
+                items.push(got.clone());
+            }
             assert_eq!(items.len(), 1);
             assert_eq!(items[0].value, 10);
         }
         assert_eq!(pin.committed_len(), held);
-        assert_eq!(pin.get::<Short>(&key)?.unwrap().value, 10);
+        assert!(pin.get::<Short>(&key, &mut got)?);
+        assert_eq!(got.value, 10);
     }
     println!("HOSTILE_FOLLOW valid_crc_fields=3 followers=8 pinned=1 retries=24");
     Ok(())

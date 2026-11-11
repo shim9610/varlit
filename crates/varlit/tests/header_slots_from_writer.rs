@@ -29,7 +29,7 @@
 //! - `the_accessors_agree_across_all_three_layers` — the forwarding is
 //!   forwarding, not a second implementation.
 
-use varlit::{VarlitFile, VarlitWriter, varlit_format};
+use varlit::{VarlitEmpty, VarlitFile, VarlitWriter, varlit_format};
 
 // `TailIndex` is what the writer records: where each record starts, so a reader
 // can seed a walk from the header instead of rebuilding an index to find it.
@@ -68,7 +68,7 @@ fn a_generated_writer_writes_the_region_directly() {
         .expect("write through the generated writer");
 
     assert_eq!(
-        writer.read_header_block::<TailIndex>().expect("read"),
+        filled(|out| writer.read_header_block::<TailIndex>(out)).expect("read"),
         Some(TailIndex {
             offsets: vec![7, 11]
         }),
@@ -81,7 +81,7 @@ fn a_generated_writer_writes_the_region_directly() {
 
     let reader = Tails::open_readonly(&path).expect("reopen");
     assert_eq!(
-        reader.read_header_block::<TailIndex>().expect("read"),
+        filled(|out| reader.read_header_block::<TailIndex>(out)).expect("read"),
         Some(TailIndex {
             offsets: vec![7, 11]
         }),
@@ -111,7 +111,7 @@ fn the_writer_keeps_writing_afterwards() {
 
     let reader = Tails::open_readonly(&path).expect("reopen");
     assert_eq!(
-        reader.read_header_block::<TailIndex>().expect("read"),
+        filled(|out| reader.read_header_block::<TailIndex>(out)).expect("read"),
         Some(TailIndex {
             offsets: vec![1, 2]
         }),
@@ -152,15 +152,15 @@ fn an_offset_recorded_at_append_seeds_a_read() {
     drop(writer);
 
     let reader = Tails::open_readonly(&path).expect("reopen");
-    let seeds = reader
-        .read_header_block::<TailIndex>()
+    let seeds = filled(|out| reader.read_header_block::<TailIndex>(out))
         .expect("read")
         .expect("present");
     assert_eq!(seeds.offsets, offsets);
 
     for (value, offset) in seeds.offsets.iter().copied().enumerate() {
-        let sample = reader
-            .read_block_at::<Sample>(offset)
+        let mut sample = Sample::empty();
+        reader
+            .read_block_at::<Sample>(offset, &mut Vec::new(), &mut sample)
             .expect("positional read from a header-supplied offset");
         assert_eq!(sample.value, value as u64);
     }
@@ -176,7 +176,7 @@ fn a_bare_varlit_writer_reaches_it_too() {
         .write_header_block(&TailIndex { offsets: vec![42] })
         .expect("write");
     assert_eq!(
-        writer.read_header_block::<TailIndex>().expect("read"),
+        filled(|out| writer.read_header_block::<TailIndex>(out)).expect("read"),
         Some(TailIndex { offsets: vec![42] }),
     );
     // And the escape hatch is a borrow now, not a move.
@@ -186,7 +186,7 @@ fn a_bare_varlit_writer_reaches_it_too() {
 
     let reader = VarlitFile::open_readonly(Tails::spec(), &path).expect("reopen");
     assert_eq!(
-        reader.read_header_block::<TailIndex>().expect("read"),
+        filled(|out| reader.read_header_block::<TailIndex>(out)).expect("read"),
         Some(TailIndex { offsets: vec![42] }),
     );
 }
@@ -221,4 +221,12 @@ fn the_accessors_agree_across_all_three_layers() {
     assert_eq!(file.header_slots_sealed().expect("sealed"), sealed);
 
     assert_eq!(used + free, capacity, "used and free partition the region");
+}
+
+/// Runs a caller-owned-output read and reports `None` when the slot is empty.
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

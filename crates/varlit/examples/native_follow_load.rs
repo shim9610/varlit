@@ -158,10 +158,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             let timer = Instant::now();
                             assert!(reader.follow().unwrap() > 0);
                             reply.follow_seconds = timer.elapsed().as_secs_f64();
+                            let mut value = Blob::empty();
                             for e in expected.iter() {
                                 let entry = reader.record_entry_at(e.offset).unwrap();
-                                let value = reader
-                                    .decode_block_into::<Blob>(&entry, &mut scratch)
+                                reader
+                                    .decode_block_into::<Blob>(&entry, &mut scratch, &mut value)
                                     .unwrap();
                                 assert_eq!(value.bytes.len(), e.bytes);
                                 assert!(value.bytes.iter().all(|&b| b == e.value));

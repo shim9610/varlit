@@ -18,7 +18,7 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     ManifestPolicy, MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, MatrixResumeSignal, ReadLimits,
-    RecoveryPolicy, VarlitBlock, VarlitDecode, VarlitEncode, VarlitMatrixBlock,
+    RecoveryPolicy, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitMatrixBlock,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +41,12 @@ impl VarlitDecode for IdentityCell {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl VarlitEmpty for IdentityCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -265,10 +271,9 @@ fn create_new_with_dims_is_exclusive_and_initializes_the_claimed_handle() -> var
     // The refused create left the existing matrix untouched.
     {
         let reader = varlit::VarlitFile::open_readonly(spec, &path)?;
-        assert_eq!(
-            reader.read_matrix_cell::<IdentityCell>(MatrixKey::new(0, 0))?,
-            IdentityCell { value: 7 }
-        );
+        let mut cell = IdentityCell::empty();
+        reader.read_matrix_cell::<IdentityCell>(MatrixKey::new(0, 0), &mut cell)?;
+        assert_eq!(cell, IdentityCell { value: 7 });
     }
 
     cleanup(&path);

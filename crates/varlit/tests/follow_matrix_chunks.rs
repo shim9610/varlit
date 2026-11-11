@@ -15,8 +15,22 @@
 use varlit::{
     BlockDescriptor, BlockKind, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
-    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitEmpty, VarlitMatrixBlock,
+    VarlitReader,
 };
+
+/// Owned-result shim over the caller-owned-output read.
+trait ReadCell {
+    fn read_cell(&self, key: MatrixKey) -> varlit::Result<Sample>;
+}
+
+impl ReadCell for VarlitReader {
+    fn read_cell(&self, key: MatrixKey) -> varlit::Result<Sample> {
+        let mut out = Sample::empty();
+        self.read_matrix_cell::<Sample>(key, &mut out)?;
+        Ok(out)
+    }
+}
 
 const CHANNELS: u64 = 4;
 const ROWS_PER_CHUNK: u64 = 4;
@@ -104,7 +118,7 @@ fn a_follow_invalidates_a_chunk_directory_built_before_it() -> varlit::Result<()
     // Touching a chunked cell is what builds and caches the directory; without
     // this read the OnceLock is empty and the follow has nothing to invalidate.
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))?,
+        reader.read_cell(key(ROWS_PER_CHUNK, 0))?,
         Sample {
             value: (ROWS_PER_CHUNK * 10) as u32
         },
@@ -134,14 +148,9 @@ fn a_follow_invalidates_a_chunk_directory_built_before_it() -> varlit::Result<()
     let expected = Sample {
         value: ((ROWS_PER_CHUNK * 2) * 10) as u32,
     };
+    assert_eq!(spec().open_reader(&path)?.read_cell(target)?, expected);
     assert_eq!(
-        spec()
-            .open_reader(&path)?
-            .read_matrix_cell::<Sample>(target)?,
-        expected
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(target)?,
+        reader.read_cell(target)?,
         expected,
         "the followed handle has the chunk's record but answered from a \
          directory built before it",
@@ -150,7 +159,7 @@ fn a_follow_invalidates_a_chunk_directory_built_before_it() -> varlit::Result<()
     // And the chunks it already had are still right, so the invalidation
     // rebuilt rather than lost.
     assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))?,
+        reader.read_cell(key(ROWS_PER_CHUNK, 0))?,
         Sample {
             value: (ROWS_PER_CHUNK * 10) as u32
         },
@@ -168,22 +177,16 @@ fn following_an_overwritten_chunk_adopts_only_its_confirmed_version() -> varlit:
     writer.commit_matrix_cell::<Sample>(cell)?;
     writer.sync()?;
     let mut old = spec().open_reader(&path)?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
+    assert_eq!(old.read_cell(cell)?.value, 1);
     writer.write_matrix_cell(cell, &Sample { value: 2 })?;
     writer.commit_matrix_cell::<Sample>(cell)?;
     writer.flush()?;
     old.follow()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
-    assert_eq!(
-        spec()
-            .open_reader(&path)?
-            .read_matrix_cell::<Sample>(cell)?
-            .value,
-        1
-    );
+    assert_eq!(old.read_cell(cell)?.value, 1);
+    assert_eq!(spec().open_reader(&path)?.read_cell(cell)?.value, 1);
     writer.sync()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
+    assert_eq!(old.read_cell(cell)?.value, 1);
     old.follow()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 2);
+    assert_eq!(old.read_cell(cell)?.value, 2);
     Ok(())
 }

@@ -1806,6 +1806,13 @@ impl DiskIndexStore {
         if state.metadata.state != DiskIndexState::Clean {
             return Err(DiskIndexError::CleanStateRequired);
         }
+        // A generation's dirty checkpoint is not a barrier, so a crash can
+        // leave the newest durable state clean with the primary longer than it
+        // covers: an interrupted generation, recovered by restore exactly as a
+        // surviving dirty checkpoint is.
+        if physical_native_eof > state.metadata.committed.eof {
+            return Err(DiskIndexError::CleanStateRequired);
+        }
         if physical_native_eof != state.metadata.committed.eof {
             return Err(DiskIndexError::NativeLengthMismatch {
                 expected: state.metadata.committed.eof,
@@ -2136,9 +2143,22 @@ impl DiskIndexStore {
         policy: TailLimitPolicy,
     ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
         self.storage.writer()?;
-        let dirty = self.storage.current()?;
+        let mut dirty = self.storage.current()?;
         validate_identity_mode(dirty.metadata, expected_identity, expected_mode)?;
         policy.validate(dirty.metadata)?;
+        if dirty.metadata.state == DiskIndexState::Clean {
+            // An interrupted generation whose dirty checkpoint did not reach
+            // storage: the newest clean checkpoint is its own rollback point,
+            // and only a primary longer than it has anything to restore.
+            if physical_native_eof <= dirty.metadata.committed.eof {
+                return Err(DiskIndexError::DirtyStateRequired);
+            }
+            dirty.metadata.state = DiskIndexState::Dirty;
+            dirty.metadata.checkpoint = Some(DiskIndexCheckpoint {
+                checkpoint_offset: dirty.offset,
+                base: dirty.metadata.committed,
+            });
+        }
         if dirty.metadata.state != DiskIndexState::Dirty {
             return Err(DiskIndexError::DirtyStateRequired);
         }
@@ -4543,8 +4563,14 @@ mod tests {
                 .committed_eof(),
             64
         );
+        // Longer than the clean commit is an interrupted generation (its
+        // dirty checkpoint is not a barrier): restore, not a mismatch.
         assert!(matches!(
             store.validate_clean_writer(identity(), plan().mode(), 100, 4),
+            Err(DiskIndexError::CleanStateRequired)
+        ));
+        assert!(matches!(
+            store.validate_clean_writer(identity(), plan().mode(), 63, 4),
             Err(DiskIndexError::NativeLengthMismatch { .. })
         ));
         assert!(matches!(

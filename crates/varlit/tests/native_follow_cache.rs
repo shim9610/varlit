@@ -66,7 +66,7 @@ fn with_refusal<T>(nth: usize, run: impl FnOnce() -> T) -> T {
     result
 }
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -216,13 +216,14 @@ fn writer_recovery_discards_the_previous_pending_cursor() -> varlit::Result<()> 
     let mut entries = Vec::new();
     reader.index_entries_into(&mut entries)?;
     let mut scratch = Vec::new();
+    let mut reading = Reading::empty();
     let values: Vec<_> = entries
         .iter()
         .filter(|e| e.block_id == 10)
         .map(|e| {
             reader
-                .decode_block_into::<Reading>(e, &mut scratch)
-                .map(|r| r.value)
+                .decode_block_into::<Reading>(e, &mut scratch, &mut reading)
+                .map(|()| reading.value)
         })
         .collect::<varlit::Result<_>>()?;
     assert_eq!(values.len(), 640);
@@ -312,13 +313,14 @@ fn eight_readers_reuse_pending_progress_and_publish_the_same_commit() -> varlit:
                             let mut entries = Vec::new();
                             reader.index_entries_into(&mut entries)?;
                             let mut scratch = Vec::new();
+                            let mut reading = Reading::empty();
                             let values = entries
                                 .iter()
                                 .filter(|e| e.block_id == 10)
                                 .map(|e| {
                                     reader
-                                        .decode_block_into::<Reading>(e, &mut scratch)
-                                        .map(|r| r.value)
+                                        .decode_block_into::<Reading>(e, &mut scratch, &mut reading)
+                                        .map(|()| reading.value)
                                 })
                                 .collect::<varlit::Result<Vec<_>>>()?;
                             assert_eq!(values, (0..1152).collect::<Vec<_>>());
@@ -551,6 +553,7 @@ fn writer_keeps_ingesting_while_eight_readers_decode_queued_commits() -> varlit:
                 let mut reader = varlit::VarlitFile::open_readonly(explicit(), path)?;
                 answers.send((id, 0, 0)).unwrap();
                 let mut scratch = Vec::new();
+                let mut reading = Reading::empty();
                 let (mut count, mut trace) = (0, 0u64);
                 for chunk in chunks {
                     for _ in 0..8 {
@@ -558,7 +561,7 @@ fn writer_keeps_ingesting_while_eight_readers_decode_queued_commits() -> varlit:
                     }
                     for &(offset, expected) in chunk.iter() {
                         let entry = reader.record_entry_at(offset)?;
-                        let reading = reader.decode_block_into::<Reading>(&entry, &mut scratch)?;
+                        reader.decode_block_into::<Reading>(&entry, &mut scratch, &mut reading)?;
                         assert_eq!(reading.value, expected);
                         count += 1;
                         trace = trace
@@ -659,22 +662,15 @@ fn publication_replay_reuses_spilled_staging_without_stale_rows() -> varlit::Res
     writer.commit()?;
     assert!(reader.follow()? > 0);
     let mut scratch = Vec::new();
+    let mut reading = Reading::empty();
     for &(offset, value) in &expected {
         let entry = reader.record_entry_at(offset)?;
-        assert_eq!(
-            reader
-                .decode_block_into::<Reading>(&entry, &mut scratch)?
-                .value,
-            value
-        );
+        reader.decode_block_into::<Reading>(&entry, &mut scratch, &mut reading)?;
+        assert_eq!(reading.value, value);
     }
     assert!(pinned.record_entry_at(expected[0].0).is_err());
     let entry = pinned.record_entry_at(first.record_offset)?;
-    assert_eq!(
-        pinned
-            .decode_block_into::<Reading>(&entry, &mut scratch)?
-            .value,
-        41
-    );
+    pinned.decode_block_into::<Reading>(&entry, &mut scratch, &mut reading)?;
+    assert_eq!(reading.value, 41);
     Ok(())
 }

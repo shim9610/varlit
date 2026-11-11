@@ -7,7 +7,6 @@ use std::io::SeekFrom;
 #[cfg(test)]
 use std::io::{Seek, Write};
 
-use crate::codec::encode_to_vec_limited;
 use crate::format::ReadLimitKey;
 use crate::matrix_generation::{MatrixIo, Source};
 use crate::{
@@ -40,7 +39,12 @@ const VMAT_MAGIC: &[u8; 4] = b"VMAT";
 // has no header slot and a different entry base, so version 3 artifacts are
 // rejected as stale-regenerable rather than being reinterpreted.
 // v5 adds direct page-to-slot metadata after each counted forward array.
-const VMAT_VERSION: u16 = 5;
+// v6 starts the slot region on a 4 KiB boundary (zero padding after the commit
+// maps), so a cell whose stride is a multiple of 4 KiB occupies whole
+// generation pages instead of straddling one more page at each end.
+const VMAT_VERSION: u16 = 6;
+/// Alignment of the slot region start (the generation page size).
+const SLOT_REGION_ALIGN: u64 = 4096;
 const VMAT_HEADER_LEN: u32 = 160;
 const MCRC_MAGIC: &[u8; 4] = b"MCRC";
 const MCRC_VERSION: u16 = 2;
@@ -858,6 +862,16 @@ pub enum MatrixCellStatus {
 pub struct PackedBitmap {
     bit_len: u64,
     bytes: Vec<u8>,
+}
+
+/// A zero-length bitmap.
+impl crate::VarlitEmpty for PackedBitmap {
+    fn empty() -> Self {
+        Self {
+            bit_len: 0,
+            bytes: Vec::new(),
+        }
+    }
 }
 
 /// Byte length of a `PackedBitmap` carrying `bit_len` bits.
@@ -3152,6 +3166,24 @@ impl MatrixLayout {
         self.append_log_start
     }
 
+    /// Bytes of the matrix region that are not cell slots or aux data: the
+    /// layout tables, commit and validity maps, page digests and CRC tables.
+    pub(crate) fn metadata_bytes(&self) -> u64 {
+        let slots: u64 = self
+            .blocks
+            .iter()
+            .map(|b| b.slot_stride.saturating_mul(b.cell_count))
+            .fold(0, u64::saturating_add);
+        let aux: u64 = self
+            .aux
+            .iter()
+            .map(|a| a.byte_len)
+            .fold(0, u64::saturating_add);
+        self.append_log_start
+            .saturating_sub(slots)
+            .saturating_sub(aux)
+    }
+
     /// The resident bitmap budget this layout currently holds.
     ///
     /// `ResidentBitmapBudget` is `Copy`, so a mutation path can take it out,
@@ -3353,9 +3385,11 @@ pub(crate) fn create_layout(
     let commit_map_off = commit_category_off
         .checked_add(category_table_len)
         .ok_or(Error::InvalidMatrixLayout)?;
-    let slot_region_off = commit_map_off
-        .checked_add(commit_map_len)
-        .ok_or(Error::InvalidMatrixLayout)?;
+    let slot_region_off = slot_region_start(
+        commit_map_off
+            .checked_add(commit_map_len)
+            .ok_or(Error::InvalidMatrixLayout)?,
+    )?;
     let slot_region_end = slot_region_off
         .checked_add(slot_region_len)
         .ok_or(Error::InvalidMatrixLayout)?;
@@ -3701,6 +3735,7 @@ pub(crate) fn write_cell<T: VarlitMatrixBlock>(
     file: &mut impl MatrixIo,
     key: MatrixKey,
     value: &T,
+    scratch: &mut Vec<u8>,
 ) -> Result<()> {
     let category = ensure_matrix_block::<T>(spec)?;
     let allowed = ensure_commit_publishable(layout, category)?;
@@ -3716,13 +3751,15 @@ pub(crate) fn write_cell<T: VarlitMatrixBlock>(
     // length; anything larger stops buffering at the first over-limit write
     // and the overflow is mapped back to the existing `MatrixSizeMismatch`
     // contract, with `actual` being the encoded length observed at cutoff.
-    let payload = match encode_to_vec_limited(
+    // Encoded into the caller's reusable scratch, not a fresh `Vec` per cell.
+    let payload = match crate::codec::encode_into_limited(
         value,
         T::ENDIAN.unwrap_or(spec.endian),
         slot_stride.saturating_add(1),
         MATRIX_SLOT_PAYLOAD_RESOURCE,
+        scratch,
     ) {
-        Ok(payload) => payload,
+        Ok(()) => &scratch[..],
         Err(Error::LimitExceeded {
             resource: MATRIX_SLOT_PAYLOAD_RESOURCE,
             actual,
@@ -3753,7 +3790,19 @@ pub(crate) fn write_cell<T: VarlitMatrixBlock>(
             apply_cell_crc_valid(layout, file, block_index, update)?;
         }
         file.seek(SeekFrom::Start(offset))?;
-        write_slot_payload(file, &payload)
+        write_slot_payload(file, payload)?;
+        // The payload is in hand: record its checksum now so committing a cell
+        // this session wrote never reads the slot back.
+        if layout.blocks[block_index].crc_offset.is_some() {
+            write_cell_crc(
+                layout,
+                file,
+                block_index,
+                ordinal,
+                slot_payload_crc(payload)?,
+            )?;
+        }
+        Ok(())
     })();
     match persisted {
         Ok(()) => {
@@ -3856,7 +3905,19 @@ pub(crate) fn write_cell_payload<T: VarlitMatrixBlock>(
             apply_cell_crc_valid(layout, file, block_index, update)?;
         }
         file.seek(SeekFrom::Start(offset))?;
-        write_slot_payload(file, payload)
+        write_slot_payload(file, payload)?;
+        // The payload is in hand: record its checksum now so committing a cell
+        // this session wrote never reads the slot back.
+        if layout.blocks[block_index].crc_offset.is_some() {
+            write_cell_crc(
+                layout,
+                file,
+                block_index,
+                ordinal,
+                slot_payload_crc(payload)?,
+            )?;
+        }
+        Ok(())
     })();
     match persisted {
         Ok(()) => {
@@ -3875,7 +3936,8 @@ pub(crate) fn read_cell<T: VarlitMatrixBlock>(
     layout: &MatrixLayout,
     reader: MatrixRegionReader<'_>,
     key: MatrixKey,
-) -> Result<T> {
+    out: &mut T,
+) -> Result<()> {
     ensure_matrix_block::<T>(spec)?;
     if cell_status::<T>(spec, layout, key, reader.bitmap_read())? == MatrixCellStatus::NotCommitted
     {
@@ -3907,7 +3969,12 @@ pub(crate) fn read_cell<T: VarlitMatrixBlock>(
             .ok_or(Error::ResourceArithmeticOverflow {
                 resource: "materialized bytes",
             })?;
-    Decoder::decode_from_slice_limited(&payload, T::ENDIAN.unwrap_or(spec.endian), decode_limit)
+    Decoder::decode_from_slice_limited_into(
+        &payload,
+        T::ENDIAN.unwrap_or(spec.endian),
+        decode_limit,
+        out,
+    )
 }
 
 /// A bounded contiguous run. The caller splits larger runs and chunk boundaries.
@@ -4179,9 +4246,11 @@ pub(crate) fn commit_cell<T: VarlitMatrixBlock>(
         prepare_cell_crc_valid(layout, block_index, ordinal, true, BitmapRead::new(file))?;
     let (commit_index, commit_update) =
         prepare_cell_commit(layout, category, ordinal, true, BitmapRead::new(file))?;
-    match scanned {
-        Some(scanned) => write_cell_crc(layout, file, block_index, ordinal, scanned.crc)?,
-        None => update_cell_crc(layout, file, block_index, ordinal)?,
+    // A cell this session wrote had its checksum recorded by the write itself
+    // (`write_cell` / `write_cell_payload`); only a cell written elsewhere is
+    // checksummed here, from the single scan above.
+    if let Some(scanned) = scanned {
+        write_cell_crc(layout, file, block_index, ordinal, scanned.crc)?;
     }
     if let Some(update) = crc_valid_update {
         apply_cell_crc_valid(layout, file, block_index, update)?;
@@ -5685,19 +5754,14 @@ fn write_cell_crc(
     write_crc_at(file, indexed_crc_offset(crc_offset, ordinal)?, crc)
 }
 
-fn update_cell_crc(
-    layout: &MatrixLayout,
-    file: &mut impl MatrixIo,
-    block_index: usize,
-    ordinal: u64,
-) -> Result<()> {
-    let Some(crc_offset) = layout.blocks[block_index].crc_offset else {
-        return Ok(());
-    };
-    let offset = layout.slot_offset(block_index, ordinal)?;
-    let stride = layout.blocks[block_index].slot_stride;
-    let crc = crc32_file_range(file, offset, stride)?;
-    write_crc_at(file, indexed_crc_offset(crc_offset, ordinal)?, crc)
+#[cfg(feature = "integrity")]
+fn slot_payload_crc(payload: &[u8]) -> Result<u32> {
+    Ok(crc32fast::hash(payload))
+}
+
+#[cfg(not(feature = "integrity"))]
+fn slot_payload_crc(_payload: &[u8]) -> Result<u32> {
+    Err(Error::IntegrityFeatureDisabled)
 }
 
 fn clear_cell_crc(
@@ -7754,13 +7818,21 @@ fn validate_layout_ranges(
         || header.block_table_off != dimension_end
         || header.commit_category_off != block_end
         || header.commit_map_off != category_end
-        || header.slot_region_off != commit_end
+        || header.slot_region_off != slot_region_start(commit_end)?
         || header.append_log_start != crc_end
         || header.append_log_start > file_len
     {
         return Err(Error::InvalidMatrixLayout);
     }
     Ok(())
+}
+
+/// The slot region begins at the first 4 KiB boundary at or after the end of
+/// the commit maps; the gap is a never-written zero extent.
+fn slot_region_start(commit_map_end: u64) -> Result<u64> {
+    commit_map_end
+        .checked_next_multiple_of(SLOT_REGION_ALIGN)
+        .ok_or(Error::InvalidMatrixLayout)
 }
 
 fn validate_range(offset: u64, len: u64, file_len: u64) -> Result<u64> {

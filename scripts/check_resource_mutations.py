@@ -99,7 +99,7 @@ def decoder_fixture():
             "LimitExceeded { resource: &'static str, actual: u64, limit: u64 } }\n"
             "type Result<T> = std::result::Result<T,Error>;\n" + wire + structure +
             "struct BuiltinCodec<T> { invariant: std::marker::PhantomData<fn(T)->T>, callback_free: bool }\n"
-            "trait VarlitDecode: Sized { const __VARLIT_BUILTIN:Option<BuiltinCodec<Self>>=None; const WIRE_TYPE: WireType; fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self>; fn decode_array<const N:usize>(_:&mut Decoder<'_>)->Result<[Self;N]>{ panic!(\"array callback outside extracted resource scope\") } }\n"
+            "trait VarlitDecode: Sized { const __VARLIT_BUILTIN:Option<BuiltinCodec<Self>>=None; const WIRE_TYPE: WireType; fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self>; fn decode_array<const N:usize>(_:&mut Decoder<'_>)->Result<[Self;N]>{ panic!(\"array callback outside extracted resource scope\") } fn decode_varlit_into(_:&mut Self,_:&mut Decoder<'_>)->Result<()>{ panic!(\"in-place callback outside extracted resource scope\") } }\n"
             "impl VarlitDecode for () { const WIRE_TYPE: WireType = WireType::Unit; fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(()) } }\n"
             "impl<'a> Decoder<'a> {" + standard + methods_text + "}\n" + group +
             body('minimum_wire_size') + body('hash_table_reservation_bytes') + body('hash_map_decode_reservation_bytes') +

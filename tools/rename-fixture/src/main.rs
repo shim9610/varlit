@@ -90,11 +90,11 @@ fn main() {
             file.flush().unwrap();
         }
         let file = vv::VarlitFile::open_readonly(spec, &path).unwrap();
-        let cells = file.blocks::<Cell>().unwrap();
-        let cells: Vec<Cell> = cells.iter().collect::<Result<_, _>>().unwrap();
+        let mut cells: Vec<Cell> = Vec::new();
+        file.decode_blocks_into(&mut cells).unwrap();
         assert_eq!(cells, vec![Cell { a: 1, b: 2 }]);
-        let items = file.blocks::<Item>().unwrap();
-        let items: Vec<Item> = items.iter().collect::<Result<_, _>>().unwrap();
+        let mut items: Vec<Item> = Vec::new();
+        file.decode_blocks_into(&mut items).unwrap();
         assert_eq!(
             items,
             vec![Item {

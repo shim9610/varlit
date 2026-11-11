@@ -33,9 +33,14 @@ fn open_reader(root: &Path) -> VarlitIndexedReader {
 }
 
 fn values(reader: &VarlitIndexedReader) -> Values {
-    (0..8)
-        .filter_map(|key| reader.get::<IndexedRecord>(&key).unwrap().map(|v| (key, v)))
-        .collect()
+    let mut value = IndexedRecord::empty();
+    let mut values = Values::new();
+    for key in 0..8 {
+        if reader.get::<IndexedRecord>(&key, &mut value).unwrap() {
+            values.insert(key, value.clone());
+        }
+    }
+    values
 }
 
 fn reopen(root: &Path) -> VarlitIndexedWriter {

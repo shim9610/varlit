@@ -1200,6 +1200,16 @@ pub(super) fn commit_tokens(choice: CommitChoice) -> TokenStream2 {
                 ::varlit::__core::TransactionMarkerMode::Explicit
             )
         },
+        CommitChoice::TransactionMarkerOnFlushSingleBarrier => quote! {
+            ::varlit::__core::CommitPolicy::TransactionMarker(
+                ::varlit::__core::TransactionMarkerMode::OnFlushSingleBarrier
+            )
+        },
+        CommitChoice::TransactionMarkerExplicitSingleBarrier => quote! {
+            ::varlit::__core::CommitPolicy::TransactionMarker(
+                ::varlit::__core::TransactionMarkerMode::ExplicitSingleBarrier
+            )
+        },
     }
 }
 
@@ -2476,8 +2486,9 @@ pub(super) fn high_cardinality_api_tokens(
             pub fn #get(
                 &self,
                 key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
-            ) -> ::varlit::__core::Result<::core::option::Option<#ty>> {
-                self.inner.get::<#ty>(key)
+                out: &mut #ty,
+            ) -> ::varlit::__core::Result<bool> {
+                self.inner.get::<#ty>(key, out)
             }
         }
     });
@@ -3100,8 +3111,9 @@ pub(super) fn typed_api_tokens(
             /// Reads a block out of the editable header region.
             pub fn read_header_block<T: ::varlit::__core::VarlitBlock>(
                 &self,
-            ) -> ::varlit::__core::Result<::core::option::Option<T>> {
-                self.inner.read_header_block::<T>()
+                out: &mut T,
+            ) -> ::varlit::__core::Result<bool> {
+                self.inner.read_header_block::<T>(out)
             }
 
             /// Writes a block into the editable header region, replacing any
@@ -3340,8 +3352,8 @@ pub(super) fn matrix_reader_methods(
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)
                 }
 
-                pub fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty> {
-                    self.inner.read_matrix_cell::<#ty>(key.into())
+                pub fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()> {
+                    self.inner.read_matrix_cell::<#ty>(key.into(), out)
                 }
 
                 pub fn #status(
@@ -3358,7 +3370,7 @@ pub(super) fn matrix_reader_methods(
                 fn #column_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::varlit::__core::Result<()>;
                 fn #row(&self, first_axis: u64, out: &mut [#ty]) -> ::varlit::__core::Result<()>;
 
-                fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty>;
+                fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()>;
 
                 fn #status(
                     &self,
@@ -3382,8 +3394,8 @@ pub(super) fn matrix_reader_methods(
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)
                 }
 
-                fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty> {
-                    self.inner.read_matrix_cell::<#ty>(key.into())
+                fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()> {
+                    self.inner.read_matrix_cell::<#ty>(key.into(), out)
                 }
 
                 fn #status(

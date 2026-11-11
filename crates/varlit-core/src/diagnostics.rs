@@ -247,8 +247,9 @@ impl FormatSelfTest {
                 Ok(())
             })),
             read: Some(Box::new(move |file| {
-                let actual = file.blocks::<T>()?.get(ordinal)?;
-                if actual.as_ref() == Some(&expected) {
+                let mut actual = expected.clone();
+                let found = file.blocks::<T>()?.get(ordinal, &mut actual)?;
+                if found && actual == expected {
                     Ok(())
                 } else {
                     Err(Error::InvalidFormatSpec(
@@ -282,8 +283,9 @@ impl FormatSelfTest {
                 Ok(())
             })),
             read: Some(Box::new(move |file| {
-                let actual = file.keyed_blocks::<T>()?.get(&key)?;
-                if actual.as_ref() == Some(&expected) {
+                let mut actual = expected.clone();
+                let found = file.keyed_blocks::<T>()?.get(&key, &mut actual)?;
+                if found && actual == expected {
                     Ok(())
                 } else {
                     Err(Error::InvalidFormatSpec(
@@ -314,7 +316,8 @@ impl FormatSelfTest {
                 if status != MatrixCellStatus::Committed {
                     return Err(Error::MatrixNotCommitted);
                 }
-                let actual = file.read_matrix_cell::<T>(key)?;
+                let mut actual = expected.clone();
+                file.read_matrix_cell::<T>(key, &mut actual)?;
                 if actual == expected {
                     Ok(())
                 } else {
@@ -331,6 +334,7 @@ impl FormatSelfTest {
     where
         T: VarlitMatrixBlock + Clone + Debug + 'static,
     {
+        let read_value = value.clone();
         self.cases.push(SelfTestCase {
             value_block: None,
             name: format!("uncommitted matrix block {} key {:?}", T::ID, key),
@@ -345,7 +349,8 @@ impl FormatSelfTest {
                         "self-test expected matrix cell to be uncommitted",
                     ));
                 }
-                match file.read_matrix_cell::<T>(key) {
+                let mut out = read_value.clone();
+                match file.read_matrix_cell::<T>(key, &mut out) {
                     Err(Error::MatrixNotCommitted) => Ok(()),
                     Ok(_) => Err(Error::InvalidFormatSpec(
                         "self-test uncommitted matrix read succeeded",
@@ -1009,6 +1014,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::InvalidSchemaManifest
         | Error::MmapEntryNotInSnapshot
         | Error::MmapPayloadOutOfBounds { .. }
+        | Error::MmapRecordRangeOutOfBounds { .. }
         | Error::InvalidMatrixSidecar
         | Error::MatrixSidecarMismatch(_)
         | Error::MatrixSidecarChecksumMismatch { .. }
@@ -1625,6 +1631,20 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
     }
 }
 
+/// A temporary directory only this user can write, whatever the umask:
+/// cleanup refuses a group- or world-writable parent that is not sticky, and
+/// `super::private_tempdir()` leaves the mode to the umask.
+#[cfg(test)]
+pub(crate) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1736,7 +1756,7 @@ mod tests {
     fn cleanup_does_not_delete_a_file_interposed_before_the_unlink() {
         const IMPOSTOR: &[u8] = b"not the self-test artifact";
 
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("interposed.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1763,7 +1783,7 @@ mod tests {
     /// test above is proving a refusal rather than a broken cleanup path.
     #[test]
     fn cleanup_removes_the_verified_object() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("owned.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1780,7 +1800,7 @@ mod tests {
     /// is reported as such rather than as a successful removal.
     #[test]
     fn cleanup_leaves_a_swapped_pathname_alone() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("swapped.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1803,7 +1823,7 @@ mod tests {
     /// ordinary Linux filesystems: the same `(dev, ino)` came back for both.
     #[test]
     fn a_pin_keeps_a_recreated_file_off_the_pinned_identity() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("recycled.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1836,7 +1856,7 @@ mod tests {
     /// and by the two `self_test_never_truncates_*` tests.
     #[test]
     fn lock_marker_removal_leaves_a_swapped_object_alone() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("marker-swap.vrv");
         let marker = directory.path().join("marker-swap.vrv.lock");
         std::fs::write(&path, b"artifact").expect("create the artifact");
@@ -1870,7 +1890,7 @@ mod tests {
     fn cleanup_refuses_a_shared_writable_directory() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let shared = directory.path().join("shared");
         std::fs::create_dir(&shared).expect("create the shared directory");
         // World-writable *without* the sticky bit: any local user could

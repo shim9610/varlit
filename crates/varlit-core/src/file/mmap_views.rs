@@ -40,7 +40,8 @@ pub struct MmapPayloads {
     // atomics retain Send + Sync without locks or publishing mutable data;
     // racing first readers may both verify the same immutable bytes.
     pub(super) verified: Vec<AtomicBool>,
-    pub(super) mmap: memmap2::Mmap,
+    /// `None` when no record is mapped (an empty file or an empty range).
+    pub(super) mmap: Option<memmap2::Mmap>,
 }
 
 /// One record payload or matrix cell mapped independently of the file's total size.
@@ -112,6 +113,68 @@ impl MmapPayloads {
             });
         }
         Ok(Some(self.payload_window_at(position)?))
+    }
+
+    /// Decodes a record of `T` into `out` straight from the mapping.
+    ///
+    /// The mapped-snapshot counterpart of [`VarlitFile::decode_block_into`]:
+    /// the same block id/version refusal, the same payload checks
+    /// ([`Self::payload_window`]) and the same per-record materialization
+    /// charge, but an uncompressed payload is decoded where it lies — there is
+    /// no copy into a buffer. `scratch` is used only for a compressed record,
+    /// whose mapped bytes are decompressed into it. On error `out` is valid but
+    /// unspecified.
+    pub fn decode_block_into<T: VarlitBlock>(
+        &self,
+        entry: &RecordIndexEntry,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+    ) -> Result<()> {
+        crate::collections::ensure_registered_block::<T>(self.spec)?;
+        if entry.block_id != T::ID {
+            return Err(Error::UnregisteredBlock(entry.block_id));
+        }
+        if entry.block_version != T::VERSION {
+            return Err(Error::BlockVersionMismatch {
+                block_id: T::ID,
+                expected: T::VERSION,
+                actual: entry.block_version,
+            });
+        }
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
+        let payload = self.payload_window(entry)?;
+        let endian = T::ENDIAN.unwrap_or(self.spec.endian);
+        let mut budget = crate::collections::MaterializationBudget::new(self.spec);
+        if !entry.is_compressed() {
+            self.spec
+                .read_limits
+                .check(ReadLimitKey::LogicalPayloadLen, entry.payload_len)?;
+            budget.consume(entry.payload_len)?;
+            return budget.decode_into(payload, endian, out);
+        }
+        // Admit the declared decompressed length before allocating for it,
+        // exactly as the copying read does.
+        let declared = compressed_logical_len(self.spec, entry, payload)?;
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::LogicalPayloadLen, declared)?;
+        budget.consume(declared)?;
+        let mut physical = std::mem::take(scratch);
+        physical.clear();
+        physical
+            .try_reserve_exact(payload.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "mapped compressed payload",
+                requested: entry.payload_len,
+            })?;
+        physical.extend_from_slice(payload);
+        // `decode_record_payload` refuses output that differs from `declared`.
+        let logical = decode_record_payload(self.spec, entry, physical)?;
+        let result = budget.decode_into(&logical, endian, out);
+        *scratch = logical;
+        result
     }
 
     #[inline]
@@ -205,6 +268,8 @@ impl MmapPayloads {
                 len: len as u64,
             })?;
         self.mmap
+            .as_deref()
+            .unwrap_or(&[])
             .get(start..end)
             .ok_or(Error::MmapPayloadOutOfBounds {
                 offset,

@@ -19,7 +19,7 @@
 use std::fs::remove_file;
 use std::path::PathBuf;
 
-use varlit::{INDEX_BLOCK_ID, VarlitBlock, varlit_format};
+use varlit::{INDEX_BLOCK_ID, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 40, version = 1, kind = "fixed")]
@@ -103,10 +103,15 @@ fn sparse_checkpoints_reopen_sees_every_record() -> varlit::Result<()> {
     let file = GrowthFormat::open_readonly(&path)?;
     let blocks = file.blocks::<GrowthBlock>()?;
     assert_eq!(blocks.len() as u32, records);
+    let mut block = GrowthBlock::empty();
     for value in 0..records {
+        assert!(
+            blocks.get(value as usize, &mut block)?,
+            "record {value} did not survive reopen",
+        );
         assert_eq!(
-            blocks.get(value as usize)?,
-            Some(GrowthBlock { value }),
+            block,
+            GrowthBlock { value },
             "record {value} did not survive reopen",
         );
     }
@@ -143,8 +148,10 @@ fn checkpointless_tail_recovers_from_empty_file() -> varlit::Result<()> {
     let file = GrowthFormat::open_readonly(&path)?;
     let blocks = file.blocks::<GrowthBlock>()?;
     assert_eq!(blocks.len(), 3);
+    let mut block = GrowthBlock::empty();
     for value in 0..3u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(GrowthBlock { value }));
+        assert!(blocks.get(value as usize, &mut block)?);
+        assert_eq!(block, GrowthBlock { value });
     }
     let checkpoints = file
         .index_entries()
@@ -219,8 +226,10 @@ fn reopened_writer_recovers_checkpoint_cadence() -> varlit::Result<()> {
     let file = GrowthFormat::open_readonly(&restarted)?;
     let blocks = file.blocks::<GrowthBlock>()?;
     assert_eq!(blocks.len() as u32, records);
+    let mut block = GrowthBlock::empty();
     for value in 0..records {
-        assert_eq!(blocks.get(value as usize)?, Some(GrowthBlock { value }));
+        assert!(blocks.get(value as usize, &mut block)?);
+        assert_eq!(block, GrowthBlock { value });
     }
     drop(file);
 

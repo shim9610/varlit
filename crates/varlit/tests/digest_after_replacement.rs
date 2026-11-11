@@ -26,7 +26,7 @@
 
 #![cfg(feature = "integrity")]
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "fixed")]
@@ -198,6 +198,8 @@ fn a_checkpoint_format_keeps_the_in_place_route() -> varlit::Result<()> {
     let reopened = checkpointed.open_readonly(&path)?;
     let blocks = reopened.blocks::<Line>()?;
     assert_eq!(blocks.len(), 64);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    let mut line = Line::empty();
+    assert!(blocks.get(0, &mut line)?);
+    assert_eq!(line, Line { value: 4242 });
     Ok(())
 }

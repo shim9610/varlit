@@ -11,6 +11,16 @@ pub struct ChunkedBytes {
     encoded: Vec<u8>,
 }
 
+/// A placeholder to decode into. Its accessors report a malformed value until a
+/// decode fills it.
+impl crate::VarlitEmpty for ChunkedBytes {
+    fn empty() -> Self {
+        Self {
+            encoded: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ChunkEntry {
     uncompressed_len: u32,

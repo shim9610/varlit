@@ -9,7 +9,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 struct CountingAllocator;
 
@@ -318,7 +318,7 @@ fn a_walk_of_n_records_allocates_one_payload_buffer_not_n() -> varlit::Result<()
     build(&large_path, LARGE)?;
     let spec = IndexResidencyFormat::spec();
 
-    // `blocks().iter()` is the probe: the collection is built BEFORE the
+    // `blocks().cursor()` is the probe: the collection is built BEFORE the
     // window opens, so the only allocations inside it are the per-record
     // payload buffers this test is about. `Sample` is all scalars, so decoding
     // one allocates nothing of its own and cannot mask the result.
@@ -328,10 +328,11 @@ fn a_walk_of_n_records_allocates_one_payload_buffer_not_n() -> varlit::Result<()
     let walk = |path: &Path| -> varlit::Result<(isize, isize)> {
         let file = varlit::VarlitFile::open_readonly(spec, path)?;
         let blocks = file.blocks::<Sample>()?;
+        let mut cursor = blocks.cursor();
+        let mut sample = Sample::empty();
         let (bytes_before, allocs_before) = totals();
         let mut seen = 0usize;
-        for value in blocks.iter() {
-            let _ = value?;
+        while cursor.next_into(&mut sample)? {
             seen += 1;
         }
         let (bytes_after, allocs_after) = totals();
@@ -407,7 +408,8 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
     // Warm both buffers on the first record, then measure the rest: what is
     // being asserted is that steady-state reads allocate nothing, not that the
     // very first one does.
-    let _: Sample = file.decode_block_into(&index[0], &mut payload)?;
+    let mut sample = Sample::empty();
+    file.decode_block_into(&index[0], &mut payload, &mut sample)?;
 
     let (bytes_before, allocs_before) = totals();
     let mut decoded = 0usize;
@@ -415,7 +417,7 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
         if entry.block_id != Sample::ID {
             continue;
         }
-        let sample: Sample = file.decode_block_into(entry, &mut payload)?;
+        file.decode_block_into(entry, &mut payload, &mut sample)?;
         decoded += usize::from(sample.value < u64::from(RECORDS));
     }
     let (bytes_after, allocs_after) = totals();
@@ -436,7 +438,7 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
     for _ in 0..4 {
         let file = varlit::VarlitFile::open_readonly_with_scratch(spec, &path, &mut scan_scratch)?;
         file.index_entries_into(&mut index)?;
-        let _: Sample = file.decode_block_into(&index[1], &mut payload)?;
+        file.decode_block_into(&index[1], &mut payload, &mut sample)?;
         drop(file);
     }
     let (bytes_after, allocs_after) = totals();
@@ -534,10 +536,11 @@ fn a_host_supplied_directory_answers_every_read_the_same() -> varlit::Result<()>
     let resident_vec = file.blocks::<Sample>()?;
     let supplied_vec = supplied.blocks::<Sample>()?;
     assert_eq!(resident_vec.len(), supplied_vec.len());
-    assert_eq!(
-        resident_vec.get(RECORDS as usize - 1)?,
-        supplied_vec.get(RECORDS as usize - 1)?
-    );
+    let mut from_resident = Sample::empty();
+    let mut from_supplied = Sample::empty();
+    assert!(resident_vec.get(RECORDS as usize - 1, &mut from_resident)?);
+    assert!(supplied_vec.get(RECORDS as usize - 1, &mut from_supplied)?);
+    assert_eq!(from_resident, from_supplied);
 
     // metadata and manifest, which walk the same directory for a different
     // block id
@@ -672,7 +675,8 @@ fn a_handle_can_keep_no_directory_and_still_answer_every_read() -> varlit::Resul
 
     // and reading one record through an entry the caller holds
     let mut payload = Vec::new();
-    let sample: Sample = file.decode_block_into(&index[7], &mut payload)?;
+    let mut sample = Sample::empty();
+    file.decode_block_into(&index[7], &mut payload, &mut sample)?;
     assert_eq!(sample.value, 7);
 
     // --- 3. the handle's own reads refuse by name, not by emptiness ---

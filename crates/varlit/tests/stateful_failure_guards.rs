@@ -21,9 +21,11 @@ fn item(id: u64, epoch: u64) -> Item {
     }
 }
 fn check(reader: &VarlitIndexedReader, expected: &BTreeMap<u64, Item>) -> Result<()> {
+    let mut got = Item::empty();
     for id in 0..33 {
+        let found = reader.get::<Item>(&id, &mut got)?;
         assert_eq!(
-            reader.get::<Item>(&id)?,
+            found.then(|| got.clone()),
             expected.get(&id).cloned(),
             "key {id}"
         );

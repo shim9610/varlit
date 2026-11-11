@@ -1,6 +1,6 @@
 //! Fixed-work matrix publication with following readers and a retained snapshot.
 use std::{sync::Barrier, time::Instant};
-use varlit::{MatrixDimensions, MatrixKey, varlit_format};
+use varlit::{MatrixDimensions, MatrixKey, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format OwnershipMatrix {
         magic: b"OWNM";
@@ -54,6 +54,7 @@ fn main() -> varlit::Result<()> {
                     if id != readers {
                         reader.follow()?;
                     }
+                    let mut actual = Cell::empty();
                     for check in 0..checks {
                         let row = (check * 104729 + epoch * 31 + id as u64 * 17) % rows;
                         let version = if id == readers || row >= epoch * 64 {
@@ -61,7 +62,7 @@ fn main() -> varlit::Result<()> {
                         } else {
                             row / 64 + 1
                         };
-                        let actual = reader.read_matrix_cell::<Cell>(MatrixKey::new(row, 0))?;
+                        reader.read_matrix_cell::<Cell>(MatrixKey::new(row, 0), &mut actual)?;
                         assert_eq!(actual.payload, value(row, version).payload);
                         sum = sum.wrapping_add(row ^ version);
                     }

@@ -95,6 +95,8 @@ pub(super) enum CommitChoice {
     RecordFooter,
     TransactionMarkerOnFlush,
     TransactionMarkerExplicit,
+    TransactionMarkerOnFlushSingleBarrier,
+    TransactionMarkerExplicitSingleBarrier,
 }
 
 pub(super) enum ParsedCommitChoice {
@@ -732,16 +734,33 @@ pub(super) fn parse_commit_choice(input: ParseStream<'_>) -> Result<ParsedCommit
             let args;
             parenthesized!(args in input);
             let mode: Ident = args.parse()?;
+            // `transaction_marker(mode, single_barrier)`: one storage barrier
+            // per durable commit (requires crc32_with_header integrity).
+            let mut single_barrier = false;
             if !args.is_empty() {
-                return Err(args.error("transaction_marker accepts exactly one mode"));
+                args.parse::<Token![,]>()?;
+                let barrier: Ident = args.parse()?;
+                if barrier != "single_barrier" {
+                    return Err(syn::Error::new_spanned(barrier, "expected single_barrier"));
+                }
+                single_barrier = true;
+            }
+            if !args.is_empty() {
+                return Err(
+                    args.error("transaction_marker accepts a mode and an optional single_barrier")
+                );
             }
             match mode.to_string().as_str() {
-                "on_flush" => Ok(ParsedCommitChoice::Append(
-                    CommitChoice::TransactionMarkerOnFlush,
-                )),
-                "explicit" => Ok(ParsedCommitChoice::Append(
-                    CommitChoice::TransactionMarkerExplicit,
-                )),
+                "on_flush" => Ok(ParsedCommitChoice::Append(if single_barrier {
+                    CommitChoice::TransactionMarkerOnFlushSingleBarrier
+                } else {
+                    CommitChoice::TransactionMarkerOnFlush
+                })),
+                "explicit" => Ok(ParsedCommitChoice::Append(if single_barrier {
+                    CommitChoice::TransactionMarkerExplicitSingleBarrier
+                } else {
+                    CommitChoice::TransactionMarkerExplicit
+                })),
                 _ => Err(syn::Error::new_spanned(
                     mode,
                     "expected on_flush or explicit",

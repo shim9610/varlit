@@ -324,6 +324,12 @@ macro_rules! nested_codec_module {
                 pub right: u32,
             }
 
+            impl varlit::VarlitEmpty for Payload {
+                fn empty() -> Self {
+                    Self { left: 0, right: 0 }
+                }
+            }
+
             impl VarlitEncode for Payload {
                 const WIRE_TYPE: WireType = WireType::Nested;
                 const SCHEMA_ID: u64 = $schema_id;
@@ -500,6 +506,12 @@ macro_rules! packed_codec_module {
             pub struct Packed {
                 pub left: u32,
                 pub right: u32,
+            }
+
+            impl varlit::VarlitEmpty for Packed {
+                fn empty() -> Self {
+                    Self { left: 0, right: 0 }
+                }
             }
 
             impl VarlitEncode for Packed {

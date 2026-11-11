@@ -1,5 +1,5 @@
 //! Runnable companion to docs/scalable-io.md; this is an application wire layout.
-use varlit::{DiskIndexOptions, varlit_format};
+use varlit::{DiskIndexOptions, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format PackedCapture {
         magic: b"PACK";
@@ -24,7 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer.sync()?;
     // Independent reader while the writer remains open; no live-file mmap.
     let reader = PackedCapture::open_indexed_reader(&path, DiskIndexOptions::default())?;
-    let block = reader.get_item_block(&7)?.ok_or("missing group")?;
+    let mut block = ItemBlock::empty();
+    if !reader.get_item_block(&7, &mut block)? {
+        return Err("missing group".into());
+    }
     if block.data.len() != 512 * 8 {
         return Err("invalid application layout".into());
     }

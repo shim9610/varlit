@@ -22,7 +22,7 @@ use varlit::{
     BlockDescriptor, BlockKind, Decoder, DiskIndexError, DiskIndexOptions, DiskIndexPlan,
     DiskIndexedBlock, Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     ManifestPolicy, ReadLimits, RecoveryPolicy, Result, ScanOptions, ScanProgressPhase,
-    VarlitBlock, VarlitDecode, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
+    VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
     VarlitKeyedBlock, WireType, disk_index_sidecar_path, rebuild_disk_index,
     rebuild_disk_index_with_progress,
 };
@@ -72,6 +72,18 @@ impl VarlitBlock for Target {
     const ENDIAN: Option<Endian> = None;
     const SCHEMA_FINGERPRINT: u64 = 0x5245_4255_494C_4401;
     const IS_KEYED: bool = true;
+}
+
+impl VarlitEmpty for Target {
+    fn empty() -> Self {
+        Self(String::new())
+    }
+}
+
+/// Owned-result shim over the caller-owned-output indexed read.
+fn get_target(reader: &VarlitIndexedReader, key: &String) -> Result<Option<Target>> {
+    let mut out = Target::empty();
+    Ok(reader.get::<Target>(key, &mut out)?.then_some(out))
 }
 
 impl VarlitKeyedBlock for Target {
@@ -289,9 +301,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     assert_eq!(small_report.records, scanned_records);
     {
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
-        assert_eq!(reader.get::<Target>(&big_key(0))?, None);
+        assert_eq!(get_target(&reader, &big_key(0))?, None);
         assert_eq!(
-            reader.get::<Target>(&big_key(1_000_000))?,
+            get_target(&reader, &big_key(1_000_000))?,
             Some(Target(big_key(1_000_000)))
         );
         assert_eq!(reader.historical_distinct_keys()?, records);
@@ -305,9 +317,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     assert_eq!(full_report.scanned_bytes, small_report.scanned_bytes);
     {
         let reader = VarlitIndexedReader::open(spec(), &path, options, full_plan())?;
-        assert_eq!(reader.get::<Target>(&big_key(TOMBSTONES - 1))?, None);
+        assert_eq!(get_target(&reader, &big_key(TOMBSTONES - 1))?, None);
         assert_eq!(
-            reader.get::<Target>(&big_key(1_000_000 + PUTS - 1))?,
+            get_target(&reader, &big_key(1_000_000 + PUTS - 1))?,
             Some(Target(big_key(1_000_000 + PUTS - 1)))
         );
         assert_eq!(reader.historical_distinct_keys()?, records);
@@ -354,7 +366,7 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
 
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
-    assert_eq!(reader.get::<Target>(&"key-0".to_string())?, None);
+    assert_eq!(get_target(&reader, &"key-0".to_string())?, None);
     drop(reader);
 
     // Rebuild re-creates tombstone rows from the native log, so the metric
@@ -490,7 +502,7 @@ mod crc_single_traversal {
         assert_eq!(report.records, 4);
         let reader = VarlitIndexedReader::open(crc_spec(), &path, options, crc_plan())?;
         assert_eq!(
-            reader.get::<Target>(&indexed_marker.to_string())?,
+            get_target(&reader, &indexed_marker.to_string())?,
             Some(Target(indexed_marker.into()))
         );
         // The whole-file integrity scan still owns full corruption coverage.
@@ -571,7 +583,7 @@ mod publication_state {
         assert!(disk_index_sidecar_path(&path).exists());
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"pending-key".to_string())?,
+            get_target(&reader, &"pending-key".to_string())?,
             Some(Target("pending-key".into()))
         );
         Ok(())
@@ -601,7 +613,7 @@ mod publication_state {
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"after-pending".to_string())?,
+            get_target(&reader, &"after-pending".to_string())?,
             Some(Target("after-pending".into()))
         );
         Ok(())
@@ -703,7 +715,7 @@ mod publication_state {
         assert!(disk_index_sidecar_path(&path).exists());
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"indeterminate-key".to_string())?,
+            get_target(&reader, &"indeterminate-key".to_string())?,
             Some(Target("indeterminate-key".into()))
         );
         Ok(())

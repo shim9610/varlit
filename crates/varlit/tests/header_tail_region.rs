@@ -54,7 +54,7 @@
 // it is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
 
-use varlit::{FormatSpec, VarlitBlock, varlit_format};
+use varlit::{FormatSpec, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 90, version = 1, kind = "fixed")]
@@ -2001,7 +2001,9 @@ fn an_in_place_replacement_retires_the_warm_region() -> varlit::Result<()> {
     // The replacement really landed, so the test is about a file that changed.
     let scanned = varlit::VarlitFile::open_readonly(on_spec(), &path)?;
     let samples = scanned.blocks::<Sample>()?;
-    assert_eq!(samples.get(0)?.expect("a Sample").value, 4_242);
+    let mut sample = Sample::empty();
+    assert!(samples.get(0, &mut sample)?, "a Sample");
+    assert_eq!(sample.value, 4_242);
 
     // And the cost is one open: the next commit warms the region again, so the
     // retirement is a pause in the fast route rather than the end of it.

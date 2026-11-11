@@ -108,6 +108,15 @@ impl MaterializationBudget {
     pub(crate) fn decode<T: VarlitDecode>(&mut self, bytes: &[u8], endian: Endian) -> Result<T> {
         Decoder::decode_from_slice_accounted(bytes, endian, &mut self.remaining)
     }
+
+    pub(crate) fn decode_into<T: VarlitDecode>(
+        &mut self,
+        bytes: &[u8],
+        endian: Endian,
+        out: &mut T,
+    ) -> Result<()> {
+        Decoder::decode_from_slice_accounted_into(bytes, endian, &mut self.remaining, out)
+    }
 }
 
 #[derive(Debug)]
@@ -154,23 +163,27 @@ where
         self.entries.is_empty()
     }
 
-    /// **This allocates** a payload buffer per call. [`get_into`](Self::get_into)
-    /// reuses the caller's, which is what [`Self::iter`] does.
-    pub fn get(&self, index: usize) -> Result<Option<T>> {
+    /// Decodes the record at `index` into `out`, reusing what `out` owns.
+    ///
+    /// Returns `false` (and leaves `out` untouched) when `index` is past the
+    /// end. **This allocates** a payload buffer per call;
+    /// [`get_into`](Self::get_into) reads through the caller's, which is what
+    /// [`Self::cursor`] does. On error `out` is valid but unspecified.
+    pub fn get(&self, index: usize, out: &mut T) -> Result<bool> {
         let mut payload = Vec::new();
-        self.get_into(index, &mut payload)
+        self.get_into(index, &mut payload, out)
     }
 
-    /// Decodes the record at `index`, reading its bytes through the caller's
-    /// buffer.
+    /// Decodes the record at `index` into `out`, reading its bytes through
+    /// the caller's `payload` buffer.
     ///
-    /// `payload` is scratch, not output: the decoded value is returned and the
-    /// buffer holds whatever the last record's bytes were. Reusing it across a
-    /// walk is the difference between one allocation and one per record.
-    pub fn get_into(&self, index: usize, payload: &mut Vec<u8>) -> Result<Option<T>> {
+    /// `payload` is scratch: it holds whatever the last record's bytes were.
+    /// Reusing both buffers across a walk is the difference between no
+    /// allocation per record and several.
+    pub fn get_into(&self, index: usize, payload: &mut Vec<u8>, out: &mut T) -> Result<bool> {
         let mut budget = MaterializationBudget::new(self.spec);
         let Some(entry) = self.entries.get(index) else {
-            return Ok(None);
+            return Ok(false);
         };
         if entry.block_version != T::VERSION {
             return Err(crate::Error::BlockVersionMismatch {
@@ -182,27 +195,34 @@ where
         let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
         budget.consume(logical_len)?;
         entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, payload)?;
-        Ok(Some(
-            budget.decode(payload, T::ENDIAN.unwrap_or(self.spec.endian))?,
-        ))
+        budget.decode_into(payload, T::ENDIAN.unwrap_or(self.spec.endian), out)?;
+        Ok(true)
     }
 
-    /// Iterates the block's records, yielding one decoded value at a time.
+    /// [`Self::get`] as a fresh value; crate tests only.
+    #[cfg(test)]
+    pub(crate) fn get_value(&self, index: usize) -> Result<Option<T>> {
+        let Some(entry) = self.entries.get(index) else {
+            return Ok(None);
+        };
+        let mut budget = MaterializationBudget::new(self.spec);
+        let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
+        budget.consume(logical_len)?;
+        let payload = entry.read_logical_payload_snapshot(self.spec, &self.snapshot)?;
+        budget
+            .decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))
+            .map(Some)
+    }
+
+    /// Walks the block's records, decoding each into the caller's value.
     ///
     /// `max_materialized_bytes` bounds **one** record here, exactly as it does
-    /// in [`Self::get`] and `StreamingBlocks::next`: nothing is retained
-    /// between steps, so the peak is one payload however long the walk is. It
-    /// used to be a single budget threaded across the whole iteration, which
-    /// made `iter()` and a `for i in 0..len { get(i) }` loop over the same
-    /// records mean two different things and refused a healthy file whose total
-    /// payload merely exceeded the ceiling.
-    /// The iterator owns one payload buffer and reuses it for every step, so a
-    /// walk of `N` records allocates one payload rather than `N`. That is the
-    /// only difference from `for i in 0..len { get(i) }`; the per-record
-    /// materialization charge is identical, because `get_into` builds the same
-    /// budget the same way.
-    pub fn iter(&self) -> BlockIter<'_, T> {
-        BlockIter {
+    /// in [`Self::get`] and `StreamingBlocks::next_into`: nothing is retained
+    /// between steps, so the peak is one payload however long the walk is.
+    /// The cursor owns one payload buffer and the caller owns the value, so a
+    /// walk of `N` same-shaped records allocates neither per record.
+    pub fn cursor(&self) -> BlockCursor<'_, T> {
+        BlockCursor {
             collection: self,
             index: 0,
             payload: Vec::new(),
@@ -210,31 +230,28 @@ where
     }
 }
 
-pub struct BlockIter<'a, T> {
+pub struct BlockCursor<'a, T> {
     collection: &'a BlockVec<T>,
     index: usize,
-    /// Reused across steps. See [`BlockVec::iter`].
+    /// Reused across steps. See [`BlockVec::cursor`].
     payload: Vec<u8>,
 }
 
-impl<T> Iterator for BlockIter<'_, T>
+impl<T> BlockCursor<'_, T>
 where
     T: VarlitBlock,
 {
-    type Item = Result<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    /// Decodes the next record into `out`. Returns `false` at the end, leaving
+    /// `out` untouched. On error `out` is valid but unspecified.
+    pub fn next_into(&mut self, out: &mut T) -> Result<bool> {
         if self.index >= self.collection.len() {
-            return None;
+            return Ok(false);
         }
-        // `get_into` builds the budget, so one step of the iteration is charged
+        // `get_into` builds the budget, so one step of the walk is charged
         // exactly what the same `get(i)` call is charged.
-        let result = self
-            .collection
-            .get_into(self.index, &mut self.payload)
-            .transpose();
+        let index = self.index;
         self.index += 1;
-        result
+        self.collection.get_into(index, &mut self.payload, out)
     }
 }
 
@@ -265,11 +282,13 @@ where
         self.by_key.is_empty()
     }
 
-    pub fn get(&self, key: &K) -> Result<Option<T>> {
+    /// Decodes the latest record for `key` into `out`. Returns `false` (and
+    /// leaves `out` untouched) when the key is absent.
+    pub fn get(&self, key: &K, out: &mut T) -> Result<bool> {
         let () = KeyedBlockContract::<T>::OK;
         let mut budget = MaterializationBudget::new(self.inner.spec);
         let Some(entry) = self.by_key.get(key) else {
-            return Ok(None);
+            return Ok(false);
         };
         if entry.block_version != T::VERSION {
             return Err(crate::Error::BlockVersionMismatch {
@@ -287,10 +306,8 @@ where
             &self.inner.snapshot,
             &mut payload,
         )?;
-        Ok(Some(budget.decode(
-            &payload,
-            T::ENDIAN.unwrap_or(self.inner.spec.endian),
-        )?))
+        budget.decode_into(&payload, T::ENDIAN.unwrap_or(self.inner.spec.endian), out)?;
+        Ok(true)
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &K> {

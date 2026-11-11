@@ -519,6 +519,8 @@ impl VarlitFile {
             self.close_commit_point();
             self.file.flush()?;
             self.file.sync_all()?;
+            // After a completed barrier the newest marker is the anchor.
+            self.anchor_after_barrier(entry.record_offset);
             // a durable commit on a file this handle created must
             // also establish the pathname; this happens once, not per commit.
             let publication = self.publish_matrix_generation();
@@ -528,7 +530,12 @@ impl VarlitFile {
             return Ok(info);
         }
         self.file.flush()?;
-        self.file.sync_data()?;
+        // A single-barrier commit does not order the records before the
+        // marker: the marker names them, and open verifies that they arrived
+        // whole before treating it as a commit point.
+        if !self.spec.commit_policy.single_barrier() {
+            self.file.sync_data()?;
+        }
         let info = self.write_commit_marker()?;
         // The segment closes the commit point, so it is appended after the
         // marker and before the durability request that makes both durable.
@@ -562,11 +569,20 @@ impl VarlitFile {
                 },
             ));
         }
+        self.anchor_after_barrier(info.record_offset);
         let publication = self.publish_matrix_generation();
         self.poison_after_started_matrix_error(publication)?;
         self.sync_created_pathname_once()?;
         self.immediate_state.reset();
         Ok(info)
+    }
+
+    /// A completed storage barrier makes `marker_offset` the newest marker
+    /// known durable, so a single-barrier scope restarts after it.
+    fn anchor_after_barrier(&mut self, marker_offset: u64) {
+        if self.spec.commit_policy.single_barrier() {
+            self.commit_scope.anchor_at(Some(marker_offset));
+        }
     }
 
     /// Flushes the buffered writer and syncs the file contents.
@@ -1106,6 +1122,7 @@ impl VarlitFile {
         self.block_tails
             .restore(snapshot.block_id, snapshot.previous_block_tail);
         self.uncommitted_since_commit = snapshot.uncommitted_since_commit;
+        self.commit_scope = snapshot.commit_scope;
         self.appended_since_digest = snapshot.appended_since_digest;
         self.last_resident_block_id = snapshot.last_resident_block_id;
         if truncated {

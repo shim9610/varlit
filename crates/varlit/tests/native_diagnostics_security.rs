@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use varlit::{
     DiagnosticDomain, DiagnosticSeverity, Error, OP_BLOCK_ID, ReadLimits, TOMBSTONE_BLOCK_ID,
-    VarlitBlock, VarlitMerge, diagnose_file, varlit_format,
+    VarlitBlock, VarlitEmpty, VarlitMerge, diagnose_file, varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -118,12 +118,13 @@ fn native_header_and_footer_bytes_remain_canonical() -> varlit::Result<()> {
     expected.extend_from_slice(&0u32.to_le_bytes());
 
     assert_eq!(read(&path)?, expected);
-    assert_eq!(
+    let mut point = GoldenPoint::empty();
+    assert!(
         NativeHeaderSecurityFormat::open_readonly(&path)?
             .blocks::<GoldenPoint>()?
-            .get(0)?,
-        Some(GoldenPoint { x: 9, y: 10 })
+            .get(0, &mut point)?
     );
+    assert_eq!(point, GoldenPoint { x: 9, y: 10 });
 
     cleanup(&path);
     Ok(())

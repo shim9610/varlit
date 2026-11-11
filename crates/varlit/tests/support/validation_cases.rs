@@ -43,6 +43,8 @@ domains! {
     };
     TransactionMarkerMode => TRANSACTIONS {
         OnFlush => TransactionMarkerMode::OnFlush, Explicit => TransactionMarkerMode::Explicit,
+        OnFlushSingleBarrier => TransactionMarkerMode::OnFlushSingleBarrier,
+        ExplicitSingleBarrier => TransactionMarkerMode::ExplicitSingleBarrier,
     };
     CompressionPolicy => COMPRESSION_SHAPES {
         None => CompressionPolicy::None,

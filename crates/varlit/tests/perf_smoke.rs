@@ -9,8 +9,9 @@ use varlit::{
     ChunkLayout, Endian, FormatSpec, IndexPolicy, LayoutSegmentInfo, MatrixAuxDescriptor,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
     MatrixDimensions, MatrixKey, ReadLimits, RecoveryPolicy, SegmentReducer, SegmentWrite,
-    VarlitBlock, VarlitDecode, VarlitEncode, VarlitMatrixBlock, VarlitMerge, compact_keyed_file,
-    compact_keyed_files, merge_keyed_files, reduce_segments_by_ref, varlit_format,
+    VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitMatrixBlock, VarlitMerge,
+    compact_keyed_file, compact_keyed_files, merge_keyed_files, reduce_segments_by_ref,
+    varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -60,6 +61,12 @@ impl VarlitDecode for PerfMatrixCell {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl VarlitEmpty for PerfMatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -518,12 +525,14 @@ fn append_open_and_scan(case: PerfCase) -> varlit::Result<()> {
         );
         let points = file.blocks::<PerfPoint>()?;
         assert_eq!(points.len(), case.records);
+        let mut last = PerfPoint::empty();
+        assert!(points.get(case.records - 1, &mut last)?);
         assert_eq!(
-            points.get(case.records - 1)?,
-            Some(PerfPoint {
+            last,
+            PerfPoint {
                 x: (case.records - 1) as u64,
                 y: ((case.records - 1) as u64).wrapping_mul(3),
-            })
+            }
         );
         Ok(())
     })?;
@@ -561,7 +570,9 @@ fn resized_replacement(case: PerfCase) -> varlit::Result<()> {
     report("replace resized COW", case.records, &path, elapsed);
 
     let file = PerfFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<PerfUser>()?.get(target)?, Some(replacement));
+    let mut replaced = PerfUser::empty();
+    assert!(file.blocks::<PerfUser>()?.get(target, &mut replaced)?);
+    assert_eq!(replaced, replacement);
     cleanup(&path);
     Ok(())
 }
@@ -669,14 +680,9 @@ fn compressed_variable_blocks(case: PerfCase) -> varlit::Result<()> {
         );
         let users = file.blocks::<PerfUser>()?;
         assert_eq!(users.len(), case.records);
-        assert_eq!(
-            users
-                .get(case.records - 1)?
-                .expect("last user")
-                .payload
-                .len(),
-            512
-        );
+        let mut last = PerfUser::empty();
+        assert!(users.get(case.records - 1, &mut last)?, "last user");
+        assert_eq!(last.payload.len(), 512);
         Ok(())
     })?;
     report("open compressed", case.records, &path, elapsed);
@@ -731,14 +737,12 @@ fn varlit3_footer_and_chain(case: PerfCase) -> varlit::Result<()> {
         let reader = PerfVarlit3Format::open_reader(&path)?;
         let users = reader.perf_v3_users()?;
         assert_eq!(users.len(), key_space);
-        assert_eq!(
-            users
-                .get(&((key_space - 1) as u64))?
-                .expect("last keyed user")
-                .payload
-                .len(),
-            64
+        let mut last = PerfV3User::empty();
+        assert!(
+            users.get(&((key_space - 1) as u64), &mut last)?,
+            "last keyed user"
         );
+        assert_eq!(last.payload.len(), 64);
         Ok(())
     })?;
     report("open varlit3 chain", case.records, &path, elapsed);
@@ -998,9 +1002,10 @@ fn matrix_direct_access_with_spec(
 
     let elapsed = timed(|| {
         let reader = spec.open_reader(&path)?;
+        let mut cell = PerfMatrixCell::empty();
         for index in 0..case.records {
             let key = MatrixKey::new((index / channels) as u64, (index % channels) as u64);
-            let cell = reader.read_matrix_cell::<PerfMatrixCell>(key)?;
+            reader.read_matrix_cell::<PerfMatrixCell>(key, &mut cell)?;
             assert_eq!(cell.value, index as u32);
         }
         Ok(())

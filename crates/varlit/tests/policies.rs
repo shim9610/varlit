@@ -91,6 +91,12 @@ struct PackedPair {
     right: u32,
 }
 
+impl varlit::VarlitEmpty for PackedPair {
+    fn empty() -> Self {
+        Self { left: 0, right: 0 }
+    }
+}
+
 impl VarlitEncode for PackedPair {
     const WIRE_TYPE: WireType = WireType::U64;
     // A hand-written codec must declare an identity that changes whenever its
@@ -396,7 +402,7 @@ fn rich_codec_roundtrips_options_arrays_sequences_and_bytes() -> varlit::Result<
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<RichBlock>()?.get(0)?, Some(value));
+    assert_eq!(opt(|o| file.blocks::<RichBlock>()?.get(0, o))?, Some(value));
 
     cleanup(&path);
     Ok(())
@@ -438,7 +444,7 @@ fn map_codec_roundtrips_in_canonical_key_order() -> varlit::Result<()> {
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<MapBlock>()?.get(0)?, Some(value));
+    assert_eq!(opt(|o| file.blocks::<MapBlock>()?.get(0, o))?, Some(value));
 
     cleanup(&path);
     Ok(())
@@ -462,7 +468,10 @@ fn user_defined_codec_type_roundtrips_as_block_field() -> varlit::Result<()> {
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CustomCodecBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        opt(|o| file.blocks::<CustomCodecBlock>()?.get(0, o))?,
+        Some(value)
+    );
     assert_eq!(
         <CustomCodecBlock as VarlitBlock>::FIELDS[0].wire_type,
         WireType::U64
@@ -581,7 +590,7 @@ fn embedded_manifest_is_optional_and_retrievable() -> varlit::Result<()> {
     assert_eq!(defaulted.fields.len(), 1);
     assert_eq!(defaulted.fields[0].presence, FieldPresence::Defaulted);
     assert_eq!(
-        file.blocks::<ContractBlock>()?.get(0)?,
+        opt(|o| file.blocks::<ContractBlock>()?.get(0, o))?,
         Some(ContractBlock { value: 4 })
     );
 
@@ -667,9 +676,9 @@ fn checkpoint_open_uses_latest_checkpoint_and_scans_tail() -> varlit::Result<()>
     let file = CheckpointFormat::open_readonly(&path)?;
     let blocks = file.blocks::<ContractBlock>()?;
     assert_eq!(blocks.len(), total as usize);
-    assert_eq!(blocks.get(0)?, Some(ContractBlock { value: 0 }));
+    assert_eq!(opt(|o| blocks.get(0, o))?, Some(ContractBlock { value: 0 }));
     assert_eq!(
-        blocks.get(total as usize - 1)?,
+        opt(|o| blocks.get(total as usize - 1, o))?,
         Some(ContractBlock { value: total - 1 })
     );
     assert!(
@@ -709,7 +718,10 @@ fn corrupt_checkpoint_falls_back_to_full_scan_without_hiding_data() -> varlit::R
     let blocks = file.blocks::<ContractBlock>()?;
     assert_eq!(blocks.len(), record_count as usize);
     for value in 0..record_count {
-        assert_eq!(blocks.get(value as usize)?, Some(ContractBlock { value }));
+        assert_eq!(
+            opt(|o| blocks.get(value as usize, o))?,
+            Some(ContractBlock { value })
+        );
     }
 
     cleanup(&path);
@@ -789,7 +801,7 @@ fn crc_integrity_detects_payload_tampering() -> varlit::Result<()> {
     ));
     let lazy = CrcFormat::open_readonly(&path)?;
     assert!(matches!(
-        lazy.blocks::<ContractBlock>()?.get(0),
+        opt(|o| lazy.blocks::<ContractBlock>()?.get(0, o)),
         Err(Error::ChecksumMismatch { .. })
     ));
     drop(lazy);
@@ -1036,7 +1048,7 @@ fn explicit_age_based_lock_break_is_opt_in() -> varlit::Result<()> {
             WriterLockBreakPolicy::BreakIfOlderThan(Duration::ZERO),
         )?;
         assert_eq!(
-            file.blocks::<ContractBlock>()?.get(0)?,
+            opt(|o| file.blocks::<ContractBlock>()?.get(0, o))?,
             Some(ContractBlock { value: 88 })
         );
         let info = ContractFormat::spec()
@@ -1079,9 +1091,9 @@ fn stale_lock_can_be_cleared_without_opening_the_data_file() -> varlit::Result<(
     drop(child);
     assert_eq!(ContractFormat::spec().inspect_writer_lock(&path)?, None);
     assert_eq!(
-        ContractFormat::open_readonly(&path)?
+        opt(|o| ContractFormat::open_readonly(&path)?
             .blocks::<ContractBlock>()?
-            .get(0)?,
+            .get(0, o))?,
         Some(ContractBlock { value: 144 })
     );
 
@@ -1270,4 +1282,14 @@ fn append_raw_field_header(output: &mut Vec<u8>, field_id: u32, wire_type: u16, 
 fn cleanup(path: &Path) {
     let _ = remove_file(path);
     let _ = remove_file(writer_lock_path(path));
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }
