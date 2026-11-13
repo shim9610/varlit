@@ -58,7 +58,7 @@ pub(crate) struct TiledMatrix {
     pub(crate) engine: Engine,
     pub(crate) meta: u64,
     /// Distinguishes this matrix from any earlier one at the same path.
-    pub(crate) nonce: [u8; 16],
+    pub(crate) creation_id: [u8; 16],
     /// Whether reads check each cell's checksum: the read-validation
     /// policy's `data_crc`. Commit bitmaps and tile headers are always
     /// checked: they decide which bytes are read at all.
@@ -200,7 +200,7 @@ impl TiledMatrix {
     pub(crate) fn create(
         spec: FormatSpec,
         dims: &MatrixDimensions,
-        nonce: [u8; 16],
+        creation_id: [u8; 16],
         store: &mut dyn TileStore,
     ) -> Result<Self> {
         let (all, pair) = dims_at_create(spec, dims)?;
@@ -256,7 +256,7 @@ impl TiledMatrix {
             check_declared(spec, ReadLimitKey::MatrixCrcBytes, block.cells() * 4)?;
         }
         check_declared(spec, ReadLimitKey::MatrixMetadataBytes, geom.meta_len())?;
-        let writer = TileWriter::create(store, geom.try_clone()?, ring, nonce)?;
+        let writer = TileWriter::create(store, geom.try_clone()?, ring, creation_id)?;
         // The block pair's extents are in the metadata record, so an open
         // needs no dims.
         let meta = writer.meta;
@@ -265,7 +265,7 @@ impl TiledMatrix {
             names,
             engine: Engine::Writer(Box::new(writer)),
             meta,
-            nonce,
+            creation_id,
             verify_cells: spec.read_validation().data_crc,
         })
     }
@@ -299,7 +299,7 @@ impl TiledMatrix {
         }
         let (geom, names) = plan(spec, pair, &all)?;
         geom.decode_meta(&fixed)?;
-        Ok((geom, names, Geometry::decode_nonce(&fixed)))
+        Ok((geom, names, Geometry::decode_creation_id(&fixed)))
     }
 
     pub(crate) fn open_writer(
@@ -307,14 +307,14 @@ impl TiledMatrix {
         store: &mut dyn TileStore,
         meta: u64,
     ) -> Result<Self> {
-        let (geom, names, nonce) = Self::opened_shape(spec, store, meta)?;
+        let (geom, names, creation_id) = Self::opened_shape(spec, store, meta)?;
         let writer = TileWriter::open(store, geom.try_clone()?, meta)?;
         Ok(Self {
             geom,
             names,
             engine: Engine::Writer(Box::new(writer)),
             meta,
-            nonce,
+            creation_id,
             verify_cells: spec.read_validation().data_crc,
         })
     }
@@ -324,14 +324,14 @@ impl TiledMatrix {
         source: &dyn TileSource,
         meta: u64,
     ) -> Result<Self> {
-        let (geom, names, nonce) = Self::opened_shape(spec, source, meta)?;
+        let (geom, names, creation_id) = Self::opened_shape(spec, source, meta)?;
         let reader = TileReader::open(source, geom.try_clone()?, meta)?;
         Ok(Self {
             geom,
             names,
             engine: Engine::Reader(Mutex::new(reader)),
             meta,
-            nonce,
+            creation_id,
             verify_cells: spec.read_validation().data_crc,
         })
     }

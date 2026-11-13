@@ -66,7 +66,7 @@ impl TileWriter {
         store: &mut dyn TileStore,
         geom: Geometry,
         ring_len: u64,
-        nonce: [u8; 16],
+        creation_id: [u8; 16],
     ) -> Result<Self> {
         let ring_len = ring_len.max(MIN_RING).next_multiple_of(8);
         let meta_len = geom.meta_len();
@@ -74,7 +74,7 @@ impl TileWriter {
         // The ring record follows the metadata record; its payload offset is
         // only known once appended, so the metadata is appended with a
         // placeholder and its fixed part rewritten.
-        geom.encode_meta((0, ring_len), nonce, &mut meta_bytes);
+        geom.encode_meta((0, ring_len), creation_id, &mut meta_bytes);
         let meta = store.append(RecordKind::Meta, &meta_bytes)?;
         let mut ring_bytes = zeroed(ring_len, "matrix ring")?;
         let header = RingHeader {
@@ -84,7 +84,7 @@ impl TileWriter {
         ring_bytes[HEADER_SLOT_FOR_SEQ1..HEADER_SLOT_FOR_SEQ1 + wal::HEADER_SLOT as usize]
             .copy_from_slice(&header.encode());
         let base = store.append(RecordKind::Ring, &ring_bytes)?;
-        geom.encode_meta((base, ring_len), nonce, &mut meta_bytes);
+        geom.encode_meta((base, ring_len), creation_id, &mut meta_bytes);
         store.write_at(meta, &meta_bytes[..META_FIXED_LEN as usize])?;
         store.sync()?;
         Ok(Self::with_parts(

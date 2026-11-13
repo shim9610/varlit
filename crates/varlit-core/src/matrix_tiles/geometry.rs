@@ -195,7 +195,7 @@ impl Geometry {
 
     /// The metadata record's initial payload. `ring` is the ring record's
     /// payload offset and length.
-    pub(crate) fn encode_meta(&self, ring: (u64, u64), nonce: [u8; 16], out: &mut [u8]) {
+    pub(crate) fn encode_meta(&self, ring: (u64, u64), creation_id: [u8; 16], out: &mut [u8]) {
         out.fill(0);
         out[0..4].copy_from_slice(META_MAGIC);
         out[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
@@ -205,7 +205,7 @@ impl Geometry {
         out[24..32].copy_from_slice(&self.dims[1].to_le_bytes());
         out[32..40].copy_from_slice(&ring.0.to_le_bytes());
         out[40..48].copy_from_slice(&ring.1.to_le_bytes());
-        out[48..64].copy_from_slice(&nonce);
+        out[48..64].copy_from_slice(&creation_id);
         let crc = crc32fast::hash(&out[..64]);
         out[64..68].copy_from_slice(&crc.to_le_bytes());
     }
@@ -235,7 +235,7 @@ impl Geometry {
     }
 
     /// The creation nonce stored in a metadata record.
-    pub(crate) fn decode_nonce(bytes: &[u8]) -> [u8; 16] {
+    pub(crate) fn decode_creation_id(bytes: &[u8]) -> [u8; 16] {
         bytes[48..64].try_into().expect("sixteen")
     }
 

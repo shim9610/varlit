@@ -111,11 +111,11 @@ impl VarlitIndexedWriter {
             return Err(Error::MatrixLayoutMissing);
         }
         let mut writer = Self::create(spec, path, options, plan)?;
-        let nonce = crate::file::fresh_stream_creation_nonce();
+        let creation_id = crate::file::fresh_stream_creation_nonce();
         let mut store = IndexedTiles {
             writer: &mut writer,
         };
-        let tiles = TiledMatrix::create(spec, &dims, nonce, &mut store)?;
+        let tiles = TiledMatrix::create(spec, &dims, creation_id, &mut store)?;
         writer.tiles = Some(tiles);
         writer.sync_with(true)?;
         Ok(writer)

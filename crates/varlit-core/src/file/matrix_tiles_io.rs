@@ -158,7 +158,7 @@ impl VarlitFile {
     pub(super) fn create_tiles(
         &mut self,
         dims: &MatrixDimensions,
-        nonce: [u8; MATRIX_CREATION_NONCE_LEN],
+        creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
     ) -> Result<()> {
         let spec = self.spec;
         let expected = self.matrix_meta_offset()?;
@@ -166,7 +166,7 @@ impl VarlitFile {
             file: self,
             appended: false,
         };
-        let tiles = TiledMatrix::create(spec, dims, nonce, &mut store)?;
+        let tiles = TiledMatrix::create(spec, dims, creation_id, &mut store)?;
         if tiles.meta != expected {
             return Err(Error::InvalidMatrixLayout);
         }
@@ -176,7 +176,7 @@ impl VarlitFile {
 
     /// The creation nonce of this file's matrix.
     pub(super) fn matrix_nonce(&self) -> Result<[u8; MATRIX_CREATION_NONCE_LEN]> {
-        Ok(self.tiles_read()?.0.nonce)
+        Ok(self.tiles_read()?.0.creation_id)
     }
 
     /// Whether this writer holds matrix changes not yet published.
