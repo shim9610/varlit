@@ -922,7 +922,6 @@ impl VarlitFile {
         take_record_entry_faults()
     }
 
-
     /// The write-side guard: poison check plus open-mode check, returning the
     /// witness the guarded operations demand. See [`Self::ensure_not_poisoned`].
     fn check_write(&self) -> Result<()> {

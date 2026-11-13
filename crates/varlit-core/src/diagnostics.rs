@@ -1655,6 +1655,7 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
 /// `super::private_tempdir()` leaves the mode to the umask.
 #[cfg(test)]
 pub(crate) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = tempfile::Builder::new();
     #[cfg(unix)]
     {

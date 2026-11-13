@@ -1133,7 +1133,11 @@ impl VarlitFile {
             write_native_file_header(&mut temp_file, self.spec, &replacement_extensions)?;
             // The replacement carries this spec's anchors from its append log
             // on, as its header now says.
-            temp_file.set_layout(self.spec.effective_anchors().layout(append_log_start_for_file(self)?));
+            temp_file.set_layout(
+                self.spec
+                    .effective_anchors()
+                    .layout(append_log_start_for_file(self)?),
+            );
             let records = self.resident_directory("replace_block")?;
             let mut source_window = SourceWindow::new();
             let mut rewrite_summary = RewriteSummary::new();
@@ -1213,7 +1217,9 @@ impl VarlitFile {
         drop(temp_file);
 
         match replace_path_atomically(&temp_path, &self.path) {
-            Ok(ReplaceDurability::Durable) => self.rebind_published_generation(sequence, Some(new_index)),
+            Ok(ReplaceDurability::Durable) => {
+                self.rebind_published_generation(sequence, Some(new_index))
+            }
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
                 // new generation, so the writer must move there regardless.

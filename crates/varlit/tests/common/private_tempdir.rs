@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 pub fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = tempfile::Builder::new();
     #[cfg(unix)]
     {

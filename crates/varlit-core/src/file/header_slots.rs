@@ -570,5 +570,4 @@ impl VarlitFile {
     fn has_uncommitted_since_last_commit(&self) -> bool {
         self.uncommitted_since_commit
     }
-
 }

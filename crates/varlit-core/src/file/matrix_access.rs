@@ -2,14 +2,14 @@
 // (`crate::matrix_tiles`).
 
 impl VarlitFile {
-
-
-
     /// Runs a matrix mutation: refused on a read-only or poisoned handle, and
     /// an I/O failure poisons the writer.
     fn matrix_mutation<R>(
         &mut self,
-        op: impl FnOnce(&mut crate::matrix_tiles::api::TiledMatrix, &mut matrix_tiles_io::FileTiles<'_>) -> Result<R>,
+        op: impl FnOnce(
+            &mut crate::matrix_tiles::api::TiledMatrix,
+            &mut matrix_tiles_io::FileTiles<'_>,
+        ) -> Result<R>,
     ) -> Result<R> {
         self.check_write()?;
         let result = self.with_tiles(op);
@@ -180,7 +180,11 @@ impl VarlitFile {
 
     /// The committed payload of `key` (exactly `T::SLOT_STRIDE` bytes),
     /// charged against `MaterializedBytes`.
-    fn matrix_payload_into<T: VarlitMatrixBlock>(&self, key: MatrixKey, out: &mut Vec<u8>) -> Result<()> {
+    fn matrix_payload_into<T: VarlitMatrixBlock>(
+        &self,
+        key: MatrixKey,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
         crate::matrix::ensure_matrix_block::<T>(self.spec)?;
         self.spec
             .read_limits
@@ -329,7 +333,9 @@ impl VarlitFile {
         channel: u64,
         value: bool,
     ) -> Result<()> {
-        self.matrix_mutation(|tiles, store| tiles.set_channel_committed(store, name, channel, value))
+        self.matrix_mutation(|tiles, store| {
+            tiles.set_channel_committed(store, name, channel, value)
+        })
     }
 
     /// What a resumed writer should do with this category: `Clean` when none
@@ -339,7 +345,11 @@ impl VarlitFile {
         tiles.resume_signal(&source, category)
     }
 
-    fn matrix_sidecar_signal(&self, category: &str, sidecar_exists: bool) -> Result<MatrixResumeSignal> {
+    fn matrix_sidecar_signal(
+        &self,
+        category: &str,
+        sidecar_exists: bool,
+    ) -> Result<MatrixResumeSignal> {
         let (tiles, source) = self.tiles_read()?;
         let (committed, total) = tiles.progress(&source, category)?;
         let clean = committed == 0 || committed == total;
@@ -418,7 +428,9 @@ impl VarlitFile {
     ) -> Result<MatrixSidecarManifest> {
         self.check_write()?;
         // The category must exist.
-        self.tiles_read()?.0.progress(&self.tiles_read()?.1, category)?;
+        self.tiles_read()?
+            .0
+            .progress(&self.tiles_read()?.1, category)?;
         let identity = self.matrix_native_identity()?;
         write_matrix_sidecar_file(
             self.spec,
@@ -435,7 +447,9 @@ impl VarlitFile {
         category: &str,
         sidecar_path: P,
     ) -> Result<(MatrixSidecarManifest, Vec<u8>)> {
-        self.tiles_read()?.0.progress(&self.tiles_read()?.1, category)?;
+        self.tiles_read()?
+            .0
+            .progress(&self.tiles_read()?.1, category)?;
         let identity = self.matrix_native_identity()?;
         read_matrix_sidecar_file(self.spec, category, sidecar_path, None, identity)
     }
@@ -446,7 +460,9 @@ impl VarlitFile {
         sidecar_path: P,
         expected_generation: u64,
     ) -> Result<(MatrixSidecarManifest, Vec<u8>)> {
-        self.tiles_read()?.0.progress(&self.tiles_read()?.1, category)?;
+        self.tiles_read()?
+            .0
+            .progress(&self.tiles_read()?.1, category)?;
         let identity = self.matrix_native_identity()?;
         read_matrix_sidecar_file(
             self.spec,

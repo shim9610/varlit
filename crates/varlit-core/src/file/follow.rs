@@ -112,7 +112,11 @@ impl VarlitFile {
     pub fn compact_matrix(&mut self) -> Result<()> {
         self.check_write()?;
         self.ensure_tiles_writer()?;
-        if self.tiles.get().is_some_and(crate::matrix_tiles::api::TiledMatrix::is_dirty) {
+        if self
+            .tiles
+            .get()
+            .is_some_and(crate::matrix_tiles::api::TiledMatrix::is_dirty)
+        {
             return Err(Error::InvalidFormatSpec(
                 "sync matrix changes before compaction",
             ));

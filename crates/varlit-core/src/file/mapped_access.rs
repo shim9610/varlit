@@ -139,7 +139,9 @@ impl VarlitFile {
         // The whole-file form charges and requires the captured snapshot's
         // length, as it always has: a truncated file is refused even when it
         // holds no record to map.
-        unsafe { self.map_payload_records(&list, 0..list.len(), base, span, mapped_len, mapped_len) }
+        unsafe {
+            self.map_payload_records(&list, 0..list.len(), base, span, mapped_len, mapped_len)
+        }
     }
 
     #[cfg(feature = "mmap")]
@@ -226,7 +228,9 @@ impl VarlitFile {
         let count = records.len();
         // `MmapLen` is charged for the captured snapshot (`mmap_payloads`) or
         // the range's extent (`mmap_payload_range`).
-        self.spec.read_limits.check(ReadLimitKey::MmapLen, charged)?;
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::MmapLen, charged)?;
         let record_count = u64::try_from(count).map_err(|_| Error::ResourceArithmeticOverflow {
             resource: "record count",
         })?;
@@ -238,18 +242,19 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::IndexBytes, mmap_index_bytes)?;
-        let extent_end = base.checked_add(span).ok_or(Error::MmapPayloadOutOfBounds {
-            offset: base,
-            len: span,
-        })?;
+        let extent_end = base
+            .checked_add(span)
+            .ok_or(Error::MmapPayloadOutOfBounds {
+                offset: base,
+                len: span,
+            })?;
         if extent_end > self.snapshot.len() {
             return Err(Error::MmapPayloadOutOfBounds {
                 offset: base,
                 len: span,
             });
         }
-        let map_len =
-            usize::try_from(span).map_err(|_| Error::LengthOverflow { value: span })?;
+        let map_len = usize::try_from(span).map_err(|_| Error::LengthOverflow { value: span })?;
 
         let mut index = Vec::new();
         index
@@ -354,10 +359,12 @@ impl VarlitFile {
                 )?;
                 self.snapshot
                     .read_exact_at(entry.record_offset, bytes.as_bytes_mut())?;
-                crossing.try_reserve(1).map_err(|_| Error::AllocationFailed {
-                    resource: "anchored record copies",
-                    requested: len,
-                })?;
+                crossing
+                    .try_reserve(1)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "anchored record copies",
+                        requested: len,
+                    })?;
                 crossing.push((entry.record_offset, bytes));
             }
         }
@@ -436,7 +443,9 @@ impl VarlitFile {
         let captured = self
             .file
             .anchor_layout()
-            .map_or(Some(self.snapshot.len()), |layout| layout.physical_end(self.snapshot.len()))
+            .map_or(Some(self.snapshot.len()), |layout| {
+                layout.physical_end(self.snapshot.len())
+            })
             .ok_or(Error::InvalidMatrixLayout)?;
         if captured > physical_len {
             return Err(Error::MmapPayloadOutOfBounds {
@@ -454,21 +463,27 @@ impl VarlitFile {
             ReadLimitKey::MaterializedBytes,
             patched.div_ceil(4096).saturating_add(entries.len() as u64) * 4096,
         )?;
-        let map_len = usize::try_from(physical_len)
-            .map_err(|_| Error::LengthOverflow { value: physical_len })?;
+        let map_len = usize::try_from(physical_len).map_err(|_| Error::LengthOverflow {
+            value: physical_len,
+        })?;
         // SAFETY: the caller guarantees the backing object stays immutable
         // and valid for the mapping's lifetime; the mapping is private, so the
         // patches below never reach the file.
-        let mut mapping =
-            unsafe { memmap2::MmapOptions::new().len(map_len).map_copy(file.raw())? };
+        let mut mapping = unsafe {
+            memmap2::MmapOptions::new()
+                .len(map_len)
+                .map_copy(file.raw())?
+        };
         let layout = self.file.anchor_layout();
         let mut bytes = Vec::new();
         for (target, at, len) in entries {
             bytes.clear();
-            bytes.try_reserve_exact(len as usize).map_err(|_| Error::AllocationFailed {
-                resource: "matrix mapping patch",
-                requested: u64::from(len),
-            })?;
+            bytes
+                .try_reserve_exact(len as usize)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "matrix mapping patch",
+                    requested: u64::from(len),
+                })?;
             bytes.resize(len as usize, 0);
             crate::matrix_tiles::store::TileSource::read_at(&source, at, &mut bytes)?;
             let mut write = |physical: u64, from: usize, n: usize| -> Result<()> {

@@ -32,7 +32,8 @@ impl VarlitFile {
                 entry.read_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
                 let (stored_key, _) = split_metadata_payload(&payload, self.spec.endian)?;
                 if stored_key == key {
-                    let (_, value): (String, Vec<u8>) = budget.decode(&payload, self.spec.endian)?;
+                    let (_, value): (String, Vec<u8>) =
+                        budget.decode(&payload, self.spec.endian)?;
                     return Ok(Some(value));
                 }
             }
@@ -1017,7 +1018,11 @@ impl VarlitFile {
         T: VarlitKeyedBlock,
         T::Key: Eq + Hash + Clone,
     {
-        self.keyed_blocks_into_in::<T, _>(&self.resident_directory("keyed_blocks")?, entries, by_key)
+        self.keyed_blocks_into_in::<T, _>(
+            &self.resident_directory("keyed_blocks")?,
+            entries,
+            by_key,
+        )
     }
 
     fn keyed_blocks_into_in<T, D: RecordDirectory + ?Sized>(

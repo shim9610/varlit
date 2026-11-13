@@ -1620,17 +1620,23 @@ fn windows_sharing_violation_preserves_generation_and_allows_retry() -> Result<(
         Err(Error::Io(_))
     ));
     assert_eq!(
-        all_blocks!(writer, ReplaceTestBlock)?.get(0)?,
+        all_blocks!(writer, ReplaceTestBlock)?.get_value(0)?,
         Some(ReplaceTestBlock { value: 1 })
     );
-    assert_eq!(old_blocks.get(0)?, Some(ReplaceTestBlock { value: 1 }));
+    assert_eq!(
+        old_blocks.get_value(0)?,
+        Some(ReplaceTestBlock { value: 1 })
+    );
     assert_no_rewrite_temps(directory.path())?;
 
     drop(blocker);
     writer.replace_fixed(0, &ReplaceTestBlock { value: 2 })?;
-    assert_eq!(old_blocks.get(0)?, Some(ReplaceTestBlock { value: 1 }));
     assert_eq!(
-        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceTestBlock)?.get(0)?,
+        old_blocks.get_value(0)?,
+        Some(ReplaceTestBlock { value: 1 })
+    );
+    assert_eq!(
+        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceTestBlock)?.get_value(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert_no_rewrite_temps(directory.path())?;
@@ -1789,9 +1795,11 @@ fn windows_external_truncate_returns_error_without_rebinding_or_panicking() -> R
     }
 
     let reader = VarlitFile::open_readonly(spec, &path)?;
-    let blocks = all_blocks!(reader, ReplaceTestBlock)?;
+    assert_eq!(all_blocks!(reader, ReplaceTestBlock)?.len(), 1);
     OpenOptions::new().write(true).open(&path)?.set_len(0)?;
-    assert!(blocks.get(0).is_err());
+    // The reader's snapshot still names the record; reading it now fails
+    // instead of rebinding to the truncated file or panicking.
+    assert!(all_blocks!(reader, ReplaceTestBlock).is_err());
     Ok(())
 }
 

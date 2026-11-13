@@ -331,19 +331,15 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<Self> {
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file =
+            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
         lock.bind_native(file.raw(), &path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
         check_open_file_len(spec, &file)?;
         let append_start = header_len;
-        let mut index = load_generation_index(
-            spec,
-            &mut file,
-            append_start,
-            ScanIntent::Writer,
-            scratch,
-        )?;
+        let mut index =
+            load_generation_index(spec, &mut file, append_start, ScanIntent::Writer, scratch)?;
         // The sequence high-water mark and the block tails come from the scan
         // rather than from the index, because the index is filtered: a
         // non-resident block's records are on disk and not in it.
@@ -370,10 +366,7 @@ impl VarlitFile {
         let derived = derive_index_state(index.entries(), false)?;
         let segment_cursor =
             SegmentCursor::rebased(derived.segment_cursor, base_records, base_segment);
-        let snapshot = SnapshotFile::from_file_with_len(
-            file.try_clone()?,
-            file.len()?,
-        )?;
+        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, file.len()?)?;
         let mut opened = Self {
             spec,
             path,
@@ -483,13 +476,8 @@ impl VarlitFile {
         // Logical: measured once the header has installed the anchor layout.
         check_open_file_len(spec, &file)?;
         let append_start = header_len;
-        let mut scanned = load_generation_index(
-            spec,
-            &mut file,
-            append_start,
-            ScanIntent::ReadOnly,
-            scratch,
-        )?;
+        let mut scanned =
+            load_generation_index(spec, &mut file, append_start, ScanIntent::ReadOnly, scratch)?;
 
         let sequence_state = scanned.sequence_state();
         let block_tails = scanned.block_tails()?;
@@ -772,7 +760,8 @@ impl VarlitFile {
         lock: &mut WriterLock,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(path)?, None);
+        let mut file =
+            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(path)?, None);
         lock.bind_native(file.raw(), path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
@@ -943,18 +932,14 @@ impl VarlitFile {
         scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
         let spec = spec.with_strict_read_validation();
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file =
+            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
         lock.bind_native(file.raw(), &path)?;
         let original_len = file.len()?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         let append_start = header_len;
-        let mut index = load_generation_index(
-            spec,
-            &mut file,
-            append_start,
-            ScanIntent::Recover,
-            scratch,
-        )?;
+        let mut index =
+            load_generation_index(spec, &mut file, append_start, ScanIntent::Recover, scratch)?;
         let sequence_state = index.sequence_state();
         let block_tails = index.block_tails()?;
         let frames_verified = index.frames_verified;
@@ -970,47 +955,44 @@ impl VarlitFile {
         let segment_cursor =
             SegmentCursor::rebased(derived.segment_cursor, base_records, base_segment);
         let records_preserved = index.record_count();
-        let snapshot = SnapshotFile::from_file_with_len(
-            file.try_clone()?,
-            file.len()?,
-        )?;
+        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, file.len()?)?;
         let report = RecoveryReport {
             original_len,
             recovered_len,
             records_preserved,
         };
         let mut opened = Self {
+            spec,
+            path,
+            file: RecordFile::new(file),
+            index: ResidentIndex::none_retained_opened(
+                snapshot.clone(),
                 spec,
-                path,
-                file: RecordFile::new(file),
-                index: ResidentIndex::none_retained_opened(
-                    snapshot.clone(),
-                    spec,
-                    base_records + index.record_count(),
-                    frames_verified,
-                    boundaries,
-                ),
-                snapshot,
-                mode: OpenMode::ReadWrite,
-                follow_scan: None,
-                header_extensions,
-                sequence_state,
-                block_tails,
+                base_records + index.record_count(),
+                frames_verified,
+                boundaries,
+            ),
+            snapshot,
+            mode: OpenMode::ReadWrite,
+            follow_scan: None,
+            header_extensions,
+            sequence_state,
+            block_tails,
             tiles: std::cell::OnceCell::new(),
             record_cache: Default::default(),
-                segment_cursor,
-                uncommitted_since_commit: false,
+            segment_cursor,
+            uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
-                record_buffer: Vec::new(),
-                immediate_state: Default::default(),
-                appended_since_digest: false,
-                last_resident_block_id: index.last_entry()?.map(|entry| entry.block_id),
-                keyed_tails: KeyedTails::new_empty(),
-                pending_pathname_parent_sync: false,
-                opened_after_crash: false,
-                poison: PoisonFlag::healthy(),
-                _lock: None,
-            };
+            record_buffer: Vec::new(),
+            immediate_state: Default::default(),
+            appended_since_digest: false,
+            last_resident_block_id: index.last_entry()?.map(|entry| entry.block_id),
+            keyed_tails: KeyedTails::new_empty(),
+            pending_pathname_parent_sync: false,
+            opened_after_crash: false,
+            poison: PoisonFlag::healthy(),
+            _lock: None,
+        };
         opened.open_tiles_now()?;
         Ok((opened, report))
     }
