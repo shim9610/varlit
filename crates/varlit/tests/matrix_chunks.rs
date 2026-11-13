@@ -1075,19 +1075,20 @@ fn chunk_compression_requires_a_growing_dimension() {
     ));
 }
 
+/// Tiled cells are rewritten in place, so a compressed matrix is refused
+/// when the file is created, before any missing compression backend matters.
 #[cfg(not(feature = "compression-zstd"))]
 #[test]
-fn chunk_compression_reports_the_missing_backend() -> varlit::Result<()> {
+fn chunk_compression_is_refused_at_creation_without_a_backend() {
     let path = temp_path("missing_compression_backend");
-    let mut writer = compressed_spec().create_writer_with_dims(path.path(), dims())?;
-    let cell = key(ROWS_PER_CHUNK, 0);
-    writer.write_matrix_cell(cell, &Sample { value: 7 })?;
-    writer.commit_matrix_cell::<Sample>(cell)?;
     assert!(matches!(
-        writer.flush(),
-        Err(Error::CompressionFeatureDisabled)
+        compressed_spec().create_writer_with_dims(path.path(), dims()),
+        Err(Error::InvalidFormatSpec(_))
     ));
-    Ok(())
+    assert!(
+        !path.path().exists(),
+        "a refused spec must not create the file"
+    );
 }
 
 // ---------------------------------------------------------------------------
