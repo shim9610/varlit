@@ -149,8 +149,11 @@ fn spilled_open_peak_and_retained_memory_do_not_scale_with_record_count() -> var
         let peak = PEAK_BYTES.with(Cell::get) - baseline;
         costs.push((retained, peak));
         assert_eq!(reader.scan().count(), count as usize);
-        assert!(retained < 16 * 1024, "retained {retained}");
-        assert!(peak < 64 * 1024, "peak {peak}");
+        // The handle keeps one fixed 16 KiB read window from open onwards,
+        // so that reads after it allocate nothing.
+        const HANDLE_WINDOW: isize = 16 * 1024;
+        assert!(retained < 16 * 1024 + HANDLE_WINDOW, "retained {retained}");
+        assert!(peak < 64 * 1024 + HANDLE_WINDOW, "peak {peak}");
     }
     eprintln!("paged open (retained, peak): {costs:?}");
     assert!(costs[1].0 <= costs[0].0 + 4096);
@@ -621,9 +624,13 @@ fn a_handle_can_keep_no_directory_and_still_answer_every_read() -> varlit::Resul
     // extensions and the block-tail table, both O(schema), plus the open
     // scan's fixed 16 KiB read window. Measured 2026-11-13: 16,618 bytes at
     // 20,000 records and the same 16,618 at 80,000, so none of it scales.
+    // Since then the handle also sizes its own 16 KiB read window at open
+    // rather than on its first read: 33,006 bytes, still independent of the
+    // record count.
     const SCAN_WINDOW: isize = 16 * 1024;
+    const HANDLE_WINDOW: isize = 16 * 1024;
     assert!(
-        without_directory_bytes < slot_array / 100 + SCAN_WINDOW,
+        without_directory_bytes < slot_array / 100 + SCAN_WINDOW + HANDLE_WINDOW,
         "opening without a directory allocated {without_directory_bytes} bytes against \
          {with_directory_bytes} with one; the slot array is {slot_array} bytes. Anything \
          near that means it is still being built and then dropped."

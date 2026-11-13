@@ -186,3 +186,36 @@ help: the trait `VarlitEmpty` is not implemented for `PackedBitmap`
              ChunkedBytes
              HashMap<K, V, S>
            and $N others
+
+error[E0277]: the trait bound `PackedBitmap: VarlitDecode` is not satisfied
+  --> tests/ui/fail_matrix_shadowed_packed_bitmap.rs:11:1
+   |
+11 | / varlit_format! {
+12 | |     pub format ShadowedPackedBitmapFormat {
+13 | |         magic: b"SPBM";
+14 | |         version: 1;
+...  |
+47 | | }
+   | |_^ unsatisfied trait bound
+   |
+help: the trait `VarlitDecode` is not implemented for `PackedBitmap`
+  --> tests/ui/fail_matrix_shadowed_packed_bitmap.rs:7:1
+   |
+ 7 | pub struct PackedBitmap {
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `VarlitDecode`:
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             BTreeMap<K, V>
+             BadCell
+             ChunkedBytes
+             HashMap<K, V>
+           and $N others
+note: required by a bound in `varlit::RecordFields::<'_>::decode_into`
+  --> $WORKSPACE/crates/varlit-core/src/file/record_fields.rs
+   |
+   |     pub fn decode_into<F: crate::VarlitDecode>(
+   |                           ^^^^^^^^^^^^^^^^^^^ required by this bound in `RecordFields::<'_>::decode_into`
+   = note: this error originates in the derive macro `::varlit::VarlitBlock` (in Nightly builds, run with -Z macro-backtrace for more info)
