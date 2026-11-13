@@ -1,5 +1,7 @@
-error[E0451]: field `position` of struct `varlit_core::enforcement_probe::ReplacementTarget` is private
-  --> tests/ui/fail_fabricated_replacement_target.rs:13:39
+error: cannot construct `varlit_core::enforcement_probe::ReplacementTarget` with struct literal syntax due to private fields
+  --> tests/ui/fail_fabricated_replacement_target.rs:13:19
    |
 13 |     let _forged = ReplacementTarget { position: 0 };
-   |                                       ^^^^^^^^ private field
+   |                   ^^^^^^^^^^^^^^^^^   ----------- private field
+   |
+   = note: ...and other private field `entry` that was not provided

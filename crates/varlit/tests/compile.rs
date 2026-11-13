@@ -180,23 +180,6 @@ fn mechanical_enforcement_contracts() {
     // the permission to rewrite an already-indexed record
     // cannot be obtained without dropping the block's keyed-tail map.
     tests.compile_fail("tests/ui/fail_fabricated_record_overwrite.rs");
-    // the CRC-validity bitmap cannot be read as evidence of
-    // absence without the completeness witness, and the witness cannot be
-    // forged.
-    tests.compile_fail("tests/ui/fail_fabricated_crc_valid_completeness.rs");
-    // SHAPE B matrix state cannot be addressed without the
-    // fail-closed fatal-recovery witness, and the witness cannot be forged.
-    tests.compile_fail("tests/ui/fail_fabricated_fatal_access.rs");
-    // ROUND 15, the minting half of both of the above. Forging a witness was
-    // never how these defects were written; minting an unchecked *gate* and
-    // taking a legitimate witness off it was. The constructors that made that a
-    // one-liner are deleted, and these two fixtures fail the day either
-    // returns. Note what they cannot cover: an outside crate could not reach
-    // either constructor anyway, so the fixtures are trip-wires rather than
-    // proofs. The proof is in-crate — `matrix.rs::bypass_catalogue`,
-    // `file.rs::bypass_catalogue` and `tests/enforcement_gates.rs`.
-    tests.compile_fail("tests/ui/fail_minted_fatal_access_gate.rs");
-    tests.compile_fail("tests/ui/fail_minted_crc_valid_completeness.rs");
 }
 
 #[cfg(feature = "mmap")]

@@ -694,9 +694,9 @@ fn an_in_place_record_write_still_demands_a_version_checked_target() {
 /// the crate may declare a `bool` field that an `fn ensure_*` guard consults.
 /// A boolean that gates an operation belongs inside a type whose only output is
 /// a witness, so that the operations demand the check instead of remembering
-/// it — `writer_permit::PoisonFlag`, `matrix::fatal_access::FatalAccessGate`
-/// and `matrix::crc_valid_evidence::CrcValidEvidence` are the three that exist,
-/// and each keeps its boolean unnameable outside its module.
+/// it — `writer_permit::PoisonFlag` keeps its boolean unnameable outside its
+/// module. (The paged matrix's `FatalAccessGate` and `CrcValidEvidence` left
+/// with the paged matrix itself.)
 ///
 /// The scan is deliberately conservative about what an "`ensure_` guard" is: it
 /// reads the forty lines following each `fn ensure_` signature. Guards are
