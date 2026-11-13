@@ -13,14 +13,13 @@ class StorageSelectionTests(unittest.TestCase):
     def test_failure_and_resource_categories_are_required(self):
         self.assertEqual({row[0] for row in gate.CASES}, {
             "keyed-spill-refusal", "strict-lazy-choice", "strict-lazy-corruption", "strict-lazy-header",
-            "compound-read", "failed-swmr", "snapshot-owner-release", "portable-head-parser", "portable-recency",
+            "compound-read", "failed-swmr", "snapshot-owner-release", "portable-head-parser",
             "ownership-deferred-box", "ownership-box-order", "ownership-inplace-box", "ownership-deferred-arc", "ownership-clone", "ownership-box", "ownership-arc", "ownership-arc-threads",
             "ownership-token", "ownership-preflight", "ownership-published", "ownership-mmap",
             "ownership-generated", "ownership-path-error", "ownership-disk-error",
-            "ownership-fatal-copy", "ownership-incomplete-copy",
             "chunk-stream-window", "chunk-stream-refusal", "chunk-stream-integrity", "chunk-stream-fallback",
             "decoder-refusal", "chunk-refusal", "hashmap-rehash-budget", "hostile-follow", "hostile-codec", "hostile-index", "spill-policy", "spill-byte-policy", "zstd-header-allocation", "chunk-header-allocation", "publication-resume", "publication-clean-resume", "publication-head-pairs", "publication-histories", "publication-live-crashes", "index-cache-shape", "index-traversal", "index-oom", "kernel-short-write", "torn-publication", "consistent-frontiers",
-            "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-evidence",
+            "native-boundary-proof", "rewrite-source-integrity", "matrix-mmap-window",
             "nonresident-record-budget", "nonresident-follow-sequence", "mutation-amortized-work", "recovery-linear-work", "mutation-uniform-proof", "mutation-rewritten-boundaries",
             "checked-chain-links", "failed-history", "decode-memory", "cardinality-growth", "oom-recovery", "zstd-context-oom"})
         for case in gate.CASES:

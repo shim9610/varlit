@@ -128,13 +128,6 @@
     "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
   },
   {
-    "test": "indexed::tests::dirty_index_restore_uses_checkpoint_without_native_scan",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
     "test": "indexed::tests::equal_length_primary_files_reject_swapped_sidecars",
     "category": "unsupported-os",
     "alternative": "native-and-asan",
@@ -226,61 +219,6 @@
     "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
   },
   {
-    "test": "matrix::page_store_lru_tests::a_page_released_by_a_clear_leaves_the_recency_order",
-    "category": "workload-cost",
-    "alternative": "native-and-asan",
-    "portable_tests": [
-      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
-    ],
-    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
-  },
-  {
-    "test": "matrix::page_store_lru_tests::a_recency_touch_costs_a_bounded_number_of_probes",
-    "category": "workload-cost",
-    "alternative": "native-and-asan",
-    "portable_tests": [
-      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
-    ],
-    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
-  },
-  {
-    "test": "matrix::page_store_lru_tests::a_writer_materialised_page_is_never_evicted",
-    "category": "workload-cost",
-    "alternative": "native-and-asan",
-    "portable_tests": [
-      "matrix::page_store_lru_tests::memory_only_recency_trace_preserves_links_accounting_and_writer_pages"
-    ],
-    "remaining_gap": "Portable trace covers in-memory links and ownership, not the full scaling workload or file-backed clear."
-  },
-  {
-    "test": "matrix_generation::tests::normal_sparse_roots_allow_spills_shared_generations_and_compaction_with_exact_budgets",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
-    "test": "matrix_generation::tests::root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
-    "test": "matrix_generation::tests::seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
-    "test": "matrix_generation::tests::tiny_pending_budget_spills_without_publishing_and_compacts_in_batches",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
     "test": "stream::tests::batch_writer_coalesces_records_and_matches_single_append",
     "category": "unsupported-os",
     "alternative": "native-and-asan",
@@ -310,13 +248,6 @@
   },
   {
     "test": "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
-    "category": "unsupported-os",
-    "alternative": "native-and-asan",
-    "portable_tests": [],
-    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
-  },
-  {
-    "test": "stream::tests::dirty_checkpoint_restore_truncates_without_scanning",
     "category": "unsupported-os",
     "alternative": "native-and-asan",
     "portable_tests": [],
