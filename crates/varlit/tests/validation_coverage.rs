@@ -1888,7 +1888,7 @@ const CONTRACTS: &[Contract] = &[
     ),
     contract!("core/format.rs::format::const:MATRIX_MAX_TILE_BYTES@3758a23cbceb72d3",
         valid { assert_eq!(varlit::MATRIX_MAX_TILE_BYTES, 64 << 20); Ok(()) },
-        invalid { let spec = GridMatrix::spec(); let mut block = spec.matrix_blocks[0]; block.tile = [1 << 10, 1 << 10]; block.slot_stride = 4096; let blocks: &'static [varlit::MatrixBlockDescriptor] = Box::leak(Box::new([block])); assert!(block.tile[0] * block.tile[1] * (block.slot_stride + 4) > varlit::MATRIX_MAX_TILE_BYTES); assert!(spec.with_matrix_spec(spec.matrix_dimensions, spec.matrix_commits, blocks).validate().is_err()); Ok(()) }
+        invalid { let spec = GridMatrix::spec(); let mut block = spec.matrix_blocks[0]; block.tile = [1 << 10, 1 << 10]; block.slot_stride = 4096; static BLOCKS: std::sync::OnceLock<[varlit::MatrixBlockDescriptor; 1]> = std::sync::OnceLock::new(); let blocks: &'static [varlit::MatrixBlockDescriptor] = BLOCKS.get_or_init(|| [block]); assert!(block.tile[0] * block.tile[1] * (block.slot_stride + 4) > varlit::MATRIX_MAX_TILE_BYTES); assert!(spec.with_matrix_spec(spec.matrix_dimensions, spec.matrix_commits, blocks).validate().is_err()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:MATRIX_MAX_TILE_BYTES@a26404714d801561",
         valid { assert!(varlit::MATRIX_MAX_TILE_BYTES >= varlit::MATRIX_DEFAULT_TILE_BYTES); Ok(()) },
