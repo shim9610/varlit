@@ -31,7 +31,31 @@ mod tests {
 #[derive(Clone, Default)]
 struct Model {
     records: u64,
+    /// Sync markers: a sync appends one when records were appended since
+    /// the previous marker.
+    markers: u64,
+    unmarked: bool,
     disk: BTreeMap<u64, DiskItem>,
+}
+
+impl Model {
+    fn appended(&mut self, records: u64) {
+        self.records += records;
+        self.unmarked |= records > 0;
+    }
+
+    fn synced(&mut self) {
+        if self.unmarked {
+            self.markers += 1;
+            self.unmarked = false;
+        }
+    }
+
+    /// What a full verification counts: the file's own leading record, every
+    /// committed record and every sync marker.
+    fn verified_records(&self) -> u64 {
+        self.records + self.markers + 1
+    }
 }
 
 pub fn run_arbitrary(data: &[u8]) {
@@ -109,7 +133,7 @@ fn create_stream_fixture(path: &Path, seed: u8, synced: bool) -> Model {
                 })
                 .is_ok()
             {
-                committed.records += 1;
+                committed.appended(1);
             }
             let key = if seed & 2 == 0 {
                 index as u64
@@ -124,16 +148,17 @@ fn create_stream_fixture(path: &Path, seed: u8, synced: bool) -> Model {
                 })
                 .is_ok()
             {
-                committed.records += 1;
+                committed.appended(1);
             }
         }
         if seed & 4 != 0 && writer.delete_stream_item(&0).is_ok() {
-            committed.records += 1;
+            committed.appended(1);
         }
     }
     if writer.sync().is_err() {
         return Model::default();
     }
+    committed.synced();
 
     if !synced {
         let _ = writer.push_sidecar_event(&SidecarEvent { value: u64::MAX });
@@ -162,7 +187,7 @@ fn create_indexed_fixture(path: &Path, seed: u8, synced: bool) -> Model {
                 })
                 .is_ok()
             {
-                committed.records += 1;
+                committed.appended(1);
             }
             let key = if seed & 2 == 0 {
                 index as u64
@@ -175,7 +200,7 @@ fn create_indexed_fixture(path: &Path, seed: u8, synced: bool) -> Model {
                 payload: vec![seed; index % 19],
             };
             if writer.push_disk_item(&item).is_ok() {
-                committed.records += 1;
+                committed.appended(1);
                 committed.disk.insert(key, item);
             }
             if index % 3 == 0
@@ -187,17 +212,18 @@ fn create_indexed_fixture(path: &Path, seed: u8, synced: bool) -> Model {
                     })
                     .is_ok()
             {
-                committed.records += 1;
+                committed.appended(1);
             }
         }
         if seed & 4 != 0 && writer.delete_disk_item(&0).is_ok() {
-            committed.records += 1;
+            committed.appended(1);
             committed.disk.remove(&0);
         }
     }
     if writer.sync().is_err() {
         return Model::default();
     }
+    committed.synced();
 
     if !synced {
         let pending = DiskItem {
@@ -267,7 +293,7 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                     })
                     .is_ok()
                 {
-                    working.records += 1;
+                    working.appended(1);
                     records += 1;
                 }
             }
@@ -280,13 +306,13 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                     })
                     .is_ok()
                 {
-                    working.records += 1;
+                    working.appended(1);
                     records += 1;
                 }
             }
             2 => {
                 if current.delete_stream_item(&u64::from(key % 16)).is_ok() {
-                    working.records += 1;
+                    working.appended(1);
                     records += 1;
                 }
             }
@@ -295,6 +321,7 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
             }
             4 => {
                 if current.sync().is_ok() {
+                    working.synced();
                     committed = working.clone();
                 }
             }
@@ -316,7 +343,7 @@ fn run_stream_machine(path: &Path, operations: &[[u8; 4]]) {
                     value: u64::from(value) + offset as u64,
                 });
                 if let Ok(report) = current.push_sidecar_events(values, batch_options()) {
-                    working.records += report.records;
+                    working.appended(report.records);
                     records += report.records as usize;
                 }
             }
@@ -356,7 +383,7 @@ fn run_indexed_machine(path: &Path, operations: &[[u8; 4]]) {
                     })
                     .is_ok()
                 {
-                    working.records += 1;
+                    working.appended(1);
                     records += 1;
                 }
             }
@@ -367,14 +394,14 @@ fn run_indexed_machine(path: &Path, operations: &[[u8; 4]]) {
                     payload: vec![value; usize::from(count % 32)],
                 };
                 if current.push_disk_item(&item).is_ok() {
-                    working.records += 1;
+                    working.appended(1);
                     working.disk.insert(key, item);
                     records += 1;
                 }
             }
             3 => {
                 if current.delete_disk_item(&key).is_ok() {
-                    working.records += 1;
+                    working.appended(1);
                     working.disk.remove(&key);
                     records += 1;
                 }
@@ -386,12 +413,13 @@ fn run_indexed_machine(path: &Path, operations: &[[u8; 4]]) {
                     payload: Vec::new(),
                 };
                 if current.push_stream_item(&item).is_ok() {
-                    working.records += 1;
+                    working.appended(1);
                     records += 1;
                 }
             }
             5 => {
                 if current.sync().is_ok() {
+                    working.synced();
                     committed = working.clone();
                 }
             }
@@ -418,7 +446,7 @@ fn run_indexed_machine(path: &Path, operations: &[[u8; 4]]) {
                     })
                     .collect();
                 if let Ok(report) = current.push_disk_items(&items, batch_options()) {
-                    working.records += report.records;
+                    working.appended(report.records);
                     records += report.records as usize;
                     for item in items.into_iter().take(report.records as usize) {
                         working.disk.insert(item.key, item);
@@ -478,7 +506,7 @@ fn exercise_indexed_strict(path: &Path, committed: &Model, should_be_clean: bool
 fn probe_stream(path: &Path, committed: &Model, _should_be_clean: bool, permit_rejection: bool) {
     match FuzzSidecarFormat::open_stream_reader(path, stream_options()) {
         Ok(reader) => {
-            assert_eq!(reader.verify_all().ok(), Some(committed.records + 1));
+            assert_eq!(reader.verify_all().ok(), Some(committed.verified_records()));
         }
         Err(_typed_error) => assert!(
             permit_rejection,
@@ -490,7 +518,7 @@ fn probe_stream(path: &Path, committed: &Model, _should_be_clean: bool, permit_r
 fn probe_indexed(path: &Path, committed: &Model, _should_be_clean: bool, permit_rejection: bool) {
     match FuzzSidecarFormat::open_indexed_reader(path, disk_options()) {
         Ok(reader) => {
-            assert_eq!(reader.verify_all().ok(), Some(committed.records + 1));
+            assert_eq!(reader.verify_all().ok(), Some(committed.verified_records()));
             for key in 0..16 {
                 let mut slot = <DiskItem as varlit::VarlitEmpty>::empty();
                 let actual = match reader.get_disk_item(&key, &mut slot) {
