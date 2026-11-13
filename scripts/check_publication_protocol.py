@@ -28,7 +28,7 @@ MUTATIONS = [
     ("primary-sync-omitted", "    io(CommitStep::PrimarySync)?;", "", COMMIT_PROOF,
      "generation adopted before primary durability"),
     ("head-sync-omitted", "        io(CheckpointStep::HeadSync)?;", "", COMMIT_PROOF,
-     "acknowledged an undurable commit"),
+     "acknowledged an undurable confirmation"),
     ("body-sync-omitted", "        io(CheckpointStep::BodySync)?;", "",
      "every_two_barrier_publication_syncs_its_body_before_its_head",
      "assertion failed: body && (body_synced || !confirmed)"),
