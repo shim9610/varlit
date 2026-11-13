@@ -319,6 +319,8 @@ mod tests {
     }
 
     #[test]
+    // One compression setting without zstd, two with it.
+    #[allow(clippy::single_element_loop)]
     fn chunked_payloads_round_trip_at_every_boundary() {
         for len in [
             CHUNK_LEN as usize + 1,

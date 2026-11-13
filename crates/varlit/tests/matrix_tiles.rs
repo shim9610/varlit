@@ -4,9 +4,10 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
+#[cfg(feature = "scalable-fault-injection")]
+use varlit::VarlitFile;
 use varlit::{
-    Error, FormatSpec, MatrixCellStatus, MatrixDimensions, MatrixKey, VarlitEmpty, VarlitFile,
-    varlit_format,
+    Error, FormatSpec, MatrixCellStatus, MatrixDimensions, MatrixKey, VarlitEmpty, varlit_format,
 };
 
 varlit_format! {
@@ -383,8 +384,10 @@ fn a_region_reads_in_pages_that_continue_where_they_stopped() -> varlit::Result<
     let page = reader.read_matrix_region_bytes_into::<Cell>(region, &mut bytes)?;
     assert_eq!(page.filled, 30);
     let first: Vec<u64> = bytes
-        .chunks_exact(8)
-        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|b| u64::from_le_bytes(*b))
         .collect();
     assert_eq!(first, expected[..30]);
     let cursor = page.next.expect("the region goes on");
@@ -533,8 +536,10 @@ fn a_key_batch_reads_in_key_order_with_repeats() -> varlit::Result<()> {
     let mut bytes = vec![0u8; keys.len() * 8];
     reader.read_matrix_cells_bytes_into::<Cell>(&keys, &mut bytes)?;
     let decoded: Vec<u64> = bytes
-        .chunks_exact(8)
-        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|b| u64::from_le_bytes(*b))
         .collect();
     assert_eq!(decoded, expected);
     // Seven channels of the latest row.

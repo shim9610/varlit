@@ -71,7 +71,7 @@ pub(crate) const INTERNAL_BLOCK_IDS: &[u32] = &[
 /// Matrix storage records: a matrix's metadata, its write-ahead ring, tile
 /// directory pages and tiles. The block version says which (see
 /// `matrix_tiles::RecordKind`); every one is appended once and then changed
-/// in place, so each carries [`RECORD_FLAG_IN_PLACE`].
+/// in place, so each carries the in-place record flag.
 pub const MATRIX_TILE_BLOCK_ID: u32 = 0xFFFF_FFF3;
 
 const _: () = {
@@ -1165,7 +1165,7 @@ impl ReadAhead {
             .checked_add(into.len() as u64)
             .ok_or(Error::LengthOverflow { value: offset })?;
         if into.len() > READ_AHEAD {
-            return Ok(snapshot.read_exact_at(offset, into)?);
+            return snapshot.read_exact_at(offset, into);
         }
         if offset < self.start || end > self.start + self.len as u64 {
             let len = snapshot.len().saturating_sub(offset).min(READ_AHEAD as u64) as usize;
@@ -1331,6 +1331,8 @@ impl RecordDirectory for WalkedRecords {
 
 /// The record list a position-based read runs over: the handle's own when it
 /// keeps one, the file itself when it does not.
+// Short-lived and built once per read, so the walk is kept inline.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RecordList<'a> {
     Kept(&'a ResidentIndex),
     Walked(WalkedRecords),
@@ -5188,35 +5190,35 @@ fn write_staged_record(
         hash.update(checksummed_footer(spec, footer));
         Ok(hash.finalize())
     };
-    if let Some(source) = verify {
-        if spec.integrity_policy != IntegrityPolicy::None {
-            let source_footer = if spec.spec_needs_record_footer() {
-                Some(encode_record_footer(RecordFooterFields {
-                    prev_same_block_offset: source.prev_same_block_offset,
-                    prev_same_key_offset: source.prev_same_key_offset,
-                    mutable_flags: source.mutable_flags,
-                })?)
-            } else {
-                None
-            };
-            let actual = crc_of(
-                RecordHeaderFields {
-                    block_id: source.block_id,
-                    block_version: source.block_version,
-                    flags: source.flags,
-                    sequence: source.sequence,
-                    payload_len: source.payload_len,
-                    checksum: 0,
-                    uncompressed_len_hint: source.uncompressed_len_hint,
-                },
-                source.record_offset,
-                source_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]),
-            )?;
-            if actual != source.checksum {
-                return Err(Error::ChecksumMismatch {
-                    offset: source.record_offset,
-                });
-            }
+    if let Some(source) = verify
+        && spec.integrity_policy != IntegrityPolicy::None
+    {
+        let source_footer = if spec.spec_needs_record_footer() {
+            Some(encode_record_footer(RecordFooterFields {
+                prev_same_block_offset: source.prev_same_block_offset,
+                prev_same_key_offset: source.prev_same_key_offset,
+                mutable_flags: source.mutable_flags,
+            })?)
+        } else {
+            None
+        };
+        let actual = crc_of(
+            RecordHeaderFields {
+                block_id: source.block_id,
+                block_version: source.block_version,
+                flags: source.flags,
+                sequence: source.sequence,
+                payload_len: source.payload_len,
+                checksum: 0,
+                uncompressed_len_hint: source.uncompressed_len_hint,
+            },
+            source.record_offset,
+            source_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]),
+        )?;
+        if actual != source.checksum {
+            return Err(Error::ChecksumMismatch {
+                offset: source.record_offset,
+            });
         }
     }
     let checksum = match spec.integrity_policy {
@@ -5284,6 +5286,7 @@ impl ChainRemap<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rewrite_replacement_record_streaming(
     spec: FormatSpec,
     snapshot: &SnapshotFile,

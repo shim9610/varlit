@@ -4,6 +4,7 @@ mod pages;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{OpenOptions, remove_file};
 use std::io::Write;
+#[cfg(feature = "integrity")]
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1126,6 +1127,7 @@ fn append_incomplete_payload(path: &Path) -> varlit::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "integrity")]
 fn tamper_byte(path: &Path, offset: u64) -> varlit::Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     file.seek(SeekFrom::Start(offset))?;

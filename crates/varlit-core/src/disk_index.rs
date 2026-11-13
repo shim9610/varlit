@@ -3733,14 +3733,6 @@ impl std::fmt::Debug for ScratchIndex {
     }
 }
 impl ScratchIndex {
-    #[cfg(test)]
-    pub(crate) fn set_cache_bytes(&mut self, bytes: usize) {
-        if self.cache_bytes != bytes {
-            self.cache_bytes = bytes;
-            self.reader = tree::Reader::new(self.file.clone(), self.end, u32::MAX as usize, bytes)
-                .with_format(tree::PageFormat::Reuse);
-        }
-    }
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
         let (file, maximum) = crate::spill_file::SpillFile::new()?.into_parts();
         crate::spill_file::check_extent(maximum, tree::PAGE as u64)?;

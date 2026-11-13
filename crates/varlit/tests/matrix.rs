@@ -1,8 +1,10 @@
 #[path = "support/pages.rs"]
 mod pages;
 
+#[cfg(any(feature = "integrity", feature = "mmap"))]
 use std::fs::OpenOptions;
 use std::fs::{File, metadata, remove_file};
+#[cfg(feature = "integrity")]
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

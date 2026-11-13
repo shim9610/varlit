@@ -1342,7 +1342,7 @@ impl VarlitFile {
     }
 
     /// How many records the resident directory holds — the positions
-    /// [`Self::mmap_payload_range`](VarlitFile::mmap_payload_range) and the
+    /// `mmap_payload_range` (with the `mmap` feature) and the
     /// index views address. Copies nothing.
     ///
     /// A lazily opened handle keeps no directory and is refused by name.

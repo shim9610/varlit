@@ -419,20 +419,6 @@ fn independent_readers_read_every_cell_correctly() -> varlit::Result<()> {
     Ok(())
 }
 
-/// Bytes in one commit-map page. Not a public constant, and deliberately not
-/// derived from one: the fixture below is built to straddle exactly this
-/// boundary, so if the internal page size ever changes the fixture stops being
-/// several pages wide and the warm-up assertion says so.
-#[cfg(feature = "scalable-fault-injection")]
-
-/// Cells per commit-map page: the map holds one bit per cell.
-#[cfg(feature = "scalable-fault-injection")]
-
-/// Live commit-map pages in the paged fixture. Four is enough for a one-page
-/// cache to miss on essentially every read while keeping the fixture cheap to
-/// build: four writes and four commits.
-#[cfg(feature = "scalable-fault-injection")]
-
 /// Fixed-work scaling with one independent reader per thread. Timing is
 /// printed rather than asserted on shared CI hardware; every value is checked.
 #[test]

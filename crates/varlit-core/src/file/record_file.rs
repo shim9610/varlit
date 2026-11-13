@@ -203,6 +203,7 @@ impl RecordFile {
     /// from `offset`, the value `SEEK_END` returned, not from
     /// `expected_offset`: it describes where the bytes went, not where
     /// they were meant to go.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn append_record_at_end(
         &mut self,
         _reserved: &ReservedIndexSlot,

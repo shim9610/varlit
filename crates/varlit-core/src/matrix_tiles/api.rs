@@ -43,6 +43,8 @@ pub(crate) struct Names {
 }
 
 /// The two ways a handle holds the engine.
+// One per handle; the reader stays inline so its lock is reached directly.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Engine {
     Writer(Box<TileWriter>),
     /// Readers cache tile lookups and the last ring header they validated
@@ -289,8 +291,6 @@ impl TiledMatrix {
                 &mut all,
                 if dimension.name == block.dimensions[0] {
                     pair[0]
-                } else if dimension.name == block.dimensions[1] {
-                    pair[1]
                 } else {
                     pair[1]
                 },

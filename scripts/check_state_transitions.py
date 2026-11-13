@@ -358,9 +358,12 @@ def inspect(text,manifest,proofs):
                         re.fullmatch(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+',invocation['target'])
                         and len(unique_names.get(invocation['target'].rsplit('::',1)[-1],set()))==1
                         and invocation['target'].rsplit('::',1)[-1] in mutable_targets) and not (
-                        # A crate trait call (`<Vec<u16> as FillFixedVec>::fill_fixed`) whose
-                        # every same-named definition is itself a checked owner writer.
+                        # A crate trait call on a concrete type (`<Vec<u16> as
+                        # FillFixedVec>::fill_fixed`) whose every same-named definition is
+                        # itself a checked owner writer. A bare Self name may be a generic
+                        # parameter dispatching to an unchecked impl, so it fails closed.
                         re.fullmatch(r'<[^\n]+ as [A-Za-z_]\w*>::[A-Za-z_]\w*',invocation['target'])
+                        and not re.match(r'<[A-Za-z_]\w* as ',invocation['target'])
                         and unique_names.get(invocation['target'].rsplit('::',1)[-1])
                         and unique_names[invocation['target'].rsplit('::',1)[-1]]<=mutable_targets):
                     callback=((f['name'] in manifest.get('callback_boundaries',[])

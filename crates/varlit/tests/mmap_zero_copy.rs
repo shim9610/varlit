@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use varlit::{
-    Endian, Error, ReadLimits, RecordIndexEntry, VarlitBlock, VarlitEmpty, decode_from_slice,
-    varlit_format,
+    Endian, Error, ReadLimits, RecordIndexEntry, VarlitBlock, decode_from_slice, varlit_format,
 };
 
 #[cfg(feature = "zero-copy")]
@@ -302,7 +301,7 @@ fn mmap_rejects_entries_outside_snapshot() -> varlit::Result<()> {
 #[test]
 fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> {
     use std::io::{Seek, SeekFrom, Write};
-    use varlit::{IndexPolicy, IntegrityPolicy, IntegrityVerification};
+    use varlit::{IndexPolicy, IntegrityPolicy, IntegrityVerification, VarlitEmpty};
 
     for policy in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
         for footers in [false, true] {

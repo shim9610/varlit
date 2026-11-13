@@ -138,8 +138,18 @@ macro_rules! contract {
             exercise: contract!(@exercise $($exercise)?),
             valid_source: stringify!($valid),
             invalid_source: stringify!($invalid),
-            valid: || -> TestResult { $valid },
-            invalid: || -> TestResult { $invalid },
+            valid: {
+                // Contract bodies share a fixture prelude and deliberately
+                // assert constants or pass empty ranges as invalid input.
+                #[allow(unused_variables, clippy::assertions_on_constants, clippy::reversed_empty_ranges, clippy::unneeded_struct_pattern)]
+                fn valid() -> TestResult { $valid }
+                valid
+            },
+            invalid: {
+                #[allow(unused_variables, clippy::assertions_on_constants, clippy::reversed_empty_ranges, clippy::unneeded_struct_pattern)]
+                fn invalid() -> TestResult { $invalid }
+                invalid
+            },
         }
     };
 }

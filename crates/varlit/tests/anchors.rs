@@ -287,7 +287,7 @@ varlit::varlit_format! {
 }
 
 fn entry(id: u64, round: u64) -> Entry {
-    let len = if id % 40 == 0 {
+    let len = if id.is_multiple_of(40) {
         12_000
     } else {
         (id % 200) as usize

@@ -272,12 +272,6 @@ impl MatrixRecoveryReport {
     }
 }
 
-/// Thread-local observability counters for the paged matrix integrity
-/// representation (/ scaling contracts).
-///
-/// These hang off `MatrixRecoveryReport` because it is the matrix diagnostic
-/// type already exported from the crate root; they are not a property of any
-
 /// A rectangle of cells: rows `row_start..row_end` and columns
 /// `col_start..col_end` (`MatrixKey::scan` and `MatrixKey::ch`), read
 /// row-major. A row and a column are regions one cell wide.
