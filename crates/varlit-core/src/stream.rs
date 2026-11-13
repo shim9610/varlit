@@ -647,7 +647,7 @@ impl VarlitStreamReader {
         // `verify_all` remains the whole-file integrity scan.
         Ok(StreamingBlocks {
             payload: Vec::new(),
-            record_cache: Default::default(),
+            record_cache: std::cell::RefCell::new(crate::file::ChunkCache::for_spec(self.spec)?),
             scanner: NativeStreamScanner::from_snapshot_framing_only(
                 self.spec,
                 self.snapshot.clone(),

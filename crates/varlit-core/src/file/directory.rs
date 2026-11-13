@@ -23,7 +23,7 @@ impl VarlitFile {
             && self.spec.index_policy.block_offset_chain
         {
             let mut budget = MaterializationBudget::new(self.spec);
-            let mut payload = Vec::new();
+            let mut payload = ScratchLoan::new(&self.record_cache);
             for entry in self.block_chain(METADATA_BLOCK_ID)? {
                 let entry = entry?;
                 budget.reset();
@@ -51,7 +51,7 @@ impl VarlitFile {
         let mut budget = MaterializationBudget::new(self.spec);
         // One payload buffer for the whole walk. It used to be one per record,
         // and the walk is over every record in the file.
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
         for record_ordinal in 0..dir.record_count() {
             if directory_skips(dir, record_ordinal, &[METADATA_BLOCK_ID]) {
                 continue;
@@ -106,7 +106,7 @@ impl VarlitFile {
     ) -> Result<()> {
         out.clear();
         let mut budget = MaterializationBudget::new(self.spec);
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
         for position in 0..dir.record_count() {
             if directory_skips(dir, position, &[METADATA_BLOCK_ID]) {
                 continue;
@@ -887,7 +887,7 @@ impl VarlitFile {
         filled: &mut usize,
     ) -> Result<()> {
         let mut budget = MaterializationBudget::new(self.spec);
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
         for position in 0..dir.record_count() {
             if directory_skips(dir, position, &[T::ID]) {
                 continue;
@@ -973,7 +973,7 @@ impl VarlitFile {
         }
         out.clear();
         let mut budget = MaterializationBudget::new(self.spec);
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
         for position in 0..dir.record_count() {
             if directory_skips(dir, position, &[From::ID]) {
                 continue;
@@ -1068,7 +1068,8 @@ impl VarlitFile {
         let mut state: HashMap<T::Key, (MergeOrder, Option<RecordIndexEntry>)> = HashMap::new();
         let mut budget = MaterializationBudget::new(self.spec);
         // One payload buffer for the whole walk, not one per record.
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
+        let mut reused: Option<T> = None;
         for record_ordinal in 0..dir.record_count() {
             if directory_skips(dir, record_ordinal, &[T::ID, TOMBSTONE_BLOCK_ID]) {
                 continue;
@@ -1097,9 +1098,13 @@ impl VarlitFile {
                         &self.snapshot,
                         &mut payload,
                     )?;
-                    let block: T =
-                        budget.decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))?;
-                    let key = block.key();
+                    // One value serves every record of the pass: only its key is kept.
+                    let endian = T::ENDIAN.unwrap_or(self.spec.endian);
+                    match reused.as_mut() {
+                        Some(block) => budget.decode_into(&payload, endian, block)?,
+                        None => reused = Some(budget.decode::<T>(&payload, endian)?),
+                    }
+                    let key = reused.as_ref().expect("decoded above").key();
                     if should_apply(state.get(&key), order) {
                         let requested = index_bytes_for_count(state.len().saturating_add(1))?;
                         self.spec
@@ -1330,7 +1335,7 @@ impl VarlitFile {
         let mut verified = 0usize;
         // The bytes are read to check their checksum and then dropped, so one
         // buffer serves the whole pass. This was an allocation per record.
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
         for entry in directory_records(dir) {
             let entry = entry?;
             // `read_payload_snapshot` is the same check the read path performs,
@@ -1662,7 +1667,8 @@ impl VarlitFile {
         let mut tails: HashMap<T::Key, (MergeOrder, u64)> = HashMap::new();
         let mut budget = MaterializationBudget::new(self.spec);
         // One payload buffer for the whole walk, not one per record.
-        let mut payload = Vec::new();
+        let mut payload = ScratchLoan::new(&self.record_cache);
+        let mut reused: Option<T> = None;
         for record_ordinal in 0..dir.record_count() {
             // Only two block ids can move `T`'s tail: `T` itself, and a
             // tombstone, which may name one of `T`'s keys. When the directory
@@ -1704,9 +1710,13 @@ impl VarlitFile {
                         &self.snapshot,
                         &mut payload,
                     )?;
-                    let block: T =
-                        budget.decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))?;
-                    let key = block.key();
+                    // One value serves every record of the pass: only its key is kept.
+                    let endian = T::ENDIAN.unwrap_or(self.spec.endian);
+                    match reused.as_mut() {
+                        Some(block) => budget.decode_into(&payload, endian, block)?,
+                        None => reused = Some(budget.decode::<T>(&payload, endian)?),
+                    }
+                    let key = reused.as_ref().expect("decoded above").key();
                     if tails.get(&key).is_none_or(|(old, _)| order >= *old) {
                         let requested = allocation_bytes::<(T::Key, (MergeOrder, u64))>(
                             tails.len().saturating_add(1),

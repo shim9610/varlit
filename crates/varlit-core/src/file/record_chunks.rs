@@ -262,6 +262,43 @@ pub(crate) fn read_chunk(
     Ok(())
 }
 
+/// The logical bytes of an in-memory chunked payload whose chunks are stored
+/// as they are (not compressed), every chunk verified where it lies: they
+/// are back to back after the table, so nothing is copied. `None` for a
+/// payload with compressed chunks.
+pub(crate) fn chunked_in_place(payload: &[u8], max: u64) -> Result<Option<&[u8]>> {
+    let header = ChunkHeader::decode(payload)?;
+    if header.algorithm.is_some() {
+        return Ok(None);
+    }
+    if header.logical_len > max {
+        return Err(Error::DecompressedLengthLimitExceeded {
+            actual: header.logical_len,
+            limit: max,
+        });
+    }
+    let mut read = |at: u64, buf: &mut [u8]| -> Result<()> {
+        let from = usize::try_from(at).map_err(|_| malformed("chunked record extent"))?;
+        let bytes = from
+            .checked_add(buf.len())
+            .and_then(|end| payload.get(from..end))
+            .ok_or(malformed("chunked record extent past its payload"))?;
+        buf.copy_from_slice(bytes);
+        Ok(())
+    };
+    for index in 0..header.count {
+        let (start, end, crc) = chunk_extent(&mut read, &header, payload.len() as u64, index)?;
+        // The extent was checked to lie inside the payload.
+        if crc32fast::hash(&payload[start as usize..end as usize]) != crc {
+            return Err(Error::ChecksumMismatch { offset: start });
+        }
+    }
+    let data_at = header.data_at() as usize;
+    Ok(Some(
+        &payload[data_at..data_at + header.logical_len as usize],
+    ))
+}
+
 /// The whole logical payload of an in-memory chunked payload, every chunk
 /// verified. `max` bounds the declared logical length before anything is
 /// allocated for it.

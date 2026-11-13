@@ -8053,7 +8053,8 @@ pub(crate) use record_fields::decode_record_into;
 #[doc(hidden)]
 pub use record_fields::{FieldsCodec, RecordField, RecordFields};
 pub(crate) use record_read::{
-    ChunkCache, fill_range, fill_record, lend_scratch, lend_window, return_scratch, return_window,
+    ChunkCache, ScratchLoan, fill_range, fill_record, lend_scratch, lend_window, return_scratch,
+    return_window,
 };
 pub use record_read::{RecordCursor, RecordPage};
 pub use record_view::{

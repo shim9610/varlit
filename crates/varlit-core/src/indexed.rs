@@ -146,8 +146,6 @@ pub struct VarlitIndexedReader {
     tiles: Option<crate::matrix_tiles::api::TiledMatrix>,
     /// The last chunk a record read checked.
     record_cache: std::cell::RefCell<crate::file::ChunkCache>,
-    /// Scratch for the small fields of a record a lookup decodes.
-    payload_scratch: std::cell::RefCell<Vec<u8>>,
     /// Where a lookup builds the index key it searches for.
     key_scratch: std::cell::RefCell<Vec<u8>>,
 }
@@ -329,6 +327,18 @@ impl VarlitIndexedReader {
             })?;
         indexed_blocks.extend(blocks.iter().map(|block| block.block_id));
         let tiles = matrix::open_reader(stream.spec(), stream.snapshot())?;
+        let record_cache = crate::file::ChunkCache::for_spec(stream.spec())?;
+        // Room for the tag and a key of ordinary length; a longer key grows
+        // the buffer once, on the first lookup that carries one.
+        let mut key_scratch = Vec::new();
+        let key_room =
+            crate::disk_index::DiskIndexKeyTag::ENCODED_LEN + options.max_key_bytes.min(256);
+        key_scratch
+            .try_reserve_exact(key_room)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "index lookup key",
+                requested: key_room as u64,
+            })?;
         Ok(Self {
             stream,
             index,
@@ -337,9 +347,8 @@ impl VarlitIndexedReader {
             plan,
             tail,
             tiles,
-            record_cache: Default::default(),
-            payload_scratch: Default::default(),
-            key_scratch: Default::default(),
+            record_cache: std::cell::RefCell::new(record_cache),
+            key_scratch: std::cell::RefCell::new(key_scratch),
         })
     }
 
@@ -886,16 +895,12 @@ impl VarlitIndexedReader {
             return Err(index_invariant("put candidate targets the wrong block"));
         }
         let mut budget = MaterializationBudget::new(self.stream.spec());
-        // The handle's scratch is reused across lookups; a re-entered lookup
-        // (there is none today) would fall back to a buffer of its own.
-        let mut own = Vec::new();
-        let mut kept = self.payload_scratch.try_borrow_mut().ok();
-        let scratch = kept.as_deref_mut().unwrap_or(&mut own);
+        let mut scratch = crate::file::ScratchLoan::new(&self.record_cache);
         crate::file::decode_record_into(
             self.stream.spec(),
             self.stream.snapshot(),
             entry,
-            scratch,
+            &mut scratch,
             &mut budget,
             &self.record_cache,
             out,

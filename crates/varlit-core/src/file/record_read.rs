@@ -105,6 +105,61 @@ pub(crate) fn return_window(cache: &std::cell::RefCell<ChunkCache>, window: Read
 }
 
 impl ChunkCache {
+    /// The buffers a handle of `spec` reads through, made once when it is
+    /// opened and exactly as long as that format can need:
+    ///
+    /// * one chunk of staging and one of scratch, when the format has
+    ///   variable records (a record without chunks, a staged chunk, a field
+    ///   and a matrix slot are each at most a chunk long);
+    /// * the longest stored chunk and a decompression context, when it
+    ///   compresses;
+    /// * the read-ahead window of a paged walk.
+    ///
+    /// A fixed-only format's handle holds the window alone.
+    pub(crate) fn for_spec(spec: FormatSpec) -> Result<Self> {
+        let variable = spec
+            .blocks
+            .iter()
+            .any(|block| block.kind == BlockKind::Variable);
+        let compresses = !matches!(spec.compression_policy, CompressionPolicy::None)
+            || !spec.block_compression.is_empty();
+        let buffer = |len: u64, resource: &'static str| -> Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(len as usize)
+                .map_err(|_| Error::AllocationFailed {
+                    resource,
+                    requested: len,
+                })?;
+            bytes.resize(len as usize, 0);
+            Ok(bytes)
+        };
+        let chunk = if variable { CHUNK_LEN } else { 0 };
+        let mut scratch = buffer(chunk, "record read scratch")?;
+        scratch.clear();
+        Ok(Self {
+            key: None,
+            bytes: buffer(chunk, "record read staging")?,
+            compressed: buffer(
+                if compresses {
+                    record_chunks::MAX_STORED_CHUNK
+                } else {
+                    0
+                },
+                "compressed chunk",
+            )?,
+            // Without the compression backend there is no context to make;
+            // a compressed read reports that when it happens.
+            decompressor: if compresses {
+                crate::compression_buffers::Decompressor::new().ok()
+            } else {
+                None
+            },
+            scratch,
+            window: Some(ReadAhead::new()?),
+        })
+    }
+
     /// Reads and decodes an unchunked compressed record into `out` through
     /// this handle's stored-bytes buffer and decompression context.
     pub(crate) fn decode_compressed_into(
@@ -135,6 +190,41 @@ pub(crate) fn lend_scratch(cache: &std::cell::RefCell<ChunkCache>) -> Vec<u8> {
         .try_borrow_mut()
         .map(|mut cache| std::mem::take(&mut cache.scratch))
         .unwrap_or_default()
+}
+
+/// The handle's scratch buffer for the length of a scope: a `Vec<u8>` to the
+/// code that uses it, returned to the handle when dropped.
+pub(crate) struct ScratchLoan<'a> {
+    cache: &'a std::cell::RefCell<ChunkCache>,
+    bytes: Vec<u8>,
+}
+
+impl<'a> ScratchLoan<'a> {
+    pub(crate) fn new(cache: &'a std::cell::RefCell<ChunkCache>) -> Self {
+        Self {
+            cache,
+            bytes: lend_scratch(cache),
+        }
+    }
+}
+
+impl std::ops::Deref for ScratchLoan<'_> {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Vec<u8> {
+        &self.bytes
+    }
+}
+
+impl std::ops::DerefMut for ScratchLoan<'_> {
+    fn deref_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.bytes
+    }
+}
+
+impl Drop for ScratchLoan<'_> {
+    fn drop(&mut self) {
+        return_scratch(self.cache, std::mem::take(&mut self.bytes));
+    }
 }
 
 /// Returns a buffer taken with [`lend_scratch`], keeping the larger of it

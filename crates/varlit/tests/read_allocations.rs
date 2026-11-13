@@ -24,15 +24,18 @@ std::thread_local! {
     /// Set while a settled read is being counted with `READ_ALLOC_TRACE=1`:
     /// each allocation then prints where it came from.
     static TRACING: Cell<bool> = const { Cell::new(false) };
+    static PRINTING: Cell<bool> = const { Cell::new(false) };
 }
 
 fn count_allocation() {
+    // While a trace is being captured and printed, its own allocations are
+    // neither counted nor traced.
+    if PRINTING.try_with(Cell::get).unwrap_or(true) {
+        return;
+    }
     let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-    if TRACING
-        .try_with(|tracing| tracing.replace(false))
-        .unwrap_or(false)
-    {
-        // Capturing allocates; tracing is off until it is printed.
+    if TRACING.try_with(Cell::get).unwrap_or(false) {
+        PRINTING.set(true);
         let trace = std::backtrace::Backtrace::force_capture().to_string();
         let frames: Vec<&str> = trace
             .lines()
@@ -40,7 +43,7 @@ fn count_allocation() {
             .take(8)
             .collect();
         eprintln!("READ_ALLOC_TRACE\n{}", frames.join("\n"));
-        let _ = TRACING.try_with(|tracing| tracing.set(true));
+        PRINTING.set(false);
     }
 }
 
@@ -249,6 +252,83 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
             Ok(())
         })?,
     ));
+    let mut index_page = vec![varlit::RecordIndexEntry::default(); 2];
+    cases.push((
+        "paged index_entries",
+        steady(4, || {
+            let mut page = r.index_entries(&mut index_page)?;
+            while let Some(next) = page.next {
+                page = r.index_entries_from(next, &mut index_page)?;
+            }
+            Ok(())
+        })?,
+    ));
+    let mut all_entries = Vec::new();
+    cases.push((
+        "index_entries_into",
+        steady(4, || r.index_entries_into(&mut all_entries))?,
+    ));
+    cases.push((
+        "block_entries_into",
+        steady(4, || r.block_entries_into::<Blob>(&mut all_entries))?,
+    ));
+    let mut decoded: Vec<Blob> = Vec::new();
+    cases.push((
+        "decode_blocks_into",
+        steady(4, || r.decode_blocks_into::<Blob>(&mut decoded))?,
+    ));
+    let mut raw = Vec::new();
+    cases.push((
+        "read_payload_into chunked",
+        steady(4, || r.read_payload_into(&entries[1], &mut raw))?,
+    ));
+    // A keyed pass decodes each record to read its key. It does so into one
+    // value it makes for the pass (a handle cannot keep a value of a type it
+    // does not know), so a pass allocates that value's fields once, however
+    // many records it visits: bounded here, and not counted as a read below.
+    let mut tails = std::collections::HashMap::new();
+    let mut by_key = std::collections::HashMap::new();
+    let per_pass = [
+        steady(4, || r.key_tail_offsets_into::<Blob>(&mut tails))? / 4,
+        steady(4, || {
+            r.keyed_blocks_into::<Blob>(&mut all_entries, &mut by_key)
+        })? / 4,
+    ];
+    println!("READ_ALLOC native     keyed passes (one value each)      {per_pass:?}");
+    assert!(
+        per_pass.iter().all(|count| *count <= 8),
+        "a keyed pass allocated more than its one scratch value: {per_pass:?}"
+    );
+    cases.push(("verify_all", steady(4, || r.verify_all().map(drop))?));
+    cases.push((
+        "scan",
+        steady(4, || {
+            for event in r.scan() {
+                event?;
+            }
+            Ok(())
+        })?,
+    ));
+    #[cfg(feature = "mmap")]
+    {
+        // SAFETY: the fixture is not modified while the mapping is alive.
+        let mapped = unsafe { r.mmap_payloads()? };
+        let mut out = Blob::empty();
+        let mut scratch = Vec::new();
+        for (entry, label) in entries.iter().zip(["mmap short", "mmap chunked"]) {
+            let n: &'static str = Box::leak(format!("{label} decode_block_into").into_boxed_str());
+            cases.push((
+                n,
+                steady(8, || {
+                    mapped.decode_block_into(entry, &mut scratch, &mut out)
+                })?,
+            ));
+        }
+        cases.push((
+            "mmap payload_window",
+            steady(8, || mapped.payload_window(&entries[0]).map(drop))?,
+        ));
+    }
     report("native", &cases);
     Ok(())
 }
@@ -323,6 +403,34 @@ fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
     cases.push((
         "get chunked",
         steady(8, || r.get_blob(&1, &mut out).map(drop))?,
+    ));
+    cases.push((
+        "lookup_entry",
+        steady(8, || r.lookup_entry::<Blob>(&1).map(drop))?,
+    ));
+    let entry = r.lookup_entry::<Blob>(&1)?.expect("present");
+    let mut buf = vec![0u8; 4096];
+    cases.push((
+        "indexed read_record_into",
+        steady(4, || {
+            let mut page = r.read_record_into(&entry, &mut buf)?;
+            while let Some(next) = page.next {
+                page = r.read_record_from(next, &mut buf)?;
+            }
+            Ok(())
+        })?,
+    ));
+    cases.push((
+        "indexed view_block + decode_field",
+        steady(8, || {
+            let view = r.view_block::<Blob>(&entry)?;
+            assert_eq!(r.decode_field::<u64>(&entry, view.id)?, 1);
+            Ok(())
+        })?,
+    ));
+    cases.push((
+        "indexed verify_all",
+        steady(4, || r.verify_all().map(drop))?,
     ));
     drop(r);
     let path = dir.path().join("stream");

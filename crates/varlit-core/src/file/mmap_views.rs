@@ -211,6 +211,13 @@ impl MmapPayloads {
             .read_limits
             .check(ReadLimitKey::LogicalPayloadLen, declared)?;
         budget.consume(declared)?;
+        if entry.is_chunked()
+            && let Some(logical) = record_chunks::chunked_in_place(payload, declared)?
+        {
+            // Stored chunks are the logical bytes: checked and decoded
+            // where they are mapped.
+            return budget.decode_into(logical, endian, out);
+        }
         let mut physical = std::mem::take(scratch);
         physical.clear();
         physical

@@ -337,23 +337,21 @@ pub(crate) fn read_native_file_header<R: Read>(
     reader: &mut R,
     spec: FormatSpec,
 ) -> Result<DecodedFileHeader> {
-    let magic = read_native_value(
+    let magic = with_native_bytes(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::Magic, 0),
+        |actual| Ok(actual == spec.magic),
     )?;
-    match magic {
-        LayoutValue::Bytes(actual) if actual == spec.magic => {}
-        _ => return Err(Error::InvalidMagic),
+    if magic != Some(true) {
+        return Err(Error::InvalidMagic);
     }
 
-    let marker_value = read_native_value(
+    let marker = with_native_bytes(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::ContainerMarker, 0),
-    )?;
-    let marker = match marker_value {
-        LayoutValue::Bytes(actual) => native_marker_from_bytes(&actual)?,
-        _ => return Err(Error::UnsupportedContainer),
-    };
+        native_marker_from_bytes,
+    )?
+    .ok_or(Error::UnsupportedContainer)?;
     if spec.spec_needs_record_footer() != (marker == *CONTAINER_MARKER_V3) {
         return Err(Error::UnsupportedContainer);
     }
@@ -1518,6 +1516,32 @@ fn write_native_value<W: Write>(
         }
         _ => Err(Error::LayoutFieldTypeMismatch(field.name)),
     }
+}
+
+/// Reads a byte field and hands it to `visit` without keeping it: a header's
+/// byte fields are a few bytes long and are only compared, so they are read
+/// onto the stack. `None` for a field that is not bytes.
+fn with_native_bytes<R: Read, T>(
+    reader: &mut R,
+    field: NativeField,
+    visit: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<Option<T>> {
+    const INLINE: usize = 64;
+    let NativeFieldType::Bytes { len } = field.ty else {
+        // Consumed all the same, as the general read does.
+        read_native_value(reader, field)?;
+        return Ok(None);
+    };
+    let len = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
+    if len > INLINE {
+        return match read_native_value(reader, field)? {
+            LayoutValue::Bytes(bytes) => visit(&bytes).map(Some),
+            _ => Ok(None),
+        };
+    }
+    let mut bytes = [0u8; INLINE];
+    reader.read_exact(&mut bytes[..len])?;
+    visit(&bytes[..len]).map(Some)
 }
 
 fn read_native_value<R: Read>(reader: &mut R, field: NativeField) -> Result<LayoutValue> {
