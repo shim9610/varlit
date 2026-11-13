@@ -11,7 +11,7 @@
 //!   are laid out in [`EXTRA_PAGE`]-byte pages, each rewritten whole, so two
 //!   writes of overlapping ranges never leave overlapping units in the ring.
 
-use std::sync::Mutex;
+use super::reader_lock::ReaderLock;
 
 use super::geometry::{BlockGeom, Geometry, TileCoord, checked_bitmap, seal_bitmap};
 use super::store::{TileSource, TileStore};
@@ -49,7 +49,7 @@ pub(crate) enum Engine {
     Writer(Box<TileWriter>),
     /// Readers cache tile lookups and the last ring header they validated
     /// against; the lock makes `&self` reads possible across threads.
-    Reader(Mutex<TileReader>),
+    Reader(ReaderLock<TileReader>),
 }
 
 pub(crate) struct TiledMatrix {
@@ -329,7 +329,7 @@ impl TiledMatrix {
         Ok(Self {
             geom,
             names,
-            engine: Engine::Reader(Mutex::new(reader)),
+            engine: Engine::Reader(ReaderLock::new(reader)),
             meta,
             creation_id,
             verify_cells: spec.read_validation().data_crc,

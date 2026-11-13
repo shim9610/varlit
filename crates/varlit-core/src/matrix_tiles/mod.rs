@@ -33,6 +33,7 @@ pub(crate) mod api;
 pub(crate) mod geometry;
 pub(crate) mod host;
 pub(crate) mod ranges;
+mod reader_lock;
 pub(crate) mod store;
 pub(crate) mod view;
 pub(crate) mod wal;
