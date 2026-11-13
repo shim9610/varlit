@@ -549,3 +549,285 @@ fn a_view_of_a_compressed_record_reads_fields() -> varlit::Result<()> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Typed decodes of chunked records fill the caller's value from storage
+// ---------------------------------------------------------------------------
+
+varlit_format! {
+    pub format Mixed {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Frame2(id = 1) {
+            id: u64,
+            note: String,
+            raw: Vec<u8>,
+            samples: Vec<u16>,
+            wide: Vec<f64>,
+            flags: Vec<bool>,
+            tags: Vec<String>,
+            tail: u32,
+        } }
+    }
+}
+
+varlit_format! {
+    pub format MixedBig {
+        magic: b"CHUNKMIX"; version: 1; endian: big; integrity: crc32_with_header;
+        blocks { variable Frame2Big(id = 1) {
+            id: u64,
+            note: String,
+            raw: Vec<u8>,
+            samples: Vec<u16>,
+            wide: Vec<f64>,
+            flags: Vec<bool>,
+            tags: Vec<String>,
+            tail: u32,
+        } }
+    }
+}
+
+// The same block id read with other field types: what the walk must refuse
+// or default exactly as a decode of the whole payload does.
+varlit_format! {
+    pub format MixedOther {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Narrow(id = 1) { id: u64, note: String, raw: Vec<u8> } }
+    }
+}
+varlit_format! {
+    pub format MixedWrongWidth {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Widened(id = 1) { id: u64, note: String, raw: Vec<u8>, samples: Vec<u64> } }
+    }
+}
+varlit_format! {
+    pub format MixedNarrowWidth {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Narrowed(id = 1) {
+            id: u64, note: String, raw: Vec<u8>, samples: Vec<u16>, wide: Vec<u16>,
+        } }
+    }
+}
+varlit_format! {
+    pub format MixedWrongWire {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Rewired(id = 1) { id: u64, note: String, raw: String } }
+    }
+}
+varlit_format! {
+    pub format MixedMissing {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Wanting(id = 1) {
+            id: u64, note: String, raw: Vec<u8>, samples: Vec<u16>, wide: Vec<f64>,
+            flags: Vec<bool>, tags: Vec<String>, tail: u32, absent: Vec<u8>,
+        } }
+    }
+}
+varlit_format! {
+    pub format MixedDefaulted {
+        magic: b"CHUNKMIX"; version: 1; endian: little; integrity: crc32_with_header;
+        blocks { variable Defaulted(id = 1) {
+            id: u64, note: String, raw: Vec<u8>, samples: Vec<u16>, wide: Vec<f64>,
+            flags: Vec<bool>, tags: Vec<String>, tail: u32, extra: Vec<u8> = default,
+        } }
+    }
+}
+
+macro_rules! frame {
+    ($ty:ident, $seed:expr, $scale:expr) => {{
+        let seed: u64 = $seed;
+        let scale: usize = $scale;
+        $ty {
+            id: seed,
+            note: "n".repeat(scale / 3 + 1),
+            raw: bytes(scale, seed),
+            samples: (0..scale / 2)
+                .map(|i| (i as u64 * 31 + seed) as u16)
+                .collect(),
+            wide: (0..scale / 8)
+                .map(|i| i as f64 * 0.5 - seed as f64)
+                .collect(),
+            flags: (0..scale / 16).map(|i| i % 3 == 0).collect(),
+            tags: (0..5).map(|i| format!("tag-{i}-{seed}")).collect(),
+            tail: seed as u32 ^ 0xA5A5,
+        }
+    }};
+}
+
+/// The value a decode of the whole logical payload gives, for comparison.
+fn slice_decode<T: varlit::VarlitBlock>(
+    r: &varlit::VarlitReader,
+    entry: &varlit::RecordIndexEntry,
+    endian: varlit::Endian,
+) -> varlit::Result<T> {
+    let mut payload = Vec::new();
+    r.read_logical_payload_into(entry, &mut payload)?;
+    varlit::decode_from_slice::<T>(&payload, endian)
+}
+
+/// Every field kind, at sizes on both sides of a chunk, decodes to exactly
+/// what a decode of the whole payload gives, whatever the value held before,
+/// and the scratch buffer never holds a large field.
+#[test]
+fn typed_decodes_of_chunked_records_match_a_whole_payload_decode() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("mixed");
+    let scales = [10usize, 3_000, 40_000, 70_000, 200_000, 700_001];
+    {
+        let mut w = Mixed::spec().create_writer(&path)?;
+        for (i, scale) in scales.iter().enumerate() {
+            w.push(&frame!(Frame2, i as u64 + 1, *scale))?;
+        }
+        w.sync()?;
+    }
+    let r = Mixed::spec().open_reader(&path)?;
+    let mut entries = Vec::new();
+    r.block_entries_into::<Frame2>(&mut entries)?;
+    assert_eq!(entries.len(), scales.len());
+    let mut scratch = Vec::new();
+    // One value reused across records of every size, growing and shrinking.
+    let mut out = Frame2::empty();
+    for order in [[0usize, 1, 2, 3, 4, 5], [5, 0, 4, 1, 3, 2]] {
+        for i in order {
+            let entry = &entries[i];
+            r.decode_block_into(entry, &mut scratch, &mut out)?;
+            assert_eq!(
+                out,
+                frame!(Frame2, i as u64 + 1, scales[i]),
+                "scale {}",
+                scales[i]
+            );
+            assert_eq!(
+                out,
+                slice_decode::<Frame2>(&r, entry, varlit::Endian::Little)?
+            );
+            if entry.is_chunked() {
+                // Only the fields without an in-place fill (the scalars and
+                // the short tag list) pass through scratch.
+                let mut fresh = Vec::new();
+                r.decode_block_into(entry, &mut fresh, &mut out)?;
+                assert!(
+                    fresh.capacity() < 4 * 1024,
+                    "scratch held a large field: {} bytes",
+                    fresh.capacity()
+                );
+            }
+        }
+        scratch = Vec::new();
+    }
+    // The paged typed read takes the same path.
+    let mut page_out = vec![Frame2::empty(); 2];
+    let mut seen = Vec::new();
+    let mut page = r.blocks::<Frame2>(&mut scratch, &mut page_out)?;
+    loop {
+        seen.extend_from_slice(&page_out[..page.filled]);
+        match page.next {
+            Some(next) => page = r.blocks_from::<Frame2>(next, &mut scratch, &mut page_out)?,
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), scales.len());
+    for (i, value) in seen.iter().enumerate() {
+        assert_eq!(*value, frame!(Frame2, i as u64 + 1, scales[i]));
+    }
+    Ok(())
+}
+
+/// A big-endian file's numeric vectors are converted in place.
+#[test]
+fn typed_decodes_convert_big_endian_vectors() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("mixed-big");
+    {
+        let mut w = MixedBig::spec().create_writer(&path)?;
+        w.push(&frame!(Frame2Big, 9, 300_000))?;
+        w.sync()?;
+    }
+    let r = MixedBig::spec().open_reader(&path)?;
+    let mut entries = Vec::new();
+    r.block_entries_into::<Frame2Big>(&mut entries)?;
+    assert!(entries[0].is_chunked());
+    let mut out = Frame2Big::empty();
+    r.decode_block_into(&entries[0], &mut Vec::new(), &mut out)?;
+    assert_eq!(out, frame!(Frame2Big, 9, 300_000));
+    assert_eq!(
+        out,
+        slice_decode::<Frame2Big>(&r, &entries[0], varlit::Endian::Big)?
+    );
+    Ok(())
+}
+
+/// Read as a block with other fields, a chunked record is refused, or its
+/// unknown fields skipped and defaults applied, exactly as by a decode of
+/// its whole payload.
+#[test]
+fn typed_decodes_refuse_what_a_whole_payload_decode_refuses() -> varlit::Result<()> {
+    fn same<T: varlit::VarlitBlock + VarlitEmpty + PartialEq + std::fmt::Debug>(
+        spec: varlit::FormatSpec,
+        path: &std::path::Path,
+    ) -> varlit::Result<Option<T>> {
+        let r = spec.open_reader(path)?;
+        let mut entries = Vec::new();
+        r.block_entries_into::<T>(&mut entries)?;
+        assert!(entries[0].is_chunked());
+        let mut out = T::empty();
+        let walked = r.decode_block_into(&entries[0], &mut Vec::new(), &mut out);
+        let whole = slice_decode::<T>(&r, &entries[0], varlit::Endian::Little);
+        match (walked, whole) {
+            (Ok(()), Ok(whole)) => {
+                assert_eq!(out, whole);
+                Ok(Some(out))
+            }
+            (Err(walked), Err(whole)) => {
+                assert_eq!(format!("{walked:?}"), format!("{whole:?}"));
+                Ok(None)
+            }
+            (walked, whole) => panic!("walk {walked:?} but whole payload {:?}", whole.map(drop)),
+        }
+    }
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("mixed-other");
+    {
+        let mut w = Mixed::spec().create_writer(&path)?;
+        w.push(&frame!(Frame2, 4, 300_000))?;
+        w.sync()?;
+    }
+    // Unknown fields are skipped without being read; a default applies.
+    let narrow = same::<Narrow>(MixedOther::spec(), &path)?.expect("decodes");
+    assert_eq!(narrow.raw, bytes(300_000, 4));
+    let defaulted = same::<Defaulted>(MixedDefaulted::spec(), &path)?.expect("decodes");
+    assert_eq!(defaulted.raw, bytes(300_000, 4));
+    assert!(defaulted.extra.is_empty());
+    // A count the data cannot hold, and data past the count.
+    assert!(same::<Widened>(MixedWrongWidth::spec(), &path)?.is_none());
+    assert!(same::<Narrowed>(MixedNarrowWidth::spec(), &path)?.is_none());
+    // Bytes are not a string field; a required field is absent.
+    assert!(same::<Rewired>(MixedWrongWire::spec(), &path)?.is_none());
+    assert!(same::<Wanting>(MixedMissing::spec(), &path)?.is_none());
+    Ok(())
+}
+
+/// The materialization limit refuses a large field before it is allocated.
+#[test]
+fn typed_decodes_charge_the_materialization_limit() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("mixed-limit");
+    {
+        let mut w = Mixed::spec().create_writer(&path)?;
+        w.push(&frame!(Frame2, 2, 300_000))?;
+        w.sync()?;
+    }
+    let mut limits = varlit::ReadLimits::standard();
+    limits.max_materialized_bytes = varlit::ReadLimit::Finite(1_200_000);
+    let spec = Mixed::spec().with_read_limits(limits);
+    let r = spec.open_reader(&path)?;
+    let mut entries = Vec::new();
+    r.block_entries_into::<Frame2>(&mut entries)?;
+    let mut out = Frame2::empty();
+    let walked = r.decode_block_into(&entries[0], &mut Vec::new(), &mut out);
+    assert!(
+        matches!(walked, Err(Error::LimitExceeded { .. })),
+        "{walked:?}"
+    );
+    Ok(())
+}

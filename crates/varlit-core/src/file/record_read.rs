@@ -70,10 +70,23 @@ fn empty_buffer() -> Error {
 /// does not read and check the chunk again on every call. Keyed by the
 /// record's identity as framed (offset, sequence, checksum, length), never
 /// by offset alone, so a rewritten file cannot serve it stale.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct ChunkCache {
     key: Option<CacheKey>,
     bytes: Vec<u8>,
+    /// A compressed chunk as stored, and the context that decodes it: kept
+    /// so a walk over a record's chunks allocates them once.
+    compressed: Vec<u8>,
+    decompressor: Option<crate::compression_buffers::Decompressor>,
+}
+
+impl std::fmt::Debug for ChunkCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkCache")
+            .field("key", &self.key)
+            .field("bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +135,8 @@ impl ChunkCache {
 }
 
 fn staging(staged: &mut Vec<u8>, len: usize) -> Result<&mut [u8]> {
+    // A whole compressed record may have left the staging longer or shorter;
+    // only growth is reserved.
     if staged.len() < len {
         staged
             .try_reserve_exact(len - staged.len())
@@ -152,7 +167,7 @@ pub(crate) fn fill_record(
         return fill_chunked(snapshot, entry, from, out, verify, &mut cache);
     }
     if entry.is_compressed() {
-        return fill_compressed(spec, snapshot, entry, from, out);
+        return fill_compressed(spec, snapshot, entry, from, out, &mut cache);
     }
     let total = entry.payload_len;
     let page = |filled: usize| RecordPage {
@@ -252,51 +267,60 @@ fn fill_chunked(
         let _ = end;
         snapshot.read_exact_at(base + at, buf)
     };
-    let mut scratch = Vec::new();
-    let mut decompressor = None;
+    // The handle's compression buffers, lent to this call and returned below.
+    let mut scratch = std::mem::take(&mut cache.compressed);
+    let mut decompressor = cache.decompressor.take();
     let mut position = from;
     let mut filled = 0usize;
-    while filled < out.len() && position < total {
-        let index = position / CHUNK_LEN;
-        let within = position % CHUNK_LEN;
-        let len = header.chunk_len(index);
-        let room = (out.len() - filled) as u64;
-        if within == 0 && room >= len {
-            let target = &mut out[filled..filled + len as usize];
-            read_chunk_checked(
-                &mut read,
-                &header,
-                payload_len,
-                base,
-                index,
-                target,
-                &mut scratch,
-                &mut decompressor,
-                verify,
-            )?;
-            filled += len as usize;
-            position += len;
-        } else {
-            let bytes = cache.get_or_fill(CacheKey::of(entry, index), len as usize, |bytes| {
+    let mut walk = || -> Result<()> {
+        while filled < out.len() && position < total {
+            let index = position / CHUNK_LEN;
+            let within = position % CHUNK_LEN;
+            let len = header.chunk_len(index);
+            let room = (out.len() - filled) as u64;
+            if within == 0 && room >= len {
+                let target = &mut out[filled..filled + len as usize];
                 read_chunk_checked(
                     &mut read,
                     &header,
                     payload_len,
                     base,
                     index,
-                    bytes,
+                    target,
                     &mut scratch,
                     &mut decompressor,
                     verify,
-                )
-            })?;
-            let take = (len - within).min(room) as usize;
-            out[filled..filled + take]
-                .copy_from_slice(&bytes[within as usize..within as usize + take]);
-            filled += take;
-            position += take as u64;
+                )?;
+                filled += len as usize;
+                position += len;
+            } else {
+                let bytes =
+                    cache.get_or_fill(CacheKey::of(entry, index), len as usize, |bytes| {
+                        read_chunk_checked(
+                            &mut read,
+                            &header,
+                            payload_len,
+                            base,
+                            index,
+                            bytes,
+                            &mut scratch,
+                            &mut decompressor,
+                            verify,
+                        )
+                    })?;
+                let take = (len - within).min(room) as usize;
+                out[filled..filled + take]
+                    .copy_from_slice(&bytes[within as usize..within as usize + take]);
+                filled += take;
+                position += take as u64;
+            }
         }
-    }
+        Ok(())
+    };
+    let walked = walk();
+    cache.compressed = scratch;
+    cache.decompressor = decompressor;
+    walked?;
     Ok(RecordPage {
         filled,
         end: total,
@@ -341,9 +365,17 @@ fn fill_compressed(
     entry: &RecordIndexEntry,
     from: u64,
     out: &mut [u8],
+    cache: &mut ChunkCache,
 ) -> Result<RecordPage> {
-    let mut logical = Vec::new();
-    entry.read_logical_payload_snapshot_into(spec, snapshot, &mut logical)?;
+    // Decoded once into the handle's staging and kept: the pages of one
+    // record do not decompress it again.
+    let key = CacheKey::of(entry, WHOLE);
+    if cache.key != Some(key) {
+        cache.key = None;
+        entry.read_logical_payload_snapshot_into(spec, snapshot, &mut cache.bytes)?;
+        cache.key = Some(key);
+    }
+    let logical = &cache.bytes;
     let total = logical.len() as u64;
     if from > total {
         return Err(past_end());

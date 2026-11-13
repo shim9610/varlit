@@ -192,10 +192,15 @@ where
                 actual: entry.block_version,
             });
         }
-        let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
-        budget.consume(logical_len)?;
-        entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, payload)?;
-        budget.decode_into(payload, T::ENDIAN.unwrap_or(self.spec.endian), out)?;
+        crate::file::decode_record_into(
+            self.spec,
+            &self.snapshot,
+            entry,
+            payload,
+            &mut budget,
+            &Default::default(),
+            out,
+        )?;
         Ok(true)
     }
 
@@ -282,16 +287,15 @@ where
                 actual: entry.block_version,
             });
         }
-        let logical_len =
-            entry.logical_payload_len_snapshot(self.inner.spec, &self.inner.snapshot)?;
-        budget.consume(logical_len)?;
-        let mut payload = Vec::new();
-        entry.read_logical_payload_snapshot_into(
+        crate::file::decode_record_into(
             self.inner.spec,
             &self.inner.snapshot,
-            &mut payload,
+            entry,
+            &mut Vec::new(),
+            &mut budget,
+            &Default::default(),
+            out,
         )?;
-        budget.decode_into(&payload, T::ENDIAN.unwrap_or(self.inner.spec.endian), out)?;
         Ok(true)
     }
 

@@ -3382,6 +3382,17 @@ impl RecordIndexEntry {
         payload: &[u8],
         footer: &[u8],
     ) -> Result<()> {
+        self.verify_record_framing(spec, header_bytes, footer)?;
+        self.verify_payload_crc(spec, payload, footer)
+    }
+
+    /// The stored header and footer are the ones this entry was built from.
+    fn verify_record_framing(
+        &self,
+        spec: FormatSpec,
+        header_bytes: &[u8],
+        footer: &[u8],
+    ) -> Result<()> {
         if spec.read_validation().structure {
             let mut header_reader = header_bytes;
             let actual = read_native_record_header(&mut header_reader, self.record_offset)?.fields;
@@ -3403,7 +3414,29 @@ impl RecordIndexEntry {
                 }
             }
         }
-        self.verify_payload_crc(spec, payload, footer)
+        Ok(())
+    }
+
+    /// [`Self::verify_record_framing`] read from the snapshot, for a record
+    /// whose payload is checked a chunk at a time instead of whole.
+    pub(super) fn verify_snapshot_framing(
+        &self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+    ) -> Result<()> {
+        if !spec.read_validation().structure {
+            return Ok(());
+        }
+        let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
+        snapshot.read_exact_at(self.record_offset, &mut header_bytes)?;
+        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let footer = if let Some(footer_offset) = self.footer_offset {
+            snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+            &footer_bytes[..]
+        } else {
+            &[]
+        };
+        self.verify_record_framing(spec, &header_bytes, footer)
     }
 
     /// Check bytes against captured framing without rereading file metadata.

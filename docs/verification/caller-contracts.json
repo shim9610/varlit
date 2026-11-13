@@ -1027,22 +1027,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::get(_1: &KeyedBlockVec<K, T>, _2: &K, _3: &mut T) -> std::result::Result<bool, error::Error> [body:bfac960d04c96a3b]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::get_into(_1: &BlockVec<T>, _2: usize, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<bool, error::Error> [body:2bf63e5c2de4b3b5]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "consume_manifest_items(_1: &mut collections::MaterializationBudget, _2: usize) -> std::result::Result<(), error::Error> [body:51fe474d4b82ad7c]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
             "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:102f787e357ccdd9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:8f58870e44073f65]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:8f58870e44073f65]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1102,11 +1102,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry) -> std::result::Result<bool, error::Error> [body:43c6d0b6a54593ca]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:3da33a37f3dc6673]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1167,12 +1162,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:85caf8d53fe815bf]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4a9e1d9f5b08cc13]",
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4425a7bde8a73ff8]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1208,11 +1198,6 @@
           },
           {
             "caller": "locate_key(_1: format::FormatSpec, _2: &BufferedIndex, _3: &mut SpillBytes, _4: u64, _5: &K, _6: collections::MaterializationBudget) -> std::result::Result<Option<u64>, error::Error> [body:f6c81120548c4bb8]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::advance(_1: &mut StreamingBlocks<T>, _2: &mut collections::MaterializationBudget) -> std::result::Result<bool, error::Error> [body:728aabaaefda2254]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           }
@@ -1244,22 +1229,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::get(_1: &KeyedBlockVec<K, T>, _2: &K, _3: &mut T) -> std::result::Result<bool, error::Error> [body:bfac960d04c96a3b]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::get_into(_1: &BlockVec<T>, _2: usize, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<bool, error::Error> [body:2bf63e5c2de4b3b5]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "consume_manifest_items(_1: &mut collections::MaterializationBudget, _2: usize) -> std::result::Result<(), error::Error> [body:51fe474d4b82ad7c]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
             "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:102f787e357ccdd9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:8f58870e44073f65]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:8f58870e44073f65]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1319,11 +1304,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry) -> std::result::Result<bool, error::Error> [body:43c6d0b6a54593ca]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:3da33a37f3dc6673]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1384,12 +1364,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:85caf8d53fe815bf]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4a9e1d9f5b08cc13]",
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4425a7bde8a73ff8]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1435,11 +1410,6 @@
           },
           {
             "caller": "mmap_views::<impl at crates/varlit-core/src/file/mmap_views.rs>::decode_block_into(_1: &MmapPayloads, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:2c3569d8dce69b6b]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::advance(_1: &mut StreamingBlocks<T>, _2: &mut collections::MaterializationBudget) -> std::result::Result<bool, error::Error> [body:728aabaaefda2254]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           }
@@ -1732,6 +1702,11 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "record_fields::<impl at crates/varlit-core/src/file/record_fields.rs>::decode_into::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_fields.rs}) -> std::result::Result<(), error::Error> [body:5154639684ca3653]",
+            "target": "Decoder::decode_from_slice_accounted_into",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:30a3de65caf0e2ad]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
@@ -1961,6 +1936,11 @@
           {
             "caller": "read_region(_1: format::FormatSpec, _2: &TiledMatrix, _3: &dyn TileSource, _4: matrix::MatrixRegion, _5: matrix::MatrixKey, _6: &mut [T]) -> std::result::Result<matrix::MatrixPage, error::Error> [body:c088d0b73a75b28b]",
             "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_fields::<impl at crates/varlit-core/src/file/record_fields.rs>::decode_into::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_fields.rs}) -> std::result::Result<(), error::Error> [body:2effb44e756ac4e3]",
+            "target": "Decoder::decode_from_slice_accounted_into",
             "result": "model/caller-specific"
           },
           {
@@ -2437,7 +2417,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "fill_chunked(_1: &snapshot::SnapshotFile, _2: &file::RecordIndexEntry, _3: u64, _4: &mut [u8], _5: bool, _6: &mut ChunkCache) -> std::result::Result<RecordPage, error::Error> [body:98d8f6f83f1bfd5f]",
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
@@ -2474,7 +2454,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "fill_chunked(_1: &snapshot::SnapshotFile, _2: &file::RecordIndexEntry, _3: u64, _4: &mut [u8], _5: bool, _6: &mut ChunkCache) -> std::result::Result<RecordPage, error::Error> [body:469c75a3382a610e]",
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },

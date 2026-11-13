@@ -1789,6 +1789,11 @@ impl RecordIndexEntry {
         out: &mut Vec<u8>,
     ) -> Result<()> {
         let logical_len = self.logical_payload_len_snapshot(spec, snapshot)?;
+        if self.is_chunked() {
+            // Chunks are read (and decompressed) straight into `out`, each
+            // checked where it lands: the stored payload is never held.
+            return self.read_chunked_snapshot_into(spec, snapshot, logical_len, out);
+        }
         if self.is_compressed() {
             let physical = self.read_payload_snapshot(spec, snapshot)?;
             *out = decode_record_payload(spec, self, physical)?;
@@ -1802,6 +1807,49 @@ impl RecordIndexEntry {
                 expected: logical_len,
                 actual,
             });
+        }
+        Ok(())
+    }
+
+    fn read_chunked_snapshot_into(
+        &self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+        logical_len: u64,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        self.verify_snapshot_framing(spec, snapshot)?;
+        let len = usize::try_from(logical_len)
+            .map_err(|_| Error::LengthOverflow { value: logical_len })?;
+        if out.len() < len {
+            out.try_reserve_exact(len - out.len())
+                .map_err(|_| Error::AllocationFailed {
+                    resource: ReadLimitKey::LogicalPayloadLen.resource(),
+                    requested: logical_len,
+                })?;
+        }
+        out.resize(len, 0);
+        let cache = std::cell::RefCell::new(ChunkCache::default());
+        let mut filled = 0;
+        while filled < len {
+            let page = fill_record(
+                spec,
+                snapshot,
+                self,
+                filled as u64,
+                &mut out[filled..],
+                &cache,
+            )?;
+            if page.end != logical_len {
+                return Err(Error::DecompressedLengthMismatch {
+                    expected: logical_len,
+                    actual: page.end,
+                });
+            }
+            if page.filled == 0 {
+                return Err(Error::UnexpectedEof);
+            }
+            filled += page.filled;
         }
         Ok(())
     }
@@ -7964,9 +8012,13 @@ mod validation_tests;
 #[path = "file/header_codec.rs"]
 mod header_codec;
 pub(crate) mod record_chunks;
+mod record_fields;
 mod record_read;
 mod record_view;
 use header_codec::*;
+pub(crate) use record_fields::decode_record_into;
+#[doc(hidden)]
+pub use record_fields::{FieldsCodec, RecordField, RecordFields};
 pub(crate) use record_read::{ChunkCache, fill_range, fill_record};
 pub use record_read::{RecordCursor, RecordPage};
 pub use record_view::{

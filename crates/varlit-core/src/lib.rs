@@ -203,3 +203,7 @@ pub(crate) fn scalable_fault_point(point: &'static str) {
 
 #[doc(hidden)]
 pub use codec::BuiltinCodec;
+#[doc(hidden)]
+pub use codec::{BulkCodec, BulkField};
+#[doc(hidden)]
+pub use file::{FieldsCodec, RecordField, RecordFields};

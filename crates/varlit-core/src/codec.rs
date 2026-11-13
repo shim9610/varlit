@@ -247,9 +247,220 @@ pub struct BuiltinCodec<T> {
     callback_free: bool,
 }
 
+/// A builtin codec's way to fill its value straight from a record's storage,
+/// without the encoded bytes passing through an intermediate buffer. Only
+/// this crate can make one.
+#[doc(hidden)]
+pub struct BulkCodec<T> {
+    /// Encoded bytes per element, and the name its budget charge goes by.
+    width: usize,
+    resource: &'static str,
+    fill: fn(&mut T, &mut BulkField<'_>) -> Result<()>,
+}
+
+impl<T> BulkCodec<T> {
+    /// Checks a declared element count against the data that follows it, as
+    /// a slice decode bounds it by its remaining input, and returns the
+    /// count with what to charge the materialization budget (under which
+    /// name) before [`Self::fill`] reserves anything.
+    pub(crate) fn admit(&self, declared: u64, data_len: u64) -> Result<(usize, u64, &'static str)> {
+        let len =
+            usize::try_from(declared).map_err(|_| Error::LengthOverflow { value: declared })?;
+        if declared > data_len / self.width as u64 {
+            return Err(Error::UnexpectedEof);
+        }
+        let bytes = len
+            .checked_mul(self.width)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: self.resource,
+            })?;
+        Ok((len, bytes as u64, self.resource))
+    }
+
+    pub(crate) fn fill(&self, out: &mut T, field: &mut BulkField<'_>) -> Result<()> {
+        (self.fill)(out, field)
+    }
+}
+
+/// One admitted, length-prefixed field value whose data is still in storage.
+#[doc(hidden)]
+pub struct BulkField<'a> {
+    pub(crate) endian: Endian,
+    /// The element count, admitted and charged.
+    pub(crate) len: usize,
+    /// Bytes of the value after its prefix.
+    pub(crate) data_len: u64,
+    /// Fills the whole slice with the next (checked) data bytes.
+    pub(crate) read: &'a mut dyn FnMut(&mut [u8]) -> Result<()>,
+}
+
+impl BulkField<'_> {
+    /// What a slice decode reports for data past the value.
+    fn finish(&self, consumed: u64) -> Result<()> {
+        match self.data_len - consumed {
+            0 => Ok(()),
+            remaining => Err(Error::TrailingBytes {
+                remaining: usize::try_from(remaining).unwrap_or(usize::MAX),
+            }),
+        }
+    }
+}
+
+/// A type whose all-zero bit pattern is a value, so freshly zeroed memory
+/// from the allocator is already initialized storage for it.
+///
+/// # Safety
+///
+/// Implemented only for primitive numbers.
+unsafe trait ZeroInit: Copy + 'static {}
+// SAFETY: zero is a `u8`.
+unsafe impl ZeroInit for u8 {}
+
+/// Sizes `out` to `len` for a fill that overwrites every element.
+///
+/// A vector with room is reused as it is: nothing is reallocated or cleared.
+/// Otherwise its storage is replaced by zeroed memory straight from the
+/// allocator, which for a large request is fresh pages rather than a pass
+/// writing zeros.
+fn size_for_fill<T: ZeroInit>(out: &mut Vec<T>, len: usize, resource: &'static str) -> Result<()> {
+    if out.capacity() >= len {
+        if out.len() >= len {
+            out.truncate(len);
+        } else {
+            // SAFETY: zero is a `T`, so the spare capacity up to `len` can be
+            // zeroed in place and counted as initialized.
+            unsafe {
+                let spare = out.as_mut_ptr().add(out.len());
+                std::ptr::write_bytes(spare, 0, len - out.len());
+                out.set_len(len);
+            }
+        }
+        return Ok(());
+    }
+    let refused = || Error::AllocationFailed {
+        resource,
+        requested: allocation_request::<T>(len),
+    };
+    let layout = std::alloc::Layout::array::<T>(len).map_err(|_| refused())?;
+    // SAFETY: `len > capacity >= 0` and `T` is not zero-sized, so the layout
+    // has a nonzero size. The block has `T`'s array layout for `len`
+    // elements, every one a zero `T`, and comes from the global allocator
+    // that `Vec` frees it with.
+    *out = unsafe {
+        let block = std::alloc::alloc_zeroed(layout).cast::<T>();
+        if block.is_null() {
+            return Err(refused());
+        }
+        Vec::from_raw_parts(block, len, len)
+    };
+    Ok(())
+}
+
+fn fill_bytes_from_storage(
+    out: &mut Vec<u8>,
+    field: &mut BulkField<'_>,
+    resource: &'static str,
+) -> Result<()> {
+    let len = field.len;
+    size_for_fill(out, len, resource)?;
+    if let Err(error) = (field.read)(out) {
+        out.clear();
+        return Err(error);
+    }
+    field.finish(len as u64)
+}
+
+fn fill_string_from_storage(out: &mut String, field: &mut BulkField<'_>) -> Result<()> {
+    // The string's own allocation is the destination; it is validated in
+    // place and handed back, or left empty.
+    let mut bytes = std::mem::take(out).into_bytes();
+    fill_bytes_from_storage(&mut bytes, field, "string")?;
+    *out = String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
+    Ok(())
+}
+
+fn fill_bools_from_storage(out: &mut Vec<bool>, field: &mut BulkField<'_>) -> Result<()> {
+    // The vector's allocation is filled and validated as bytes, and only
+    // then counted as booleans again.
+    let mut taken = std::mem::ManuallyDrop::new(std::mem::take(out));
+    // SAFETY: `bool` and `u8` have the same size and alignment, a `bool` is
+    // a valid `u8`, and `taken` gives up its allocation here without dropping.
+    let mut bytes = unsafe {
+        Vec::from_raw_parts(
+            taken.as_mut_ptr().cast::<u8>(),
+            taken.len(),
+            taken.capacity(),
+        )
+    };
+    fill_bytes_from_storage(&mut bytes, field, "sequence entries")?;
+    check_bool_bytes(&bytes)?;
+    let mut bytes = std::mem::ManuallyDrop::new(bytes);
+    // SAFETY: as above, and every byte was just checked to be 0 or 1.
+    *out = unsafe {
+        Vec::from_raw_parts(
+            bytes.as_mut_ptr().cast::<bool>(),
+            bytes.len(),
+            bytes.capacity(),
+        )
+    };
+    Ok(())
+}
+
+/// A fixed-width number every bit pattern of which is a value, so its
+/// storage can be filled as bytes and fixed up in place.
+trait RawNumeric: ZeroInit {
+    fn to_native(self, endian: Endian) -> Self;
+}
+
+macro_rules! raw_numeric {
+    ($($ty:ty),+) => {$(
+        // SAFETY: zero is a value of every primitive number.
+        unsafe impl ZeroInit for $ty {}
+        impl RawNumeric for $ty {
+            #[inline(always)]
+            fn to_native(self, endian: Endian) -> Self {
+                let bytes = self.to_ne_bytes();
+                match endian {
+                    Endian::Little => <$ty>::from_le_bytes(bytes),
+                    Endian::Big => <$ty>::from_be_bytes(bytes),
+                }
+            }
+        }
+    )+};
+}
+raw_numeric!(i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64);
+
+fn fill_numeric_from_storage<T: RawNumeric>(
+    out: &mut Vec<T>,
+    field: &mut BulkField<'_>,
+) -> Result<()> {
+    let len = field.len;
+    // Admission already multiplied these without overflow.
+    let bytes = len * size_of::<T>();
+    size_for_fill(out, len, "sequence entries")?;
+    // SAFETY: `out` holds `len` initialized `T`s, so its storage is `bytes`
+    // initialized, writable bytes; `T` is a primitive number without padding
+    // for which every bit pattern is a value, and `u8` has alignment 1.
+    let raw = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), bytes) };
+    if let Err(error) = (field.read)(raw) {
+        out.clear();
+        return Err(error);
+    }
+    let endian = field.endian;
+    if cfg!(target_endian = "little") != matches!(endian, Endian::Little) {
+        for value in out.iter_mut() {
+            *value = value.to_native(endian);
+        }
+    }
+    field.finish(bytes as u64)
+}
+
 pub trait VarlitDecode: Sized {
     #[doc(hidden)]
     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = None;
+    /// Set by the builtin codecs that can fill their value from storage.
+    #[doc(hidden)]
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = None;
     const WIRE_TYPE: WireType;
 
     /// Structural identity of the bytes this codec accepts; see
@@ -1608,6 +1819,11 @@ impl VarlitDecode for Vec<u8> {
         invariant: std::marker::PhantomData,
         callback_free: true,
     });
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = Some(BulkCodec {
+        width: 1,
+        resource: "byte vector",
+        fill: |out, field| fill_bytes_from_storage(out, field, "byte vector"),
+    });
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bytes");
 
@@ -1659,6 +1875,11 @@ impl VarlitDecode for String {
     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
         invariant: std::marker::PhantomData,
         callback_free: true,
+    });
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = Some(BulkCodec {
+        width: 1,
+        resource: "string",
+        fill: fill_string_from_storage,
     });
     const WIRE_TYPE: WireType = WireType::String;
     const SCHEMA_ID: u64 = leaf_schema_id(b"string");
@@ -2203,7 +2424,7 @@ macro_rules! vec_seq_codec {
 /// and reservation as [`vec_seq_codec`]; the elements are converted from one
 /// bounds-checked input slice instead of one decoder call per element.
 macro_rules! vec_fixed_codec {
-    ($(($ty:ty, $width:expr, $little:expr, $big:expr, $check:expr)),+ $(,)?) => {
+    ($(($ty:ty, $width:expr, $little:expr, $big:expr, $check:expr, $bulk:expr)),+ $(,)?) => {
         $(
             impl VarlitEncode for Vec<$ty> {
                 const WIRE_TYPE: WireType = WireType::Seq;
@@ -2218,6 +2439,7 @@ macro_rules! vec_fixed_codec {
 
             impl VarlitDecode for Vec<$ty> {
                 const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true });
+                const __VARLIT_BULK: Option<BulkCodec<Self>> = $bulk;
                 const WIRE_TYPE: WireType = WireType::Seq;
                 const SCHEMA_ID: u64 =
                     container_schema_id(b"seq", &[<$ty as VarlitDecode>::SCHEMA_ID]);
@@ -2281,19 +2503,145 @@ vec_fixed_codec!(
         1,
         |b: [u8; 1]| b[0] == 1,
         |b: [u8; 1]| b[0] == 1,
-        check_bool_bytes
+        check_bool_bytes,
+        Some(BulkCodec {
+            width: 1,
+            resource: "sequence entries",
+            fill: fill_bools_from_storage
+        })
     ),
-    (i8, 1, i8::from_le_bytes, i8::from_be_bytes, no_check),
-    (u16, 2, u16::from_le_bytes, u16::from_be_bytes, no_check),
-    (i16, 2, i16::from_le_bytes, i16::from_be_bytes, no_check),
-    (u32, 4, u32::from_le_bytes, u32::from_be_bytes, no_check),
-    (i32, 4, i32::from_le_bytes, i32::from_be_bytes, no_check),
-    (u64, 8, u64::from_le_bytes, u64::from_be_bytes, no_check),
-    (i64, 8, i64::from_le_bytes, i64::from_be_bytes, no_check),
-    (u128, 16, u128::from_le_bytes, u128::from_be_bytes, no_check),
-    (i128, 16, i128::from_le_bytes, i128::from_be_bytes, no_check),
-    (f32, 4, f32::from_le_bytes, f32::from_be_bytes, no_check),
-    (f64, 8, f64::from_le_bytes, f64::from_be_bytes, no_check)
+    (
+        i8,
+        1,
+        i8::from_le_bytes,
+        i8::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i8>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i8>,
+        })
+    ),
+    (
+        u16,
+        2,
+        u16::from_le_bytes,
+        u16::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u16>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u16>,
+        })
+    ),
+    (
+        i16,
+        2,
+        i16::from_le_bytes,
+        i16::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i16>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i16>,
+        })
+    ),
+    (
+        u32,
+        4,
+        u32::from_le_bytes,
+        u32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u32>,
+        })
+    ),
+    (
+        i32,
+        4,
+        i32::from_le_bytes,
+        i32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i32>,
+        })
+    ),
+    (
+        u64,
+        8,
+        u64::from_le_bytes,
+        u64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u64>,
+        })
+    ),
+    (
+        i64,
+        8,
+        i64::from_le_bytes,
+        i64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i64>,
+        })
+    ),
+    (
+        u128,
+        16,
+        u128::from_le_bytes,
+        u128::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u128>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u128>,
+        })
+    ),
+    (
+        i128,
+        16,
+        i128::from_le_bytes,
+        i128::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i128>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i128>,
+        })
+    ),
+    (
+        f32,
+        4,
+        f32::from_le_bytes,
+        f32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<f32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<f32>,
+        })
+    ),
+    (
+        f64,
+        8,
+        f64::from_le_bytes,
+        f64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<f64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<f64>,
+        })
+    )
 );
 
 vec_seq_codec!((String, 8));
@@ -3060,6 +3408,141 @@ mod tests {
             None => {}
             Some(charge) => assert!(charge >= usize::MAX as u64),
         }
+    }
+}
+
+/// The fills that put a field's data straight into the value's storage,
+/// driven from memory so they also run under Miri.
+#[cfg(test)]
+mod storage_fill_tests {
+    use super::*;
+
+    /// Fills `out` as a field walk does: the value's encoding minus its
+    /// 8-byte prefix is served in pieces of `piece` bytes.
+    fn fill<T: VarlitDecode>(
+        out: &mut T,
+        encoded: &[u8],
+        endian: Endian,
+        piece: usize,
+    ) -> Result<()> {
+        let prefix: [u8; 8] = encoded[..8].try_into().unwrap();
+        let declared = match endian {
+            Endian::Little => u64::from_le_bytes(prefix),
+            Endian::Big => u64::from_be_bytes(prefix),
+        };
+        let data = &encoded[8..];
+        let mut at = 0;
+        let mut read = |buf: &mut [u8]| -> Result<()> {
+            for part in buf.chunks_mut(piece) {
+                let end = at + part.len();
+                part.copy_from_slice(data.get(at..end).ok_or(Error::UnexpectedEof)?);
+                at = end;
+            }
+            Ok(())
+        };
+        let bulk = T::__VARLIT_BULK.expect("a storage fill");
+        let (len, charge, _) = bulk.admit(declared, data.len() as u64)?;
+        assert!(charge >= len as u64);
+        bulk.fill(
+            out,
+            &mut BulkField {
+                endian,
+                len,
+                data_len: data.len() as u64,
+                read: &mut read,
+            },
+        )
+    }
+
+    fn agrees<T>(value: T, stale: T)
+    where
+        T: VarlitEncode + VarlitDecode + PartialEq + std::fmt::Debug + Clone,
+    {
+        for endian in [Endian::Little, Endian::Big] {
+            let encoded = encode_to_vec(&value, endian).unwrap();
+            let whole: T = Decoder::new(&encoded, endian).decode_value().unwrap();
+            assert_eq!(whole, value);
+            for piece in [1, 7, 4096] {
+                // Into an empty value, a larger one and a smaller one.
+                for mut out in [stale.clone(), value.clone()] {
+                    fill(&mut out, &encoded, endian, piece).unwrap();
+                    assert_eq!(out, value);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn storage_fills_agree_with_slice_decodes() {
+        agrees(vec![1u8, 2, 3, 250], vec![9u8; 40]);
+        agrees(Vec::<u8>::new(), vec![9u8; 4]);
+        agrees(
+            String::from("storage ≠ slice"),
+            String::from("x").repeat(90),
+        );
+        agrees(vec![true, false, true, true], vec![false; 30]);
+        agrees(vec![-3i8, 7, i8::MIN], vec![1i8; 9]);
+        agrees(vec![0x0102u16, 0xFFFE, 7], Vec::new());
+        agrees(vec![-5i32, i32::MAX], vec![1i32; 12]);
+        agrees(vec![u64::MAX, 1, 0x0102_0304_0506_0708], vec![3u64]);
+        agrees(vec![i128::MIN, 5], vec![0i128; 3]);
+        agrees(vec![1.5f32, -0.0, f32::MAX], vec![0f32; 2]);
+        agrees(vec![f64::MIN_POSITIVE, 2.5e300], vec![0f64; 7]);
+    }
+
+    #[test]
+    fn storage_fills_refuse_what_slice_decodes_refuse() {
+        let encoded = encode_to_vec(&vec![7u16, 8, 9], Endian::Little).unwrap();
+        // A count the data cannot hold, and data past the count.
+        let mut wide = Vec::<u64>::new();
+        assert!(matches!(
+            fill(&mut wide, &encoded, Endian::Little, 4),
+            Err(Error::UnexpectedEof)
+        ));
+        let mut narrow = Vec::<u8>::new();
+        assert!(matches!(
+            fill(&mut narrow, &encoded, Endian::Little, 4),
+            Err(Error::TrailingBytes { remaining: 3 })
+        ));
+        // Bytes that are not booleans or text leave the value empty.
+        let mut flags = vec![true; 5];
+        assert!(
+            fill(
+                &mut flags,
+                &encode_to_vec(&vec![1u8, 2], Endian::Little).unwrap(),
+                Endian::Little,
+                1
+            )
+            .is_err()
+        );
+        assert!(flags.is_empty());
+        let mut text = String::from("kept?");
+        assert!(matches!(
+            fill(
+                &mut text,
+                &encode_to_vec(&vec![0xFFu8, 0xFE], Endian::Little).unwrap(),
+                Endian::Little,
+                1
+            ),
+            Err(Error::InvalidUtf8)
+        ));
+        assert!(text.is_empty());
+        // A read that fails part-way leaves no half-filled value behind.
+        let long = encode_to_vec(&vec![5u32; 10], Endian::Little).unwrap();
+        let mut out = vec![1u32; 3];
+        assert!(fill(&mut out, &long[..20], Endian::Little, 4).is_err());
+        assert!(
+            out.is_empty()
+                || out
+                    .iter()
+                    .all(|value| *value == 1 || *value == 5 || *value == 0)
+        );
+        // Admission names what to charge before anything is reserved.
+        let bytes = <Vec<u8> as VarlitDecode>::__VARLIT_BULK.unwrap();
+        assert_eq!(bytes.admit(64, 64).unwrap(), (64, 64, "byte vector"));
+        let wide = <Vec<u64> as VarlitDecode>::__VARLIT_BULK.unwrap();
+        assert_eq!(wide.admit(3, 24).unwrap(), (3, 24, "sequence entries"));
+        assert!(matches!(wide.admit(4, 24), Err(Error::UnexpectedEof)));
     }
 }
 

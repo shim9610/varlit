@@ -647,6 +647,7 @@ impl VarlitStreamReader {
         // `verify_all` remains the whole-file integrity scan.
         Ok(StreamingBlocks {
             payload: Vec::new(),
+            record_cache: Default::default(),
             scanner: NativeStreamScanner::from_snapshot_framing_only(
                 self.spec,
                 self.snapshot.clone(),
@@ -738,6 +739,8 @@ pub struct StreamingBlocks<T> {
     /// rather than `N`. This is the scalable family's per-record read, so it is
     /// the one place on it where that difference is unbounded.
     payload: Vec<u8>,
+    /// The checked chunk a long record's fields are read through.
+    record_cache: std::cell::RefCell<crate::file::ChunkCache>,
     _marker: PhantomData<(T, std::rc::Rc<()>)>,
 }
 
@@ -772,10 +775,20 @@ impl<T: VarlitBlock> StreamingBlocks<T> {
     /// following); `out` is valid but unspecified.
     pub fn next_into(&mut self, out: &mut T) -> Result<bool> {
         let mut budget = MaterializationBudget::new(self.spec);
-        if !self.advance(&mut budget)? {
+        let Some(entry) = self.advance()? else {
             return Ok(false);
-        }
-        let decoded = budget.decode_into(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian), out);
+        };
+        // The single payload read: checked as it is decoded, large fields
+        // straight into `out`.
+        let decoded = crate::file::decode_record_into(
+            self.spec,
+            self.scanner.snapshot(),
+            &entry,
+            &mut self.payload,
+            &mut budget,
+            &self.record_cache,
+            out,
+        );
         self.settle(decoded).map(|()| true)
     }
 
@@ -783,11 +796,23 @@ impl<T: VarlitBlock> StreamingBlocks<T> {
     #[cfg(test)]
     pub(crate) fn next_value(&mut self) -> Option<Result<T>> {
         let mut budget = MaterializationBudget::new(self.spec);
-        match self.advance(&mut budget) {
-            Ok(false) => None,
+        match self.advance() {
+            Ok(None) => None,
             Err(error) => Some(Err(error)),
-            Ok(true) => {
-                let decoded = budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian));
+            Ok(Some(entry)) => {
+                let decoded = entry
+                    .logical_payload_len_snapshot(self.spec, self.scanner.snapshot())
+                    .and_then(|logical_len| budget.consume(logical_len))
+                    .and_then(|()| {
+                        entry.read_logical_payload_snapshot_into(
+                            self.spec,
+                            self.scanner.snapshot(),
+                            &mut self.payload,
+                        )
+                    })
+                    .and_then(|()| {
+                        budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian))
+                    });
                 Some(self.settle(decoded))
             }
         }
@@ -804,9 +829,10 @@ impl<T: VarlitBlock> StreamingBlocks<T> {
 
     /// Finds the next record of `T`, charges its logical length to `budget`
     /// and reads it once (checksummed) into `self.payload`. `false` at the end.
-    fn advance(&mut self, budget: &mut MaterializationBudget) -> Result<bool> {
+    /// The next record of `T`, framed but not yet read.
+    fn advance(&mut self) -> Result<Option<crate::RecordIndexEntry>> {
         if self.finished {
-            return Ok(false);
+            return Ok(None);
         }
         // The scanner must not checksum payloads: the typed decode owns the
         // single, checksum-verified payload read.
@@ -819,7 +845,7 @@ impl<T: VarlitBlock> StreamingBlocks<T> {
                 Ok(Some(entry)) => entry,
                 Ok(None) => {
                     self.finished = true;
-                    return Ok(false);
+                    return Ok(None);
                 }
                 Err(error) => {
                     self.finished = true;
@@ -839,21 +865,7 @@ impl<T: VarlitBlock> StreamingBlocks<T> {
                     actual: entry.block_version,
                 });
             }
-            let read = match entry.logical_payload_len_snapshot(self.spec, self.scanner.snapshot())
-            {
-                Ok(logical_len) => budget.consume(logical_len),
-                Err(error) => Err(error),
-            };
-            // The single payload read: verifies the record checksum over the
-            // in-memory buffer that typed decode then reads.
-            let read = read.and_then(|()| {
-                entry.read_logical_payload_snapshot_into(
-                    self.spec,
-                    self.scanner.snapshot(),
-                    &mut self.payload,
-                )
-            });
-            return self.settle(read).map(|()| true);
+            return Ok(Some(entry));
         }
     }
 }

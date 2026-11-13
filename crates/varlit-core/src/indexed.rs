@@ -146,6 +146,8 @@ pub struct VarlitIndexedReader {
     tiles: Option<crate::matrix_tiles::api::TiledMatrix>,
     /// The last chunk a record read checked.
     record_cache: std::cell::RefCell<crate::file::ChunkCache>,
+    /// Scratch for the small fields of a record a lookup decodes.
+    payload_scratch: std::cell::RefCell<Vec<u8>>,
 }
 
 /// What a reader holds of the primary past its confirmed sidecar: the
@@ -334,6 +336,7 @@ impl VarlitIndexedReader {
             tail,
             tiles,
             record_cache: Default::default(),
+            payload_scratch: Default::default(),
         })
     }
 
@@ -869,11 +872,22 @@ impl VarlitIndexedReader {
         T: VarlitKeyedBlock,
         T::Key: VarlitDiskKey,
     {
+        if entry.block_id != T::ID || entry.block_version != T::VERSION {
+            return Err(index_invariant("put candidate targets the wrong block"));
+        }
         let mut budget = MaterializationBudget::new(self.stream.spec());
-        let payload = self.read_put_payload::<T>(entry, &mut budget)?;
-        budget.decode_into(
-            &payload,
-            T::ENDIAN.unwrap_or(self.stream.spec().endian),
+        // The handle's scratch is reused across lookups; a re-entered lookup
+        // (there is none today) would fall back to a buffer of its own.
+        let mut own = Vec::new();
+        let mut kept = self.payload_scratch.try_borrow_mut().ok();
+        let scratch = kept.as_deref_mut().unwrap_or(&mut own);
+        crate::file::decode_record_into(
+            self.stream.spec(),
+            self.stream.snapshot(),
+            entry,
+            scratch,
+            &mut budget,
+            &self.record_cache,
             out,
         )?;
         self.check_put_key(out, key)

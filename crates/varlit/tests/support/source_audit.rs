@@ -51,7 +51,7 @@ pub(crate) const RAW_SITES: &[(&str, &str, &str)] = &[
     ),
     (
         "file/scan.rs",
-        "verify_record_bytes",
+        "verify_record_framing",
         "read_native_record_header",
     ),
     (

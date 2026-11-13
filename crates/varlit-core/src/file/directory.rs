@@ -300,10 +300,15 @@ impl VarlitFile {
             });
         }
         let mut budget = MaterializationBudget::new(self.spec);
-        let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
-        budget.consume(logical_len)?;
-        entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, scratch)?;
-        budget.decode_into(scratch, T::ENDIAN.unwrap_or(self.spec.endian), out)
+        decode_record_into(
+            self.spec,
+            &self.snapshot,
+            &entry,
+            scratch,
+            &mut budget,
+            &self.record_cache,
+            out,
+        )
     }
 
     /// Frames the record at `record_offset` into its index entry.
@@ -394,9 +399,17 @@ impl VarlitFile {
         scratch: &mut Vec<u8>,
         out: &mut T,
     ) -> Result<()> {
+        self.check_block_entry::<T>(entry)?;
         let mut budget = MaterializationBudget::new(self.spec);
-        self.read_block_payload::<T>(entry, scratch, &mut budget)?;
-        budget.decode_into(scratch, T::ENDIAN.unwrap_or(self.spec.endian), out)
+        decode_record_into(
+            self.spec,
+            &self.snapshot,
+            entry,
+            scratch,
+            &mut budget,
+            &self.record_cache,
+            out,
+        )
     }
 
     /// [`Self::decode_block_into`] as a fresh value, for crate checks that
@@ -411,12 +424,8 @@ impl VarlitFile {
         budget.decode(scratch, T::ENDIAN.unwrap_or(self.spec.endian))
     }
 
-    fn read_block_payload<T: VarlitBlock>(
-        &self,
-        entry: &RecordIndexEntry,
-        scratch: &mut Vec<u8>,
-        budget: &mut MaterializationBudget,
-    ) -> Result<()> {
+    /// The entry is a record of block `T`, at `T`'s version.
+    fn check_block_entry<T: VarlitBlock>(&self, entry: &RecordIndexEntry) -> Result<()> {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         if entry.block_id != T::ID {
             return Err(Error::UnregisteredBlock(entry.block_id));
@@ -428,6 +437,16 @@ impl VarlitFile {
                 actual: entry.block_version,
             });
         }
+        Ok(())
+    }
+
+    fn read_block_payload<T: VarlitBlock>(
+        &self,
+        entry: &RecordIndexEntry,
+        scratch: &mut Vec<u8>,
+        budget: &mut MaterializationBudget,
+    ) -> Result<()> {
+        self.check_block_entry::<T>(entry)?;
         let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
         budget.consume(logical_len)?;
         entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, scratch)?;
@@ -707,7 +726,6 @@ impl VarlitFile {
         // A non-resident block is not framed by the walk, and an empty page
         // would say "nothing was written" rather than "not through this door".
         crate::collections::ensure_resident_block::<T>(self.spec)?;
-        let endian = T::ENDIAN.unwrap_or(self.spec.endian);
         self.fill_page(from, out.len(), |filled, entry| {
             if entry.block_id != T::ID {
                 return Ok(false);
@@ -722,10 +740,15 @@ impl VarlitFile {
             // A budget per record, owned by this call: each block is charged
             // on its own, and the budget never leaves the closure as a loan.
             let mut budget = MaterializationBudget::new(self.spec);
-            let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
-            budget.consume(logical_len)?;
-            entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, payload)?;
-            budget.decode_into(payload, endian, &mut out[filled])?;
+            decode_record_into(
+                self.spec,
+                &self.snapshot,
+                entry,
+                payload,
+                &mut budget,
+                &self.record_cache,
+                &mut out[filled],
+            )?;
             Ok(true)
         })
     }

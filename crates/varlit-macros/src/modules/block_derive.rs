@@ -312,6 +312,28 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             }
         }
     });
+    // The same arms for a walk over the stored record (see `RecordFields`).
+    let match_arms_fields = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let ty = &field.ty;
+        let field_id = field.field_id;
+        let field_name = field.name.to_string();
+        quote! {
+            #field_id => {
+                if field.wire_type() != <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE {
+                    return Err(::varlit::__core::Error::WireTypeMismatch {
+                        field: #field_name,
+                        expected: <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE,
+                        actual: field.wire_type(),
+                    });
+                }
+                fields.decode_into(&field, &mut out.#name)?;
+                #var = true;
+            }
+        }
+    });
+    let seen_vars_fields = seen_vars.clone();
     let finish_fields_into = descriptors.iter().map(|field| {
         let name = &field.name;
         let var = seen_ident(name);
@@ -334,6 +356,7 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             }
         }
     });
+    let finish_fields_walk = finish_fields_into.clone();
     let empty_fields = descriptors.iter().map(|field| {
         let name = &field.name;
         let ty = &field.ty;
@@ -628,6 +651,28 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                 #(#field_descriptors,)*
             ];
             const __VARLIT_RECORD_VALIDATOR: ::varlit::__core::RecordValidator = #record_validator;
+            const __VARLIT_FIELDS: ::core::option::Option<::varlit::__core::FieldsCodec<Self>> =
+                ::core::option::Option::Some(::varlit::__core::FieldsCodec {
+                    decode_into: Self::__varlit_decode_fields,
+                });
+        }
+
+        impl #ident {
+            #[doc(hidden)]
+            fn __varlit_decode_fields(
+                out: &mut Self,
+                fields: &mut ::varlit::__core::RecordFields<'_>,
+            ) -> ::varlit::__core::Result<()> {
+                #(#seen_vars_fields)*
+                while let ::core::option::Option::Some(field) = fields.next()? {
+                    match field.id() {
+                        #(#match_arms_fields)*
+                        _ => {}
+                    }
+                }
+                #(#finish_fields_walk)*
+                ::core::result::Result::Ok(())
+            }
         }
 
         #keyed_impl

@@ -23,6 +23,11 @@ pub trait VarlitBlock: VarlitEncode + VarlitDecode {
     /// it explicitly so keyedness cannot silently
     /// default to the chain-unsafe value.
     const IS_KEYED: bool;
+    /// How a derived variable block decodes itself field by field from
+    /// storage. Set by the derive; a manual implementation leaves it unset
+    /// and is decoded from its whole payload.
+    #[doc(hidden)]
+    const __VARLIT_FIELDS: Option<crate::FieldsCodec<Self>> = None;
     /// Process-local identity of this block's declared schema.
     ///
     /// `#[derive(VarlitBlock)]` computes this deterministically (FNV-1a 64 over
