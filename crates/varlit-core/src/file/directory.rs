@@ -377,7 +377,7 @@ impl VarlitFile {
         entry: &RecordIndexEntry,
         out: &mut Vec<u8>,
     ) -> Result<()> {
-        entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, out)
+        entry.read_logical_payload_cached(self.spec, &self.snapshot, out, &self.record_cache)
     }
 
     /// Decodes a record the caller already holds an entry for, reading its
@@ -1438,20 +1438,35 @@ impl VarlitFile {
         }
         // The walk never stores into this; it is the map's required buffer.
         let mut unused = Vec::new();
-        let mut walk = RecordMap::new_page(self, &mut unused, from)?;
+        let window = lend_window(&self.record_cache)?;
+        let mut walk = RecordMap::new_page(self, &mut unused, from, window)?;
         let mut filled = 0;
+        let mut complete = false;
+        let mut stored = Ok(());
         while filled < capacity {
-            let Some(entry) = walk.frame()? else {
-                return Ok(Page { filled, next: None });
-            };
-            if store(filled, &entry)? {
-                filled += 1;
+            match walk.frame() {
+                Ok(Some(entry)) => match store(filled, &entry) {
+                    Ok(true) => filled += 1,
+                    Ok(false) => {}
+                    Err(error) => {
+                        stored = Err(error);
+                        break;
+                    }
+                },
+                Ok(None) => {
+                    complete = true;
+                    break;
+                }
+                Err(error) => {
+                    stored = Err(error);
+                    break;
+                }
             }
         }
-        Ok(Page {
-            filled,
-            next: walk.page_cursor(),
-        })
+        let next = if complete { None } else { walk.page_cursor() };
+        return_window(&self.record_cache, walk.into_window());
+        stored?;
+        Ok(Page { filled, next })
     }
 
     /// Fills the caller's buffer with the record index.

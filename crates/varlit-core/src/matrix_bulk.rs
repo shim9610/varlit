@@ -3,8 +3,7 @@ use super::*;
 
 /// Cells decoded per batch of a typed read: the payload scratch is at most
 /// this many cells, or 64 KiB, whichever is fewer.
-const RUN_CELLS: usize = 1024;
-const RUN_BYTES: usize = 64 * 1024;
+use crate::matrix_tiles::api::batch_cells;
 
 impl VarlitFile {
     fn matrix_stride<T: VarlitMatrixBlock>(&self) -> Result<usize> {
@@ -74,7 +73,7 @@ impl VarlitFile {
         if out.is_empty() {
             return Ok(());
         }
-        let batch = RUN_CELLS.min((RUN_BYTES / stride).max(1)).min(out.len());
+        let batch = batch_cells(stride, out.len());
         let scratch_len = batch * stride;
         let inline = (out.len() as u64)
             .checked_mul(size_of::<T>() as u64)
@@ -89,25 +88,27 @@ impl VarlitFile {
             .require(ReadLimitKey::MaterializedBytes)?
             .unwrap_or(u64::MAX)
             - inline;
-        let mut scratch = try_zeroed_vec(scratch_len as u64, "matrix run payload")?;
-        let mut done = 0;
-        while done < out.len() {
-            let count = batch.min(out.len() - done);
-            let bytes = &mut scratch[..count * stride];
-            fill(done, bytes)?;
-            for (target, payload) in out[done..done + count]
-                .iter_mut()
-                .zip(bytes.chunks_exact(stride))
-            {
-                *target = crate::codec::Decoder::decode_from_slice_accounted(
-                    payload,
-                    T::ENDIAN.unwrap_or(self.spec.endian),
-                    &mut remaining,
-                )?;
+        let (tiles, _) = self.tiles_read()?;
+        tiles.with_payloads(scratch_len, |scratch| {
+            let mut done = 0;
+            while done < out.len() {
+                let count = batch.min(out.len() - done);
+                let bytes = &mut scratch[..count * stride];
+                fill(done, bytes)?;
+                for (target, payload) in out[done..done + count]
+                    .iter_mut()
+                    .zip(bytes.chunks_exact(stride))
+                {
+                    *target = crate::codec::Decoder::decode_from_slice_accounted(
+                        payload,
+                        T::ENDIAN.unwrap_or(self.spec.endian),
+                        &mut remaining,
+                    )?;
+                }
+                done += count;
             }
-            done += count;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn check_bytes_output<T: VarlitMatrixBlock>(&self, out: &[u8]) -> Result<()> {

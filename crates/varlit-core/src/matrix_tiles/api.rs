@@ -63,6 +63,76 @@ pub(crate) struct TiledMatrix {
     /// policy's `data_crc`. Commit bitmaps and tile headers are always
     /// checked: they decide which bytes are read at all.
     verify_cells: bool,
+    /// The buffers cell reads and writes stage through, sized for this
+    /// matrix when it is opened and reused by every call.
+    scratch: ReaderLock<MatrixScratch>,
+    /// Where a typed bulk read stages the encoded cells it decodes: one
+    /// batch, sized when the matrix is opened.
+    payloads: ReaderLock<Vec<u8>>,
+}
+
+/// The cells a typed bulk read stages at a time, and their byte bound.
+pub(crate) const RUN_CELLS: usize = 1024;
+pub(crate) const RUN_BYTES: usize = 64 * 1024;
+
+/// How many cells of `stride` bytes one staged batch holds.
+pub(crate) fn batch_cells(stride: usize, wanted: usize) -> usize {
+    RUN_CELLS
+        .min((RUN_BYTES / stride).max(1))
+        .min(wanted.max(1))
+}
+
+/// Staging for one call: a tile's commit bitmap unit, a run of slots (each a
+/// payload followed by its checksum) and the tile order of a key batch.
+pub(crate) struct MatrixScratch {
+    bitmap: Vec<u8>,
+    slots: Vec<u8>,
+    order: Vec<(TileCoord, u64, usize)>,
+}
+
+impl MatrixScratch {
+    /// Exactly what the largest block of `geom` needs: one bitmap unit, and
+    /// the longest slot run a read stages (a tile row, or a key-batch span).
+    fn for_geometry(geom: &Geometry) -> Result<Self> {
+        let mut bitmap = 0;
+        let mut slots = 0;
+        for block in &geom.blocks {
+            let span = (CELLS_SPAN_BYTES / block.slot_len()).clamp(1, block.cells());
+            bitmap = bitmap.max(block.bitmap_unit_len());
+            slots = slots.max(block.tile[1].max(span) * block.slot_len());
+        }
+        Ok(Self {
+            bitmap: zeroed(bitmap)?,
+            slots: zeroed(slots)?,
+            order: Vec::new(),
+        })
+    }
+
+    /// The largest batch of encoded cells a typed read of `geom` stages.
+    fn payload_batch(geom: &Geometry) -> Result<Vec<u8>> {
+        let mut bytes = 0;
+        for block in &geom.blocks {
+            let stride = block.stride as usize;
+            bytes = bytes.max(batch_cells(stride.max(1), usize::MAX) * stride);
+        }
+        zeroed(bytes as u64)
+    }
+}
+
+/// The first `len` bytes of a scratch buffer. It was sized for the matrix,
+/// so this grows it only if an earlier call lost it to an error.
+fn sized(buffer: &mut Vec<u8>, len: u64) -> Result<&mut [u8]> {
+    let len = len as usize;
+    if buffer.len() < len {
+        buffer
+            .try_reserve_exact(len - buffer.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "matrix cell buffer",
+                requested: len as u64,
+            })?;
+        buffer.resize(len, 0);
+    }
+    Ok(&mut buffer[..len])
 }
 
 impl std::fmt::Debug for TiledMatrix {
@@ -260,6 +330,8 @@ impl TiledMatrix {
         // The block pair's extents are in the metadata record, so an open
         // needs no dims.
         let meta = writer.meta;
+        let scratch = MatrixScratch::for_geometry(&geom)?;
+        let payloads = MatrixScratch::payload_batch(&geom)?;
         Ok(Self {
             geom,
             names,
@@ -267,6 +339,8 @@ impl TiledMatrix {
             meta,
             creation_id,
             verify_cells: spec.read_validation().data_crc,
+            scratch: ReaderLock::new(scratch),
+            payloads: ReaderLock::new(payloads),
         })
     }
 
@@ -309,6 +383,8 @@ impl TiledMatrix {
     ) -> Result<Self> {
         let (geom, names, creation_id) = Self::opened_shape(spec, store, meta)?;
         let writer = TileWriter::open(store, geom.try_clone()?, meta)?;
+        let scratch = MatrixScratch::for_geometry(&geom)?;
+        let payloads = MatrixScratch::payload_batch(&geom)?;
         Ok(Self {
             geom,
             names,
@@ -316,6 +392,8 @@ impl TiledMatrix {
             meta,
             creation_id,
             verify_cells: spec.read_validation().data_crc,
+            scratch: ReaderLock::new(scratch),
+            payloads: ReaderLock::new(payloads),
         })
     }
 
@@ -326,6 +404,8 @@ impl TiledMatrix {
     ) -> Result<Self> {
         let (geom, names, creation_id) = Self::opened_shape(spec, source, meta)?;
         let reader = TileReader::open(source, geom.try_clone()?, meta)?;
+        let scratch = MatrixScratch::for_geometry(&geom)?;
+        let payloads = MatrixScratch::payload_batch(&geom)?;
         Ok(Self {
             geom,
             names,
@@ -333,7 +413,28 @@ impl TiledMatrix {
             meta,
             creation_id,
             verify_cells: spec.read_validation().data_crc,
+            scratch: ReaderLock::new(scratch),
+            payloads: ReaderLock::new(payloads),
         })
+    }
+
+    /// This handle's staging buffers, for the length of one call.
+    fn scratch(&self) -> Result<super::reader_lock::ReaderGuard<'_, MatrixScratch>> {
+        self.scratch.lock().map_err(|_| Error::InvalidMatrixLayout)
+    }
+
+    /// Runs `body` with `len` bytes to stage encoded cells in: this handle's
+    /// batch buffer, or one made for the call when that is in use (a read
+    /// re-entered from a codec) or was sized for less.
+    pub(crate) fn with_payloads<R>(
+        &self,
+        len: usize,
+        body: impl FnOnce(&mut [u8]) -> Result<R>,
+    ) -> Result<R> {
+        if let Some(mut kept) = self.payloads.try_lock() {
+            return body(sized(&mut kept, len as u64)?);
+        }
+        body(&mut zeroed(len as u64)?)
     }
 
     /// The published generation this handle shows.
@@ -450,16 +551,15 @@ impl TiledMatrix {
         let block = self.block_index(block_id)?;
         let geom = self.geom.blocks[block];
         let (coord, slot) = geom.locate(key);
+        let mut scratch = self.scratch()?;
         self.with_access(source, block, &mut |access| {
             let Some(tile) = access.tile(coord)? else {
                 return Ok(MatrixCellStatus::NotCommitted);
             };
-            // Allocated after the lookup: a refused tile-cache entry is
-            // tolerated, so a refusal here must come later to be reported.
-            let mut bitmap = zeroed(geom.bitmap_unit_len())?;
-            access.read(tile + geom.bitmap_at(), &mut bitmap)?;
-            checked_bitmap(&bitmap)?;
-            Ok(if bit(&bitmap, slot) {
+            let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
+            access.read(tile + geom.bitmap_at(), bitmap)?;
+            checked_bitmap(bitmap)?;
+            Ok(if bit(bitmap, slot) {
                 MatrixCellStatus::Committed
             } else {
                 MatrixCellStatus::NotCommitted
@@ -486,18 +586,20 @@ impl TiledMatrix {
             });
         }
         let (coord, slot) = geom.locate(key);
+        let mut scratch = self.scratch()?;
+        let scratch = &mut *scratch;
         self.with_access(source, block, &mut |access| {
             let tile = access.tile(coord)?.ok_or(Error::MatrixNotCommitted)?;
-            let mut bitmap = zeroed(geom.bitmap_unit_len())?;
-            let mut piece = zeroed(geom.slot_len())?;
-            access.read(tile + geom.bitmap_at(), &mut bitmap)?;
-            checked_bitmap(&bitmap)?;
-            if !bit(&bitmap, slot) {
+            let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
+            let piece = sized(&mut scratch.slots, geom.slot_len())?;
+            access.read(tile + geom.bitmap_at(), bitmap)?;
+            checked_bitmap(bitmap)?;
+            if !bit(bitmap, slot) {
                 return Err(Error::MatrixNotCommitted);
             }
             let at = tile + geom.slot_at(slot);
-            access.read(at, &mut piece)?;
-            self.check_slot(&piece, geom, at)?;
+            access.read(at, piece)?;
+            self.check_slot(piece, geom, at)?;
             out.copy_from_slice(&piece[..geom.stride as usize]);
             Ok(())
         })
@@ -539,8 +641,13 @@ impl TiledMatrix {
         self.geom.check_key(key)?;
         self.geom
             .check_key(MatrixKey::new(key.scan, key.ch + count - 1))?;
-        let mut slot_bytes = zeroed(geom.slot_len() * geom.tile[1].min(count))?;
-        let mut bitmap = zeroed(geom.bitmap_unit_len())?;
+        let mut scratch = self.scratch()?;
+        let scratch = &mut *scratch;
+        let slot_bytes = sized(
+            &mut scratch.slots,
+            geom.slot_len() * geom.tile[1].min(count),
+        )?;
+        let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
         self.with_access(source, block, &mut |access| {
             let mut done = 0u64;
             while done < count {
@@ -548,9 +655,9 @@ impl TiledMatrix {
                 let (coord, slot) = geom.locate(at);
                 let in_tile = (geom.tile[1] - at.ch % geom.tile[1]).min(count - done);
                 let tile = access.tile(coord)?.ok_or(Error::MatrixNotCommitted)?;
-                access.read(tile + geom.bitmap_at(), &mut bitmap)?;
-                checked_bitmap(&bitmap)?;
-                if (0..in_tile).any(|i| !bit(&bitmap, slot + i)) {
+                access.read(tile + geom.bitmap_at(), bitmap)?;
+                checked_bitmap(bitmap)?;
+                if (0..in_tile).any(|i| !bit(bitmap, slot + i)) {
                     return Err(Error::MatrixNotCommitted);
                 }
                 let bytes = &mut slot_bytes[..(in_tile * geom.slot_len()) as usize];
@@ -593,10 +700,12 @@ impl TiledMatrix {
         self.geom.check_key(start)?;
         self.geom
             .check_key(MatrixKey::new(region.row_end - 1, region.col_end - 1))?;
-        let mut scratch = zeroed(geom.tile[1] * geom.slot_len())?;
-        let mut bitmap = zeroed(geom.bitmap_unit_len())?;
+        let mut scratch = self.scratch()?;
+        let scratch = &mut *scratch;
+        let slots = sized(&mut scratch.slots, geom.tile[1] * geom.slot_len())?;
+        let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
         self.with_access(source, block, &mut |access| {
-            self.region_pass(access, geom, region, start, out, &mut scratch, &mut bitmap)
+            self.region_pass(access, geom, region, start, out, slots, bitmap)
         })
     }
 
@@ -671,9 +780,14 @@ impl TiledMatrix {
         if keys.is_empty() {
             return Ok(());
         }
-        let mut order: Vec<(TileCoord, u64, usize)> = Vec::new();
+        let mut scratch = self.scratch()?;
+        let scratch = &mut *scratch;
+        // The order list is kept between calls; it grows only for a batch
+        // larger than any this handle has read.
+        let order = &mut scratch.order;
+        order.clear();
         order
-            .try_reserve_exact(keys.len())
+            .try_reserve(keys.len())
             .map_err(|_| Error::AllocationFailed {
                 resource: "matrix key batch order",
                 requested: (keys.len() * std::mem::size_of::<(TileCoord, u64, usize)>()) as u64,
@@ -690,14 +804,14 @@ impl TiledMatrix {
         let mut widest = 1u64;
         let mut at = 0usize;
         while at < order.len() {
-            let end = span_end(&order, at, gap, span_cap);
+            let end = span_end(order, at, gap, span_cap);
             widest = widest.max(order[end - 1].1 - order[at].1 + 1);
             at = end;
         }
-        let mut scratch = zeroed(widest * geom.slot_len())?;
-        let mut bitmap = zeroed(geom.bitmap_unit_len())?;
+        let slots = sized(&mut scratch.slots, widest * geom.slot_len())?;
+        let bitmap = sized(&mut scratch.bitmap, geom.bitmap_unit_len())?;
         self.with_access(source, block, &mut |access| {
-            self.cells_pass(access, geom, &order, out, &mut scratch, &mut bitmap)
+            self.cells_pass(access, geom, order, out, slots, bitmap)
         })
     }
 

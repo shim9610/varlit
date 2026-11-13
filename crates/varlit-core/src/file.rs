@@ -918,6 +918,19 @@ pub struct RecordMap<'a> {
 
 impl<'a> RecordMap<'a> {
     fn new(file: &VarlitFile, entries: &'a mut Vec<RecordIndexEntry>) -> Result<Self> {
+        Self::new_through(file, entries, ReadAhead::new()?)
+    }
+
+    /// [`Self::new`] reading ahead through a window the caller already has.
+    fn new_through(
+        file: &VarlitFile,
+        entries: &'a mut Vec<RecordIndexEntry>,
+        mut window: ReadAhead,
+    ) -> Result<Self> {
+        // Whatever an earlier walk left in it may since have been rewritten
+        // in place.
+        window.start = 0;
+        window.len = 0;
         let start = append_log_start_for_file(file)?;
         entries.clear();
         let mut accounting = ScanAccounting::default();
@@ -933,8 +946,13 @@ impl<'a> RecordMap<'a> {
             next: start,
             end: file.snapshot.len(),
             accounting,
-            window: ReadAhead::new()?,
+            window,
         })
+    }
+
+    /// The read-ahead window, for the handle to keep.
+    pub(crate) fn into_window(self) -> ReadAhead {
+        self.window
     }
 
     fn new_from(
@@ -964,8 +982,9 @@ impl<'a> RecordMap<'a> {
         file: &VarlitFile,
         entries: &'a mut Vec<RecordIndexEntry>,
         from: Option<PageCursor>,
+        window: ReadAhead,
     ) -> Result<Self> {
-        let mut map = Self::new(file, entries)?;
+        let mut map = Self::new_through(file, entries, window)?;
         if let Some(cursor) = from {
             if cursor.offset < map.start || cursor.offset > map.end {
                 return Err(Error::InvalidFollowCursor(
@@ -1792,7 +1811,8 @@ impl RecordIndexEntry {
         if self.is_chunked() {
             // Chunks are read (and decompressed) straight into `out`, each
             // checked where it lands: the stored payload is never held.
-            return self.read_chunked_snapshot_into(spec, snapshot, logical_len, out);
+            let cache = std::cell::RefCell::new(ChunkCache::default());
+            return self.read_chunked_snapshot_into(spec, snapshot, logical_len, out, &cache);
         }
         if self.is_compressed() {
             let physical = self.read_payload_snapshot(spec, snapshot)?;
@@ -1811,12 +1831,43 @@ impl RecordIndexEntry {
         Ok(())
     }
 
+    /// [`Self::read_logical_payload_snapshot_into`] through a handle's
+    /// buffers: a compressed record's stored bytes and decompression context
+    /// are the handle's, so a settled read allocates nothing.
+    pub(crate) fn read_logical_payload_cached(
+        &self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+        out: &mut Vec<u8>,
+        cache: &std::cell::RefCell<ChunkCache>,
+    ) -> Result<()> {
+        if !self.is_compressed() {
+            return self.read_logical_payload_snapshot_into(spec, snapshot, out);
+        }
+        let logical_len = self.logical_payload_len_snapshot(spec, snapshot)?;
+        if self.is_chunked() {
+            return self.read_chunked_snapshot_into(spec, snapshot, logical_len, out, cache);
+        }
+        let Ok(mut cache) = cache.try_borrow_mut() else {
+            return self.read_logical_payload_snapshot_into(spec, snapshot, out);
+        };
+        cache.decode_compressed_into(spec, snapshot, self, out)?;
+        if out.len() as u64 != logical_len {
+            return Err(Error::DecompressedLengthMismatch {
+                expected: logical_len,
+                actual: out.len() as u64,
+            });
+        }
+        Ok(())
+    }
+
     fn read_chunked_snapshot_into(
         &self,
         spec: FormatSpec,
         snapshot: &SnapshotFile,
         logical_len: u64,
         out: &mut Vec<u8>,
+        cache: &std::cell::RefCell<ChunkCache>,
     ) -> Result<()> {
         self.verify_snapshot_framing(spec, snapshot)?;
         let len = usize::try_from(logical_len)
@@ -1829,7 +1880,6 @@ impl RecordIndexEntry {
                 })?;
         }
         out.resize(len, 0);
-        let cache = std::cell::RefCell::new(ChunkCache::default());
         let mut filled = 0;
         while filled < len {
             let page = fill_record(
@@ -1838,7 +1888,7 @@ impl RecordIndexEntry {
                 self,
                 filled as u64,
                 &mut out[filled..],
-                &cache,
+                cache,
             )?;
             if page.end != logical_len {
                 return Err(Error::DecompressedLengthMismatch {
@@ -2036,23 +2086,6 @@ impl SequenceState {
             None => Self::Exhausted,
         }
     }
-}
-
-/// A zeroed buffer of `len` bytes, allocated fallibly.
-///
-/// A chunk's buffers are sized by a declared knob, so an over-large
-/// `rows_per_chunk` must report `AllocationFailed` rather than abort.
-fn try_zeroed_vec(len: u64, resource: &'static str) -> Result<Vec<u8>> {
-    let capacity = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
-    let mut buffer = Vec::new();
-    buffer
-        .try_reserve_exact(capacity)
-        .map_err(|_| Error::AllocationFailed {
-            resource,
-            requested: len,
-        })?;
-    buffer.resize(capacity, 0);
-    Ok(buffer)
 }
 
 /// O(1) writer-side state for the internal segment chain.
@@ -8019,7 +8052,9 @@ use header_codec::*;
 pub(crate) use record_fields::decode_record_into;
 #[doc(hidden)]
 pub use record_fields::{FieldsCodec, RecordField, RecordFields};
-pub(crate) use record_read::{ChunkCache, fill_range, fill_record};
+pub(crate) use record_read::{
+    ChunkCache, fill_range, fill_record, lend_scratch, lend_window, return_scratch, return_window,
+};
 pub use record_read::{RecordCursor, RecordPage};
 pub use record_view::{
     FIELD_INLINE, FieldSpan, FieldWalk, VarlitView, view_set, view_wire_mismatch,

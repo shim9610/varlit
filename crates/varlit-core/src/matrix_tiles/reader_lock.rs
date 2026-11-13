@@ -40,6 +40,16 @@ impl<T> ReaderLock<T> {
         }
     }
 
+    /// The guard if nothing holds the lock (and it is not poisoned), without
+    /// waiting: for a buffer a caller can do without.
+    pub(crate) fn try_lock(&self) -> Option<ReaderGuard<'_, T>> {
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()?;
+        let guard = ReaderGuard { lock: self };
+        (!self.poisoned.load(Ordering::Relaxed)).then_some(guard)
+    }
+
     pub(crate) fn lock(&self) -> Result<ReaderGuard<'_, T>, Poisoned> {
         let mut spins = 0u32;
         while self
@@ -122,6 +132,16 @@ mod tests {
     }
 
     #[test]
+    fn try_lock_takes_a_free_lock_and_never_waits() {
+        let lock = ReaderLock::new(5u64);
+        let held = lock.try_lock().expect("free");
+        assert!(lock.try_lock().is_none());
+        drop(held);
+        *lock.try_lock().expect("free again") += 1;
+        assert_eq!(*lock.lock().unwrap(), 6);
+    }
+
+    #[test]
     fn a_panic_while_locked_poisons_the_lock() {
         let lock = Arc::new(ReaderLock::new(1u64));
         let shared = Arc::clone(&lock);
@@ -134,6 +154,7 @@ mod tests {
         assert!(lock.lock().is_err());
         // The lock itself was released: a second attempt does not hang.
         assert!(lock.lock().is_err());
+        assert!(lock.try_lock().is_none());
         let mut lock = Arc::try_unwrap(lock).ok().unwrap();
         assert!(lock.get_mut().is_err());
     }

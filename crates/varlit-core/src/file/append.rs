@@ -1135,6 +1135,7 @@ impl VarlitFile {
             Some(PageCursor {
                 offset: covered_start,
             }),
+            crate::file::ReadAhead::new()?,
         )?;
         let payload = encode_segment_payload(
             self.spec,

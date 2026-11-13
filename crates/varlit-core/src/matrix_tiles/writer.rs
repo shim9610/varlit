@@ -1,11 +1,9 @@
 //! The single writer: stages byte ranges, publishes them through the ring,
 //! and checkpoints them into place when the ring needs room.
 
-use std::collections::HashMap;
-
 use super::ranges::Ranges;
 
-use super::geometry::{Geometry, META_FIXED_LEN, TileCoord};
+use super::geometry::{Geometry, META_FIXED_LEN, TileCache, TileCoord};
 use super::store::{TileSource, TileStore};
 use super::view::{Overlay, OverlayEntry, find_tile, for_each_tile, lay_over};
 use super::wal::{
@@ -55,7 +53,7 @@ pub(crate) struct TileWriter {
     /// The end of the furthest matrix record this writer appended: what a
     /// frame it writes may point into, so what the frame `requires`.
     requires: u64,
-    tiles: HashMap<(usize, u64), u64>,
+    tiles: TileCache,
     pub(crate) stats: WriterStats,
 }
 
@@ -87,7 +85,7 @@ impl TileWriter {
         geom.encode_meta((base, ring_len), creation_id, &mut meta_bytes);
         store.write_at(meta, &meta_bytes[..META_FIXED_LEN as usize])?;
         store.sync()?;
-        Ok(Self::with_parts(
+        Self::with_parts(
             geom,
             meta,
             Ring {
@@ -95,7 +93,7 @@ impl TileWriter {
                 len: ring_len,
             },
             header,
-        ))
+        )
     }
 
     /// Opens an existing matrix for writing. Every publication the ring
@@ -110,13 +108,14 @@ impl TileWriter {
             return Err(Error::InvalidMatrixLayout);
         }
         let header = ring.read_header(store)?;
-        let mut writer = Self::with_parts(geom, meta, ring, header);
+        let mut writer = Self::with_parts(geom, meta, ring, header)?;
         writer.recover(store)?;
         Ok(writer)
     }
 
-    fn with_parts(geom: Geometry, meta: u64, ring: Ring, header: RingHeader) -> Self {
-        Self {
+    fn with_parts(geom: Geometry, meta: u64, ring: Ring, header: RingHeader) -> Result<Self> {
+        let tiles = TileCache::for_geometry(&geom)?;
+        Ok(Self {
             geom,
             meta,
             ring,
@@ -129,9 +128,9 @@ impl TileWriter {
             appended: false,
             fresh: Vec::new(),
             requires: 0,
-            tiles: HashMap::new(),
+            tiles,
             stats: WriterStats::default(),
-        }
+        })
     }
 
     /// The newest published generation.
@@ -246,8 +245,8 @@ impl TileWriter {
         create: bool,
     ) -> Result<Option<u64>> {
         let key = coord.morton()?;
-        if let Some(found) = self.tiles.get(&(block, key)) {
-            return Ok(Some(*found));
+        if let Some(found) = self.tiles.get(block, key) {
+            return Ok(Some(found));
         }
         let root_at = self.meta + self.geom.root_at(block);
         let found = find_tile(root_at, coord, &mut |at, buf| self.read(store, at, buf))?;
@@ -256,10 +255,7 @@ impl TileWriter {
             None if !create => return Ok(None),
             None => self.allocate_tile(store, block, coord, key)?,
         };
-        if self.tiles.try_reserve(1).is_ok() {
-            // A cache: when it cannot grow, the next lookup walks again.
-            self.tiles.insert((block, key), found);
-        }
+        self.tiles.insert(block, key, found);
         Ok(Some(found))
     }
 
@@ -333,8 +329,8 @@ impl TileWriter {
         block: usize,
         coord: TileCoord,
     ) -> Result<Option<u64>> {
-        if let Some(found) = self.tiles.get(&(block, coord.morton()?)) {
-            return Ok(Some(*found));
+        if let Some(found) = self.tiles.get(block, coord.morton()?) {
+            return Ok(Some(found));
         }
         find_tile(
             self.meta + self.geom.root_at(block),

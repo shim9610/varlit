@@ -495,3 +495,41 @@ fn a_ring_length_outside_the_format_bounds_is_refused() {
         assert_eq!(geom.decode_meta(&meta).is_ok(), ok, "ring of {len}");
     }
 }
+
+/// The tile cache is one fixed table: an entry answers for exactly its tile,
+/// a colliding tile replaces it, and nothing ever grows.
+#[test]
+fn the_tile_cache_is_a_fixed_table() {
+    use super::geometry::TileCache;
+    let geom = geometry(false);
+    let mut cache = TileCache::for_geometry(&geom).unwrap();
+    assert_eq!(cache.get(0, 7), None);
+    cache.insert(0, 7, 4096);
+    assert_eq!(cache.get(0, 7), Some(4096));
+    assert_eq!(cache.get(1, 7), None);
+    assert_eq!(cache.get(0, 8), None);
+    // The same tile of another block is another entry, not the same slot:
+    // across a spread of tiles the two blocks rarely evict each other.
+    let mut kept = 0;
+    for tile in 0..32u64 {
+        cache.clear();
+        cache.insert(0, tile, 1);
+        cache.insert(1, tile, 2);
+        assert_eq!(cache.get(1, tile), Some(2));
+        kept += u32::from(cache.get(0, tile) == Some(1));
+    }
+    assert!(kept >= 28, "blocks collide systematically: {kept}/32 kept");
+    // Far more tiles than slots: every answer is still the right tile's,
+    // or a miss, and the last one inserted is always there.
+    for tile in 0..200_000u64 {
+        cache.insert(0, tile, tile * 3 + 1);
+        assert_eq!(cache.get(0, tile), Some(tile * 3 + 1));
+    }
+    for tile in 0..200_000u64 {
+        if let Some(at) = cache.get(0, tile) {
+            assert_eq!(at, tile * 3 + 1);
+        }
+    }
+    cache.clear();
+    assert_eq!(cache.get(0, 199_999), None);
+}

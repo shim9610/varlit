@@ -14,8 +14,7 @@ use crate::{
 
 /// Cells decoded per batch of a typed read: the payload scratch is at most
 /// this many cells, or 64 KiB, whichever is fewer.
-const RUN_CELLS: usize = 1024;
-const RUN_BYTES: usize = 64 * 1024;
+use super::api::batch_cells;
 /// What a batch key read's sort order costs per key.
 const KEY_ORDER_BYTES: u64 = 32;
 
@@ -109,19 +108,20 @@ pub(crate) fn read_cell<T: VarlitMatrixBlock>(
     let stride = stride::<T>(spec)?;
     spec.read_limits
         .check(ReadLimitKey::MaterializedBytes, stride as u64)?;
-    let mut payload = zeroed(stride, "matrix cell payload")?;
-    tiles.read_cell(source, T::ID, key, &mut payload)?;
-    let limit = spec
-        .read_limits
-        .require(ReadLimitKey::MaterializedBytes)?
-        .unwrap_or(u64::MAX)
-        - stride as u64;
-    crate::codec::Decoder::decode_from_slice_limited_into(
-        &payload,
-        T::ENDIAN.unwrap_or(spec.endian),
-        limit,
-        out,
-    )
+    tiles.with_payloads(stride, |payload| {
+        tiles.read_cell(source, T::ID, key, payload)?;
+        let limit = spec
+            .read_limits
+            .require(ReadLimitKey::MaterializedBytes)?
+            .unwrap_or(u64::MAX)
+            - stride as u64;
+        crate::codec::Decoder::decode_from_slice_limited_into(
+            payload,
+            T::ENDIAN.unwrap_or(spec.endian),
+            limit,
+            out,
+        )
+    })
 }
 
 /// The decode budget left once `inline` bytes are charged.
@@ -133,12 +133,6 @@ fn decode_budget(spec: FormatSpec, inline: u64) -> Result<u64> {
         .require(ReadLimitKey::MaterializedBytes)?
         .unwrap_or(u64::MAX)
         - inline)
-}
-
-fn batch_cells(stride: usize, wanted: usize) -> usize {
-    RUN_CELLS
-        .min((RUN_BYTES / stride).max(1))
-        .min(wanted.max(1))
 }
 
 /// Reads the committed cells at `keys` into `out`, item `i` from `keys[i]`,
@@ -164,25 +158,26 @@ pub(crate) fn read_cells<T: VarlitMatrixBlock>(
         .and_then(|n| n.checked_add(batch as u64 * KEY_ORDER_BYTES))
         .ok_or(Error::InvalidMatrixLayout)?;
     let mut remaining = decode_budget(spec, inline)?;
-    let mut scratch = zeroed(batch * stride, "matrix cell batch payload")?;
-    let mut done = 0;
-    while done < keys.len() {
-        let count = batch.min(keys.len() - done);
-        let bytes = &mut scratch[..count * stride];
-        tiles.read_cells(source, T::ID, &keys[done..done + count], bytes)?;
-        for (target, payload) in out[done..done + count]
-            .iter_mut()
-            .zip(bytes.chunks_exact(stride))
-        {
-            *target = crate::codec::Decoder::decode_from_slice_accounted(
-                payload,
-                T::ENDIAN.unwrap_or(spec.endian),
-                &mut remaining,
-            )?;
+    tiles.with_payloads(batch * stride, |scratch| {
+        let mut done = 0;
+        while done < keys.len() {
+            let count = batch.min(keys.len() - done);
+            let bytes = &mut scratch[..count * stride];
+            tiles.read_cells(source, T::ID, &keys[done..done + count], bytes)?;
+            for (target, payload) in out[done..done + count]
+                .iter_mut()
+                .zip(bytes.chunks_exact(stride))
+            {
+                *target = crate::codec::Decoder::decode_from_slice_accounted(
+                    payload,
+                    T::ENDIAN.unwrap_or(spec.endian),
+                    &mut remaining,
+                )?;
+            }
+            done += count;
         }
-        done += count;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Encoded counterpart of [`read_cells`]: one snapshot for the whole call.
@@ -222,34 +217,35 @@ pub(crate) fn read_region<T: VarlitMatrixBlock>(
         .and_then(|n| n.checked_add((batch * stride) as u64))
         .ok_or(Error::InvalidMatrixLayout)?;
     let mut remaining = decode_budget(spec, inline)?;
-    let mut scratch = zeroed(batch * stride, "matrix region payload")?;
-    let mut done = 0usize;
-    let mut next = Some(start);
-    while done < out.len() {
-        let Some(at) = next else { break };
-        let want = batch.min(out.len() - done);
-        let bytes = &mut scratch[..want * stride];
-        let (filled, after) = tiles.read_region(source, T::ID, region, at, bytes)?;
-        for (target, payload) in out[done..done + filled]
-            .iter_mut()
-            .zip(bytes.chunks_exact(stride))
-        {
-            *target = crate::codec::Decoder::decode_from_slice_accounted(
-                payload,
-                T::ENDIAN.unwrap_or(spec.endian),
-                &mut remaining,
-            )?;
+    tiles.with_payloads(batch * stride, |scratch| {
+        let mut done = 0usize;
+        let mut next = Some(start);
+        while done < out.len() {
+            let Some(at) = next else { break };
+            let want = batch.min(out.len() - done);
+            let bytes = &mut scratch[..want * stride];
+            let (filled, after) = tiles.read_region(source, T::ID, region, at, bytes)?;
+            for (target, payload) in out[done..done + filled]
+                .iter_mut()
+                .zip(bytes.chunks_exact(stride))
+            {
+                *target = crate::codec::Decoder::decode_from_slice_accounted(
+                    payload,
+                    T::ENDIAN.unwrap_or(spec.endian),
+                    &mut remaining,
+                )?;
+            }
+            done += filled;
+            next = after;
         }
-        done += filled;
-        next = after;
-    }
-    if out.is_empty() {
-        // Nothing asked for: validate the region, report where it starts.
-        tiles.read_region(source, T::ID, region, start, &mut [])?;
-    }
-    Ok(MatrixPage {
-        filled: done,
-        next: next.map(|key| MatrixCursor::new(region, key)),
+        if out.is_empty() {
+            // Nothing asked for: validate the region, report where it starts.
+            tiles.read_region(source, T::ID, region, start, &mut [])?;
+        }
+        Ok(MatrixPage {
+            filled: done,
+            next: next.map(|key| MatrixCursor::new(region, key)),
+        })
     })
 }
 

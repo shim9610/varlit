@@ -148,6 +148,8 @@ pub struct VarlitIndexedReader {
     record_cache: std::cell::RefCell<crate::file::ChunkCache>,
     /// Scratch for the small fields of a record a lookup decodes.
     payload_scratch: std::cell::RefCell<Vec<u8>>,
+    /// Where a lookup builds the index key it searches for.
+    key_scratch: std::cell::RefCell<Vec<u8>>,
 }
 
 /// What a reader holds of the primary past its confirmed sidecar: the
@@ -337,6 +339,7 @@ impl VarlitIndexedReader {
             tiles,
             record_cache: Default::default(),
             payload_scratch: Default::default(),
+            key_scratch: Default::default(),
         })
     }
 
@@ -696,7 +699,14 @@ impl VarlitIndexedReader {
                 return Ok(pointer);
             }
         }
-        self.index.lookup_pointer(T::ID, key).map_err(index_error)
+        // The handle's key buffer is reused across lookups; a re-entered
+        // lookup would build its key in a buffer of its own.
+        let mut own = Vec::new();
+        let mut kept = self.key_scratch.try_borrow_mut().ok();
+        let scratch = kept.as_deref_mut().unwrap_or(&mut own);
+        self.index
+            .lookup_pointer_through(T::ID, key, scratch)
+            .map_err(index_error)
     }
 
     fn ensure_indexed<T: VarlitKeyedBlock>(&self) -> Result<()> {

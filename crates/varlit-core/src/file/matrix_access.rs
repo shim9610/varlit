@@ -189,13 +189,16 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::MaterializedBytes, T::SLOT_STRIDE)?;
-        out.clear();
-        out.try_reserve_exact(T::SLOT_STRIDE as usize)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix cell payload",
-                requested: T::SLOT_STRIDE,
-            })?;
-        out.resize(T::SLOT_STRIDE as usize, 0);
+        let stride = T::SLOT_STRIDE as usize;
+        if out.capacity() < stride {
+            out.clear();
+            out.try_reserve_exact(stride)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "matrix cell payload",
+                    requested: T::SLOT_STRIDE,
+                })?;
+        }
+        out.resize(stride, 0);
         let (tiles, source) = self.tiles_read()?;
         tiles.read_cell(&source, T::ID, key, out)
     }
@@ -207,24 +210,30 @@ impl VarlitFile {
         key: MatrixKey,
         out: &mut T,
     ) -> Result<()> {
-        let mut payload = Vec::new();
-        self.matrix_payload_into::<T>(key, &mut payload)?;
-        let materialized_limit = self
-            .spec
-            .read_limits
-            .require(ReadLimitKey::MaterializedBytes)?
-            .unwrap_or(u64::MAX);
-        let decode_limit = materialized_limit.checked_sub(payload.len() as u64).ok_or(
-            Error::ResourceArithmeticOverflow {
-                resource: "materialized bytes",
-            },
-        )?;
-        crate::codec::Decoder::decode_from_slice_limited_into(
-            &payload,
-            T::ENDIAN.unwrap_or(self.spec.endian),
-            decode_limit,
-            out,
-        )
+        // The slot is staged in the handle's scratch, not a buffer made
+        // for this call.
+        let mut payload = lend_scratch(&self.record_cache);
+        let decoded = (|| {
+            self.matrix_payload_into::<T>(key, &mut payload)?;
+            let materialized_limit = self
+                .spec
+                .read_limits
+                .require(ReadLimitKey::MaterializedBytes)?
+                .unwrap_or(u64::MAX);
+            let decode_limit = materialized_limit.checked_sub(payload.len() as u64).ok_or(
+                Error::ResourceArithmeticOverflow {
+                    resource: "materialized bytes",
+                },
+            )?;
+            crate::codec::Decoder::decode_from_slice_limited_into(
+                &payload,
+                T::ENDIAN.unwrap_or(self.spec.endian),
+                decode_limit,
+                out,
+            )
+        })();
+        return_scratch(&self.record_cache, payload);
+        decoded
     }
 
     pub fn matrix_cell_payload<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<Vec<u8>> {

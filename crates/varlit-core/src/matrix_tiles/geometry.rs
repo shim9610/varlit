@@ -142,6 +142,66 @@ pub(crate) fn seal_bitmap(unit: &mut [u8]) {
     unit[at..].copy_from_slice(&crc.to_le_bytes());
 }
 
+/// Where tiles already looked up are: a fixed table made when a matrix is
+/// opened, one slot per tile its extents hold now (within bounds), indexed
+/// by a hash of the tile. Tiles never move once allocated, so an entry is
+/// right for as long as it is there; a colliding tile replaces it, and a
+/// lookup that misses walks the directory again. Nothing here grows.
+pub(crate) struct TileCache {
+    /// `(block + 1, tile, payload offset)`; block 0 marks an empty slot.
+    slots: Vec<(u32, u64, u64)>,
+}
+
+impl TileCache {
+    const MIN_SLOTS: u64 = 64;
+    const MAX_SLOTS: u64 = 1 << 16;
+
+    pub(crate) fn for_geometry(geom: &Geometry) -> Result<Self> {
+        let mut tiles = 0u64;
+        for block in &geom.blocks {
+            let rows = geom.dims[0].div_ceil(block.tile[0]).max(1);
+            let cols = geom.dims[1].div_ceil(block.tile[1]).max(1);
+            tiles = tiles.saturating_add(rows.saturating_mul(cols));
+        }
+        let len = tiles
+            .clamp(Self::MIN_SLOTS, Self::MAX_SLOTS)
+            .next_power_of_two() as usize;
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(len)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "matrix tile cache",
+                requested: (len * std::mem::size_of::<(u32, u64, u64)>()) as u64,
+            })?;
+        slots.resize(len, (0, 0, 0));
+        Ok(Self { slots })
+    }
+
+    fn slot(&self, block: usize, tile: u64) -> usize {
+        // Multiplicative hashing, top bits: every bit of the tile and of the
+        // block reaches them. The table length is a power of two.
+        let mixed = tile.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (block as u64 + 1).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        let bits = self.slots.len().trailing_zeros();
+        (mixed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - bits)) as usize
+    }
+
+    pub(crate) fn get(&self, block: usize, tile: u64) -> Option<u64> {
+        let (tag, key, at) = self.slots[self.slot(block, tile)];
+        (tag as usize == block + 1 && key == tile).then_some(at)
+    }
+
+    pub(crate) fn insert(&mut self, block: usize, tile: u64, at: u64) {
+        let slot = self.slot(block, tile);
+        self.slots[slot] = (block as u32 + 1, tile, at);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear(&mut self) {
+        self.slots.fill((0, 0, 0));
+    }
+}
+
 /// The whole matrix: dimensions, blocks, and the extra metadata area the
 /// matrix API lays out (commit flags, aux regions).
 #[derive(Clone, Debug, PartialEq, Eq)]

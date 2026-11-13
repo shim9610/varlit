@@ -1,9 +1,7 @@
 //! Reading a snapshot: the file as of the last checkpoint, with every range
 //! published since laid over it from the ring.
 
-use std::collections::HashMap;
-
-use super::geometry::{Geometry, TileCoord};
+use super::geometry::{Geometry, TileCache, TileCoord};
 use super::store::TileSource;
 use super::wal::{self, Ring, RingHeader, ScanEvent};
 use super::{DIR_FANOUT, DIR_LEVEL_BITS};
@@ -225,7 +223,7 @@ pub(crate) struct TileReader {
     /// The last header a read validated against.
     seen: RingHeader,
     /// Tiles never move once allocated, so a resolved one stays resolved.
-    tiles: HashMap<(usize, u64), u64>,
+    tiles: TileCache,
 }
 
 impl TileReader {
@@ -236,6 +234,7 @@ impl TileReader {
         source.read_at(meta, &mut fixed)?;
         let (base, len) = geom.decode_meta(&fixed)?;
         let ring = Ring { base, len };
+        let tiles = TileCache::for_geometry(&geom)?;
         let mut reader = Self {
             geom,
             meta,
@@ -244,7 +243,7 @@ impl TileReader {
             scanned_head: 0,
             overlay: Overlay::default(),
             seen: RingHeader::default(),
-            tiles: HashMap::new(),
+            tiles,
         };
         reader.rebuild(source)?;
         Ok(reader)
@@ -431,7 +430,7 @@ impl TileReader {
 
     /// A resolved tile from the cache, without reading anything.
     pub(crate) fn cached_tile(&self, block: usize, coord: TileCoord) -> Result<Option<u64>> {
-        Ok(self.tiles.get(&(block, coord.morton()?)).copied())
+        Ok(self.tiles.get(block, coord.morton()?))
     }
 
     /// The payload offset of `block`'s tile `coord`, if it exists.
@@ -442,16 +441,13 @@ impl TileReader {
         coord: TileCoord,
     ) -> Result<Option<u64>> {
         let key = coord.morton()?;
-        if let Some(found) = self.tiles.get(&(block, key)) {
-            return Ok(Some(*found));
+        if let Some(found) = self.tiles.get(block, key) {
+            return Ok(Some(found));
         }
         let root_at = self.meta + self.geom.root_at(block);
         let found = find_tile(root_at, coord, &mut |at, buf| self.read(source, at, buf))?;
-        if let Some(found) = found
-            && self.tiles.try_reserve(1).is_ok()
-        {
-            // A cache: when it cannot grow, the next lookup walks again.
-            self.tiles.insert((block, key), found);
+        if let Some(found) = found {
+            self.tiles.insert(block, key, found);
         }
         Ok(found)
     }

@@ -347,6 +347,6 @@ pub(crate) fn decode_record_into<T: VarlitBlock>(
         budget.consume(frame_limit - walk.remaining)?;
         return decoded;
     }
-    entry.read_logical_payload_snapshot_into(spec, snapshot, scratch)?;
+    entry.read_logical_payload_cached(spec, snapshot, scratch, cache)?;
     budget.decode_into(scratch, endian, out)
 }

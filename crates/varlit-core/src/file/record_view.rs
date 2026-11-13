@@ -300,19 +300,31 @@ pub(crate) fn decode_field<F: crate::VarlitDecode>(
     }
     spec.read_limits
         .check(ReadLimitKey::MaterializedBytes, span.len)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(span.len as usize)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "field value",
-            requested: span.len,
-        })?;
-    bytes.resize(span.len as usize, 0);
-    let page = read_span(spec, snapshot, entry, span, &mut bytes, cache)?;
-    if page.filled != bytes.len() {
-        return Err(Error::UnexpectedEof);
-    }
-    crate::codec::Decoder::decode_from_slice_limited(&bytes, span.endian, limit - span.len)
+    // Staged in the handle's scratch, not a buffer made for this call.
+    let mut bytes = lend_scratch(cache);
+    let decoded = (|| {
+        let len = span.len as usize;
+        if bytes.len() < len {
+            bytes
+                .try_reserve_exact(len - bytes.len())
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "field value",
+                    requested: span.len,
+                })?;
+            bytes.resize(len, 0);
+        }
+        let page = read_span(spec, snapshot, entry, span, &mut bytes[..len], cache)?;
+        if page.filled != len {
+            return Err(Error::UnexpectedEof);
+        }
+        crate::codec::Decoder::decode_from_slice_limited(
+            &bytes[..len],
+            span.endian,
+            limit - span.len,
+        )
+    })();
+    return_scratch(cache, bytes);
+    decoded
 }
 
 impl VarlitFile {

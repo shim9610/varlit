@@ -976,6 +976,63 @@ pub(super) fn encode_compression_envelope(
     Ok(payload)
 }
 
+/// [`decode_record_payload`] for a compressed record without chunks, into
+/// the caller's buffer and through a decompression context the caller
+/// keeps: nothing is allocated once both have been used.
+pub(super) fn decode_compressed_payload_into(
+    spec: FormatSpec,
+    entry: &RecordIndexEntry,
+    physical_payload: &[u8],
+    out: &mut Vec<u8>,
+    decompressor: &mut Option<crate::compression_buffers::Decompressor>,
+) -> Result<()> {
+    validate_record_entry(&spec, entry)?;
+    let compression = variable_compression_for_block(spec, entry.block_id)
+        .ok_or(Error::InvalidCompressionHeader)?;
+    let (algorithm, expected_len, compressed_payload) = match compression.header_mode {
+        CompressionHeaderMode::RecordExplicit => decode_compression_envelope(physical_payload)?,
+        CompressionHeaderMode::FileExplicit | CompressionHeaderMode::FormatContract => {
+            if entry.uncompressed_len_hint == 0 {
+                return Err(Error::InvalidCompressionHeader);
+            }
+            (
+                compression.algorithm,
+                u64::from(entry.uncompressed_len_hint),
+                physical_payload,
+            )
+        }
+    };
+    if expected_len > compression.max_uncompressed_len {
+        return Err(Error::DecompressedLengthLimitExceeded {
+            actual: expected_len,
+            limit: compression.max_uncompressed_len,
+        });
+    }
+    let len = usize::try_from(expected_len).map_err(|_| Error::LengthOverflow {
+        value: expected_len,
+    })?;
+    if out.capacity() < len {
+        out.clear();
+        out.try_reserve_exact(len)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "decompressed payload",
+                requested: expected_len,
+            })?;
+    }
+    out.resize(len, 0);
+    match algorithm {
+        CompressionAlgorithm::Zstd => {
+            if decompressor.is_none() {
+                *decompressor = Some(crate::compression_buffers::Decompressor::new()?);
+            }
+            decompressor
+                .as_mut()
+                .expect("set above")
+                .decompress_into(compressed_payload, out)
+        }
+    }
+}
+
 pub(super) fn decode_compression_envelope(
     payload: &[u8],
 ) -> Result<(CompressionAlgorithm, u64, &[u8])> {

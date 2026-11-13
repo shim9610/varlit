@@ -2816,6 +2816,7 @@ impl DiskIndexSnapshot {
         Ok(self.lookup_pointer(block_id, key)?.entry)
     }
 
+    #[cfg(test)]
     pub fn lookup_pointer<K: VarlitDiskKey>(
         &self,
         block_id: u32,
@@ -2825,6 +2826,42 @@ impl DiskIndexSnapshot {
         self.lookup_pointer_canonical(block_id, &encoded)
     }
 
+    /// [`Self::lookup_pointer`] building the key it looks up in `scratch`,
+    /// a buffer the caller keeps between lookups: the tag and the encoded
+    /// key are written there once, with nothing allocated for a key that
+    /// fits what the buffer already holds.
+    pub(crate) fn lookup_pointer_through<K: VarlitDiskKey>(
+        &self,
+        block_id: u32,
+        key: &K,
+        scratch: &mut Vec<u8>,
+    ) -> DiskIndexResult<DiskIndexRecordPointer> {
+        #[cfg(test)]
+        DISK_KEY_ENCODE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let mut composite = std::mem::take(scratch);
+        composite.clear();
+        composite
+            .try_reserve(DiskIndexKeyTag::ENCODED_LEN)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+        composite.extend_from_slice(&DiskIndexKeyTag::keyed(block_id).encode());
+        let mut encoder = crate::codec::Encoder::new_limited_appending(
+            Endian::Little,
+            u64::try_from(self.max_key_bytes).unwrap_or(u64::MAX),
+            "disk index key",
+            composite,
+        );
+        let encoded = key.encode_varlit(&mut encoder);
+        let composite = encoder.try_into_inner();
+        encoded?;
+        *scratch = composite?;
+        ensure_key_limit(
+            scratch.len() - DiskIndexKeyTag::ENCODED_LEN,
+            self.max_key_bytes,
+        )?;
+        self.lookup_composite(block_id, scratch)
+    }
+
+    #[cfg(test)]
     pub fn lookup_pointer_canonical(
         &self,
         block_id: u32,
@@ -2835,8 +2872,20 @@ impl DiskIndexSnapshot {
             return Err(DiskIndexError::KeyTableUnavailable);
         }
         let key = composite_key(block_id, canonical_key, self.max_key_bytes)?;
+        self.lookup_composite(block_id, &key)
+    }
+
+    /// Looks up a composite key (tag, then canonical key).
+    fn lookup_composite(
+        &self,
+        block_id: u32,
+        key: &[u8],
+    ) -> DiskIndexResult<DiskIndexRecordPointer> {
+        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
+            return Err(DiskIndexError::KeyTableUnavailable);
+        }
         let pin = self.pinned()?;
-        let Some(value) = pin.reader.get(pin.root, key.as_slice())? else {
+        let Some(value) = pin.reader.get(pin.root, key)? else {
             return Ok(DiskIndexRecordPointer {
                 entry: DiskIndexEntry::Missing,
                 target_block_id: block_id,

@@ -78,6 +78,73 @@ pub(crate) struct ChunkCache {
     /// so a walk over a record's chunks allocates them once.
     compressed: Vec<u8>,
     decompressor: Option<crate::compression_buffers::Decompressor>,
+    /// Scratch a read that has no caller buffer to stage in borrows for its
+    /// duration ([`lend_scratch`]).
+    scratch: Vec<u8>,
+    /// The read-ahead window paged walks frame records through.
+    window: Option<ReadAhead>,
+}
+
+/// The handle's read-ahead window for one walk, or a new one when it is
+/// out (or was lost to an earlier error).
+pub(crate) fn lend_window(cache: &std::cell::RefCell<ChunkCache>) -> Result<ReadAhead> {
+    match cache
+        .try_borrow_mut()
+        .ok()
+        .and_then(|mut cache| cache.window.take())
+    {
+        Some(window) => Ok(window),
+        None => ReadAhead::new(),
+    }
+}
+
+pub(crate) fn return_window(cache: &std::cell::RefCell<ChunkCache>, window: ReadAhead) {
+    if let Ok(mut cache) = cache.try_borrow_mut() {
+        cache.window = Some(window);
+    }
+}
+
+impl ChunkCache {
+    /// Reads and decodes an unchunked compressed record into `out` through
+    /// this handle's stored-bytes buffer and decompression context.
+    pub(crate) fn decode_compressed_into(
+        &mut self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+        entry: &RecordIndexEntry,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        let stored = staging(&mut self.compressed, entry.payload_len as usize)?;
+        snapshot.read_exact_at(entry.payload_offset, stored)?;
+        entry.verify_snapshot_record(spec, snapshot, stored)?;
+        header_codec::decode_compressed_payload_into(
+            spec,
+            entry,
+            stored,
+            out,
+            &mut self.decompressor,
+        )
+    }
+}
+
+/// Takes the handle's scratch buffer for one call. A call that finds it
+/// already lent (a read re-entered from a codec) gets an empty one of its
+/// own, so nothing is ever shared.
+pub(crate) fn lend_scratch(cache: &std::cell::RefCell<ChunkCache>) -> Vec<u8> {
+    cache
+        .try_borrow_mut()
+        .map(|mut cache| std::mem::take(&mut cache.scratch))
+        .unwrap_or_default()
+}
+
+/// Returns a buffer taken with [`lend_scratch`], keeping the larger of it
+/// and whatever is there.
+pub(crate) fn return_scratch(cache: &std::cell::RefCell<ChunkCache>, scratch: Vec<u8>) {
+    if let Ok(mut cache) = cache.try_borrow_mut()
+        && cache.scratch.capacity() < scratch.capacity()
+    {
+        cache.scratch = scratch;
+    }
 }
 
 impl std::fmt::Debug for ChunkCache {
@@ -372,7 +439,11 @@ fn fill_compressed(
     let key = CacheKey::of(entry, WHOLE);
     if cache.key != Some(key) {
         cache.key = None;
-        entry.read_logical_payload_snapshot_into(spec, snapshot, &mut cache.bytes)?;
+        entry.logical_payload_len_snapshot(spec, snapshot)?;
+        let mut logical = std::mem::take(&mut cache.bytes);
+        let decoded = cache.decode_compressed_into(spec, snapshot, entry, &mut logical);
+        cache.bytes = logical;
+        decoded?;
         cache.key = Some(key);
     }
     let logical = &cache.bytes;
