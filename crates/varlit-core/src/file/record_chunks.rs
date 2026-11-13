@@ -266,6 +266,7 @@ pub(crate) fn read_chunk(
 /// as they are (not compressed), every chunk verified where it lies: they
 /// are back to back after the table, so nothing is copied. `None` for a
 /// payload with compressed chunks.
+#[cfg(feature = "mmap")]
 pub(crate) fn chunked_in_place(payload: &[u8], max: u64) -> Result<Option<&[u8]>> {
     let header = ChunkHeader::decode(payload)?;
     if header.algorithm.is_some() {

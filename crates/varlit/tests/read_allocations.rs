@@ -135,7 +135,8 @@ macro_rules! blob {
 /// A short record (one checksum over all of it) and a long one (chunked).
 const SIZES: [usize; 2] = [900, 300_000];
 
-type Case = (&'static str, u64);
+type Label = std::borrow::Cow<'static, str>;
+type Case = (Label, u64);
 
 fn report(title: &str, cases: &[Case]) {
     let mut failed = false;
@@ -170,7 +171,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
     let mut scratch = Vec::new();
     let mut tick = Tick::empty();
     cases.push((
-        "fixed decode_block_into",
+        "fixed decode_block_into".into(),
         steady(8, || {
             r.decode_block_into(&ticks[0], &mut scratch, &mut tick)
         })?,
@@ -178,8 +179,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
     for (entry, label) in entries.iter().zip(["short", "chunked"]) {
         let mut out = Blob::empty();
         let mut scratch = Vec::new();
-        let name =
-            |what: &str| -> &'static str { Box::leak(format!("{label} {what}").into_boxed_str()) };
+        let name = |what: &str| -> Label { format!("{label} {what}").into() };
         let n = name("decode_block_into");
         cases.push((
             n,
@@ -243,7 +243,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
     let mut page_out = vec![Blob::empty(); 2];
     let mut payload = Vec::new();
     cases.push((
-        "paged blocks",
+        "paged blocks".into(),
         steady(4, || {
             let mut page = r.blocks::<Blob>(&mut payload, &mut page_out)?;
             while let Some(next) = page.next {
@@ -254,7 +254,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
     ));
     let mut index_page = vec![varlit::RecordIndexEntry::default(); 2];
     cases.push((
-        "paged index_entries",
+        "paged index_entries".into(),
         steady(4, || {
             let mut page = r.index_entries(&mut index_page)?;
             while let Some(next) = page.next {
@@ -265,21 +265,21 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
     ));
     let mut all_entries = Vec::new();
     cases.push((
-        "index_entries_into",
+        "index_entries_into".into(),
         steady(4, || r.index_entries_into(&mut all_entries))?,
     ));
     cases.push((
-        "block_entries_into",
+        "block_entries_into".into(),
         steady(4, || r.block_entries_into::<Blob>(&mut all_entries))?,
     ));
     let mut decoded: Vec<Blob> = Vec::new();
     cases.push((
-        "decode_blocks_into",
+        "decode_blocks_into".into(),
         steady(4, || r.decode_blocks_into::<Blob>(&mut decoded))?,
     ));
     let mut raw = Vec::new();
     cases.push((
-        "read_payload_into chunked",
+        "read_payload_into chunked".into(),
         steady(4, || r.read_payload_into(&entries[1], &mut raw))?,
     ));
     // A keyed pass decodes each record to read its key. It does so into one
@@ -299,9 +299,9 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
         per_pass.iter().all(|count| *count <= 8),
         "a keyed pass allocated more than its one scratch value: {per_pass:?}"
     );
-    cases.push(("verify_all", steady(4, || r.verify_all().map(drop))?));
+    cases.push(("verify_all".into(), steady(4, || r.verify_all().map(drop))?));
     cases.push((
-        "scan",
+        "scan".into(),
         steady(4, || {
             for event in r.scan() {
                 event?;
@@ -316,7 +316,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
         let mut out = Blob::empty();
         let mut scratch = Vec::new();
         for (entry, label) in entries.iter().zip(["mmap short", "mmap chunked"]) {
-            let n: &'static str = Box::leak(format!("{label} decode_block_into").into_boxed_str());
+            let n: Label = format!("{label} decode_block_into").into();
             cases.push((
                 n,
                 steady(8, || {
@@ -325,7 +325,7 @@ fn settled_native_reads_allocate_nothing() -> varlit::Result<()> {
             ));
         }
         cases.push((
-            "mmap payload_window",
+            "mmap payload_window".into(),
             steady(8, || mapped.payload_window(&entries[0]).map(drop))?,
         ));
     }
@@ -351,8 +351,7 @@ fn settled_compressed_reads_allocate_nothing() -> varlit::Result<()> {
     for (entry, label) in entries.iter().zip(["short", "chunked"]) {
         let mut out = PBlob::empty();
         let mut scratch = Vec::new();
-        let name =
-            |what: &str| -> &'static str { Box::leak(format!("{label} {what}").into_boxed_str()) };
+        let name = |what: &str| -> Label { format!("{label} {what}").into() };
         let n = name("decode_block_into");
         cases.push((
             n,
@@ -397,21 +396,21 @@ fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
     let mut cases: Vec<Case> = Vec::new();
     let mut out = Blob::empty();
     cases.push((
-        "get short",
+        "get short".into(),
         steady(8, || r.get_blob(&0, &mut out).map(drop))?,
     ));
     cases.push((
-        "get chunked",
+        "get chunked".into(),
         steady(8, || r.get_blob(&1, &mut out).map(drop))?,
     ));
     cases.push((
-        "lookup_entry",
+        "lookup_entry".into(),
         steady(8, || r.lookup_entry::<Blob>(&1).map(drop))?,
     ));
     let entry = r.lookup_entry::<Blob>(&1)?.expect("present");
     let mut buf = vec![0u8; 4096];
     cases.push((
-        "indexed read_record_into",
+        "indexed read_record_into".into(),
         steady(4, || {
             let mut page = r.read_record_into(&entry, &mut buf)?;
             while let Some(next) = page.next {
@@ -421,7 +420,7 @@ fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
         })?,
     ));
     cases.push((
-        "indexed view_block + decode_field",
+        "indexed view_block + decode_field".into(),
         steady(8, || {
             let view = r.view_block::<Blob>(&entry)?;
             assert_eq!(r.decode_field::<u64>(&entry, view.id)?, 1);
@@ -429,7 +428,7 @@ fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
         })?,
     ));
     cases.push((
-        "indexed verify_all",
+        "indexed verify_all".into(),
         steady(4, || r.verify_all().map(drop))?,
     ));
     drop(r);
@@ -450,7 +449,10 @@ fn settled_indexed_and_stream_reads_allocate_nothing() -> varlit::Result<()> {
     let before = ALLOCATIONS.with(Cell::get);
     assert!(cursor.next_into(&mut out)?);
     assert!(cursor.next_into(&mut out)?);
-    cases.push(("stream next_into", ALLOCATIONS.with(Cell::get) - before));
+    cases.push((
+        "stream next_into".into(),
+        ALLOCATIONS.with(Cell::get) - before,
+    ));
     report("indexed", &cases);
     Ok(())
 }
@@ -484,14 +486,14 @@ fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
     let mut cell = Slot::empty();
     let mut at = 0u64;
     cases.push((
-        "read_matrix_cell",
+        "read_matrix_cell".into(),
         steady(64, || {
             at = (at + 37) % 256;
             r.read_matrix_cell::<Slot>(MatrixKey::new(at / 16, at % 16), &mut cell)
         })?,
     ));
     cases.push((
-        "matrix_cell_status",
+        "matrix_cell_status".into(),
         steady(16, || {
             at = (at + 37) % 256;
             r.matrix_cell_status::<Slot>(MatrixKey::new(at / 16, at % 16))
@@ -501,38 +503,38 @@ fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
     let mut slots = vec![Slot::empty(); 16 * 16];
     let mut raw = vec![0u8; 16 * 16 * 8];
     cases.push((
-        "read_matrix_run_into",
+        "read_matrix_run_into".into(),
         steady(8, || {
             r.read_matrix_run_into::<Slot>(MatrixKey::new(3, 2), &mut slots[..13])
         })?,
     ));
     cases.push((
-        "read_matrix_run_bytes_into",
+        "read_matrix_run_bytes_into".into(),
         steady(8, || {
             r.read_matrix_run_bytes_into::<Slot>(MatrixKey::new(3, 2), &mut raw[..13 * 8])
         })?,
     ));
     cases.push((
-        "read_matrix_column_into",
+        "read_matrix_column_into".into(),
         steady(8, || {
             r.read_matrix_column_into::<Slot>(MatrixKey::new(1, 5), &mut slots[..12])
         })?,
     ));
     cases.push((
-        "read_matrix_row_into",
+        "read_matrix_row_into".into(),
         steady(8, || r.read_matrix_row_into::<Slot>(9, &mut slots[..16]))?,
     ));
     let region = varlit::MatrixRegion::new(2..14, 3..15);
     // Whole in one page, and in pages of seven cells.
     cases.push((
-        "read_matrix_region_into",
+        "read_matrix_region_into".into(),
         steady(8, || {
             r.read_matrix_region_into::<Slot>(region, &mut slots)
                 .map(drop)
         })?,
     ));
     cases.push((
-        "read_matrix_region_from pages",
+        "read_matrix_region_from pages".into(),
         steady(4, || {
             let mut page = r.read_matrix_region_into::<Slot>(region, &mut slots[..7])?;
             while let Some(next) = page.next {
@@ -542,7 +544,7 @@ fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
         })?,
     ));
     cases.push((
-        "read_matrix_region_bytes_into",
+        "read_matrix_region_bytes_into".into(),
         steady(8, || {
             r.read_matrix_region_bytes_into::<Slot>(region, &mut raw)
                 .map(drop)
@@ -552,13 +554,13 @@ fn settled_matrix_reads_allocate_nothing() -> varlit::Result<()> {
         .map(|i| MatrixKey::new((i * 7) % 16, (i * 11) % 16))
         .collect();
     cases.push((
-        "read_matrix_cells_into",
+        "read_matrix_cells_into".into(),
         steady(8, || {
             r.read_matrix_cells_into::<Slot>(&keys, &mut slots[..keys.len()])
         })?,
     ));
     cases.push((
-        "read_matrix_cells_bytes_into",
+        "read_matrix_cells_bytes_into".into(),
         steady(8, || {
             r.read_matrix_cells_bytes_into::<Slot>(&keys, &mut raw[..keys.len() * 8])
         })?,
