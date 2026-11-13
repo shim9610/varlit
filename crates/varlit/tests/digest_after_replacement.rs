@@ -25,6 +25,8 @@
 //! stops opening, so this is data loss, not a degraded index.
 
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -196,7 +198,7 @@ fn a_checkpoint_format_keeps_the_in_place_route() -> varlit::Result<()> {
     drop(file);
 
     let reopened = checkpointed.open_readonly(&path)?;
-    let blocks = reopened.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(reopened, Line)?;
     assert_eq!(blocks.len(), 64);
     let mut line = Line::empty();
     assert!(blocks.get(0, &mut line)?);

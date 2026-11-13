@@ -26,12 +26,14 @@
 //! option is off.
 
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 /// Every record of a block collection, in order, through the caller-owned cursor.
 fn collect<T: VarlitBlock + VarlitEmpty + Clone>(
-    blocks: varlit::BlockVec<T>,
+    blocks: crate::pages::Blocks<T>,
 ) -> varlit::Result<Vec<T>> {
     let mut all = Vec::new();
     let mut item = T::empty();
@@ -252,7 +254,7 @@ fn the_trailing_word_is_outside_the_checksum_only_when_the_option_is_on() -> var
                 .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
         );
         let file = varlit::VarlitFile::open_readonly(spec, path)?;
-        Ok(file.blocks::<Reading>()?.len())
+        Ok(crate::pages::all_blocks!(file, Reading)?.len())
     }
 
     let directory = tempfile::tempdir()?;
@@ -299,7 +301,7 @@ fn the_header_checksum_policy_is_unaffected() -> varlit::Result<()> {
             .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
     );
     let file = varlit::VarlitFile::open_readonly(spec, &path)?;
-    assert_eq!(file.blocks::<Reading>()?.len(), 6);
+    assert_eq!(crate::pages::all_blocks!(file, Reading)?.len(), 6);
     Ok(())
 }
 
@@ -366,7 +368,7 @@ fn a_marked_record_stays_readable_and_says_it_is_dead() -> varlit::Result<()> {
     }
 
     // Advisory: the record is still there, still read back, still correct.
-    let readings = collect(file.blocks::<Reading>()?)?;
+    let readings = collect(crate::pages::all_blocks!(file, Reading)?)?;
     assert_eq!(readings.len(), 6);
     assert_eq!(readings[2], Reading { value: 2 });
     Ok(())
@@ -714,7 +716,7 @@ fn a_crashed_tail_is_marked_dead_instead_of_truncated() -> varlit::Result<()> {
     // marker cannot retroactively commit anything.
     assert!(std::fs::metadata(&path)?.len() > with_tail);
     let file = varlit::VarlitFile::open_readonly(Marked::spec(), &path)?;
-    let readings = collect(file.blocks::<Reading>()?)?;
+    let readings = collect(crate::pages::all_blocks!(file, Reading)?)?;
     assert_eq!(readings.len(), 7, "all seven records survived");
     assert!(records(&file)? >= 7);
     for (index, offset) in tail.iter().enumerate() {
@@ -853,13 +855,13 @@ fn marking_between_appends_preserves_records_and_a_live_reader() -> varlit::Resu
     writer.flush()?;
     assert!(reader.record_is_dead(first.record_offset)?);
     assert_eq!(
-        collect(reader.blocks::<Reading>()?)?,
+        collect(crate::pages::all_blocks!(reader, Reading)?)?,
         vec![Reading { value: 11 }]
     );
     drop(writer);
     let reopened = varlit::VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
-        collect(reopened.blocks::<Reading>()?)?,
+        collect(crate::pages::all_blocks!(reopened, Reading)?)?,
         vec![Reading { value: 11 }, Reading { value: 22 }]
     );
     assert!(reopened.record_is_dead(first.record_offset)?);
@@ -997,7 +999,10 @@ fn marked_tail_recovery_frames_linearly_at_two_cardinalities() -> varlit::Result
         }
         drop(recovered);
         let reopened = Marked::spec().open_readonly(&path)?;
-        assert_eq!(reopened.blocks::<Reading>()?.len(), count as usize + 1);
+        assert_eq!(
+            crate::pages::all_blocks!(reopened, Reading)?.len(),
+            count as usize + 1
+        );
     }
     Ok(())
 }

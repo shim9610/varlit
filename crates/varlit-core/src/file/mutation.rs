@@ -51,15 +51,14 @@ impl VarlitFile {
                 "defragment is not supported for custom physical layouts",
             ));
         }
-        if self.matrix.is_some() {
+        if self.spec.has_matrix_blocks() {
             return Err(Error::InvalidFormatSpec(
                 "defragment is not supported for matrix storage",
             ));
         }
-        let _ = self.resident_directory("defragment")?;
         self.ensure_generation_rewrite_allowed()?;
 
-        let bytes_before = self.file.metadata()?.len();
+        let bytes_before = self.file.physical_len()?;
         let mut new_index = RewriteDirectory::new(self.spec);
         // One entry per record, per chain: a survivor maps its old offset to
         // its new one, and a dropped record inherits whatever its own
@@ -73,14 +72,20 @@ impl VarlitFile {
         let mut dropped = 0usize;
         let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
         let prepare_result = (|| -> Result<()> {
-            if let Ok(metadata) = self.file.metadata() {
-                temp_file.set_permissions(metadata.permissions())?;
+            if let Ok(permissions) = self.file.permissions() {
+                temp_file.raw().set_permissions(permissions)?;
             }
             let replacement_extensions =
                 header_extensions_for_replacement(self.spec, &self.header_extensions)?;
             write_native_file_header(&mut temp_file, self.spec, &replacement_extensions)?;
+            // The replacement carries this spec's anchors from its append log
+            // on, as its header now says.
+            temp_file.set_layout(self.spec.effective_anchors().layout(rewrite_append_start));
             let mut source_end = rewrite_append_start;
-            for source_entry in self.index.iter() {
+            let records = self.resident_directory("defragment")?;
+            let mut source_window = SourceWindow::new();
+            let mut rewrite_summary = RewriteSummary::new();
+            for source_entry in records.iter() {
                 let source_entry = source_entry?;
                 let old_offset = source_entry.record_offset;
                 // Prove directory coverage while copying, including records
@@ -154,6 +159,8 @@ impl VarlitFile {
                 updated = rewrite_replacement_record_streaming(
                     self.spec,
                     &self.snapshot,
+                    &mut source_window,
+                    &rewrite_summary,
                     &mut temp_file,
                     updated,
                     payload,
@@ -174,6 +181,7 @@ impl VarlitFile {
                         .last()
                         .is_none_or(|last| last.record_offset < updated.record_offset)
                 );
+                rewrite_summary.note(&updated)?;
                 new_index.push(updated)?;
             }
             if source_end != self.snapshot.len() {
@@ -236,7 +244,7 @@ impl VarlitFile {
         Ok(DefragmentReport {
             records_dropped: dropped,
             bytes_before,
-            bytes_after: self.file.metadata()?.len(),
+            bytes_after: self.file.physical_len()?,
         })
     }
 
@@ -251,7 +259,7 @@ impl VarlitFile {
                 "replacement is not supported for custom physical layouts",
             ));
         }
-        if self.matrix.is_some() || T::KIND == BlockKind::Matrix {
+        if self.spec.has_matrix_blocks() || T::KIND == BlockKind::Matrix {
             return Err(Error::InvalidFormatSpec(
                 "replacement is not supported for matrix storage",
             ));
@@ -260,8 +268,10 @@ impl VarlitFile {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         // resolution and the target-version refusal are one step, and
         // there is no other way to address the target. See `ReplacementTarget`.
-        let target_position = ReplacementTarget::resolve::<T>(&self.index, index)?.position();
-        let target = self.index.entry_at(target_position)?;
+        let resolved =
+            ReplacementTarget::resolve::<T>(&self.resident_directory("replace_block")?, index)?;
+        let target_position = resolved.position();
+        let target = resolved.entry().clone();
         let mut materialization = MaterializationBudget::new(self.spec);
         let old_logical_len = target.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
         materialization.consume(old_logical_len)?;
@@ -312,8 +322,8 @@ impl VarlitFile {
         let mut segment_covered_start: Option<u64> = None;
         let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
         let prepare_result = (|| -> Result<()> {
-            if let Ok(metadata) = self.file.metadata() {
-                temp_file.set_permissions(metadata.permissions())?;
+            if let Ok(permissions) = self.file.permissions() {
+                temp_file.raw().set_permissions(permissions)?;
             }
             // Write back the region this file carries, not the one `spec`
             // would generate: regenerating drops any block this build does not
@@ -323,7 +333,13 @@ impl VarlitFile {
             let replacement_extensions =
                 header_extensions_for_replacement(self.spec, &self.header_extensions)?;
             write_native_file_header(&mut temp_file, self.spec, &replacement_extensions)?;
-            for (position, source_entry) in self.index.iter().enumerate() {
+            // The replacement carries this spec's anchors from its append log
+            // on, as its header now says.
+            temp_file.set_layout(self.spec.effective_anchors().layout(rewrite_append_start));
+            let records = self.resident_directory("replace_block")?;
+            let mut source_window = SourceWindow::new();
+            let mut rewrite_summary = RewriteSummary::new();
+            for (position, source_entry) in records.iter().enumerate() {
                 let source_entry = source_entry?;
                 let mut updated = source_entry.clone();
                 let checkpoint_payload;
@@ -379,6 +395,8 @@ impl VarlitFile {
                 updated = rewrite_replacement_record_streaming(
                     self.spec,
                     &self.snapshot,
+                    &mut source_window,
+                    &rewrite_summary,
                     &mut temp_file,
                     updated,
                     payload,
@@ -400,6 +418,7 @@ impl VarlitFile {
                         .last()
                         .is_none_or(|last| last.record_offset < updated.record_offset)
                 );
+                rewrite_summary.note(&updated)?;
                 new_index.push(updated)?;
             }
             temp_file.flush()?;
@@ -480,7 +499,7 @@ impl VarlitFile {
     /// published file. This is a format-level refusal rather than a per-block
     /// one, because the loss is of blocks the caller did not name.
     fn ensure_generation_rewrite_allowed(&self) -> Result<()> {
-        if self.matrix.is_some() {
+        if self.spec.has_matrix_blocks() {
             return Err(Error::InvalidFormatSpec(
                 "record generation replacement is not supported for matrix storage",
             ));
@@ -634,7 +653,64 @@ impl VarlitFile {
     #[inline(never)]
     fn require_uncached_native_boundary(&mut self, record_offset: u64) -> Result<()> {
         let append_start = append_log_start_for_file(self)?;
+        // A handle without a list proves the boundary from the nearest anchor
+        // at or before it: the anchor names the record spanning it, written by
+        // the writer and not reachable from user payload, so walking forward
+        // from that record's start reaches every boundary up to the target.
+        // At most one anchor spacing is framed, wherever the target lies.
+        if !self.index.is_retained()
+            && record_offset >= append_start
+            && record_offset < self.snapshot.len()
+            && !self.index.boundary_cached(record_offset)?
+            && let Some(start) = self.anchored_walk_start(record_offset)?
+            && start > self.index.boundary_frontier().unwrap_or(append_start)
+        {
+            return self.walk_to_boundary(start, record_offset);
+        }
         self.index.verify_boundary(append_start, record_offset)
+    }
+
+    /// Where a boundary walk to `offset` may start: the record spanning the
+    /// nearest intact anchor at or before it. `None` before the first anchor,
+    /// without anchors, or when that anchor is damaged, which leaves the
+    /// caller on the cached proof.
+    fn anchored_walk_start(&self, offset: u64) -> Result<Option<u64>> {
+        let Some(layout) = self.file.anchor_layout() else {
+            return Ok(None);
+        };
+        let k = layout.anchors_before(offset.saturating_add(1));
+        if k == 0 {
+            return Ok(None);
+        }
+        let append_start = append_log_start_for_file(self)?;
+        Ok(self
+            .snapshot
+            .anchor(k)?
+            .map(|anchor| anchor.record_start)
+            .filter(|start| *start >= append_start && *start <= offset))
+    }
+
+    /// Frames forward from `start` and succeeds only if a record begins at
+    /// exactly `offset`.
+    fn walk_to_boundary(&self, start: u64, offset: u64) -> Result<()> {
+        let mut window = crate::file::ReadAhead::new()?;
+        let mut at = start;
+        while at < offset {
+            let entry = window.frame(&self.snapshot, self.spec, at)?;
+            validate_record_entry(&self.spec, &entry)?;
+            let end = entry.checked_physical_end()?;
+            if end <= at || end > self.snapshot.len() {
+                return Err(Error::CorruptTail { offset: at });
+            }
+            at = end;
+        }
+        if at == offset {
+            Ok(())
+        } else {
+            Err(Error::InvalidCanonicalEncoding(
+                "offset is not a native record boundary",
+            ))
+        }
     }
 
     #[inline]
@@ -691,7 +767,9 @@ impl VarlitFile {
         }
         // resolution and the target-version refusal are one step, and
         // there is no other way to address the target. See `ReplacementTarget`.
-        let target_position = ReplacementTarget::resolve::<T>(&self.index, index)?.position();
+        let resolved =
+            ReplacementTarget::resolve::<T>(&self.resident_directory("replace_block")?, index)?;
+        let target_position = resolved.position();
 
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);
         let payload = encode_logical_payload_limited(self.spec, block, endian)?;
@@ -703,7 +781,7 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::LogicalPayloadLen, payload_len)?;
-        let old_len = self.index.entry_at(target_position)?.payload_len;
+        let old_len = resolved.entry().payload_len;
         if old_len != payload_len {
             return Err(Error::ReplaceSizeMismatch {
                 old: old_len,
@@ -714,7 +792,7 @@ impl VarlitFile {
         self.validate_source_generation()?;
 
         let sequence = self.sequence_state.available()?;
-        let entry = self.index.entry_at(target_position)?;
+        let entry = resolved.entry().clone();
         let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
         let footer = if let Some(footer_offset) = entry.footer_offset {
             self.snapshot
@@ -742,15 +820,25 @@ impl VarlitFile {
         let record_offset = entry.record_offset;
         let payload_offset = entry.payload_offset;
 
-        let mut new_index = RewriteDirectory::new(self.spec);
-        for (position, source) in self.index.iter().enumerate() {
-            let mut updated = source?;
-            if position == target_position {
-                updated.sequence = sequence;
-                updated.checksum = checksum;
+        // A handle that keeps a record list gets the new generation's list.
+        // One that keeps none needs nothing from a walk: the patch is the same
+        // size in the same place, so every offset, tail and segment position
+        // stands, and only the patched record is checked in the copy.
+        let new_index = if self.index.is_retained() {
+            let mut new_index = RewriteDirectory::new(self.spec);
+            let records = self.resident_directory("replace_block")?;
+            for (position, source) in records.iter().enumerate() {
+                let mut updated = source?;
+                if position == target_position {
+                    updated.sequence = sequence;
+                    updated.checksum = checksum;
+                }
+                new_index.push(updated)?;
             }
-            new_index.push(updated)?;
-        }
+            Some(new_index)
+        } else {
+            None
+        };
 
         // The copy below reproduces the header verbatim, warm region included,
         // and that table would describe a file whose true sequence maximum is
@@ -760,27 +848,58 @@ impl VarlitFile {
 
         let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
         let prepare_result = (|| -> Result<()> {
-            if let Ok(metadata) = self.file.metadata() {
-                temp_file.set_permissions(metadata.permissions())?;
+            if let Ok(permissions) = self.file.permissions() {
+                temp_file.raw().set_permissions(permissions)?;
             }
-            self.snapshot
-                .copy_range_to(0, self.snapshot.len(), &mut temp_file)?;
-            temp_file.seek(SeekFrom::Start(record_offset))?;
-            temp_file.write_all(&header_bytes)?;
-            temp_file.seek(SeekFrom::Start(payload_offset))?;
-            temp_file.write_all(&payload)?;
+            // A byte-for-byte copy, anchors included: the replacement has the
+            // same header and so the same layout, and only the patched record
+            // differs.
+            self.snapshot.copy_physical_to(temp_file.raw_mut())?;
+            temp_file.set_layout(self.file.anchor_layout());
+            // The copied anchors' summaries from the patched record on no
+            // longer describe the file: its sequence changes.
+            temp_file.clear_summaries_from(record_offset)?;
+            temp_file.overwrite_at(record_offset, &header_bytes)?;
+            temp_file.overwrite_at(payload_offset, &payload)?;
             if let Some((offset, cold)) = cold_tails.as_ref() {
-                temp_file.seek(SeekFrom::Start(*offset))?;
-                temp_file.write_all(cold)?;
+                temp_file.overwrite_at(*offset, cold)?;
             }
             temp_file.flush()?;
             temp_file.sync_all()?;
-            validate_generation_file(
-                self.spec,
-                &mut temp_file,
-                append_log_start_for_file(self)?,
-                &new_index,
-            )?;
+            match &new_index {
+                Some(new_index) => validate_generation_file(
+                    self.spec,
+                    &mut temp_file,
+                    append_log_start_for_file(self)?,
+                    new_index,
+                )?,
+                None => {
+                    // The copy is the validated snapshot byte for byte; what
+                    // changed is the one record, framed and checksummed here.
+                    let len = temp_file.len()?;
+                    let mut accounting = ScanAccounting::default();
+                    match read_record_entry_at(
+                        self.spec,
+                        &mut temp_file,
+                        len,
+                        record_offset,
+                        ScanChecks {
+                            partial_boundary: None,
+                            checksum_boundary: None,
+                            verify_checksums: true,
+                        },
+                        &mut accounting,
+                    )? {
+                        RecordRead::Entry(patched)
+                            if patched.sequence == sequence && patched.checksum == checksum => {}
+                        _ => {
+                            return Err(Error::InvalidCanonicalEncoding(
+                                "the patched record does not read back",
+                            ));
+                        }
+                    }
+                }
+            }
             Ok(())
         })();
         match prepare_result {
@@ -871,8 +990,8 @@ impl VarlitFile {
         }
         // resolution and the target-version refusal are one step, and
         // there is no other way to address the target. See `ReplacementTarget`.
-        let target = ReplacementTarget::resolve::<T>(&self.index, index)?;
-        let target_position = target.position();
+        let target =
+            ReplacementTarget::resolve::<T>(&self.resident_directory("replace_block")?, index)?;
         let payload = encode_logical_payload_limited(
             self.spec,
             block,
@@ -886,7 +1005,7 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::LogicalPayloadLen, payload_len)?;
-        let entry = self.index.entry_at(target_position)?;
+        let entry = target.entry().clone();
         if entry.payload_len != payload_len {
             return Err(Error::ReplaceSizeMismatch {
                 old: entry.payload_len,
@@ -896,7 +1015,7 @@ impl VarlitFile {
         self.ensure_generation_rewrite_allowed()?;
         self.validate_source_generation()?;
         let sequence = self.sequence_state.available()?;
-        let entry = self.index.entry_at(target_position)?;
+        let entry = target.entry().clone();
         let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
         let footer = if let Some(footer_offset) = entry.footer_offset {
             self.snapshot
@@ -973,7 +1092,7 @@ impl VarlitFile {
                 "replace is not supported for record-footer formats",
             ));
         }
-        if self.matrix.is_some() {
+        if self.spec.has_matrix_blocks() {
             return Err(Error::InvalidFormatSpec(
                 "native rewrite is not supported for matrix files",
             ));
@@ -982,7 +1101,9 @@ impl VarlitFile {
         crate::collections::ensure_registered_block::<T>(self.spec)?;
         // resolution and the target-version refusal are one step, and
         // there is no other way to address the target. See `ReplacementTarget`.
-        let target_position = ReplacementTarget::resolve::<T>(&self.index, index)?.position();
+        let resolved =
+            ReplacementTarget::resolve::<T>(&self.resident_directory("replace_block")?, index)?;
+        let target_position = resolved.position();
         let sequence = self.sequence_state.available()?;
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);
         let encoded = encode_logical_payload_limited(self.spec, block, endian)?;
@@ -999,8 +1120,8 @@ impl VarlitFile {
 
         let (temp_path, mut temp_file) = create_rewrite_temp_file(&self.path)?;
         let prepare_result = (|| -> Result<()> {
-            if let Ok(metadata) = self.file.metadata() {
-                temp_file.set_permissions(metadata.permissions())?;
+            if let Ok(permissions) = self.file.permissions() {
+                temp_file.raw().set_permissions(permissions)?;
             }
             // Write back the region this file carries, not the one `spec`
             // would generate: regenerating drops any block this build does not
@@ -1010,7 +1131,13 @@ impl VarlitFile {
             let replacement_extensions =
                 header_extensions_for_replacement(self.spec, &self.header_extensions)?;
             write_native_file_header(&mut temp_file, self.spec, &replacement_extensions)?;
-            for (position, source_entry) in self.index.iter().enumerate() {
+            // The replacement carries this spec's anchors from its append log
+            // on, as its header now says.
+            temp_file.set_layout(self.spec.effective_anchors().layout(append_log_start_for_file(self)?));
+            let records = self.resident_directory("replace_block")?;
+            let mut source_window = SourceWindow::new();
+            let mut rewrite_summary = RewriteSummary::new();
+            for (position, source_entry) in records.iter().enumerate() {
                 let source_entry = source_entry?;
                 let mut updated = source_entry.clone();
                 let checkpoint_payload;
@@ -1056,10 +1183,13 @@ impl VarlitFile {
                 updated = rewrite_record_streaming(
                     self.spec,
                     &self.snapshot,
+                    &mut source_window,
+                    &rewrite_summary,
                     &mut temp_file,
                     updated,
                     payload,
                 )?;
+                rewrite_summary.note(&updated)?;
                 new_index.push(updated)?;
             }
             temp_file.flush()?;
@@ -1083,7 +1213,7 @@ impl VarlitFile {
         drop(temp_file);
 
         match replace_path_atomically(&temp_path, &self.path) {
-            Ok(ReplaceDurability::Durable) => self.rebind_published_generation(sequence, new_index),
+            Ok(ReplaceDurability::Durable) => self.rebind_published_generation(sequence, Some(new_index)),
             Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
                 // Publication already happened: the pathname resolves to the
                 // new generation, so the writer must move there regardless.
@@ -1092,7 +1222,7 @@ impl VarlitFile {
                 // too, and `PublishedButRebindFailed` alone cannot say that
                 // the published pathname is not yet durable. Both facts are
                 // preserved instead.
-                match self.rebind_published_generation(sequence, new_index) {
+                match self.rebind_published_generation(sequence, Some(new_index)) {
                     Ok(_) => Err(crate::fallible::boxed_path_error(
                         sync_error,
                         &self.path,
@@ -1150,16 +1280,16 @@ impl VarlitFile {
     fn rebind_published_generation(
         &mut self,
         sequence: u64,
-        new_index: RewriteDirectory,
+        new_index: Option<RewriteDirectory>,
     ) -> Result<u64> {
-        let rebind = (|| -> Result<(File, SnapshotFile)> {
+        let rebind = (|| -> Result<(PrimaryFile, SnapshotFile)> {
             #[cfg(test)]
             fail_rebind_after_publish_if_requested()?;
-            let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+            let file = self.open_primary_generation()?;
             // The published generation is a new file object; the single-writer
             // object lock must move with the writer.
             if let Some(lock) = self._lock.as_mut() {
-                lock.bind_native(&file, &self.path)?;
+                lock.bind_native(file.raw(), &self.path)?;
             }
             let snapshot = SnapshotFile::new(file.try_clone()?)?;
             Ok((file, snapshot))
@@ -1169,18 +1299,41 @@ impl VarlitFile {
             Ok((file, snapshot)) => {
                 self.file = RecordFile::new(file);
                 self.snapshot = snapshot;
+                let Some(new_index) = new_index else {
+                    // Same-size, same-place: offsets, tails and the segment
+                    // cursor all stand; the count is unchanged.
+                    let count = self.index.whole_file_count().unwrap_or(self.index.len());
+                    self.index = ResidentIndex::none_retained_counting(
+                        self.snapshot.clone(),
+                        self.spec,
+                        count,
+                    );
+                    self.keyed_tails.invalidate_all();
+                    self.header_extensions =
+                        header_extensions_for_replacement(self.spec, &self.header_extensions)?;
+                    self.publish_sequence(sequence);
+                    return Ok(sequence);
+                };
                 let last_resident_block_id = new_index.last().map(|entry| entry.block_id);
                 // Rebinding succeeded and the complete new directory is ready.
                 // Release the old private rows before optional compaction; an
                 // assignment alone would keep them alive throughout its RHS.
-                self.index = ResidentIndex::empty(self.snapshot.clone(), self.spec);
-                self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
-                // The resident index was replaced wholesale; recover the O(1)
-                // flush-cadence state once for the new generation
-                // and the O(1) block tails with it. Record offsets
-                // moved, so every cached generic keyed tail is stale.
-                let derived = derive_index_state(self.index.iter(), true)?;
-                self.checkpoint_cadence = derived.checkpoint_cadence;
+                // The derived per-handle state comes from the new generation's
+                // directory either way; whether the handle then keeps that
+                // directory is what it kept before. A handle that kept no
+                // record list does not start keeping one because it rewrote.
+                // Record offsets moved, so every cached generic keyed tail is
+                // stale.
+                let derived = derive_index_state(directory_records(&new_index), true)?;
+                let kept = self.index.is_retained();
+                self.index = ResidentIndex::none_retained_counting(
+                    self.snapshot.clone(),
+                    self.spec,
+                    new_index.record_count(),
+                );
+                if kept {
+                    self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
+                }
                 self.block_tails = derived.block_tails.expect("tails were requested");
                 self.segment_cursor = derived.segment_cursor;
                 // The same wholesale replacement: the newest entry is a
@@ -1223,19 +1376,31 @@ impl VarlitFile {
         }
     }
 
+    /// Opens the generation now at this handle's path, with the anchors its
+    /// header records from this file's append log start.
+    fn open_primary_generation(&self) -> Result<PrimaryFile> {
+        let mut file = PrimaryFile::new(
+            OpenOptions::new().read(true).write(true).open(&self.path)?,
+            None,
+        );
+        let (_, _, anchors) = read_file_header_anchored(self.spec, &mut file)?;
+        file.set_layout(anchors.layout(append_log_start_for_file(self)?));
+        Ok(file)
+    }
+
     fn rebind_replacement_generation(
         &mut self,
         info: ReplacementInfo,
         new_index: RewriteDirectory,
     ) -> Result<ReplacementInfo> {
-        let rebind = (|| -> Result<(File, SnapshotFile)> {
+        let rebind = (|| -> Result<(PrimaryFile, SnapshotFile)> {
             #[cfg(test)]
             fail_rebind_after_publish_if_requested()?;
-            let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+            let file = self.open_primary_generation()?;
             // The published generation is a new file object; the single-writer
             // object lock must move with the writer.
             if let Some(lock) = self._lock.as_mut() {
-                lock.bind_native(&file, &self.path)?;
+                lock.bind_native(file.raw(), &self.path)?;
             }
             let snapshot = SnapshotFile::new(file.try_clone()?)?;
             Ok((file, snapshot))
@@ -1249,14 +1414,22 @@ impl VarlitFile {
                 // Rebinding succeeded and the complete new directory is ready.
                 // Release the old private rows before optional compaction; an
                 // assignment alone would keep them alive throughout its RHS.
-                self.index = ResidentIndex::empty(self.snapshot.clone(), self.spec);
-                self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
-                // The resident index was replaced wholesale; recover the O(1)
-                // flush-cadence state once for the new generation
-                // and the O(1) block tails with it. Record offsets
-                // moved, so every cached generic keyed tail is stale.
-                let derived = derive_index_state(self.index.iter(), true)?;
-                self.checkpoint_cadence = derived.checkpoint_cadence;
+                // The derived per-handle state comes from the new generation's
+                // directory either way; whether the handle then keeps that
+                // directory is what it kept before. A handle that kept no
+                // record list does not start keeping one because it rewrote.
+                // Record offsets moved, so every cached generic keyed tail is
+                // stale.
+                let derived = derive_index_state(directory_records(&new_index), true)?;
+                let kept = self.index.is_retained();
+                self.index = ResidentIndex::none_retained_counting(
+                    self.snapshot.clone(),
+                    self.spec,
+                    new_index.record_count(),
+                );
+                if kept {
+                    self.index = new_index.into_resident(self.snapshot.clone(), self.spec);
+                }
                 self.block_tails = derived.block_tails.expect("tails were requested");
                 self.segment_cursor = derived.segment_cursor;
                 // The same wholesale replacement: the newest entry is a
@@ -1307,11 +1480,17 @@ impl VarlitFile {
     }
 
     fn validate_source_generation(&self) -> Result<()> {
-        let current_len = self.file.metadata()?.len();
+        let current_len = self.file.len()?;
         if current_len != self.snapshot.len() {
             return Err(Error::InvalidCanonicalEncoding(
                 "native file changed after it was indexed",
             ));
+        }
+        // What is validated is the handle's kept record list against the
+        // file. A handle that keeps none has nothing that could have drifted:
+        // every position it answers is read from the file itself.
+        if !self.index.is_retained() {
+            return Ok(());
         }
         let mut file = self.snapshot.try_clone_file()?;
         validate_generation_index(

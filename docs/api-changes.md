@@ -2,13 +2,20 @@
 
 ## 0.13.0
 
-Update the Cargo dependency requirement from `0.12.1` to `0.13.0` to use these
-additions. Cargo does not cross a pre-1.0 minor version automatically.
-Existing public signatures, schema fingerprints, native/sidecar bytes, VCHK,
-VMAT v5 and experimental
-STREUSE2 formats are preserved. Rust 1.95 remains the minimum supported version.
-Existing valid files need no format migration. Stricter validation can reject
-damaged metadata that an older reader accepted.
+Update the Cargo dependency requirement from `0.12.1` to `0.13.0`. Cargo does
+not cross a pre-1.0 minor version automatically. Rust 1.95 remains the minimum
+supported version. This release has breaking changes:
+
+- Typed reads decode into a value the caller owns (see
+  [caller-owned decoding](#caller-owned-decoding)).
+- Matrix files use layout `VMAT` v6. v5 files written by 0.12.x are refused
+  with `FormatVersionMismatch { expected: 6, actual: 5 }`; recreate them.
+- Stream/indexed sidecars written by 0.13.0 are not readable by earlier
+  versions.
+
+Schema fingerprints, native record bytes, VCHK and experimental STREUSE2
+formats are preserved. Stricter validation can reject damaged metadata that an
+older reader accepted.
 
 | Addition | Application use |
 | --- | --- |
@@ -28,6 +35,57 @@ damaged metadata that an older reader accepted.
 `new`/`default` and convenience builders keep their original contracts. Internal
 shared owners now use fallible allocation through a private `triomphe` dependency;
 no dependency-specific owner type is exposed in place of a public std `Arc`.
+
+
+### Caller-owned decoding
+
+
+**Breaking.** A read
+that returned a decoded block now takes `out: &mut T` and decodes into it,
+reusing the vectors and strings `out` already owns. A steady read loop keeps one
+`out` (and one scratch byte buffer) alive and allocates nothing per record for
+same-shaped uncompressed records. File bytes, schema fingerprints and
+materialization limits are unchanged; an in-place decode is charged exactly what
+a fresh decode is charged and is refused at the same limit.
+
+| Before | Now |
+| --- | --- |
+| `BlockVec::get(i) -> Result<Option<T>>` | `get(i, &mut out) -> Result<bool>` |
+| `BlockVec::get_into(i, &mut payload) -> Result<Option<T>>` | `get_into(i, &mut payload, &mut out) -> Result<bool>` |
+| `BlockVec::iter()` / `BlockIter` (an `Iterator`) | `cursor()` / `BlockCursor::next_into(&mut out) -> Result<bool>` |
+| `KeyedBlockVec::get(&k) -> Result<Option<T>>` | `get(&k, &mut out) -> Result<bool>` |
+| `StreamingBlocks<T>`: `Iterator<Item = Result<T>>` | `next_into(&mut out) -> Result<bool>`; no longer an `Iterator` |
+| `read_block_at::<T>(offset) -> Result<T>` | `read_block_at::<T>(offset, &mut scratch, &mut out) -> Result<()>` |
+| `decode_block_into::<T>(&entry, &mut scratch) -> Result<T>` | `decode_block_into::<T>(&entry, &mut scratch, &mut out) -> Result<()>` |
+| `read_header_block::<T>() -> Result<Option<T>>` | `read_header_block::<T>(&mut out) -> Result<bool>` |
+| `read_matrix_cell::<T>(key) -> Result<T>`, generated cell getters | `read_matrix_cell::<T>(key, &mut out) -> Result<()>` |
+| indexed `get::<T>(&key) -> Result<Option<T>>`, generated `get_<block>(&key)` | `get::<T>(&key, &mut out) -> Result<bool>`, `get_<block>(&key, &mut out)` |
+| experimental `MatrixReader::get::<T>(key) -> Result<T>` | `get::<T>(key, &mut out) -> Result<()>` |
+| `decode_blocks_into(&mut Vec<T>)` (cleared, then pushed) | same signature; existing elements are decoded into, the vector only grows past its old length |
+
+`false` means "absent" (no record at that index, key or header slot, or end of
+walk) and leaves `out` untouched. After an error `out` is a valid value with
+unspecified contents.
+
+### Durability and reads
+
+| Change | Effect |
+| --- | --- |
+| `transaction_marker(<mode>, single_barrier)` (`TransactionMarkerMode::{OnFlushSingleBarrier, ExplicitSingleBarrier}`, `CommitPolicy::single_barrier`) | `commit_durable` with one storage barrier instead of two; open verifies the newest transaction before committing it. Opt-in; requires `crc32_with_header`. See [durability model](durability-model.md#single-barrier-commit) |
+| Stream/indexed `sync()` | Two storage barriers per publication instead of six: the Dirty checkpoint is no longer synced, and the confirmed checkpoint and one `VIXHEAD2` head share one sidecar sync. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
+| `MmapPayloads::decode_block_into(&entry, &mut scratch, &mut out)` | Decode straight from a read-only mapping, with the same id/version, checksum, length and materialization checks as the copying read |
+| Matrix layout `VMAT` v6 | The slot region starts on a 4 KiB boundary, so a cell whose stride is a multiple of 4 KiB fills whole generation pages: a cold read of such a cell is one positional read instead of three. v5 matrix files are refused with `FormatVersionMismatch { expected: 6, actual: 5 }`; recreate them |
+| Matrix generation reads | A read that starts or ends inside a page reads its covering pages with one positional read (at most 1 MiB, bounded scratch) and checks every page CRC, instead of a separate read per edge page. Same bytes, checks and errors |
+| `unsafe mmap_payload_range(records)`, `record_count()` (`VarlitFile`, `VarlitReader`) | Map only the records at resident positions `records`. `MmapLen`, `Records` and `IndexBytes` are charged for the range, not the file; a following reader maps only `seen..record_count()?`. Out-of-range positions return `MmapRecordRangeOutOfBounds` |
+
+Additions supporting this:
+
+| Addition | Use |
+| --- | --- |
+| `VarlitEmpty` (`T::empty()`) | A starting value for `out`; derived for every `VarlitBlock` and finite key, implemented for scalars, `String`, `Vec`, `Option`, arrays, maps and tuples up to 4. A hand-written `VarlitBlock` used as an output implements it itself |
+| `VarlitDecode::decode_varlit_into` | In-place decode hook; the default decodes a fresh value and assigns it. Derived blocks, `Vec` of fixed-width values, `Vec<u8>`, `String`, `Option`, `Vec<String>` and record sequences override it to reuse capacity |
+| `Decoder::decode_value_into`, `decode_nested_into`, `decode_from_slice_limited_into`, `decode_from_slice_accounted_into`, `decode_from_slice_into` | In-place counterparts of the value decodes, through the same checked decoder frame and budget |
+| `Vec<T: VarlitBlock>` as a block field | Whole records as one field (compound-array layout), bounded and fallible like other sequences |
 
 ### Lazy open and explicit scan selection
 

@@ -100,7 +100,11 @@ fn moving_reader_with_live_local_cursors_keeps_positions_independent() -> varlit
 fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("retention.varlit");
-    let options = DiskIndexOptions::default();
+    // Lag is counted in confirmed sidecar generations, so confirm each sync.
+    let options = DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..DiskIndexOptions::default()
+    };
     let mut writer = Managed::create_indexed_writer(&path, options)?;
     writer.push_item(&Item { key: 1, value: 1 })?;
     writer.immediate()?;
@@ -116,7 +120,8 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
     let lag = old.snapshot_status()?;
     assert_eq!(lag.generation, before.generation);
     assert_eq!(lag.confirmed_generation - lag.generation, 7);
-    assert_eq!(lag.records_behind, 7);
+    // Seven records and their seven sync markers.
+    assert_eq!(lag.records_behind, 14);
     assert!(lag.bytes_behind > 0);
     assert!(idle.release_snapshot());
     assert!(!idle.release_snapshot());
@@ -130,7 +135,7 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
     }
     assert_eq!(walked, vec![Item { key: 1, value: 1 }]);
     writer.push_item(&Item { key: 1, value: 9 })?; // Unconfirmed remains invisible.
-    assert_eq!(idle.follow()?, 7);
+    assert_eq!(idle.follow()?, 14);
     assert!(idle.get_item(&1, &mut item)?);
     assert_eq!(item.value, 8);
     assert!(idle.snapshot_status()?.pinned);
@@ -138,7 +143,7 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
     assert_eq!(idle.follow()?, 0); // Re-pin even without a new generation.
     assert!(idle.get_item(&1, &mut item)?);
     assert_eq!(item.value, 8);
-    assert_eq!(old.follow()?, 7);
+    assert_eq!(old.follow()?, 14);
     drop(old);
     drop(idle);
     writer.immediate()?;
@@ -149,7 +154,14 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
 fn stream_release_preserves_cursor_and_follow_releases_old_generation() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("stream.varlit");
-    let options = StreamOptions::default();
+    // Lag is counted in confirmed sidecar generations, so confirm each sync.
+    let options = StreamOptions {
+        state: DiskIndexOptions {
+            confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+            ..DiskIndexOptions::default()
+        },
+        ..StreamOptions::default()
+    };
     let mut writer = Feed::create_stream_writer(&path, options)?;
     writer.push_sample(&Sample { value: 1 })?;
     writer.immediate()?;
@@ -162,8 +174,9 @@ fn stream_release_preserves_cursor_and_follow_releases_old_generation() -> varli
     writer.push_sample(&Sample { value: 2 })?;
     writer.immediate()?;
     writer.push_sample(&Sample { value: 3 })?;
-    assert_eq!(reader.snapshot_status()?.records_behind, 1);
-    assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
+    // The sample and its sync marker.
+    assert_eq!(reader.snapshot_status()?.records_behind, 2);
+    assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
     assert!(cursor.next_into(&mut sample)?);
     assert_eq!(sample, Sample { value: 2 });
     assert!(!cursor.next_into(&mut sample)?);

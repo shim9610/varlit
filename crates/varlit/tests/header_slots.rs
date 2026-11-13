@@ -19,6 +19,8 @@
 //!   CRC question: verify continuously, or fix the value at a chosen point.
 //! - `integrity_none_ignores_a_corrupted_region` — the exemption is real, not
 //!   nominal.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -309,7 +311,7 @@ fn the_region_does_not_move_the_append_log() {
         len_before,
         "editing a fixed region changes no length",
     );
-    let samples = file.blocks::<Sample>().expect("read records");
+    let samples = crate::pages::all_blocks!(file, Sample).expect("read records");
     assert_eq!(samples.len(), 1);
     assert_eq!(
         sample_at(&samples, 0).value,
@@ -319,7 +321,7 @@ fn the_region_does_not_move_the_append_log() {
 
     file.push(&Sample { value: 8 }).expect("push after edit");
     file.flush().expect("flush");
-    let samples = file.blocks::<Sample>().expect("read records");
+    let samples = crate::pages::all_blocks!(file, Sample).expect("read records");
     assert_eq!(samples.len(), 2);
     assert_eq!(sample_at(&samples, 1).value, 8);
 }
@@ -612,7 +614,7 @@ fn the_region_survives_a_republishing_replacement() {
         Some(watermark("carried")),
         "and so does the published generation on disk",
     );
-    let samples = reopened.blocks::<Sample>().expect("read records");
+    let samples = crate::pages::all_blocks!(reopened, Sample).expect("read records");
     assert_eq!(
         sample_at(&samples, 0).value,
         99,
@@ -747,7 +749,7 @@ fn filled<T: varlit::VarlitEmpty>(
     Ok(read(&mut out)?.then_some(out))
 }
 
-fn sample_at(samples: &varlit::BlockVec<Sample>, index: usize) -> Sample {
+fn sample_at(samples: &crate::pages::Blocks<Sample>, index: usize) -> Sample {
     let mut out = Sample::empty();
     assert!(samples.get(index, &mut out).expect("get"), "a Sample");
     out

@@ -103,11 +103,20 @@ fn scanned_shape(
     path: &Path,
 ) -> Option<(Vec<(u32, u64, u64)>, Vec<Option<u64>>)> {
     let file = VarlitFile::open_readonly(spec, path).ok()?;
-    let entries = file
-        .index_entries()
-        .iter()
-        .map(|entry| (entry.block_id, entry.record_offset, entry.payload_len))
-        .collect();
+    let mut entries = Vec::new();
+    let mut buffer = vec![varlit::RecordIndexEntry::default(); 64];
+    let mut page = file.index_entries(&mut buffer).ok()?;
+    loop {
+        entries.extend(
+            buffer[..page.filled]
+                .iter()
+                .map(|entry| (entry.block_id, entry.record_offset, entry.payload_len)),
+        );
+        match page.next {
+            Some(next) => page = file.index_entries_from(next, &mut buffer).ok()?,
+            None => break,
+        }
+    }
     let tails = vec![
         file.block_tail_offset(TailLine::ID),
         file.block_tail_offset(TailNote::ID),
@@ -337,10 +346,12 @@ fn compare_route(spec: FormatSpec, path: &Path, oracle: Oracle, strict: bool) {
     // that let a corrupt table through surfaces here as an error rather than as
     // a wrong-typed read, and a nonsensical offset surfaces to the sanitizers.
     if let Some(offset) = line_tail {
-        let _ = file.read_block_at::<TailLine>(offset);
+        let mut out = <TailLine as varlit::VarlitEmpty>::empty();
+        let _ = file.read_block_at::<TailLine>(offset, &mut Vec::new(), &mut out);
     }
     if let Some(offset) = note_tail {
-        let _ = file.read_block_at::<TailNote>(offset);
+        let mut out = <TailNote as varlit::VarlitEmpty>::empty();
+        let _ = file.read_block_at::<TailNote>(offset, &mut Vec::new(), &mut out);
     }
 
     // The header route keeps no directory, so the map is the only way to ask it

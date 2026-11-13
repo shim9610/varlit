@@ -74,6 +74,7 @@
         "publication_protocol::proofs::commit_survives_every_io_failure_effect",
         "publication_protocol::proofs::successful_commit_is_reachable_and_durable",
         "publication_protocol::proofs::every_publication_writes_one_head_and_only_confirmed_syncs_once",
+        "publication_protocol::proofs::every_two_barrier_publication_syncs_its_body_before_its_head",
         "publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync",
         "publication_protocol::proofs::follow_error_preserves_the_entire_reader",
         "publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition",
@@ -89,7 +90,7 @@
       "limits": "Callbacks, fsync durability and stable snapshots assumed; creation/replacement not modeled",
       "specification": {
         "requires": "Returning I/O callbacks obey the stated effect model; confirmed snapshots are stable.",
-        "ensures": "Acknowledgment follows the required data/head/checkpoint durability steps.",
+        "ensures": "Acknowledgment follows primary (sync marker) durability; a confirmation, single- or two-barrier, leaves its generation durable before acknowledgment.",
         "on_error": "A failed transition preserves reader state or poisons the writer as specified.",
         "frame": "Confirmed frontiers are not changed by failed publications.",
         "progress": "Finite protocol transitions; OS liveness/durability is assumed."
@@ -357,6 +358,26 @@
         "on_error": "Rejected transitions have no committed state.",
         "frame": "Pure scalar decisions.",
         "progress": "Successful nonzero charge/read strictly reduces its remaining extent."
+      }
+    },
+    {
+      "id": "record-chunk-table",
+      "harnesses": [
+        "file::record_chunks::resource_proofs::chunk_geometry_covers_the_payload_exactly",
+        "file::record_chunks::resource_proofs::chunk_extent_accepts_exactly_well_formed_entries"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/record_chunks.rs",
+        "crates/varlit-core/src/file/record_chunks.rs"
+      ],
+      "scope": "chunk geometry for arbitrary chunked lengths up to 2^40; table-entry extent checks for arbitrary entry values, reserved word and payload length, on a three-chunk uncompressed header",
+      "limits": "Header checksum and compressed frames are covered by native tests, not proofs; the extent proof fixes the logical length to three chunks.",
+      "specification": {
+        "requires": "A chunk header built from a logical length longer than one chunk.",
+        "ensures": "Chunks are 1..=64 KiB and cover the logical payload exactly; an accepted extent is ascending, exactly the chunk's length, inside the payload, and the last ends the data.",
+        "on_error": "A malformed table entry is refused before the chunk is read or anything is allocated for it.",
+        "frame": "Extent checks read two table entries and mutate nothing.",
+        "progress": "No loops; each check is constant work."
       }
     }
   ],

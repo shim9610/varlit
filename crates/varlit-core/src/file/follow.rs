@@ -92,44 +92,46 @@ impl VarlitFile {
     /// second writer is refused by the object lock this one holds, and a read
     /// view of the published generation is the useful thing to hand back.
     pub fn reopen_readonly(&self) -> Result<Self> {
+        // The route the handle was opened by: a handle that scanned (or
+        // created the file) knows the whole file and reopens by scan; a lazy
+        // handle reopens lazily.
         if self.index.is_retained() {
             Self::open_readonly(self.spec, &self.path)
+        } else if self.index.whole_file_count().is_some() {
+            // Scanned (or created) without a list: rescan, still without one.
+            Self::open_readonly_scan(self.spec, &self.path)
         } else {
             Ok(Self::open_readonly_lazy_with_report(self.spec, &self.path)?.0)
         }
     }
 
-    /// Reclaims obsolete matrix pages without waiting for existing readers.
-    /// Requires a clean, explicitly synced writer. Existing readers retain their
-    /// old file until follow/drop; their generation remains readable.
+    /// Requires a clean, synced writer, and then has nothing to do: a tiled
+    /// matrix never grows with overwrites (cells change in place, and the
+    /// write-ahead ring is a fixed size), so there is nothing to reclaim.
+    /// Existing readers keep their generation until they follow.
     pub fn compact_matrix(&mut self) -> Result<()> {
-        let _permit = self.ensure_write()?;
-        let pages = self.file.matrix_pages().ok_or(Error::MatrixLayoutMissing)?;
-        if self.open_chunk_is_unwritten()
-            || pages.is_dirty()
-            || pages.head().native_eof != self.snapshot.len()
-        {
+        self.check_write()?;
+        self.ensure_tiles_writer()?;
+        if self.tiles.get().is_some_and(crate::matrix_tiles::api::TiledMatrix::is_dirty) {
             return Err(Error::InvalidFormatSpec(
                 "sync matrix changes before compaction",
             ));
         }
-        if let Err(error) = self.file.compact_matrix() {
-            self.poison.poison();
-            return Err(error);
+        if !self.spec.has_matrix_blocks() {
+            return Err(Error::MatrixLayoutMissing);
         }
-        let source = crate::matrix_generation::MatrixIo::source(self.file.matrix_pages().unwrap())?;
-        crate::matrix::rebind_generation_backing(self.matrix.as_mut().unwrap(), &source);
         Ok(())
     }
 
-    /// Confirmed generation captured by this handle. Queries never advance it.
+    /// Published matrix generation this handle shows. Queries never advance it.
     pub fn matrix_generation(&self) -> Option<u64> {
-        self.file.matrix_pages().map(|p| p.head().generation)
+        self.tiles_read().ok().map(|(tiles, _)| tiles.generation())
     }
 
-    /// Required companion file; its name includes the primary's creation nonce.
+    /// The file holding the matrix. Tiled matrices keep everything, the
+    /// write-ahead ring included, in the primary file, so this is its path.
     pub fn matrix_generation_path(&self) -> Option<&Path> {
-        self.file.matrix_pages().map(|p| p.path())
+        self.spec.has_matrix_blocks().then_some(self.path.as_path())
     }
 
     /// Extends this handle to records appended since it opened.
@@ -214,71 +216,30 @@ impl VarlitFile {
         if self.mode == OpenMode::ReadWrite {
             return Ok(0);
         }
-        // One short-lived staged value; keep ordinary follow allocation-free here.
-        #[allow(clippy::large_enum_variant)]
-        enum MatrixFollow {
-            Compacted(crate::matrix::MatrixLayout),
-            Delta(crate::matrix::MatrixDelta),
-        }
-        impl MatrixFollow {
-            fn apply(self, layout: &mut Option<crate::matrix::MatrixLayout>) {
-                match self {
-                    Self::Compacted(next) => *layout = Some(next),
-                    Self::Delta(delta) => delta.apply(layout.as_mut().unwrap()),
-                }
+        // The matrix first: its ring is read where it is, independent of the
+        // record snapshot. A matrix-only publication answers `0`, as before;
+        // `matrix_generation()` tells it apart.
+        if self.spec.has_matrix_blocks() {
+            if self.tiles.get().is_none() {
+                self.tiles_read()?;
+            } else if let Some(tiles) = self.tiles.get_mut() {
+                tiles.follow(&matrix_tiles_io::FileTilesRead(&self.file))?;
             }
         }
-        let mut matrix_next = if let Some(pages) = self.file.matrix_pages() {
-            let mut next = pages.refreshed()?;
-            if next.head().generation <= pages.head().generation {
-                return Ok(0);
-            }
-            let mut base = self.snapshot.try_clone_file()?;
-            let header_len = read_file_header(self.spec, &mut base)?;
-            let layout_start = header_len
-                .checked_add(MATRIX_CREATION_NONCE_REGION_LEN as u64)
-                .ok_or(Error::InvalidMatrixLayout)?;
-            let len = next.head().native_eof;
-            let layout = if next.head().compaction_epoch != pages.head().compaction_epoch {
-                MatrixFollow::Compacted(crate::matrix::read_layout_at_len(
-                    self.spec,
-                    &mut next,
-                    layout_start,
-                    len,
-                )?)
-            } else {
-                MatrixFollow::Delta(crate::matrix::MatrixDelta::prepare(
-                    self.matrix.as_mut().ok_or(Error::InvalidMatrixLayout)?,
-                    pages,
-                    &next,
-                    layout_start,
-                )?)
-            };
-            Some((layout, next))
-        } else {
-            None
-        };
         let from = self.snapshot.len();
         // The object, not the pathname. A rename may have put a different file
         // at the path, and framing *that* file's bytes at this handle's offsets
         // is the one thing this must never do.
         let mut file = self.snapshot.try_clone_file()?;
-        let physical_metadata = file.metadata()?;
-        let file_len = matrix_next
-            .as_ref()
-            .map_or(physical_metadata.len(), |(_, p)| p.head().native_eof);
+        let logical_len = file.len()?;
+        let file_len = logical_len;
         if file_len < from {
             return Err(Error::InvalidMatrixLayout);
         }
         if file_len == from {
-            if let Some((layout, pages)) = matrix_next.take() {
-                layout.apply(&mut self.matrix);
-                self.file.adopt_matrix(pages);
-                self.chunk_directory = std::cell::OnceCell::new();
-            }
             return Ok(0);
         }
-        let modified = physical_metadata.modified().ok();
+        let modified = file.raw().metadata()?.modified().ok();
         let mut pending = match self.follow_scan.take() {
             Some(pending) => pending,
             None => crate::try_box(FollowScan::new(self.spec, from, &self.path)?)?,
@@ -295,11 +256,6 @@ impl VarlitFile {
         if unchanged_input {
             pending.progress = Some(progress);
             self.follow_scan = Some(pending);
-            if let Some((layout, pages)) = matrix_next.take() {
-                layout.apply(&mut self.matrix);
-                self.file.adopt_matrix(pages);
-                self.chunk_directory = std::cell::OnceCell::new();
-            }
             return Ok(0);
         }
         let reusable = progress.from == from
@@ -350,11 +306,6 @@ impl VarlitFile {
         if !has_commit {
             pending.progress = Some(progress);
             self.follow_scan = Some(pending);
-            if let Some((layout, pages)) = matrix_next.take() {
-                layout.apply(&mut self.matrix);
-                self.file.adopt_matrix(pages);
-                self.chunk_directory = std::cell::OnceCell::new();
-            }
             return Ok(0);
         }
         pending.rows.finish(self.spec, &mut progress.scanned)?;
@@ -368,11 +319,6 @@ impl VarlitFile {
         let logical_len = scanned.physical_end(from);
         if logical_len <= from {
             // A matrix generation can advance without a record commit marker.
-            if let Some((layout, pages)) = matrix_next.take() {
-                layout.apply(&mut self.matrix);
-                self.file.adopt_matrix(pages);
-                self.chunk_directory = std::cell::OnceCell::new();
-            }
             return Ok(0);
         }
         // Sequences are file-global and strictly increasing, and the scan's own
@@ -394,7 +340,9 @@ impl VarlitFile {
         }
         let next_progress = ScanProgress::new(self.spec, logical_len, 0, Some(logical_len))?;
         let snapshot = self.snapshot.with_len(logical_len)?;
-        if self.index.is_retained() {
+        // A handle that keeps a list, or only a whole-file count, takes the
+        // new records in; `extend` stores rows or bumps the count.
+        if self.index.whole_file_count().is_some() {
             let first = self.index.len();
             let holding = first.checked_add(framed.record_count()).ok_or(
                 Error::ResourceArithmeticOverflow {
@@ -404,17 +352,14 @@ impl VarlitFile {
             self.spec
                 .read_limits
                 .check(ReadLimitKey::Records, holding as u64)?;
-            let mut checkpoint = self.checkpoint_cadence;
             let mut segment = self.segment_cursor;
             for (at, entry) in framed.entries().enumerate() {
                 let entry = entry?;
-                checkpoint.note_appended(first + at, entry.block_id);
                 segment.note_appended(first + at, entry.block_id, entry.checked_physical_end()?);
             }
             // Fallible staging ends here. On scratch I/O failure extend rolls
             // back its logical length, preserving the complete old snapshot.
             self.index.extend(framed.entries())?;
-            self.checkpoint_cadence = checkpoint;
             self.segment_cursor = segment;
         }
         self.snapshot = snapshot;
@@ -434,20 +379,17 @@ impl VarlitFile {
         }
         // A record just adopted may be the newest of its key.
         self.keyed_tails.invalidate_all();
+        // Chunk records in the adopted run, filed into the directory if this
+        // handle built one; read before the run's rows are released.
         pending.rows.reset();
         pending.progress = Some(next_progress);
         self.follow_scan = Some(pending);
         // And a matrix chunk record is an ordinary append-log record, so a run
-        // may have brought new chunks. The chunk directory is built once and
-        // cached in a `OnceCell`, which was sound to keep forever only while a
-        // handle's snapshot could not grow — it can now. Measured before this
-        // line existed: a followed handle answered `MatrixNotCommitted` for a
-        // cell a fresh open of the same file read back.
-        self.chunk_directory = std::cell::OnceCell::new();
-        if let Some((layout, pages)) = matrix_next.take() {
-            layout.apply(&mut self.matrix);
-            self.file.adopt_matrix(pages);
-        }
+        // may have brought new chunks. They are filed into the directory
+        // rather than the directory being dropped: a dropped one is rebuilt
+        // by walking the whole file on the next cell read, once per follow.
+        // (A matrix generation that advanced without records leaves the
+        // directory alone: it is built from records only.)
         Ok(logical_len - from)
     }
 }

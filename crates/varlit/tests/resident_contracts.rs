@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 // These keys are synthetic fixture identifiers, never real user identities.
 // Resident-facade contract regressions for the 2026-07-19 adversarial review.
 //
@@ -18,7 +21,7 @@ use std::path::Path;
 
 #[cfg(feature = "scalable-fault-injection")]
 use varlit::VarlitFile;
-use varlit::{Error, VarlitEmpty, varlit_format};
+use varlit::{Error, varlit_format};
 
 varlit_format! {
     pub format ResidentChainFormat {
@@ -106,8 +109,7 @@ type ChainLink = (u64, Option<u64>, Option<u64>);
 /// the assertions are against the persisted footers rather than writer state.
 fn chain(path: &Path, block_id: u32) -> varlit::Result<Vec<ChainLink>> {
     let file = ResidentChainFormat::open(path)?;
-    Ok(file
-        .index_entries()
+    Ok(crate::pages::all_entries!(file)
         .iter()
         .filter(|entry| entry.block_id == block_id)
         .map(|entry| {
@@ -118,19 +120,6 @@ fn chain(path: &Path, block_id: u32) -> varlit::Result<Vec<ChainLink>> {
             )
         })
         .collect())
-}
-
-/// Decodes every record of `blocks` (as the old iterator did) and counts them.
-fn count_blocks<T: varlit::VarlitBlock + VarlitEmpty>(
-    blocks: varlit::BlockVec<T>,
-) -> varlit::Result<usize> {
-    let mut cursor = blocks.cursor();
-    let mut out = T::empty();
-    let mut count = 0;
-    while cursor.next_into(&mut out)? {
-        count += 1;
-    }
-    Ok(count)
 }
 
 fn assert_keyed_chain_rejection(error: &Error) {
@@ -196,8 +185,8 @@ fn generic_push_accepts_keyed_blocks_without_keyed_chaining() -> varlit::Result<
     drop(file);
 
     let file = ResidentPlainFormat::open(&path)?;
-    assert_eq!(file.index_entries().len(), 2);
-    for entry in file.index_entries() {
+    assert_eq!(crate::pages::all_entries!(file).len(), 2);
+    for entry in crate::pages::all_entries!(file) {
         assert_eq!(entry.prev_same_key_offset, None);
     }
     Ok(())
@@ -269,7 +258,7 @@ fn keyed_delete_links_the_predecessor_chain() -> varlit::Result<()> {
     drop(file);
 
     let opened = ResidentChainFormat::open(&path)?;
-    let entries = opened.index_entries();
+    let entries = crate::pages::all_entries!(opened);
     let tombstone = entries
         .iter()
         .find(|entry| entry.block_id == varlit::TOMBSTONE_BLOCK_ID)
@@ -1054,7 +1043,7 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> varlit:
 
     // The merge itself is unaffected by the accounting change.
     let reopened = ResidentEstimateFormat::open(&merged)?;
-    assert_eq!(reopened.index_entries().len() as u64, KEYS);
+    assert_eq!(crate::pages::all_entries!(reopened).len() as u64, KEYS);
     Ok(())
 }
 
@@ -1072,8 +1061,7 @@ fn resident_keyed_tail_growth_spills_and_preserves_predecessors() -> varlit::Res
     file.flush()?;
     drop(file);
     let file = ResidentTailBudgetFormat::open(&path)?;
-    let records: Vec<_> = file
-        .index_entries()
+    let records: Vec<_> = crate::pages::all_entries!(file)
         .iter()
         .filter(|r| r.block_id == <Budgeted as varlit::VarlitBlock>::ID)
         .map(|r| {
@@ -1187,7 +1175,7 @@ fn generated_keyed_writer_opens_above_the_tail_cache_budget() -> varlit::Result<
     drop(writer);
     let file = unlimited::GeneratedTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        count_blocks::<unlimited::Tracked>(file.blocks::<unlimited::Tracked>()?)? as u64,
+        crate::pages::all_blocks!(file, unlimited::Tracked)?.len() as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1224,7 +1212,7 @@ fn owned_tail_map_is_limited_but_writer_tail_cache_can_spill() -> varlit::Result
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        count_blocks::<unlimited::Budgeted>(file.blocks::<unlimited::Budgeted>()?)? as u64,
+        crate::pages::all_blocks!(file, unlimited::Budgeted)?.len() as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1248,7 +1236,7 @@ fn a_small_reopened_tail_cache_can_grow_beyond_its_budget() -> varlit::Result<()
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        count_blocks::<unlimited::Budgeted>(file.blocks::<unlimited::Budgeted>()?)?,
+        crate::pages::all_blocks!(file, unlimited::Budgeted)?.len(),
         65
     );
     Ok(())

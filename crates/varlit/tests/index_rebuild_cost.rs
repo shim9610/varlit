@@ -291,8 +291,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     }
     let records = u64::from(PUTS + TOMBSTONES);
     // A rebuild also scans the internal creation-nonce record every
-    // stream/indexed primary carries as its first record.
-    let scanned_records = records + 1;
+    // stream/indexed primary carries as its first record, and the sync marker
+    // that closed the records.
+    let scanned_records = records + 2;
 
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let small_started = Instant::now();
@@ -349,7 +350,12 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
     let _isolation = shared_fault_gate();
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("k-ever.varlit");
-    let options = DiskIndexOptions::default();
+    // The writer's count is that of its last committed root, so confirm on
+    // every sync for it to cover what was just synced.
+    let options = DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..DiskIndexOptions::default()
+    };
 
     let mut writer = VarlitIndexedWriter::create(spec(), &path, options, small_plan())?;
     for ordinal in 0..32u32 {
@@ -373,8 +379,8 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
     // does not shrink without a native compaction.
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
-    // 64 user records plus the internal creation-nonce record.
-    assert_eq!(report.records, 65);
+    // 64 user records, the internal creation-nonce record and one sync marker.
+    assert_eq!(report.records, 66);
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
     Ok(())
@@ -489,8 +495,9 @@ mod crc_single_traversal {
         // Baseline: the clean CRC file rebuilds.
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 4);
+        // Three user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 5);
 
         // Corrupt the payload of the record outside the plan. A rebuild that
         // still ran the scanner's whole-payload checksum pre-pass would fail
@@ -498,8 +505,9 @@ mod crc_single_traversal {
         let corrupted = flip_marker_byte(&path, blob_marker)?;
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 4);
+        // Three user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 5);
         let reader = VarlitIndexedReader::open(crc_spec(), &path, options, crc_plan())?;
         assert_eq!(
             get_target(&reader, &indexed_marker.to_string())?,

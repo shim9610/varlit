@@ -14,6 +14,8 @@
 // Every case here declares `integrity: crc32`, so without the `integrity`
 // feature the format is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
@@ -116,8 +118,7 @@ fn write(path: &Path, lines: u32, summaries: u64) -> varlit::Result<()> {
 fn corrupt_payload(path: &Path, block_id: u32, nth: usize) {
     let offset = {
         let reader = full_spec().open_readonly(path).expect("open to locate");
-        reader
-            .index_entries()
+        crate::pages::all_entries!(reader)
             .iter()
             .filter(|entry| entry.block_id == block_id)
             .nth(nth)
@@ -142,9 +143,9 @@ fn verify_all_visits_the_records_of_a_non_resident_block() -> varlit::Result<()>
     // (a) The same bytes must verify to the same count whichever way the
     // records are held. Before the fix the lean handle answered 12 short: its
     // index has the 6 summaries and the internal records, and nothing else.
-    let resident_only = lean.index_entries().len();
+    let resident_only = crate::pages::all_entries!(lean).len();
     assert_eq!(
-        lean.index_entries()
+        crate::pages::all_entries!(lean)
             .iter()
             .filter(|entry| entry.block_id == 70)
             .count(),
@@ -218,7 +219,7 @@ fn an_empty_chain_verifies_rather_than_errors() -> varlit::Result<()> {
     let lean = lean_spec().open_readonly(&path)?;
     let full = full_spec().open_readonly(&path)?;
     assert_eq!(lean.verify_all()?, full.verify_all()?);
-    assert_eq!(lean.verify_all()?, lean.index_entries().len());
+    assert_eq!(lean.verify_all()?, crate::pages::all_entries!(lean).len());
 
     cleanup(&path);
     Ok(())

@@ -23,6 +23,8 @@
 //! walk the chain.
 
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -71,7 +73,7 @@ varlit_format! {
 
 fn notes(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec<String>> {
     let file = varlit::VarlitFile::open_readonly(spec, path)?;
-    let blocks = file.blocks::<Note>()?;
+    let blocks = crate::pages::all_blocks!(file, Note)?;
     let mut cursor = blocks.cursor();
     let mut note = Note::empty();
     let mut texts = Vec::new();
@@ -83,7 +85,7 @@ fn notes(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec
 
 fn readings(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec<u64>> {
     let file = varlit::VarlitFile::open_readonly(spec, path)?;
-    let blocks = file.blocks::<Reading>()?;
+    let blocks = crate::pages::all_blocks!(file, Reading)?;
     let mut cursor = blocks.cursor();
     let mut reading = Reading::empty();
     let mut values = Vec::new();

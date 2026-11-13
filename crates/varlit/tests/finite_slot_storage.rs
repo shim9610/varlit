@@ -23,19 +23,32 @@ fn options() -> DiskIndexOptions {
         ..DiskIndexOptions::default()
     }
 }
+/// Confirms the sidecar on every sync, for tests that examine or interrupt
+/// the confirmation itself.
+fn confirming_options() -> DiskIndexOptions {
+    DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..options()
+    }
+}
 fn key(code: u16) -> SlotKey {
     SlotKey::from_code(code).unwrap()
 }
+/// The newest confirmed checkpoint record of a page-reusing (version 6)
+/// sidecar: the confirmed head with the highest publication sequence names it.
+/// Its tree root is at 16 and its slot root at 336, as in version 5.
 fn checkpoint(path: &Path) -> Vec<u8> {
     let bytes = fs::read(path.with_extension("varlit.vki")).unwrap();
     assert_eq!(&bytes[..8], b"VARVEIX5");
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 6);
     let offset = [4096usize, 8192]
         .into_iter()
-        .filter(|s| matches!(&bytes[*s..*s + 8], b"VIXHEAD1" | b"VIXHEAD2"))
-        .map(|s| u64::from_le_bytes(bytes[s + 8..s + 16].try_into().unwrap()) as usize)
-        .max()
+        .filter(|s| &bytes[*s..*s + 8] == b"VIXHEAD3")
+        .max_by_key(|s| u64_at(&bytes, s + 24))
+        .map(|s| u64_at(&bytes, s + 8) as usize)
         .unwrap();
-    bytes[offset..offset + 352].to_vec()
+    assert_eq!(&bytes[offset..offset + 8], b"VIXROOT5");
+    bytes[offset..offset + 416].to_vec()
 }
 fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
@@ -44,7 +57,9 @@ fn u64_at(bytes: &[u8], offset: usize) -> u64 {
 fn finite_only_has_no_tree_and_flush_does_not_publish_slot_extents() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("data.varlit");
-    let options = options();
+    // What is published is examined at each confirmation, so confirm on every
+    // sync rather than once the primary outgrows the sidecar.
+    let options = confirming_options();
     let mut writer = Direct::create_indexed_writer(&path, options)?;
     writer.push_slot(&Slot {
         key: key(0),
@@ -140,12 +155,14 @@ fn corrupt_slot_chunk_is_rejected_before_returning_a_record() -> varlit::Result<
     let sidecar = path.with_extension("varlit.vki");
     let mut bytes = fs::read(&sidecar)?;
     let directory = u64_at(&cp, 336) as usize;
-    assert_eq!(&bytes[directory..directory + 8], b"VIXSLOT1");
-    let chunk = u64_at(&bytes, directory + 40) as usize;
+    assert_eq!(&bytes[directory..directory + 8], b"VIXSLOT2");
+    // 32-byte directory header, 16-byte block header, then (offset, birth)
+    // per chunk.
+    let chunk = u64_at(&bytes, directory + 48) as usize;
     bytes[chunk + 6] ^= 1;
     fs::write(&sidecar, bytes)?;
-    // The generation's checksum covers the chunk, so the damage is refused at
-    // open; a handle that does open must still refuse the read.
+    // The chunk's own checksum and identity trailer refuse the damaged rows:
+    // at open, or at the first read through a handle that did open.
     match Direct::open_indexed_reader(&path, options) {
         Err(_) => {}
         Ok(reader) => assert!(opt(|o| reader.get_slot(&key(0), o)).is_err()),
@@ -298,7 +315,7 @@ fn slots_crash_child() {
     let Some(path) = std::env::var_os("VARLIT_SLOT_CHILD") else {
         return;
     };
-    let mut writer = Direct::open_indexed_writer(path, options()).unwrap();
+    let mut writer = Direct::open_indexed_writer(path, confirming_options()).unwrap();
     let _armed = varlit::scalable_fault::arm_from_env().unwrap();
     writer
         .push_slot(&Slot {
@@ -322,7 +339,7 @@ fn interrupted_slot_and_directory_writes_preserve_confirmed_generation() -> varl
     fn prepare(root: &Path) -> varlit::Result<std::path::PathBuf> {
         fs::create_dir(root)?;
         let path = root.join("data.varlit");
-        let mut writer = Direct::create_indexed_writer(&path, options())?;
+        let mut writer = Direct::create_indexed_writer(&path, confirming_options())?;
         for code in [0, 4095] {
             writer.push_slot(&Slot {
                 key: key(code),
@@ -359,21 +376,21 @@ fn interrupted_slot_and_directory_writes_preserve_confirmed_generation() -> varl
             &path,
             varlit::WriterLockBreakPolicy::BreakIfProcessAbsent,
         )?;
-        let reader = Direct::open_indexed_reader(&path, options())?;
+        let reader = Direct::open_indexed_reader(&path, confirming_options())?;
         let value = opt(|o| reader.get_slot(&key(0), o))?.unwrap().value;
         assert!(value == 1 || value == 2);
         assert_eq!(
             opt(|o| reader.get_slot(&key(4095), o))?.unwrap().value,
             value
         );
-        let mut writer = Direct::open_indexed_writer(&path, options())
-            .or_else(|_| Direct::restore_indexed_writer(&path, options()))?;
+        let mut writer = Direct::open_indexed_writer(&path, confirming_options())
+            .or_else(|_| Direct::restore_indexed_writer(&path, confirming_options()))?;
         writer.push_slot(&Slot {
             key: key(0),
             value: 3,
         })?;
         writer.sync()?;
-        let reader = Direct::open_indexed_reader(&path, options())?;
+        let reader = Direct::open_indexed_reader(&path, confirming_options())?;
         assert_eq!(opt(|o| reader.get_slot(&key(0), o))?.unwrap().value, 3);
         aborts += 1;
     }

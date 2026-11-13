@@ -110,9 +110,11 @@ fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
         let offset = u64::from(flags) * stride;
         let sequential = scan(spec, &bytes, offset);
         let positional = read_record_entry_positional(spec, &snapshot, offset);
-        // Independent wire contract: bit 0 is compression, bit 15 internal.
-        // Adding a flag requires an explicit contract/test update.
-        let unknown = flags & !0x8001;
+        // Independent wire contract: bit 0 is compression, bit 1 chunked
+        // (variable payloads with per-chunk checksums), bit 14 in-place
+        // (matrix storage only), bit 15 internal. Adding a flag requires an
+        // explicit contract/test update.
+        let unknown = flags & !0xC003;
         if unknown != 0 {
             assert!(
                 matches!(sequential, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
@@ -122,9 +124,10 @@ fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
                 matches!(positional, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
                 "positional read must reject flags {flags:#06x} with UnknownRecordFlags"
             );
-        } else if flags & 0x8000 != 0 {
+        } else if flags & 0xC000 != 0 {
             // This fixture has user block ID 37. A well-known flag still
-            // cannot relabel that ID as an internal control record.
+            // cannot relabel that ID as an internal control record, nor take
+            // its payload out of the checksum.
             assert!(matches!(
                 sequential,
                 Err(Error::InvalidCanonicalEncoding(_))
@@ -133,9 +136,10 @@ fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
                 positional,
                 Err(Error::InvalidCanonicalEncoding(_))
             ));
-        } else if flags & 1 != 0 {
-            // No registered compression contract; even the known compression
-            // bit is invalid here. Both paths must enforce that rule too.
+        } else if flags & 3 != 0 {
+            // No registered compression contract and no variable block 37;
+            // even the known encoding bits (compressed, chunked) are invalid
+            // here. Both paths must enforce that rule too.
             assert!(matches!(
                 sequential,
                 Err(Error::UnregisteredBlock(37) | Error::InvalidCompressionHeader)
@@ -320,6 +324,7 @@ fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()>
         block_id: 37,
         next: Some(128),
         visited: 0,
+        floor: 0,
     };
     assert!(correct.next().unwrap().is_ok());
     assert!(correct.next().is_none());
@@ -329,6 +334,7 @@ fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()>
         block_id: 38,
         next: Some(128),
         visited: 0,
+        floor: 0,
     };
     assert!(wrong.next().unwrap().is_err());
     assert!(wrong.next().is_none());
@@ -586,7 +592,7 @@ fn verified_copy_checks_crc_and_retries_repaired_sources_at_buffer_edges() -> Re
                 let mut encoded = vec![0; 17];
                 let entry = append_frame(spec, &mut encoded, 0, &payload, footer)?;
                 let source = snapshot(&encoded)?;
-                let mut output = tempfile::tempfile()?;
+                let mut output: crate::primary_file::PrimaryFile = tempfile::tempfile()?.into();
                 let mut hash = copy_verified_snapshot_record(
                     spec,
                     &source,
@@ -614,7 +620,7 @@ fn verified_copy_checks_crc_and_retries_repaired_sources_at_buffer_edges() -> Re
                     )
                     .is_err()
                 );
-                assert_eq!(output.metadata()?.len(), 0);
+                assert_eq!(output.len()?, 0);
                 if len != 0 {
                     let changed_at = entry.payload_offset as usize + len / 2;
                     encoded[changed_at] ^= 1;
@@ -696,14 +702,9 @@ fn read_validation_combinations_separate_damage_detection_and_frame_io() -> Resu
                 entry.read_payload_snapshot_into(spec, &original, &mut out)?;
                 assert_eq!(out, b"payload");
                 let requests = crate::snapshot::take_read_requests();
-                assert_eq!(
-                    requests.0,
-                    if policy.structure {
-                        2 + u64::from(footer)
-                    } else {
-                        1
-                    }
-                );
+                // A small record is read whole in one request when its framing
+                // is checked; without the check, only the payload is read.
+                assert_eq!(requests.0, 1);
                 assert_eq!(
                     requests.1,
                     7 + if policy.structure {

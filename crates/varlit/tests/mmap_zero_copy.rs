@@ -1,4 +1,6 @@
 #![cfg(feature = "mmap")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::remove_file;
 use std::path::PathBuf;
@@ -225,9 +227,12 @@ fn mmap_payload_windows_match_indexed_payload_reads() -> varlit::Result<()> {
     // SAFETY: The fixture is not modified while the mapping is alive.
     let mmap = unsafe { file.mmap_payloads()? };
 
-    let snapshot = file.index_entries();
+    let snapshot = crate::pages::all_entries!(file);
     for entry in &snapshot {
-        assert_eq!(mmap.payload_window(entry)?, entry.read_payload(&path)?);
+        assert_eq!(
+            mmap.payload_window(entry)?,
+            MmapFormat::read_payload(entry, &path)?
+        );
     }
 
     let first = mmap
@@ -317,7 +322,7 @@ fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> 
             writer.sync()?;
             drop(writer);
             let reader = spec.open_readonly(&path)?;
-            let entry = reader.index_entries()[0].clone();
+            let entry = crate::pages::all_entries!(reader)[0].clone();
             // SAFETY: these mappings are dropped before the fixture is edited.
             let mapped = unsafe { reader.mmap_payloads()? };
             for _ in 0..3 {
@@ -341,7 +346,9 @@ fn mapped_record_reads_verify_crc_before_exposing_bytes() -> varlit::Result<()> 
             let reader = spec.open_readonly(&path)?;
             let mut point = RawPoint::empty();
             assert!(matches!(
-                reader.blocks::<RawPoint>()?.get(0, &mut point),
+                reader
+                    .blocks::<RawPoint>(&mut Vec::new(), std::slice::from_mut(&mut point))
+                    .map(|page| page.filled == 1),
                 Err(Error::ChecksumMismatch { .. })
             ));
             // SAFETY: the damaged file remains immutable throughout these maps.

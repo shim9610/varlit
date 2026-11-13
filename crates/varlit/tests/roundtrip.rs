@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 // These keys are synthetic fixture identifiers, never real user identities.
 use std::fs::{read_dir, remove_file};
 use std::path::PathBuf;
@@ -98,7 +101,7 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    let points = file.blocks::<Point>()?;
+    let points = crate::pages::all_blocks!(file, Point)?;
     assert_eq!(points.len(), 1);
     assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 10, y: 20 }));
 
@@ -112,7 +115,7 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
         })
     );
 
-    let nested = file.blocks::<Nested>()?;
+    let nested = crate::pages::all_blocks!(file, Nested)?;
     assert_eq!(
         opt(|o| nested.get(0, o))?,
         Some(Nested {
@@ -141,7 +144,7 @@ fn low_level_native_entrypoints_resolve_missing_runtime_policy() -> varlit::Resu
         varlit::ReadLimit::Finite(u64::MAX)
     );
     assert_eq!(
-        opt(|o| file.blocks::<Point>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(file, Point)?.get(0, o))?,
         Some(Point { x: 1, y: 2 })
     );
 
@@ -169,7 +172,7 @@ fn reader_writer_handles_cover_common_workflow() -> varlit::Result<()> {
     let reader = TestFormat::open_reader(&path)?;
     assert_eq!(reader.mode(), varlit::OpenMode::ReadOnly);
     assert_eq!(
-        opt(|o| reader.blocks::<Point>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(reader, Point)?.get(0, o))?,
         Some(Point { x: 44, y: 55 })
     );
     assert_eq!(
@@ -198,7 +201,7 @@ fn fixed_replace_publishes_copy_on_write_generation() -> varlit::Result<()> {
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    let points = file.blocks::<Point>()?;
+    let points = crate::pages::all_blocks!(file, Point)?;
     assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 3, y: 4 }));
 
     cleanup(&path);
@@ -235,11 +238,11 @@ fn variable_replace_rewrite_preserves_records_and_cleans_temp() -> varlit::Resul
 
     let file = TestFormat::open_readonly(&path)?;
     assert_eq!(
-        opt(|o| file.blocks::<Point>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(file, Point)?.get(0, o))?,
         Some(Point { x: 1, y: 2 })
     );
     assert_eq!(
-        opt(|o| file.blocks::<Nested>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(file, Nested)?.get(0, o))?,
         Some(Nested {
             point: Point { x: 3, y: 4 },
             score: 5,
@@ -292,7 +295,7 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
     )?;
     assert_eq!(grown.sequence, 0);
     assert!(grown.new_physical_len > grown.old_physical_len);
-    assert_eq!(file.index_entries()[1].sequence, 1);
+    assert_eq!(crate::pages::all_entries!(file)[1].sequence, 1);
     assert_eq!(
         opt(|o| old_reader.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
@@ -392,13 +395,13 @@ fn typed_decode_charges_nested_allocations_to_handle_budget() -> varlit::Result<
         let mut file = TestFormat::create(&path)?;
         file.push(&value)?;
         file.flush()?;
-        file.index_entries()[0].payload_len
+        crate::pages::all_entries!(file)[0].payload_len
     };
     let limits = ReadLimits::missing()
         .with_max_materialized_bytes(payload_len + value.name.len() as u64 - 1);
     let file = TestFormat::open_readonly_with_resource_limits(&path, limits)?;
     assert!(matches!(
-        opt(|o| file.blocks::<User>()?.get(0, o)),
+        opt(|o| crate::pages::all_blocks!(file, User)?.get(0, o)),
         Err(varlit::Error::LimitExceeded {
             resource: "string",
             actual,

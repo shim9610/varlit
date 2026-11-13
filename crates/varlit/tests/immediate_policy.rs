@@ -246,7 +246,13 @@ fn stream_scalar_batch_and_unindexed_batch_honor_declarations() -> varlit::Resul
 fn automatic_immediate_failure_reports_the_already_written_prefix() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("failed.varlit");
-    let mut writer = Boundaries::create_indexed_writer(&path, opts())?;
+    // The injected failure is in the sidecar confirmation, so the immediate
+    // sync has to confirm.
+    let confirming = varlit::DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..opts()
+    };
+    let mut writer = Boundaries::create_indexed_writer(&path, confirming)?;
     writer.set_immediate_policy(ImmediatePolicy::new().after_records(3))?;
     varlit::VarlitStreamWriter::inject_generation_restamp_failures(1);
     let error = writer
@@ -263,7 +269,9 @@ fn automatic_immediate_failure_reports_the_already_written_prefix() -> varlit::R
     assert!(matches!(writer.immediate(), Err(Error::WriterPoisoned(_))));
     drop(writer);
     let _writer = Boundaries::restore_indexed_writer(&path, opts())?;
-    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&0, o))?.is_none());
+    // The immediate sync made the prefix durable on the primary before the
+    // sidecar confirmation failed, so recovery keeps it.
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&0, o))?.is_some());
     Ok(())
 }
 

@@ -351,11 +351,7 @@ pub fn check_file<P: AsRef<Path>>(
             return Ok(report);
         }
     };
-    let physical_len = match file
-        .snapshot()
-        .try_clone_file()
-        .and_then(|f| Ok(f.metadata()?.len()))
-    {
+    let physical_len = match file.snapshot().try_clone_file().and_then(|f| Ok(f.len()?)) {
         Ok(len) => len,
         Err(e) => {
             report.checks[8].fail(e);
@@ -392,14 +388,14 @@ pub fn check_file<P: AsRef<Path>>(
     }
     let mut scratch = Vec::new();
     let mut inspected_end = 0u64;
-    let entries = match file.record_entries() {
-        Ok(entries) => entries,
+    let records = match file.record_entries() {
+        Ok(records) => records,
         Err(e) => {
             report.checks[1].fail(e);
             return Ok(report);
         }
     };
-    for entry in entries {
+    for entry in records.iter() {
         match entry {
             Ok(entry) => {
                 match entry.checked_physical_end() {

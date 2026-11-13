@@ -285,7 +285,7 @@ Unchanged bitmap and physical-page caches survive. Different epochs trigger the
 full layout load against the replacement file. Follow never initiates compaction.
 All fallible work precedes adoption; a refused delta leaves the old root, bitmap
 state and log EOF visible. A damaged or quarantined old directory requires
-reopening for recovery. VMAT v5 stores both forward and directly addressed reverse
+reopening for recovery. VMAT v5 and later store both forward and directly addressed reverse
 metadata inside the same generation; readers do not reconstruct a private mirror.
 A failure while updating either direction poisons the writer, so a partially
 updated working root cannot become a confirmed generation.
@@ -313,6 +313,29 @@ The durable append-log order is:
 2. flush and `sync_data` those bytes
 3. write the commit marker
 4. flush and `sync_all` the marker
+
+### Single-barrier commit
+
+`transaction_marker(on_flush, single_barrier)` /
+`transaction_marker(explicit, single_barrier)` drop step 2: records and marker
+are written and made durable by one `sync_all`. Storage may then persist the
+marker without some bytes before it, so the marker (v2 payload `VCM2`) names
+what it commits: the newest marker known durable when it was written (its
+*anchor*, the last marker a completed `commit_durable` barrier covered), and
+the count and order-sensitive checksum chain of every record after the
+anchor's commit point. Every open route — scan, segment chain, header tails,
+open digest — verifies the newest marker's run of records with full checksums
+before treating it as a commit point. A run that does not verify is not
+committed: the file ends at the anchor's commit point, a read-only open shows
+exactly that prefix without changing the file, and a writer open truncates the
+rest. Non-durable `commit()` markers after the anchor roll back with it.
+
+The mode requires `integrity: crc32_with_header` (so every byte of every record
+is under a checksum open can check) and refuses `recovery: mark_tail`. A writer
+handle pays one extra `sync_all` before its first record, so that what an
+earlier handle left unsynced is durable before it becomes the anchor. Strict
+`open_*_lazy` routes return an error for an unverified newest transaction;
+`*_lazy_or_scan` falls back to the scan.
 
 Matrix `commit_*` updates working visibility without a hidden fsync. A reader
 sees those changes only after explicit generation publication.

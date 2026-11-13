@@ -4,6 +4,8 @@
 //! is *skipped*, and skipping it correctly means more than not erroring. The
 //! append log starts after it, a rewrite writes it back, and a region that
 //! cannot be framed is still refused.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::PathBuf;
 
@@ -103,7 +105,7 @@ fn an_unknown_block_is_skipped_at_open() -> varlit::Result<()> {
     }
 
     let file = PlainFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<Sample>()?;
+    let blocks = crate::pages::all_blocks!(file, Sample)?;
     assert_eq!(blocks.len(), 8);
     let mut got = Sample::empty();
     for value in 0..8u64 {
@@ -154,7 +156,7 @@ fn a_rewrite_writes_the_unknown_block_back() -> varlit::Result<()> {
     );
 
     let file = PlainFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<Sample>()?;
+    let blocks = crate::pages::all_blocks!(file, Sample)?;
     assert_eq!(blocks.len(), 4);
     let mut got = Sample::empty();
     assert!(blocks.get(1, &mut got)?);

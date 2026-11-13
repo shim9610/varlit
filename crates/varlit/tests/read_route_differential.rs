@@ -1,6 +1,8 @@
 //! Differential coverage of owned, indexed, streaming and mapped reads.
 //! Mappings only exist while the test file is immutable, including after damage.
 #![cfg(all(feature = "integrity", feature = "compression-zstd", feature = "mmap"))]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::{
     fs::OpenOptions,
@@ -71,8 +73,7 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                         writer.sync()?;
                         drop(writer);
                         let reader = spec.open_readonly(&path)?;
-                        let entry = reader
-                            .index_entries()
+                        let entry = crate::pages::all_entries!(reader)
                             .iter()
                             .find(|e| e.block_id == Blob::ID)
                             .unwrap()
@@ -141,7 +142,9 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
                         );
                         rejected(
                             "typed collection",
-                            reader.blocks::<Blob>()?.get(0, &mut got),
+                            reader
+                                .blocks::<Blob>(&mut Vec::new(), std::slice::from_mut(&mut got))
+                                .map(|page| page.filled == 1),
                             &mut checks,
                         );
                         rejected(
@@ -198,7 +201,7 @@ fn read_routes_agree_on_valid_and_corrupt_payloads()
             writer.sync()?;
             drop(writer);
             let reader = spec.open_readonly(&path)?;
-            let e = reader.index_entries()[0].clone();
+            let e = crate::pages::all_entries!(reader)[0].clone();
             assert_eq!(e.payload_len, 0);
             let map = unsafe { reader.mmap_payloads()? };
             assert_eq!(map.payload_window(&e)?, []);

@@ -164,7 +164,7 @@ fn crate_shipped_code(name: &str) -> String {
 /// modules, leaving shipped code byte-identical.
 #[test]
 fn the_shipped_code_stripper_removes_test_modules_and_nothing_else() {
-    for name in ["matrix.rs", "file.rs", "writer_permit.rs"] {
+    for name in ["format.rs", "file.rs", "writer_permit.rs"] {
         let code = crate_code(name);
         let shipped = crate_shipped_code(name);
         assert!(
@@ -199,52 +199,6 @@ fn the_shipped_code_stripper_removes_test_modules_and_nothing_else() {
         );
         assert!(dropped > 0, "{name}: nothing was dropped");
     }
-}
-
-/// SHAPE A, `matrix.rs`. The two functions that put persisted page-index bytes
-/// on disk are declared inside a private `mod page_index` **without**
-/// `pub(super)`, so nothing in the other ~7000 lines of the file can call them;
-/// the only route is one of the prepared values, whose construction performs
-/// every fallible step. Adding `pub(super)` — or moving either function out of
-/// the module — is the single edit that would reopen , and it fails here.
-#[test]
-fn the_matrix_page_index_writers_stay_unreachable_outside_their_gate() {
-    let source = crate_source("matrix.rs");
-    let gate_start = source
-        .find("\nmod page_index {")
-        .expect("matrix.rs must still hold the private `mod page_index` gate");
-    // The module is top-level, so its closing brace is the next line that is
-    // exactly `}` at column zero.
-    let gate_end = source[gate_start + 1..]
-        .find("\n}\n")
-        .map(|offset| gate_start + 1 + offset)
-        .expect("`mod page_index` must be closed");
-    let gate = &source[gate_start..gate_end];
-
-    for writer in ["fn write_entry_run", "fn write_header_bytes"] {
-        assert!(
-            gate.contains(writer),
-            "{writer} must stay inside `mod page_index`: outside it, the fallible \
-             mirror work stops being a compile-time precondition of the disk write"
-        );
-        assert!(
-            !gate.contains(&format!("pub(super) {writer}"))
-                && !gate.contains(&format!("pub(crate) {writer}"))
-                && !gate.contains(&format!("pub {writer}")),
-            "{writer} must stay private to `mod page_index`; exporting it is the \
-             one edit that reopens F-03"
-        );
-    }
-    assert_eq!(
-        source.matches("fn write_entry_run").count(),
-        1,
-        "a second page-index entry writer outside the gate would bypass it"
-    );
-    assert_eq!(
-        source.matches("fn write_header_bytes").count(),
-        1,
-        "a second page-index header writer outside the gate would bypass it"
-    );
 }
 
 /// Every `.rs` file that ships in `varlit-core`. Widened deliberately: a gate
@@ -516,8 +470,16 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
     }
     // The gate above forbids a bypass; it does not notice a *new gated method*,
     // and adding one is exactly how the module's guarantee widens without
-    // anyone deciding to widen it. So count them: four today, and a fifth has
+    // anyone deciding to widen it. So count them: five today, and a sixth has
     // to be argued for here before it can exist.
+    //
+    // The fifth is `overwrite_matrix_bytes`. Matrix storage records (tiles,
+    // their directory pages, the metadata record and the write-ahead ring)
+    // are appended through `append_record_at_end` like every record, with
+    // `RECORD_FLAG_IN_PLACE`, which keeps their payload out of the record
+    // checksum; their framing never changes afterwards, so anchors and their
+    // summaries stay valid. The tile engine is the only caller, and its ring
+    // is what makes those in-place writes crash-atomic.
     //
     // The fourth is `overwrite_record_mutable_flags`, and the argument for it
     // is that it is the narrowest write in the module. It takes `[u8; 4]`
@@ -539,13 +501,14 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
                     | "overwrite_indexed_record"
                     | "overwrite_header_region"
                     | "overwrite_record_mutable_flags"
+                    | "overwrite_matrix_bytes"
             )
         })
         .collect();
     assert_eq!(
         gated.len(),
-        4,
-        "`mod record_file` must expose exactly the four writes this gate names, and no other: \
+        5,
+        "`mod record_file` must expose exactly the five writes this gate names, and no other: \
          found {gated:?}"
     );
     // Comment-stripped, because the fields carry doc comments and a gate that
@@ -556,15 +519,9 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        gate_code.contains(
-            "    pub struct RecordFile {\n        file: File,\n        matrix_read_pool: \
-             crate::matrix::MatrixReadPool,\n        matrix_pages: Option<crate::matrix_generation::MatrixFile>,\n    }"
-        ),
-        "the wrapped handle must stay a private field of `RecordFile`, and the one other field is \
-         the one argued for here; any further one has to be argued for the same way. \
-         `MatrixReadPool` is read-only — its handles are opened `FILE_GENERIC_READ` and never \
-         leave `mod region_reader`, see \
-         `the_private_matrix_read_handles_are_read_only_and_never_lent_out`. \
+        gate_code.contains("    pub struct RecordFile {\n        file: PrimaryFile,\n    }"),
+        "the wrapped handle must stay the only, private field of `RecordFile`; any further one \
+         has to be argued for here. \
          \
          A cached file offset is the field this gate is now specifically here to keep out. There \
          was one — `cursor: Option<u64>`, to spare the append path an `lseek` per record — and it \
@@ -575,7 +532,45 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
          Windows case moves the offset from another thread under `&self` while this handle is \
          exclusively borrowed, which no invalidate-on-handout scheme reaches. Making the append \
          path free of the syscall did not need the cache anyway: the offset's only consumer was \
-         `AppendSnapshot`'s rollback cursor, and the rollback restores `eof` instead"
+         `AppendSnapshot`'s rollback cursor, and the rollback restores `eof` instead. \
+         \
+         The handle is a `PrimaryFile` because anchors sit inside the log and only that type \
+         translates logical offsets around them; see the gate on `PrimaryFile` below for why \
+         its `position` is not the cached offset this paragraph excludes"
+    );
+    // `PrimaryFile` implements `Write`, so lending one is lending a write.
+    assert!(
+        !gate.contains("-> &PrimaryFile") && !gate.contains("-> &mut PrimaryFile"),
+        "`RecordFile` must not lend out its `PrimaryFile`: it implements `Write`"
+    );
+    // `PrimaryFile::position` is this handle's own logical cursor, not the
+    // kernel's offset: every byte moves by a positional call (`pread`/`pwrite`,
+    // `seek_read`/`seek_write`), and `try_clone` starts the clone at zero. So a
+    // snapshot clone shares the open file description but never a cursor, and
+    // a Windows `seek_read` that moves the kernel offset moves nothing anyone
+    // reads. That holds only while the type never seeks or streams its handle.
+    let primary = crate_code("primary_file.rs");
+    for bypass in [
+        "self.file.seek(",
+        "self.file.read(",
+        "self.file.read_exact(",
+        "self.file.write(",
+        "self.file.write_all(",
+        "self.file.stream_position(",
+    ] {
+        assert!(
+            !primary.contains(bypass),
+            "`{bypass}` uses the kernel offset `PrimaryFile` shares with its clones; every \
+             transfer must be positional"
+        );
+    }
+    let clone = &primary[primary
+        .find("fn try_clone(")
+        .expect("`PrimaryFile::try_clone` exists")..];
+    let clone = &clone[..clone.find("\n    }\n").expect("`try_clone` is closed")];
+    assert!(
+        clone.contains("position: 0,"),
+        "`PrimaryFile::try_clone` must start the clone's cursor at zero, not copy it"
     );
     assert!(
         !gate.contains("impl Write for RecordFile")
@@ -588,23 +583,21 @@ fn the_primary_record_handle_is_only_written_through_its_four_gated_operations()
     // The single deliberate exception, named in the module doc rather than left
     // to be discovered.
     assert_eq!(
-        source.matches("fn matrix_region(").count(),
+        source.matches("fn barrier_file(").count(),
         1,
         "there must be exactly one escape hatch to the raw handle"
     );
 }
 
-/// The named exception to the gate above. `crate::matrix`'s functions and the
-/// public `MatrixDurabilityBarrier` trait take `&mut File`, so the handle has to
-/// be lent for matrix work. The matrix region is disjoint from the record region
-/// and carries its own shape-A gate (`matrix.rs`, `mod page_index`). This gate
-/// keeps the exception from silently widening: every use of the accessor must be
-/// an argument to a `crate::matrix::` call or to a matrix durability sync.
+/// The named exception to the gate above. The public `MatrixDurabilityBarrier`
+/// trait takes `&mut File`, so the handle has to be lent to a caller's barrier.
+/// This gate keeps the exception from silently widening: every use of the
+/// accessor must be an argument to a matrix durability sync.
 #[test]
 fn the_primary_handle_escape_is_only_for_the_matrix_region() {
     let source = crate_source("file.rs");
     for (number, line) in source.lines().enumerate() {
-        if !line.contains(".matrix_region()") {
+        if !line.contains(".barrier_file()") {
             continue;
         }
         let context: String = source
@@ -614,89 +607,15 @@ fn the_primary_handle_escape_is_only_for_the_matrix_region() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            context.contains("crate::matrix::")
-                || context.contains("sync_matrix_data")
+            context.contains("sync_matrix_data")
                 || context.contains("sync_matrix_commit")
-                || line.contains("pub(super) fn matrix_region"),
-            "file.rs:{}: `matrix_region()` is the one escape from the record-write gate and may \
-             only hand the handle to `crate::matrix` or to a matrix durability barrier; this use \
-             is something else:\n{context}",
+                || line.contains("pub(super) fn barrier_file"),
+            "file.rs:{}: `barrier_file()` is the one escape from the record-write gate and may \
+             only hand the handle to a matrix durability barrier; this use is something \
+             else:\n{context}",
             number + 1
         );
     }
-}
-
-/// The per-thread matrix read handles are a *second* set of open file objects
-/// for the same file, so they get the same treatment as the primary handle:
-/// read-only at the OS level, and never lent out of the module that owns them.
-///
-/// They exist because `&self` on the read entry points bought the right to share
-/// a handle and, on Windows, none of the throughput: `ReadFile` against a
-/// synchronous handle serialises on the file object, so four threads sharing one
-/// handle measured 0.27x of one thread. Each reading thread now gets its own
-/// file object derived from the open handle with `ReOpenFile`. That is only
-/// acceptable while the derived handles cannot write.
-#[test]
-fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
-    let source = crate_source("matrix.rs");
-    let start = source
-        .find("\nmod region_reader {")
-        .expect("matrix.rs must still hold `mod region_reader`");
-    let end = source[start + 1..]
-        .find("\n}\n")
-        .map(|offset| start + 1 + offset)
-        .expect("`mod region_reader` must be closed");
-    let module: String = source[start..end]
-        .lines()
-        .filter(|line| {
-            !line.trim_start().starts_with("//") && !line.trim_start().starts_with("///")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(
-        module.contains("FILE_GENERIC_READ"),
-        "the private handles must be reopened read-only"
-    );
-    for writable in ["GENERIC_WRITE", "FILE_GENERIC_WRITE", "FILE_WRITE_DATA"] {
-        assert!(
-            !module.contains(writable),
-            "`{writable}` in `mod region_reader` would make a private read handle writable, and \
-             it is reachable from `&self` — i.e. from a shared borrow of a `VarlitReader`"
-        );
-    }
-    assert_eq!(
-        module.matches("ReOpenFile(").count(),
-        1,
-        "one derivation site; `ReOpenFile` takes no path, so there is no window in which a \
-         different file could be opened under the same name"
-    );
-    assert!(
-        module.contains("FILE_SHARE_DELETE"),
-        "a cached private handle must not block deletion of a file its owner has closed"
-    );
-    for lent in [
-        "pub(crate) fn reopen",
-        "pub fn reopen",
-        "-> &File",
-        "-> Arc<File>",
-        "-> Box<File>",
-    ] {
-        assert!(
-            !module.contains(lent),
-            "`{lent}`: the private handles must never leave `mod region_reader`; `&File` \
-             implements `Write`, so lending one out is lending a write handle"
-        );
-    }
-    // Ownership, rather than a thread-local weak registry, bounds handle lifetime.
-    assert!(module.contains("handle: OnceCell<Option<Box<File>>>"));
-    assert!(module.contains("crate::fallible::try_box("));
-    assert!(
-        !module.contains("get_or_init"),
-        "a refused reopen must remain retryable"
-    );
-    assert!(!module.contains("thread_local!"));
-    assert!(!module.contains("Mutex<"));
 }
 
 /// Wiring in `file.rs`. The two enforcement types keep their private fields and
@@ -708,7 +627,9 @@ fn the_private_matrix_read_handles_are_read_only_and_never_lent_out() {
 fn an_in_place_record_write_still_demands_a_version_checked_target() {
     let source = crate_source("file.rs");
     assert!(
-        source.contains("pub struct ReplacementTarget {\n        position: usize,\n    }"),
+        source.contains(
+            "pub struct ReplacementTarget {\n        position: usize,\n        entry: super::RecordIndexEntry,\n    }"
+        ),
         "the target token's field must stay private, which is what \
          tests/ui/fail_fabricated_replacement_target.rs asserts"
     );
@@ -756,176 +677,6 @@ fn an_in_place_record_write_still_demands_a_version_checked_target() {
     assert!(
         source.contains("write: RecordOverwrite,"),
         "`RecordFile::overwrite_indexed_record` must consume the permission by value"
-    );
-}
-
-/// SHAPE B, `matrix.rs`. 's fix was judged *partial* on re-verification:
-/// round 12 recorded completeness in a `crc_valid_complete: bool` beside a plain
-/// `SparseBitmap` and added one call to a checking function, so a new consumer
-/// that wrote `block.crc_valid_bits.get(ordinal)?` compiled cleanly. The check
-/// bound nothing — it was the "the next function will simply fail to repeat it"
-/// shape, in the file that had just been rewritten to close that class.
-///
-/// The bitmap now lives inside `mod crc_valid_evidence` and is unnameable
-/// outside it, so the only operation in the crate that yields a validity *bit*
-/// is `CompleteCrcValidEvidence::get`, whose witness is produced solely by the
-/// completeness refusal. The compile-fail fixture
-/// `tests/ui/fail_fabricated_crc_valid_completeness.rs` asserts the witness
-/// cannot be forged. This gate stands for the two parts a fixture cannot express
-/// from outside the crate: that the field keeps the evidence type rather than a
-/// bare bitmap, and that the module's two deliberate escapes — the fail-closed
-/// reader and the page-index maintenance lend — keep exactly one call site each.
-#[test]
-fn the_crc_validity_bitmap_is_only_read_through_its_evidence_type() {
-    let source = crate_source("matrix.rs");
-    assert!(
-        source.contains("    crc_valid_bits: CrcValidEvidence,"),
-        "`MatrixBlockLayout::crc_valid_bits` must stay a `CrcValidEvidence`; a bare \
-         `SparseBitmap` field puts `get` back in reach of all ~7000 lines of matrix.rs, which \
-         is the configuration F-04 was found in and the reason its round-12 fix was judged \
-         partial"
-    );
-    let code: String = source
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.starts_with("//") && !trimmed.starts_with("///")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        !code.contains("crc_valid_complete"),
-        "completeness must travel *inside* the evidence type; a separate boolean beside the \
-         bitmap is a fact a reader may consult, not a precondition of addressing it"
-    );
-
-    let gate_start = source
-        .find("\npub(crate) mod crc_valid_evidence {")
-        .expect("matrix.rs must still hold the `mod crc_valid_evidence` gate");
-    let gate_end = source[gate_start + 1..]
-        .find("\n}\n")
-        .map(|offset| gate_start + 1 + offset)
-        .expect("`mod crc_valid_evidence` must be closed");
-    let gate = &source[gate_start..gate_end];
-    // Everything outside the gate that ships in the library: comments cannot
-    // call anything, and the crate's own `#[cfg(test)]` modules are where the
-    // evidence type's unit contract is stated, so counting their calls would
-    // punish testing the enforcement.
-    let mut outside = format!("{}{}", &source[..gate_start], &source[gate_end..]);
-    for unit_test_module in [
-        "\n#[cfg(test)]\nmod crc_valid_evidence_tests {",
-        // Round 16: the in-crate bypass catalogue proves the narrowed escape
-        // by *using* it, which is the only way to prove what it no longer
-        // lends. Counting that call against the one-call-site gate would make
-        // demonstrating the property break the gate that states it.
-        "\n#[cfg(test)]\nmod bypass_catalogue {",
-    ] {
-        if let Some(unit_tests) = outside.find(unit_test_module) {
-            let end = outside[unit_tests + 1..]
-                .find("\n}\n")
-                .map(|offset| unit_tests + 1 + offset + 3)
-                .unwrap_or(outside.len());
-            outside.replace_range(unit_tests..end, "\n");
-        }
-    }
-    let outside: String = outside
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.starts_with("//") && !trimmed.starts_with("///")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(
-        gate.contains("bits: SparseBitmap,"),
-        "the bitmap must stay a private field of `CrcValidEvidence`"
-    );
-    assert_eq!(
-        gate.chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-            .replace(",)", ")")
-            .matches("fncomplete(&self,read:BitmapRead<'_>)")
-            .count(),
-        1,
-        "`CrcValidEvidence::complete` must remain the only producer of the witness, because it \
-         is where the F-04 refusal lives"
-    );
-    assert!(
-        gate.contains("self.bits.visit_index(read, |_, _| Ok(()))?;"),
-        "a recovery witness must validate the original directory, including after OnDemand open"
-    );
-    assert_eq!(
-        gate.matches("fn get(&self, ordinal: u64, read: BitmapRead<'_>) -> Result<bool>")
-            .count(),
-        1,
-        "`CompleteCrcValidEvidence::get` must remain the only bit read; a second one on \
-         `CrcValidEvidence` itself would hand back absence as data without the proof"
-    );
-
-    // The two deliberate escapes, held to one use each. Anything more is a new
-    // route from incomplete evidence to a value a caller can publish.
-    assert_eq!(
-        outside.matches(".require_meaningful(").count(),
-        1,
-        "the fail-closed reader has exactly one legitimate caller (`require_cell_crc_evidence`, which \
-         turns an absent bit into a refusal). A second caller must justify itself here rather \
-         than appear silently, and `.is_ok()` on its result is the one way its `Result<()>` \
-         can be laundered back into a bit"
-    );
-    for (offset, _) in outside.match_indices(".require_meaningful(") {
-        let window = &outside[offset..outside.len().min(offset + 400)];
-        assert!(
-            !window.contains(".is_ok()") && !window.contains(".is_err()"),
-            "a fail-closed read must never be turned back into a boolean: its `Result<()>` \
-             carries no bit precisely so that an absent one cannot become published state"
-        );
-    }
-    assert_eq!(
-        outside.matches(".page_index_mirror_mut()").count(),
-        1,
-        "lending the bitmap for page-index maintenance is the one escape from the evidence \
-         type; every extra call site is a fresh route to `SparseBitmap::get`"
-    );
-    // Round 16: the count above is the second line of defence, not the
-    // property. Re-verification executed `*evidence.page_index_mirror_mut() =
-    // attacker_bits;` at the single permitted call site and read a laundered
-    // bit back through `CompleteCrcValidEvidence::get` — a count over call
-    // sites says nothing about what one call site may do. The escape must
-    // therefore hand back the narrowed mirror, whose borrow is private to `mod
-    // page_index`, and never a `&mut SparseBitmap`.
-    assert!(
-        gate.contains("pub(super) fn page_index_mirror_mut(&mut self) -> PageIndexMirror<'_> {"),
-        "the page-index escape must return `PageIndexMirror`, not `&mut SparseBitmap`: with the \
-         raw borrow, `*evidence.page_index_mirror_mut() = attacker_bits` replaces a block's \
-         whole validity map while `complete` stays true, which is precisely the F-04 property \
-         `CrcValidEvidence::new` was deleted to protect"
-    );
-    let mirror_start = source
-        .find("    pub(super) struct PageIndexMirror<'a> {")
-        .expect("`mod page_index` must hold the narrowed mirror");
-    let mirror_end = source[mirror_start..]
-        .find("\n    /// Records `page` in the persisted page index")
-        .map(|offset| mirror_start + offset)
-        .expect("`PageIndexMirror` must keep its impl before the entry writers");
-    let mirror = &source[mirror_start..mirror_end];
-    assert!(
-        mirror.contains("        bits: &'a mut SparseBitmap,"),
-        "the mirror's borrow must stay a private field of `mod page_index`; a `pub` one is the \
-         raw borrow again with an extra dot"
-    );
-    for lent_back in ["-> &mut SparseBitmap", "-> &SparseBitmap", "impl DerefMut"] {
-        assert!(
-            !mirror.contains(lent_back),
-            "`PageIndexMirror` must not hand the bitmap back (`{lent_back}`): its whole purpose \
-             is that page-index maintenance cannot reach `set`, `get` or assignment"
-        );
-    }
-    assert!(
-        outside.contains("let evidence = block.crc_valid_bits.complete(BitmapRead::new(file))?;"),
-        "the CRC commit-map rebuild must keep obtaining the completeness witness before it \
-         reads any validity bit (F-04)"
     );
 }
 
@@ -1105,211 +856,6 @@ fn the_resident_record_index_cannot_be_grown_or_outrun() {
         !source.contains("self.index.push("),
         "the append path must install through `ResidentIndex::install`, whose token is \
          produced only by the reservation that runs before the write"
-    );
-}
-
-/// SHAPE B, `matrix.rs`, the flag the name-based sweep could not see.
-///
-/// `fatal_access_blocked` gated access to matrix state through an
-/// `ensure_fatal_access_allowed` helper called by convention, and was absent
-/// from round 12's shape-B table because that inventory was built by grepping
-/// for `poisoned`. The boolean now lives in `mod fatal_access`, and the two
-/// functions that turn a block id or a commit category into a position in the
-/// layout's state demand the witness that reading it produces.
-///
-/// The witness cannot be forged from outside the crate
-/// (`tests/ui/fail_fabricated_fatal_access.rs`); this gate stands for the
-/// in-crate half — that the flag stays wrapped, that the resolvers keep
-/// demanding the witness, and that there remains exactly one place a witness
-/// comes into existence.
-#[test]
-fn matrix_state_is_only_addressed_through_the_fatal_access_witness() {
-    let source = crate_source("matrix.rs");
-    assert!(
-        source.contains("    fatal_access: FatalAccessGate,"),
-        "`MatrixLayout` must hold the fail-closed state as a `FatalAccessGate`; a bare \
-         `fatal_access_blocked: bool` is a guard every accessor has to remember, which is the \
-         configuration re-verification found it in"
-    );
-    let gate_start = source
-        .find("\npub(crate) mod fatal_access {")
-        .expect("matrix.rs must hold the `mod fatal_access` gate");
-    let gate_end = source[gate_start + 1..]
-        .find("\n}\n")
-        .map(|offset| gate_start + 1 + offset)
-        .expect("`mod fatal_access` must be closed");
-    let gate = &source[gate_start..gate_end];
-    assert!(
-        gate.contains("        blocked: bool,"),
-        "the boolean must stay a private field of `FatalAccessGate`"
-    );
-    assert!(
-        gate.contains("pub struct FatalAccessAllowed(());"),
-        "the witness's field must stay private, which is what \
-         tests/ui/fail_fabricated_fatal_access.rs asserts"
-    );
-    let code = crate_shipped_code("matrix.rs");
-    assert_eq!(
-        code.matches("FatalAccessAllowed(())").count(),
-        2,
-        "the witness must come into existence in exactly one place: its declaration, and the          single `Ok(FatalAccessAllowed(()))` inside `fatal_access::allow_for`, which IS the          refusal"
-    );
-
-    // Round 15: the minting half. Round 14 made the witness unforgeable and
-    // stopped there, so `FatalAccessGate::new(false).allow()` - three tokens,
-    // inside matrix.rs - produced a witness for a layout that was blocked.
-    assert!(
-        !gate.contains("fn new("),
-        "`FatalAccessGate` must have no constructor that accepts the decision. `new(blocked:          bool)` was the named one-line bypass: mint a gate that says `false`, take its witness,          and address the state of a layout carrying a `Fatal` finding"
-    );
-    assert!(
-        gate.contains("        fn evaluate<'a>("),
-        "the only constructor must be `FatalAccessGate::evaluate`, which *performs* the          classification from the recovery findings and the spec rather than accepting it"
-    );
-    // Round 16. `pub(super)` on the constructor made it *file*-visible, and a
-    // file-visible function returning a gate is a file-visible way to write
-    // one: `layout.fatal_access = FatalAccessGate::evaluate(clean.iter(),
-    // spec);` is a single field assignment (`MatrixLayout`'s fields are private
-    // to the file, not to a module) and it undoes `block()`. The enforced
-    // property is no longer "one call site" but "no expression of this type
-    // exists outside the module".
-    assert!(
-        !gate.contains("pub(super) fn evaluate")
-            && !gate.contains("pub(crate) fn evaluate")
-            && !gate.contains("pub fn evaluate"),
-        "`FatalAccessGate::evaluate` must stay private to `mod fatal_access`: exported, it is a          one-line reassignment of any layout's fail-closed decision, `block()` included"
-    );
-    assert_eq!(
-        code.matches("FatalAccessGate::evaluate(").count(),
-        1,
-        "a gate must come into existence exactly once, on the open path, from that layout's own          findings"
-    );
-    assert!(
-        !gate.contains("#[derive(Clone, Debug)]\n    pub struct FatalAccessGate")
-            && !code.contains("impl Clone for FatalAccessGate"),
-        "`FatalAccessGate` must not be `Clone`: `layout.fatal_access =          donor.fatal_access.clone();` copies an unblocked decision off a healthy layout onto a          blocked one, in one line, and appeared in no report until re-verification wrote it"
-    );
-    assert!(
-        code.contains("impl Drop for MatrixLayout {"),
-        "`MatrixLayout` must implement `Drop`, whose only purpose is E0509: without it a gate          can be *moved* out of any expression that yields a layout          (`donor.clone().fatal_access`, `assemble_layout(..).fatal_access`), which is the same          one-line laundering with two more tokens"
-    );
-    assert!(
-        gate.contains("pub(super) fn assemble_layout(")
-            && gate.contains("    let layout = MatrixLayout {"),
-        "the layout literal must live inside `mod fatal_access`, so that constructing a gate and          constructing the state it speaks for are the same act"
-    );
-    assert!(
-        !gate.contains("fn allow(&self)"),
-        "there must be no method that turns a gate into a witness: a gate built anywhere else          would then speak for a layout it has nothing to do with, which is the laundering shape          round 14 closed for `MutationPermit` and left open here"
-    );
-    assert!(
-        gate.contains(
-            "pub(super) fn allow_for(layout: &MatrixLayout) -> Result<FatalAccessAllowed> {"
-        ),
-        "the sole producer of the witness must take the layout, so the gate consulted is the          gate of the state the caller is about to address"
-    );
-    assert_eq!(
-        code.matches("= MatrixLayout {").count(),
-        1,
-        "`MatrixLayout` must keep exactly one declaration and one literal. The residual after          round 15 is that a literal can carry a gate of the caller's choosing; holding the crate          to the single construction in `layout_from_parts` is what keeps that residual the size          it is documented to be"
-    );
-    for resolver in [
-        "fn block_index(&self, _allowed: &FatalAccessAllowed, block_id: u32) -> Result<usize> {",
-        "fn commit_index(&self, _allowed: &FatalAccessAllowed, name: &str) -> Result<usize> {",
-    ] {
-        assert!(
-            source.contains(resolver),
-            "`{resolver}` must keep demanding the witness: these two are the only routes from \
-             an identifier to a position in the layout's state, so a matrix accessor written \
-             next month cannot address what it wants to touch without the fail-closed check"
-        );
-    }
-}
-
-/// the **minting** half.
-///
-/// Round 14 made `CompleteCrcValidEvidence` unforgeable and left
-/// `CrcValidEvidence::new(bits, complete: bool)` `pub(super)`, so one line
-/// inside `matrix.rs` - `CrcValidEvidence::new(bits, true).complete()?` -
-/// produced the completeness witness for a bitmap nothing had enumerated. That
-/// is  with the check spelled out loud instead of omitted, and the round-14
-/// `trybuild` fixture could not see it: it compiles an outside crate, where
-/// `new` was never reachable in the first place.
-///
-/// Making the witness type unforgeable cannot fix a *derived* fact on its own,
-/// because whoever may state it may restate it. The chain has to terminate at
-/// the code that derives it, so the enumerator now lives in
-/// `mod page_index_enumeration` and returns a `PageIndexEnumeration` whose two
-/// constructors have no visibility modifier at all. This gate holds that shape.
-#[test]
-fn crc_validity_completeness_can_only_come_from_an_enumeration_that_ran() {
-    let source = crate_source("matrix.rs");
-    let code = crate_code("matrix.rs");
-    let shipped = crate_shipped_code("matrix.rs");
-
-    let gate_start = source
-        .find("\npub(crate) mod crc_valid_evidence {")
-        .expect("matrix.rs must still hold the `mod crc_valid_evidence` gate");
-    let gate_end = source[gate_start + 1..]
-        .find("\n}\n")
-        .map(|offset| gate_start + 1 + offset)
-        .expect("`mod crc_valid_evidence` must be closed");
-    let gate = &source[gate_start..gate_end];
-
-    assert!(
-        !gate.contains("fn new(bits: SparseBitmap, complete: bool)"),
-        "`CrcValidEvidence` must have no constructor that accepts completeness as a `bool`.          That was the named one-line bypass: assert completeness for a bitmap that was never          enumerated and take the F-04 witness off it"
-    );
-    assert!(
-        gate.contains("pub(super) fn from_page_index_enumeration("),
-        "the load-path constructor must take the enumeration outcome by value, so the          completeness fact travels from the code that derived it"
-    );
-    assert!(
-        gate.contains("pub(super) fn newly_created(bit_count: u64) -> Result<Self> {"),
-        "the create-path constructor must take a bit *count* and build its own empty bitmap;          one that accepted a `SparseBitmap` would launder an arbitrary map as complete"
-    );
-    for spelling in [
-        "pub fn fully_enumerated",
-        "pub(crate) fn fully_enumerated",
-        "pub(super) fn fully_enumerated",
-        "pub fn truncated_by_damage",
-        "pub(crate) fn truncated_by_damage",
-        "pub(super) fn truncated_by_damage",
-    ] {
-        assert!(
-            !code.contains(spelling),
-            "`{spelling}` puts the completeness fact back in reach of every line of matrix.rs,              which is the shape `CrcValidEvidence::new(bits, true)` had"
-        );
-    }
-    assert!(
-        code.contains("        fn fully_enumerated() -> Self {")
-            && code.contains("        fn truncated_by_damage() -> Self {"),
-        "`PageIndexEnumeration`'s two constructors must keep their exact private declarations"
-    );
-    assert!(
-        code.contains("pub(crate) mod page_index_enumeration {")
-            && code.contains("    ) -> Result<PageIndexEnumeration> {"),
-        "the enumerator must live inside `mod page_index_enumeration` and return the outcome          type; moving it out, or returning a bare `bool`, restores the mint"
-    );
-    assert_eq!(
-        shipped
-            .matches("CrcValidEvidence::from_page_index_enumeration(")
-            .count(),
-        1,
-        "there must be exactly one place a loaded bitmap becomes CRC-validity evidence"
-    );
-    assert!(
-        !shipped.contains("index_complete: bool"),
-        "the enumeration outcome must not be carried as a bare `bool` anywhere between the          enumerator and the evidence; that intermediate is where it becomes restatable"
-    );
-    assert_eq!(
-        code.matches("from_parts_for_tests_only").count(),
-        3,
-        "the deliberate test-only escape has two unit-test callers: evidence checks and fallible-copy checks"
-    );
-    assert!(
-        !shipped.contains("from_parts_for_tests_only"),
-        "neither the test escape nor either caller may enter shipped code"
     );
 }
 

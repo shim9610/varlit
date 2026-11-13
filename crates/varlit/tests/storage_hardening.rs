@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::fs::{File, OpenOptions, remove_file};
 use std::io::{Seek, SeekFrom, Write};
 use std::panic::catch_unwind;
@@ -106,23 +109,23 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
 
     let mut file = StorageFormat::create(&path)?;
     file.push(&value)?;
-    let entry = file.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(file)[0].clone();
     drop(file);
 
     assert_eq!(
-        entry.read_payload_limited(&path, logical.len() as u64)?,
+        StorageFormat::read_payload_limited(&entry, &path, logical.len() as u64)?,
         logical
     );
     assert!(matches!(
-        entry.read_payload_limited(&path, logical.len() as u64 - 1),
+        StorageFormat::read_payload_limited(&entry, &path, logical.len() as u64 - 1),
         Err(Error::LimitExceeded {
             resource: "payload",
             ..
         })
     ));
     assert_eq!(
-        entry.read_logical_payload_limited(
-            StorageFormat::spec(),
+        StorageFormat::read_logical_payload_limited(
+            &entry,
             &path,
             logical.len() as u64,
             logical.len() as u64
@@ -134,7 +137,7 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
     beyond_eof.payload_offset = std::fs::metadata(&path)?.len();
     beyond_eof.payload_len = 1;
     assert!(matches!(
-        beyond_eof.read_payload(&path),
+        StorageFormat::read_payload(&beyond_eof, &path),
         Err(Error::UnexpectedEof)
     ));
 
@@ -142,14 +145,14 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
     let mut missing_footer = entry.clone();
     missing_footer.footer_offset = Some(payload_end);
     assert!(matches!(
-        missing_footer.read_payload_limited(&path, logical.len() as u64),
+        StorageFormat::read_payload_limited(&missing_footer, &path, logical.len() as u64),
         Err(Error::UnexpectedEof)
     ));
 
     let mut misplaced_footer = entry.clone();
     misplaced_footer.footer_offset = Some(payload_end - 1);
     assert!(matches!(
-        misplaced_footer.read_payload(&path),
+        StorageFormat::read_payload(&misplaced_footer, &path),
         Err(Error::CorruptTail { .. })
     ));
 
@@ -191,7 +194,7 @@ fn sparse_payload_rejects_standard_limit_before_reading() -> varlit::Result<()> 
     };
 
     assert!(matches!(
-        entry.read_payload(&path),
+        StorageFormat::read_payload(&entry, &path),
         Err(Error::LimitExceeded {
             resource: "record payload length",
             ..
@@ -208,7 +211,7 @@ fn hostile_on_disk_payload_lengths_fail_without_panicking_or_allocating() -> var
     cleanup(&path);
     let mut writer = StorageFormat::create(&path)?;
     writer.push(&StorageValue { value: 17 })?;
-    let entry = writer.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(writer)[0].clone();
     drop(writer);
 
     let payload_len_offset = entry.record_offset + 16;
@@ -241,13 +244,13 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
 
     let mut file = StorageCompressionFormat::create(&path)?;
     file.push(&value)?;
-    let entry = file.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(file)[0].clone();
     assert!(entry.payload_len > logical.len() as u64);
     drop(file);
 
     assert_eq!(
-        entry.read_logical_payload_limited(
-            StorageCompressionFormat::spec(),
+        StorageCompressionFormat::read_logical_payload_limited(
+            &entry,
             &path,
             entry.payload_len,
             logical.len() as u64
@@ -255,8 +258,8 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
         logical
     );
     assert!(matches!(
-        entry.read_logical_payload_limited(
-            StorageCompressionFormat::spec(),
+        StorageCompressionFormat::read_logical_payload_limited(
+            &entry,
             &path,
             entry.payload_len - 1,
             logical.len() as u64
@@ -269,9 +272,8 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
 
     let runtime =
         varlit::ReadLimits::missing().with_max_logical_payload_len(logical.len() as u64 - 1);
-    let limited_spec = StorageCompressionFormat::spec().with_resource_limits(runtime);
     assert!(matches!(
-        entry.read_logical_payload_limited(limited_spec, &path, u64::MAX, u64::MAX,),
+        StorageCompressionFormat::read_logical_payload_with_resource_limits(&entry, &path, runtime),
         Err(Error::LimitExceeded {
             resource: "logical payload length",
             ..
@@ -292,7 +294,7 @@ fn mmap_constructor_rejects_a_stale_index_extent() -> varlit::Result<()> {
     drop(file);
 
     let reader = StorageFormat::open_readonly(&path)?;
-    let truncated_len = reader.index_entries()[0].payload_offset;
+    let truncated_len = crate::pages::all_entries!(reader)[0].payload_offset;
     OpenOptions::new()
         .write(true)
         .open(&path)?
@@ -317,7 +319,7 @@ fn mmap_constructor_rejects_truncated_empty_snapshot() -> varlit::Result<()> {
     drop(StorageFormat::create(&path)?);
 
     let reader = StorageFormat::open_readonly(&path)?;
-    assert!(reader.index_entries().is_empty());
+    assert!(crate::pages::all_entries!(reader).is_empty());
     OpenOptions::new().write(true).open(&path)?.set_len(1)?;
 
     // No state is reused after a panic; this checks rejection, not unwind recovery.
@@ -491,7 +493,10 @@ fn successful_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::
     // The publication really happened, so the check above is about hygiene and
     // not about a compact that silently did nothing.
     let compacted = StorageKeyedFormat::open(&output)?;
-    assert_eq!(compacted.blocks::<StorageKeyedValue>()?.len(), 64);
+    assert_eq!(
+        crate::pages::all_blocks!(compacted, StorageKeyedValue)?.len(),
+        64
+    );
     drop(compacted);
 
     // Markers for the caller's own paths are stable identities and stay put:
@@ -572,7 +577,7 @@ fn create_and_sync_reports_pathname_durability() -> varlit::Result<()> {
     drop(file);
 
     let reopened = StorageFormat::open(&*path)?;
-    assert_eq!(reopened.blocks::<StorageValue>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(reopened, StorageValue)?.len(), 2);
     drop(reopened);
 
     // An existing pathname is not re-established by opening it, and syncing a
@@ -665,7 +670,10 @@ fn rewrite_temp_is_removed_when_preparation_fails_after_creation() -> varlit::Re
         "a successful compact must still leave nothing behind"
     );
     let compacted = StorageKeyedFormat::open(&output)?;
-    assert_eq!(compacted.blocks::<StorageKeyedValue>()?.len(), 8);
+    assert_eq!(
+        crate::pages::all_blocks!(compacted, StorageKeyedValue)?.len(),
+        8
+    );
     Ok(())
 }
 

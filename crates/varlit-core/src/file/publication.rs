@@ -193,7 +193,7 @@ pub(super) struct RewriteTemp {
     pub(super) path: PathBuf,
     /// Closed by [`RewriteTemp::close`] before publication; Windows cannot
     /// rename or delete a file through a live handle.
-    pub(super) file: Option<File>,
+    pub(super) file: Option<crate::primary_file::PrimaryFile>,
     pub(super) armed: bool,
 }
 
@@ -217,6 +217,7 @@ impl RewriteTemp {
         self.file
             .as_ref()
             .expect("rewrite temp handle used after close")
+            .raw()
     }
 
     /// Releases the handle while keeping the file and the cleanup obligation.
@@ -281,7 +282,9 @@ pub(super) fn take_injected_rewrite_temp_preparation_failure() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn create_rewrite_temp_file(path: &Path) -> Result<(PathBuf, File)> {
+pub(crate) fn create_rewrite_temp_file(
+    path: &Path,
+) -> Result<(PathBuf, crate::primary_file::PrimaryFile)> {
     let base_name = path
         .file_name()
         .map(|name| name.to_os_string())
@@ -300,7 +303,10 @@ pub(crate) fn create_rewrite_temp_file(path: &Path) -> Result<(PathBuf, File)> {
             .create_new(true)
             .open(&temp_path)
         {
-            Ok(file) => return Ok((temp_path, file)),
+            Ok(file) => {
+                // Anchors, if any, are installed once the header is written.
+                return Ok((temp_path, crate::primary_file::PrimaryFile::new(file, None)));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
         }

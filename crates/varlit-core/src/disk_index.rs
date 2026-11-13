@@ -116,6 +116,41 @@ impl Default for DiskIndexBatchOptions {
     }
 }
 
+/// How far a checkpointed writer lets its sidecar trail the primary.
+///
+/// A sync is published with one storage barrier, on the primary, and closed by
+/// a sync marker there. The sidecar is confirmed — written and synced — only
+/// once the primary has grown `max_bytes`, or `max_records` records, past the
+/// last confirmed EOF, and by compaction. Readers and recovery replay what the
+/// sidecar does not cover from the primary, so these bound the bytes a
+/// recovery reads and the records a reader holds in its tail map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskIndexConfirmPolicy {
+    pub max_bytes: u64,
+    pub max_records: u64,
+}
+
+impl Default for DiskIndexConfirmPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: 64 * 1024 * 1024,
+            max_records: 65_536,
+        }
+    }
+}
+
+impl DiskIndexConfirmPolicy {
+    /// Confirms on every sync: the sidecar never trails the primary.
+    pub const EVERY_SYNC: Self = Self {
+        max_bytes: 0,
+        max_records: 0,
+    };
+
+    pub(crate) const fn due(self, bytes: u64, records: u64) -> bool {
+        bytes >= self.max_bytes || records >= self.max_records
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiskIndexOptions {
     /// Index-cache accounting budget per reader/snapshot, in bytes.
@@ -127,6 +162,19 @@ pub struct DiskIndexOptions {
     pub max_key_bytes: usize,
     pub batch: DiskIndexBatchOptions,
     pub limits: ResourceLimits,
+    /// Writer only: when a sync also confirms the sidecar.
+    pub confirm: DiskIndexConfirmPolicy,
+    /// Reader only: the most unconfirmed records a reader holds key pointers
+    /// for. A reader whose primary tail exceeds it refuses to follow rather
+    /// than grow without bound.
+    pub max_tail_records: u64,
+    /// Writer only: how many further confirmed generations a page that a
+    /// confirmed generation stopped referencing waits before it is reused.
+    /// Readers that `follow` at least that often never meet a reclaimed page;
+    /// one that falls further behind gets `PageReclaimed` and must follow.
+    /// Crash safety does not depend on it: recovery only ever returns to the
+    /// newest confirmed generation.
+    pub reclaim_after: u64,
 }
 
 impl Default for DiskIndexOptions {
@@ -138,6 +186,9 @@ impl Default for DiskIndexOptions {
             // The native index performs paged access; its file length is not an allocation request.
             // Callers can opt into a finite sidecar policy per open when required.
             limits: ResourceLimits::MISSING.with_max_sidecar_len(u64::MAX),
+            confirm: DiskIndexConfirmPolicy::default(),
+            max_tail_records: 1 << 20,
+            reclaim_after: 2,
         }
     }
 }
@@ -241,6 +292,9 @@ pub enum DiskIndexError {
         minimum: usize,
     },
     InvalidBatchOptions(&'static str),
+    /// A page this snapshot reaches was reclaimed and rewritten by a later
+    /// generation; `follow` to a newer generation and retry.
+    PageReclaimed,
     KeyTooLong {
         actual: usize,
         limit: usize,
@@ -375,6 +429,10 @@ impl fmt::Display for DiskIndexError {
                 "canonical disk index key is too long: {actual} bytes exceeds {limit}"
             ),
             Self::MetadataMissing => write!(f, "disk index metadata row is missing"),
+            Self::PageReclaimed => write!(
+                f,
+                "a disk index page of this snapshot was reclaimed; follow to a newer generation"
+            ),
             Self::MetadataLength { actual, expected } => write!(
                 f,
                 "disk index metadata has length {actual}; expected {expected}"
@@ -529,6 +587,12 @@ impl std::error::Error for DiskIndexError {
 }
 
 // Allocation failures must not allocate again while crossing the public API.
+/// Whether a writer open failed only because the sidecar trails the primary,
+/// which recovery resolves without losing an acknowledged sync.
+pub(crate) fn requires_recovery(error: &Error) -> bool {
+    matches!(error, Error::DiskIndex(inner) if matches!(**inner, DiskIndexError::CleanStateRequired))
+}
+
 pub(crate) fn index_error(error: DiskIndexError) -> Error {
     match error {
         DiskIndexError::Busy => Error::IndexBusy,
@@ -1680,6 +1744,10 @@ impl DiskIndexStore {
         validate_identity_mode(store.read_metadata()?, identity, mode)?;
         Ok(store)
     }
+    pub(crate) const fn options(&self) -> DiskIndexOptions {
+        self.options
+    }
+
     pub fn read_metadata(&self) -> DiskIndexResult<DiskIndexMetadata> {
         Ok(self.storage.current()?.metadata)
     }
@@ -1856,25 +1924,24 @@ impl DiskIndexStore {
             .tempfile_in(target.parent().unwrap_or(Path::new(".")))?
             .into_temp_path();
         let mut replacement = IndexStorage::open(&temp, self.options, true, true)?;
+        // The rebuilt pages belong to the generation the replacement
+        // republishes, so none of them reads as reusable once it is published.
+        replacement.set_building(base.metadata.generation.max(1))?;
         let mut root = storage::Root::default();
         let mut updates = BTreeMap::new();
         let mut bytes = 0usize;
-        let flush = |root: &mut storage::Root,
-                     updates: &mut BTreeMap<Vec<u8>, [u8; LATEST_LEN]>|
+        let max_key = self
+            .options
+            .max_key_bytes
+            .saturating_add(DiskIndexKeyTag::ENCODED_LEN);
+        let cache_bytes = self.options.cache_bytes;
+        let mut flush = |root: &mut storage::Root,
+                         updates: &mut BTreeMap<Vec<u8>, [u8; LATEST_LEN]>|
          -> DiskIndexResult<()> {
             if updates.is_empty() {
                 return Ok(());
             }
-            let end = replacement.file.metadata()?.len();
-            let reader = tree::Reader::new(
-                replacement.file.clone(),
-                end,
-                self.options
-                    .max_key_bytes
-                    .saturating_add(DiskIndexKeyTag::ENCODED_LEN),
-                self.options.cache_bytes,
-            );
-            root.tree = tree::apply(replacement.writer()?, &reader, root.tree, updates)?;
+            root.tree = replacement.apply_unpublished(root.tree, updates, max_key, cache_bytes)?;
             updates.clear();
             Ok(())
         };
@@ -1904,7 +1971,9 @@ impl DiskIndexStore {
                 self.options.batch.max_bytes.max(self.options.cache_bytes),
             )?;
             working.compact();
-            root.slots = working.publish(replacement.writer()?, true)?;
+            let file = replacement.writer()?.try_clone()?;
+            root.slots =
+                working.publish(&file, true, replacement.alloc()?, slots::Root::default())?;
         }
         if root.count() != base.root.count() {
             return Err(DiskIndexError::CheckpointMismatch(
@@ -2076,8 +2145,11 @@ impl DiskIndexStore {
                 .ok_or(DiskIndexError::CheckpointMismatch(
                     "finite slot working state is unavailable",
                 ))?;
-            root.slots = working.publish(self.storage.writer()?, false)?;
+            let file = self.storage.writer()?.try_clone()?;
+            let previous = current.root.slots;
+            let published = working.publish(&file, false, self.storage.alloc()?, previous);
             self.slots_cache = Some(working);
+            root.slots = published?;
         }
         crate::scalable_fault_point("publish.clean_commit");
         let result = self
@@ -2479,7 +2551,6 @@ impl DiskIndexWriteBatch {
         self.metadata.primary_generation
     }
 
-    #[cfg(test)]
     pub(crate) const fn working_frontier(&self) -> DiskIndexFrontier {
         self.metadata.working
     }
@@ -2636,13 +2707,26 @@ impl DiskIndexRestoreGuard<'_> {
     pub const fn primary_generation(&self) -> DiskIndexPrimaryGeneration {
         self.staged.metadata.primary_generation
     }
+    #[cfg(test)]
     pub(crate) fn commit_after_native_sync(
         self,
         observed_native_eof: u64,
     ) -> DiskIndexResult<DiskIndexMetadata> {
-        if observed_native_eof != self.base_eof() {
+        let base = self.base_eof();
+        self.commit_after_native_sync_at(observed_native_eof, base)
+    }
+
+    /// Publishes the restored base once the primary has been cut back and
+    /// synced to `expected_native_eof`: the base EOF, or the end of the
+    /// verified sync-marker prefix after it that the caller will replay.
+    pub(crate) fn commit_after_native_sync_at(
+        self,
+        observed_native_eof: u64,
+        expected_native_eof: u64,
+    ) -> DiskIndexResult<DiskIndexMetadata> {
+        if expected_native_eof < self.base_eof() || observed_native_eof != expected_native_eof {
             return Err(DiskIndexError::NativeLengthMismatch {
-                expected: self.base_eof(),
+                expected: expected_native_eof,
                 actual: observed_native_eof,
             });
         }
@@ -3610,6 +3694,14 @@ pub(crate) struct ScratchIndex {
     cache_bytes: usize,
     end: u64,
     maximum: Option<u64>,
+    /// Pages the copy-on-write updates leave behind, reused by the next ones.
+    /// Nothing but this handle reads the file, so a page the previous root
+    /// referenced is free the moment the new root is in place: the file grows
+    /// with the tree, not with the number of updates.
+    alloc: tree::PageAlloc,
+    /// One per handle sharing this file: clones share it, so a count above
+    /// one means another root may still reference a released page.
+    sharers: crate::fallible::Arc<()>,
 }
 impl Clone for ScratchIndex {
     fn clone(&self) -> Self {
@@ -3619,12 +3711,17 @@ impl Clone for ScratchIndex {
             cache_bytes: self.cache_bytes,
             end: self.end,
             maximum: self.maximum,
+            // A clone starts with nothing to reuse; neither side releases a
+            // page while the file is shared (see `apply_iter`).
+            alloc: tree::PageAlloc::new(self.alloc.building),
+            sharers: self.sharers.clone(),
             reader: tree::Reader::new(
                 self.file.clone(),
                 self.end,
                 u32::MAX as usize,
                 self.cache_bytes,
-            ),
+            )
+            .with_format(tree::PageFormat::Reuse),
         }
     }
 }
@@ -3640,7 +3737,8 @@ impl ScratchIndex {
     pub(crate) fn set_cache_bytes(&mut self, bytes: usize) {
         if self.cache_bytes != bytes {
             self.cache_bytes = bytes;
-            self.reader = tree::Reader::new(self.file.clone(), self.end, u32::MAX as usize, bytes);
+            self.reader = tree::Reader::new(self.file.clone(), self.end, u32::MAX as usize, bytes)
+                .with_format(tree::PageFormat::Reuse);
         }
     }
     pub(crate) fn new(cache_bytes: usize) -> crate::Result<Self> {
@@ -3653,7 +3751,8 @@ impl ScratchIndex {
             tree::PAGE as u64,
             u32::MAX as usize,
             cache_bytes,
-        );
+        )
+        .with_format(tree::PageFormat::Reuse);
         Ok(Self {
             file,
             root: tree::Root::default(),
@@ -3661,6 +3760,8 @@ impl ScratchIndex {
             cache_bytes,
             end: tree::PAGE as u64,
             maximum,
+            alloc: tree::PageAlloc::new(1),
+            sharers: crate::fallible::try_arc(())?,
         })
     }
     pub(crate) fn get(&self, key: &[u8]) -> crate::Result<Option<[u8; 52]>> {
@@ -3697,24 +3798,46 @@ impl ScratchIndex {
             .maximum
             .map(|_| self.file.metadata().map(|m| m.len()))
             .transpose()?;
-        let root =
-            match tree::apply_with_limit(&self.file, &self.reader, self.root, values, self.maximum)
-            {
-                Ok(root) => root,
-                Err(error) => {
-                    if let Some(prior) = prior {
-                        self.file.set_len(prior)?;
-                    }
-                    return Err(index_error(error));
+        let building = self.alloc.building;
+        let root = match tree::apply_with_limit(
+            &self.file,
+            &self.reader,
+            self.root,
+            values,
+            self.maximum,
+            Some(&mut self.alloc),
+        ) {
+            Ok(root) => root,
+            Err(error) => {
+                // The old root still stands: pages it references that this
+                // attempt released go back to pending-forever rather than
+                // reusable, and nothing they hold was overwritten (pages of an
+                // older generation are only ever released, never reused,
+                // within one update).
+                self.alloc.pending.retain(|&(_, tag)| tag < building);
+                if let Some(prior) = prior {
+                    self.file.set_len(prior)?;
                 }
-            };
+                return Err(index_error(error));
+            }
+        };
+        // The new root is in place. If this handle is the file's only reader,
+        // every page the update released is free now; while a clone shares
+        // the file, its root may still reference them, so they stay retired.
+        if crate::fallible::Arc::strong_count(&self.sharers) == 1 {
+            self.alloc.release(building).map_err(index_error)?;
+        } else {
+            self.alloc.pending.clear();
+        }
+        self.alloc.building = building + 1;
         self.end = self.file.metadata()?.len();
         self.reader = tree::Reader::new(
             self.file.clone(),
             self.end,
             u32::MAX as usize,
             self.cache_bytes,
-        );
+        )
+        .with_format(tree::PageFormat::Reuse);
         self.root = root;
         Ok(())
     }
@@ -3730,6 +3853,35 @@ mod tests {
     };
 
     use super::*;
+
+    /// Repeated updates of the same keys must not grow the scratch file: the
+    /// pages each copy-on-write update leaves behind are reused by the next.
+    #[test]
+    fn scratch_updates_reuse_released_pages() -> Result<()> {
+        let mut index = ScratchIndex::new(64 * 1024)?;
+        let batch = |round: u64| -> BTreeMap<Vec<u8>, [u8; 52]> {
+            (0..2_000u64)
+                .map(|key| {
+                    let mut row = [0; 52];
+                    row[..8].copy_from_slice(&round.to_le_bytes());
+                    (key.to_be_bytes().to_vec(), row)
+                })
+                .collect()
+        };
+        index.apply(&batch(0))?;
+        let after_first = index.file.metadata()?.len();
+        for round in 1..200 {
+            index.apply(&batch(round))?;
+        }
+        let after_all = index.file.metadata()?.len();
+        assert!(
+            after_all <= after_first * 3,
+            "200 rewrites grew the scratch file from {after_first} to {after_all} bytes"
+        );
+        let row = index.get(&7u64.to_be_bytes())?.expect("key 7");
+        assert_eq!(u64::from_le_bytes(row[..8].try_into().unwrap()), 199);
+        Ok(())
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct PlanItem(u64);
@@ -3816,10 +3968,16 @@ mod tests {
         let reader = store.storage.reader(&checkpoint);
         let mut slots =
             slots::Working::load(&reader.slots, &[(PlanItem::ID, 2)], 1024 * 1024).unwrap();
+        let file = store.storage.writer().unwrap().try_clone().unwrap();
         let root = storage::Root {
             tree: tree::Root::default(),
             slots: slots
-                .publish(store.storage.writer().unwrap(), true)
+                .publish(
+                    &file,
+                    true,
+                    store.storage.alloc().unwrap(),
+                    slots::Root::default(),
+                )
                 .unwrap(),
         };
         store
@@ -4237,13 +4395,26 @@ mod tests {
     }
 
     fn corrupt_metadata(store: &DiskIndexStore, edit: impl FnOnce(&mut [u8])) -> u64 {
+        // The metadata sits at the same place in both record versions; only
+        // the record checksum that covers it moves.
         let checkpoint = store.storage.current().unwrap();
-        let mut header = [0; 352];
+        let mut header = [0; 416];
         tree::read_at(&store.storage.file, checkpoint.offset, &mut header).unwrap();
         edit(&mut header[32..332]);
-        let crc = crc32fast::hash(&header[..348]);
-        header[348..352].copy_from_slice(&crc.to_le_bytes());
-        tree::write_at(store.storage.writer().unwrap(), checkpoint.offset, &header).unwrap();
+        let (covered, at) = if &header[..8] == b"VIXROOT5" {
+            (412, 412)
+        } else {
+            (348, 348)
+        };
+        let crc = crc32fast::hash(&header[..covered]);
+        header[at..at + 4].copy_from_slice(&crc.to_le_bytes());
+        let len = if covered == 412 { 416 } else { 352 };
+        tree::write_at(
+            store.storage.writer().unwrap(),
+            checkpoint.offset,
+            &header[..len],
+        )
+        .unwrap();
         checkpoint.offset
     }
 

@@ -54,6 +54,8 @@
 //! `get_into` off-by-one by three checkpoint-recovery tests. Those four were
 //! caught by tests that are about something else entirely, which is coverage by
 //! luck; the assertions here name the property instead.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::collections::HashMap;
 
@@ -265,13 +267,16 @@ fn every_into_form_clears_and_matches_the_allocating_one() -> varlit::Result<()>
     let baseline = entries.len();
     file.index_entries_into(&mut entries)?;
     assert_eq!(entries.len(), baseline);
-    assert_eq!(entries.as_slice(), &*file.index_entries());
+    assert_eq!(entries.as_slice(), &*crate::pages::all_entries!(file));
 
     // block_entries_into
     let mut block_entries = entries.clone();
     file.block_entries_into::<Tick>(&mut block_entries)?;
     assert_eq!(block_entries.len(), 3);
-    assert_eq!(block_entries.len(), file.blocks::<Tick>()?.len());
+    assert_eq!(
+        block_entries.len(),
+        crate::pages::all_blocks!(file, Tick)?.len()
+    );
 
     // decode_blocks_into
     let mut ticks = dirty(&Tick { at: 99 });
@@ -328,7 +333,7 @@ fn block_vec_get_into_matches_get_and_reuses_the_buffer() -> varlit::Result<()> 
     let path = directory.path().join("getinto.buffer");
     build(&path)?;
     let file = BufferFormat::open_readonly(&path)?;
-    let notes = file.blocks::<Note>()?;
+    let notes = crate::pages::all_blocks!(file, Note)?;
 
     let mut scratch = dirty(&0u8);
     let mut via_into = Note::empty();
@@ -367,12 +372,12 @@ fn opening_a_writer_through_a_scratch_buffer_sees_the_same_file() -> varlit::Res
 
     let mut scratch = Vec::new();
     let plain = varlit::VarlitWriter::open(BufferFormat::spec(), &path)?;
-    let expected = plain.index_entries();
+    let expected = crate::pages::all_entries!(plain);
     drop(plain);
 
     let scratched =
         varlit::VarlitWriter::open_with_scratch(BufferFormat::spec(), &path, &mut scratch)?;
-    assert_eq!(&*scratched.index_entries(), &*expected);
+    assert_eq!(&*crate::pages::all_entries!(scratched), &*expected);
     // The scan buffer is the file's index when open returns, which is the
     // property `open_readonly_without_directory` depends on.
     assert_eq!(scratch.as_slice(), &*expected);

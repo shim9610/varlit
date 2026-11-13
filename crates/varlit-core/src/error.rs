@@ -591,6 +591,14 @@ pub enum Error {
     #[error("matrix cell is not committed")]
     MatrixNotCommitted,
 
+    /// A reader's snapshot fell further behind than the write-ahead ring
+    /// keeps: the file holds newer values than the snapshot for some cells.
+    /// `follow()` (or a reopen) moves the reader to the newest generation.
+    #[error(
+        "matrix snapshot {snapshot} expired: generations up to {checkpointed} were written in place; follow to continue"
+    )]
+    MatrixSnapshotExpired { snapshot: u64, checkpointed: u64 },
+
     #[error("matrix cell was not written before commit")]
     MatrixCellNotWritten,
 
@@ -744,6 +752,18 @@ pub enum Error {
 }
 
 impl Error {
+    /// Hands an error to an `std::io` interface without hiding an OS error.
+    ///
+    /// An [`Error::Io`] gives back the original I/O error, so a caller that
+    /// sees it converted again receives the same kind and OS code (`EFBIG`,
+    /// `ENOSPC`) rather than an `Other` wrapping it.
+    pub(crate) fn into_io(self) -> std::io::Error {
+        match self {
+            Error::Io(error) => error,
+            other => std::io::Error::other(other),
+        }
+    }
+
     /// Folds an already-known parent-directory sync failure into a published
     /// outcome that would otherwise drop it.
     ///

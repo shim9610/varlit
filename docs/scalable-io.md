@@ -127,7 +127,8 @@ let key = FrameKey::from_values((1, 2))?;
 let record = Frame { key, payload: 17 };
 writer.push_frame(&record)?;
 writer.sync()?;
-let latest = reader.get_frame(&FrameKey::Scan1Frame2)?;
+let mut latest = Frame::empty();
+let found = reader.get_frame(&FrameKey::Scan1Frame2, &mut latest)?;
 assert_eq!(key.values(), (1, 2));
 assert!(FrameKey::from_values((1, 4)).is_err());
 ```
@@ -252,7 +253,8 @@ let reader = Capture::open_indexed_reader(
     DiskIndexOptions::default(),
 )?;
 
-let frame = reader.get_frame(&FrameKey::from_values((2, 3))?)?;
+let mut frame = Frame::empty();
+let found = reader.get_frame(&FrameKey::from_values((2, 3))?, &mut frame)?;
 let all_runs = reader.runs()?;       // explicit lazy native scan
 let all_events = reader.events()?;  // explicit lazy native scan
 let verified = reader.verify_all()?; // explicit eager full validation
@@ -371,7 +373,9 @@ strictly after them. These unsafe APIs require the application to exclude
 truncation, replacement, compaction and every operation that could modify or
 invalidate captured records. Existing mappings never grow; follow publications
 and map new windows or take a new snapshot. Whole-prefix snapshots copy the
-captured index when rebuilt; record windows avoid that repeated full-index copy.
+captured index when rebuilt; `mmap_payload_range(seen..record_count()?)` maps and
+copies only what was appended since the previous mapping, and record windows
+avoid the index copy entirely.
 Growing matrix layouts require their own stricter mapping contract. See
 [mmap safety](../SECURITY.md#mapped-files-and-external-modification).
 

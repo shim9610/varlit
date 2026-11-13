@@ -3,7 +3,12 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+#[macro_use]
+mod test_pages;
+
 mod adapter;
+mod anchor;
 mod chunks;
 mod codec;
 mod collections;
@@ -11,6 +16,7 @@ mod compression_buffers;
 mod conformance;
 mod decode_state;
 mod diagnostics;
+mod primary_file;
 
 mod disk_index;
 mod error;
@@ -24,7 +30,7 @@ pub mod experimental_matrix;
 mod indexed;
 mod layout;
 mod matrix;
-mod matrix_generation;
+mod matrix_tiles;
 mod merge;
 mod native_layout;
 #[cfg(test)]
@@ -42,6 +48,7 @@ mod spill_file;
 mod spill_rows;
 
 mod stream;
+mod sync_marker;
 mod traits;
 mod writer_permit;
 
@@ -67,8 +74,6 @@ mod writer_permit;
 pub mod enforcement_probe {
     pub use crate::file::replacement_target::{RecordOverwrite, ReplacementTarget};
     pub use crate::file::resident_index::{ReservedIndexSlot, ResidentIndex};
-    pub use crate::matrix::crc_valid_evidence::{CompleteCrcValidEvidence, CrcValidEvidence};
-    pub use crate::matrix::fatal_access::{FatalAccessAllowed, FatalAccessGate};
     pub use crate::writer_permit::{MutationInFlight, MutationPermit, PoisonFlag};
 
     /// Checked borrow for compile-fail instance-binding proofs, never a raw flag.
@@ -103,10 +108,11 @@ pub use diagnostics::{
     diagnose_spec, error_hint,
 };
 
+pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
 pub use disk_index::{
-    DiskIndexBatchOptions, DiskIndexDescriptor as DiskIndexedBlock, DiskIndexDigest,
-    DiskIndexEntry, DiskIndexError, DiskIndexKeyTag, DiskIndexMode, DiskIndexOptions,
-    DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
+    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDescriptor as DiskIndexedBlock,
+    DiskIndexDigest, DiskIndexEntry, DiskIndexError, DiskIndexKeyTag, DiskIndexMode,
+    DiskIndexOptions, DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
     sidecar_path as disk_index_sidecar_path,
 };
 pub use error::{AllocationFailureContext, Error, Result};
@@ -114,16 +120,17 @@ pub use fallible::{TryClone, try_box};
 pub use fallible::{try_box_uninit, try_box_with};
 pub use file::{
     AppendInfo, BlockChain, BlockEvent, COMMIT_BLOCK_ID, CREATION_NONCE_BLOCK_ID, DefragmentReport,
-    DirectoryRead, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID, IndexEntries, KeyedChain,
-    KeyedMergeEstimate, LazyOpenSource, MANIFEST_BLOCK_ID, MATRIX_CHUNK_BLOCK_ID,
-    METADATA_BLOCK_ID, MatrixDurabilityBarrier, MatrixNumeric, MatrixSidecarManifest, OP_BLOCK_ID,
-    OPEN_DIGEST_BLOCK_ID, OpenMode, RECORD_MUTABLE_FLAG_DEAD, RecordDirectory, RecordIndexEntry,
-    RecordMap, RecoveryReport, ReplacePublicationFailure, ReplacementInfo, SEGMENT_BLOCK_ID,
+    DirectoryRead, FIELD_INLINE, FieldSpan, FieldWalk, FileMatrixDurabilityBarrier, INDEX_BLOCK_ID,
+    KeyedChain, KeyedMergeEstimate, LazyOpenSource, MANIFEST_BLOCK_ID, MATRIX_CHUNK_BLOCK_ID,
+    MATRIX_TILE_BLOCK_ID, METADATA_BLOCK_ID, MatrixDurabilityBarrier, MatrixNumeric,
+    MatrixSidecarManifest, OP_BLOCK_ID, OPEN_DIGEST_BLOCK_ID, OpenMode, Page, PageCursor,
+    RECORD_MUTABLE_FLAG_DEAD, RecordCursor, RecordDirectory, RecordIndexEntry, RecordMap,
+    RecordPage, RecoveryReport, ReplacePublicationFailure, ReplacementInfo, SEGMENT_BLOCK_ID,
     SchemaBlockDescriptor, SchemaFieldDescriptor, SchemaManifest, TOMBSTONE_BLOCK_ID, VarlitFile,
-    VarlitReader, VarlitWriter, WriterLockBreakPolicy, WriterLockInfo,
+    VarlitReader, VarlitView, VarlitWriter, WriterLockBreakPolicy, WriterLockInfo,
     classify_replace_publication_error, clear_stale_writer_lock, compact_keyed_files,
     compact_keyed_files_with_key_limit, estimate_keyed_merge, merge_keyed_files,
-    merge_keyed_files_with_key_limit,
+    merge_keyed_files_with_key_limit, view_set, view_wire_mismatch,
 };
 #[cfg(feature = "mmap")]
 pub use file::{MmapMatrix, MmapPayloadWindow, MmapPayloads};
@@ -137,13 +144,15 @@ pub use format::{
     LayoutPlan, LayoutPlanField, LayoutPlanFieldGroup, LayoutPlanFieldSource, LayoutPlanFieldType,
     LayoutPlanLen, LayoutPlanPartDescriptor, LayoutPlanPartKind, LayoutPlanRegion,
     LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset, LayoutSpec, LeadInDescriptor,
-    LivenessPolicy, ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor,
-    MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor, MatrixMetadataResidency,
+    LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS,
+    ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor, MatrixCommitDescriptor,
+    MatrixCommitKind, MatrixDimensionDescriptor, MatrixMetadataResidency,
     MatrixMetadataVerification, MetadataDescriptor, RawRegionDescriptor, ReadLimit, ReadLimits,
     ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat,
-    TransactionMarkerMode, VariableCompression,
+    TransactionMarkerMode, VariableCompression, matrix_default_tile,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
+pub use sync_marker::SYNC_BLOCK_ID;
 
 pub use indexed::{
     DiskIndexRebuildReport, VarlitIndexedReader, VarlitIndexedWriter, rebuild_disk_index,
@@ -155,8 +164,9 @@ pub use layout::{
 };
 pub use matrix::{
     MatrixCellStatus, MatrixCommitEvent, MatrixCorruptionKind, MatrixCorruptionSeverity,
-    MatrixDimensionValue, MatrixDimensions, MatrixKey, MatrixRecoveryAction, MatrixRecoveryFinding,
-    MatrixRecoveryReport, MatrixResumeSignal, MatrixStorageDiagnostics, PackedBitmap,
+    MatrixCursor, MatrixDimensionValue, MatrixDimensions, MatrixKey, MatrixPage,
+    MatrixRecoveryAction, MatrixRecoveryFinding, MatrixRecoveryReport, MatrixRegion,
+    MatrixResumeSignal, MatrixStorageDiagnostics, PackedBitmap,
 };
 pub use merge::{
     MergeAction, SequencedMergeAction, VarlitMerge, compact_keyed_file,

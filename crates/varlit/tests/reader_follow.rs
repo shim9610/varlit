@@ -13,6 +13,8 @@
 //! different generation when the pathname is replaced under it.
 
 #![cfg(all(feature = "integrity", feature = "scalable-fault-injection"))]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -380,10 +382,8 @@ fn a_directoryless_handle_follows_its_tails() -> varlit::Result<()> {
     let mut scratch = Vec::new();
     let mut reader =
         varlit::VarlitFile::open_readonly_without_directory(spec(), &path, &mut scratch)?;
-    assert!(matches!(
-        reader.blocks::<Reading>(),
-        Err(varlit::Error::NoResidentDirectory { .. })
-    ));
+    // A paged read walks the file, so it needs no directory.
+    assert!(!crate::pages::all_blocks!(reader, Reading)?.is_empty());
 
     for value in 10..30 {
         writer.push(&Reading { value })?;
@@ -402,10 +402,8 @@ fn a_directoryless_handle_follows_its_tails() -> varlit::Result<()> {
         );
     }
     // Still directoryless: following must not quietly start retaining one.
-    assert!(matches!(
-        reader.blocks::<Reading>(),
-        Err(varlit::Error::NoResidentDirectory { .. })
-    ));
+    // A paged read walks the file, so it needs no directory.
+    assert!(!crate::pages::all_blocks!(reader, Reading)?.is_empty());
     Ok(())
 }
 
@@ -776,22 +774,18 @@ fn a_reopen_keeps_the_route_the_handle_was_using() -> varlit::Result<()> {
     drop(writer);
 
     let retained = varlit::VarlitFile::open_readonly(spec(), &path)?;
-    assert!(retained.blocks::<Reading>().is_ok());
-    assert!(retained.reopen_readonly()?.blocks::<Reading>().is_ok());
+    assert!(crate::pages::all_blocks!(retained, Reading).is_ok());
+    assert!(crate::pages::all_blocks!(retained.reopen_readonly()?, Reading).is_ok());
 
     let mut scratch = Vec::new();
     let bare = varlit::VarlitFile::open_readonly_without_directory(spec(), &path, &mut scratch)?;
-    // No summary was written. Reopening a directory-free handle now reports
-    // that condition instead of silently rebuilding it by scanning.
-    assert!(matches!(
-        bare.reopen_readonly(),
-        Err(varlit::Error::LazyOpenMetadataUnavailable { .. })
-    ));
+    // It was opened by a scan that kept no list, so it reopens the same way:
+    // by scan, still keeping none, and it answers every record.
+    let again = bare.reopen_readonly()?;
+    assert_eq!(crate::pages::all_blocks!(again, Reading)?.len(), 20);
     let reopened = varlit::VarlitFile::open_readonly_scan(spec(), &path)?;
-    assert!(matches!(
-        reopened.blocks::<Reading>(),
-        Err(varlit::Error::NoResidentDirectory { .. })
-    ));
+    // A paged read walks the file, so it needs no directory.
+    assert!(!crate::pages::all_blocks!(reopened, Reading)?.is_empty());
     Ok(())
 }
 
@@ -824,13 +818,13 @@ fn the_reader_wrapper_exposes_the_pair() -> varlit::Result<()> {
 
     let reader = varlit::VarlitReader::open(spec(), &path)?;
     assert!(reader.is_current()?);
-    let held = reader.blocks::<Reading>()?.len();
+    let held = crate::pages::all_blocks!(reader, Reading)?.len();
     assert_eq!(label(&reader)?, "original");
 
     // Same object, so the reopen agrees with the original about everything.
     let again = reader.reopen()?;
     assert!(again.is_current()?);
-    assert_eq!(again.blocks::<Reading>()?.len(), held);
+    assert_eq!(crate::pages::all_blocks!(again, Reading)?.len(), held);
 
     let mut writer = varlit::VarlitWriter::open(spec(), &path)?;
     writer.replace_block(
@@ -844,7 +838,7 @@ fn the_reader_wrapper_exposes_the_pair() -> varlit::Result<()> {
     // Now the two answers separate: the wrapper reports the generation it holds
     // is superseded, keeps serving it, and the reopen lands on the new one.
     assert!(!reader.is_current()?);
-    assert_eq!(reader.blocks::<Reading>()?.len(), held);
+    assert_eq!(crate::pages::all_blocks!(reader, Reading)?.len(), held);
     assert_eq!(label(&reader)?, "original");
 
     let moved = reader.reopen()?;
@@ -852,7 +846,7 @@ fn the_reader_wrapper_exposes_the_pair() -> varlit::Result<()> {
     assert!(label(&moved)?.starts_with("a replacement"));
     // Same records — the replacement moved every one of them, and the reopened
     // handle found them all at their new offsets.
-    assert_eq!(moved.blocks::<Reading>()?.len(), held);
+    assert_eq!(crate::pages::all_blocks!(moved, Reading)?.len(), held);
     Ok(())
 }
 
@@ -984,7 +978,7 @@ fn a_handle_that_never_follows_reads_on_without_being_told() -> varlit::Result<(
     assert_eq!(read_at::<Reading>(&viewer, held_tail)?, held_value);
     let label: Label = read_at(&viewer, viewer.block_tail_offset(Label::ID).unwrap())?;
     assert_eq!(label.text, "original");
-    assert!(!viewer.blocks::<Reading>()?.is_empty());
+    assert!(!crate::pages::all_blocks!(viewer, Reading)?.is_empty());
 
     // The one thing that says so, and only because it was asked.
     assert!(!viewer.is_current()?);
@@ -1056,7 +1050,7 @@ fn a_shrunk_pathname_leaves_a_held_generation_whole() -> varlit::Result<()> {
     );
     // The old object is unlinked but alive, so the handle still reads all of
     // it — the bytes are gone from the directory listing, not from the disk.
-    assert!(viewer.blocks::<Reading>()?.len() >= 200);
+    assert!(crate::pages::all_blocks!(viewer, Reading)?.len() >= 200);
     let held: Label = read_at(&viewer, viewer.block_tail_offset(Label::ID).unwrap())?;
     assert_eq!(held.text.len(), 4_000);
     drop(viewer);

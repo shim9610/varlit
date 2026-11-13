@@ -1,4 +1,7 @@
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
+
 use varlit::{DiskIndexOptions, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format AuditFinite {
@@ -40,15 +43,39 @@ fn aliased_finite_extents_return_errors_through_public_reads() -> varlit::Result
     drop(writer);
     let sidecar = varlit::disk_index_sidecar_path(&path);
     let mut bytes = std::fs::read(&sidecar)?;
+    // The audit forges an append-only (version 5) table, the layout whose
+    // offsets alone decide which bytes a reference may reach. Take the rows
+    // from the version 6 file the writer produced, then relabel the file as
+    // version 5 and re-encode its newest checkpoint record in the version 5
+    // layout below. (A version 6 chunk also names its block, position and
+    // birth, which rules aliasing out before any of these checks.)
     let cp = [4096usize, 8192]
         .into_iter()
+        .filter(|at| &bytes[*at..*at + 8] == b"VIXHEAD3")
+        .max_by_key(|at| word(&bytes, at + 24))
         .map(|at| word(&bytes, at + 8) as usize)
-        .max()
         .unwrap();
+    assert_eq!(&bytes[cp..cp + 8], b"VIXROOT5");
     let olddir = word(&bytes, cp + 336) as usize;
-    let oldchunk = word(&bytes, olddir + 40) as usize;
+    assert_eq!(&bytes[olddir..olddir + 8], b"VIXSLOT2");
+    let oldchunk = word(&bytes, olddir + 48) as usize;
+    bytes[8..12].copy_from_slice(&5u32.to_le_bytes());
+    let crc = crc32(&bytes[..12]);
+    bytes[12..16].copy_from_slice(&crc.to_le_bytes());
+    let tails = u32::from_le_bytes(bytes[cp + 332..cp + 336].try_into().unwrap()) as usize;
+    let mut legacy = vec![0u8; 352 + tails * 32];
+    legacy[..8].copy_from_slice(b"VIXROOT4");
+    let legacy_len = legacy.len() as u64;
+    legacy[8..16].copy_from_slice(&legacy_len.to_le_bytes());
+    legacy[16..348].copy_from_slice(&bytes[cp + 16..cp + 348]);
+    legacy[352..].copy_from_slice(&bytes[cp + 416..cp + 416 + tails * 32]);
+    let cp = bytes.len();
+    bytes.extend_from_slice(&legacy);
     let mut data = vec![0u8; 64 * 40 + 4];
-    data[..44].copy_from_slice(&bytes[oldchunk..oldchunk + 44]);
+    // Row 0, then the CRC a one-row version 5 chunk ends with.
+    data[..40].copy_from_slice(&bytes[oldchunk..oldchunk + 40]);
+    let row_crc = crc32(&data[..40]);
+    data[40..44].copy_from_slice(&row_crc.to_le_bytes());
     let crc = crc32(&data[..2560]);
     data[2560..].copy_from_slice(&crc.to_le_bytes());
     let data_at = bytes.len() as u64;

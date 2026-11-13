@@ -86,6 +86,7 @@ fn identity_spec() -> FormatSpec {
         dimensions: IdentityCell::DIMENSIONS,
         category: IdentityCell::CATEGORY,
         slot_stride: IdentityCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"MID",

@@ -12,7 +12,7 @@ pub(super) trait ScanBuffer: RecordDirectory {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>>;
@@ -56,7 +56,7 @@ impl ScanBuffer for Vec<RecordIndexEntry> {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>> {
@@ -81,7 +81,7 @@ pub(super) struct BufferedScan {
     marker_seen: bool,
     suffix: Vec<RecordIndexEntry>, // at most SEGMENT and DIGEST after a marker
     previous: Option<u64>,
-    sequences: Option<crate::disk_index::ScratchIndex>,
+    sequences: Option<SequenceSet>,
 }
 impl BufferedScan {
     pub(super) fn new(spec: FormatSpec) -> Self {
@@ -134,23 +134,8 @@ impl BufferedScan {
         row[73..77].copy_from_slice(&entry.mutable_flags.to_le_bytes());
         row
     }
-    pub(super) fn remember_sequence(
-        index: &mut crate::disk_index::ScratchIndex,
-        sequence: u64,
-    ) -> Result<()> {
-        let mut key = Vec::new();
-        key.try_reserve_exact(8)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "sequence key",
-                requested: 8,
-            })?;
-        key.extend_from_slice(&sequence.to_be_bytes());
-        if index.get(&key)?.is_some() {
-            return Err(Error::InvalidCanonicalEncoding(
-                "duplicate native record sequence",
-            ));
-        }
-        index.apply(&std::collections::BTreeMap::from([(key, [0; 52])]))
+    pub(super) fn remember_sequence(index: &mut SequenceSet, sequence: u64) -> Result<()> {
+        index.insert(sequence)
     }
 }
 impl RecordDirectory for BufferedScan {
@@ -177,7 +162,7 @@ impl ScanBuffer for BufferedScan {
     }
     fn push_entry(&mut self, entry: RecordIndexEntry) -> Result<()> {
         if self.sequences.is_none() && self.previous.is_some_and(|prev| prev >= entry.sequence) {
-            let mut index = crate::disk_index::ScratchIndex::new(0)?;
+            let mut index = SequenceSet::new()?;
             for old in self.entries() {
                 Self::remember_sequence(&mut index, old?.sequence)?;
             }
@@ -223,7 +208,7 @@ impl ScanBuffer for BufferedScan {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>> {
@@ -358,6 +343,65 @@ mod replay_tests {
         );
         assert!(!observed.committed);
         assert!(scan.record_at(1).is_err());
+        Ok(())
+    }
+}
+
+/// The sequences a scan has seen, for refusing a duplicate once they are no
+/// longer in increasing order.
+///
+/// New sequences gather in a bounded in-memory batch and go into the scratch
+/// tree one batch at a time. The tree copies every page an update touches, so
+/// one update per record rewrote a leaf and its ancestors for every record —
+/// several 4 KiB pages each, never reclaimed. A sorted batch touches each
+/// leaf once.
+pub(crate) struct SequenceSet {
+    index: crate::disk_index::ScratchIndex,
+    pending: std::collections::BTreeSet<u64>,
+}
+
+impl std::fmt::Debug for SequenceSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SequenceSet")
+            .field("pending", &self.pending.len())
+            .finish()
+    }
+}
+
+/// Sequences held in memory before a batch goes to the tree: 64 Ki of them,
+/// a few MiB at most.
+const SEQUENCE_BATCH: usize = 64 * 1024;
+
+impl SequenceSet {
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            index: crate::disk_index::ScratchIndex::new(0)?,
+            pending: std::collections::BTreeSet::new(),
+        })
+    }
+
+    /// Records `sequence`, refusing one already seen.
+    pub(crate) fn insert(&mut self, sequence: u64) -> Result<()> {
+        let duplicate = || Error::InvalidCanonicalEncoding("duplicate native record sequence");
+        if self.pending.contains(&sequence) || self.index.get(&sequence.to_be_bytes())?.is_some() {
+            return Err(duplicate());
+        }
+        self.pending.insert(sequence);
+        if self.pending.len() >= SEQUENCE_BATCH {
+            let mut batch = std::collections::BTreeMap::new();
+            for sequence in std::mem::take(&mut self.pending) {
+                let mut key = Vec::new();
+                key.try_reserve_exact(8)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "sequence key",
+                        requested: 8,
+                    })?;
+                key.extend_from_slice(&sequence.to_be_bytes());
+                batch.insert(key, [0; 52]);
+            }
+            self.index.apply(&batch)?;
+        }
         Ok(())
     }
 }

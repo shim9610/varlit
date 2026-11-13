@@ -17,6 +17,8 @@
 // Every case here declares `integrity: crc32`, so without the `integrity`
 // feature the format is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
@@ -82,8 +84,7 @@ fn write_lines(path: &Path, count: usize) {
 /// Flips one bit inside the payload of the `nth` user record.
 fn corrupt_payload(path: &Path, nth: usize) -> u64 {
     let reader = VarlitFile::open_readonly(Guarded::spec(), path).expect("open to locate");
-    let offset = reader
-        .index_entries()
+    let offset = crate::pages::all_entries!(reader)
         .iter()
         .filter(|entry| entry.block_id == Line::ID)
         .nth(nth)
@@ -154,13 +155,19 @@ fn on_demand_opens_the_same_corrupt_file_and_still_refuses_the_bad_record() {
     let reader = VarlitFile::open_readonly(Guarded::spec(), &path)
         .expect("OnDemand must open a file with a damaged record");
 
-    let blocks = reader.blocks::<Line>().expect("blocks");
+    // A paged decode stops at the damaged record; the entries do not read
+    // payloads, so decoding them one by one is how a caller steps past it.
+    let lines: Vec<_> = crate::pages::all_entries!(reader)
+        .into_iter()
+        .filter(|entry| entry.block_id == Line::ID)
+        .collect();
     let mut refused = 0;
     let mut read_ok = 0;
     let mut out = Line::empty();
-    for index in 0..blocks.len() {
-        match blocks.get(index, &mut out) {
-            Ok(true) => read_ok += 1,
+    let mut scratch = Vec::new();
+    for (index, entry) in lines.iter().enumerate() {
+        match reader.decode_block_into(entry, &mut scratch, &mut out) {
+            Ok(()) => read_ok += 1,
             Err(Error::ChecksumMismatch { .. }) => refused += 1,
             other => panic!("unexpected result at {index}: {other:?}"),
         }
@@ -208,10 +215,13 @@ fn an_intact_file_reads_identically_under_both_policies() {
     )
     .expect("open eager");
 
-    assert_eq!(lazy.index_entries().len(), eager.index_entries().len());
     assert_eq!(
-        lazy.index_entries(),
-        eager.index_entries(),
+        crate::pages::all_entries!(lazy).len(),
+        crate::pages::all_entries!(eager).len()
+    );
+    assert_eq!(
+        crate::pages::all_entries!(lazy),
+        crate::pages::all_entries!(eager),
         "the policy must change when bytes are checked, not what is indexed"
     );
     cleanup(&path);

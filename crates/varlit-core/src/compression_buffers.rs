@@ -441,6 +441,34 @@ impl Decompressor {
     ) -> Result<&[u8]> {
         Err(Error::CompressionFeatureDisabled)
     }
+    /// Decompresses one frame into `out`, which must be exactly its
+    /// decompressed length. No allocation: the output is the window.
+    #[cfg(feature = "compression-zstd")]
+    pub(crate) fn decompress_into(&mut self, payload: &[u8], out: &mut [u8]) -> Result<()> {
+        if let (Some(declared), _) = frame_sizes(payload)?
+            && declared != out.len() as u64
+        {
+            return Err(Error::DecompressedLengthMismatch {
+                expected: out.len() as u64,
+                actual: declared,
+            });
+        }
+        let len = self
+            .context
+            .decompress(out, payload)
+            .map_err(backend_error)?;
+        if len != out.len() {
+            return Err(Error::DecompressedLengthMismatch {
+                expected: out.len() as u64,
+                actual: len as u64,
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "compression-zstd"))]
+    pub(crate) fn decompress_into(&mut self, _payload: &[u8], _out: &mut [u8]) -> Result<()> {
+        Err(Error::CompressionFeatureDisabled)
+    }
     #[cfg(feature = "compression-zstd")]
     pub(crate) fn decompress_append(
         &mut self,

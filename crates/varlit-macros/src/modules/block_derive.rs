@@ -497,8 +497,92 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         quote!(::varlit::__core::RecordValidator::of::<Self>())
     };
 
+    // The field view of a variable block: one span per field, the value
+    // itself left in the record for the caller to read into its own buffer.
+    let view_items = if kind_name == "variable" {
+        let view_ident = format_ident!("{}View", ident);
+        let vis = &input.vis;
+        let view_fields = descriptors.iter().map(|field| {
+            let name = &field.name;
+            if field.default {
+                quote!(pub #name: ::core::option::Option<::varlit::__core::FieldSpan>)
+            } else {
+                quote!(pub #name: ::varlit::__core::FieldSpan)
+            }
+        });
+        let view_slots = descriptors.iter().map(|field| {
+            let var = option_ident(&field.name);
+            quote!(let mut #var: ::core::option::Option<::varlit::__core::FieldSpan> = ::core::option::Option::None;)
+        });
+        let view_arms = descriptors.iter().map(|field| {
+            let var = option_ident(&field.name);
+            let ty = &field.ty;
+            let field_id = field.field_id;
+            let field_name = field.name.to_string();
+            quote! {
+                #field_id => {
+                    let expected = <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE;
+                    if span.wire_type() != expected {
+                        return ::core::result::Result::Err(
+                            ::varlit::__core::view_wire_mismatch(#field_name, expected, span.wire_type()),
+                        );
+                    }
+                    ::varlit::__core::view_set(&mut #var, span)?;
+                }
+            }
+        });
+        let view_build = descriptors.iter().map(|field| {
+            let name = &field.name;
+            let var = option_ident(name);
+            let field_id = field.field_id;
+            let field_name = name.to_string();
+            if field.default {
+                quote!(#name: #var)
+            } else {
+                quote! {
+                    #name: #var.ok_or(::varlit::__core::Error::MissingField {
+                        field: #field_name,
+                        field_id: #field_id,
+                    })?
+                }
+            }
+        });
+        let doc = format!(
+            "Where each field of a [`{ident}`] record sits (see `VarlitView`): read a large field with `read_span_into` into your own buffer, decode a small one with `decode_field`."
+        );
+        quote! {
+            #[doc = #doc]
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            #vis struct #view_ident {
+                #(#view_fields,)*
+            }
+
+            impl ::varlit::__core::VarlitView for #ident {
+                type View = #view_ident;
+
+                fn view_from_fields(
+                    walk: ::varlit::__core::FieldWalk<'_>,
+                ) -> ::varlit::__core::Result<#view_ident> {
+                    #(#view_slots)*
+                    walk(&mut |field_id, span| {
+                        match field_id {
+                            #(#view_arms)*
+                            _ => {}
+                        }
+                        ::core::result::Result::Ok(())
+                    })?;
+                    ::core::result::Result::Ok(#view_ident { #(#view_build,)* })
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
     Ok(quote! {
         #(#codec_identity_asserts)*
+
+        #view_items
 
         impl ::varlit::__core::VarlitEncode for #ident {
             const WIRE_TYPE: ::varlit::__core::WireType = ::varlit::__core::WireType::Nested;

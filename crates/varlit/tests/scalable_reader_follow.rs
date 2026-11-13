@@ -92,8 +92,9 @@ fn dirty_overwrites_and_deletes_preserve_the_confirmed_index() -> varlit::Result
     writer.immediate()?;
     // Return to Dirty before either existing reader follows the new checkpoint.
     writer.push_item(&Item { key: 0, value: 2 })?;
-    assert_eq!(reader.follow_blocks(&mut blocks)?, 3);
-    assert_eq!(during.follow()?, 3);
+    // Three records and the sync marker that closed them.
+    assert_eq!(reader.follow_blocks(&mut blocks)?, 4);
+    assert_eq!(during.follow()?, 4);
     for view in [&reader, &during] {
         assert!(view.get_item(&0, &mut item)?);
         assert_eq!(item.value, 1);
@@ -132,7 +133,8 @@ fn stream_cursors_resume_from_eof_across_dirty_generations() -> varlit::Result<(
         assert!(!blocks.next_into(&mut sample)?);
         writer.immediate()?;
         writer.push_sample(&Sample { value: value + 1 })?;
-        assert_eq!(reader.follow_blocks(&mut blocks)?, 1);
+        // The synced sample and its sync marker.
+        assert_eq!(reader.follow_blocks(&mut blocks)?, 2);
         all.extend(drain(&mut blocks)?);
         // A cursor can catch up after follow() already advanced the reader.
         assert_eq!(reader.follow_events(&mut events)?, 0);
@@ -142,7 +144,8 @@ fn stream_cursors_resume_from_eof_across_dirty_generations() -> varlit::Result<(
         all,
         (0..40).map(|value| Sample { value }).collect::<Vec<_>>()
     );
-    assert_eq!(event_count, initial_events + 40);
+    // Each sync adds its sample and its marker.
+    assert_eq!(event_count, initial_events + 80);
     assert_eq!(reader.verify_all()? as usize, event_count);
     Ok(())
 }
@@ -175,7 +178,8 @@ fn readers_open_and_follow_inside_an_active_write_batch() -> varlit::Result<()> 
         .map_err(|e| e.source)?;
     assert_eq!(retained.follow()?, 0);
     writer.immediate()?;
-    assert_eq!(retained.follow()?, 25);
+    // Twenty-five records and the sync marker that closed them.
+    assert_eq!(retained.follow()?, 26);
     let mut item = Item::empty();
     assert!(retained.get_item(&0, &mut item)?);
     assert_eq!(item.value, 8);
@@ -207,7 +211,8 @@ fn dirty_reopen_and_restore_do_not_invalidate_existing_readers() -> varlit::Resu
     assert_eq!(reader.follow()?, 0);
     writer.push_item(&Item { key: 0, value: 3 })?;
     writer.immediate()?;
-    assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
+    // The record and its sync marker.
+    assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
     assert!(cursor.next_into(&mut item)?);
     assert_eq!(item.value, 3);
     assert!(!cursor.next_into(&mut item)?);

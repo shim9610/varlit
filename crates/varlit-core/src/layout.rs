@@ -685,7 +685,10 @@ fn inspect_layout_file_report_inner<P: AsRef<Path>>(
 
     ensure_custom_layout_spec(spec)?;
     ensure_layout_open_limits(spec)?;
-    let snapshot = SnapshotFile::new(File::open(path.as_ref())?)?;
+    let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+        File::open(path.as_ref())?,
+        None,
+    ))?;
     let file_len = snapshot.len();
     let header = match read_file_header(spec, &snapshot) {
         Ok(header) => header,
@@ -906,7 +909,10 @@ impl LayoutWriter {
             crate::file::with_writer_lock_value(lock, |lock| {
                 let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
                 lock.bind_native(&file, &path)?;
-                let snapshot = SnapshotFile::new(file.try_clone()?)?;
+                let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+                    file.try_clone()?,
+                    None,
+                ))?;
                 let header = read_file_header(spec, &snapshot)?;
                 // Counting, not retaining: the writer's only use for the scan is
                 // the per-name tally the walk already maintains, so nothing here
@@ -1270,7 +1276,10 @@ impl LayoutReader {
         ensure_custom_layout_spec(spec)?;
         ensure_layout_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let snapshot = SnapshotFile::new(File::open(&path)?)?;
+        let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+            File::open(&path)?,
+            None,
+        ))?;
         let header = read_file_header(spec, &snapshot)?;
         let slots = scan_layout_segment_slots(spec, &snapshot, header.len, header.index_bytes)?;
         Ok(Self {

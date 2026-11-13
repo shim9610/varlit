@@ -21,12 +21,11 @@ PLAN = {
 MEMCAP = {"grid": "4G"}
 
 def control(out):
-    """SQLite oltp transaction time: a disk-health probe (healthy ~0.5 s)."""
+    """Disk-health probe: 1000 x (4 KiB write + fdatasync); healthy ~0.48 s."""
     d = out / "control"
+    p = subprocess.run([str(BIN), "probe", str(d)], capture_output=True, text=True, check=True)
     shutil.rmtree(d, ignore_errors=True)
-    p = subprocess.run([str(BIN), "bench", "oltp", "sqlite", str(d)], capture_output=True, text=True, check=True)
-    shutil.rmtree(d, ignore_errors=True)
-    return json.loads(p.stdout.strip().splitlines()[-1])["txn_s"]
+    return float(p.stdout.strip())
 
 def wait_healthy(out, limit=0.7):
     while True:

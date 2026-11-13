@@ -2,10 +2,12 @@
 //! power loss, and rejects a durable head whose referenced data did not persist.
 use super::*;
 
+/// Two confirmed publications of a version 5 (append-only, single-barrier)
+/// sidecar. The version 6 counterparts are at the end of this file.
 fn images() -> (Vec<u8>, Vec<u8>, Checkpoint, Checkpoint) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("checkpoints");
-    let mut store = Store::open(&path, DiskIndexOptions::default(), true, true).unwrap();
+    let mut store = Store::create_legacy(&path, DiskIndexOptions::default()).unwrap();
     let metadata = DiskIndexMetadata::new_state(
         DiskIndexIdentity {
             schema_hash: 42,
@@ -283,4 +285,97 @@ fn failed_resume_releases_writer_lock_while_snapshot_owners_survive() {
     // Consuming the final library owner transfers the actual File, without
     // leaving an Arc allocation or a hidden snapshot reference behind.
     drop(Arc::try_unwrap(file).expect("last file owner"));
+}
+
+/// Two confirmed publications of a version 6 (page-reusing) sidecar.
+fn reuse_images() -> (Vec<u8>, Vec<u8>, Checkpoint, Checkpoint) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("checkpoints");
+    let mut store = Store::open(&path, DiskIndexOptions::default(), true, true).unwrap();
+    let metadata = DiskIndexMetadata::new_state(
+        DiskIndexIdentity {
+            schema_hash: 42,
+            primary_fingerprint: [0; 32],
+        },
+        DiskIndexFrontier::empty(64),
+        4,
+    );
+    let old = store
+        .publish(metadata, &[], Root::default(), Publication::Confirmed)
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let metadata = DiskIndexMetadata {
+        generation: 1,
+        committed: DiskIndexFrontier::empty(128),
+        working: DiskIndexFrontier::empty(128),
+        ..metadata
+    };
+    let new = store
+        .publish(metadata, &[], Root::default(), Publication::Confirmed)
+        .unwrap();
+    (before, std::fs::read(&path).unwrap(), old, new)
+}
+
+/// A version 6 confirmation syncs its record before writing the head that
+/// names it, so the only writes a crash can lose or tear are the heads.
+/// Whatever subset of the two head writes landed, and however much of each,
+/// the newest confirmed generation is the old one or the new one, never a mix,
+/// and a pair of whole heads is always readable.
+#[test]
+fn reuse_heads_torn_after_the_record_barrier_never_mix_generations() {
+    let (before, after, old, new) = reuse_images();
+    assert_ne!(old.seq, new.seq);
+    let mut cases = 0;
+    for first_cut in 0..=64 {
+        for second_cut in 0..=64 {
+            let mut image = after.clone();
+            for (slot, cut) in CONFIRMED.into_iter().zip([first_cut, second_cut]) {
+                let slot = slot as usize;
+                image[slot..slot + 64].copy_from_slice(&before[slot..slot + 64]);
+                image[slot..slot + cut].copy_from_slice(&after[slot..slot + cut]);
+            }
+            match open_image(&image) {
+                Ok(actual) => {
+                    let expected = if actual.seq == old.seq { &old } else { &new };
+                    assert!(actual.seq == old.seq || actual.seq == new.seq);
+                    assert_eq!(actual.offset, expected.offset);
+                    assert_eq!(actual.metadata, expected.metadata);
+                    assert_eq!(actual.end, expected.end);
+                }
+                Err(_) => assert!(
+                    !(first_cut == 0 && second_cut == 0 || first_cut == 64 && second_cut == 64),
+                    "whole heads at {first_cut}/{second_cut} were unreadable"
+                ),
+            }
+            cases += 1;
+        }
+    }
+    assert_eq!(cases, 65 * 65);
+}
+
+/// A head whose record page was reused names a record carrying another
+/// publication's sequence: it is never adopted as that record.
+#[test]
+fn reuse_head_naming_a_reused_record_page_is_not_adopted() {
+    let (_, mut after, old, new) = reuse_images();
+    // Point the newer confirmed slot's head at the older record, with the
+    // newer sequence: as if the newer record's page had been reused.
+    let slot = CONFIRMED
+        .into_iter()
+        .find(|slot| read_u64(&after[*slot as usize..], 24) == new.seq)
+        .unwrap() as usize;
+    let mut head = [0u8; 64];
+    head.copy_from_slice(&after[slot..slot + 64]);
+    head[8..16].copy_from_slice(&old.offset.to_le_bytes());
+    head[16..24].copy_from_slice(&old.end.to_le_bytes());
+    head[60..64].fill(0);
+    let crc = crc32fast::hash(&head[..60]);
+    head[60..64].copy_from_slice(&crc.to_le_bytes());
+    after[slot..slot + 64].copy_from_slice(&head);
+    for other in CONFIRMED {
+        if other as usize != slot {
+            after[other as usize..other as usize + 64].copy_from_slice(&head);
+        }
+    }
+    assert!(open_image(&after).is_err());
 }

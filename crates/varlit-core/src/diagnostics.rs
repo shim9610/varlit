@@ -247,8 +247,26 @@ impl FormatSelfTest {
                 Ok(())
             })),
             read: Some(Box::new(move |file| {
-                let mut actual = expected.clone();
-                let found = file.blocks::<T>()?.get(ordinal, &mut actual)?;
+                // One-slot pages, walked to the `ordinal`-th record of `T`.
+                let mut slot = [expected.clone()];
+                let mut payload = Vec::new();
+                let mut page = file.blocks::<T>(&mut payload, &mut slot)?;
+                let mut seen = 0usize;
+                let found = loop {
+                    if page.filled == 1 {
+                        if seen == ordinal {
+                            break true;
+                        }
+                        seen += 1;
+                    }
+                    match page.next {
+                        Some(next) => {
+                            page = file.blocks_from::<T>(next, &mut payload, &mut slot)?
+                        }
+                        None => break false,
+                    }
+                };
+                let [actual] = slot;
                 if found && actual == expected {
                     Ok(())
                 } else {
@@ -760,8 +778,8 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
         "file opened with the supplied format spec",
     ));
 
-    let entries = match file.record_entries() {
-        Ok(entries) => entries,
+    let records = match file.record_entries() {
+        Ok(records) => records,
         Err(error) => {
             let (domain, hint) = classify_error_with_hint(&error);
             report.push(
@@ -772,7 +790,7 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
         }
     };
     let mut scanned = 0usize;
-    for entry in entries {
+    for entry in records.iter() {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -922,6 +940,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MatrixSizeMismatch { .. }
         | Error::MatrixNumericOutOfBounds { .. }
         | Error::MatrixNotCommitted
+        | Error::MatrixSnapshotExpired { .. }
         | Error::MatrixCellNotWritten
         | Error::MatrixChunkClosed { .. }
         | Error::MatrixChunkNotReopenable { .. }

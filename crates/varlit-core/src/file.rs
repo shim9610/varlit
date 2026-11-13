@@ -2,6 +2,7 @@ use crate::TryClone;
 #[path = "matrix_bulk.rs"]
 mod matrix_bulk;
 
+use crate::primary_file::PrimaryFile;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -16,10 +17,11 @@ use crate::{
     BlockKind, BlockVec, CommitPolicy, CompressionAlgorithm, CompressionHeaderMode,
     CompressionLevel, CompressionPolicy, Endian, Error, FormatSpec, HeaderSlotIntegrity,
     IndexPolicy, IntegrityPolicy, IntegrityVerification, KeyedBlockVec, LivenessPolicy,
-    ManifestPolicy, MatrixCellStatus, MatrixCommitEvent, MatrixDimensions, MatrixKey,
-    MatrixRecoveryAction, MatrixRecoveryReport, MatrixResumeSignal, RecoveryPolicy, Result,
-    SnapshotFile, VariableCompression, VarlitBlock, VarlitEncode, VarlitKeyedBlock,
-    VarlitMatrixBlock, VarlitMerge, VarlitMigration, VarlitReplaceBlock, WireType,
+    ManifestPolicy, MatrixCellStatus, MatrixCommitEvent, MatrixCursor, MatrixDimensions, MatrixKey,
+    MatrixPage, MatrixRecoveryAction, MatrixRecoveryReport, MatrixRegion, MatrixResumeSignal,
+    RecoveryPolicy, Result, SnapshotFile, VariableCompression, VarlitBlock, VarlitEncode,
+    VarlitKeyedBlock, VarlitMatrixBlock, VarlitMerge, VarlitMigration, VarlitReplaceBlock,
+    WireType,
     codec::encode_to_vec_limited,
     collections::MaterializationBudget,
     format::ReadLimitKey,
@@ -62,7 +64,15 @@ pub(crate) const INTERNAL_BLOCK_IDS: &[u32] = &[
     SEGMENT_BLOCK_ID,
     MATRIX_CHUNK_BLOCK_ID,
     OPEN_DIGEST_BLOCK_ID,
+    crate::sync_marker::SYNC_BLOCK_ID,
+    MATRIX_TILE_BLOCK_ID,
 ];
+
+/// Matrix storage records: a matrix's metadata, its write-ahead ring, tile
+/// directory pages and tiles. The block version says which (see
+/// `matrix_tiles::RecordKind`); every one is appended once and then changed
+/// in place, so each carries [`RECORD_FLAG_IN_PLACE`].
+pub const MATRIX_TILE_BLOCK_ID: u32 = 0xFFFF_FFF3;
 
 const _: () = {
     let mut index = 0;
@@ -100,7 +110,16 @@ pub const RECORD_MUTABLE_FLAG_DEAD: u32 = 0x0000_0001;
 pub(crate) const RECORD_FOOTER_MUTABLE_LEN: u64 = 4;
 const RECORD_FLAG_COMPRESSED: u16 = 0x0001;
 pub(crate) const RECORD_FLAG_INTERNAL: u16 = 0x8000;
-const RECORD_KNOWN_FLAGS: u16 = RECORD_FLAG_COMPRESSED | RECORD_FLAG_INTERNAL;
+/// The record's payload is rewritten in place after it is appended, so its
+/// checksum covers the header (and footer) only; the payload carries its own
+/// checksums. Only matrix storage records ([`MATRIX_TILE_BLOCK_ID`]) use it.
+pub(crate) const RECORD_FLAG_IN_PLACE: u16 = 0x4000;
+/// A variable record whose payload carries a CRC per 64 KiB chunk
+/// (`record_chunks`). Set with [`RECORD_FLAG_COMPRESSED`] when its chunks are
+/// compressed.
+pub(crate) const RECORD_FLAG_CHUNKED: u16 = 0x0002;
+const RECORD_KNOWN_FLAGS: u16 =
+    RECORD_FLAG_COMPRESSED | RECORD_FLAG_CHUNKED | RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE;
 pub(crate) const RECORD_FOOTER_MAGIC: &[u8; 4] = b"VRF1";
 pub(crate) const RECORD_FOOTER_VERSION: u16 = 1;
 pub(crate) const RECORD_FOOTER_FLAG_PREV_SAME_BLOCK: u16 = 0x0001;
@@ -307,62 +326,8 @@ fn decode_digest_payload(
 /// create. Chunk 0 *is* the matrix region; chunk `k > 0` is a record with the
 /// region's layout. See [`crate::GrowingMatrixDimension`].
 pub const MATRIX_CHUNK_BLOCK_ID: u32 = 0xFFFF_FFF6;
-const MATRIX_CHUNK_MAGIC: &[u8; 4] = b"VMCK";
-const MATRIX_CHUNK_VERSION: u16 = 1;
-/// Prefix flag: every block region is `commit map | crc table | slots`.
-///
-/// Set when the format's integrity policy is a crc32 one. A chunk read
-/// otherwise has nothing to check: the record footer's crc covers the whole
-/// payload and is verified on a *record* read, which a positional cell read is
-/// not, so a single flipped bit in a written chunk came back as data. The matrix
-/// region solves this with a per-cell checksum and so does a chunk.
-const MATRIX_CHUNK_FLAG_CELL_CRC: u16 = 0x0001;
-/// Prefix flag: every block's slot region is a sub-block index followed by
-/// compressed sub-blocks, rather than plain cells.
-///
-/// A chunk is written whole, including its unfilled slots. Only the slot regions
-/// are compressed: the
-/// prefix, the descriptors, the commit maps and the checksum tables stay plain,
-/// so addressing a cell, reading its commit bit and checking its checksum are
-/// unchanged, and only the `stride`-byte positional read becomes a sub-block
-/// decode.
-const MATRIX_CHUNK_FLAG_COMPRESSED_SLOTS: u16 = 0x0002;
-const MATRIX_CHUNK_KNOWN_FLAGS: u16 =
-    MATRIX_CHUNK_FLAG_CELL_CRC | MATRIX_CHUNK_FLAG_COMPRESSED_SLOTS;
-/// Uncompressed bytes a slot sub-block covers, before rounding to whole cells.
-///
-/// A cell's sub-block is `ordinal / cells_per_sub_block(stride)` — arithmetic,
-/// not a search — and both sides derive the divisor from `stride` alone so they
-/// cannot disagree.
-const MATRIX_CHUNK_SUB_BLOCK_BYTES: u64 = 8192;
-/// One `u32` offset per sub-block, plus a terminator, so a sub-block's extent
-/// is two reads and no prefix sum.
-const MATRIX_CHUNK_SUB_BLOCK_OFFSET_LEN: u64 = 4;
-/// Bytes of stored checksum per cell.
-const MATRIX_CHUNK_CRC_LEN: u64 = 4;
-/// magic(4) + version(2) + flags(2) + chunk_index(8) + first_row(8) + rows(8)
-/// + block_count(4) + reserved(4).
-const MATRIX_CHUNK_PREFIX_LEN: u64 = 4 + 2 + 2 + 8 + 8 + 8 + 4 + 4;
-/// block_id(4) + reserved(4) + stride(8) + cells(8) + commit_len(8).
-///
-/// Every block's descriptor precedes every block's data, so a reader computes
-/// any block's slot offset from the descriptors alone — one small positional
-/// read, whatever the chunk's size. That is what keeps a cell read from
-/// materialising the chunk.
-const MATRIX_CHUNK_BLOCK_DESC_LEN: u64 = 4 + 4 + 8 + 8 + 8;
-/// Descriptor bytes a cell read keeps on the stack.
-///
-/// Eighteen blocks. A chunked cell read must not allocate — that is the whole
-/// point of addressing a chunk by arithmetic — and every format anyone has
-/// declared fits well inside this.
-const MATRIX_CHUNK_INLINE_DESCRIPTOR_BYTES: usize = 512;
 /// Smallest live-tail growth that forces a fresh full index checkpoint.
 ///
-/// Below this floor the geometric-spacing rule in [`VarlitFile::needs_index_checkpoint`]
-/// would fire on nearly every flush, reintroducing the cumulative O(N^2)
-/// checkpoint bytes that  removes. The floor keeps small files cheap to
-/// recover while capping the per-flush overhead of a rapidly growing append log.
-const INDEX_CHECKPOINT_MIN_RECORDS: usize = 16;
 const MANIFEST_PAYLOAD_VERSION: u16 = 5;
 const WRITER_LOCK_MAGIC: &str = "varve-lock-v1";
 const COMPRESSION_ENVELOPE_MAGIC: &[u8; 4] = b"VCMP";
@@ -439,7 +404,14 @@ const HEADER_TAILS_SLOTS: usize = 2;
 /// alongside it, and the creation nonce belongs to a path that is — so the true
 /// need today is seven. Twelve bytes each is not worth the reasoning it would
 /// take to keep "which ids can co-occur" correct as the refusals change.
-const HEADER_TAILS_RESERVED_ENTRIES: usize = INTERNAL_BLOCK_IDS.len();
+const HEADER_TAILS_RESERVED_ENTRIES: usize = 10;
+// The capacity is part of every `header_tails` file already written, so it is
+// pinned at the ten ids the list held when the option shipped. The sync marker
+// added since is written only by checkpointed stream writers, which never track
+// it as a tail, and matrix storage records exist only in matrix files, which
+// refuse `header_tails`; the reservation still covers every id that can
+// co-occur.
+const _: () = assert!(INTERNAL_BLOCK_IDS.len() == HEADER_TAILS_RESERVED_ENTRIES + 2);
 /// `version u16 | flags u16 | capacity u32 | count u32 | generation u64 |
 /// commit_offset u64`.
 ///
@@ -471,17 +443,7 @@ const MATRIX_SIDECAR_FIXED_LEN: usize = 104;
 const MATRIX_SIDECAR_FINGERPRINT_OFFSET: usize = 48;
 const MATRIX_SIDECAR_LAYOUT_GENERATION_OFFSET: usize = 80;
 const MATRIX_SIDECAR_CREATION_NONCE_OFFSET: usize = 88;
-// Per-create identity region stamped between the native file header and the
-// matrix layout header of every matrix file. `create_with_dims`
-// reuses the OS file object when the pathname already exists, so OS identity,
-// schema hash and layout offsets are all stable across a same-dims recreate;
-// the nonce is the only value that distinguishes the new logical matrix from
-// the one every existing sidecar was published against.
-const MATRIX_CREATION_NONCE_MAGIC: &[u8; 4] = b"VMNC";
-const MATRIX_CREATION_NONCE_VERSION: u16 = 1;
 const MATRIX_CREATION_NONCE_LEN: usize = 16;
-// Magic (4) + version (2) + reserved (2) + nonce (16).
-const MATRIX_CREATION_NONCE_REGION_LEN: usize = 8 + MATRIX_CREATION_NONCE_LEN;
 #[cfg(feature = "integrity")]
 const STREAM_BUFFER_LEN: usize = 64 * 1024;
 const WRITER_LOCK_MAX_LEN: u64 = 16 * 1024;
@@ -689,6 +651,8 @@ pub(crate) mod replacement_target;
 
 use replacement_target::{RecordOverwrite, ReplacementTarget};
 
+#[path = "file/matrix_tiles_io.rs"]
+mod matrix_tiles_io;
 /// Mechanical enforcement for shape A/B on the primary file handle: the record
 /// bytes of an open generation cannot be written except through one of two
 /// gated operations.
@@ -949,6 +913,7 @@ pub struct RecordMap<'a> {
     /// One past the last byte the walk may touch: the handle's snapshot end.
     end: u64,
     accounting: ScanAccounting,
+    window: ReadAhead,
 }
 
 impl<'a> RecordMap<'a> {
@@ -968,7 +933,55 @@ impl<'a> RecordMap<'a> {
             next: start,
             end: file.snapshot.len(),
             accounting,
+            window: ReadAhead::new()?,
         })
+    }
+
+    fn new_from(
+        file: &VarlitFile,
+        entries: &'a mut Vec<RecordIndexEntry>,
+        offset: u64,
+    ) -> Result<Self> {
+        let mut map = Self::new(file, entries)?;
+        if offset < map.start || offset > map.end {
+            return Err(Error::InvalidFollowCursor(
+                "record_map_from offset is outside this handle's append log",
+            ));
+        }
+        // The bytes before `offset` are not framed by this walk, but they are
+        // charged, so a `ScanBytes` ceiling keeps meaning bytes of file covered.
+        map.accounting.advance(map.spec, offset - map.start)?;
+        map.next = offset;
+        Ok(map)
+    }
+
+    /// A walk that starts at `offset` and charges `ScanBytes` only for what it
+    /// frames itself. A paged read is one of many walks over the same file, and
+    /// charging each page for the bytes before it would make the ceiling a
+    /// limit on how far into a file paging may go rather than on what one call
+    /// reads.
+    pub(crate) fn new_page(
+        file: &VarlitFile,
+        entries: &'a mut Vec<RecordIndexEntry>,
+        from: Option<PageCursor>,
+    ) -> Result<Self> {
+        let mut map = Self::new(file, entries)?;
+        if let Some(cursor) = from {
+            if cursor.offset < map.start || cursor.offset > map.end {
+                return Err(Error::InvalidFollowCursor(
+                    "page cursor is outside this handle's append log",
+                ));
+            }
+            map.next = cursor.offset;
+        }
+        map.accounting = ScanAccounting::default();
+        Ok(map)
+    }
+
+    /// The cursor a page that stopped here hands back: `None` once the walk
+    /// has reached the end of the file.
+    pub(crate) fn page_cursor(&self) -> Option<PageCursor> {
+        (!self.is_complete()).then_some(PageCursor { offset: self.next })
     }
 
     /// Frames the next record, appends it, and returns it; `None` at the end of
@@ -978,6 +991,16 @@ impl<'a> RecordMap<'a> {
     /// format has one. Nothing else is touched: a record's payload is not read
     /// to frame it, whatever its size.
     pub fn advance(&mut self) -> Result<Option<RecordIndexEntry>> {
+        let Some(entry) = self.frame()? else {
+            return Ok(None);
+        };
+        reserve_scanned_entry(self.spec, self.entries)?;
+        self.entries.push(entry.clone());
+        Ok(Some(entry))
+    }
+
+    /// Frames the next resident record and returns it without keeping it.
+    pub(crate) fn frame(&mut self) -> Result<Option<RecordIndexEntry>> {
         loop {
             if self.next >= self.end {
                 return Ok(None);
@@ -988,7 +1011,7 @@ impl<'a> RecordMap<'a> {
             // rebuilds an entry of an index that already exists, and conflating
             // the two would make every `index_entries()` call look like a scan.
             note_record_framed();
-            let entry = fault_record_entry(&self.snapshot, self.spec, self.next, true)?;
+            let entry = self.window.frame(&self.snapshot, self.spec, self.next)?;
             let record_end =
                 entry
                     .checked_physical_end()
@@ -1012,8 +1035,6 @@ impl<'a> RecordMap<'a> {
             if !record_is_resident(self.spec, entry.block_id) {
                 continue;
             }
-            reserve_scanned_entry(self.spec, self.entries)?;
-            self.entries.push(entry.clone());
             return Ok(Some(entry));
         }
     }
@@ -1114,6 +1135,243 @@ impl RecordDirectory for RecordMap<'_> {
     }
 }
 
+/// A forward walk's read-ahead: one positional read fills a window that then
+/// serves the next frames' headers and footers, so a walk over small records
+/// costs one read per window instead of two per record.
+pub(crate) struct ReadAhead {
+    bytes: Box<[u8; READ_AHEAD]>,
+    start: u64,
+    len: usize,
+}
+
+const READ_AHEAD: usize = 16 * 1024;
+
+impl ReadAhead {
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            bytes: crate::fallible::try_box([0u8; READ_AHEAD])?,
+            start: 0,
+            len: 0,
+        })
+    }
+
+    pub(crate) fn read(
+        &mut self,
+        snapshot: &SnapshotFile,
+        offset: u64,
+        into: &mut [u8],
+    ) -> Result<()> {
+        let end = offset
+            .checked_add(into.len() as u64)
+            .ok_or(Error::LengthOverflow { value: offset })?;
+        if into.len() > READ_AHEAD {
+            return Ok(snapshot.read_exact_at(offset, into)?);
+        }
+        if offset < self.start || end > self.start + self.len as u64 {
+            let len = snapshot.len().saturating_sub(offset).min(READ_AHEAD as u64) as usize;
+            if len < into.len() {
+                return Err(Error::UnexpectedEof);
+            }
+            snapshot.read_exact_at(offset, &mut self.bytes[..len])?;
+            self.start = offset;
+            self.len = len;
+        }
+        let at = (offset - self.start) as usize;
+        into.copy_from_slice(&self.bytes[at..at + into.len()]);
+        Ok(())
+    }
+
+    /// Frames the record at `offset` through the window.
+    pub(crate) fn frame(
+        &mut self,
+        snapshot: &SnapshotFile,
+        spec: FormatSpec,
+        offset: u64,
+    ) -> Result<RecordIndexEntry> {
+        fault_record_entry_with::<{ RECORD_HEADER_LEN as usize }>(
+            snapshot.len(),
+            spec,
+            offset,
+            true,
+            |at, into| self.read(snapshot, at, into),
+        )
+    }
+}
+
+/// A handle's records, answered by reading the file instead of keeping a list.
+///
+/// This is what a handle that keeps no in-memory record list hands to every
+/// position-based read: `record_count` and `record_at` are answered by framing
+/// records off the file — a header (and footer) read each — and nothing is
+/// kept but a cursor and the count. Reads walk positions in order, so the
+/// cursor makes a whole pass one walk; going backwards restarts from the log
+/// start.
+///
+/// The count is established when the walk is built, which is one pass over
+/// the file: every read it serves is itself a pass, so that at most doubles
+/// the reads and never adds memory.
+pub(crate) struct WalkedRecords {
+    spec: FormatSpec,
+    snapshot: SnapshotFile,
+    start: u64,
+    end: u64,
+    count: usize,
+    /// The position the next frame produces, and the offset it frames at.
+    cursor: std::cell::Cell<(usize, u64)>,
+    window: std::cell::RefCell<ReadAhead>,
+}
+
+impl WalkedRecords {
+    pub(crate) fn new(file: &VarlitFile) -> Result<Self> {
+        let start = append_log_start_for_file(file)?;
+        // A handle that already knows how many records the file holds skips
+        // the counting pass.
+        if let Some(count) = file.index.whole_file_count() {
+            return Ok(Self {
+                spec: file.spec,
+                snapshot: file.snapshot.clone(),
+                start,
+                end: file.snapshot.len(),
+                count,
+                cursor: std::cell::Cell::new((0, start)),
+                window: std::cell::RefCell::new(ReadAhead::new()?),
+            });
+        }
+        let mut walk = Self {
+            spec: file.spec,
+            snapshot: file.snapshot.clone(),
+            start,
+            end: file.snapshot.len(),
+            count: 0,
+            cursor: std::cell::Cell::new((0, start)),
+            window: std::cell::RefCell::new(ReadAhead::new()?),
+        };
+        let mut count = 0usize;
+        let mut next = start;
+        while walk.frame_from(&mut next)?.is_some() {
+            count += 1;
+        }
+        walk.count = count;
+        Ok(walk)
+    }
+
+    /// Frames the resident record at or after `next`, advancing `next` past
+    /// it; `None` at the end of the log. The same rule `RecordMap::frame`
+    /// applies, so a walk lists exactly what an open scan indexes.
+    fn frame_from(&self, next: &mut u64) -> Result<Option<RecordIndexEntry>> {
+        loop {
+            if *next >= self.end {
+                return Ok(None);
+            }
+            note_record_framed();
+            let entry = self
+                .window
+                .borrow_mut()
+                .frame(&self.snapshot, self.spec, *next)?;
+            let record_end =
+                entry
+                    .checked_physical_end()
+                    .map_err(|_| Error::ResourceArithmeticOverflow {
+                        resource: "record extent",
+                    })?;
+            if record_end > self.end {
+                *next = self.end;
+                return Ok(None);
+            }
+            *next = record_end;
+            if record_is_resident(self.spec, entry.block_id) {
+                return Ok(Some(entry));
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.count
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Result<RecordIndexEntry>> + '_ {
+        let mut next = self.start;
+        let mut left = self.count;
+        std::iter::from_fn(move || {
+            if left == 0 {
+                return None;
+            }
+            left -= 1;
+            Some(
+                self.frame_from(&mut next)
+                    .and_then(|entry| entry.ok_or(Error::UnexpectedEof)),
+            )
+        })
+    }
+}
+
+impl RecordDirectory for WalkedRecords {
+    fn record_count(&self) -> usize {
+        self.count
+    }
+
+    fn record_at(&self, position: usize) -> Result<RecordIndexEntry> {
+        if position >= self.count {
+            return Err(Error::UnexpectedEof);
+        }
+        let (mut at, mut next) = self.cursor.get();
+        if position < at {
+            (at, next) = (0, self.start);
+        }
+        loop {
+            let entry = self.frame_from(&mut next)?.ok_or(Error::UnexpectedEof)?;
+            at += 1;
+            if at - 1 == position {
+                self.cursor.set((at, next));
+                return Ok(entry);
+            }
+        }
+    }
+}
+
+/// The record list a position-based read runs over: the handle's own when it
+/// keeps one, the file itself when it does not.
+pub(crate) enum RecordList<'a> {
+    Kept(&'a ResidentIndex),
+    Walked(WalkedRecords),
+}
+
+impl RecordList<'_> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Kept(index) => index.len(),
+            Self::Walked(walk) => walk.len(),
+        }
+    }
+
+    pub(crate) fn iter(&self) -> Box<dyn Iterator<Item = Result<RecordIndexEntry>> + '_> {
+        match self {
+            Self::Kept(index) => Box::new(index.iter()),
+            Self::Walked(walk) => Box::new(walk.iter()),
+        }
+    }
+}
+
+impl RecordDirectory for RecordList<'_> {
+    fn record_count(&self) -> usize {
+        self.len()
+    }
+
+    fn record_at(&self, position: usize) -> Result<RecordIndexEntry> {
+        match self {
+            Self::Kept(index) => index.record_at(position),
+            Self::Walked(walk) => walk.record_at(position),
+        }
+    }
+
+    fn block_id_at(&self, position: usize) -> Option<u32> {
+        match self {
+            Self::Kept(index) => index.block_id_at(position),
+            Self::Walked(_) => None,
+        }
+    }
+}
+
 impl std::fmt::Debug for RecordMap<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1125,39 +1383,37 @@ impl std::fmt::Debug for RecordMap<'_> {
     }
 }
 
-/// An owned snapshot of a file's record index.
+/// Where a paged read continues: the record boundary the next page starts at.
 ///
-/// Derefs to `[RecordIndexEntry]`, so it reads exactly like the borrowed slice
-/// this replaced.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexEntries {
-    entries: Vec<RecordIndexEntry>,
+/// Taken from a [`Page`] and handed back to the matching `_from` method of the
+/// same handle. It names a byte offset in the append log, so it stays valid
+/// across appends to the file — a later page simply sees more records — and a
+/// value that is not a record boundary is refused when the walk frames it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PageCursor {
+    offset: u64,
 }
 
-impl core::ops::Deref for IndexEntries {
-    type Target = [RecordIndexEntry];
-
-    fn deref(&self) -> &[RecordIndexEntry] {
-        &self.entries
+impl PageCursor {
+    /// The append-log offset the next page starts at, which is also what
+    /// [`VarlitFile::record_map_from`] takes.
+    pub const fn offset(self) -> u64 {
+        self.offset
     }
 }
 
-impl IntoIterator for IndexEntries {
-    type Item = RecordIndexEntry;
-    type IntoIter = std::vec::IntoIter<RecordIndexEntry>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.entries.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a IndexEntries {
-    type Item = &'a RecordIndexEntry;
-    type IntoIter = std::slice::Iter<'a, RecordIndexEntry>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.entries.iter()
-    }
+/// What one paged read wrote into the caller's buffer.
+///
+/// `filled` slots at the front of the buffer hold this page; the rest are
+/// untouched. `next` is where the following page starts, or `None` when the
+/// walk reached the end of the file. A full buffer whose remaining records turn
+/// out not to match still reports `Some`, and the next call returns an empty,
+/// final page: the walk does not read ahead to find out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub struct Page {
+    pub filled: usize,
+    pub next: Option<PageCursor>,
 }
 
 /// A [`VarlitFile`]'s reads, resolved through a caller-supplied directory.
@@ -1270,7 +1526,7 @@ impl<D: RecordDirectory + ?Sized> DirectoryRead<'_, D> {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct RecordIndexEntry {
     pub block_id: u32,
     pub block_version: u16,
@@ -1309,12 +1565,18 @@ impl RecordIndexEntry {
     /// the standard physical payload ceiling. Prefer a typed
     /// reader/collection, which remains bound to its opened snapshot. For an
     /// explicitly path-based untrusted-input tool, use
-    /// [`Self::read_payload_limited`] after establishing the entry's provenance.
-    pub fn read_payload(&self, path: &Path) -> Result<Vec<u8>> {
-        let mut file = File::open(path)?;
-        let file_len = file.metadata()?.len();
-        self.validate_payload_extent(file_len)?;
+    /// `MyFormat::read_payload_limited` after establishing the entry's provenance.
+    ///
+    /// Generated format types expose this as `MyFormat::read_payload(&entry,
+    /// path)`, so the format is fixed when the binary is compiled; the header
+    /// read with it places the entry's logical offsets in an anchored file.
+    #[doc(hidden)]
+    pub fn __read_payload(&self, spec: FormatSpec, path: &Path) -> Result<Vec<u8>> {
+        // The ceiling is checked before any I/O, as it always was.
         crate::ReadLimits::STANDARD.check(ReadLimitKey::RecordPayloadLen, self.payload_len)?;
+        let mut file = open_primary_by_path(spec, path)?;
+        let file_len = file.len()?;
+        self.validate_payload_extent(file_len)?;
         self.read_payload_file_validated(&mut file)
     }
 
@@ -1324,36 +1586,44 @@ impl RecordIndexEntry {
     /// This remains path-based and non-snapshot: pathname replacement can make
     /// it read a different object with a compatible extent. The limit does not
     /// establish index membership or checksum validity. High-level readers do
-    /// not use this method.
-    pub fn read_payload_limited(&self, path: &Path, limit: u64) -> Result<Vec<u8>> {
-        let mut file = File::open(path)?;
-        let file_len = file.metadata()?.len();
-        self.validate_payload_extent(file_len)?;
+    /// not use this method. Generated format types expose it as
+    /// `MyFormat::read_payload_limited(&entry, path, limit)`.
+    #[doc(hidden)]
+    pub fn __read_payload_limited(
+        &self,
+        spec: FormatSpec,
+        path: &Path,
+        limit: u64,
+    ) -> Result<Vec<u8>> {
         ensure_payload_limit(PHYSICAL_PAYLOAD_RESOURCE, self.payload_len, limit)?;
+        let mut file = open_primary_by_path(spec, path)?;
+        let file_len = file.len()?;
+        self.validate_payload_extent(file_len)?;
         self.read_payload_file_validated(&mut file)
     }
 
+    /// Whether the stored payload is an encoding of the logical one
+    /// (compressed, or chunked with per-chunk checksums) rather than the
+    /// logical bytes themselves.
     pub fn is_compressed(&self) -> bool {
-        self.flags & RECORD_FLAG_COMPRESSED != 0
+        self.flags & (RECORD_FLAG_COMPRESSED | RECORD_FLAG_CHUNKED) != 0
     }
 
-    /// Reads and decodes logical payload bytes through the current pathname.
-    ///
-    /// This low-level method is non-snapshot and resolves the format's runtime
-    /// physical and logical allocation ceilings. It does not replace index-membership or record
-    /// integrity validation. Use a typed snapshot reader for ordinary reads,
-    /// or [`Self::read_logical_payload_limited`] for explicitly path-based
-    /// tooling that has separately established entry provenance.
-    pub fn read_logical_payload(&self, spec: FormatSpec, path: &Path) -> Result<Vec<u8>> {
-        self.read_logical_payload_limited(spec, path, u64::MAX, u64::MAX)
+    /// Whether the payload carries a CRC per 64 KiB chunk.
+    pub fn is_chunked(&self) -> bool {
+        self.flags & RECORD_FLAG_CHUNKED != 0
     }
 
     /// Reads and decodes through the current pathname with separate stored and
     /// logical allocation ceilings.
     ///
-    /// The limits bound allocation but do not turn this path-based helper into
-    /// an opened-object snapshot API.
-    pub fn read_logical_payload_limited(
+    /// Generated format types expose this as `MyFormat::read_logical_payload`,
+    /// `MyFormat::read_logical_payload_limited` and
+    /// `MyFormat::read_logical_payload_with_resource_limits`, so the format is
+    /// fixed when the binary is compiled. Non-snapshot: the limits bound
+    /// allocation but do not establish index membership or record integrity.
+    #[doc(hidden)]
+    pub fn __read_logical_payload_limited(
         &self,
         spec: FormatSpec,
         path: &Path,
@@ -1361,8 +1631,8 @@ impl RecordIndexEntry {
         logical_limit: u64,
     ) -> Result<Vec<u8>> {
         let spec = spec.resolve_entrypoint();
-        let mut file = File::open(path)?;
-        let file_len = file.metadata()?.len();
+        let mut file = open_primary_by_path(spec, path)?;
+        let file_len = file.len()?;
         self.validate_payload_extent(file_len)?;
         spec.read_limits
             .check(ReadLimitKey::RecordPayloadLen, self.payload_len)?;
@@ -1410,6 +1680,24 @@ impl RecordIndexEntry {
     ///
     /// `out` ends exactly `payload_len` bytes long; see
     /// [`SnapshotFile::read_into_at`] for why that matters to the checksum.
+    /// The record's whole extent — header through footer — when its framing
+    /// is self-consistent: header before payload, footer (if any) right after
+    /// it. `None` sends a caller to the part-by-part path, which reports the
+    /// inconsistency itself.
+    fn whole_record_len(&self) -> Option<usize> {
+        let header_len = self.payload_offset.checked_sub(self.record_offset)?;
+        let payload_end = self.payload_offset.checked_add(self.payload_len)?;
+        let end = match self.footer_offset {
+            Some(at) if at == payload_end => at.checked_add(RECORD_FOOTER_LEN)?,
+            Some(_) => return None,
+            None => payload_end,
+        };
+        if header_len < RECORD_HEADER_LEN {
+            return None;
+        }
+        usize::try_from(end - self.record_offset).ok()
+    }
+
     pub(crate) fn read_payload_snapshot_into(
         &self,
         spec: FormatSpec,
@@ -1419,6 +1707,41 @@ impl RecordIndexEntry {
         spec.read_limits
             .check(ReadLimitKey::RecordPayloadLen, self.payload_len)?;
         self.validate_payload_extent(snapshot.len())?;
+        // A record that fits one page is read whole — header, payload and
+        // footer in one positional read onto the stack — and verified from
+        // those bytes. A larger one reads its payload straight into `out` and
+        // its framing separately, where copying the payload would cost more
+        // than the two reads it saves.
+        const WHOLE: usize = 4096;
+        if spec.read_validation().structure
+            && let Some(whole) = self.whole_record_len().filter(|len| *len <= WHOLE)
+        {
+            let mut bytes = [0u8; WHOLE];
+            snapshot.read_exact_at(self.record_offset, &mut bytes[..whole])?;
+            let header_len = (self.payload_offset - self.record_offset) as usize;
+            let payload_end = header_len + self.payload_len as usize;
+            let footer = match self.footer_offset {
+                Some(at) => {
+                    let at = (at - self.record_offset) as usize;
+                    &bytes[at..at + RECORD_FOOTER_LEN as usize]
+                }
+                None => &[][..],
+            };
+            self.verify_record_bytes(
+                spec,
+                &bytes[..header_len],
+                &bytes[header_len..payload_end],
+                footer,
+            )?;
+            out.clear();
+            out.try_reserve(self.payload_len as usize)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: ReadLimitKey::RecordPayloadLen.resource(),
+                    requested: self.payload_len,
+                })?;
+            out.extend_from_slice(&bytes[header_len..payload_end]);
+            return Ok(());
+        }
         snapshot.read_into_at(
             self.payload_offset,
             self.payload_len,
@@ -1665,294 +1988,6 @@ impl SequenceState {
     }
 }
 
-/// O(1) writer-side state behind [`VarlitFile::needs_index_checkpoint`]
-///
-///
-/// The original predicate reverse-searched the resident index for the last
-/// checkpoint and re-counted the suffix on every flush, which made the
-/// cumulative flush CPU O(N^2) for flush-per-record workloads even after the
-/// checkpoint *bytes* were made amortized O(N). This state mirrors exactly
-/// what that scan recomputed and is maintained incrementally at the single
-/// index append site, restored on append rollback, and recovered with one
-/// bounded reverse walk wherever the resident index is loaded or replaced
-/// wholesale (open, recovery, and generation rebinds).
-///
-/// Invariant: at all times this equals `CheckpointCadence::from_index(&index)`
-/// for the current resident index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CheckpointCadence {
-    /// Entries appended since the last full checkpoint whose presence would
-    /// change the serialized checkpoint (everything but commit markers).
-    eligible_since_checkpoint: usize,
-    /// Geometric growth threshold derived from the last checkpoint's index
-    /// position: `max(INDEX_CHECKPOINT_MIN_RECORDS, records_at_last_checkpoint / 2)`.
-    next_threshold: usize,
-}
-
-impl CheckpointCadence {
-    /// Cadence for a freshly created file with an empty resident index.
-    fn new_empty() -> Self {
-        Self {
-            eligible_since_checkpoint: 0,
-            next_threshold: INDEX_CHECKPOINT_MIN_RECORDS,
-        }
-    }
-
-    /// Recovers the cadence with a single reverse walk that stops at the last
-    /// checkpoint record, so reopen pays the live-tail length exactly once
-    /// instead of every flush paying it again.
-    /// The rule, kept as the specification `derive_index_state` must match.
-    ///
-    /// No longer called in production — one forward pass now derives this and
-    /// the two structures beside it — but it is what the invariant above names,
-    /// and `derived_state_matches_the_three_rules_it_replaced` compares the two
-    /// on every shape that distinguishes them.
-    #[cfg(test)]
-    fn from_index(index: &[RecordIndexEntry]) -> Self {
-        let mut eligible: usize = 0;
-        let mut touched: u64 = 0;
-        for (position, entry) in index.iter().enumerate().rev() {
-            touched = touched.saturating_add(1);
-            if entry.block_id == INDEX_BLOCK_ID {
-                note_checkpoint_cadence_index_touches(touched);
-                return Self {
-                    eligible_since_checkpoint: eligible,
-                    next_threshold: core::cmp::max(INDEX_CHECKPOINT_MIN_RECORDS, position / 2),
-                };
-            }
-            if !matches!(entry.block_id, COMMIT_BLOCK_ID | SEGMENT_BLOCK_ID) {
-                eligible = eligible.saturating_add(1);
-            }
-        }
-        note_checkpoint_cadence_index_touches(touched);
-        Self {
-            eligible_since_checkpoint: eligible,
-            next_threshold: INDEX_CHECKPOINT_MIN_RECORDS,
-        }
-    }
-
-    /// Advances the cadence for the entry just pushed at `position` in the
-    /// resident index. A checkpoint record resets the tail count and derives
-    /// the next geometric threshold from its own position (the number of
-    /// entries it serialized); commit markers, segment records and open digests
-    /// never alter checkpoint identity; every other record grows the eligible
-    /// tail by one.
-    ///
-    /// The digest belongs in that exemption for the reason the other two do: it
-    /// is written *because* a commit point closed, not because a record was
-    /// added, so counting it would make the checkpoint cadence a function of how
-    /// often the file is flushed rather than of how much was written.
-    fn note_appended(&mut self, position: usize, block_id: u32) {
-        note_checkpoint_cadence_index_touches(1);
-        if block_id == INDEX_BLOCK_ID {
-            self.eligible_since_checkpoint = 0;
-            self.next_threshold = core::cmp::max(INDEX_CHECKPOINT_MIN_RECORDS, position / 2);
-        } else if !matches!(
-            block_id,
-            COMMIT_BLOCK_ID | SEGMENT_BLOCK_ID | OPEN_DIGEST_BLOCK_ID
-        ) {
-            self.eligible_since_checkpoint = self.eligible_since_checkpoint.saturating_add(1);
-        }
-    }
-}
-
-#[cfg(feature = "scalable-fault-injection")]
-std::thread_local! {
-    static CHECKPOINT_CADENCE_INDEX_TOUCHES: std::cell::Cell<u64> = const {
-        std::cell::Cell::new(0)
-    };
-}
-
-/// Counts resident index entries examined by the checkpoint flush-cadence
-/// machinery on this thread ( regression evidence). Inert without the
-/// `scalable-fault-injection` feature.
-#[inline]
-fn note_checkpoint_cadence_index_touches(count: u64) {
-    #[cfg(feature = "scalable-fault-injection")]
-    CHECKPOINT_CADENCE_INDEX_TOUCHES
-        .with(|touches| touches.set(touches.get().saturating_add(count)));
-    #[cfg(not(feature = "scalable-fault-injection"))]
-    let _ = count;
-}
-
-/// The payload one written chunk occupies, given the declared dimensions.
-///
-/// Computed at create so the two ceilings a chunk crosses — the buffer it is
-/// held in and the record it is written as — are reconciled before any write is
-/// accepted rather than at the first write.
-fn chunk_payload_len_for(spec: FormatSpec, dims: &MatrixDimensions) -> Result<u64> {
-    let Some(growing) = spec.growing_matrix else {
-        return Ok(0);
-    };
-    let cell_crc = !matches!(spec.integrity_policy, IntegrityPolicy::None);
-    let mut len = MATRIX_CHUNK_PREFIX_LEN
-        .checked_add(
-            MATRIX_CHUNK_BLOCK_DESC_LEN
-                .checked_mul(spec.matrix_blocks.len() as u64)
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk descriptors",
-                })?,
-        )
-        .ok_or(Error::ResourceArithmeticOverflow {
-            resource: "matrix chunk prefix",
-        })?;
-    for block in spec.matrix_blocks {
-        let width = dims
-            .get(block.dimensions[1])
-            .ok_or_else(|| Error::MatrixDimensionMissing(block.dimensions[1].to_string()))?;
-        let cells =
-            growing
-                .rows_per_chunk
-                .checked_mul(width)
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk cells",
-                })?;
-        let slots =
-            cells
-                .checked_mul(block.slot_stride)
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk slot region",
-                })?;
-        let crc = if cell_crc {
-            cells
-                .checked_mul(MATRIX_CHUNK_CRC_LEN)
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk checksum table",
-                })?
-        } else {
-            0
-        };
-        // The uncompressed size plus the sub-block index. Compression can only
-        // make the written record smaller, so bounding the uncompressed form is
-        // the conservative check — a spec must not depend on its data
-        // compressing in order to fit.
-        let index = if spec.chunk_compression.is_some() {
-            sub_block_count(cells, compressed_cell_width(block.slot_stride, cell_crc))
-                .checked_add(1)
-                .and_then(|entries| entries.checked_mul(MATRIX_CHUNK_SUB_BLOCK_OFFSET_LEN))
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk sub-block index",
-                })?
-        } else {
-            0
-        };
-        len = len
-            .checked_add(cells.div_ceil(8))
-            .and_then(|len| len.checked_add(crc))
-            .and_then(|len| len.checked_add(index))
-            .and_then(|len| len.checked_add(slots))
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "matrix chunk payload length",
-            })?;
-    }
-    Ok(len)
-}
-
-/// Writes one block's slot region as a sub-block index plus compressed
-/// sub-blocks.
-///
-/// The index is `sub_block_count + 1` little-endian `u32` offsets relative to
-/// the end of the index, so a sub-block's extent is `off[i]..off[i + 1]` — two
-/// four-byte reads and no prefix sum.
-///
-/// **A sub-block is stored raw when compressing it does not shrink it**, and
-/// the reader tells the two apart by length alone: stored length equal to the
-/// uncompressed length means raw. The writer therefore never emits a compressed
-/// sub-block of exactly that length, which costs nothing — such a sub-block is
-/// stored raw instead, byte for byte the same thing.
-fn encode_compressed_slots(
-    payload: &mut Vec<u8>,
-    block: &OpenChunkBlock,
-    compression: VariableCompression,
-) -> Result<()> {
-    let cell_crc = !block.crc.is_empty();
-    let width = compressed_cell_width(block.stride, cell_crc);
-    let per = cells_per_sub_block(width);
-    let count = sub_block_count(block.cells, width);
-    let count_usize = usize::try_from(count).map_err(|_| Error::InvalidMatrixChunk)?;
-    let stride = usize::try_from(block.stride).map_err(|_| Error::InvalidMatrixChunk)?;
-    let width_usize = usize::try_from(width).map_err(|_| Error::InvalidMatrixChunk)?;
-    let per_usize = usize::try_from(per).map_err(|_| Error::InvalidMatrixChunk)?;
-    let cells = usize::try_from(block.cells).map_err(|_| Error::InvalidMatrixChunk)?;
-
-    let mut stored: Vec<Vec<u8>> = Vec::new();
-    stored
-        .try_reserve_exact(count_usize)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "matrix chunk sub-blocks",
-            requested: count,
-        })?;
-    let mut packed = Vec::new();
-    for index in 0..count_usize {
-        let first = index * per_usize;
-        let last = ((index + 1) * per_usize).min(cells);
-        packed.clear();
-        packed
-            .try_reserve((last.saturating_sub(first)) * width_usize)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix chunk sub-block",
-                requested: width,
-            })?;
-        for cell in first..last {
-            packed.extend_from_slice(&block.slots[cell * stride..(cell + 1) * stride]);
-            if cell_crc {
-                packed.extend_from_slice(&block.crc[cell * 4..(cell + 1) * 4]);
-            }
-        }
-        let compressed =
-            compress_with_algorithm(compression.algorithm, compression.level, &packed)?;
-        if compressed.len() >= packed.len() {
-            stored.push(packed.try_clone()?);
-        } else {
-            stored.push(compressed);
-        }
-    }
-
-    let mut offset = 0u32;
-    for bytes in &stored {
-        payload.extend_from_slice(&offset.to_le_bytes());
-        offset = offset
-            .checked_add(u32::try_from(bytes.len()).map_err(|_| Error::InvalidMatrixChunk)?)
-            .ok_or(Error::InvalidMatrixChunk)?;
-    }
-    payload.extend_from_slice(&offset.to_le_bytes());
-    for bytes in &stored {
-        payload.extend_from_slice(bytes);
-    }
-    Ok(())
-}
-
-/// Bytes a compressed sub-block holds per cell.
-///
-/// **The checksum travels with its cell.** Compressing only the slot region
-/// left the per-cell checksum table — four bytes per cell, all zeros for every
-/// never-written cell — uncompressed. Packing each cell beside its checksum makes
-/// one decode yield both and lets the zeros collapse together.
-const fn compressed_cell_width(stride: u64, cell_crc: bool) -> u64 {
-    if cell_crc {
-        stride + MATRIX_CHUNK_CRC_LEN
-    } else {
-        stride
-    }
-}
-
-/// Cells one compressed sub-block covers, for a given packed cell width.
-///
-/// Derived from the width alone so the writer and the reader cannot disagree
-/// about where a cell lives.
-const fn cells_per_sub_block(stride: u64) -> u64 {
-    if stride == 0 || stride >= MATRIX_CHUNK_SUB_BLOCK_BYTES {
-        1
-    } else {
-        MATRIX_CHUNK_SUB_BLOCK_BYTES / stride
-    }
-}
-
-/// Sub-blocks a block's slot region is cut into.
-fn sub_block_count(cells: u64, stride: u64) -> u64 {
-    cells.div_ceil(cells_per_sub_block(stride)).max(1)
-}
-
 /// A zeroed buffer of `len` bytes, allocated fallibly.
 ///
 /// A chunk's buffers are sized by a declared knob, so an over-large
@@ -1968,360 +2003,6 @@ fn try_zeroed_vec(len: u64, resource: &'static str) -> Result<Vec<u8>> {
         })?;
     buffer.resize(capacity, 0);
     Ok(buffer)
-}
-
-/// Rebuilds a reloaded chunk block's write bitmap from what the record does
-/// carry.
-///
-/// A cell counts as written if it is committed — a commit cannot have happened
-/// without one — or if its slot bytes are not all zero. That second clause is
-/// the region's own test (`matrix::commit_cell` scans the slot when its
-/// session bitmap says nothing), so a reloaded chunk and a region row answer
-/// "was this written" identically.
-fn seed_written_map(commit: &[u8], slots: &[u8], cells: u64, stride: u64) -> Result<Vec<u8>> {
-    let len = u64::try_from(commit.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-        resource: "matrix chunk write map",
-    })?;
-    let mut written = try_zeroed_vec(len, "matrix chunk write map")?;
-    let stride = usize::try_from(stride).map_err(|_| Error::InvalidMatrixLayout)?;
-    for ordinal in 0..cells {
-        let byte = usize::try_from(ordinal / 8).map_err(|_| Error::InvalidMatrixLayout)?;
-        let bit = 1u8 << (ordinal % 8);
-        if commit
-            .get(byte)
-            .is_some_and(|committed| committed & bit != 0)
-        {
-            written[byte] |= bit;
-            continue;
-        }
-        let start = usize::try_from(ordinal)
-            .ok()
-            .and_then(|ordinal| ordinal.checked_mul(stride))
-            .ok_or(Error::InvalidMatrixLayout)?;
-        let slot = slots
-            .get(
-                start
-                    ..start
-                        .checked_add(stride)
-                        .ok_or(Error::InvalidMatrixLayout)?,
-            )
-            .ok_or(Error::InvalidMatrixChunk)?;
-        if slot.iter().any(|byte| *byte != 0) {
-            written[byte] |= bit;
-        }
-    }
-    Ok(written)
-}
-
-/// One matrix block's slice of the chunk being filled.
-#[derive(Debug)]
-struct OpenChunkBlock {
-    block_id: u32,
-    stride: u64,
-    /// `rows * dimension 1`, the cells this chunk holds for this block.
-    cells: u64,
-    /// One bit per cell: written this session, whatever the bytes say.
-    ///
-    /// The region keeps the same thing (`current_write_bits`) for the same
-    /// reason. Without it, `commit_matrix_cell` decided "was this written" by
-    /// testing whether the slot read as all zeros, so a legitimate value that
-    /// encodes to zeros — `0u32`, an empty flag word, a zeroed struct — could
-    /// never be committed in a chunk while committing fine in the region.
-    /// Not written to disk: the commit map is what a reader consults.
-    written: Vec<u8>,
-    /// One bit per cell, the chunk-local form of the region's commit map.
-    commit: Vec<u8>,
-    /// `crc32` of each cell's slot bytes, or empty when the format declares no
-    /// integrity policy. The chunk-local form of the region's checksum table.
-    crc: Vec<u8>,
-    /// `cells * stride` bytes, addressed exactly as the region's slot region is.
-    slots: Vec<u8>,
-}
-
-/// A chunk record's prefix, decoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ChunkPrefix {
-    index: u64,
-    first_row: u64,
-    rows: u64,
-    block_count: u32,
-    cell_crc: bool,
-    compressed_slots: bool,
-}
-
-/// One written chunk, located.
-///
-/// `block_count` is carried so a cell lookup does not re-read the prefix that
-/// finding the chunk already read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ChunkLocator {
-    index: u64,
-    record_offset: u64,
-    payload_len: u64,
-    block_count: u32,
-    cell_crc: bool,
-    compressed_slots: bool,
-    /// This record's position among the chunk records, counted in the order the
-    /// resident index holds them — which is file order, not chunk-index order.
-    ///
-    /// It is what addresses the record for a rewrite, and it is stored rather
-    /// than derived because the two orders are no longer the same: a chunk that
-    /// was skipped and is written later sits at the end of the file with a
-    /// lower index than its neighbours, and the directory is sorted by index.
-    ordinal: usize,
-}
-
-/// Every written chunk, by chunk index, ordered once.
-///
-/// **This exists because the first version did not have it, and that is the
-/// mistake this project keeps making.** `find_chunk_record` filtered the whole
-/// resident index and collected it into a fresh `Vec` on *every chunked cell
-/// read* — `O(total records)` plus a heap allocation per read, behind a doc
-/// comment that claimed `O(log chunks)` and "no state built at open". It is the
-/// same shape [`CheckpointCadence`] , [`BlockTails`]  and
-/// [`SegmentCursor`] each exist to remove, in a file where all three are
-/// already written down.
-///
-/// Built at most once per handle, on the first chunked access rather than at
-/// open, and extended in place when the writer writes one. Lookup is a binary search
-/// over memory: no walk, no allocation, no read.
-///
-/// Invariant: equals the `MATRIX_CHUNK_BLOCK_ID` entries of the resident index,
-/// in index order, at all times.
-#[derive(Debug, Default)]
-struct ChunkDirectory {
-    chunks: Vec<ChunkLocator>,
-    next_ordinal: usize,
-}
-
-impl ChunkDirectory {
-    fn find(&self, index: u64) -> Option<ChunkLocator> {
-        self.chunks
-            .binary_search_by_key(&index, |locator| locator.index)
-            .ok()
-            .map(|position| self.chunks[position])
-    }
-
-    /// Files a chunk record that was just appended.
-    ///
-    /// Inserted at its index position rather than pushed, because a chunk is no
-    /// longer always written in ascending order: a chunk that committed nothing
-    /// is never written, and a later write to one of its rows appends its
-    /// record after higher-indexed ones. Ascending is still the common case and
-    /// costs an insert at the end.
-    ///
-    /// Returns the number of chunk records now filed, which is the ordinal the
-    /// *next* appended one will carry.
-    fn note_written(&mut self, locator: ChunkLocator) {
-        let position = self
-            .chunks
-            .partition_point(|filed| filed.index < locator.index);
-        self.next_ordinal = self.next_ordinal.max(locator.ordinal.saturating_add(1));
-        if self
-            .chunks
-            .get(position)
-            .is_some_and(|old| old.index == locator.index)
-        {
-            self.chunks[position] = locator;
-        } else {
-            self.chunks.insert(position, locator);
-        }
-    }
-
-    /// The ordinal an appended chunk record would carry: one past the last,
-    /// because a record is appended at the end of the file and the ordinals
-    /// count file order.
-    fn next_ordinal(&self) -> usize {
-        self.next_ordinal
-    }
-}
-
-/// The chunk a growing matrix is currently filling.
-///
-/// Held in memory until it is written, which is the one cost this design has and the
-/// reason `rows_per_chunk` is a declared knob rather than a constant. Sealing
-/// writes it as one ordinary record, so nothing else in the file format learns
-/// that chunks exist.
-///
-/// One chunk is open at a time, and which one is not fixed: writing a row that
-/// belongs to an already-written chunk writes the open one out and loads that
-/// chunk back — see `VarlitFile::reopen_written_chunk`.
-#[derive(Debug)]
-struct OpenChunk {
-    index: u64,
-    first_row: u64,
-    rows: u64,
-    /// How the slot regions are stored when this chunk is written.
-    compression: Option<VariableCompression>,
-    blocks: Vec<OpenChunkBlock>,
-    /// Whether any cell has been committed since the chunk was opened. A chunk
-    /// nothing committed is not written: an empty chunk and an absent chunk
-    /// answer every read identically, and writing one would grow the file on
-    /// every idle flush the way an empty segment once did.
-    dirty: bool,
-    /// The chunk-record ordinal this chunk was loaded from, when it was loaded
-    /// rather than started empty.
-    ///
-    /// `Some` means a record for this chunk index already exists and holds
-    /// these same bytes, so writing the chunk out must rewrite *that* record
-    /// rather than append a second one. Two records claiming one chunk index is
-    /// not a thing the directory can order, and `build_chunk_directory` refuses
-    /// a file that carries them.
-    ///
-    /// An ordinal rather than an offset because that is what
-    /// `ReplacementTarget` selects on: the nth record of `MATRIX_CHUNK_BLOCK_ID`
-    /// is the nth entry of the chunk directory, which is built by walking the
-    /// resident index in the same order.
-    backing: Option<usize>,
-}
-
-impl OpenChunk {
-    fn block_position(&self, block_id: u32) -> Option<usize> {
-        self.blocks
-            .iter()
-            .position(|block| block.block_id == block_id)
-    }
-
-    fn payload_len(&self) -> Result<u64> {
-        let mut len = MATRIX_CHUNK_PREFIX_LEN
-            .checked_add(
-                MATRIX_CHUNK_BLOCK_DESC_LEN
-                    .checked_mul(u64::try_from(self.blocks.len()).map_err(|_| {
-                        Error::ResourceArithmeticOverflow {
-                            resource: "matrix chunk block count",
-                        }
-                    })?)
-                    .ok_or(Error::ResourceArithmeticOverflow {
-                        resource: "matrix chunk descriptors",
-                    })?,
-            )
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "matrix chunk prefix",
-            })?;
-        for block in &self.blocks {
-            let commit = u64::try_from(block.commit.len()).map_err(|_| {
-                Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk commit map",
-                }
-            })?;
-            let slots = u64::try_from(block.slots.len()).map_err(|_| {
-                Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk slot region",
-                }
-            })?;
-            let crc =
-                u64::try_from(block.crc.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk checksum table",
-                })?;
-            let index = if self.compression.is_some() {
-                sub_block_count(
-                    block.cells,
-                    compressed_cell_width(block.stride, !block.crc.is_empty()),
-                )
-                .checked_add(1)
-                .and_then(|entries| entries.checked_mul(MATRIX_CHUNK_SUB_BLOCK_OFFSET_LEN))
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk sub-block index",
-                })?
-            } else {
-                0
-            };
-            len = len
-                .checked_add(commit)
-                .and_then(|len| len.checked_add(crc))
-                .and_then(|len| len.checked_add(index))
-                .and_then(|len| len.checked_add(slots))
-                .ok_or(Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk payload length",
-                })?;
-        }
-        Ok(len)
-    }
-
-    fn encode(&self) -> Result<Vec<u8>> {
-        // The uncompressed size, which is exact when plain and an upper bound
-        // when compressing. Reserving the bound is the point: a compressed
-        // chunk must never need more than the ceiling `create` checked.
-        let payload_len = self.payload_len()?;
-        let capacity = usize::try_from(payload_len)
-            .map_err(|_| Error::LengthOverflow { value: payload_len })?;
-        let mut payload = Vec::new();
-        payload
-            .try_reserve_exact(capacity)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix chunk payload",
-                requested: payload_len,
-            })?;
-        let block_count =
-            u32::try_from(self.blocks.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "matrix chunk block count",
-            })?;
-        let mut flags = if self.blocks.iter().any(|block| !block.crc.is_empty()) {
-            MATRIX_CHUNK_FLAG_CELL_CRC
-        } else {
-            0
-        };
-        if self.compression.is_some() {
-            flags |= MATRIX_CHUNK_FLAG_COMPRESSED_SLOTS;
-        }
-        payload.extend_from_slice(MATRIX_CHUNK_MAGIC);
-        payload.extend_from_slice(&MATRIX_CHUNK_VERSION.to_le_bytes());
-        payload.extend_from_slice(&flags.to_le_bytes());
-        payload.extend_from_slice(&self.index.to_le_bytes());
-        payload.extend_from_slice(&self.first_row.to_le_bytes());
-        payload.extend_from_slice(&self.rows.to_le_bytes());
-        payload.extend_from_slice(&block_count.to_le_bytes());
-        payload.extend_from_slice(&0u32.to_le_bytes());
-        for block in &self.blocks {
-            let commit_len = u64::try_from(block.commit.len()).map_err(|_| {
-                Error::ResourceArithmeticOverflow {
-                    resource: "matrix chunk commit map",
-                }
-            })?;
-            payload.extend_from_slice(&block.block_id.to_le_bytes());
-            payload.extend_from_slice(&0u32.to_le_bytes());
-            payload.extend_from_slice(&block.stride.to_le_bytes());
-            payload.extend_from_slice(&block.cells.to_le_bytes());
-            payload.extend_from_slice(&commit_len.to_le_bytes());
-        }
-        for block in &self.blocks {
-            payload.extend_from_slice(&block.commit);
-            match self.compression {
-                Some(compression) => {
-                    // No separate checksum table: each cell is packed beside
-                    // its own, inside the sub-block.
-                    encode_compressed_slots(&mut payload, block, compression)?;
-                }
-                None => {
-                    payload.extend_from_slice(&block.crc);
-                    payload.extend_from_slice(&block.slots);
-                }
-            }
-        }
-        Ok(payload)
-    }
-}
-
-/// Where one block's bytes sit inside a chunk record's payload.
-///
-/// Produced by reading the prefix and the descriptors — a fixed, small read
-/// whatever the chunk holds — so a cell read is that read plus one `stride`-byte
-/// positional read, and never the chunk.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ChunkBlockLocation {
-    commit_offset: u64,
-    /// `None` when the chunk carries no per-cell checksums.
-    crc_offset: Option<u64>,
-    slots_offset: u64,
-    /// One past the last byte of this block's slot region, so a compressed
-    /// sub-block's extent is bounded without consulting the record again.
-    slots_end: u64,
-    compressed_slots: bool,
-    /// Whether cells carry a checksum at all, which a compressed block needs
-    /// even though it has no separate table.
-    cell_crc: bool,
-    stride: u64,
-    cells: u64,
 }
 
 /// O(1) writer-side state for the internal segment chain.
@@ -2383,6 +2064,25 @@ impl SegmentCursor {
     /// `record_end` is the physical end the append path budgeted and checked
     /// before writing, so this stays infallible on the far side of the
     /// authoritative write (INVARIANT 3).
+    /// The cursor of an open that resumed at an anchor: the scanned tail's
+    /// own when a segment follows the anchor (its position shifted past the
+    /// records before it), else the one the anchor's summary carried.
+    fn rebased(tail: Self, base_records: usize, summary: Option<(u64, u64)>) -> Self {
+        if tail.covered_start.is_some() {
+            Self {
+                next_position: tail.next_position + base_records,
+                covered_start: tail.covered_start,
+            }
+        } else if let Some((position, covered)) = summary {
+            Self {
+                next_position: usize::try_from(position).unwrap_or(usize::MAX),
+                covered_start: Some(covered),
+            }
+        } else {
+            tail
+        }
+    }
+
     fn note_appended(&mut self, position: usize, block_id: u32, record_end: u64) {
         if block_id == SEGMENT_BLOCK_ID {
             self.next_position = position + 1;
@@ -2412,6 +2112,106 @@ impl SegmentCursor {
 struct BlockTails {
     /// Sorted by block id.
     tails: Vec<(u32, u64)>,
+}
+
+/// The open summary a native writer stores with an anchor its next record
+/// reaches; see [`crate::anchor::AnchorSummary`].
+struct WriterSummary<'a> {
+    tails: &'a BlockTails,
+    records_before: Option<usize>,
+    sequence_high_water: Option<u64>,
+    segment: &'a SegmentCursor,
+}
+
+impl crate::anchor::SummarySource for WriterSummary<'_> {
+    fn write_summary(&self, out: &mut [u8]) -> bool {
+        let Some(records) = self.records_before else {
+            return false;
+        };
+        let segment = self
+            .segment
+            .covered_start
+            .map(|covered| (self.segment.next_position as u64, covered));
+        crate::anchor::encode_summary(
+            out,
+            records as u64,
+            self.sequence_high_water,
+            segment,
+            self.tails.tails.iter().copied(),
+        )
+    }
+}
+
+/// The open summary a rewrite keeps for the file it is writing.
+///
+/// The same rule an open derives from the records themselves
+/// ([`derive_index_state`] and the scan): every record counts, each block's
+/// newest record is its tail, the highest sequence is the high-water mark, and
+/// the newest segment record sets the cursor. A rewrite notes each record after
+/// writing it, so at the start of the next record this is exactly "the file
+/// before it" — what an anchor that record reaches has to describe.
+struct RewriteSummary {
+    tails: BlockTails,
+    records: u64,
+    sequence_high_water: Option<u64>,
+    segment: Option<(u64, u64)>,
+}
+
+impl RewriteSummary {
+    fn new() -> Self {
+        Self {
+            tails: BlockTails::new_empty(),
+            records: 0,
+            sequence_high_water: None,
+            segment: None,
+        }
+    }
+
+    fn note(&mut self, entry: &RecordIndexEntry) -> Result<()> {
+        if self.tails.tails.len() == self.tails.tails.capacity()
+            && self
+                .tails
+                .tails
+                .binary_search_by_key(&entry.block_id, |(id, _)| *id)
+                .is_err()
+        {
+            self.tails
+                .tails
+                .try_reserve(1)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "rewrite block tails",
+                    requested: (self.tails.tails.len() as u64 + 1).saturating_mul(16),
+                })?;
+        }
+        self.tails
+            .note_appended(entry.block_id, entry.record_offset);
+        self.records = self
+            .records
+            .checked_add(1)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "rewrite record count",
+            })?;
+        self.sequence_high_water = Some(
+            self.sequence_high_water
+                .map_or(entry.sequence, |seen| seen.max(entry.sequence)),
+        );
+        if entry.block_id == SEGMENT_BLOCK_ID {
+            self.segment = Some((self.records, entry.checked_physical_end()?));
+        }
+        Ok(())
+    }
+}
+
+impl crate::anchor::SummarySource for RewriteSummary {
+    fn write_summary(&self, out: &mut [u8]) -> bool {
+        crate::anchor::encode_summary(
+            out,
+            self.records,
+            self.sequence_high_water,
+            self.segment,
+            self.tails.tails.iter().copied(),
+        )
+    }
 }
 
 impl BlockTails {
@@ -2851,7 +2651,6 @@ struct AppendSnapshot {
     eof: u64,
     sequence_state: SequenceState,
     index_len: usize,
-    checkpoint_cadence: CheckpointCadence,
     segment_cursor: SegmentCursor,
     /// The block this append is about to move the tail of, and where that tail
     /// pointed before. Two words, so the rollback needs no allocation.
@@ -2997,24 +2796,12 @@ pub(crate) struct RecordFooterFields {
     pub(crate) mutable_flags: u32,
 }
 
-/// Seals the open chunk on the way out.
-///
-/// **Every other byte a writer accepts is on disk before the call returns.** A
-/// chunked cell is the one exception: it lives in the open chunk until it is written.
-/// Without this, dropping a writer without `flush` lost every committed cell in
-/// that chunk, silently, and this library had no other way to lose committed
-/// data.
-///
-/// Best effort, and that is a real limitation rather than a hedge: `drop`
-/// cannot report a failure, so a caller who needs to know the write succeeded
-/// must call `flush`, `commit` or `sync` and read the error. What this
-/// guarantees is that the ordinary case — a writer that goes out of scope —
-/// does not lose data.
+/// A writer releases its crash verdict when it goes out of scope. Staged
+/// matrix changes that were never published are dropped, as they would be by
+/// a crash: publication (`sync`, `commit_durable`) is what makes them part of
+/// the file.
 impl Drop for VarlitFile {
     fn drop(&mut self) {
-        if self.mode == OpenMode::ReadWrite && self.open_chunk.is_some() {
-            let _ = self.write_open_chunk_record();
-        }
         // The clean-release half of the crash verdict. Best-effort by
         // necessity — `drop` cannot report — and that is the right shape here:
         // a clear that fails leaves the bit set, so the next open runs a
@@ -3047,28 +2834,16 @@ pub struct VarlitFile {
     // verbatim rather than regenerating it — regenerating would drop the
     // unknown block and silently move the append log.
     header_extensions: Vec<u8>,
-    matrix: Option<crate::matrix::MatrixLayout>,
-    // Present exactly when `matrix` is present: read once at open/create time
-    // so sidecar identity checks never touch the file per operation.
-    matrix_creation_nonce: Option<[u8; MATRIX_CREATION_NONCE_LEN]>,
     sequence_state: SequenceState,
-    // O(1) flush-cadence state for `needs_index_checkpoint`; must equal
-    // `CheckpointCadence::from_index(&index)` at all times.
-    checkpoint_cadence: CheckpointCadence,
     // O(1) append-side block-offset-chain predecessors; must equal
     // `BlockTails::from_index(&index)` at all times.
     block_tails: BlockTails,
-    // The matrix chunk being filled, when a growing dimension is declared. See
-    // `OpenChunk`; `None` until a write lands past the declared extent.
-    open_chunk: Option<OpenChunk>,
-    // Every written chunk, ordered once and searched in memory. Empty until the
-    // first chunked access, so a handle that never touches a chunk builds
-    // nothing. See `ChunkDirectory` for why this is not derived per read.
-    //
-    // `OnceCell` rather than `Option`, because building it happens on a read
-    // path and every read entry point takes `&self` — that is a standing design
-    // policy, not a convenience.
-    chunk_directory: std::cell::OnceCell<ChunkDirectory>,
+    // The tiled matrix, when the spec declares matrix blocks: opened with the
+    // handle (a writer's open finds what its ring holds; a reader's captures
+    // its snapshot).
+    tiles: std::cell::OnceCell<crate::matrix_tiles::api::TiledMatrix>,
+    /// The last chunk a record read checked (`record_read`).
+    record_cache: std::cell::RefCell<record_read::ChunkCache>,
     // O(1) commit-point state for the internal segment chain; must equal
     // `SegmentCursor::from_index(&index)` at all times.
     segment_cursor: SegmentCursor,
@@ -3270,8 +3045,19 @@ impl VarlitReader {
         self.file.schema_manifest()
     }
 
-    pub fn blocks<T: VarlitBlock>(&self) -> Result<BlockVec<T>> {
-        self.file.blocks::<T>()
+    /// See [`VarlitFile::blocks`].
+    pub fn blocks<T: VarlitBlock>(&self, payload: &mut Vec<u8>, out: &mut [T]) -> Result<Page> {
+        self.file.blocks::<T>(payload, out)
+    }
+
+    /// See [`VarlitFile::blocks_from`].
+    pub fn blocks_from<T: VarlitBlock>(
+        &self,
+        from: PageCursor,
+        payload: &mut Vec<u8>,
+        out: &mut [T],
+    ) -> Result<Page> {
+        self.file.blocks_from::<T>(from, payload, out)
     }
 
     /// See [`VarlitFile::block_entries_into`].
@@ -3353,8 +3139,18 @@ impl VarlitReader {
         self.file.verify_all()
     }
 
-    pub fn index_entries(&self) -> IndexEntries {
-        self.file.index_entries()
+    /// See [`VarlitFile::index_entries`].
+    pub fn index_entries(&self, out: &mut [RecordIndexEntry]) -> Result<Page> {
+        self.file.index_entries(out)
+    }
+
+    /// See [`VarlitFile::index_entries_from`].
+    pub fn index_entries_from(
+        &self,
+        from: PageCursor,
+        out: &mut [RecordIndexEntry],
+    ) -> Result<Page> {
+        self.file.index_entries_from(from, out)
     }
 
     /// Fills the caller's buffer with the record index; see
@@ -3376,6 +3172,30 @@ impl VarlitReader {
         self.file.record_map(buffer)
     }
 
+    /// See [`VarlitFile::record_map_from`].
+    pub fn record_map_from<'a>(
+        &self,
+        buffer: &'a mut Vec<RecordIndexEntry>,
+        offset: u64,
+    ) -> Result<RecordMap<'a>> {
+        self.file.record_map_from(buffer, offset)
+    }
+
+    /// See [`VarlitFile::anchor_layout`].
+    pub fn anchor_layout(&self) -> Option<crate::AnchorLayout> {
+        self.file.anchor_layout()
+    }
+
+    /// See [`VarlitFile::anchor`].
+    pub fn anchor(&self, k: u64) -> Result<Option<crate::Anchor>> {
+        self.file.anchor(k)
+    }
+
+    /// See [`VarlitFile::seek_sequence`].
+    pub fn seek_sequence(&self, sequence: u64) -> Result<u64> {
+        self.file.seek_sequence(sequence)
+    }
+
     /// See [`VarlitFile::read_payload_into`].
     pub fn read_payload_into(&self, entry: &RecordIndexEntry, out: &mut Vec<u8>) -> Result<()> {
         self.file.read_payload_into(entry, out)
@@ -3388,6 +3208,40 @@ impl VarlitReader {
         out: &mut Vec<u8>,
     ) -> Result<()> {
         self.file.read_logical_payload_into(entry, out)
+    }
+
+    /// See [`VarlitFile::read_record_into`].
+    pub fn read_record_into(&self, entry: &RecordIndexEntry, out: &mut [u8]) -> Result<RecordPage> {
+        self.file.read_record_into(entry, out)
+    }
+
+    /// See [`VarlitFile::read_record_from`].
+    pub fn read_record_from(&self, cursor: RecordCursor, out: &mut [u8]) -> Result<RecordPage> {
+        self.file.read_record_from(cursor, out)
+    }
+
+    /// See [`VarlitFile::view_block`].
+    pub fn view_block<T: VarlitView>(&self, entry: &RecordIndexEntry) -> Result<T::View> {
+        self.file.view_block::<T>(entry)
+    }
+
+    /// See [`VarlitFile::read_span_into`].
+    pub fn read_span_into(
+        &self,
+        entry: &RecordIndexEntry,
+        span: FieldSpan,
+        out: &mut [u8],
+    ) -> Result<RecordPage> {
+        self.file.read_span_into(entry, span, out)
+    }
+
+    /// See [`VarlitFile::decode_field`].
+    pub fn decode_field<F: crate::VarlitDecode>(
+        &self,
+        entry: &RecordIndexEntry,
+        span: FieldSpan,
+    ) -> Result<F> {
+        self.file.decode_field(entry, span)
     }
 
     /// See [`VarlitFile::decode_block_into`].
@@ -3441,6 +3295,60 @@ impl VarlitReader {
         out: &mut [u8],
     ) -> Result<()> {
         self.file.read_matrix_run_bytes_into::<T>(start, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_into`].
+    pub fn read_matrix_region_into<T: VarlitMatrixBlock>(
+        &self,
+        region: MatrixRegion,
+        out: &mut [T],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_into::<T>(region, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_from`].
+    pub fn read_matrix_region_from<T: VarlitMatrixBlock>(
+        &self,
+        cursor: MatrixCursor,
+        out: &mut [T],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_from::<T>(cursor, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_bytes_into`].
+    pub fn read_matrix_region_bytes_into<T: VarlitMatrixBlock>(
+        &self,
+        region: MatrixRegion,
+        out: &mut [u8],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_bytes_into::<T>(region, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_bytes_from`].
+    pub fn read_matrix_region_bytes_from<T: VarlitMatrixBlock>(
+        &self,
+        cursor: MatrixCursor,
+        out: &mut [u8],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_bytes_from::<T>(cursor, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_cells_into`].
+    pub fn read_matrix_cells_into<T: VarlitMatrixBlock>(
+        &self,
+        keys: &[MatrixKey],
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_cells_into::<T>(keys, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_cells_bytes_into`].
+    pub fn read_matrix_cells_bytes_into<T: VarlitMatrixBlock>(
+        &self,
+        keys: &[MatrixKey],
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_cells_bytes_into::<T>(keys, out)
     }
 
     /// See [`VarlitFile::read_matrix_column_into`].
@@ -3884,8 +3792,18 @@ impl VarlitWriter {
         self.file.header_slots_sealed()
     }
 
-    pub fn index_entries(&self) -> IndexEntries {
-        self.file.index_entries()
+    /// See [`VarlitFile::index_entries`].
+    pub fn index_entries(&self, out: &mut [RecordIndexEntry]) -> Result<Page> {
+        self.file.index_entries(out)
+    }
+
+    /// See [`VarlitFile::index_entries_from`].
+    pub fn index_entries_from(
+        &self,
+        from: PageCursor,
+        out: &mut [RecordIndexEntry],
+    ) -> Result<Page> {
+        self.file.index_entries_from(from, out)
     }
 
     /// Fills the caller's buffer with the record index; see
@@ -3907,6 +3825,30 @@ impl VarlitWriter {
         self.file.record_map(buffer)
     }
 
+    /// See [`VarlitFile::record_map_from`].
+    pub fn record_map_from<'a>(
+        &self,
+        buffer: &'a mut Vec<RecordIndexEntry>,
+        offset: u64,
+    ) -> Result<RecordMap<'a>> {
+        self.file.record_map_from(buffer, offset)
+    }
+
+    /// See [`VarlitFile::anchor_layout`].
+    pub fn anchor_layout(&self) -> Option<crate::AnchorLayout> {
+        self.file.anchor_layout()
+    }
+
+    /// See [`VarlitFile::anchor`].
+    pub fn anchor(&self, k: u64) -> Result<Option<crate::Anchor>> {
+        self.file.anchor(k)
+    }
+
+    /// See [`VarlitFile::seek_sequence`].
+    pub fn seek_sequence(&self, sequence: u64) -> Result<u64> {
+        self.file.seek_sequence(sequence)
+    }
+
     /// See [`VarlitFile::read_payload_into`].
     pub fn read_payload_into(&self, entry: &RecordIndexEntry, out: &mut Vec<u8>) -> Result<()> {
         self.file.read_payload_into(entry, out)
@@ -3919,6 +3861,40 @@ impl VarlitWriter {
         out: &mut Vec<u8>,
     ) -> Result<()> {
         self.file.read_logical_payload_into(entry, out)
+    }
+
+    /// See [`VarlitFile::read_record_into`].
+    pub fn read_record_into(&self, entry: &RecordIndexEntry, out: &mut [u8]) -> Result<RecordPage> {
+        self.file.read_record_into(entry, out)
+    }
+
+    /// See [`VarlitFile::read_record_from`].
+    pub fn read_record_from(&self, cursor: RecordCursor, out: &mut [u8]) -> Result<RecordPage> {
+        self.file.read_record_from(cursor, out)
+    }
+
+    /// See [`VarlitFile::view_block`].
+    pub fn view_block<T: VarlitView>(&self, entry: &RecordIndexEntry) -> Result<T::View> {
+        self.file.view_block::<T>(entry)
+    }
+
+    /// See [`VarlitFile::read_span_into`].
+    pub fn read_span_into(
+        &self,
+        entry: &RecordIndexEntry,
+        span: FieldSpan,
+        out: &mut [u8],
+    ) -> Result<RecordPage> {
+        self.file.read_span_into(entry, span, out)
+    }
+
+    /// See [`VarlitFile::decode_field`].
+    pub fn decode_field<F: crate::VarlitDecode>(
+        &self,
+        entry: &RecordIndexEntry,
+        span: FieldSpan,
+    ) -> Result<F> {
+        self.file.decode_field(entry, span)
     }
 
     /// See [`VarlitFile::decode_block_into`].
@@ -4297,6 +4273,60 @@ impl VarlitWriter {
         self.file.read_matrix_run_bytes_into::<T>(start, out)
     }
 
+    /// See [`VarlitFile::read_matrix_region_into`].
+    pub fn read_matrix_region_into<T: VarlitMatrixBlock>(
+        &self,
+        region: MatrixRegion,
+        out: &mut [T],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_into::<T>(region, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_from`].
+    pub fn read_matrix_region_from<T: VarlitMatrixBlock>(
+        &self,
+        cursor: MatrixCursor,
+        out: &mut [T],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_from::<T>(cursor, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_bytes_into`].
+    pub fn read_matrix_region_bytes_into<T: VarlitMatrixBlock>(
+        &self,
+        region: MatrixRegion,
+        out: &mut [u8],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_bytes_into::<T>(region, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_region_bytes_from`].
+    pub fn read_matrix_region_bytes_from<T: VarlitMatrixBlock>(
+        &self,
+        cursor: MatrixCursor,
+        out: &mut [u8],
+    ) -> Result<MatrixPage> {
+        self.file.read_matrix_region_bytes_from::<T>(cursor, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_cells_into`].
+    pub fn read_matrix_cells_into<T: VarlitMatrixBlock>(
+        &self,
+        keys: &[MatrixKey],
+        out: &mut [T],
+    ) -> Result<()> {
+        self.file.read_matrix_cells_into::<T>(keys, out)
+    }
+
+    /// See [`VarlitFile::read_matrix_cells_bytes_into`].
+    pub fn read_matrix_cells_bytes_into<T: VarlitMatrixBlock>(
+        &self,
+        keys: &[MatrixKey],
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.file.read_matrix_cells_bytes_into::<T>(keys, out)
+    }
+
     /// See [`VarlitFile::read_matrix_column_into`].
     pub fn read_matrix_column_into<T: VarlitMatrixBlock>(
         &self,
@@ -4510,6 +4540,8 @@ pub struct BlockChain<'a> {
     block_id: u32,
     next: Option<u64>,
     visited: u64,
+    /// The first byte a record may start at: a link below it is refused.
+    floor: u64,
 }
 
 impl Iterator for BlockChain<'_> {
@@ -4539,6 +4571,13 @@ impl BlockChain<'_> {
         self.spec
             .read_limits
             .check(ReadLimitKey::Records, self.visited)?;
+        if offset < self.floor || offset >= self.snapshot.len() {
+            return Err(Error::InvalidCanonicalEncoding(
+                "offset chain points outside the append log",
+            ));
+        }
+        // Rebuilding an entry from its header, as a list fault does.
+        scan::count_record_entry_fault();
         let entry = read_record_entry_positional(self.spec, self.snapshot, offset)?;
         if entry.block_id != self.block_id {
             return Err(Error::InvalidCanonicalEncoding(
@@ -4582,6 +4621,8 @@ pub struct KeyedChain<'a> {
     snapshot: &'a SnapshotFile,
     next: Option<u64>,
     visited: u64,
+    /// The first byte a record may start at: a link below it is refused.
+    floor: u64,
 }
 
 impl Iterator for KeyedChain<'_> {
@@ -4612,6 +4653,11 @@ impl KeyedChain<'_> {
         self.spec
             .read_limits
             .check(ReadLimitKey::Records, self.visited)?;
+        if offset < self.floor || offset >= self.snapshot.len() {
+            return Err(Error::InvalidCanonicalEncoding(
+                "offset chain points outside the append log",
+            ));
+        }
         let entry = read_record_entry_positional(self.spec, self.snapshot, offset)?;
         // Strictly decreasing, so a crafted or damaged chain cannot loop. The
         // same defence in depth `BlockChain` carries, and for the same reason:
@@ -4740,9 +4786,6 @@ pub(crate) fn read_record_entry_positional(
 }
 
 fn append_log_start_for_file(file: &VarlitFile) -> Result<u64> {
-    if let Some(matrix) = &file.matrix {
-        return Ok(matrix.append_log_start());
-    }
     // From the file's own region, not from `spec`: a block this build does not
     // know is skipped at open rather than refused, so a file can carry a longer
     // header than this build writes. Deriving the boundary from `spec` would
@@ -4772,7 +4815,7 @@ fn append_log_start_for_file(file: &VarlitFile) -> Result<u64> {
 /// truncated under the writer fails the first or the second of those.
 fn validate_generation_index(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut PrimaryFile,
     append_start: u64,
     index: &ResidentIndex,
 ) -> Result<()> {
@@ -4784,7 +4827,7 @@ fn validate_generation_index(
 /// published and so have no directory for it yet.
 fn validate_generation_file(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut PrimaryFile,
     append_start: u64,
     expected_entries: &dyn RecordDirectory,
 ) -> Result<()> {
@@ -4793,7 +4836,7 @@ fn validate_generation_file(
 
 fn validate_replacement_generation_file(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut PrimaryFile,
     append_start: u64,
     expected_entries: &dyn RecordDirectory,
 ) -> Result<()> {
@@ -4804,7 +4847,7 @@ fn validate_replacement_generation_file(
 /// the already validated prefix. Other callers screen only the fixed header.
 fn validate_generation_file_inner(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut PrimaryFile,
     append_start: u64,
     expected_entries: &dyn RecordDirectory,
     strict_prefix: bool,
@@ -4823,6 +4866,9 @@ fn validate_generation_file_inner(
     // Overlapping ranges take the bounded external-sort fallback.
     let mut sequences = native_rewrite::SequenceRanges::default();
     let mut walked = 0usize;
+    // The walk is sequential, so it reads through a window rather than three
+    // small reads per record; checkpoint rows read positionally underneath.
+    let mut window = scan::WindowedReader::new(file)?;
     for (position, expected) in directory_records(expected_entries).enumerate() {
         let expected = expected?;
         let expected = &expected;
@@ -4834,7 +4880,7 @@ fn validate_generation_file_inner(
         }
         let actual = match read_record_entry_at(
             spec,
-            file,
+            &mut window,
             file_len,
             offset,
             // Generation validation proves a just-published file matches what
@@ -4865,7 +4911,7 @@ fn validate_generation_file_inner(
             if strict_prefix {
                 native_rewrite::validate_checkpoint(
                     spec,
-                    file,
+                    window.inner(),
                     &actual,
                     expected_entries,
                     position,
@@ -4873,7 +4919,7 @@ fn validate_generation_file_inner(
                 )?;
             } else {
                 let prefix = actual.read_payload_prefix_file_with_len(
-                    file,
+                    window.inner(),
                     file_len,
                     INDEX_CHECKPOINT_PREFIX_LEN,
                 )?;
@@ -4922,7 +4968,9 @@ enum RewritePayload<'a> {
 fn rewrite_record_streaming(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
-    output: &mut File,
+    source: &mut SourceWindow,
+    summary: &RewriteSummary,
+    output: &mut PrimaryFile,
     mut entry: RecordIndexEntry,
     payload: RewritePayload<'_>,
 ) -> Result<RecordIndexEntry> {
@@ -4971,6 +5019,27 @@ fn rewrite_record_streaming(
         checksum: 0,
         uncompressed_len_hint: entry.uncompressed_len_hint,
     };
+    output.begin_record_summarized(record_offset, entry.sequence, record_end, summary);
+    entry.record_offset = record_offset;
+    entry.payload_offset = payload_offset;
+    entry.payload_len = payload_len;
+    entry.footer_offset = None;
+    entry.prev_same_block_offset = None;
+    entry.prev_same_key_offset = None;
+    if let Some(checksum) = write_staged_record(
+        spec,
+        snapshot,
+        source,
+        output,
+        record_offset,
+        header,
+        &payload,
+        &[],
+        None,
+    )? {
+        entry.checksum = checksum;
+        return Ok(entry);
+    }
     write_record_header(output, spec, record_offset, header)?;
     match payload {
         RewritePayload::Bytes(bytes) => output.write_all(bytes)?,
@@ -4980,12 +5049,6 @@ fn rewrite_record_streaming(
         }
     }
 
-    entry.record_offset = record_offset;
-    entry.payload_offset = payload_offset;
-    entry.payload_len = payload_len;
-    entry.footer_offset = None;
-    entry.prev_same_block_offset = None;
-    entry.prev_same_key_offset = None;
     entry.checksum = match spec.integrity_policy {
         IntegrityPolicy::None => 0,
         IntegrityPolicy::Crc32 | IntegrityPolicy::Crc32WithHeader => {
@@ -5004,6 +5067,171 @@ fn rewrite_record_streaming(
     )?;
     output.seek(SeekFrom::Start(record_end))?;
     Ok(entry)
+}
+
+/// Read-ahead over the source snapshot for one rewrite pass.
+///
+/// A rewrite copies records in file order, so the payloads it stages are
+/// adjacent; reading them through one window turns one read per record into
+/// one read per window. Reads the window cannot hold go straight through.
+pub(crate) struct SourceWindow {
+    buffer: Option<Box<[u8; SOURCE_WINDOW]>>,
+    start: u64,
+    len: usize,
+}
+
+const SOURCE_WINDOW: usize = 16 * 1024;
+
+impl SourceWindow {
+    pub(crate) const fn new() -> Self {
+        Self {
+            buffer: None,
+            start: 0,
+            len: 0,
+        }
+    }
+
+    fn read(&mut self, snapshot: &SnapshotFile, offset: u64, out: &mut [u8]) -> Result<()> {
+        let want = out.len() as u64;
+        let end = offset
+            .checked_add(want)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: "rewrite source window",
+            })?;
+        if out.len() > SOURCE_WINDOW / 2 || end > snapshot.len() {
+            return snapshot.read_exact_at(offset, out);
+        }
+        let held = self.start + self.len as u64;
+        if self.buffer.is_none() || offset < self.start || end > held {
+            if self.buffer.is_none() {
+                self.buffer = Some(crate::fallible::try_box([0u8; SOURCE_WINDOW])?);
+            }
+            let buffer = self.buffer.as_mut().expect("allocated above");
+            let len = (snapshot.len() - offset).min(SOURCE_WINDOW as u64) as usize;
+            snapshot.read_exact_at(offset, &mut buffer[..len])?;
+            self.start = offset;
+            self.len = len;
+        }
+        let buffer = self.buffer.as_ref().expect("filled above");
+        let at = (offset - self.start) as usize;
+        out.copy_from_slice(&buffer[at..at + out.len()]);
+        Ok(())
+    }
+}
+
+/// The largest record a rewrite assembles in memory before writing it.
+///
+/// Header, payload and footer of a record this small are staged in one stack
+/// buffer, checksummed there and written with one call. The streamed route
+/// writes the header, the payload and the footer separately, reads the payload
+/// back to checksum it, and seeks back to rewrite the header: four writes and
+/// at least one read per record, which dominated the cost of a whole-file
+/// rewrite of small records.
+const STAGED_RECORD_LEN: usize = 4096;
+
+/// Writes a small rewritten record in one call and returns its checksum, or
+/// `None` when the record must take the streamed route (too large, an index
+/// payload, or a checksum this build cannot compute).
+///
+/// `verify` names the source record a snapshot copy must still match; its
+/// checksum is recomputed from the staged bytes before anything is written,
+/// exactly as the streamed copy does.
+#[allow(clippy::too_many_arguments)]
+fn write_staged_record(
+    spec: FormatSpec,
+    snapshot: &SnapshotFile,
+    source: &mut SourceWindow,
+    output: &mut PrimaryFile,
+    record_offset: u64,
+    header: RecordHeaderFields,
+    payload: &RewritePayload<'_>,
+    footer: &[u8],
+    verify: Option<&RecordIndexEntry>,
+) -> Result<Option<u32>> {
+    if cfg!(not(feature = "integrity")) && spec.integrity_policy != IntegrityPolicy::None {
+        return Ok(None);
+    }
+    let header_len = RECORD_HEADER_LEN as usize;
+    let payload_len = match payload {
+        RewritePayload::Bytes(bytes) => bytes.len(),
+        RewritePayload::Snapshot { len, .. } => match usize::try_from(*len) {
+            Ok(len) => len,
+            Err(_) => return Ok(None),
+        },
+        RewritePayload::Index(_) => return Ok(None),
+    };
+    let Some(total) = header_len
+        .checked_add(payload_len)
+        .and_then(|len| len.checked_add(footer.len()))
+        .filter(|&total| total <= STAGED_RECORD_LEN)
+    else {
+        return Ok(None);
+    };
+    let mut buffer = [0u8; STAGED_RECORD_LEN];
+    let payload_end = header_len + payload_len;
+    match payload {
+        RewritePayload::Bytes(bytes) => buffer[header_len..payload_end].copy_from_slice(bytes),
+        RewritePayload::Snapshot { offset, .. } => {
+            source.read(snapshot, *offset, &mut buffer[header_len..payload_end])?;
+        }
+        RewritePayload::Index(_) => unreachable!("index payloads stream"),
+    }
+    buffer[payload_end..total].copy_from_slice(footer);
+
+    let footer_len = record_footer_len(spec);
+    let crc_of = |fields: RecordHeaderFields, at: u64, footer: &[u8]| -> Result<u32> {
+        let mut hash = crc32fast::Hasher::new();
+        if spec.integrity_policy == IntegrityPolicy::Crc32WithHeader {
+            hash.update(&encode_native_record_header(fields, at, footer_len)?);
+        }
+        hash.update(&buffer[header_len..payload_end]);
+        hash.update(checksummed_footer(spec, footer));
+        Ok(hash.finalize())
+    };
+    if let Some(source) = verify {
+        if spec.integrity_policy != IntegrityPolicy::None {
+            let source_footer = if spec.spec_needs_record_footer() {
+                Some(encode_record_footer(RecordFooterFields {
+                    prev_same_block_offset: source.prev_same_block_offset,
+                    prev_same_key_offset: source.prev_same_key_offset,
+                    mutable_flags: source.mutable_flags,
+                })?)
+            } else {
+                None
+            };
+            let actual = crc_of(
+                RecordHeaderFields {
+                    block_id: source.block_id,
+                    block_version: source.block_version,
+                    flags: source.flags,
+                    sequence: source.sequence,
+                    payload_len: source.payload_len,
+                    checksum: 0,
+                    uncompressed_len_hint: source.uncompressed_len_hint,
+                },
+                source.record_offset,
+                source_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]),
+            )?;
+            if actual != source.checksum {
+                return Err(Error::ChecksumMismatch {
+                    offset: source.record_offset,
+                });
+            }
+        }
+    }
+    let checksum = match spec.integrity_policy {
+        IntegrityPolicy::None => 0,
+        IntegrityPolicy::Crc32 | IntegrityPolicy::Crc32WithHeader => {
+            crc_of(header, record_offset, footer)?
+        }
+    };
+    buffer[..header_len].copy_from_slice(&encode_native_record_header(
+        RecordHeaderFields { checksum, ..header },
+        record_offset,
+        footer_len,
+    )?);
+    output.write_all(&buffer[..total])?;
+    Ok(Some(checksum))
 }
 
 /// Which backward chain a link belongs to.
@@ -5059,7 +5287,9 @@ impl ChainRemap<'_> {
 fn rewrite_replacement_record_streaming(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
-    output: &mut File,
+    source: &mut SourceWindow,
+    summary: &RewriteSummary,
+    output: &mut PrimaryFile,
     mut entry: RecordIndexEntry,
     payload: RewritePayload<'_>,
     replacement: ChainRemap<'_>,
@@ -5132,6 +5362,36 @@ fn rewrite_replacement_record_streaming(
         checksum: 0,
         uncompressed_len_hint: entry.uncompressed_len_hint,
     };
+    output.begin_record_summarized(record_offset, entry.sequence, record_end, summary);
+    let staged_footer = if spec.spec_needs_record_footer() {
+        Some(encode_record_footer(RecordFooterFields {
+            prev_same_block_offset: entry.prev_same_block_offset,
+            prev_same_key_offset: entry.prev_same_key_offset,
+            // Carried, not reset: a republish moves a record, it does not bring
+            // it back to life.
+            mutable_flags: entry.mutable_flags,
+        })?)
+    } else {
+        None
+    };
+    if let Some(checksum) = write_staged_record(
+        spec,
+        snapshot,
+        source,
+        output,
+        record_offset,
+        header,
+        &payload,
+        staged_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]),
+        source_entry.as_ref(),
+    )? {
+        // The predecessor check reads the record back, so it runs after the
+        // write; a refusal discards the whole temporary file.
+        validate_replacement_predecessors(output, &entry, rewritten_prefix)?;
+        output.seek(SeekFrom::Start(record_end))?;
+        entry.checksum = checksum;
+        return Ok(entry);
+    }
     write_record_header(output, spec, record_offset, header)?;
     let mut copied_crc = None;
     match payload {
@@ -5152,19 +5412,10 @@ fn rewrite_replacement_record_streaming(
             }
         }
     }
-    let encoded_footer = if spec.spec_needs_record_footer() {
-        let footer = encode_record_footer(RecordFooterFields {
-            prev_same_block_offset: entry.prev_same_block_offset,
-            prev_same_key_offset: entry.prev_same_key_offset,
-            // Carried, not reset: a republish moves a record, it does not bring
-            // it back to life.
-            mutable_flags: entry.mutable_flags,
-        })?;
-        output.write_all(&footer)?;
-        Some(footer)
-    } else {
-        None
-    };
+    let encoded_footer = staged_footer;
+    if let Some(footer) = &encoded_footer {
+        output.write_all(footer)?;
+    }
     let footer = encoded_footer.as_ref().map_or(&[][..], |bytes| &bytes[..]);
     validate_replacement_predecessors(output, &entry, rewritten_prefix)?;
 
@@ -5200,7 +5451,7 @@ fn rewrite_replacement_record_streaming(
 fn copy_verified_snapshot_record(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
-    output: &mut File,
+    output: &mut PrimaryFile,
     source: &RecordIndexEntry,
     offset: u64,
     len: u64,
@@ -5270,7 +5521,7 @@ fn copy_verified_snapshot_record(
 fn copy_snapshot_payload_crc<const BUFFER: usize>(
     payload: &mut crc32fast::Hasher,
     snapshot: &SnapshotFile,
-    output: &mut File,
+    output: &mut PrimaryFile,
     offset: u64,
     len: u64,
 ) -> Result<()> {
@@ -5299,7 +5550,7 @@ fn copy_snapshot_payload_crc<const BUFFER: usize>(
 fn copy_verified_snapshot_record(
     _spec: FormatSpec,
     _snapshot: &SnapshotFile,
-    _output: &mut File,
+    _output: &mut PrimaryFile,
     _source: &RecordIndexEntry,
     _offset: u64,
     _len: u64,
@@ -5308,7 +5559,7 @@ fn copy_verified_snapshot_record(
 }
 
 fn validate_replacement_predecessors(
-    output: &mut File,
+    output: &mut PrimaryFile,
     entry: &RecordIndexEntry,
     rewritten_prefix: &RewriteDirectory,
 ) -> Result<()> {
@@ -5334,7 +5585,7 @@ fn validate_replacement_predecessors(
     Ok(())
 }
 
-fn replacement_chain_block_id(file: &mut File, entry: &RecordIndexEntry) -> Result<u32> {
+fn replacement_chain_block_id(file: &mut PrimaryFile, entry: &RecordIndexEntry) -> Result<u32> {
     if !matches!(entry.block_id, TOMBSTONE_BLOCK_ID | OP_BLOCK_ID) {
         return Ok(entry.block_id);
     }
@@ -5699,6 +5950,12 @@ where
     Ok(())
 }
 
+/// What one key of a merge state holds inline, charged to the
+/// materialization budget when the key first appears.
+fn merge_slot_bytes<T: VarlitKeyedBlock>() -> u64 {
+    std::mem::size_of::<(T::Key, (MergeOrder, Option<T>))>() as u64
+}
+
 fn apply_merge_entries<T, D: RecordDirectory + ?Sized>(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
@@ -5733,6 +5990,11 @@ where
                 let key = block.key();
                 if should_apply(state.get(&key), order) {
                     admit_merge_key::<T>(state, &key, max_distinct_keys)?;
+                    // A new key holds its slot whatever its payload weighed:
+                    // a forty-byte tombstone costs the whole inline `T`.
+                    if !state.contains_key(&key) {
+                        budget.consume(merge_slot_bytes::<T>())?;
+                    }
                     state.try_reserve(1).map_err(|_| Error::AllocationFailed {
                         resource: "merge state",
                         requested: logical_len,
@@ -5750,6 +6012,11 @@ where
                 };
                 if should_apply(state.get(&key), order) {
                     admit_merge_key::<T>(state, &key, max_distinct_keys)?;
+                    // A new key holds its slot whatever its payload weighed:
+                    // a forty-byte tombstone costs the whole inline `T`.
+                    if !state.contains_key(&key) {
+                        budget.consume(merge_slot_bytes::<T>())?;
+                    }
                     state.try_reserve(1).map_err(|_| Error::AllocationFailed {
                         resource: "merge state",
                         requested: logical_len,
@@ -6048,9 +6315,15 @@ where
 
 /// Write the header this spec describes, and hand back the extension region it
 /// put there so the caller can record what this file actually carries.
-pub(crate) fn write_file_header(spec: FormatSpec, file: &mut File) -> Result<Vec<u8>> {
+pub(crate) fn write_file_header(
+    spec: FormatSpec,
+    file: &mut crate::primary_file::PrimaryFile,
+) -> Result<Vec<u8>> {
     let extensions = file_header_extensions(spec)?;
-    write_native_file_header(file, spec, &extensions)?;
+    // The header precedes every anchor; the layout is installed after it.
+    file.set_layout(None);
+    let header_len = write_native_file_header(file, spec, &extensions)?;
+    file.set_layout(spec.effective_anchors().layout(header_len));
     Ok(extensions)
 }
 
@@ -6068,6 +6341,15 @@ pub(crate) fn read_file_header_parts(
     spec: FormatSpec,
     file: &mut (impl Read + Seek),
 ) -> Result<(u64, Vec<u8>)> {
+    let (header_len, extensions, _) = read_file_header_anchored(spec, file)?;
+    Ok((header_len, extensions))
+}
+
+/// [`read_file_header_parts`] and the anchor policy the file was written with.
+pub(crate) fn read_file_header_anchored(
+    spec: FormatSpec,
+    file: &mut (impl Read + Seek),
+) -> Result<(u64, Vec<u8>, crate::anchor::AnchorPolicy)> {
     file.seek(SeekFrom::Start(0))?;
     let header = read_native_file_header(file, spec)?;
     let hash = header.schema_hash;
@@ -6088,108 +6370,34 @@ pub(crate) fn read_file_header_parts(
     }
     if header.has_extension_len {
         validate_file_header_extensions(spec, &header.extensions)?;
-        Ok((header.header_len, header.extensions))
+        Ok((header.header_len, header.extensions, header.anchors))
     } else {
         if uses_file_explicit_compression(spec) {
             return Err(Error::InvalidCompressionHeader);
         }
-        Ok((native_file_header_len(spec, 0), Vec::new()))
+        Ok((native_file_header_len(spec, 0), Vec::new(), header.anchors))
     }
 }
 
-/// Pages of partial (metadata) writes a matrix writer buffers until the next
-/// spill: the layout's metadata size plus slack for slot-edge pages, within the
-/// existing `max_matrix_metadata_bytes` limit. `MatrixFile` further caps it at
-/// the pending-page limit.
-fn matrix_dirty_page_budget(spec: FormatSpec, layout: &crate::matrix::MatrixLayout) -> usize {
-    const PAGE: u64 = 4096;
-    const SLACK_PAGES: u64 = 64;
-    let wanted = layout
-        .metadata_bytes()
-        .div_ceil(PAGE)
-        .saturating_add(SLACK_PAGES);
-    let allowed = spec
-        .read_limits
-        .require(ReadLimitKey::MatrixMetadataBytes)
-        .ok()
-        .flatten()
-        .map_or(u64::MAX, |bytes| bytes / PAGE);
-    usize::try_from(wanted.min(allowed)).unwrap_or(usize::MAX)
+/// Opens the primary at `path` read-only, with the anchors its header records.
+fn open_primary_by_path(spec: FormatSpec, path: &Path) -> Result<PrimaryFile> {
+    let mut file = PrimaryFile::new(File::open(path)?, None);
+    read_primary_header(spec, &mut file)?;
+    Ok(file)
 }
 
-fn matrix_pending_limit(spec: FormatSpec) -> usize {
-    // Charge a conservative 128 bytes of directory metadata per dirty page.
-    spec.read_limits
-        .require(ReadLimitKey::MaterializedBytes)
-        .ok()
-        .flatten()
-        .map_or(65_536, |n| {
-            usize::try_from(n / 128).unwrap_or(usize::MAX).max(1)
-        })
-}
-fn read_matrix_layout_if_needed(
-    path: &Path,
-    writable: bool,
+/// Reads the header of a primary handle and installs the anchor layout it
+/// records, so every later offset on the handle is logical. Anchors count
+/// from the end of the header: a matrix format, whose append log starts after
+/// its matrix region, is never anchored (`FormatSpec::effective_anchors`).
+pub(crate) fn read_primary_header(
     spec: FormatSpec,
-    file: &mut File,
-    header_len: u64,
-    _captured_len: u64,
-) -> Result<
-    Option<(
-        crate::matrix::MatrixLayout,
-        [u8; MATRIX_CREATION_NONCE_LEN],
-        crate::matrix_generation::MatrixFile,
-    )>,
-> {
-    if !spec.has_matrix_blocks() {
-        return Ok(None);
-    }
-    let nonce = read_matrix_creation_nonce_region(file, header_len)?;
-    let mut pages = crate::matrix_generation::MatrixFile::open(
-        path,
-        file,
-        nonce,
-        writable,
-        matrix_pending_limit(spec),
-    )?;
-    pages.set_cache_bytes(spec.read_limits.matrix_generation_cache_budget());
-    pages.set_traversal_bytes(limit_or_max(
-        spec.read_limits.require(ReadLimitKey::ScanBytes)?,
-    ));
-    if pages.head().native_eof > file.metadata()?.len() {
-        return Err(Error::InvalidMatrixLayout);
-    }
-    let layout_start = header_len
-        .checked_add(MATRIX_CREATION_NONCE_REGION_LEN as u64)
-        .ok_or(Error::InvalidMatrixLayout)?;
-    let confirmed_len = pages.head().native_eof;
-    let layout = crate::matrix::read_layout_at_len(spec, &mut pages, layout_start, confirmed_len)?;
-    if writable {
-        file.set_len(pages.head().native_eof)?;
-        pages.set_dirty_page_budget(matrix_dirty_page_budget(spec, &layout));
-    }
-    Ok(Some((layout, nonce, pages)))
-}
-#[allow(clippy::type_complexity)]
-fn split_matrix_state(
-    state: Option<(
-        crate::matrix::MatrixLayout,
-        [u8; MATRIX_CREATION_NONCE_LEN],
-        crate::matrix_generation::MatrixFile,
-    )>,
-) -> (
-    Option<crate::matrix::MatrixLayout>,
-    Option<[u8; MATRIX_CREATION_NONCE_LEN]>,
-    Option<crate::matrix_generation::MatrixFile>,
-) {
-    match state {
-        Some((layout, nonce, pages)) => (Some(layout), Some(nonce), Some(pages)),
-        None => (None, None, None),
-    }
-}
-
-fn append_log_start(header_len: u64, matrix: Option<&crate::matrix::MatrixLayout>) -> u64 {
-    matrix.map_or(header_len, crate::matrix::MatrixLayout::append_log_start)
+    file: &mut crate::primary_file::PrimaryFile,
+) -> Result<(u64, Vec<u8>)> {
+    file.set_layout(None);
+    let (header_len, extensions, anchors) = read_file_header_anchored(spec, file)?;
+    file.set_layout(anchors.layout(header_len));
+    Ok((header_len, extensions))
 }
 
 /// Produces a fresh 128-bit matrix creation nonce.
@@ -6238,37 +6446,6 @@ fn fresh_matrix_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     nonce
 }
 
-fn write_matrix_creation_nonce_region(
-    file: &mut File,
-    creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
-) -> Result<()> {
-    let mut region = [0u8; MATRIX_CREATION_NONCE_REGION_LEN];
-    region[0..4].copy_from_slice(MATRIX_CREATION_NONCE_MAGIC);
-    region[4..6].copy_from_slice(&MATRIX_CREATION_NONCE_VERSION.to_le_bytes());
-    // region[6..8] stays zero (reserved).
-    region[8..].copy_from_slice(&creation_id);
-    file.write_all(&region)?;
-    Ok(())
-}
-
-fn read_matrix_creation_nonce_region(
-    file: &mut File,
-    offset: u64,
-) -> Result<[u8; MATRIX_CREATION_NONCE_LEN]> {
-    file.seek(SeekFrom::Start(offset))?;
-    let mut region = [0u8; MATRIX_CREATION_NONCE_REGION_LEN];
-    file.read_exact(&mut region)?;
-    if &region[0..4] != MATRIX_CREATION_NONCE_MAGIC
-        || region[4..6] != MATRIX_CREATION_NONCE_VERSION.to_le_bytes()
-        || region[6..8] != [0; 2]
-    {
-        return Err(Error::InvalidMatrixLayout);
-    }
-    let mut nonce = [0u8; MATRIX_CREATION_NONCE_LEN];
-    nonce.copy_from_slice(&region[8..]);
-    Ok(nonce)
-}
-
 /// The limits a native format must declare before it may be written or opened.
 ///
 /// **`FileLen` is not among them, and that is the point.** Requiring a
@@ -6299,8 +6476,24 @@ pub(crate) fn ensure_native_open_limits(spec: FormatSpec) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn check_open_file_len(_spec: FormatSpec, file: &File) -> Result<u64> {
-    Ok(file.metadata()?.len())
+/// Whether an anchor interrupts the logical range `[offset, offset + len)`.
+#[cfg(feature = "mmap")]
+pub(crate) fn anchored_range_is_split(
+    layout: &crate::anchor::AnchorLayout,
+    offset: u64,
+    len: u64,
+) -> bool {
+    if len < 2 {
+        return false;
+    }
+    match (layout.physical(offset), layout.physical(offset + len - 1)) {
+        (Some(first), Some(last)) => last - first != len - 1,
+        _ => true,
+    }
+}
+
+pub(crate) fn check_open_file_len(_spec: FormatSpec, file: &PrimaryFile) -> Result<u64> {
+    Ok(file.len()?)
 }
 
 fn ensure_matrix_byte_copy_compatible<From, To>() -> Result<()>
@@ -6448,7 +6641,6 @@ fn validate_unique_sequences(entries: &[RecordIndexEntry]) -> Result<()> {
 /// The three per-handle structures every open and every generation rebind
 /// derives from the resident index.
 struct DerivedIndexState {
-    checkpoint_cadence: CheckpointCadence,
     segment_cursor: SegmentCursor,
     /// `None` when the caller did not ask for tails, which an open does not:
     /// it already has them from the scan or the chain walk, and building the
@@ -6459,7 +6651,7 @@ struct DerivedIndexState {
 /// Derives all three in ONE forward pass.
 ///
 /// They used to be three separate walks of the same entries — one forward
-/// (`BlockTails`) and two reverse (`CheckpointCadence`, `SegmentCursor`) — run
+/// (`BlockTails`) and reverse ones (`SegmentCursor`) — run
 /// back to back at every open and at both generation rebinds. The two reverse
 /// walks stop at the newest checkpoint and the newest segment respectively, so
 /// on a file that carries neither they each walk the whole index; the forward
@@ -6478,12 +6670,7 @@ fn derive_index_state(
     let mut newest: HashMap<u32, u64> = HashMap::new();
     // Position of, and entry at, the newest record of each kind the derived
     // structures key on.
-    let mut newest_checkpoint: Option<usize> = None;
     let mut newest_segment: Option<(usize, u64)> = None;
-    // Eligible records since the newest checkpoint, counted forward: reset each
-    // time a checkpoint is seen, which leaves exactly the tail the reverse walk
-    // used to accumulate.
-    let mut eligible: usize = 0;
     for (position, entry) in entries.enumerate() {
         let entry = entry?;
         touched = touched.saturating_add(1);
@@ -6496,24 +6683,11 @@ fn derive_index_state(
             }
             newest.insert(entry.block_id, entry.record_offset);
         }
-        match entry.block_id {
-            INDEX_BLOCK_ID => {
-                newest_checkpoint = Some(position);
-                eligible = 0;
-            }
-            SEGMENT_BLOCK_ID => newest_segment = Some((position, entry.physical_end())),
-            COMMIT_BLOCK_ID => {}
-            _ => eligible = eligible.saturating_add(1),
+        if entry.block_id == SEGMENT_BLOCK_ID {
+            newest_segment = Some((position, entry.physical_end()));
         }
     }
     let state = DerivedIndexState {
-        checkpoint_cadence: CheckpointCadence {
-            eligible_since_checkpoint: eligible,
-            next_threshold: match newest_checkpoint {
-                Some(position) => core::cmp::max(INDEX_CHECKPOINT_MIN_RECORDS, position / 2),
-                None => INDEX_CHECKPOINT_MIN_RECORDS,
-            },
-        },
         segment_cursor: match newest_segment {
             Some((position, physical_end)) => SegmentCursor {
                 next_position: position + 1,
@@ -6528,7 +6702,6 @@ fn derive_index_state(
     if with_tails {
         note_block_tail_index_touches(touched);
     }
-    note_checkpoint_cadence_index_touches(touched);
     Ok(state)
 }
 
@@ -6573,7 +6746,7 @@ fn read_record_header(
 }
 
 fn write_record_header(
-    file: &mut File,
+    file: &mut PrimaryFile,
     spec: FormatSpec,
     record_offset: u64,
     header: RecordHeaderFields,
@@ -6590,7 +6763,7 @@ fn encode_record_footer(footer: RecordFooterFields) -> Result<[u8; RECORD_FOOTER
 /// Rebuilds a record's index entry from the record itself, positionally.
 ///
 /// **`&self` throughout, which is the whole point.** `read_record_entry_at`
-/// takes `&mut File` and seeks, so it cannot serve an `&self` read path.
+/// takes `&mut PrimaryFile` and seeks, so it cannot serve an `&self` read path.
 /// A demand-filled index uses that path: every read of an entry the index no
 /// longer holds has to come
 /// from the file, under `&self`. This reads the two fixed-size regions through
@@ -6813,6 +6986,11 @@ fn checksum_record_fields(
     footer: &[u8],
 ) -> Result<u32> {
     header.checksum = 0;
+    let payload = if header.flags & RECORD_FLAG_IN_PLACE != 0 {
+        &[][..]
+    } else {
+        payload
+    };
     let header_bytes = if spec.integrity_policy == IntegrityPolicy::Crc32WithHeader {
         Some(encode_native_record_header(
             header,
@@ -6857,7 +7035,11 @@ fn checksum_record_file(
     crc32_record_file(
         file,
         entry.payload_offset,
-        entry.payload_len,
+        if entry.flags & RECORD_FLAG_IN_PLACE != 0 {
+            0
+        } else {
+            entry.payload_len
+        },
         header_bytes.as_ref().map(|bytes| &bytes[..]).unwrap_or(&[]),
         checksummed_footer(spec, footer),
     )
@@ -7405,7 +7587,7 @@ impl FileMutationPermit<'_> {
         // the version refusal happened in `ReplacementTarget::resolve`, and
         // `prepare` drops the keyed-tail map before the write below.
         let writer: &mut VarlitFile = self;
-        let write = RecordOverwrite::prepare(target, &writer.index, &mut writer.keyed_tails)?;
+        let write = RecordOverwrite::prepare(target, &mut writer.keyed_tails)?;
         writer
             .file
             .overwrite_indexed_record(write, header_bytes, payload)
@@ -7529,7 +7711,6 @@ impl FileMutationPermit<'_> {
             eof: self.snapshot.len(),
             sequence_state: self.sequence_state,
             index_len: self.index.len(),
-            checkpoint_cadence: self.checkpoint_cadence,
             segment_cursor: self.segment_cursor,
             block_id,
             previous_block_tail: self.block_tails.tail(block_id),
@@ -7613,12 +7794,23 @@ impl FileMutationPermit<'_> {
         // (`mod record_file`). It seeks to the end itself and refuses an
         // offset that is not the one budgeted above, so this path cannot land
         // inside an already-indexed record even if `record_offset` were wrong.
-        let write_result = self.file.append_record_at_end(
+        // What an anchor this record reaches records for an open to resume
+        // from: the state before this record, known only to a handle that
+        // knows the whole file's record count.
+        let writer: &mut VarlitFile = &mut *self;
+        let summary = WriterSummary {
+            tails: &writer.block_tails,
+            records_before: writer.index.whole_file_count(),
+            sequence_high_water: sequence.checked_sub(1),
+            segment: &writer.segment_cursor,
+        };
+        let write_result = writer.file.append_record_at_end(
             &index_slot,
             record_offset,
             &header_bytes,
             payload,
             footer.as_ref().map(|bytes| &bytes[..]),
+            Some(&summary),
             || {
                 #[cfg(test)]
                 fail_append_after_header_if_requested()?;
@@ -7679,11 +7871,10 @@ impl FileMutationPermit<'_> {
         if resident {
             self.last_resident_block_id = Some(block_id);
             self.index.install(index_slot, &entry);
-            // Single index append site: keep the O(1) flush-cadence state in
-            // lockstep with the resident index. It counts resident
-            // entries, so a non-resident record must not advance it.
+            // Single index append site: keep the segment cursor in lockstep
+            // with the resident index. It counts resident entries, so a
+            // non-resident record must not advance it.
             let ordinal = self.index.len() - 1;
-            self.checkpoint_cadence.note_appended(ordinal, block_id);
             self.segment_cursor
                 .note_appended(ordinal, block_id, prospective_len);
         } else {
@@ -7769,7 +7960,16 @@ mod validation_tests;
 
 #[path = "file/header_codec.rs"]
 mod header_codec;
+pub(crate) mod record_chunks;
+mod record_read;
+mod record_view;
 use header_codec::*;
+pub(crate) use record_read::{ChunkCache, fill_range, fill_record};
+pub use record_read::{RecordCursor, RecordPage};
+pub use record_view::{
+    FIELD_INLINE, FieldSpan, FieldWalk, VarlitView, view_set, view_wire_mismatch,
+};
+pub(crate) use record_view::{decode_field, read_span, view_block};
 
 pub(crate) use header_codec::file_header_extensions;
 
@@ -7808,6 +8008,8 @@ pub(crate) use scan::prepare_stream_manifest_record;
 pub(crate) use scan::fresh_stream_creation_nonce;
 
 pub(crate) use scan::prepare_stream_creation_nonce_record;
+pub(crate) use scan::prepare_stream_matrix_record;
+pub(crate) use scan::prepare_stream_sync_record;
 
 pub(crate) use scan::read_stream_creation_nonce;
 

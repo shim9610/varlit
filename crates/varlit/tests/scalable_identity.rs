@@ -279,8 +279,9 @@ fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<
     // Rebuild is the documented recovery: it republishes a sidecar for the
     // generation actually on disk.
     let report = rebuild_disk_index(spec(), &first, options, plan())?;
-    // Two user records plus the leading internal creation-nonce record.
-    assert_eq!(report.records, 3);
+    // Two user records, the leading internal creation-nonce record and the
+    // sync marker that closed them.
+    assert_eq!(report.records, 4);
     let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
     assert_eq!(
         filled(|o| reader.get::<Item>(&20, o))?,
@@ -648,7 +649,8 @@ fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary
         fs::write(&sidecar, &damaged)?;
         assert_eq!(
             varlit::VarlitStreamReader::open(stream_spec(), &path, options)?.verify_all()?,
-            3
+            // The creation nonce, two records and their sync marker.
+            4
         );
         damaged[8192 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
@@ -667,7 +669,7 @@ fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary
             damaged,
             "recovery republished a stale checkpoint"
         );
-        assert_eq!(pinned.verify_all()?, 3);
+        assert_eq!(pinned.verify_all()?, 4);
     }
     Ok(())
 }

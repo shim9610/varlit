@@ -428,7 +428,8 @@ Then:
 let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
 
-let mark = file.read_header_block::<Watermark>()?;   // takes &self, no I/O
+let mut mark = Watermark::empty();
+let found = file.read_header_block::<Watermark>(&mut mark)?; // &self, no I/O
 let left = file.header_slots_free_bytes()?;
 ```
 

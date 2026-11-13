@@ -81,15 +81,6 @@ fn derived_state_matches_the_three_rules_it_replaced() {
     for (name, index) in shapes {
         let derived = derive_index_state(infallible_entries(&index), true)
             .expect("borrowed entries cannot fail");
-        let cadence = CheckpointCadence::from_index(&index);
-        assert_eq!(
-            derived.checkpoint_cadence.eligible_since_checkpoint, cadence.eligible_since_checkpoint,
-            "{name}: eligible count diverged from the reverse walk"
-        );
-        assert_eq!(
-            derived.checkpoint_cadence.next_threshold, cadence.next_threshold,
-            "{name}: next threshold diverged from the reverse walk"
-        );
         let cursor = SegmentCursor::from_index(&index);
         assert_eq!(
             derived.segment_cursor.next_position, cursor.next_position,
@@ -318,46 +309,14 @@ fn a_checkpoint_that_stops_short_of_its_coverage_is_refused() {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MatrixTestCell {
-    value: u32,
-}
-
-impl VarlitEncode for MatrixTestCell {
-    const WIRE_TYPE: crate::WireType = crate::WireType::U32;
-
-    fn encode_varlit(&self, encoder: &mut crate::Encoder) -> Result<()> {
-        self.value.encode_varlit(encoder)
-    }
-}
-
-impl VarlitDecode for MatrixTestCell {
-    const WIRE_TYPE: crate::WireType = crate::WireType::U32;
-
-    fn decode_varlit(decoder: &mut crate::Decoder<'_>) -> Result<Self> {
-        Ok(Self {
-            value: u32::decode_varlit(decoder)?,
-        })
-    }
-}
-
-impl VarlitBlock for MatrixTestCell {
-    const ID: u32 = 41;
-    const VERSION: u16 = 1;
-    const KIND: BlockKind = BlockKind::Matrix;
-    const ENDIAN: Option<Endian> = None;
-    const IS_KEYED: bool = false;
-    const SCHEMA_FINGERPRINT: u64 = 0x4649_4C45_0000_0029;
-}
-
-impl VarlitMatrixBlock for MatrixTestCell {
-    const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
-    const CATEGORY: &'static str = "cells";
-    const SLOT_STRIDE: u64 = 4;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReplaceTestBlock {
     value: u64,
+}
+
+impl crate::VarlitEmpty for ReplaceTestBlock {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
 }
 
 impl VarlitEncode for ReplaceTestBlock {
@@ -464,6 +423,12 @@ fn a_digest_with_an_unknown_flag_is_refused() {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReplaceString(String);
 
+impl crate::VarlitEmpty for ReplaceString {
+    fn empty() -> Self {
+        Self(String::new())
+    }
+}
+
 impl VarlitEncode for ReplaceString {
     const WIRE_TYPE: crate::WireType = crate::WireType::String;
 
@@ -543,83 +508,6 @@ impl VarlitReplaceBlock for ReplaceKeyed {
             Err(Error::ReplacementKeyMismatch)
         }
     }
-}
-
-/// A format with one declared block kept out of the resident index, and the
-/// footer chain that makes it reachable.
-/// A failed write must leave the chunk where it was.
-///
-/// `write_open_chunk_record` `take()`d the chunk and *then* ran three fallible
-/// steps, so any failure destroyed the data and emptied `open_chunk` — and
-/// the retry a caller would naturally make returned `Ok(())` for a chunk
-/// that no longer existed anywhere. Silent loss reported as success.
-///
-/// **The state is constructed rather than reached through the API, and the
-/// reason is worth stating.** The reachable way to make a write fail was a
-/// record payload ceiling below the chunk's written size, and `create` now
-/// refuses that pairing outright — fixing a different defect closed the
-/// public route to this one. `a_chunk_that_could_never_be_written_is_refused_at_create`
-/// covers the refusal; this covers what happens if a write fails anyway,
-/// which an I/O error still can.
-#[test]
-fn a_failed_chunk_write_keeps_the_chunk() {
-    let spec = residency_test_spec();
-    let dir = tempfile::tempdir().expect("temp dir");
-    let path = dir.path().join("chunk-write.varlit");
-    let mut file = VarlitFile::create(spec, &path).expect("create");
-
-    file.open_chunk = Some(OpenChunk {
-        index: 1,
-        first_row: 4,
-        rows: 4,
-        compression: None,
-        blocks: vec![OpenChunkBlock {
-            block_id: 900,
-            stride: 4,
-            cells: 32,
-            written: vec![0xFF; 4],
-            commit: vec![0xFF; 4],
-            crc: Vec::new(),
-            slots: vec![7; 128],
-        }],
-        dirty: true,
-        backing: None,
-    });
-
-    // A ceiling the encoded chunk cannot fit under.
-    file.spec = file
-        .spec
-        .with_read_limits(file.spec.read_limits.with_max_record_payload_len(16));
-
-    assert!(matches!(
-        file.write_open_chunk_record(),
-        Err(Error::LimitExceeded { .. })
-    ));
-    assert!(
-        file.open_chunk.is_some(),
-        "a failed chunk write must leave the chunk where it was",
-    );
-    // The retry reports the same failure rather than Ok.
-    assert!(matches!(
-        file.write_open_chunk_record(),
-        Err(Error::LimitExceeded { .. })
-    ));
-
-    // Let it succeed, and confirm the chunk is released exactly once.
-    //
-    // Released, even though a written chunk is normally *retained* now —
-    // retention is what preserves the write bitmap across a flush. This
-    // fixture builds an `OpenChunk` by hand on a spec that declares no
-    // growing matrix, so no chunk directory exists and the record it just
-    // wrote has no ordinal to be addressed by later. A retained chunk with
-    // no `backing` would append a *second* record for its index on the next
-    // edit, so the no-ordinal case releases instead: the write bitmap is
-    // worth less than the guarantee that a duplicate cannot be produced.
-    file.spec = file
-        .spec
-        .with_read_limits(file.spec.read_limits.with_max_record_payload_len(u64::MAX));
-    file.write_open_chunk_record().expect("write the chunk");
-    assert!(file.open_chunk.is_none());
 }
 
 fn digest_test_spec() -> FormatSpec {
@@ -1072,19 +960,17 @@ fn serialized_directory_cannot_authorize_marking_an_embedded_record() -> Result<
         let _ = writer.push_info_for_test(10, b"pad-one")?;
         let _ = writer.push_info_for_test(10, b"pad-two")?;
         let fake = fault_record_entry(&writer.snapshot, spec, outer.payload_offset, false)?;
-        assert!(writer.index.has_sequence_hint());
+        // The embedded frame carries the outer record's own sequence, so a
+        // sequence check alone would accept it. The writer keeps no record
+        // list to hint from; the refusal below has to come from the boundary
+        // check itself.
         assert_eq!(fake.sequence, outer.sequence);
-        // Even a matching sequence cannot authenticate an embedded frame.
-        assert!(
-            !writer
-                .index
-                .matches_sequence_hint(outer.payload_offset, fake.sequence)?
-        );
         let before = std::fs::read(&path)?;
-        assert!(matches!(
-            writer.mark_record_dead(outer.payload_offset),
-            Err(Error::InvalidCanonicalEncoding(_))
-        ));
+        let outcome = writer.mark_record_dead(outer.payload_offset);
+        assert!(
+            matches!(outcome, Err(Error::InvalidCanonicalEncoding(_))),
+            "budget {budget}: {outcome:?}"
+        );
         assert_eq!(std::fs::read(&path)?, before);
         // Model a serialized segment claiming the embedded header is a record.
         writer.index = ResidentIndex::adopt_generation(
@@ -1124,45 +1010,6 @@ fn test_spec() -> FormatSpec {
         ManifestPolicy::None,
         &[],
     )
-    .with_read_limits(crate::ReadLimits::finite_all(u64::MAX))
-}
-
-fn matrix_test_spec() -> FormatSpec {
-    static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
-        id: MatrixTestCell::ID,
-        name: "MatrixTestCell",
-        version: MatrixTestCell::VERSION,
-        kind: BlockKind::Matrix,
-        fields: MatrixTestCell::FIELDS,
-    }];
-    static DIMENSIONS: &[crate::MatrixDimensionDescriptor] = &[
-        crate::MatrixDimensionDescriptor { name: "scan" },
-        crate::MatrixDimensionDescriptor { name: "ch" },
-    ];
-    static COMMITS: &[crate::MatrixCommitDescriptor] = &[crate::MatrixCommitDescriptor {
-        name: "cells",
-        kind: crate::MatrixCommitKind::Cell,
-    }];
-    static MATRIX_BLOCKS: &[crate::MatrixBlockDescriptor] = &[crate::MatrixBlockDescriptor {
-        block_id: MatrixTestCell::ID,
-        dimensions: MatrixTestCell::DIMENSIONS,
-        category: MatrixTestCell::CATEGORY,
-        slot_stride: MatrixTestCell::SLOT_STRIDE,
-    }];
-
-    FormatSpec::new(
-        b"VSMTX",
-        1,
-        Endian::Little,
-        0,
-        IndexPolicy::ScanOnOpen,
-        IntegrityPolicy::None,
-        RecoveryPolicy::Strict,
-        ManifestPolicy::None,
-        BLOCKS,
-    )
-    .with_block_identities(&[MatrixTestCell::IDENTITY])
-    .with_matrix_spec(DIMENSIONS, COMMITS, MATRIX_BLOCKS)
     .with_read_limits(crate::ReadLimits::finite_all(u64::MAX))
 }
 
@@ -1262,16 +1109,14 @@ fn replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot() -> R
     writer.flush()?;
 
     let old_reader = VarlitFile::open_readonly(spec, &path)?;
-    let old_values = old_reader.blocks::<ReplaceString>()?;
-    let old_tail_offset = writer
-        .index_entries()
+    let old_values = all_blocks!(old_reader, ReplaceString)?;
+    let old_tail_offset = all_entries!(writer)
         .iter()
         .filter(|entry| entry.block_id == ReplaceString::ID)
         .nth(1)
         .expect("tail record")
         .record_offset;
-    let sequence = writer
-        .index_entries()
+    let sequence = all_entries!(writer)
         .iter()
         .find(|entry| entry.block_id == ReplaceString::ID)
         .expect("target record")
@@ -1284,7 +1129,7 @@ fn replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot() -> R
     assert_eq!(grown.sequence, sequence);
     assert!(grown.new_physical_len > grown.old_physical_len);
     let translated_tail = grown.translate_record_offset(old_tail_offset)?;
-    let entries = writer.index_entries();
+    let entries = all_entries!(writer);
     let tail = entries
         .iter()
         .filter(|entry| entry.block_id == ReplaceString::ID)
@@ -1303,11 +1148,11 @@ fn replace_block_grows_shrinks_and_preserves_sequence_chains_and_snapshot() -> R
 
     let reopened = VarlitFile::open_readonly(spec, &path)?;
     assert_eq!(
-        reopened.blocks::<ReplaceString>()?.get_value(0)?,
+        all_blocks!(reopened, ReplaceString)?.get_value(0)?,
         Some(ReplaceString("y".into()))
     );
     assert_eq!(
-        reopened.blocks::<ReplaceString>()?.get_value(1)?,
+        all_blocks!(reopened, ReplaceString)?.get_value(1)?,
         Some(ReplaceString("tail".into()))
     );
     assert_no_rewrite_temps(directory.path())?;
@@ -1377,7 +1222,7 @@ fn replace_block_translates_keyed_predecessors_after_target() -> Result<()> {
             value: "a much longer first value".into(),
         },
     )?;
-    let snapshot = writer.index_entries();
+    let snapshot = all_entries!(writer);
     let keyed: Vec<_> = snapshot
         .iter()
         .filter(|entry| entry.block_id == ReplaceKeyed::ID)
@@ -1410,11 +1255,11 @@ fn replace_block_preserves_transaction_visibility_and_next_sequence() -> Result<
     assert_eq!(info.sequence, 0);
     assert_eq!(writer.sequence_state.available()?, next_sequence);
     assert_eq!(
-        old_reader.blocks::<ReplaceString>()?.get_value(0)?,
+        all_blocks!(old_reader, ReplaceString)?.get_value(0)?,
         Some(ReplaceString("committed-old".into()))
     );
     let new_reader = VarlitFile::open_readonly(spec, &path)?;
-    let visible = new_reader.blocks::<ReplaceString>()?;
+    let visible = all_blocks!(new_reader, ReplaceString)?;
     assert_eq!(visible.len(), 1);
     assert_eq!(
         visible.get_value(0)?,
@@ -1439,13 +1284,11 @@ fn replacement_publish_rebind_failure_is_explicit_and_poisoned() -> Result<()> {
         Err(Error::PublishedButRebindFailed { sequence: 0, .. })
     ));
     assert_eq!(
-        old_reader.blocks::<ReplaceString>()?.get_value(0)?,
+        all_blocks!(old_reader, ReplaceString)?.get_value(0)?,
         Some(ReplaceString("old".into()))
     );
     assert_eq!(
-        VarlitFile::open_readonly(spec, &path)?
-            .blocks::<ReplaceString>()?
-            .get_value(0)?,
+        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceString)?.get_value(0)?,
         Some(ReplaceString("new and longer".into()))
     );
     assert!(matches!(writer.flush(), Err(Error::WriterPoisoned("file"))));
@@ -1516,42 +1359,28 @@ fn append_failure_rolls_back_and_preserves_sequence() -> Result<()> {
     Ok(())
 }
 
-/// A read through the snapshot moves the writer's own file offset.
+/// A read through the snapshot leaves the writer's appends where they belong.
 ///
-/// `VarlitFile::snapshot` is a `try_clone` of `VarlitFile::file`, and
-/// `try_clone` shares the open file description — so the two share one
-/// offset. `cursor_at` is the plainest way to show it (it is what the
-/// layout scan uses), but it is not the only one: every `replace_*` seeks
-/// this description through `validate_generation_index`, and on Windows so
-/// does every positional read, `read_exact_at` being `seek_read` there.
-///
-/// This is a property of the design, not a defect — reads are supposed to
-/// be free of the writer. What was a defect is anything believing it knows
-/// where the offset is: `RecordFile` cached it, and after the `cursor_at`
-/// below the cache said `eof` while the kernel said `0`, with nothing able
-/// to tell the writer otherwise. The cache is gone; every write here seeks
-/// first, so a displaced offset costs nothing.
+/// `VarlitFile::snapshot` is a `try_clone` of `VarlitFile::file`, so the two
+/// share one open file description and one kernel offset. Every read and every
+/// append on the primary is positional and logical (`PrimaryFile`), so nothing
+/// depends on where that offset is: a layout scan's cursor can move it anywhere
+/// and the next append still lands at the end.
 #[test]
-fn a_snapshot_read_moves_the_writers_offset_and_the_writer_survives_it() -> Result<()> {
+fn a_snapshot_read_does_not_displace_the_writers_appends() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("shared-description.varlit");
     let mut file = VarlitFile::create(test_spec(), &path)?;
     file.push_info_for_test(12, b"first")?;
     let after_first = file.snapshot.len();
-    assert_eq!(file.file.stream_position()?, after_first);
 
     // What a layout scan does, on the description the writer appends to.
-    let _scan = file.snapshot.cursor_at(0)?;
-    assert_eq!(
-        file.file.stream_position()?,
-        0,
-        "the snapshot and the writer share one file offset",
-    );
+    let mut scan = file.snapshot.cursor_at(0)?;
+    let mut magic = [0u8; 4];
+    scan.read_exact_at(0, &mut magic)?;
 
-    // The append still lands at the end, because it seeks there itself.
     let info = file.push_info_for_test(12, b"second")?;
     assert_eq!(info.record_offset, after_first);
-    assert_eq!(file.file.stream_position()?, file.snapshot.len());
     assert!(file.snapshot.len() > after_first);
     Ok(())
 }
@@ -1576,111 +1405,6 @@ fn rollback_failure_poisons_mutation_flush_and_sync() -> Result<()> {
     ));
     assert!(matches!(file.flush(), Err(Error::WriterPoisoned("file"))));
     assert!(matches!(file.sync(), Err(Error::WriterPoisoned("file"))));
-    Ok(())
-}
-
-/// A-3. A whole-category clear does its fallible region half first, so a
-/// failure there leaves every chunk exactly as it was.
-///
-/// **The ordering was fixed on 2026-08-08 and went unpinned until now,
-/// because nothing could make the region half fail.** The clear writes
-/// through `zero_range`; the two injectors that existed sat on
-/// `write_slot_payload` and `write_bitmap_byte`, neither of which a
-/// category clear ever calls. So the fix was a reordering nobody could
-/// observe, which is the same as no fix at all against the next edit — and
-/// the defect it corrected is silent: the chunk half used to run first as
-/// an infallible memset, so a region clear that then failed on I/O returned
-/// an error to a caller entitled to believe nothing had happened, with the
-/// chunk's committed cells already destroyed.
-///
-/// Both kinds of chunk are present, because the halves are separate code
-/// now: chunk 1 has a record and is reached by the directory walk, chunk 2
-/// is the open buffer. Neither may be touched.
-#[test]
-fn a_failed_region_clear_leaves_every_chunk_alone() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("clear-order.varlit");
-    let spec = matrix_test_spec().with_growing_matrix_dimension("scan", 4);
-    let mut file = VarlitFile::create_with_dims(
-        spec,
-        &path,
-        MatrixDimensions::from_pairs([("scan", 4), ("ch", 1)]),
-    )?;
-    let region = MatrixKey::new(0, 0);
-    let written = MatrixKey::new(4, 0);
-    let open = MatrixKey::new(8, 0);
-    for (key, value) in [(region, 1), (written, 2), (open, 3)] {
-        file.write_matrix_cell(key, &MatrixTestCell { value })?;
-        file.commit_matrix_cell::<MatrixTestCell>(key)?;
-    }
-    // Opening chunk 2 wrote chunk 1 out, so `written` lives in a record and
-    // `open` lives in the buffer.
-    file.flush()?;
-    let length_before = file.file.metadata()?.len();
-
-    crate::matrix::inject_zero_range_failure();
-    assert!(matches!(
-        file.clear_matrix_category(MatrixTestCell::CATEGORY),
-        Err(Error::Io(_))
-    ));
-
-    for key in [region, written, open] {
-        assert_eq!(
-            file.matrix_cell_status::<MatrixTestCell>(key)?,
-            MatrixCellStatus::Committed,
-            "a clear that failed on the region reported an error and destroyed a cell",
-        );
-    }
-    assert_eq!(
-        file.file.metadata()?.len(),
-        length_before,
-        "a clear that failed before its first write must not have rewritten a chunk record",
-    );
-    Ok(())
-}
-
-#[test]
-fn partial_matrix_overwrite_is_withdrawn_and_poisons_writer() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("matrix-partial.varlit");
-    let spec = matrix_test_spec();
-    let key = MatrixKey::new(0, 0);
-    let mut file = VarlitFile::create_with_dims(
-        spec,
-        &path,
-        MatrixDimensions::from_pairs([("scan", 1), ("ch", 1)]),
-    )?;
-    file.write_matrix_cell(key, &MatrixTestCell { value: 11 })?;
-    file.commit_matrix_cell::<MatrixTestCell>(key)?;
-    let original_len = file.file.metadata()?.len();
-
-    crate::matrix::inject_partial_slot_write_failure();
-    assert!(matches!(
-        file.write_matrix_cell(key, &MatrixTestCell { value: 22 }),
-        Err(Error::Io(_))
-    ));
-    assert_eq!(file.file.metadata()?.len(), original_len);
-    assert_eq!(
-        file.matrix_cell_status::<MatrixTestCell>(key)?,
-        MatrixCellStatus::NotCommitted
-    );
-    assert!(matches!(
-        file.write_matrix_cell(key, &MatrixTestCell { value: 33 }),
-        Err(Error::WriterPoisoned("file"))
-    ));
-    assert!(matches!(file.flush(), Err(Error::WriterPoisoned("file"))));
-    assert!(matches!(file.sync(), Err(Error::WriterPoisoned("file"))));
-    drop(file);
-
-    let reopened = VarlitFile::open_readonly(spec, &path)?;
-    assert_eq!(
-        reopened.matrix_cell_status::<MatrixTestCell>(key)?,
-        MatrixCellStatus::NotCommitted
-    );
-    assert!(matches!(
-        reopened.read_matrix_cell::<MatrixTestCell>(key, &mut MatrixTestCell { value: 0 }),
-        Err(Error::MatrixNotCommitted)
-    ));
     Ok(())
 }
 
@@ -1709,7 +1433,7 @@ fn assert_publish_rebind_failure(rewrite: bool) -> Result<()> {
     }
 
     let old_reader = VarlitFile::open_readonly(spec, &path)?;
-    let old_blocks = old_reader.blocks::<ReplaceTestBlock>()?;
+    let old_blocks = all_blocks!(old_reader, ReplaceTestBlock)?;
     let mut writer = VarlitFile::open(spec, &path)?;
     inject_write_fault(WriteFault::RebindAfterPublish);
     let error = if rewrite {
@@ -1741,9 +1465,7 @@ fn assert_publish_rebind_failure(rewrite: bool) -> Result<()> {
         Some(ReplaceTestBlock { value: 1 })
     );
     assert_eq!(
-        VarlitFile::open_readonly(spec, &path)?
-            .blocks::<ReplaceTestBlock>()?
-            .get_value(0)?,
+        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceTestBlock)?.get_value(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert!(matches!(
@@ -1844,9 +1566,7 @@ fn assert_double_publication_fault_reports_both_facts(api: ReplacementApi) -> Re
     // Everything the single-fault contract already promised still holds:
     // publication happened, and the writer is poisoned.
     assert_eq!(
-        VarlitFile::open_readonly(spec, &path)?
-            .blocks::<ReplaceTestBlock>()?
-            .get_value(0)?,
+        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceTestBlock)?.get_value(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert!(matches!(
@@ -1888,7 +1608,7 @@ fn windows_sharing_violation_preserves_generation_and_allows_retry() -> Result<(
     }
 
     let old_reader = VarlitFile::open_readonly(spec, &path)?;
-    let old_blocks = old_reader.blocks::<ReplaceTestBlock>()?;
+    let old_blocks = all_blocks!(old_reader, ReplaceTestBlock)?;
     let mut writer = VarlitFile::open(spec, &path)?;
     let blocker = OpenOptions::new()
         .read(true)
@@ -1900,7 +1620,7 @@ fn windows_sharing_violation_preserves_generation_and_allows_retry() -> Result<(
         Err(Error::Io(_))
     ));
     assert_eq!(
-        writer.blocks::<ReplaceTestBlock>()?.get(0)?,
+        all_blocks!(writer, ReplaceTestBlock)?.get(0)?,
         Some(ReplaceTestBlock { value: 1 })
     );
     assert_eq!(old_blocks.get(0)?, Some(ReplaceTestBlock { value: 1 }));
@@ -1910,9 +1630,7 @@ fn windows_sharing_violation_preserves_generation_and_allows_retry() -> Result<(
     writer.replace_fixed(0, &ReplaceTestBlock { value: 2 })?;
     assert_eq!(old_blocks.get(0)?, Some(ReplaceTestBlock { value: 1 }));
     assert_eq!(
-        VarlitFile::open_readonly(spec, &path)?
-            .blocks::<ReplaceTestBlock>()?
-            .get(0)?,
+        all_blocks!(VarlitFile::open_readonly(spec, &path)?, ReplaceTestBlock)?.get(0)?,
         Some(ReplaceTestBlock { value: 2 })
     );
     assert_no_rewrite_temps(directory.path())?;
@@ -2071,7 +1789,7 @@ fn windows_external_truncate_returns_error_without_rebinding_or_panicking() -> R
     }
 
     let reader = VarlitFile::open_readonly(spec, &path)?;
-    let blocks = reader.blocks::<ReplaceTestBlock>()?;
+    let blocks = all_blocks!(reader, ReplaceTestBlock)?;
     OpenOptions::new().write(true).open(&path)?.set_len(0)?;
     assert!(blocks.get(0).is_err());
     Ok(())
@@ -2085,39 +1803,6 @@ fn assert_no_rewrite_temps(directory: &Path) -> Result<()> {
             "rewrite temp leaked after failed publication"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn failed_matrix_commit_publish_keeps_memory_uncommitted_and_poisons_writer() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("matrix-commit-failure.varlit");
-    let spec = matrix_test_spec();
-    let key = MatrixKey::new(0, 0);
-    let mut file = VarlitFile::create_with_dims(
-        spec,
-        &path,
-        MatrixDimensions::from_pairs([("scan", 1), ("ch", 1)]),
-    )?;
-    file.write_matrix_cell(key, &MatrixTestCell { value: 44 })?;
-
-    crate::matrix::inject_bitmap_write_failure();
-    assert!(matches!(
-        file.commit_matrix_cell::<MatrixTestCell>(key),
-        Err(Error::Io(_))
-    ));
-    assert_eq!(
-        file.matrix_cell_status::<MatrixTestCell>(key)?,
-        MatrixCellStatus::NotCommitted
-    );
-    assert!(matches!(file.sync(), Err(Error::WriterPoisoned("file"))));
-    drop(file);
-
-    let reopened = VarlitFile::open_readonly(spec, &path)?;
-    assert_eq!(
-        reopened.matrix_cell_status::<MatrixTestCell>(key)?,
-        MatrixCellStatus::NotCommitted
-    );
     Ok(())
 }
 
@@ -2365,12 +2050,8 @@ fn an_append_window_issues_no_metadata_syscall() -> Result<()> {
 
     // The records really are there and really are readable through the
     // rebound snapshot, so this is not "no syscalls because no work".
-    assert_eq!(file.index_entries().len(), 1_000);
-    let last = file
-        .index_entries()
-        .last()
-        .expect("appended record")
-        .clone();
+    assert_eq!(all_entries!(file).len(), 1_000);
+    let last = all_entries!(file).last().expect("appended record").clone();
     assert_eq!(file.snapshot.len(), last.checked_physical_end()?);
     Ok(())
 }
@@ -2443,11 +2124,12 @@ fn every_index_entry_can_be_rebuilt_from_its_own_record() -> Result<()> {
     drop(writer);
 
     let opened = VarlitFile::open_readonly(spec, &path)?;
-    let resident = opened.index_entries();
+    let resident = all_entries!(opened);
     assert!(resident.len() >= 64, "fixture is too small to say anything");
 
-    let mut file = OpenOptions::new().read(true).open(&path)?;
-    let file_len = file.metadata()?.len();
+    let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(&path)?, None);
+    read_primary_header(spec, &mut file)?;
+    let file_len = file.len()?;
     let mut accounting = ScanAccounting::default();
     let mut committed_differed = 0usize;
     for entry in resident.iter() {
@@ -2487,7 +2169,7 @@ fn every_index_entry_can_be_rebuilt_from_its_own_record() -> Result<()> {
     // And the same again through the positional `&self` reader, which is
     // the one a demand-filled index would actually use: `read_record_entry_at`
     // above takes `&mut File` and seeks, which no shared read path can do.
-    let snapshot = SnapshotFile::new(OpenOptions::new().read(true).open(&path)?)?;
+    let snapshot = SnapshotFile::new(file.try_clone()?)?;
     for entry in resident.iter() {
         let faulted = fault_record_entry(&snapshot, spec, entry.record_offset, entry.committed)?;
         assert_eq!(
@@ -2522,7 +2204,7 @@ fn replace_block_finds_predecessors_without_rescanning_the_prefix() -> Result<()
         writer.push(&ReplaceString(format!("v{index}")))?;
     }
     writer.flush()?;
-    let entries = writer.index_entries().len() as u64;
+    let entries = all_entries!(writer).len() as u64;
 
     let _ = VarlitFile::take_replacement_predecessor_probes();
     writer.replace_block(0, &ReplaceString("replaced".into()))?;
@@ -2540,7 +2222,7 @@ fn replace_block_finds_predecessors_without_rescanning_the_prefix() -> Result<()
     // And the replacement actually happened, so this is not "cheap because
     // the validation was deleted".
     let replaced = VarlitFile::open_readonly(spec, &path)?;
-    let values = replaced.blocks::<ReplaceString>()?;
+    let values = all_blocks!(replaced, ReplaceString)?;
     assert_eq!(values.len() as u64, RECORDS);
     assert_eq!(values.get_value(0)?.expect("record 0").0, "replaced");
     assert_eq!(
@@ -2596,5 +2278,66 @@ fn keyed_tail_spill_allocation_failures_preserve_entries_and_retry() -> Result<(
         }
     }
     assert!(completed && failures >= 9);
+    Ok(())
+}
+
+/// A segment-chained writer opened at an anchor keeps writing a chain the
+/// segment walk accepts: the cursor it resumed with (from the anchor summary
+/// or the scanned tail) names exactly the records each new segment covers.
+#[cfg(feature = "integrity")]
+#[test]
+fn an_anchored_writer_open_keeps_the_segment_chain_exact() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("anchored-segments.varlit");
+    let spec = test_spec()
+        .with_integrity_policy(IntegrityPolicy::Crc32)
+        .with_index_policy(IndexPolicy::SegmentOnFlush)
+        .with_anchors(crate::AnchorPolicy::every(13, true));
+    {
+        let mut file = VarlitFile::create(spec, &path)?;
+        for round in 0..60u64 {
+            for _ in 0..40 {
+                file.push_info_for_test(12, &round.to_le_bytes())?;
+            }
+            file.flush()?;
+        }
+    }
+    let records_before = {
+        let file = VarlitFile::open_readonly_scan(spec, &path)?;
+        file.record_count()?
+    };
+    // Opened at an anchor (the file spans many 8 KiB spacings), then appended.
+    {
+        #[cfg(feature = "scalable-fault-injection")]
+        let framed_before = VarlitFile::records_framed();
+        let mut file = VarlitFile::open(spec, &path)?;
+        #[cfg(feature = "scalable-fault-injection")]
+        assert!(
+            VarlitFile::records_framed() - framed_before < records_before as u64 / 4,
+            "the writer open did not resume at an anchor"
+        );
+        assert!(file.index.whole_file_count() == Some(records_before));
+        for _ in 0..3 {
+            for _ in 0..40 {
+                file.push_info_for_test(12, b"more")?;
+            }
+            file.flush()?;
+        }
+    }
+    // The segment chain, walked on its own, must describe the same records as
+    // a full scan.
+    let mut primary = crate::primary_file::PrimaryFile::new(std::fs::File::open(&path)?, None);
+    let (header_len, _) = read_primary_header(spec, &mut primary)?;
+    let end = primary.len()?;
+    let mut chained = Vec::new();
+    walk_segment_chain(spec, &mut primary, header_len, &mut chained, end)?;
+    let scanned = VarlitFile::open_readonly_scan(spec, &path)?;
+    let mut all = Vec::new();
+    scanned.index_entries_into(&mut all)?;
+    assert_eq!(chained.len(), all.len());
+    for (left, right) in chained.iter().zip(&all) {
+        assert_eq!(left.record_offset, right.record_offset);
+        assert_eq!(left.sequence, right.sequence);
+    }
     Ok(())
 }

@@ -17,6 +17,8 @@
 //! re-executed child of this test binary, spawned with `current_dir` set to a
 //! temporary directory — the subprocess pattern `scalable_crash_faults` and
 //! `policies` already use for process-scoped state.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -117,8 +119,7 @@ fn bare_filename_child() {
     let reopened = BareFormat::open_readonly(BARE_NAME).expect("reopen under a bare filename");
     let mut reading = Reading::empty();
     assert!(
-        reopened
-            .blocks::<Reading>()
+        crate::pages::all_blocks!(reopened, Reading)
             .expect("readings")
             .get(0, &mut reading)
             .expect("first reading")
@@ -126,8 +127,7 @@ fn bare_filename_child() {
     assert_eq!(reading, Reading { at: 1, value: 7 });
     let mut note = Note::empty();
     assert!(
-        reopened
-            .blocks::<Note>()
+        crate::pages::all_blocks!(reopened, Note)
             .expect("notes")
             .get(0, &mut note)
             .expect("first note")

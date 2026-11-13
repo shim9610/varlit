@@ -24,6 +24,8 @@
 //! same shape the header-tail slot uses to decide whether to trust a table.
 
 #![cfg(feature = "scalable-fault-injection")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{BlockVec, VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -99,7 +101,7 @@ fn a_directory_from_a_superseded_generation_is_refused() -> varlit::Result<()> {
     // The directory the host already has, built against this generation.
     let mut held = Vec::new();
     old.index_entries_into(&mut held)?;
-    let truth: Vec<Reading> = collect_all(old.blocks::<Reading>()?)?;
+    let truth: Vec<Reading> = crate::pages::all_blocks!(old, Reading)?.0;
     assert_eq!(truth.len(), COUNT as usize);
 
     // Generation N+1: a longer label moves every record after it.

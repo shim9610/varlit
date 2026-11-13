@@ -179,7 +179,8 @@ fn dirty_generation_reads_the_saved_root_without_writer_admission() -> Result<()
     writer.sync()?;
     let fresh = VarlitIndexedReader::open(spec, &path, options, plan)?;
     assert_eq!(get_item(&fresh, &2)?, Some(item(2, "two")));
-    assert_eq!(following.follow()?, 1);
+    // The synced record and the sync marker that closed it.
+    assert_eq!(following.follow()?, 2);
     assert_eq!(get_item(&following, &2)?, Some(item(2, "two")));
     // The older reader still serves the generation it pinned at open.
     assert_eq!(get_item(&reader, &1)?, Some(item(1, "one")));
@@ -209,8 +210,9 @@ fn rebuild_replaces_the_sidecar_for_fresh_handles() -> Result<()> {
     // open the replacement database, not a stale shared entry for the
     // replaced file object.
     let report = rebuild_disk_index(spec, &path, options, plan)?;
-    // Three user records plus the internal creation-nonce record.
-    assert_eq!(report.records, 4);
+    // Three user records, the internal creation-nonce record and one sync
+    // marker.
+    assert_eq!(report.records, 5);
     let first = VarlitIndexedReader::open(spec, &path, options, plan)?;
     let second = VarlitIndexedReader::open(spec, &path, options, plan)?;
     for reader in [&first, &second] {

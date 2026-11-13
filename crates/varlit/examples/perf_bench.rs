@@ -138,7 +138,16 @@ fn append_open_scan_bench(records: usize) -> varlit::Result<()> {
             file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
             records + 2
         );
-        assert_eq!(file.blocks::<BenchPoint>()?.len(), records);
+        // Paged through a caller-owned buffer; nothing is held across pages.
+        let mut page_buf = vec![BenchPoint { x: 0, y: 0 }; 4096];
+        let mut payload = Vec::new();
+        let mut page = file.blocks::<BenchPoint>(&mut payload, &mut page_buf)?;
+        let mut counted = page.filled;
+        while let Some(next) = page.next {
+            page = file.blocks_from::<BenchPoint>(next, &mut payload, &mut page_buf)?;
+            counted += page.filled;
+        }
+        assert_eq!(counted, records);
         Ok(())
     })?;
     report(

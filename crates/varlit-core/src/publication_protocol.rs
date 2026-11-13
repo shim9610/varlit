@@ -12,6 +12,9 @@ pub(crate) enum CheckpointKind {
 #[derive(Clone, Copy)]
 pub(crate) enum CheckpointStep {
     Body,
+    /// A barrier between a body and the head naming it: the two-barrier
+    /// confirmation of a page-reusing sidecar.
+    BodySync,
     SelectHead,
     Head,
     HeadSync,
@@ -29,6 +32,27 @@ pub(crate) fn checkpoint<E>(
     // working checkpoints are not barriers: a crashed generation is recovered
     // from the newest confirmed checkpoint, whatever reached storage after it.
     io(CheckpointStep::Body)?;
+    io(CheckpointStep::SelectHead)?;
+    io(CheckpointStep::Head)?;
+    if matches!(kind, CheckpointKind::Confirmed) {
+        io(CheckpointStep::HeadSync)?;
+    }
+    Ok(())
+}
+
+/// [`checkpoint`] for a sidecar whose confirmed body is not covered by a
+/// checksum in its head: a confirmation syncs the body before the head is
+/// written, so a head on storage always names a body on storage. Working and
+/// dirty publications remain barrier-free.
+#[inline]
+pub(crate) fn checkpoint_with_body_barrier<E>(
+    kind: CheckpointKind,
+    mut io: impl FnMut(CheckpointStep) -> Result<(), E>,
+) -> Result<(), E> {
+    io(CheckpointStep::Body)?;
+    if matches!(kind, CheckpointKind::Confirmed) {
+        io(CheckpointStep::BodySync)?;
+    }
     io(CheckpointStep::SelectHead)?;
     io(CheckpointStep::Head)?;
     if matches!(kind, CheckpointKind::Confirmed) {

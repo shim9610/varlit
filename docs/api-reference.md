@@ -240,10 +240,12 @@ is where the next offset lives.
 
 ```rust
 let newest = file.key_tail_offsets::<Reading>()?[&sensor];
+let (mut scratch, mut reading) = (Vec::new(), Reading::empty());
 for step in file.keyed_chain(newest)? {
     let entry = step?;
     if entry.block_id == Reading::ID {
-        history.push(file.read_block_at::<Reading>(entry.record_offset)?);
+        file.read_block_at::<Reading>(entry.record_offset, &mut scratch, &mut reading)?;
+        history.push(reading.clone());
     }
 }
 ```
@@ -494,6 +496,26 @@ another handle appends afterwards are not visible until it advances with
 
 ### Reads that fill a buffer you own
 
+**Every typed read decodes into a value you own.** `get`, `cursor().next_into`,
+`StreamingBlocks::next_into`, `read_block_at`, `decode_block_into`,
+`read_header_block`, `read_matrix_cell`, indexed `get` and their generated
+wrappers take `out: &mut T` and decode into it, reusing the `Vec`s and `String`s
+it already owns. Start from `T::empty()` (`VarlitEmpty`) or any existing value
+and keep it across a loop:
+
+```rust
+let mut cursor = reader.frames()?;
+let mut frame = Frame::empty();
+while cursor.next_into(&mut frame)? {
+    consume(&frame); // borrow it; the next step decodes over it
+}
+```
+
+A `bool` result means present (`true`) or absent / end of walk (`false`, `out`
+untouched). After an error `out` is valid but its contents are unspecified. The
+in-place decode is charged the same materialization budget as a fresh decode and
+refused at the same limit.
+
 The collection reads listed below accept reusable caller-owned buffers.
 `out` is cleared and then filled. Reusing sufficient capacity can avoid growing
 the outer buffer, but larger results may reserve more space, and decoded values,
@@ -505,7 +527,7 @@ metadata entries and internal scratch may allocate separately. These `Vec` and
 | `index_entries()` | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
 | `all_metadata()` | `all_metadata_into(&mut Vec<(String, Vec<u8>)>)` |
 | `blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
-| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output; not a bounded-memory iterator |
+| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output, decoding into the elements it already holds; not a bounded-memory iterator |
 | `blocks_migrated::<F, T, M>()` | `blocks_migrated_into::<F, T, M>(&mut Vec<T>)` |
 | `keyed_blocks::<T>()` | `keyed_blocks_into::<T>(&mut Vec<RecordIndexEntry>, &mut HashMap<..>)` |
 | `materialized_keyed_blocks::<T>()` | `materialized_keyed_blocks_into::<T>(&mut HashMap<..>)` |
@@ -527,7 +549,7 @@ Reading one record you already hold an entry for, into a buffer you own:
 | --- | --- |
 | `read_payload_into(&entry, &mut Vec<u8>)` | stored bytes, checked under the selected read policy |
 | `read_logical_payload_into(&entry, &mut Vec<u8>)` | decompressed if the record is compressed |
-| `decode_block_into::<T>(&entry, &mut scratch)` | decode, reading the bytes through `scratch` |
+| `decode_block_into::<T>(&entry, &mut scratch, &mut out)` | decode into `out` (reusing what it owns), reading the bytes through `scratch` |
 
 All three are bound to this open handle's snapshot, not to a path. The entry is
 yours and is therefore not trusted: an extent past the snapshot is refused.
@@ -578,7 +600,8 @@ let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;          // no read yet
 let hit = map.find(|entry| entry.block_id == Note::ID)?;
 if let Some(entry) = hit {
-    let note: Note = file.decode_block_into(&entry, &mut payload)?;
+    let mut note = Note::empty();
+    file.decode_block_into(&entry, &mut payload, &mut note)?;
 }
 let points = file.with_directory(&map)?.blocks::<Point>()?;  // the prefix walked
 map.clear();
@@ -829,12 +852,14 @@ varlit_format! {
 
 let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
-assert_eq!(file.read_header_block::<Watermark>()?, Some(watermark));
+let mut mark = Watermark::empty();
+assert!(file.read_header_block::<Watermark>(&mut mark)?);
+assert_eq!(mark, watermark);
 ```
 
 | method | takes | does |
 | --- | --- | --- |
-| `read_header_block::<T>()` | `&self` | decodes `T` from the cached header; no I/O, `None` if never written |
+| `read_header_block::<T>(&mut out)` | `&self` | decodes `T` from the cached header into `out`; no I/O, `false` if never written |
 | `write_header_block(&block)` | `&mut self` | writes it in place, replacing any earlier value for the same id |
 | `remove_header_block::<T>()` | `&mut self` | removes it, freeing its bytes |
 | `seal_header_slots()` | `&mut self` | fixes the checksum and refuses every later write |
@@ -1189,7 +1214,8 @@ clamped to `max_matrix_bitmap_bytes`. Cache admission charges 4096 bytes plus a
 windows. Fixed read buffers are additional. Misses read the original generation;
 no temporary mirror is built at open or follow. The legacy
 `matrix_resident_page_index_bytes` diagnostic excludes this optional cache.
-VMAT v5 adds the directly addressed reverse array; older layouts are rejected.
+VMAT v5 adds the directly addressed reverse array and v6 aligns the slot region
+to 4 KiB; older layouts are rejected.
 OnDemand validates headers at open and entries as accessed. AtOpen also streams
 all entries; explicit verification and CRC rebuild validate the directory too.
 It is separate from the per-bitmap residency budget. `matrix_generation()` exposes
@@ -1202,7 +1228,7 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `create_writer_with_dims(path, dims)` | create matrix file with runtime dimensions |
 | `write_matrix_cell::<T>(key, &value)` | encode and write a slot, clearing commit first |
 | `commit_matrix_cell::<T>(key)` | mark a written cell visible |
-| `read_matrix_cell::<T>(key)` | read committed cell or return `MatrixNotCommitted` |
+| `read_matrix_cell::<T>(key, &mut out)` | decode committed cell into `out` or return `MatrixNotCommitted` |
 | `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
 | `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
 | `read_matrix_row_into::<T>(first_axis, out)` | read one complete storage row; slice length equals dimension 1 |
@@ -1602,12 +1628,31 @@ Feature-gated APIs:
 | Feature | API | Meaning |
 | --- | --- | --- |
 | `mmap` | `unsafe mmap_payloads()` | mmap append-log payload windows |
+| `mmap` | `unsafe mmap_payload_range(records)` | mmap only the records at resident positions `records` (positions relative to the range) |
 | `mmap` | `unsafe VarlitFile::mmap_payload_window(entry)` | independently map one stored record payload |
 | `mmap` | `unsafe mmap_matrix()` | mmap matrix slot windows |
 | `mmap` | `unsafe mmap_matrix_cell::<T>(key)` | independently map one committed cell, patching only its COW pages |
 | `mmap` | `MmapMatrix::cell_numeric::<T, N>(key)` | endian-aware numeric scalar read |
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
+
+`mmap_payload_range(a..b)` maps from record `a`'s header to record `b - 1`'s
+end and copies only those entries; read a large file in successive ranges, or
+map `seen..record_count()?` after each `follow()`:
+
+```rust
+let mut seen = 0;
+loop {
+    reader.follow()?;
+    let now = reader.record_count()?;
+    // SAFETY: published records are never rewritten; the writer only appends.
+    let fresh = unsafe { reader.mmap_payload_range(seen..now)? };
+    for entry in fresh.index_entries() {
+        fresh.decode_block_into(entry, &mut scratch, &mut out)?;
+    }
+    seen = now;
+}
+```
 
 For bounded mapping workloads, choose an individual window. `MmapPayloadWindow`
 owns that mapping; `as_bytes()` borrows its bytes and `offset()` reports the
@@ -1808,7 +1853,7 @@ minor-version policy as the rest of the library.
 | `MatrixSidecarMismatch(reason)` | matrix sidecar rejected: wrong native identity, layout generation, creation nonce, or sidecar version; regenerate the sidecar |
 | `InvalidMatrixLayout` | matrix layout bytes are not valid for this build — including a matrix file created before the creation-nonce region existed; recreate the matrix file |
 | `MatrixSizeMismatch` | encoded matrix payload does not match slot stride |
-| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1, 2, 3, or 4 matrix file (v5 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
+| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1 to 5 matrix file (v6 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
 | `KeyedChainRequiresKeyedApi { block_id }` | generic `push`/`push_info` cannot maintain the keyed offset chain; use `push_keyed`/`push_keyed_info` or the generated keyed writer |
 | `LimitExceeded { resource: "variable field ids" }` | decoding charged the materialization budget for distinct variable field ids above 63 and the budget ran out |
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |

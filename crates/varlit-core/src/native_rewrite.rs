@@ -260,7 +260,7 @@ impl IndexPayload<'_> {
                 resource: "rewrite checkpoint bytes",
             })
     }
-    pub(super) fn write(&self, output: &mut File) -> Result<()> {
+    pub(super) fn write(&self, output: &mut crate::primary_file::PrimaryFile) -> Result<()> {
         let count = (self.entries.record_count() - self.start) as u64;
         if let Some(start) = self.covered_start {
             output.write_all(SEGMENT_MAGIC)?;
@@ -294,7 +294,7 @@ impl IndexPayload<'_> {
 
 pub(super) fn validate_checkpoint(
     spec: FormatSpec,
-    file: &mut File,
+    file: &mut crate::primary_file::PrimaryFile,
     actual: &RecordIndexEntry,
     expected: &dyn RecordDirectory,
     count: usize,

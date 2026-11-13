@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 // no user-defined trait may run after a generated keyed
 // mutation is authoritative.
 //
@@ -166,8 +169,7 @@ struct Snapshot {
 fn snapshot(path: &Path) -> varlit::Result<Snapshot> {
     let len = std::fs::metadata(path)?.len();
     let file = PanicKeyFormat::open(path)?;
-    let index = file
-        .index_entries()
+    let index = crate::pages::all_entries!(file)
         .iter()
         .map(|entry| {
             (

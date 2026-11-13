@@ -16,6 +16,8 @@
 //! Every test here also asserts the ceiling still refuses a single record that
 //! is genuinely too large — the discriminator against "fix" by deleting the
 //! charge.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,7 +121,7 @@ fn iter_and_a_get_loop_bound_the_same_thing() -> varlit::Result<()> {
     // `iter()` yielded two and then refused, and that asymmetry over the same
     // records is the defect.
     let file = capped(4096).open_readonly(&path)?;
-    let blocks = file.blocks::<Blob>()?;
+    let blocks = crate::pages::all_blocks!(file, Blob)?;
     assert_eq!(blocks.len(), 10);
 
     let mut by_index = Vec::new();
@@ -166,19 +168,21 @@ fn a_ceiling_below_one_record_still_refuses_the_first_item() -> varlit::Result<(
     // The discriminator against deleting the budget from iteration rather than
     // resetting it per record: 512 bytes cannot materialize even one record.
     let file = capped(512).open_readonly(&path)?;
-    let blocks = file.blocks::<Blob>()?;
 
     let mut item = Blob::empty();
-    let from_get = blocks
-        .get(0, &mut item)
-        .expect_err("get must refuse the first record");
-    assert!(is_materialization_refusal(&from_get), "{from_get:?}");
+    let from_page = file
+        .blocks::<Blob>(&mut Vec::new(), std::slice::from_mut(&mut item))
+        .expect_err("a page must refuse the first record");
+    assert!(is_materialization_refusal(&from_page), "{from_page:?}");
 
-    let from_iter = blocks
-        .cursor()
-        .next_into(&mut item)
-        .expect_err("cursor must refuse the first record");
-    assert!(is_materialization_refusal(&from_iter), "{from_iter:?}");
+    let first = crate::pages::all_entries!(file)
+        .into_iter()
+        .find(|entry| entry.block_id == Blob::ID)
+        .expect("a blob record");
+    let from_entry = file
+        .decode_block_into(&first, &mut Vec::new(), &mut item)
+        .expect_err("an entry decode must refuse the first record");
+    assert!(is_materialization_refusal(&from_entry), "{from_entry:?}");
 
     cleanup(&path);
     Ok(())
@@ -265,8 +269,7 @@ fn write_keyed(path: &Path, count: u64) -> varlit::Result<u64> {
         })?;
     }
     file.flush()?;
-    let payload_len = file
-        .index_entries()
+    let payload_len = crate::pages::all_entries!(file)
         .iter()
         .find(|entry| entry.block_id == 2)
         .expect("a keyed record was written")
@@ -295,8 +298,7 @@ fn a_healthy_keyed_file_stays_appendable_under_a_small_ceiling() -> varlit::Resu
 
     let reader = BudgetFormat::spec().open_readonly(&path)?;
     assert_eq!(
-        reader
-            .index_entries()
+        crate::pages::all_entries!(reader)
             .iter()
             .filter(|entry| entry.block_id == 2)
             .count(),

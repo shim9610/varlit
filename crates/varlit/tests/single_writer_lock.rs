@@ -1,6 +1,8 @@
 //!  regression: the authoritative single-writer lock is held on the
 //! native file object itself, so hard-link aliases cannot bypass it the way
 //! they bypass the path-derived ".lock" marker.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs;
 
@@ -96,12 +98,12 @@ fn hard_link_alias_cannot_acquire_second_writer() -> Result<()> {
     // writer holds it, through either pathname.
     let reader = VarlitFile::open_readonly(spec(), &original)?;
     assert_eq!(
-        filled(|o| reader.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reader, LockRecord)?.get(0, o))?,
         Some(LockRecord(1))
     );
     let alias_reader = VarlitFile::open_readonly(spec(), &alias)?;
     assert_eq!(
-        filled(|o| alias_reader.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(alias_reader, LockRecord)?.get(0, o))?,
         Some(LockRecord(1))
     );
     drop(reader);
@@ -118,7 +120,7 @@ fn hard_link_alias_cannot_acquire_second_writer() -> Result<()> {
     drop(alias_writer);
 
     let reopened = VarlitFile::open_readonly(spec(), &original)?;
-    let blocks = reopened.blocks::<LockRecord>()?;
+    let blocks = crate::pages::all_blocks!(reopened, LockRecord)?;
     assert_eq!(filled(|o| blocks.get(0, o))?, Some(LockRecord(1)));
     assert_eq!(filled(|o| blocks.get(1, o))?, Some(LockRecord(2)));
     Ok(())
@@ -148,7 +150,7 @@ fn hard_link_alias_create_is_refused_before_truncation() -> Result<()> {
 
     let reopened = VarlitFile::open_readonly(spec(), &original)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(7))
     );
     Ok(())
@@ -190,7 +192,7 @@ fn create_new_refuses_existing_path() -> Result<()> {
     // The refused exclusive create must leave the existing file untouched.
     let reopened = VarlitFile::open_readonly(spec(), &path)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(9))
     );
 
@@ -582,7 +584,7 @@ fn a_failed_open_on_a_corrupt_tail_releases_the_writer_lock() -> Result<()> {
     let recovering = spec().with_recovery_policy(RecoveryPolicy::TruncateTail);
     let (recovered, report) = VarlitFile::open_recover_with_report(recovering, &path)?;
     assert_eq!(report.recovered_len, intact_len);
-    assert_eq!(recovered.blocks::<LockRecord>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(recovered, LockRecord)?.len(), 2);
     Ok(())
 }
 
@@ -616,7 +618,7 @@ fn a_failed_open_on_an_invalid_header_releases_the_writer_lock() -> Result<()> {
     fs::write(&path, &original)?;
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(3))
     );
     Ok(())
@@ -659,7 +661,7 @@ fn a_failed_open_on_a_version_mismatch_releases_the_writer_lock() -> Result<()> 
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(4))
     );
     Ok(())
@@ -687,7 +689,7 @@ fn a_failed_open_on_a_refused_limit_releases_the_writer_lock() -> Result<()> {
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(5))
     );
     Ok(())
@@ -730,7 +732,7 @@ fn a_failed_open_on_a_schema_hash_mismatch_releases_the_writer_lock() -> Result<
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        filled(|o| reopened.blocks::<LockRecord>()?.get(0, o))?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(9))
     );
     Ok(())
@@ -827,7 +829,7 @@ fn a_release_beside_a_forked_child_does_not_strand_the_writer_claim() -> Result<
     let refusal = match reopened {
         Ok(file) => {
             assert_eq!(
-                filled(|o| file.blocks::<LockRecord>()?.get(0, o))?,
+                filled(|o| crate::pages::all_blocks!(file, LockRecord)?.get(0, o))?,
                 Some(LockRecord(10))
             );
             None

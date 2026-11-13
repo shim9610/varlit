@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 // These keys are synthetic fixture identifiers, never real user identities.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
@@ -296,8 +299,9 @@ fn explicit_scan_progress_and_cancellation_are_exact() -> varlit::Result<()> {
         reader.verify_all_with_progress(every_record_scan(None), |progress| {
             phases.push(progress.phase);
         })?,
-        // Three user records plus the internal creation-nonce record.
-        5
+        // Four user records, the internal creation-nonce record and the sync
+        // marker that closed them.
+        6
     );
     assert_eq!(phases.first(), Some(&ScanProgressPhase::Started));
     assert_eq!(phases.last(), Some(&ScanProgressPhase::Complete));
@@ -778,7 +782,7 @@ fn a_generated_keyed_writer_spills_long_keys_and_keeps_tombstone_predecessors() 
     writer.flush()?;
     drop(writer);
     let file = LongKeyBudgetFormat::open(&path)?;
-    let records = file.index_entries();
+    let records = crate::pages::all_entries!(file);
     let entries: Vec<_> = records
         .iter()
         .filter(|r| {

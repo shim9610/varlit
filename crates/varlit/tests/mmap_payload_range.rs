@@ -5,6 +5,8 @@
 //! and limits only for its own extent, and let a following reader map just
 //! what was appended since its previous mapping.
 #![cfg(feature = "mmap")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{
     Error, ReadLimit, RecordIndexEntry, VarlitBlock, VarlitEmpty, VarlitFile, varlit_format,

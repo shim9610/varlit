@@ -110,6 +110,7 @@ pub(crate) struct DecodedRecordHeader {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedFileHeader {
+    pub(crate) anchors: crate::anchor::AnchorPolicy,
     pub(crate) schema_hash: u64,
     pub(crate) extensions: Vec<u8>,
     pub(crate) has_extension_len: bool,
@@ -386,11 +387,9 @@ pub(crate) fn read_native_file_header<R: Read>(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::Flags, 0),
     )?;
-    if value_as_u8("flags", &flags)? != 0 {
-        return Err(Error::InvalidCanonicalEncoding(
-            "native file-header reserved flags must be zero",
-        ));
-    }
+    // Zero, or the anchor policy the file was written with: see
+    // `crate::anchor::AnchorPolicy`. A file is read as its header says.
+    let anchors = crate::anchor::AnchorPolicy::from_flags(value_as_u8("flags", &flags)?)?;
 
     let hash = read_native_value(
         reader,
@@ -433,6 +432,7 @@ pub(crate) fn read_native_file_header<R: Read>(
     let extension_len =
         u64::try_from(extensions.len()).map_err(|_| Error::InvalidCompressionHeader)?;
     Ok(DecodedFileHeader {
+        anchors,
         schema_hash,
         extensions,
         has_extension_len,
@@ -1340,7 +1340,9 @@ fn native_file_header_field_to_plan(
             NativeFileHeaderField::ContainerMarker => {
                 LayoutPlanFieldSource::LiteralBytes(native_container_marker_for_plan(spec).to_vec())
             }
-            NativeFileHeaderField::Flags => LayoutPlanFieldSource::LiteralU64(0),
+            NativeFileHeaderField::Flags => {
+                LayoutPlanFieldSource::LiteralU64(u64::from(spec.effective_anchors().flags()))
+            }
             _ => native_field_source_to_plan(native_field.source),
         },
         endian: Some(Endian::Little),
@@ -1358,7 +1360,9 @@ fn native_file_header_write_value(
         NativeFileHeaderField::ContainerMarker => LayoutValue::Bytes(marker.to_vec()),
         NativeFileHeaderField::FormatVersion => LayoutValue::U16(spec.version),
         NativeFileHeaderField::Endian => LayoutValue::U8(spec.endian.to_byte()),
-        NativeFileHeaderField::Flags => LayoutValue::U8(0),
+        NativeFileHeaderField::Flags => {
+            LayoutValue::U8(spec.effective_anchors().validate()?.flags())
+        }
         NativeFileHeaderField::SchemaHash => LayoutValue::U64(spec.schema_hash),
         NativeFileHeaderField::ExtensionLen => {
             let len =

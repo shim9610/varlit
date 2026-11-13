@@ -42,6 +42,51 @@ pub struct MmapPayloads {
     pub(super) verified: Vec<AtomicBool>,
     /// `None` when no record is mapped (an empty file or an empty range).
     pub(super) mmap: Option<memmap2::Mmap>,
+    /// The file's anchors, and the physical offset `base` maps to. Offsets
+    /// stay logical everywhere above `window`.
+    pub(super) anchors: Option<crate::anchor::AnchorLayout>,
+    pub(super) physical_base: u64,
+    /// Owned copies of the records whose bytes an anchor interrupts, sorted
+    /// by record offset: `(record offset, bytes, len)`. A window inside such a
+    /// record is served from here instead of the mapping.
+    pub(super) crossing: Vec<(u64, AlignedBytes)>,
+}
+
+/// Bytes held 16-byte aligned, so a raw view of an owned copy is as aligned
+/// as one of the mapping it stands in for.
+#[cfg(feature = "mmap")]
+#[derive(Debug)]
+pub(crate) struct AlignedBytes {
+    words: Box<[u128]>,
+    len: usize,
+}
+
+#[cfg(feature = "mmap")]
+impl AlignedBytes {
+    pub(crate) fn zeroed(len: usize) -> Result<Self> {
+        let words = len.div_ceil(16);
+        let mut storage = Vec::new();
+        storage
+            .try_reserve_exact(words)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "anchored record copy",
+                requested: len as u64,
+            })?;
+        storage.resize(words, 0u128);
+        Ok(Self {
+            words: storage.into_boxed_slice(),
+            len,
+        })
+    }
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `u128` has no padding; the slice covers `len <= 16 * words`
+        // initialized bytes of the boxed storage.
+        unsafe { std::slice::from_raw_parts(self.words.as_ptr().cast::<u8>(), self.len) }
+    }
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: as above, uniquely borrowed.
+        unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr().cast::<u8>(), self.len) }
+    }
 }
 
 /// One record payload or matrix cell mapped independently of the file's total size.
@@ -51,6 +96,8 @@ pub struct MmapPayloads {
 pub struct MmapPayloadWindow {
     pub(super) offset: u64,
     pub(super) mmap: Option<memmap2::Mmap>,
+    /// The payload as an owned copy when an anchor interrupts it.
+    pub(super) owned: Option<AlignedBytes>,
 }
 #[cfg(feature = "mmap")]
 impl MmapPayloadWindow {
@@ -58,7 +105,10 @@ impl MmapPayloadWindow {
         self.offset
     }
     pub fn as_bytes(&self) -> &[u8] {
-        self.mmap.as_deref().unwrap_or(&[])
+        match &self.owned {
+            Some(owned) => owned.as_bytes(),
+            None => self.mmap.as_deref().unwrap_or(&[]),
+        }
     }
 }
 
@@ -254,8 +304,23 @@ impl MmapPayloads {
 
     #[inline]
     fn window(&self, offset: u64, len: u64) -> Result<&[u8]> {
+        let mapped_offset = match self.anchors {
+            None => offset,
+            Some(layout) => {
+                if crate::file::anchored_range_is_split(&layout, offset, len) {
+                    return self.crossing_window(offset, len);
+                }
+                // The mapping starts at `base`'s physical offset; map this
+                // offset to the same frame.
+                layout
+                    .physical(offset)
+                    .and_then(|physical| physical.checked_sub(self.physical_base))
+                    .and_then(|delta| delta.checked_add(self.base))
+                    .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?
+            }
+        };
         // File offsets are absolute; the mapping starts at `base`.
-        let start = offset
+        let start = mapped_offset
             .checked_sub(self.base)
             .and_then(|offset| usize::try_from(offset).ok())
             .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
@@ -279,13 +344,108 @@ impl MmapPayloads {
 }
 
 #[cfg(feature = "mmap")]
-/// A read-only mapping paired with an immutable snapshot of a validated matrix
-/// layout.
+impl MmapPayloads {
+    /// A window inside a record an anchor interrupts, from its owned copy.
+    #[cold]
+    fn crossing_window(&self, offset: u64, len: u64) -> Result<&[u8]> {
+        let out = || Error::MmapPayloadOutOfBounds { offset, len };
+        let at = self
+            .crossing
+            .partition_point(|(start, _)| *start <= offset)
+            .checked_sub(1)
+            .ok_or_else(out)?;
+        let (start, bytes) = &self.crossing[at];
+        let from = usize::try_from(offset - start).map_err(|_| out())?;
+        let to = from
+            .checked_add(usize::try_from(len).map_err(|_| out())?)
+            .ok_or_else(out)?;
+        bytes.as_bytes().get(from..to).ok_or_else(out)
+    }
+}
+
+#[cfg(feature = "mmap")]
+/// A private copy-on-write mapping of the primary file, with the logical
+/// offsets the tile engine uses translated around anchors.
+#[derive(Debug)]
+pub(crate) struct MmapSource {
+    pub(super) mmap: memmap2::Mmap,
+    pub(super) layout: Option<crate::anchor::AnchorLayout>,
+}
+
+#[cfg(feature = "mmap")]
+impl MmapSource {
+    /// The physical range of logical `[offset, offset + len)` when no anchor
+    /// interrupts it.
+    pub(super) fn contiguous(&self, offset: u64, len: u64) -> Result<&[u8]> {
+        let physical = match self.layout {
+            None => offset,
+            Some(layout) => {
+                let start = layout.physical(offset).ok_or(Error::InvalidMatrixLayout)?;
+                if len != 0 {
+                    let last = layout
+                        .physical(offset + len - 1)
+                        .ok_or(Error::InvalidMatrixLayout)?;
+                    if last != start + len - 1 {
+                        return Err(Error::MmapPayloadOutOfBounds { offset, len });
+                    }
+                }
+                start
+            }
+        };
+        let start =
+            usize::try_from(physical).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?;
+        let end = start
+            .checked_add(
+                usize::try_from(len).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?,
+            )
+            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
+        self.mmap
+            .get(start..end)
+            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })
+    }
+}
+
+#[cfg(feature = "mmap")]
+impl crate::matrix_tiles::store::TileSource for MmapSource {
+    fn len(&self) -> Result<u64> {
+        let physical = self.mmap.len() as u64;
+        Ok(self
+            .layout
+            .map_or(physical, |layout| layout.logical_len(physical)))
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let Some(layout) = self.layout else {
+            buf.copy_from_slice(self.contiguous(offset, buf.len() as u64)?);
+            return Ok(());
+        };
+        layout.split(offset, buf.len() as u64, |segment| {
+            if let crate::anchor::Segment::Data {
+                physical,
+                logical,
+                len,
+            } = segment
+            {
+                let from = physical as usize;
+                let to = from + len as usize;
+                let bytes = self
+                    .mmap
+                    .get(from..to)
+                    .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
+                let at = (logical - offset) as usize;
+                buf[at..at + len as usize].copy_from_slice(bytes);
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(feature = "mmap")]
+/// A read-only snapshot of a file's matrix, mapped.
 ///
-/// Varlit validates the complete matrix extent against the mapped length before
-/// constructing this type. Safe accessors use checked slot offsets and verify
-/// configured CRC evidence. The mapping owns its OS mapping, so returned slices
-/// cannot outlive it.
+/// The mapping is private: every change the snapshot's write-ahead ring
+/// holds is copied into its place in the mapping when it is made, so a
+/// cell's bytes are where its tile says, and returned slices borrow the
+/// mapping. Safe accessors check the commit bit and the cell's checksum.
 ///
 /// These guarantees rely on the caller having upheld the unsafe constructor's
 /// requirement that the backing object remains immutable and valid for this
@@ -293,27 +453,32 @@ impl MmapPayloads {
 #[derive(Debug)]
 pub struct MmapMatrix {
     pub(super) spec: FormatSpec,
-    pub(super) layout: crate::matrix::MatrixLayout,
-    pub(super) mmap: memmap2::Mmap,
+    pub(super) tiles: crate::matrix_tiles::api::TiledMatrix,
+    pub(super) source: MmapSource,
 }
 
 #[cfg(feature = "mmap")]
 impl MmapMatrix {
     pub fn cell_payload_window<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<&[u8]> {
-        let (offset, len, crc) = crate::matrix::cell_payload_parts::<T>(
-            self.spec,
-            &self.layout,
-            key,
-            crate::matrix::BitmapRead::Mapped(&self.mmap),
-        )?;
-        let payload = self.window(offset, len)?;
-        if let Some(crc) = crc {
-            let expected = self.read_crc(crc.offset)?;
-            crc.verify(
-                payload,
+        crate::matrix::ensure_matrix_block::<T>(self.spec)?;
+        if self.tiles.cell_status(&self.source, T::ID, key)? != MatrixCellStatus::Committed {
+            return Err(Error::MatrixNotCommitted);
+        }
+        let (geom, tile, slot) = self
+            .tiles
+            .slot_of(&self.source, T::ID, key)?
+            .ok_or(Error::MatrixNotCommitted)?;
+        let at = tile + geom.slot_at(slot);
+        let bytes = self.source.contiguous(at, geom.slot_len())?;
+        let (payload, crc) = bytes.split_at(geom.stride as usize);
+        let expected = u32::from_le_bytes(crc.try_into().expect("four"));
+        let actual = crc32fast::hash(payload);
+        if expected != actual {
+            return Err(Error::MatrixChecksumMismatch {
+                offset: at,
                 expected,
-                crate::matrix::BitmapRead::Mapped(&self.mmap),
-            )?;
+                actual,
+            });
         }
         Ok(payload)
     }
@@ -394,26 +559,6 @@ impl MmapMatrix {
             expected: expected_len,
             actual: bytes.len() as u64,
         })
-    }
-
-    pub(super) fn window(&self, offset: u64, len: u64) -> Result<&[u8]> {
-        let start =
-            usize::try_from(offset).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?;
-        let len_usize =
-            usize::try_from(len).map_err(|_| Error::MmapPayloadOutOfBounds { offset, len })?;
-        let end = start
-            .checked_add(len_usize)
-            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
-        self.mmap
-            .get(start..end)
-            .ok_or(Error::MmapPayloadOutOfBounds { offset, len })
-    }
-
-    pub(super) fn read_crc(&self, offset: u64) -> Result<u32> {
-        let bytes = self.window(offset, 4)?;
-        let mut crc = [0; 4];
-        crc.copy_from_slice(bytes);
-        Ok(u32::from_le_bytes(crc))
     }
 }
 

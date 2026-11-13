@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::ffi::OsString;
 use std::fs::{OpenOptions, read, remove_file, write};
 use std::io::{Seek, SeekFrom, Write};
@@ -8,6 +11,10 @@ use varlit::{
     DiagnosticDomain, DiagnosticSeverity, Error, OP_BLOCK_ID, ReadLimits, TOMBSTONE_BLOCK_ID,
     VarlitBlock, VarlitEmpty, VarlitMerge, diagnose_file, varlit_format,
 };
+
+/// The header flags byte of a file created with the default anchor policy:
+/// anchored (bit 7), 4 KiB holes (bit 6 clear), spacing 2^(10 + 12) = 4 MiB.
+const DEFAULT_ANCHOR_FLAGS: u8 = 0x80 | (22 - 10);
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 71, version = 1, kind = "fixed")]
@@ -95,7 +102,7 @@ fn native_header_and_footer_bytes_remain_canonical() -> varlit::Result<()> {
     expected.extend_from_slice(b"VARVE3");
     expected.extend_from_slice(&1u16.to_le_bytes());
     expected.push(1);
-    expected.push(0);
+    expected.push(DEFAULT_ANCHOR_FLAGS);
     expected.extend_from_slice(&NativeHeaderSecurityFormat::spec().schema_hash.to_le_bytes());
     expected.extend_from_slice(&0u32.to_le_bytes());
 
@@ -120,9 +127,11 @@ fn native_header_and_footer_bytes_remain_canonical() -> varlit::Result<()> {
     assert_eq!(read(&path)?, expected);
     let mut point = GoldenPoint::empty();
     assert!(
-        NativeHeaderSecurityFormat::open_readonly(&path)?
-            .blocks::<GoldenPoint>()?
-            .get(0, &mut point)?
+        crate::pages::all_blocks!(
+            NativeHeaderSecurityFormat::open_readonly(&path)?,
+            GoldenPoint
+        )?
+        .get(0, &mut point)?
     );
     assert_eq!(point, GoldenPoint { x: 9, y: 10 });
 
@@ -143,7 +152,8 @@ fn native_file_header_rejects_nonzero_reserved_flags() -> varlit::Result<()> {
 
     let mut bytes = read(&path)?;
     let flags_offset = b"NSEC".len() + b"VARVE3".len() + 2 + 1;
-    assert_eq!(bytes[flags_offset], 0);
+    assert_eq!(bytes[flags_offset], DEFAULT_ANCHOR_FLAGS);
+    // Nonzero, but without the anchored bit: no meaning is assigned to it.
     bytes[flags_offset] = 1;
     write(&path, bytes)?;
 
@@ -179,7 +189,7 @@ fn native_record_footer_rejects_reserved_and_noncanonical_fields() -> varlit::Re
         let mut file = NativeHeaderSecurityFormat::create(&base)?;
         file.push(&GoldenPoint { x: 1, y: 2 })?;
         file.flush()?;
-        usize::try_from(file.index_entries()[0].footer_offset.unwrap())
+        usize::try_from(crate::pages::all_entries!(file)[0].footer_offset.unwrap())
             .expect("test footer offset must fit usize")
     };
     let canonical = read(&base)?;
@@ -229,7 +239,7 @@ fn internal_key_and_op_envelopes_reject_trailing_bytes() -> varlit::Result<()> {
         })?;
         file.delete::<SecurityUser>(&7)?;
         file.flush()?;
-        file.index_entries().last().cloned().unwrap()
+        crate::pages::all_entries!(file).last().cloned().unwrap()
     };
     assert_eq!(tombstone.block_id, TOMBSTONE_BLOCK_ID);
     append_declared_trailing_byte(&tombstone_path, &tombstone)?;
@@ -256,7 +266,7 @@ fn internal_key_and_op_envelopes_reject_trailing_bytes() -> varlit::Result<()> {
             },
         )?;
         file.flush()?;
-        file.index_entries().last().cloned().unwrap()
+        crate::pages::all_entries!(file).last().cloned().unwrap()
     };
     assert_eq!(op.block_id, OP_BLOCK_ID);
     append_declared_trailing_byte(&op_path, &op)?;

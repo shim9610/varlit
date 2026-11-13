@@ -199,21 +199,6 @@ where
         Ok(true)
     }
 
-    /// [`Self::get`] as a fresh value; crate tests only.
-    #[cfg(test)]
-    pub(crate) fn get_value(&self, index: usize) -> Result<Option<T>> {
-        let Some(entry) = self.entries.get(index) else {
-            return Ok(None);
-        };
-        let mut budget = MaterializationBudget::new(self.spec);
-        let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
-        budget.consume(logical_len)?;
-        let payload = entry.read_logical_payload_snapshot(self.spec, &self.snapshot)?;
-        budget
-            .decode(&payload, T::ENDIAN.unwrap_or(self.spec.endian))
-            .map(Some)
-    }
-
     /// Walks the block's records, decoding each into the caller's value.
     ///
     /// `max_materialized_bytes` bounds **one** record here, exactly as it does

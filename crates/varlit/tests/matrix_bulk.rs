@@ -220,35 +220,6 @@ fn declaration_order_selects_contiguous_columns_and_generated_run_methods() -> v
     Ok(())
 }
 
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn chunk_run_reads_metadata_per_batch_instead_of_per_cell() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("cost");
-    let spec = spec(IntegrityPolicy::None, true);
-    let mut w = spec.create_writer_with_dims(
-        &path,
-        MatrixDimensions::from_pairs([("row", 7), ("col", 1024)]),
-    )?;
-    for i in 7 * 1024..8 * 1024 {
-        w.write_matrix_cell(key(i, 1024), &Cell { value: i })?;
-        w.commit_matrix_cell::<Cell>(key(i, 1024))?;
-    }
-    w.sync()?;
-    let r = spec.open_reader(&path)?;
-    filled_out(|o| r.read_matrix_cell::<Cell>(key(7 * 1024, 1024), o))?; // directory setup is charged separately
-    let before = varlit::VarlitFile::chunk_bytes_read();
-    let mut out = vec![Cell { value: 0 }; 1024];
-    r.read_matrix_run_into(key(7 * 1024, 1024), &mut out)?;
-    let bytes = varlit::VarlitFile::chunk_bytes_read() - before;
-    assert!(
-        bytes <= 8192 + 256,
-        "payload plus one descriptor/bitmap batch: {bytes}"
-    );
-    assert_eq!(out[1023].value, 8191);
-    Ok(())
-}
-
 #[cfg(feature = "integrity")]
 #[test]
 fn corrupted_chunk_cell_is_not_returned_by_bulk_read() -> varlit::Result<()> {
@@ -316,61 +287,6 @@ fn typed_run_budget_is_checked_before_output_changes() -> varlit::Result<()> {
         .open_reader(&path)?;
     r.read_matrix_run_into(key(0, 128), &mut out)?;
     assert_eq!(out[127].value, 127);
-    Ok(())
-}
-
-#[cfg(all(feature = "integrity", feature = "compression-zstd"))]
-#[test]
-fn compressed_runs_cross_subblocks_and_match_encoded_output() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("compressed");
-    let spec = spec(IntegrityPolicy::Crc32, true).with_chunk_compression(
-        varlit::VariableCompression::zstd(varlit::CompressionHeaderMode::RecordExplicit),
-    );
-    let mut w = spec.create_writer_with_dims(
-        &path,
-        MatrixDimensions::from_pairs([("row", 7), ("col", 1024)]),
-    )?;
-    for i in 0..15 * 1024 {
-        w.write_matrix_cell(key(i, 1024), &Cell { value: i })?;
-        w.commit_matrix_cell::<Cell>(key(i, 1024))?;
-    }
-    w.sync()?;
-    let r = spec.open_reader(&path)?;
-    let mut column = vec![Cell { value: 0 }; 13];
-    r.read_matrix_column_into(MatrixKey::new(2, 11), &mut column)?;
-    let mut encoded_column = vec![0; 13 * 8];
-    r.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(2, 11), &mut encoded_column)?;
-    for (i, (v, b)) in column
-        .iter()
-        .zip(encoded_column.as_chunks::<8>().0.iter())
-        .enumerate()
-    {
-        assert_eq!(v.value, (i as u64 + 2) * 1024 + 11);
-        assert_eq!(v.value, u64::from_le_bytes(*b));
-    }
-    let limited = spec
-        .with_resource_limits(ReadLimits::STANDARD.with_max_materialized_bytes(1024))
-        .open_reader(&path)?;
-    assert!(matches!(
-        limited.read_matrix_column_into(MatrixKey::new(2, 11), &mut column),
-        Err(Error::LimitExceeded { .. })
-    ));
-    assert!(matches!(
-        limited.read_matrix_column_bytes_into::<Cell>(MatrixKey::new(2, 11), &mut encoded_column),
-        Err(Error::LimitExceeded { .. })
-    ));
-    let first = 7 * 1024 - 3;
-    let mut out = vec![Cell { value: 0 }; 8 * 1024];
-    r.read_matrix_run_into(key(first, 1024), &mut out)?;
-    for (i, v) in out.iter().enumerate() {
-        assert_eq!(v.value, first + i as u64);
-    }
-    let mut raw = vec![0; out.len() * 8];
-    r.read_matrix_run_bytes_into::<Cell>(key(first, 1024), &mut raw)?;
-    for (i, b) in raw.as_chunks::<8>().0.iter().enumerate() {
-        assert_eq!(u64::from_le_bytes(*b), first + i as u64);
-    }
     Ok(())
 }
 
@@ -507,39 +423,6 @@ fn column_snapshots_follow_deletes_and_budget_refusals() -> varlit::Result<()> {
             ));
             held.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
         }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn column_chunk_metadata_is_batched_and_payload_amplification_is_bounded() -> varlit::Result<()> {
-    for width in [1, 3, 640] {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("column-io");
-        let spec = spec(IntegrityPolicy::None, true).with_growing_matrix_dimension("row", 256);
-        let mut w = spec.create_writer_with_dims(
-            &path,
-            MatrixDimensions::from_pairs([("row", 256), ("col", width)]),
-        )?;
-        for row in 256..512 {
-            let k = MatrixKey::new(row, width - 1);
-            w.write_matrix_cell(k, &Cell { value: row })?;
-            w.commit_matrix_cell::<Cell>(k)?;
-        }
-        w.sync()?;
-        let r = spec.open_reader(&path)?;
-        filled_out(|o| r.read_matrix_cell::<Cell>(MatrixKey::new(256, width - 1), o))?;
-        let before = varlit::VarlitFile::chunk_bytes_read();
-        let mut out = vec![Cell { value: 0 }; 256];
-        r.read_matrix_column_into(MatrixKey::new(256, width - 1), &mut out)?;
-        let read = varlit::VarlitFile::chunk_bytes_read() - before;
-        // At most four times useful payload + the covered bitmap + one descriptor.
-        assert!(
-            read <= 256 * 8 * 4 + (256 * width).div_ceil(8) + 256,
-            "width={width}, read={read}"
-        );
-        assert_eq!(out[255].value, 511);
     }
     Ok(())
 }

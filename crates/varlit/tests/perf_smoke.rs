@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 // These keys are synthetic fixture identifiers, never real user identities.
 use std::fs::{OpenOptions, metadata, remove_file};
 use std::io::Write;
@@ -161,6 +164,7 @@ fn perf_matrix_spec_with_integrity(integrity: varlit::IntegrityPolicy) -> Format
         dimensions: PerfMatrixCell::DIMENSIONS,
         category: PerfMatrixCell::CATEGORY,
         slot_stride: PerfMatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"PERFMTX",
@@ -523,7 +527,7 @@ fn append_open_and_scan(case: PerfCase) -> varlit::Result<()> {
             file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
             case.records
         );
-        let points = file.blocks::<PerfPoint>()?;
+        let points = crate::pages::all_blocks!(file, PerfPoint)?;
         assert_eq!(points.len(), case.records);
         let mut last = PerfPoint::empty();
         assert!(points.get(case.records - 1, &mut last)?);
@@ -571,7 +575,7 @@ fn resized_replacement(case: PerfCase) -> varlit::Result<()> {
 
     let file = PerfFormat::open_readonly(&path)?;
     let mut replaced = PerfUser::empty();
-    assert!(file.blocks::<PerfUser>()?.get(target, &mut replaced)?);
+    assert!(crate::pages::all_blocks!(file, PerfUser)?.get(target, &mut replaced)?);
     assert_eq!(replaced, replacement);
     cleanup(&path);
     Ok(())
@@ -661,8 +665,7 @@ fn compressed_variable_blocks(case: PerfCase) -> varlit::Result<()> {
         for index in 0..case.records {
             file.push(&perf_compressible_user(index))?;
         }
-        let compressed_records = file
-            .index_entries()
+        let compressed_records = crate::pages::all_entries!(file)
             .iter()
             .filter(|entry| entry.block_id == PerfUser::ID && entry.is_compressed())
             .count();
@@ -678,7 +681,7 @@ fn compressed_variable_blocks(case: PerfCase) -> varlit::Result<()> {
             file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
             case.records
         );
-        let users = file.blocks::<PerfUser>()?;
+        let users = crate::pages::all_blocks!(file, PerfUser)?;
         assert_eq!(users.len(), case.records);
         let mut last = PerfUser::empty();
         assert!(users.get(case.records - 1, &mut last)?, "last user");
@@ -708,8 +711,11 @@ fn checkpoint_open(case: PerfCase) -> varlit::Result<()> {
 
     let elapsed = timed(|| {
         let file = PerfCheckpointFormat::open_readonly(&path)?;
-        assert!(file.index_entries().len() >= case.records);
-        assert_eq!(file.blocks::<PerfPoint>()?.len(), case.records);
+        assert!(crate::pages::all_entries!(file).len() >= case.records);
+        assert_eq!(
+            crate::pages::all_blocks!(file, PerfPoint)?.len(),
+            case.records
+        );
         Ok(())
     })?;
     report("checkpoint open", case.records, &path, elapsed);
@@ -909,7 +915,7 @@ fn recovery_tail_truncation(records: usize) -> varlit::Result<()> {
         assert!(report.original_len > report.recovered_len);
         assert_eq!(report.recovered_len, clean_len);
         assert_eq!(report.records_preserved, records);
-        assert_eq!(file.blocks::<PerfPoint>()?.len(), records);
+        assert_eq!(crate::pages::all_blocks!(file, PerfPoint)?.len(), records);
         Ok(())
     })?;
     report("recover partial tail", records, &path, elapsed);

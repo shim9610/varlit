@@ -1,4 +1,6 @@
 use crate::writer_permit::GuardedWriter;
+
+mod matrix;
 use std::borrow::Borrow;
 use std::fs;
 use std::path::Path;
@@ -139,6 +141,149 @@ pub struct VarlitIndexedReader {
     _store: DiskIndexStore,
     indexed_blocks: Vec<u32>,
     plan: DiskIndexPlan,
+    tail: ReaderTail,
+    /// The matrix this primary carries, as this reader's snapshot shows it.
+    tiles: Option<crate::matrix_tiles::api::TiledMatrix>,
+    /// The last chunk a record read checked.
+    record_cache: std::cell::RefCell<crate::file::ChunkCache>,
+}
+
+/// What a reader holds of the primary past its confirmed sidecar: the
+/// verified sync-marker prefix the writer acknowledged but has not confirmed,
+/// and the latest key pointer of every indexed record in it.
+///
+/// Bounded by the writer's confirm policy; a reader refuses to hold more than
+/// `DiskIndexOptions::max_tail_records` records.
+struct ReaderTail {
+    walk: crate::sync_marker::MarkedTail,
+    records: u64,
+    /// Keyed by block id, then canonical key, so a lookup borrows the key it
+    /// is given instead of copying it into an owned map key.
+    latest:
+        std::collections::HashMap<u32, std::collections::HashMap<Vec<u8>, DiskIndexRecordPointer>>,
+    /// Key bytes held by `latest`, charged against `KeyedTailBytes`.
+    key_bytes: u64,
+    max_records: u64,
+    max_key_bytes: usize,
+}
+
+/// What one reader-tail key holds: its heap bytes and its map slot.
+fn tail_key_charge(key: &[u8]) -> u64 {
+    (key.len() + std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<DiskIndexRecordPointer>())
+        as u64
+}
+
+impl ReaderTail {
+    fn new(confirmed_eof: u64, options: DiskIndexOptions) -> Self {
+        Self {
+            walk: crate::sync_marker::MarkedTail::new(confirmed_eof),
+            records: 0,
+            latest: std::collections::HashMap::new(),
+            key_bytes: 0,
+            max_records: options.max_tail_records,
+            max_key_bytes: options.max_key_bytes,
+        }
+    }
+
+    /// Drops pointers a confirmation at `confirmed_eof` now covers.
+    fn prune(&mut self, confirmed_eof: u64) {
+        let mut released = 0u64;
+        self.latest.retain(|_, keys| {
+            keys.retain(|key, pointer| {
+                let keep = match pointer.entry {
+                    DiskIndexEntry::Put { record_offset, .. }
+                    | DiskIndexEntry::Tombstone { record_offset, .. } => {
+                        record_offset >= confirmed_eof
+                    }
+                    DiskIndexEntry::Missing => false,
+                };
+                if !keep {
+                    released += tail_key_charge(key);
+                }
+                keep
+            });
+            !keys.is_empty()
+        });
+        self.key_bytes = self.key_bytes.saturating_sub(released);
+    }
+
+    /// Advances over newly acknowledged records in `physical` and returns
+    /// the committed EOF and how many records it added.
+    fn advance(
+        &mut self,
+        spec: FormatSpec,
+        physical: &SnapshotFile,
+        plan: DiskIndexPlan,
+    ) -> Result<(u64, u64)> {
+        let from = self.walk.committed();
+        if !self.walk.advance(spec, physical)? {
+            return Ok((from, 0));
+        }
+        let end = self.walk.committed();
+        let snapshot = physical.with_len(end)?;
+        let mut scanner =
+            NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), from)?;
+        let mut added = 0u64;
+        while let Some(entry) = scanner.next_entry()? {
+            added += 1;
+            // Refused before anything for this record is held, so a tail too
+            // long for this reader is refused at the first record past the
+            // ceiling rather than after the whole tail is in memory.
+            if self.records.saturating_add(added) > self.max_records {
+                return Err(index_invariant(
+                    "unconfirmed primary tail exceeds this reader's max_tail_records",
+                ));
+            }
+            let Some(update) = crate::disk_index::extract_plan_update(
+                spec,
+                &snapshot,
+                plan,
+                &entry,
+                self.max_key_bytes,
+            )?
+            else {
+                continue;
+            };
+            let pointer = DiskIndexRecordPointer {
+                entry: update.entry,
+                target_block_id: update.block_id,
+                physical: update.physical,
+            };
+            // The key's heap bytes and the slot it occupies, charged before the
+            // insert; a key already present replaces its pointer for nothing.
+            let refused = |charge| Error::AllocationFailed {
+                resource: "reader tail key pointers",
+                requested: charge,
+            };
+            if !self.latest.contains_key(&update.block_id) {
+                self.latest.try_reserve(1).map_err(|_| refused(0))?;
+                self.latest
+                    .insert(update.block_id, std::collections::HashMap::new());
+            }
+            let keys = self
+                .latest
+                .get_mut(&update.block_id)
+                .expect("inserted above");
+            if !keys.contains_key(&update.canonical_key) {
+                let charge = tail_key_charge(&update.canonical_key);
+                let total = self.key_bytes.saturating_add(charge);
+                spec.read_limits
+                    .check(crate::format::ReadLimitKey::KeyedTailBytes, total)?;
+                keys.try_reserve(1).map_err(|_| refused(charge))?;
+                self.key_bytes = total;
+            }
+            keys.insert(update.canonical_key, pointer);
+        }
+        self.records = self.records.saturating_add(added);
+        Ok((end, added))
+    }
+
+    fn lookup(&self, block_id: u32, canonical_key: &[u8]) -> Option<DiskIndexRecordPointer> {
+        if self.latest.is_empty() {
+            return None;
+        }
+        self.latest.get(&block_id)?.get(canonical_key).copied()
+    }
 }
 
 impl VarlitIndexedReader {
@@ -167,7 +312,10 @@ impl VarlitIndexedReader {
             .begin_committed_snapshot(identity, plan.mode())
             .map_err(index_error)?;
         index.validate_finite_layout(plan).map_err(index_error)?;
-        stream.adopt_snapshot(stream.committed_native_snapshot(&index)?);
+        let committed = stream.committed_native_snapshot(&index)?;
+        let mut tail = ReaderTail::new(index.committed_eof(), options);
+        let (end, _) = tail.advance(stream.spec(), &committed.physical()?, plan)?;
+        stream.adopt_snapshot(committed.with_len(end)?);
         let mut indexed_blocks = Vec::new();
         indexed_blocks
             .try_reserve_exact(blocks.len())
@@ -176,12 +324,16 @@ impl VarlitIndexedReader {
                 requested: (blocks.len() as u64).saturating_mul(4),
             })?;
         indexed_blocks.extend(blocks.iter().map(|block| block.block_id));
+        let tiles = matrix::open_reader(stream.spec(), stream.snapshot())?;
         Ok(Self {
             stream,
             index,
             _store: store,
             indexed_blocks,
             plan,
+            tail,
+            tiles,
+            record_cache: Default::default(),
         })
     }
 
@@ -189,6 +341,16 @@ impl VarlitIndexedReader {
     /// Dirty working generations expose their saved confirmed root. An error
     /// leaves this handle unchanged. Existing iterators retain their old view.
     pub fn follow(&mut self) -> Result<u64> {
+        let added = self.follow_records()?;
+        // The matrix follows what the primary acknowledged: its generations
+        // never depend on records past the snapshot just adopted.
+        if let Some(tiles) = self.tiles.as_mut() {
+            tiles.follow(self.stream.snapshot())?;
+        }
+        Ok(added)
+    }
+
+    fn follow_records(&mut self) -> Result<u64> {
         crate::publication_protocol::follow(
             self,
             |current| {
@@ -196,23 +358,77 @@ impl VarlitIndexedReader {
                     ._store
                     .followed_handle(&current.index)
                     .map_err(index_error)?;
-                let added = next.record_count() - current.index.record_count();
-                if next.generation() == current.index.generation()
+                let unchanged = next.generation() == current.index.generation()
                     && current.index.is_pinned()
-                    && current._store.same_file(&store)
-                {
+                    && current._store.same_file(&store);
+                let index_added = next.record_count() - current.index.record_count();
+                if !unchanged {
+                    next.validate_finite_layout(current.plan)
+                        .map_err(index_error)?;
+                }
+                let native = current.stream.committed_native_snapshot(&next)?;
+                // Staged on a copy with an empty map, so an error leaves this
+                // handle unchanged; the copy's pointers are merged on adoption.
+                let mut tail = ReaderTail {
+                    walk: current.tail.walk,
+                    records: current.tail.records,
+                    latest: std::collections::HashMap::new(),
+                    // Starts from what the live map holds, so the ceiling is
+                    // on the two together (a key in both is counted twice,
+                    // which errs toward refusing).
+                    key_bytes: current.tail.key_bytes,
+                    max_records: current.tail.max_records,
+                    max_key_bytes: current.tail.max_key_bytes,
+                };
+                let confirmed = next.committed_eof();
+                let mut reset = false;
+                if confirmed != current.index.committed_eof() {
+                    if confirmed >= tail.walk.committed() {
+                        tail.walk = crate::sync_marker::MarkedTail::new(confirmed);
+                        tail.records = 0;
+                        reset = true;
+                    } else {
+                        tail.records = tail.records.saturating_sub(index_added);
+                    }
+                }
+                let before = current.index.record_count() + current.tail.records;
+                let (end, _) =
+                    tail.advance(current.stream.spec(), &native.physical()?, current.plan)?;
+                if unchanged && end == current.stream.snapshot().len() {
                     return Ok(None);
                 }
-                next.validate_finite_layout(current.plan)
-                    .map_err(index_error)?;
-                let native = current.stream.committed_native_snapshot(&next)?;
-                Ok(Some((store, next, native, added)))
+                let added = (next.record_count() + tail.records).saturating_sub(before);
+                let native = native.with_len(end)?;
+                Ok(Some((store, next, native, tail, reset, added)))
             },
             |current, prepared| {
-                let Some((store, next, native, added)) = prepared else {
+                let Some((store, next, native, tail, reset, added)) = prepared else {
                     return 0;
                 };
                 current.stream.adopt_snapshot(native);
+                if reset {
+                    current.tail.latest.clear();
+                } else {
+                    current.tail.prune(next.committed_eof());
+                }
+                current.tail.walk = tail.walk;
+                current.tail.records = tail.records;
+                for (block_id, keys) in tail.latest {
+                    current
+                        .tail
+                        .latest
+                        .entry(block_id)
+                        .or_default()
+                        .extend(keys);
+                }
+                // Exact again after the merge: a key in both maps is held once.
+                current.tail.key_bytes = current
+                    .tail
+                    .latest
+                    .values()
+                    .flat_map(|keys| keys.keys())
+                    .map(|key| tail_key_charge(key))
+                    .sum();
                 current.index = next;
                 current._store = store;
                 added
@@ -249,8 +465,10 @@ impl VarlitIndexedReader {
         self.index.status(&self._store).map_err(index_error)
     }
 
+    /// The primary EOF this reader exposes: the confirmed sidecar's EOF
+    /// extended by the verified sync-marker tail after it.
     pub fn committed_len(&self) -> u64 {
-        self.index.committed_eof()
+        self.stream.snapshot().len()
     }
 
     /// Returns the physical event stream. The scanner is created only when
@@ -286,7 +504,7 @@ impl VarlitIndexedReader {
         // registration in `ensure_indexed` stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_indexed::<T>()?;
-        let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
+        let pointer = self.lookup_latest::<T>(key)?;
         self.validate_candidate::<T>(key, pointer)?;
         Ok(pointer.entry)
     }
@@ -299,7 +517,7 @@ impl VarlitIndexedReader {
         T::Key: VarlitDiskKey,
     {
         self.ensure_indexed::<T>()?;
-        let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
+        let pointer = self.lookup_latest::<T>(key)?;
         match pointer.entry {
             DiskIndexEntry::Missing => Ok(None),
             DiskIndexEntry::Tombstone { .. } => {
@@ -324,7 +542,7 @@ impl VarlitIndexedReader {
         // compile-time keyedness contract at the public entry point.
         let () = KeyedBlockContract::<T>::OK;
         self.ensure_indexed::<T>()?;
-        let pointer = self.index.lookup_pointer(T::ID, key).map_err(index_error)?;
+        let pointer = self.lookup_latest::<T>(key)?;
         match pointer.entry {
             DiskIndexEntry::Missing => Ok(false),
             DiskIndexEntry::Tombstone { .. } => {
@@ -337,6 +555,111 @@ impl VarlitIndexedReader {
                 Ok(true)
             }
         }
+    }
+
+    /// The record holding `key`'s latest value, to read with
+    /// [`Self::read_record_into`] into a caller's buffer instead of decoding
+    /// it whole; `None` when the key is absent or deleted.
+    pub fn lookup_entry<T>(&self, key: &T::Key) -> Result<Option<RecordIndexEntry>>
+    where
+        T: VarlitKeyedBlock,
+        T::Key: VarlitDiskKey,
+    {
+        let () = KeyedBlockContract::<T>::OK;
+        self.ensure_indexed::<T>()?;
+        let pointer = self.lookup_latest::<T>(key)?;
+        match pointer.entry {
+            DiskIndexEntry::Missing => Ok(None),
+            DiskIndexEntry::Tombstone { .. } => {
+                self.validate_candidate::<T>(key, pointer)?;
+                Ok(None)
+            }
+            DiskIndexEntry::Put { .. } => {
+                let entry = self.put_candidate_entry(pointer)?;
+                if entry.block_id != T::ID || entry.block_version != T::VERSION {
+                    return Err(index_invariant("put candidate targets the wrong block"));
+                }
+                Ok(Some(entry))
+            }
+        }
+    }
+
+    /// See [`crate::VarlitFile::read_record_into`].
+    pub fn read_record_into(
+        &self,
+        entry: &RecordIndexEntry,
+        out: &mut [u8],
+    ) -> Result<crate::RecordPage> {
+        crate::file::fill_record(
+            self.stream.spec(),
+            self.stream.snapshot(),
+            entry,
+            0,
+            out,
+            &self.record_cache,
+        )
+    }
+
+    /// See [`crate::VarlitFile::read_record_from`].
+    pub fn read_record_from(
+        &self,
+        cursor: crate::RecordCursor,
+        out: &mut [u8],
+    ) -> Result<crate::RecordPage> {
+        let snapshot = self.stream.snapshot();
+        let entry =
+            read_record_entry_positional(self.stream.spec(), snapshot, cursor.record_offset())?;
+        crate::file::fill_range(
+            self.stream.spec(),
+            snapshot,
+            &entry,
+            cursor.offset(),
+            cursor.end(),
+            out,
+            &self.record_cache,
+        )
+    }
+
+    /// See [`crate::VarlitFile::view_block`].
+    pub fn view_block<T: crate::VarlitView>(&self, entry: &RecordIndexEntry) -> Result<T::View> {
+        crate::file::view_block::<T>(
+            self.stream.spec(),
+            self.stream.snapshot(),
+            entry,
+            &self.record_cache,
+        )
+    }
+
+    /// See [`crate::VarlitFile::read_span_into`].
+    pub fn read_span_into(
+        &self,
+        entry: &RecordIndexEntry,
+        span: crate::FieldSpan,
+        out: &mut [u8],
+    ) -> Result<crate::RecordPage> {
+        crate::file::read_span(
+            self.stream.spec(),
+            self.stream.snapshot(),
+            entry,
+            span,
+            out,
+            &self.record_cache,
+        )
+    }
+
+    /// See [`crate::VarlitFile::decode_field`].
+    pub fn decode_field<F: crate::VarlitDecode>(
+        &self,
+        entry: &RecordIndexEntry,
+        span: crate::FieldSpan,
+    ) -> Result<F> {
+        crate::file::decode_field(
+            self.stream.spec(),
+            self.stream.snapshot(),
+            entry,
+            span,
+            &self.record_cache,
+        )
     }
 
     pub fn resident_state(&self) -> crate::StreamResidentState {
@@ -354,6 +677,23 @@ impl VarlitIndexedReader {
     /// rebuilding the sidecar together.
     pub fn historical_distinct_keys(&self) -> Result<u64> {
         self.index.historical_distinct_keys().map_err(index_error)
+    }
+
+    /// The newest pointer for `key`: the unconfirmed tail first, then the
+    /// confirmed sidecar.
+    fn lookup_latest<T>(&self, key: &T::Key) -> Result<DiskIndexRecordPointer>
+    where
+        T: VarlitKeyedBlock,
+        T::Key: VarlitDiskKey,
+    {
+        if !self.tail.latest.is_empty() {
+            let canonical =
+                DiskIndexUpdate::encode_key(key, self.tail.max_key_bytes).map_err(index_error)?;
+            if let Some(pointer) = self.tail.lookup(T::ID, &canonical) {
+                return Ok(pointer);
+            }
+        }
+        self.index.lookup_pointer(T::ID, key).map_err(index_error)
     }
 
     fn ensure_indexed<T: VarlitKeyedBlock>(&self) -> Result<()> {
@@ -584,6 +924,14 @@ pub struct VarlitIndexedWriter {
     batch_last_sequence: Option<u64>,
     dirty: bool,
     immediate_state: crate::immediate::ImmediateState,
+    /// Primary EOF and record count the last confirmed sidecar covers.
+    confirmed_eof: u64,
+    confirmed_records: u64,
+    confirm: crate::disk_index::DiskIndexConfirmPolicy,
+    /// The matrix this primary carries (`None` for a format without one).
+    tiles: Option<crate::matrix_tiles::api::TiledMatrix>,
+    /// Encoding scratch for matrix slots.
+    matrix_scratch: Vec<u8>,
 }
 
 impl VarlitIndexedWriter {
@@ -639,7 +987,7 @@ impl VarlitIndexedWriter {
         let plan = plan.validate(spec).map_err(index_error)?;
         let blocks = plan.descriptors();
         let path = std::fs::canonicalize(path.as_ref())?;
-        let (stream, index) = VarlitStreamWriter::restore_checkpointed(
+        let (stream, index, base_eof) = VarlitStreamWriter::restore_checkpointed(
             spec,
             &path,
             StreamOptions {
@@ -650,18 +998,82 @@ impl VarlitIndexedWriter {
             sidecar_path(&path),
             plan.mode(),
         )?;
-        Self::new(stream, index, blocks, plan)
+        let mut writer = Self::new(stream, index, blocks, plan)?;
+        writer.replay_tail(base_eof, plan)?;
+        writer.open_matrix()?;
+        Ok(writer)
     }
 
+    /// Indexes the records in `[from, EOF)` — kept by recovery, not yet in the
+    /// sidecar — exactly as a rebuild would, and confirms the sidecar.
+    fn replay_tail(&mut self, from: u64, plan: DiskIndexPlan) -> Result<()> {
+        let spec = self.stream.spec();
+        let snapshot = self.stream.snapshot().clone();
+        if from == snapshot.len() {
+            return Ok(());
+        }
+        let max_key_bytes = self.index.max_key_bytes();
+        let mut scanner =
+            NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), from)?;
+        let mut covered = from;
+        while let Some(entry) = scanner.next_entry()? {
+            let end = entry.checked_physical_end()?;
+            let update = crate::disk_index::extract_plan_update(
+                spec,
+                &snapshot,
+                plan,
+                &entry,
+                max_key_bytes,
+            )?;
+            let tail = record_tail(spec, entry.block_id, AppendInfo::from(&entry));
+            self.ensure_batch()?;
+            match update.as_ref() {
+                Some(update) => self.ensure_update_capacity(update, tail.is_some())?,
+                None => self.ensure_coverage_capacity(tail.is_some())?,
+            }
+            let batch = self.index.batch.as_mut().expect("batch initialized");
+            match update {
+                Some(update) => batch
+                    .apply_update_with_tail(covered, end, &update, tail, None)
+                    .map(|_| ()),
+                None => batch
+                    .advance_coverage_with_tail(covered, end, entry.sequence, tail)
+                    .map(|_| ()),
+            }
+            .map_err(index_error)?;
+            self.finish_record(entry.sequence)?;
+            covered = end;
+        }
+        self.sync_with(true)
+    }
+
+    /// Opens the writer, recovering first when the sidecar trails the primary
+    /// (an unconfirmed tail, or an interrupted generation): the verified
+    /// sync-marker prefix is kept and replayed into the sidecar, anything after
+    /// it is cut. See [`Self::restore_checkpoint_and_open`].
     pub fn open(
         spec: FormatSpec,
         path: impl AsRef<Path>,
         options: DiskIndexOptions,
         plan: DiskIndexPlan,
     ) -> Result<Self> {
+        match Self::open_clean(spec, path.as_ref(), options, plan) {
+            Err(error) if crate::disk_index::requires_recovery(&error) => {
+                Self::restore_checkpoint_and_open(spec, path, options, plan)
+            }
+            result => result,
+        }
+    }
+
+    fn open_clean(
+        spec: FormatSpec,
+        path: &Path,
+        options: DiskIndexOptions,
+        plan: DiskIndexPlan,
+    ) -> Result<Self> {
         let plan = plan.validate(spec).map_err(index_error)?;
         let blocks = plan.descriptors();
-        let path = std::fs::canonicalize(path.as_ref())?;
+        let path = std::fs::canonicalize(path)?;
         let (stream, index) = VarlitStreamWriter::open_checkpointed(
             spec,
             &path,
@@ -682,7 +1094,9 @@ impl VarlitIndexedWriter {
                 ))
             },
         )?;
-        Self::new(stream, index, blocks, plan)
+        let mut writer = Self::new(stream, index, blocks, plan)?;
+        writer.open_matrix()?;
+        Ok(writer)
     }
 
     fn new(
@@ -692,6 +1106,12 @@ impl VarlitIndexedWriter {
         plan: DiskIndexPlan,
     ) -> Result<Self> {
         index.configure_finite(plan).map_err(index_error)?;
+        let mut stream = stream;
+        // The sidecar covers exactly this EOF, so it is a chain boundary.
+        stream.begin_sync_chain();
+        let confirmed_eof = stream.snapshot().len();
+        let confirmed_records = stream.record_count();
+        let confirm = index.options().confirm;
         Ok(Self {
             record_buffer: Vec::new(),
             last_batch_capacity: 0,
@@ -702,6 +1122,11 @@ impl VarlitIndexedWriter {
             batch_last_sequence: None,
             dirty: false,
             immediate_state: Default::default(),
+            confirmed_eof,
+            confirmed_records,
+            confirm,
+            tiles: None,
+            matrix_scratch: Vec::new(),
         })
     }
 
@@ -969,32 +1394,99 @@ impl VarlitIndexedWriter {
         self.stream.flush()
     }
 
+    /// Makes every preceding record durable and visible to readers.
+    ///
+    /// One storage barrier: a sync marker closes the records since the last
+    /// sync and the primary is synced. The sidecar is confirmed as well only
+    /// when the primary has outgrown it by the writer's
+    /// [`DiskIndexConfirmPolicy`](crate::DiskIndexConfirmPolicy); until then
+    /// readers and recovery take the unconfirmed tail from the primary.
     pub fn sync(&mut self) -> Result<()> {
+        self.sync_with(false)
+    }
+
+    fn sync_with(&mut self, force_confirm: bool) -> Result<()> {
         use crate::publication_protocol::CommitStep;
+        let mut confirmed = false;
         crate::publication_protocol::commit(|step| {
             match step {
                 CommitStep::Prepare => {
                     self.ensure_not_poisoned()?;
-                    self.commit_pending_batch()?;
+                    self.append_sync_marker()?;
                 }
-                CommitStep::PrimarySync => self.stream.sync()?,
+                // A dirty matrix publishes after the marker, and its
+                // publication ends in the barrier that makes the marker and
+                // every record before it durable too: one barrier, not two.
+                CommitStep::PrimarySync => {
+                    if self.matrix_is_dirty() {
+                        self.publish_matrix()?;
+                    } else {
+                        self.stream.sync()?;
+                    }
+                }
                 CommitStep::Publish => {
-                    if self.dirty {
+                    let bytes = self.stream.snapshot().len() - self.confirmed_eof;
+                    let records = self.stream.record_count() - self.confirmed_records;
+                    if self.dirty && (force_confirm || self.confirm.due(bytes, records)) {
+                        self.commit_pending_batch()?;
                         self.index
                             .publish_clean(checkpoint_frontier(&self.stream.checkpoint()))
                             .map_err(index_error)?;
+                        confirmed = true;
                     }
                 }
                 CommitStep::Poison => self.stream.poison(),
                 CommitStep::Finish => {
-                    self.batch_records = 0;
-                    self.batch_last_sequence = None;
-                    self.dirty = false;
+                    if confirmed {
+                        self.batch_records = 0;
+                        self.batch_last_sequence = None;
+                        self.dirty = false;
+                        self.confirmed_eof = self.stream.snapshot().len();
+                        self.confirmed_records = self.stream.record_count();
+                    }
                     self.immediate_state.reset();
                 }
             }
             Ok(())
         })
+    }
+
+    /// Closes the records since the last sync with a sync marker and covers
+    /// the marker in the pending sidecar batch like any other record.
+    fn append_sync_marker(&mut self) -> Result<()> {
+        if !self.stream.sync_pending() {
+            return Ok(());
+        }
+        self.ensure_batch()?;
+        self.ensure_coverage_capacity(false)?;
+        let old_eof = self.stream.snapshot().len();
+        let Some(info) = self.stream.append_sync_marker()? else {
+            return Ok(());
+        };
+        let result = self
+            .index
+            .batch
+            .as_mut()
+            .expect("batch initialized")
+            .advance_coverage_with_tail(old_eof, self.stream.snapshot().len(), info.sequence, None)
+            .map(|_| ())
+            .map_err(index_error);
+        if let Err(error) = result {
+            self.stream.poison();
+            return Err(crate::fallible::boxed_error(
+                error,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: info.sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: info.sequence,
+                    source,
+                },
+            ));
+        }
+        self.finish_record(info.sequence)
     }
 
     /// Persist all preceding records, then publish their clean disk-index root.
@@ -1037,7 +1529,12 @@ impl VarlitIndexedWriter {
     pub fn compact_index(&mut self) -> Result<crate::IndexCompaction> {
         self.ensure_not_poisoned()?;
         if self.dirty {
-            return Err(index_error(DiskIndexError::CleanStateRequired));
+            // Compaction rewrites the confirmed sidecar, so confirm first:
+            // records synced but not yet confirmed would otherwise be left out.
+            if self.stream.sync_pending() {
+                return Err(index_error(DiskIndexError::CleanStateRequired));
+            }
+            self.sync_with(true)?;
         }
         let result = self.index.compact().map_err(index_error);
         if result.is_err() {
@@ -1212,6 +1709,9 @@ impl VarlitIndexedWriter {
                     self.immediate().map_err(|source| {
                         crate::immediate::appended_immediate_error(sequence, source)
                     })?;
+                    // The sync appended a marker: continue after it.
+                    next_offset = self.stream.snapshot().len();
+                    next_sequence = Some(self.stream.next_sequence()?);
                 } else if self.batch_records >= INDEX_BATCH_RECORDS {
                     self.commit_pending_batch()?;
                 }
@@ -1351,6 +1851,9 @@ impl VarlitIndexedWriter {
                     self.immediate().map_err(|source| {
                         crate::immediate::appended_immediate_error(sequence, source)
                     })?;
+                    // The sync appended a marker: continue after it.
+                    next_offset = self.stream.snapshot().len();
+                    next_sequence = Some(self.stream.next_sequence()?);
                 } else if self.batch_records >= INDEX_BATCH_RECORDS {
                     self.commit_pending_batch()?;
                 }
@@ -1448,11 +1951,11 @@ impl VarlitIndexedWriter {
             && batch.primary_generation().len < PRIMARY_GENERATION_WINDOW
         {
             crate::stream::take_injected_generation_restamp_failure()?;
-            let generation = primary_generation(
-                self.stream.spec(),
-                self.stream.snapshot(),
-                self.stream.snapshot().len(),
-            )?;
+            // Stamped at the batch's own frontier: during recovery replay the
+            // primary already extends past what the batch covers.
+            let covered = batch.working_frontier().eof;
+            let generation =
+                primary_generation(self.stream.spec(), self.stream.snapshot(), covered)?;
             self.index
                 .batch
                 .as_mut()
@@ -1519,7 +2022,18 @@ impl VarlitIndexedWriter {
         info: AppendInfo,
         tombstone: bool,
     ) -> Result<AppendInfo> {
-        let _expected_id = if tombstone { TOMBSTONE_BLOCK_ID } else { T::ID };
+        let block_id = if tombstone { TOMBSTONE_BLOCK_ID } else { T::ID };
+        self.publish_record_coverage(old_eof, info, block_id)
+    }
+
+    /// Covers the record `info` (of `block_id`, appended at `old_eof`) in
+    /// the pending sidecar batch.
+    fn publish_record_coverage(
+        &mut self,
+        old_eof: u64,
+        info: AppendInfo,
+        _expected_id: u32,
+    ) -> Result<AppendInfo> {
         let result = self
             .index
             .batch
@@ -1676,6 +2190,14 @@ impl VarlitIndexedWriter {
 
 impl Drop for VarlitIndexedWriter {
     fn drop(&mut self) {
+        // A writer that closes with every record synced confirms its sidecar,
+        // so readers of a closed file open without walking its tail. Best
+        // effort: on failure the tail stays unconfirmed, which every reader
+        // and the next writer open already handle. Unsynced records are not
+        // acknowledged and are left to recovery.
+        if self.dirty && !self.stream.sync_pending() && self.ensure_not_poisoned().is_ok() {
+            let _ = self.sync_with(true);
+        }
         // Discard uncommitted staging before releasing the writer file guard.
         self.index.batch.take();
     }
@@ -1822,7 +2344,10 @@ where
     // operating system from handing the scanned object's identity to a
     // different file while the sidecar is published, so the post-publication
     // re-check below cannot be fooled by an identity that was recycled.
-    let current = SnapshotFile::new(fs::File::open(native_path)?)?;
+    let current = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+        fs::File::open(native_path)?,
+        None,
+    ))?;
     if primary_identity(spec, &current)? != identity {
         return Err(index_error(DiskIndexError::IdentityMismatch));
     }
@@ -1849,7 +2374,7 @@ where
     let published = crate::file::PinnedObject::open(&path).ok();
     let republished = fs::File::open(native_path)
         .ok()
-        .and_then(|file| SnapshotFile::new(file).ok())
+        .and_then(|file| SnapshotFile::new(crate::primary_file::PrimaryFile::new(file, None)).ok())
         .and_then(|snapshot| primary_identity(spec, &snapshot).ok());
     if republished.as_ref() != Some(&identity) {
         return Err(index_error(
@@ -2073,9 +2598,10 @@ fn prepared_physical(
     })
 }
 
+/// The sidecar tail a record hands over, if any. Sync markers never do: they
+/// are not chained and the sidecar reserves no tail for them.
 fn record_tail(spec: FormatSpec, block_id: u32, info: AppendInfo) -> Option<DiskIndexTail> {
-    spec.index_policy
-        .block_offset_chain
+    (spec.index_policy.block_offset_chain && block_id != crate::sync_marker::SYNC_BLOCK_ID)
         .then_some(DiskIndexTail {
             block_id,
             record_offset: info.record_offset,
@@ -2259,6 +2785,227 @@ mod tests {
         .with_read_limits(ReadLimits::STANDARD)
     }
 
+    fn item(key: u64, value: &str) -> Item {
+        Item {
+            key,
+            value: value.into(),
+        }
+    }
+
+    fn flip_byte(path: &Path, offset: u64) -> Result<()> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+        let mut byte = [0u8];
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(&mut byte)?;
+        byte[0] ^= 0x5a;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(&byte)?;
+        Ok(())
+    }
+
+    #[test]
+    fn sync_publishes_on_the_primary_alone_and_readers_take_the_tail() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("one-barrier.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        let created = writer.stream.snapshot().len();
+        writer.push_info(&item(1, "one"))?;
+        writer.sync()?;
+        // The sidecar was neither confirmed nor told about the sync.
+        let metadata =
+            read_metadata_read_only(sidecar_path(&path), options).map_err(index_error)?;
+        assert_eq!(metadata.committed.eof, created);
+        assert_eq!(writer.confirmed_eof, created);
+        // A reader takes the synced record from the primary's verified tail,
+        // and a follower sees the next sync without a confirmation either.
+        let mut reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        assert_eq!(reader.get_value::<Item>(&1)?, Some(item(1, "one")));
+        assert_eq!(reader.committed_len(), writer.stream.snapshot().len());
+        writer.push_info(&item(1, "uno"))?;
+        writer.push_info(&item(2, "two"))?;
+        assert_eq!(reader.follow()?, 0, "unsynced records are not visible");
+        writer.sync()?;
+        assert_eq!(reader.follow()?, 3);
+        assert_eq!(reader.get_value::<Item>(&1)?, Some(item(1, "uno")));
+        assert_eq!(reader.get_value::<Item>(&2)?, Some(item(2, "two")));
+        assert_eq!(
+            read_metadata_read_only(sidecar_path(&path), options)
+                .map_err(index_error)?
+                .committed
+                .eof,
+            created
+        );
+        // Closing with everything synced confirms, so the tail empties.
+        drop(writer);
+        assert_eq!(reader.follow()?, 0);
+        assert!(reader.tail.latest.is_empty());
+        assert_eq!(reader.get_value::<Item>(&1)?, Some(item(1, "uno")));
+        Ok(())
+    }
+
+    #[test]
+    fn the_confirm_policy_bounds_the_unconfirmed_tail() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("confirm-policy.varlit");
+        let options = DiskIndexOptions {
+            confirm: crate::DiskIndexConfirmPolicy {
+                max_bytes: u64::MAX,
+                max_records: 6,
+            },
+            ..DiskIndexOptions::default()
+        };
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        for key in 0..3 {
+            writer.push_info(&item(key, "first"))?;
+        }
+        writer.sync()?;
+        // Three records and a marker: under the bound.
+        assert!(writer.dirty);
+        for key in 3..5 {
+            writer.push_info(&item(key, "second"))?;
+        }
+        writer.sync()?;
+        // Seven records past the confirmed EOF: confirmed.
+        assert!(!writer.dirty);
+        assert_eq!(writer.confirmed_eof, writer.stream.snapshot().len());
+        let metadata =
+            read_metadata_read_only(sidecar_path(&path), options).map_err(index_error)?;
+        assert_eq!(metadata.committed.eof, writer.stream.snapshot().len());
+        Ok(())
+    }
+
+    #[test]
+    fn a_torn_last_sync_is_cut_back_to_the_marker_before_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("torn-sync.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        writer.push_info(&item(1, "kept"))?;
+        writer.sync()?;
+        let kept_eof = writer.stream.snapshot().len();
+        let torn = writer.push_info(&item(2, "torn"))?;
+        writer.sync()?;
+        // A crash: no confirmation on the way out.
+        writer.stream.poison();
+        drop(writer);
+        // The last sync's payload never reached storage whole. The format has
+        // no record checksum, so only the marker's link can tell.
+        flip_byte(&path, torn.payload_offset + torn.payload_len - 1)?;
+
+        let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        assert_eq!(reader.committed_len(), kept_eof);
+        assert_eq!(reader.get_value::<Item>(&2)?, None);
+        drop(reader);
+        let writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
+        assert_eq!(writer.stream.snapshot().len(), kept_eof);
+        drop(writer);
+        assert_eq!(fs::metadata(&path)?.len(), kept_eof);
+        let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        assert_eq!(reader.get_value::<Item>(&1)?, Some(item(1, "kept")));
+        assert_eq!(reader.get_value::<Item>(&2)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn damage_before_a_later_marker_is_refused_not_cut() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("damaged-sync.varlit");
+        let options = DiskIndexOptions::default();
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        let damaged = writer.push_info(&item(1, "damaged"))?;
+        writer.sync()?;
+        writer.push_info(&item(2, "later"))?;
+        writer.sync()?;
+        writer.stream.poison();
+        drop(writer);
+        flip_byte(&path, damaged.payload_offset + damaged.payload_len - 1)?;
+        let before = fs::read(&path)?;
+
+        assert!(matches!(
+            VarlitIndexedReader::open(spec(), &path, options, index_plan()),
+            Err(Error::ChecksumMismatch { .. })
+        ));
+        assert!(matches!(
+            VarlitIndexedWriter::open(spec(), &path, options, index_plan()),
+            Err(Error::ChecksumMismatch { .. })
+        ));
+        assert_eq!(fs::read(&path)?, before, "acknowledged syncs were cut");
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_updates_reuse_sidecar_pages_and_stale_readers_are_told() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("reuse.varlit");
+        // Confirm on every sync: the worst case for sidecar growth.
+        let options = DiskIndexOptions {
+            confirm: crate::DiskIndexConfirmPolicy::EVERY_SYNC,
+            ..DiskIndexOptions::default()
+        };
+        let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+        for key in 0..3_000 {
+            writer.push_info(&item(key, "initial"))?;
+        }
+        writer.sync()?;
+        let mut follower = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        let stale = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        let sidecar = sidecar_path(&path);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut warm = 0;
+        for round in 0..300u64 {
+            for _ in 0..40 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                writer.push_info(&item(seed % 3_000, &format!("round-{round}")))?;
+            }
+            writer.sync()?;
+            follower.follow()?;
+            if round == 60 {
+                warm = fs::metadata(&sidecar)?.len();
+            }
+        }
+        let after = fs::metadata(&sidecar)?.len();
+        // Every sync rewrote about forty leaves and their paths; without reuse
+        // the sidecar would have grown by that much each time.
+        assert!(
+            after <= warm + warm / 4,
+            "sidecar grew from {warm} to {after} bytes over 240 confirmations"
+        );
+        // A reader that follows keeps up; one that held generation one through
+        // hundreds of confirmations is told, not served rewritten pages.
+        assert!(follower.get_value::<Item>(&(seed % 3_000))?.is_some());
+        let outcome: Result<Vec<_>> = (0..3_000)
+            .map(|key| stale.get_value::<Item>(&key))
+            .collect();
+        match outcome {
+            Err(Error::DiskIndex(error)) => {
+                assert!(matches!(*error, DiskIndexError::PageReclaimed), "{error}")
+            }
+            other => panic!("stale reader was served: {:?}", other.map(|v| v.len())),
+        }
+        let mut stale = stale;
+        stale.follow()?;
+        assert!(stale.get_value::<Item>(&(seed % 3_000))?.is_some());
+        // Reopening keeps reusing: the allocation state was persisted.
+        drop(writer);
+        let mut writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
+        let reopened = fs::metadata(&sidecar)?.len();
+        for round in 0..40u64 {
+            for key in 0..40 {
+                writer.push_info(&item(key, &format!("again-{round}")))?;
+            }
+            writer.sync()?;
+        }
+        assert!(fs::metadata(&sidecar)?.len() <= reopened + reopened / 8);
+        drop(writer);
+        let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        assert_eq!(reader.get_value::<Item>(&7)?, Some(item(7, "again-39")));
+        Ok(())
+    }
+
     #[test]
     fn rebuild_refuses_truncated_record_instead_of_publishing_a_prefix() -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -2342,8 +3089,9 @@ mod tests {
             Err(Error::DiskIndex(_))
         ));
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Three user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 4);
+        // Three user records, the internal creation-nonce record and the two
+        // sync markers that closed them.
+        assert_eq!(report.records, 6);
         assert!(report.scanned_bytes > 0);
         let mut writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
         writer.sync()?;
@@ -2444,9 +3192,7 @@ mod tests {
             key: 1,
             value: "one".into(),
         })?;
-        crate::file::reset_stream_io_counters();
         let mut reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
         let mut cursor = reader.blocks::<Item>()?;
         assert_eq!(cursor.by_ref().collect::<Result<Vec<_>>>()?.len(), 1);
         crate::file::reset_stream_io_counters();
@@ -2458,11 +3204,18 @@ mod tests {
                 key: key + 1,
                 value: "next".into(),
             })?;
-            assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
+            // The synced record and the sync marker that closed it.
+            assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
             assert_eq!(cursor.next().unwrap()?.key, key);
             assert!(cursor.next().is_none());
+            let expected = if key == 1 { "one" } else { "next" };
+            assert_eq!(reader.get_value::<Item>(&key)?.unwrap().value, expected);
         }
-        assert_eq!(crate::file::stream_io_counters(), (0, 20, 0));
+        // Each follow frames only what was appended since the last one (the
+        // tail walk, the committed-range pass and the cursor), never the
+        // growing prefix: a rescan would be quadratic in the loop.
+        let (_, framed, _) = crate::file::stream_io_counters();
+        assert!(framed <= 20 * 6, "framed {framed} entries");
         Ok(())
     }
 
@@ -2508,12 +3261,20 @@ mod tests {
     fn failed_clean_publication_stops_further_indexed_mutation() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("publication-outcome.varlit");
-        let options = DiskIndexOptions::default();
+        // The failure under test is the sidecar confirmation, so confirm on
+        // every sync.
+        let options = DiskIndexOptions {
+            confirm: crate::DiskIndexConfirmPolicy::EVERY_SYNC,
+            ..DiskIndexOptions::default()
+        };
         let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
         writer.push_info(&Item {
             key: 1,
             value: "published".into(),
         })?;
+        // The first two steps of `sync`: close the records with a sync marker
+        // and make the primary durable.
+        writer.append_sync_marker()?;
         writer.commit_pending_batch()?;
         writer.stream.sync()?;
         // Model a clean root becoming visible before publication returned an
@@ -2545,34 +3306,51 @@ mod tests {
     }
 
     #[test]
-    fn dirty_index_restore_uses_checkpoint_without_native_scan() -> Result<()> {
+    fn open_recovers_the_synced_tail_and_cuts_the_unsynced_one() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("restore-index.varlit");
         let options = DiskIndexOptions::default();
+        let confirmed_eof;
         {
             let mut writer = VarlitIndexedWriter::create(spec(), &path, options, index_plan())?;
+            confirmed_eof = writer.stream.snapshot().len();
             writer.push_info(&Item {
                 key: 1,
-                value: "committed".into(),
+                value: "synced".into(),
             })?;
+            // One barrier: the sidecar is not confirmed over this record.
             writer.sync()?;
+            assert_eq!(writer.confirmed_eof, confirmed_eof);
             writer.push_info(&Item {
                 key: 2,
-                value: "dirty".into(),
+                value: "never synced".into(),
             })?;
+            // Dropped with an unsynced record: no confirmation on drop.
         }
         assert!(matches!(
-            VarlitIndexedWriter::open(spec(), &path, options, index_plan()),
-            Err(Error::DiskIndex(_))
+            read_metadata_read_only(sidecar_path(&path), options)
+                .map_err(index_error)?
+                .state,
+            DiskIndexState::Dirty
         ));
 
-        crate::file::reset_stream_io_counters();
-        let writer =
-            VarlitIndexedWriter::restore_checkpoint_and_open(spec(), &path, options, index_plan())?;
-        assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
-        drop(writer);
+        // A reader sees the synced record from the primary's verified tail.
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
-        assert!(reader.get_value::<Item>(&1)?.is_some());
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "synced");
+        assert_eq!(reader.get_value::<Item>(&2)?, None);
+        drop(reader);
+
+        // The writer open recovers instead of refusing: the synced record is
+        // replayed into the sidecar, the unsynced one is cut, and only the
+        // tail after the confirmed EOF is walked.
+        let writer = VarlitIndexedWriter::open(spec(), &path, options, index_plan())?;
+        assert_eq!(writer.confirmed_eof, writer.stream.snapshot().len());
+        assert!(!writer.dirty);
+        drop(writer);
+        crate::file::reset_stream_io_counters();
+        let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
+        assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
+        assert_eq!(reader.get_value::<Item>(&1)?.unwrap().value, "synced");
         assert_eq!(reader.get_value::<Item>(&2)?, None);
         Ok(())
     }
@@ -2687,8 +3465,9 @@ mod tests {
             ..DiskIndexOptions::default()
         };
         let report = rebuild_disk_index(spec(), &path, options, index_plan())?;
-        // Five user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 6);
+        // Five user records, the internal creation-nonce record and the sync
+        // marker that closed them.
+        assert_eq!(report.records, 7);
         let reader = VarlitIndexedReader::open(spec(), &path, options, index_plan())?;
         assert_eq!(reader.get_value::<Item>(&4)?.unwrap().value, "value-4");
         Ok(())
@@ -2771,8 +3550,9 @@ mod tests {
         fs::remove_file(sidecar_path(&path))?;
         crate::disk_index::reset_tombstone_key_decode_calls();
         let report = rebuild_disk_index(spec_multi(), &path, options, plan_multi())?;
-        // Four user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 5);
+        // Four user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 6);
         // One decode per tombstone record, not one per plan descriptor.
         assert_eq!(crate::disk_index::tombstone_key_decode_calls(), 2);
         let reader = VarlitIndexedReader::open(spec_multi(), &path, options, plan_multi())?;
@@ -2879,8 +3659,9 @@ mod tests {
 
         crate::disk_index::reset_plan_payload_reads();
         let report = rebuild_disk_index(spec_crc(), &path, options, plan_crc())?;
-        // Four user records plus the internal creation-nonce record.
-        assert_eq!(report.records, 5);
+        // Four user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 6);
         // Two indexed puts and one tombstone: three payload materializations,
         // never a scanner checksum pre-pass on top and never the unindexed
         // record's payload.
@@ -2908,7 +3689,8 @@ mod tests {
         use crate::native_layout::{encode_native_record_header, read_native_record_header};
         use std::io::{Read, Seek, SeekFrom, Write};
 
-        const UNKNOWN_FLAG: u16 = 0x0002;
+        // Bits 0 (compressed) and 1 (chunked) are known; 2 is not.
+        const UNKNOWN_FLAG: u16 = 0x0004;
         for integrity in [
             IntegrityPolicy::None,
             IntegrityPolicy::Crc32,

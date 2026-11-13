@@ -76,12 +76,12 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = options.open(&path)?;
+        let mut file = PrimaryFile::new(options.open(&path)?, None);
         // bind the single-writer object lock before any destructive
         // initialization. Opening with `.truncate(true)` would clear the new
         // object inside the pre-bind window where a concurrent creator that
         // lost the race could still hold an unbound handle to it.
-        lock.bind_native(&file, &path)?;
+        lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
         let header_extensions = write_file_header(spec, &mut file)?;
@@ -90,15 +90,12 @@ impl VarlitFile {
             spec,
             path,
             file: RecordFile::new(file),
-            index: ResidentIndex::empty(snapshot.clone(), spec),
+            index: ResidentIndex::none_retained_created(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
             follow_scan: None,
             header_extensions,
-            matrix: None,
-            matrix_creation_nonce: None,
             sequence_state: SequenceState::Available(0),
-            checkpoint_cadence: CheckpointCadence::new_empty(),
             block_tails: BlockTails::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             uncommitted_since_commit: false,
@@ -111,8 +108,8 @@ impl VarlitFile {
             // this handle established the pathname, so its
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
@@ -175,16 +172,6 @@ impl VarlitFile {
                     actual: declared,
                 });
             }
-            // A chunk is buffered against `MatrixSlotRegionLen` and written
-            // against `RecordPayloadLen`, and nothing reconciled them: a spec
-            // could pass `validate`, accept writes, and then die at the first
-            // write with the data already in RAM and no way to get it out.
-            // Refused here, before a byte is accepted.
-            let written = chunk_payload_len_for(spec, &dims)?;
-            spec.read_limits
-                .check(ReadLimitKey::RecordPayloadLen, written)?;
-            spec.read_limits
-                .check(ReadLimitKey::MatrixSlotRegionLen, written)?;
         }
         let path = path.to_path_buf();
         let lock = WriterLock::acquire(&path)?;
@@ -209,46 +196,30 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = options.open(&path)?;
+        let mut file = PrimaryFile::new(options.open(&path)?, None);
         // bind the single-writer object lock before any destructive
         // initialization; see `create_impl`.
-        lock.bind_native(&file, &path)?;
+        lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
         let header_extensions = write_file_header(spec, &mut file)?;
         // stamp a fresh creation nonce so this logical matrix is
         // distinguishable from any earlier matrix that lived in the same OS
         // file object at the same layout offsets.
+        // Distinguishes this matrix from any earlier one that lived in the same
+        // file object; kept in the matrix's metadata record.
         let creation_nonce = fresh_matrix_creation_nonce();
-        write_matrix_creation_nonce_region(&mut file, creation_nonce)?;
-        let header_len = file.stream_position()?;
-        let matrix = crate::matrix::create_layout(spec, &mut file, header_len, &dims)?;
-        let mut matrix_pages = crate::matrix_generation::MatrixFile::create(
-            &path,
-            &file,
-            matrix.append_log_start(),
-            creation_nonce,
-            matrix_pending_limit(spec),
-        )?;
-        matrix_pages.set_cache_bytes(spec.read_limits.matrix_generation_cache_budget());
-        matrix_pages.set_dirty_page_budget(matrix_dirty_page_budget(spec, &matrix));
-        matrix_pages.set_traversal_bytes(limit_or_max(
-            spec.read_limits.require(ReadLimitKey::ScanBytes)?,
-        ));
         let snapshot = SnapshotFile::new(file.try_clone()?)?;
         let mut file = Self {
             spec,
             path,
-            file: RecordFile::new(file).with_matrix(Some(matrix_pages)),
-            index: ResidentIndex::empty(snapshot.clone(), spec),
+            file: RecordFile::new(file),
+            index: ResidentIndex::none_retained_created(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
             follow_scan: None,
             header_extensions,
-            matrix: Some(matrix),
-            matrix_creation_nonce: Some(creation_nonce),
             sequence_state: SequenceState::Available(0),
-            checkpoint_cadence: CheckpointCadence::new_empty(),
             block_tails: BlockTails::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             uncommitted_since_commit: false,
@@ -261,13 +232,14 @@ impl VarlitFile {
             // this handle established the pathname, so its
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
         };
+        file.create_tiles(&dims, creation_nonce)?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
         Ok(file)
@@ -359,21 +331,18 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-        lock.bind_native(&file, &path)?;
-        let captured_len = check_open_file_len(spec, &file)?;
-        let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
-        let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
-            read_matrix_layout_if_needed(&path, true, spec, &mut file, header_len, captured_len)?,
-        );
-        let append_start = append_log_start(header_len, matrix.as_ref());
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        lock.bind_native(file.raw(), &path)?;
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // Logical: measured once the header has installed the anchor layout.
+        check_open_file_len(spec, &file)?;
+        let append_start = header_len;
         let mut index = load_generation_index(
             spec,
             &mut file,
             append_start,
             ScanIntent::Writer,
             scratch,
-            matrix_pages.as_ref(),
         )?;
         // The sequence high-water mark and the block tails come from the scan
         // rather than from the index, because the index is filtered: a
@@ -382,6 +351,8 @@ impl VarlitFile {
         let block_tails = index.block_tails()?;
         let frames_verified = index.frames_verified;
         let boundaries = index.boundaries.take();
+        let base_records = index.base_records;
+        let base_segment = index.base_segment;
         let index = &*scratch;
         // The crash verdict has to be read *before* the handle exists, because
         // truncation happens here and would destroy the evidence it decides
@@ -397,36 +368,31 @@ impl VarlitFile {
             previous_writer_crashed,
         )?;
         let derived = derive_index_state(index.entries(), false)?;
-        let checkpoint_cadence = derived.checkpoint_cadence;
-        let segment_cursor = derived.segment_cursor;
+        let segment_cursor =
+            SegmentCursor::rebased(derived.segment_cursor, base_records, base_segment);
         let snapshot = SnapshotFile::from_file_with_len(
             file.try_clone()?,
-            matrix_pages
-                .as_ref()
-                .map_or(file.metadata()?.len(), |p| p.head().native_eof),
+            file.len()?,
         )?;
         let mut opened = Self {
             spec,
             path,
-            file: RecordFile::new(file).with_matrix(matrix_pages),
-            index: ResidentIndex::adopt_generation(
-                index,
+            file: RecordFile::new(file),
+            index: ResidentIndex::none_retained_opened(
                 snapshot.clone(),
                 spec,
+                base_records + index.record_count(),
                 frames_verified,
                 boundaries,
-            )?,
+            ),
             snapshot,
             mode: OpenMode::ReadWrite,
             follow_scan: None,
             header_extensions,
-            matrix,
-            matrix_creation_nonce,
             sequence_state,
-            checkpoint_cadence,
             block_tails,
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             segment_cursor,
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -512,21 +478,19 @@ impl VarlitFile {
         spec.validate()?;
         ensure_native_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let mut file = OpenOptions::new().read(true).open(&path)?;
-        let captured_len = check_open_file_len(spec, &file)?;
-        let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
-        let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
-            read_matrix_layout_if_needed(&path, false, spec, &mut file, header_len, captured_len)?,
-        );
-        let append_start = append_log_start(header_len, matrix.as_ref());
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(&path)?, None);
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // Logical: measured once the header has installed the anchor layout.
+        check_open_file_len(spec, &file)?;
+        let append_start = header_len;
         let mut scanned = load_generation_index(
             spec,
             &mut file,
             append_start,
             ScanIntent::ReadOnly,
             scratch,
-            matrix_pages.as_ref(),
         )?;
+
         let sequence_state = scanned.sequence_state();
         let block_tails = scanned.block_tails()?;
         let frames_verified = scanned.frames_verified;
@@ -545,21 +509,38 @@ impl VarlitFile {
         // under a marker policy the uncommitted tail a writer open would delete
         // must not be visible here either. Both facts belong to the scan.
         let logical_len = scanned.physical_end(append_start);
+        // An open that resumed at an anchor holds only the records after it,
+        // so it cannot keep a whole-file list; it keeps the count instead.
+        let base_records = scanned.base_records;
+        let base_segment = scanned.base_segment;
+        let retention = if base_records > 0 {
+            DirectoryRetention::None
+        } else {
+            retention
+        };
         let index = &*scratch;
         let derived = derive_index_state(index.entries(), false)?;
-        let checkpoint_cadence = derived.checkpoint_cadence;
-        let segment_cursor = derived.segment_cursor;
+        let segment_cursor =
+            SegmentCursor::rebased(derived.segment_cursor, base_records, base_segment);
         let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, logical_len)?;
-        Ok(Self {
+        let mut opened = Self {
             spec,
             path,
-            file: RecordFile::new(file).with_matrix(matrix_pages),
+            file: RecordFile::new(file),
             index: match retention {
                 // Not "built and then dropped": a caller that asked for no
                 // directory never has one allocated on its behalf. `N` slots is
                 // the largest thing an open would have taken, and the point of
                 // the option is that varlit does not take it.
-                DirectoryRetention::None => ResidentIndex::none_retained(snapshot.clone(), spec),
+                // The scan counted the records; keeping that one number is what
+                // spares every later read a counting walk.
+                DirectoryRetention::None => ResidentIndex::none_retained_opened(
+                    snapshot.clone(),
+                    spec,
+                    base_records + index.record_count(),
+                    frames_verified,
+                    boundaries,
+                ),
                 DirectoryRetention::Keep => ResidentIndex::adopt_generation(
                     index,
                     snapshot.clone(),
@@ -572,13 +553,10 @@ impl VarlitFile {
             mode: OpenMode::ReadOnly,
             follow_scan: None,
             header_extensions,
-            matrix,
-            matrix_creation_nonce,
             sequence_state,
-            checkpoint_cadence,
             block_tails,
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             segment_cursor,
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -591,7 +569,9 @@ impl VarlitFile {
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
-        })
+        };
+        opened.open_tiles_now()?;
+        Ok(opened)
     }
 
     /// Opens read-only using only the selected summary metadata, without a full scan.
@@ -792,14 +772,12 @@ impl VarlitFile {
         lock: &mut WriterLock,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-        lock.bind_native(&file, path)?;
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(path)?, None);
+        lock.bind_native(file.raw(), path)?;
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // Logical: measured once the header has installed the anchor layout.
         let captured_len = check_open_file_len(spec, &file)?;
-        let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
-        let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
-            read_matrix_layout_if_needed(path, true, spec, &mut file, header_len, captured_len)?,
-        );
-        let append_start = append_log_start(header_len, matrix.as_ref());
+        let append_start = header_len;
         // No `truncate_uncommitted_tail_if_needed`, and both routes earn that
         // the same way — by requiring the thing they read to account for the
         // file all the way to its last byte.
@@ -819,9 +797,6 @@ impl VarlitFile {
         // Either way a file that reaches the line below has no uncommitted tail
         // to cut. `a_file_with_an_uncommitted_tail_is_truncated_by_the_scan`
         // is what holds that for the header route.
-        let captured_len = matrix_pages
-            .as_ref()
-            .map_or(captured_len, |pages| pages.head().native_eof);
         let digest = read_lazy_block_tails(
             spec,
             &mut file,
@@ -832,17 +807,15 @@ impl VarlitFile {
             source,
         )?;
         let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, digest.physical_end)?;
-        Ok(Self {
+        let mut opened = Self {
             spec,
             path: path.to_path_buf(),
-            file: RecordFile::new(file).with_matrix(matrix_pages),
+            file: RecordFile::new(file),
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadWrite,
             follow_scan: None,
             header_extensions,
-            matrix,
-            matrix_creation_nonce,
             sequence_state: match digest.sequence_high_water {
                 None => SequenceState::Available(0),
                 Some(u64::MAX) => SequenceState::Exhausted,
@@ -850,11 +823,10 @@ impl VarlitFile {
             },
             // Both are refused above rather than approximated: see
             // `open_lazy`'s doc. Empty is what "never used" looks like.
-            checkpoint_cadence: CheckpointCadence::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
@@ -869,7 +841,9 @@ impl VarlitFile {
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
-        })
+        };
+        opened.open_tiles_now()?;
+        Ok(opened)
     }
 
     fn open_readonly_from_digest(
@@ -877,16 +851,11 @@ impl VarlitFile {
         path: &Path,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).open(path)?;
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        // Logical: measured once the header has installed the anchor layout.
         let captured_len = check_open_file_len(spec, &file)?;
-        let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
-        let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
-            read_matrix_layout_if_needed(path, false, spec, &mut file, header_len, captured_len)?,
-        );
-        let append_start = append_log_start(header_len, matrix.as_ref());
-        let captured_len = matrix_pages
-            .as_ref()
-            .map_or(captured_len, |pages| pages.head().native_eof);
+        let append_start = header_len;
         let digest = read_lazy_block_tails(
             spec,
             &mut file,
@@ -897,17 +866,15 @@ impl VarlitFile {
             source,
         )?;
         let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, digest.physical_end)?;
-        Ok(Self {
+        let mut opened = Self {
             spec,
             path: path.to_path_buf(),
-            file: RecordFile::new(file).with_matrix(matrix_pages),
+            file: RecordFile::new(file),
             index: ResidentIndex::none_retained(snapshot.clone(), spec),
             snapshot,
             mode: OpenMode::ReadOnly,
             follow_scan: None,
             header_extensions,
-            matrix,
-            matrix_creation_nonce,
             sequence_state: match digest.sequence_high_water {
                 None => SequenceState::Available(0),
                 Some(u64::MAX) => SequenceState::Exhausted,
@@ -916,11 +883,10 @@ impl VarlitFile {
             // Both are writer state — when the next checkpoint is due, which
             // records the next segment covers — and this handle is read-only.
             // Recovering them is what would have required the walk.
-            checkpoint_cadence: CheckpointCadence::new_empty(),
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
-            open_chunk: None,
-            chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
             record_buffer: Vec::new(),
@@ -935,7 +901,9 @@ impl VarlitFile {
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
-        })
+        };
+        opened.open_tiles_now()?;
+        Ok(opened)
     }
 
     pub fn open_recover<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<Self> {
@@ -975,64 +943,61 @@ impl VarlitFile {
         scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
         let spec = spec.with_strict_read_validation();
-        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-        lock.bind_native(&file, &path)?;
-        let original_len = file.metadata()?.len();
-        let (header_len, header_extensions) = read_file_header_parts(spec, &mut file)?;
-        let (matrix, matrix_creation_nonce, matrix_pages) = split_matrix_state(
-            read_matrix_layout_if_needed(&path, true, spec, &mut file, header_len, original_len)?,
-        );
-        let append_start = append_log_start(header_len, matrix.as_ref());
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        lock.bind_native(file.raw(), &path)?;
+        let original_len = file.len()?;
+        let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
+        let append_start = header_len;
         let mut index = load_generation_index(
             spec,
             &mut file,
             append_start,
             ScanIntent::Recover,
             scratch,
-            matrix_pages.as_ref(),
         )?;
         let sequence_state = index.sequence_state();
         let block_tails = index.block_tails()?;
         let frames_verified = index.frames_verified;
         let boundaries = index.boundaries.take();
+        let base_records = index.base_records;
+        let base_segment = index.base_segment;
         let index = &*scratch;
         // No mark here: this route reaches a file that already ended at a
         // commit point, so there is no tail. See the digest's frame check.
         truncate_uncommitted_tail_if_needed(spec, &mut file, append_start, index, false)?;
-        let recovered_len = file.metadata()?.len();
+        let recovered_len = file.len()?;
         let derived = derive_index_state(index.entries(), false)?;
-        let checkpoint_cadence = derived.checkpoint_cadence;
-        let segment_cursor = derived.segment_cursor;
+        let segment_cursor =
+            SegmentCursor::rebased(derived.segment_cursor, base_records, base_segment);
         let records_preserved = index.record_count();
         let snapshot = SnapshotFile::from_file_with_len(
             file.try_clone()?,
-            matrix_pages
-                .as_ref()
-                .map_or(file.metadata()?.len(), |p| p.head().native_eof),
+            file.len()?,
         )?;
-        Ok((
-            Self {
+        let report = RecoveryReport {
+            original_len,
+            recovered_len,
+            records_preserved,
+        };
+        let mut opened = Self {
                 spec,
                 path,
-                file: RecordFile::new(file).with_matrix(matrix_pages),
-                index: ResidentIndex::adopt_generation(
-                    index,
+                file: RecordFile::new(file),
+                index: ResidentIndex::none_retained_opened(
                     snapshot.clone(),
                     spec,
+                    base_records + index.record_count(),
                     frames_verified,
                     boundaries,
-                )?,
+                ),
                 snapshot,
                 mode: OpenMode::ReadWrite,
                 follow_scan: None,
                 header_extensions,
-                matrix,
-                matrix_creation_nonce,
                 sequence_state,
-                checkpoint_cadence,
                 block_tails,
-                open_chunk: None,
-                chunk_directory: std::cell::OnceCell::new(),
+            tiles: std::cell::OnceCell::new(),
+            record_cache: Default::default(),
                 segment_cursor,
                 uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -1045,12 +1010,8 @@ impl VarlitFile {
                 opened_after_crash: false,
                 poison: PoisonFlag::healthy(),
                 _lock: None,
-            },
-            RecoveryReport {
-                original_len,
-                recovered_len,
-                records_preserved,
-            },
-        ))
+            };
+        opened.open_tiles_now()?;
+        Ok((opened, report))
     }
 }

@@ -155,9 +155,11 @@ fn public_index_reads_return_oom_and_remain_usable_after_each_refusal() -> Resul
         });
         assert_eq!(result?, if long { 50 } else { 1500 });
         let allocations = MATCHES.load(Relaxed);
+        // A cold lookup allocates for the index nodes and the cache it
+        // fills; the key itself is borrowed, never copied.
         assert!(
-            allocations > 2,
-            "cold lookup did not exercise node/cache growth"
+            allocations >= 2,
+            "cold lookup did not exercise node/cache growth: {allocations} allocations (case {case})"
         );
         for nth in 1..=allocations {
             let read = OomIndex::open_indexed_reader(&path, options)?;

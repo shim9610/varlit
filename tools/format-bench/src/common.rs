@@ -46,7 +46,10 @@ pub fn fsync_dir(dir: &Path) -> Result<()> {
 }
 
 pub fn fsync_file(path: &Path) -> Result<()> {
-    std::fs::OpenOptions::new().read(true).open(path)?.sync_all()?;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .open(path)?
+        .sync_all()?;
     Ok(())
 }
 
@@ -161,5 +164,56 @@ pub fn got<T: varlit::VarlitEmpty>(
     what: &'static str,
 ) -> Result<T> {
     let mut out = T::empty();
-    if read(&mut out)? { Ok(out) } else { Err(what.into()) }
+    if read(&mut out)? {
+        Ok(out)
+    } else {
+        Err(what.into())
+    }
+}
+
+/// The storage configuration an engine adapter was asked to use (one of the
+/// names its scenario module lists as candidates). Empty = the first.
+pub fn cand() -> String {
+    std::env::var("FB_CAND").unwrap_or_default()
+}
+
+/// Disk-health probe: 1000 x (4 KiB pwrite + fdatasync) on a fresh file.
+/// Returns seconds. Independent of every scenario's configuration.
+pub fn probe(dir: &Path) -> Result<f64> {
+    use std::os::unix::fs::FileExt;
+    std::fs::create_dir_all(dir)?;
+    let p = dir.join("probe.bin");
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .read(true)
+        .write(true)
+        .open(&p)?;
+    let buf = [0x5au8; 4096];
+    let t = Timer::start();
+    for i in 0..1000u64 {
+        f.write_all_at(&buf, i * 4096)?;
+        f.sync_data()?;
+    }
+    let s = t.secs();
+    drop(f);
+    std::fs::remove_file(&p)?;
+    Ok(s)
+}
+
+/// Peak resident set of this process (VmHWM), MiB.
+pub fn peak_rss_mb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .map(str::to_owned)
+        })
+        .and_then(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .map_or(0, |kb| kb / 1024)
 }

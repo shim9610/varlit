@@ -6,6 +6,8 @@
 //! Typed access always requires a declared immutable block identity. These
 //! tests exercise mismatches both before and after the legitimate type is
 //! used, plus missing identities and independent manual schema declarations.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::remove_file;
 use std::path::{Path, PathBuf};
@@ -365,8 +367,8 @@ fn cleanup(path: &Path) {
 /// Registers the generated types first so the process-local registry always
 /// holds the generated schema as the first-seen contract.
 fn register_generated(file: &varlit::VarlitFile) -> varlit::Result<()> {
-    file.blocks::<Plain>()?;
-    file.blocks::<KeyedGen>()?;
+    crate::pages::all_blocks!(file, Plain)?;
+    crate::pages::all_blocks!(file, KeyedGen)?;
     Ok(())
 }
 
@@ -384,7 +386,7 @@ fn correct_manual_mirror_still_registers() -> varlit::Result<()> {
     let file = InvariantFormat::open_readonly(&path)?;
     register_generated(&file)?;
 
-    let mirrored = file.blocks::<PlainMirror>()?;
+    let mirrored = crate::pages::all_blocks!(file, PlainMirror)?;
     assert_eq!(mirrored.len(), 1);
     assert_eq!(opt(|o| mirrored.get(0, o))?, Some(PlainMirror { value: 7 }));
 
@@ -407,7 +409,7 @@ fn impostor_with_different_schema_is_rejected() -> varlit::Result<()> {
     register_generated(&file)?;
 
     let expected = <Plain as VarlitBlock>::SCHEMA_FINGERPRINT;
-    match file.blocks::<PlainImpostor>() {
+    match crate::pages::all_blocks!(file, PlainImpostor) {
         Err(Error::BlockSchemaFingerprintMismatch {
             block_id,
             registered,
@@ -441,7 +443,7 @@ fn keyedness_denial_is_rejected_even_with_forged_fingerprint() -> varlit::Result
     let file = InvariantFormat::open_readonly(&path)?;
     register_generated(&file)?;
 
-    match file.blocks::<KeyedDenier>() {
+    match crate::pages::all_blocks!(file, KeyedDenier) {
         Err(Error::BlockKeyednessMismatch {
             block_id,
             registered,
@@ -688,13 +690,13 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     };
 
     assert_rejected(file.push(&OrderedImpostor { value: 1 }).map(|_| ()));
-    assert_rejected(file.blocks::<OrderedImpostor>().map(|_| ()));
+    assert_rejected(crate::pages::all_blocks!(file, OrderedImpostor).map(|_| ()));
 
     // The legitimate generated type is unaffected by the failed first use.
     file.push(&Ordered { value: 7 })?;
     file.flush()?;
     assert_eq!(
-        opt(|o| file.blocks::<Ordered>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(file, Ordered)?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
     drop(file);
@@ -702,10 +704,10 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     // Reopening keeps the same verdict in both directions.
     let reopened = OrderInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        opt(|o| reopened.blocks::<Ordered>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(reopened, Ordered)?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
-    assert_rejected(reopened.blocks::<OrderedImpostor>().map(|_| ()));
+    assert_rejected(crate::pages::all_blocks!(reopened, OrderedImpostor).map(|_| ()));
 
     cleanup(&path);
     Ok(())
@@ -909,12 +911,12 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
             file.push(&BigCellInheritedEndian { value: VALUE })
                 .map(|_| ()),
         );
-        assert_endian_rejected(file.blocks::<BigCellInheritedEndian>().map(|_| ()));
+        assert_endian_rejected(crate::pages::all_blocks!(file, BigCellInheritedEndian).map(|_| ()));
         assert_endian_rejected(
             file.push(&BigCellExplicitLittle { value: VALUE })
                 .map(|_| ()),
         );
-        assert_endian_rejected(file.blocks::<BigCellExplicitLittle>().map(|_| ()));
+        assert_endian_rejected(crate::pages::all_blocks!(file, BigCellExplicitLittle).map(|_| ()));
 
         file.push(&BigCell { value: VALUE })?;
         file.flush()?;
@@ -922,17 +924,17 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
 
     let file = EndianInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        opt(|o| file.blocks::<BigCell>()?.get(0, o))?,
+        opt(|o| crate::pages::all_blocks!(file, BigCell)?.get(0, o))?,
         Some(BigCell { value: VALUE })
     );
 
     // The rejection holds after the generated type has registered, and the
     // swapped value is never produced.
-    assert_endian_rejected(file.blocks::<BigCellInheritedEndian>().map(|_| ()));
-    assert_endian_rejected(file.blocks::<BigCellExplicitLittle>().map(|_| ()));
+    assert_endian_rejected(crate::pages::all_blocks!(file, BigCellInheritedEndian).map(|_| ()));
+    assert_endian_rejected(crate::pages::all_blocks!(file, BigCellExplicitLittle).map(|_| ()));
 
     // Control: a mirror that agrees on the override reads the true value.
-    let mirrored = file.blocks::<BigCellAgreeingMirror>()?;
+    let mirrored = crate::pages::all_blocks!(file, BigCellAgreeingMirror)?;
     assert_eq!(mirrored.len(), 1);
     assert_eq!(
         opt(|o| mirrored.get(0, o))?,
@@ -1050,7 +1052,7 @@ fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varl
     {
         let file = VarlitFile::create(without_identities, &first)?;
         assert!(matches!(
-            file.blocks::<CacheProbe>(),
+            crate::pages::all_blocks!(file, CacheProbe),
             Err(Error::InvalidFormatSpec(_))
         ));
     }
@@ -1062,7 +1064,7 @@ fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varl
     cleanup(&second);
     {
         let file = VarlitFile::create(with_identities, &second)?;
-        match file.blocks::<CacheProbe>() {
+        match crate::pages::all_blocks!(file, CacheProbe) {
             Err(Error::BlockSchemaFingerprintMismatch {
                 block_id,
                 registered,
@@ -1126,6 +1128,12 @@ macro_rules! prefix_probe {
             }
         }
 
+        impl varlit::VarlitEmpty for $name {
+            fn empty() -> Self {
+                Self { value: 0 }
+            }
+        }
+
         impl VarlitBlock for $name {
             const ID: u32 = PREFIX_BLOCK_ID;
             const VERSION: u16 = 1;
@@ -1168,21 +1176,21 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
 
         // Even the first use must obey the declaration.
         assert!(matches!(
-            short_file.blocks::<PrefixProbeIntruder>(),
+            crate::pages::all_blocks!(short_file, PrefixProbeIntruder),
             Err(Error::BlockSchemaFingerprintMismatch { .. })
         ));
         assert!(matches!(
-            long_file.blocks::<PrefixProbeIntruder>(),
+            crate::pages::all_blocks!(long_file, PrefixProbeIntruder),
             Err(Error::BlockSchemaFingerprintMismatch { .. })
         ));
         // The two schemas declare different contracts for the same numeric id.
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
 
         // Repeated validation has the same result.
-        short_file.blocks::<PrefixProbeShort>()?;
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
 
         // Each format still refuses a type that disagrees with the contract it
         // declares.
@@ -1190,7 +1198,7 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
             (&short_file, 0x0011_0011_0011_0011_u64),
             (&long_file, 0x0022_0022_0022_0022_u64),
         ] {
-            match file.blocks::<PrefixProbeIntruder>() {
+            match crate::pages::all_blocks!(file, PrefixProbeIntruder) {
                 Err(Error::BlockSchemaFingerprintMismatch {
                     block_id,
                     registered: actual_registered,
@@ -1205,8 +1213,8 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
         }
 
         // Rejection never changes the schema contract.
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
     }
 
     cleanup(&short_path);

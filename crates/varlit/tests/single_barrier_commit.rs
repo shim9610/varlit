@@ -214,3 +214,52 @@ fn a_single_barrier_requires_header_and_payload_checksums() {
         Err(Error::InvalidFormatSpec(_))
     ));
 }
+
+/// The same torn-transaction guarantee when the open resumes at an anchor:
+/// many durable transactions across small anchors, then a torn newest one.
+#[test]
+fn a_torn_transaction_is_cut_when_the_open_resumes_at_an_anchor() -> varlit::Result<()> {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = Single::spec().with_anchors(varlit::AnchorPolicy::every(13, true));
+    let path = dir.path().join("anchored-torn");
+    let mut expected = Vec::new();
+    let torn = {
+        let mut file = VarlitFile::create(spec, &path)?;
+        for round in 0..60u64 {
+            for i in 0..3 {
+                let tag = round * 10 + i;
+                file.push(&sample(tag))?;
+                expected.push(tag);
+            }
+            file.commit_durable()?;
+        }
+        let mut last = Vec::new();
+        for tag in 1_000..1_003 {
+            last.push(file.push_info(&sample(tag))?.payload_offset);
+        }
+        file.commit_durable()?;
+        last
+    };
+    // `tear` writes at a physical offset; translate around the anchors.
+    let layout = VarlitFile::open_readonly_scan(spec, &path)?
+        .anchor_layout()
+        .expect("an anchored file");
+    tear(&path, layout.physical(torn[1]).unwrap());
+    let len_before = std::fs::metadata(&path).unwrap().len();
+
+    let file = VarlitFile::open_readonly(spec, &path)?;
+    assert_eq!(tags(&file)?, expected, "read-only open");
+    drop(file);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), len_before);
+
+    let mut writer = VarlitFile::open(spec, &path)?;
+    assert_eq!(tags(&writer)?, expected, "writer open");
+    assert!(std::fs::metadata(&path).unwrap().len() < len_before);
+    writer.push(&sample(2_000))?;
+    writer.commit_durable()?;
+    drop(writer);
+    expected.push(2_000);
+    let file = VarlitFile::open_readonly(spec, &path)?;
+    assert_eq!(tags(&file)?, expected, "after recovery");
+    Ok(())
+}

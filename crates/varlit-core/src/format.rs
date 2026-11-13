@@ -582,7 +582,11 @@ impl ReadLimits {
     pub const STANDARD: Self = Self {
         max_file_len: ReadLimit::Finite(u64::MAX),
         max_records: ReadLimit::Finite(u64::MAX),
-        max_index_bytes: ReadLimit::Finite(u64::MAX),
+        // Held memory is finite by default: a record list or map built in
+        // memory may not exceed 1 GiB. Record and segment counts and scan
+        // bytes stay work counters — every walk is bounded by the file
+        // itself, and capping them would refuse a large log, not a resource.
+        max_index_bytes: ReadLimit::Finite(1024 * 1024 * 1024),
         max_scan_bytes: ReadLimit::Finite(u64::MAX),
         max_record_payload_len: ReadLimit::Finite(64 * 1024 * 1024),
         max_logical_payload_len: ReadLimit::Finite(256 * 1024 * 1024),
@@ -599,7 +603,7 @@ impl ReadLimits {
         max_file_header_extension_len: ReadLimit::Finite(
             crate::native_layout::DEFAULT_MAX_FILE_HEADER_EXTENSION_LEN,
         ),
-        max_keyed_tail_bytes: ReadLimit::Finite(u64::MAX),
+        max_keyed_tail_bytes: ReadLimit::Finite(256 * 1024 * 1024),
         // Deliberately `Missing` rather than a concrete policy: `STANDARD` is
         // what `resolve` overlays onto, so a concrete value here would be
         // indistinguishable from a caller's declaration and could not be
@@ -672,13 +676,6 @@ impl ReadLimits {
         self.matrix_generation_cache_bytes = ReadLimit::Finite(bytes);
         self
     }
-    pub(crate) fn matrix_generation_cache_budget(self) -> usize {
-        let bytes = match self.matrix_generation_cache_bytes {
-            ReadLimit::Finite(n) => n,
-            _ => 2 * 1024 * 1024,
-        };
-        usize::try_from(bytes).unwrap_or(usize::MAX)
-    }
 
     /// Sets each matrix directory's original-page cache budget (default 1 MiB).
     /// Zero disables it. Cache admission charges 4096 bytes plus a conservative
@@ -687,18 +684,6 @@ impl ReadLimits {
     pub const fn with_matrix_directory_cache_bytes(mut self, bytes: u64) -> Self {
         self.matrix_directory_cache_bytes = ReadLimit::Finite(bytes);
         self
-    }
-
-    pub(crate) fn matrix_directory_budget(self) -> usize {
-        let bytes = match self.matrix_directory_cache_bytes {
-            ReadLimit::Finite(n) => n,
-            _ => 1024 * 1024,
-        };
-        let bytes = match self.resolve().max_matrix_bitmap_bytes {
-            ReadLimit::Finite(n) => bytes.min(n),
-            _ => bytes,
-        };
-        usize::try_from(bytes).unwrap_or(usize::MAX)
     }
 
     /// Declares the matrix commit-metadata residency policy (see
@@ -841,55 +826,6 @@ impl ReadLimits {
                 }
             }
             ReadLimit::Missing | ReadLimit::TrustedUnbounded => default,
-        }
-    }
-
-    /// Resolves the residency policy for one open and admits its cache.
-    ///
-    /// The two ways of arriving at a cache differ on purpose: a *declared* one is
-    /// checked against `max_matrix_bitmap_bytes` and refuses the open when it
-    /// exceeds it, while the *derived* default is clamped by
-    /// [`Self::default_matrix_metadata_cache_bytes`] and can never be the reason
-    /// an open fails.
-    pub(crate) fn admit_matrix_metadata_residency(self) -> Result<u64> {
-        match self.effective_matrix_metadata_residency() {
-            MatrixMetadataResidency::Lazy { cache_bytes } => {
-                if let MatrixMetadataResidency::Lazy { .. } = self.matrix_metadata_residency {
-                    self.check(ReadLimitKey::MatrixBitmapBytes, cache_bytes)?;
-                }
-                Ok(cache_bytes)
-            }
-            // `Missing` cannot survive `effective_matrix_metadata_residency`,
-            // which is the single resolution point for the unset state; a
-            // default that named it is rejected at compile time. Residency has
-            // no other shape: the eager variant was removed in 0.5.0 because
-            // what callers wanted from it — verification — became its own
-            // policy, and keeping it would have been a second residency
-            // implementation with no reason to exist.
-            MatrixMetadataResidency::Missing => Ok(self.default_matrix_metadata_cache_bytes()),
-        }
-    }
-
-    /// Resolves the verification policy for one open: `true` when the streaming
-    /// verification pass runs while opening.
-    ///
-    /// The single admission point, matching
-    /// [`Self::admit_matrix_metadata_residency`]. There is nothing to charge — a
-    /// pass retains one 4096-byte page buffer, which is the one-page floor the
-    /// demand cache already has — so this admits rather than checks, and states
-    /// that fact in one place instead of at each call site.
-    pub(crate) fn admit_matrix_metadata_verification(self) -> bool {
-        if self.read_validation.is_some_and(|p| !p.structure) {
-            return false;
-        }
-        match self.effective_matrix_metadata_verification() {
-            MatrixMetadataVerification::AtOpen => true,
-            MatrixMetadataVerification::OnDemand => false,
-            // Unreachable through `effective_…`, which is the single resolution
-            // point; a default that named it is rejected at compile time. Fail
-            // *towards* verification, because the cost of a needless pass is
-            // bytes read and the cost of a missed one is silence.
-            MatrixMetadataVerification::Missing => true,
         }
     }
 
@@ -1271,6 +1207,47 @@ pub struct MatrixBlockDescriptor {
     pub dimensions: [&'static str; 2],
     pub category: &'static str,
     pub slot_stride: u64,
+    /// `[rows, cols]` of the tiles this block's cells are stored in: the unit
+    /// a cell lives in, is allocated with, and is read back with. `[0, 0]`
+    /// asks for [`matrix_default_tile`] of the slot stride.
+    pub tile: [u64; 2],
+}
+
+impl MatrixBlockDescriptor {
+    /// The tile shape in effect: the declared one, or the default for the
+    /// slot stride when none was declared.
+    pub const fn effective_tile(&self) -> [u64; 2] {
+        if self.tile[0] == 0 && self.tile[1] == 0 {
+            matrix_default_tile(self.slot_stride)
+        } else {
+            self.tile
+        }
+    }
+}
+
+/// Bytes a tile of a matrix block aims for when its shape is not declared.
+pub const MATRIX_DEFAULT_TILE_BYTES: u64 = 64 * 1024;
+/// The most cells one tile holds.
+pub const MATRIX_MAX_TILE_CELLS: u64 = 1 << 20;
+/// The most bytes one tile's record holds.
+pub const MATRIX_MAX_TILE_BYTES: u64 = 64 << 20;
+
+/// The tile shape a block of `slot_stride` gets when it declares none: as
+/// many cells as fit [`MATRIX_DEFAULT_TILE_BYTES`] (a power of two, at least
+/// one), arranged as close to square as powers of two allow, wider than tall.
+pub const fn matrix_default_tile(slot_stride: u64) -> [u64; 2] {
+    // Each slot carries its checksum.
+    let per_cell = slot_stride.saturating_add(4);
+    let fit = MATRIX_DEFAULT_TILE_BYTES / if per_cell == 0 { 1 } else { per_cell };
+    let cells = if fit <= 1 {
+        1
+    } else {
+        // The largest power of two not above `fit`.
+        1u64 << (63 - fit.leading_zeros())
+    };
+    let log = cells.trailing_zeros();
+    let cols = 1u64 << log.div_ceil(2);
+    [cells / cols, cols]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2313,6 +2290,10 @@ pub struct FormatSpec {
     pub growing_matrix: Option<GrowingMatrixDimension>,
     /// How a chunk's slot regions are compressed, if at all.
     pub chunk_compression: Option<VariableCompression>,
+    /// Bytes of the write-ahead ring a new matrix file reserves; `None` for
+    /// the default (16 MiB). A reader may fall behind by as many
+    /// publications as fit in it before its snapshot expires.
+    pub matrix_ring_bytes: Option<u64>,
     /// Per-block schema identity of the implementations backing
     /// [`FormatSpec::blocks`], as `(block_id, declared endian override,
     /// keyedness, generated schema fingerprint)` tuples.
@@ -2345,6 +2326,10 @@ pub struct FormatSpec {
     /// matrix recovery report contains `Fatal` findings. Defaults to false:
     /// safe accessors fail closed with [`Error::MatrixFatalCorruption`].
     pub matrix_fatal_forensics: bool,
+    /// Whether files this spec creates carry fixed-offset anchors. Not part of
+    /// the schema: a file's own header says whether it is anchored, and that is
+    /// how it is read and appended to. See [`crate::AnchorPolicy`].
+    pub anchors: crate::AnchorPolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2428,11 +2413,29 @@ impl FormatSpec {
             matrix_aux: &[],
             growing_matrix: None,
             chunk_compression: None,
+            matrix_ring_bytes: None,
             block_identities: &[],
             layout: LayoutSpec::varlit_native(),
             read_limits: ReadLimits::MISSING,
             matrix_fatal_forensics: false,
+            anchors: crate::AnchorPolicy::DEFAULT,
         }
+    }
+
+    /// The anchors files of this spec are created with: its policy, except
+    /// that a matrix format has none. Matrix cells are addressed by
+    /// arithmetic already, and records after the matrix region are found
+    /// through the chunk directory, so anchors would buy nothing there; and
+    /// without them an anchored file's anchors always count from the end of
+    /// its header, which the header alone determines.
+    pub const fn effective_anchors(&self) -> crate::AnchorPolicy {
+        self.anchors
+    }
+
+    /// Sets whether files this spec creates carry anchors.
+    pub const fn with_anchors(mut self, anchors: crate::AnchorPolicy) -> Self {
+        self.anchors = anchors;
+        self
     }
 
     pub const fn with_extension(mut self, extension: Option<&'static str>) -> Self {
@@ -2583,6 +2586,18 @@ impl FormatSpec {
     ) -> Self {
         self.chunk_compression = compression;
         self
+    }
+
+    /// Reserves `bytes` of write-ahead ring in new matrix files. A reader can
+    /// keep a snapshot across as many publications as fit in it.
+    pub const fn with_matrix_ring_bytes(mut self, bytes: u64) -> Self {
+        self.matrix_ring_bytes = Some(bytes);
+        self
+    }
+
+    /// The ring size new matrix files get, when declared.
+    pub const fn matrix_ring_bytes(&self) -> Option<u64> {
+        self.matrix_ring_bytes
     }
 
     /// Rows each chunk covers, or `None` when no dimension grows.
@@ -3167,12 +3182,13 @@ impl FormatSpec {
             }
             for block in self.matrix_blocks {
                 output.push_str(&format!(
-                    "  block {} dims [{}, {}] category {} stride {}\n",
+                    "  block {} dims [{}, {}] category {} stride {} tile {:?}\n",
                     block.block_id,
                     block.dimensions[0],
                     block.dimensions[1],
                     block.category,
-                    block.slot_stride
+                    block.slot_stride,
+                    block.effective_tile()
                 ));
             }
             for aux in self.matrix_aux {
@@ -3259,6 +3275,12 @@ impl FormatSpec {
             hash.write_str(block.dimensions[1]);
             hash.write_str(block.category);
             hash.write_bytes(&block.slot_stride.to_le_bytes());
+            // Tiles decide where every cell lives: a reader assuming another
+            // shape would read other cells' bytes.
+            let tile = block.effective_tile();
+            hash.write_bytes(b"matrix-tile-v1");
+            hash.write_bytes(&tile[0].to_le_bytes());
+            hash.write_bytes(&tile[1].to_le_bytes());
         }
         for aux in self.matrix_aux {
             hash.write_str(aux.name);
@@ -3463,30 +3485,10 @@ impl FormatSpec {
                 "header_tails requires block_offset_chain",
             ));
         }
-        // The matrix creation nonce and the matrix layout header sit at fixed
-        // offsets *after* the file header, so a header that grew by a tail
-        // region moves both. Every consumer of those two offsets has not been
-        // walked, so this refuses rather than guesses; lifting it is a matter
-        // of establishing that they are all derived from `header_len` and none
-        // is a stored constant.
-        if self.index_policy.header_tails && self.has_matrix_blocks() {
-            return Err(Error::InvalidFormatSpec(
-                "header_tails is not supported for a format declaring matrix blocks",
-            ));
-        }
-
         // The editable header region, validated. Everything here is refused
         // rather than approximated, because each one is a way for the region to
         // exist while meaning nothing.
         if self.header_slots.is_declared() {
-            // Same reason as the tail region directly above: the matrix
-            // creation nonce and the matrix layout sit at fixed offsets after
-            // the file header, and a reserved region moves both.
-            if self.has_matrix_blocks() {
-                return Err(Error::InvalidFormatSpec(
-                    "header_slots is not supported for a format declaring matrix blocks",
-                ));
-            }
             // A custom physical layout does not have varlit's file header at
             // all, so there is nothing to reserve the region inside.
             if !self.layout.is_varlit_native_default() {
@@ -3943,6 +3945,19 @@ impl FormatSpec {
                     "matrix slot_stride must be non-zero",
                 ));
             }
+            let [tile_rows, tile_cols] = block.effective_tile();
+            let tile_cells = tile_rows.checked_mul(tile_cols);
+            if tile_rows == 0
+                || tile_cols == 0
+                || tile_cells.is_none_or(|cells| cells > MATRIX_MAX_TILE_CELLS)
+                || tile_cells
+                    .and_then(|cells| cells.checked_mul(block.slot_stride.saturating_add(4)))
+                    .is_none_or(|bytes| bytes > MATRIX_MAX_TILE_BYTES)
+            {
+                return Err(Error::InvalidFormatSpec(
+                    "matrix tile must be non-empty and at most 2^20 cells and 64 MiB",
+                ));
+            }
             let descriptor = self.block(block.block_id).ok_or(Error::InvalidFormatSpec(
                 "matrix block id is not registered",
             ))?;
@@ -4024,6 +4039,12 @@ impl FormatSpec {
         if self.chunk_compression.is_some() && self.growing_matrix.is_none() {
             return Err(Error::InvalidFormatSpec(
                 "chunk compression requires a growing matrix dimension",
+            ));
+        }
+        // Tiles are rewritten in place, which a compressed tile cannot be.
+        if self.chunk_compression.is_some() {
+            return Err(Error::InvalidFormatSpec(
+                "matrix tiles are rewritten in place and cannot be compressed",
             ));
         }
         if !self.matrix_aux.is_empty() && self.matrix_blocks.is_empty() {
@@ -4854,7 +4875,14 @@ mod read_limit_tests {
         assert_eq!(resolved.max_scan_bytes, ReadLimit::Finite(u64::MAX));
         assert_eq!(resolved.max_records, ReadLimit::Finite(u64::MAX));
         assert_eq!(resolved.max_segments, ReadLimit::Finite(u64::MAX));
-        assert_eq!(resolved.max_index_bytes, ReadLimit::Finite(u64::MAX));
+        assert_eq!(
+            resolved.max_index_bytes,
+            ReadLimit::Finite(1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            resolved.max_keyed_tail_bytes,
+            ReadLimit::Finite(256 * 1024 * 1024)
+        );
         assert_eq!(
             resolved.max_logical_payload_len,
             ReadLimits::STANDARD.max_logical_payload_len
@@ -4977,5 +5005,44 @@ mod read_limit_tests {
         );
         let bounded = base.with_read_limits(ReadLimits::finite_all(1));
         assert_eq!(base.computed_schema_hash(), bounded.computed_schema_hash());
+    }
+}
+
+#[cfg(test)]
+mod matrix_tile_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_tile_fills_about_64_kib_nearly_square() {
+        // 1 KiB cells (+4 checksum bytes): 63 fit, so 32 cells as 4 x 8.
+        assert_eq!(matrix_default_tile(1024), [4, 8]);
+        // 4-byte cells: 8192 fit, 64 x 128.
+        assert_eq!(matrix_default_tile(4), [64, 128]);
+        // A cell larger than the target still gets a tile of one.
+        assert_eq!(matrix_default_tile(1 << 20), [1, 1]);
+        for stride in [1u64, 3, 8, 100, 1000, 4096, 65_532, 65_533] {
+            let [rows, cols] = matrix_default_tile(stride);
+            let cells = rows * cols;
+            assert!(cells.is_power_of_two() && rows <= cols, "stride {stride}");
+            assert!(cells == 1 || cells * (stride + 4) <= MATRIX_DEFAULT_TILE_BYTES);
+            assert!(
+                cells * 2 * (stride + 4) > MATRIX_DEFAULT_TILE_BYTES,
+                "stride {stride}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_tile_is_used_and_zero_means_default() {
+        let mut block = MatrixBlockDescriptor {
+            block_id: 1,
+            dimensions: ["r", "c"],
+            category: "data",
+            slot_stride: 8,
+            tile: [0, 0],
+        };
+        assert_eq!(block.effective_tile(), matrix_default_tile(8));
+        block.tile = [16, 2];
+        assert_eq!(block.effective_tile(), [16, 2]);
     }
 }

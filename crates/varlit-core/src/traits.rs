@@ -109,6 +109,9 @@ pub trait VarlitMatrixBlock: VarlitBlock {
     const DIMENSIONS: [&'static str; 2];
     const CATEGORY: &'static str;
     const SLOT_STRIDE: u64;
+    /// `[rows, cols]` of the tiles this block is stored in. Must equal the
+    /// spec descriptor's effective tile.
+    const TILE: [u64; 2] = crate::format::matrix_default_tile(Self::SLOT_STRIDE);
 }
 
 pub trait VarlitMigration<From, To>

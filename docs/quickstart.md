@@ -8,7 +8,7 @@ still alive. Install Varlit 0.13.0 with the `integrity` feature as shown in the
 ## Write blocks, then read published data
 
 ```rust
-use varlit::{BatchOptions, StreamOptions, varlit_format};
+use varlit::{BatchOptions, StreamOptions, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format Capture {
@@ -42,9 +42,12 @@ fn main() -> varlit::Result<()> {
 
     let reader = Capture::open_stream_reader(path, StreamOptions::default())?;
     let mut samples_read = 0;
-    for (block, frame) in reader.frames()?.enumerate() {
-        let frame = frame?;
-        assert_eq!(frame.first_sample, block as u64 * 4096);
+    let mut cursor = reader.frames()?;
+    let mut frame = Frame::empty(); // decoded into, reused for every record
+    let mut block = 0u64;
+    while cursor.next_into(&mut frame)? {
+        assert_eq!(frame.first_sample, block * 4096);
+        block += 1;
         assert_eq!(frame.samples.len(), 4096);
         assert!(frame.samples.iter().enumerate().all(|(i, &v)| v == i as u32));
         samples_read += frame.samples.len();

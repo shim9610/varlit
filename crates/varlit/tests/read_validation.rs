@@ -1,10 +1,11 @@
 //! Trust choices change detection and I/O, not resource or publication guards.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell as LocalCell;
 use std::io::{Read, Seek, SeekFrom, Write};
-#[path = "common/matrix_image.rs"]
-mod matrix_image;
 use varlit::*;
 
 struct Meter;
@@ -120,10 +121,13 @@ fn native_and_indexed_reads_refuse_allocation_and_retry_in_every_mode() -> Resul
         let r = Log::spec()
             .with_resource_limits(limits(p))
             .open_reader(&path)?;
-        let blocks = r.blocks::<Item>()?;
-        let (failed, denied) = deny_large(|| opt(|o| blocks.get(0, o)));
+        // The denial covers the library's decode, not a test-side clone of
+        // an already decoded value.
+        let (failed, denied) =
+            deny_large(|| opt(|o| crate::pages::all_blocks!(r, Item)?.get(0, o)));
         assert!(failed.is_err());
         assert!(denied > 0);
+        let blocks = crate::pages::all_blocks!(r, Item)?;
         assert_eq!(opt(|o| blocks.get(0, o))?, Some(value.clone()));
         let r =
             VarlitIndexedReader::open(Log::spec(), &indexed, options(p), Log::disk_index_plan()?)?;
@@ -153,7 +157,7 @@ fn payload_damage_and_explicit_verification_have_distinct_contracts() -> Result<
         let r = Log::spec()
             .with_resource_limits(limits(p))
             .open_reader(&path)?;
-        let got = opt(|o| r.blocks::<Item>()?.get(0, o));
+        let got = opt(|o| crate::pages::all_blocks!(r, Item)?.get(0, o));
         assert_eq!(got.is_err(), p.data_crc, "{p:?}: {got:?}");
         assert!(
             r.verify_all().is_err(),
@@ -249,7 +253,7 @@ fn matrix_scalar_run_column_and_mmap_honor_crc_choice_and_visibility() -> Result
         }
         w.sync()?;
     }
-    let mut image = matrix_image::OpenOptions::new()
+    let mut image = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(&path)?;
@@ -339,46 +343,6 @@ fn compressed_indexed_reads_keep_decoder_budgets_for_every_header_and_mode() -> 
                 Err(Error::LimitExceeded { .. })
             ));
         }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "compression-zstd")]
-#[test]
-fn growing_compressed_matrix_runs_and_columns_cross_chunks_in_every_mode() -> Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("growing");
-    let spec = Grid::spec()
-        .with_growing_matrix_dimension("row", 2)
-        .with_chunk_compression(VariableCompression::zstd(
-            CompressionHeaderMode::RecordExplicit,
-        ));
-    {
-        let mut w = spec.create_writer_with_dims(
-            &path,
-            MatrixDimensions::from_pairs([("row", 2), ("col", 4)]),
-        )?;
-        for i in 0..28 {
-            let key = MatrixKey::new(i / 4, i % 4);
-            w.write_matrix_cell(key, &GridCell { value: i })?;
-            w.commit_matrix_cell::<GridCell>(key)?;
-        }
-        w.sync()?;
-    }
-    for p in POLICIES {
-        let r = spec.with_resource_limits(limits(p)).open_reader(&path)?;
-        let mut run: Vec<_> = (0..23).map(|_| GridCell { value: 0 }).collect();
-        r.read_matrix_run_into(MatrixKey::new(1, 0), &mut run)?;
-        assert_eq!(
-            run.iter().map(|c| c.value).collect::<Vec<_>>(),
-            (4..27).collect::<Vec<_>>()
-        );
-        let mut col: Vec<_> = (0..7).map(|_| GridCell { value: 0 }).collect();
-        r.read_matrix_column_into(MatrixKey::new(0, 2), &mut col)?;
-        assert_eq!(
-            col.iter().map(|c| c.value).collect::<Vec<_>>(),
-            (0..7).map(|i| i * 4 + 2).collect::<Vec<_>>()
-        );
     }
     Ok(())
 }

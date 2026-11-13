@@ -53,6 +53,8 @@
 // The fixture declares `integrity: crc32`, so without the `integrity` feature
 // it is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{FormatSpec, VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -485,93 +487,6 @@ fn the_region_requires_the_chain_it_hands_out_entry_points_to() {
 
 /// The region and a matrix declaration are refused together, deliberately.
 ///
-/// The matrix creation nonce and the matrix layout header sit at fixed offsets
-/// *after* the file header, so a header that grew by a tail region moves both.
-/// Not every consumer of those two offsets has been walked, so this refuses
-/// rather than guesses. Lifting it means establishing that all of them derive
-/// from `header_len` and none is a stored constant — and then this test is the
-/// one to delete.
-mod matrix_refusal {
-    use varlit::{
-        BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
-        MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
-        ReadLimits, VarlitBlock, VarlitMatrixBlock,
-    };
-
-    #[derive(Clone, Debug, PartialEq, Eq, VarlitBlock)]
-    #[varlit(id = 92, version = 1, kind = "matrix")]
-    struct Cell {
-        value: u32,
-    }
-
-    impl VarlitMatrixBlock for Cell {
-        const DIMENSIONS: [&'static str; 2] = ["scan", "ch"];
-        const CATEGORY: &'static str = "cells";
-        const SLOT_STRIDE: u64 = 4;
-    }
-
-    static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
-        id: Cell::ID,
-        name: "Cell",
-        version: Cell::VERSION,
-        kind: BlockKind::Matrix,
-        fields: &[],
-    }];
-    static DIMS: &[MatrixDimensionDescriptor] = &[
-        MatrixDimensionDescriptor { name: "scan" },
-        MatrixDimensionDescriptor { name: "ch" },
-    ];
-    static COMMITS: &[MatrixCommitDescriptor] = &[MatrixCommitDescriptor {
-        name: Cell::CATEGORY,
-        kind: MatrixCommitKind::Cell,
-    }];
-    static MATRIX_BLOCKS: &[MatrixBlockDescriptor] = &[MatrixBlockDescriptor {
-        block_id: Cell::ID,
-        dimensions: Cell::DIMENSIONS,
-        category: Cell::CATEGORY,
-        slot_stride: Cell::SLOT_STRIDE,
-    }];
-
-    fn matrix_spec(header_tails: bool) -> FormatSpec {
-        FormatSpec::new(
-            b"HDRTMTX0",
-            1,
-            Endian::Little,
-            0,
-            IndexPolicy::BlockOffsetChain.with_header_tails(header_tails),
-            IntegrityPolicy::Crc32,
-            varlit::RecoveryPolicy::Strict,
-            varlit::ManifestPolicy::None,
-            BLOCKS,
-        )
-        .with_block_identities(&[Cell::IDENTITY])
-        .with_read_limits(ReadLimits::finite_all(u64::MAX))
-        .with_matrix_spec(DIMS, COMMITS, MATRIX_BLOCKS)
-    }
-
-    #[test]
-    fn a_matrix_format_may_not_declare_the_region() {
-        // The same declaration without the region validates, so the refusal
-        // below is about the combination and not about the fixture.
-        matrix_spec(false)
-            .validate()
-            .expect("the fixture itself is a valid matrix format");
-
-        let error = matrix_spec(true)
-            .validate()
-            .expect_err("the region and a matrix declaration are refused together");
-        assert!(
-            matches!(
-                error,
-                Error::InvalidFormatSpec(
-                    "header_tails is not supported for a format declaring matrix blocks"
-                )
-            ),
-            "{error:?}",
-        );
-    }
-}
-
 /// The region needs a checksum, so it needs the policy that provides one.
 ///
 /// The failure mode this guards against is unlike every other structure's: the
@@ -878,8 +793,7 @@ fn commit_offset_must_name_a_commit_marker() -> varlit::Result<()> {
     drop(writer);
     assert_eq!(
         uncommitted
-            + varlit::VarlitFile::open_readonly(on_spec(), &path)?
-                .index_entries()
+            + crate::pages::all_entries!(varlit::VarlitFile::open_readonly(on_spec(), &path)?)
                 .last()
                 .map(|_| 0)
                 .unwrap_or(0),
@@ -1063,8 +977,7 @@ fn a_writer_resumed_from_the_header_appends_a_chain_the_scan_agrees_with() -> va
 
     // The chain, walked from the tail the scan finds, must reach every Sample.
     let scanned = varlit::VarlitFile::open_readonly(on_spec(), &path)?;
-    let samples = scanned
-        .index_entries()
+    let samples = crate::pages::all_entries!(scanned)
         .iter()
         .filter(|entry| entry.block_id == Sample::ID)
         .count();
@@ -1095,13 +1008,13 @@ fn a_header_tails_file_can_still_be_mapped() -> varlit::Result<()> {
     // SAFETY: nothing else holds this file open for writing for the duration.
     let mapped = unsafe { file.mmap_payloads()? };
     let mut compared = 0;
-    for entry in file.index_entries() {
+    for entry in crate::pages::all_entries!(file) {
         if entry.block_id != Sample::ID {
             continue;
         }
         assert_eq!(
             mapped.payload_window(&entry)?,
-            entry.read_payload(&path)?,
+            TailFormatOn::read_payload(&entry, &path)?,
             "the mapped window must be the payload the indexed read returns",
         );
         compared += 1;
@@ -1348,14 +1261,14 @@ fn an_explicit_marker_format_resumes_from_the_header() -> varlit::Result<()> {
 /// resuming a very large file cheaply and then mapping it.
 #[cfg(feature = "mmap")]
 #[test]
-fn a_lazily_opened_handle_refuses_to_map_rather_than_answering_empty() -> varlit::Result<()> {
+fn a_lazily_opened_handle_maps_every_record_by_walking_the_file() -> varlit::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("lazy-map.varlit");
     write_samples(on_spec(), &path, 60)?;
 
     // The premise: the file is not empty, and the scanning handle maps it.
     let scanned = varlit::VarlitFile::open_readonly(on_spec(), &path)?;
-    let records = scanned.index_entries().len();
+    let records = crate::pages::all_entries!(scanned).len();
     assert!(records > 0);
     let mapped = unsafe { scanned.mmap_payloads()? };
     assert_eq!(mapped.len(), records);
@@ -1365,17 +1278,10 @@ fn a_lazily_opened_handle_refuses_to_map_rather_than_answering_empty() -> varlit
     let (lazy, source) = varlit::VarlitFile::open_readonly_lazy_with_report(on_spec(), &path)?;
     assert_eq!(source, varlit::LazyOpenSource::HeaderTails);
     // SAFETY: nothing else holds this file open for writing.
-    let outcome = unsafe { lazy.mmap_payloads() };
-    assert!(
-        matches!(
-            outcome,
-            Err(varlit::Error::NoResidentDirectory {
-                operation: "mmap_payloads"
-            })
-        ),
-        "a handle with no directory must say so: {:?}",
-        outcome.map(|mapped| mapped.len()),
-    );
+    // No kept list, so the mapping walks the file; it maps every record the
+    // scanning handle did, and never answers "empty".
+    let mapped = unsafe { lazy.mmap_payloads()? };
+    assert_eq!(mapped.len(), records);
     Ok(())
 }
 
@@ -1418,8 +1324,7 @@ fn a_non_resident_blocks_tail_is_in_the_region() -> varlit::Result<()> {
     // The premise: `Note` really is absent from the resident index.
     let scanned = varlit::VarlitFile::open_readonly(spec, &path)?;
     assert!(
-        !scanned
-            .index_entries()
+        !crate::pages::all_entries!(scanned)
             .iter()
             .any(|entry| entry.block_id == Note::ID),
         "the fixture must declare Note non-resident or this test proves nothing",
@@ -1603,30 +1508,28 @@ mod both_extension_blocks {
     }
 }
 
-/// The region costs one seek per commit point and nothing per record.
+/// The region costs one write per commit point and nothing per record.
 ///
-/// The append hot path is the thing this option must not touch. The write is an
-/// overwrite of a fixed extent inside the header, so it moves the shared file
-/// offset — which is safe only because `append_record_at_end` re-seeks
-/// `SEEK_END` every call and nothing caches a cursor. That safety is what makes
-/// the cost question the interesting one: the write must happen per *commit
-/// point*, never per record.
+/// The append hot path is the thing this option must not touch. The write is a
+/// positional overwrite of a fixed extent inside the header (which precedes
+/// every anchor), so it moves no shared offset; the cost question is what is
+/// left: the write must happen per *commit point*, never per record.
 ///
-/// `take_record_file_seeks` counts exactly the seeks `RecordFile` performs, so
-/// the assertion is a difference between two runs that differ only in record
-/// count — a per-record cost would show up as the difference, and a constant
-/// one cancels.
+/// `take_header_region_writes` counts exactly the region writes `RecordFile`
+/// performs, so the assertion is a difference between two runs that differ only
+/// in record count — a per-record cost would show up as the difference, and a
+/// constant one cancels.
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
-fn the_region_write_is_one_seek_per_commit_point() -> varlit::Result<()> {
-    fn seeks(
+fn the_region_write_is_one_write_per_commit_point() -> varlit::Result<()> {
+    fn writes(
         path: &std::path::Path,
         spec: FormatSpec,
         records: u32,
         flushes: u32,
     ) -> varlit::Result<u64> {
         let mut writer = spec.create(path)?;
-        let _ = varlit::VarlitFile::take_record_file_seeks();
+        let _ = varlit::VarlitFile::take_header_region_writes();
         for value in 0..records {
             writer.push(&Sample { value })?;
             if flushes > 0 && (value + 1) % (records / flushes) == 0 {
@@ -1635,15 +1538,15 @@ fn the_region_write_is_one_seek_per_commit_point() -> varlit::Result<()> {
         }
         writer.flush()?;
         drop(writer);
-        Ok(varlit::VarlitFile::take_record_file_seeks())
+        Ok(varlit::VarlitFile::take_header_region_writes())
     }
 
     let directory = tempfile::tempdir()?;
     // Same number of commit points, ten times the records.
-    let small_on = seeks(&directory.path().join("s-on.varlit"), on_spec(), 100, 5)?;
-    let large_on = seeks(&directory.path().join("l-on.varlit"), on_spec(), 1_000, 5)?;
-    let small_off = seeks(&directory.path().join("s-off.varlit"), off_spec(), 100, 5)?;
-    let large_off = seeks(&directory.path().join("l-off.varlit"), off_spec(), 1_000, 5)?;
+    let small_on = writes(&directory.path().join("s-on.varlit"), on_spec(), 100, 5)?;
+    let large_on = writes(&directory.path().join("l-on.varlit"), on_spec(), 1_000, 5)?;
+    let small_off = writes(&directory.path().join("s-off.varlit"), off_spec(), 100, 5)?;
+    let large_off = writes(&directory.path().join("l-off.varlit"), off_spec(), 1_000, 5)?;
 
     // What the option adds, at each size. If the region write had migrated onto
     // the append path these two would differ by the record count.
@@ -1651,12 +1554,14 @@ fn the_region_write_is_one_seek_per_commit_point() -> varlit::Result<()> {
     let added_large = large_on - large_off;
     assert_eq!(
         added_small, added_large,
-        "the region added {added_small} seeks at 100 records and {added_large} at \
+        "the region added {added_small} writes at 100 records and {added_large} at \
          1,000; it is being written per record",
     );
-    // Six commit points — five flushes plus the trailing one — and one seek
-    // each. Pinned, so a second write per commit point has to say so here.
-    assert_eq!(added_small, 6, "one seek per commit point");
+    // Six commit points — five flushes plus the trailing one — and one region
+    // write each. Pinned, so a second write per commit point has to say so
+    // here. (The write is positional now, so it is counted directly rather
+    // than by the seek it used to need.)
+    assert_eq!(added_small, 6, "one region write per commit point");
     Ok(())
 }
 
@@ -2000,7 +1905,7 @@ fn an_in_place_replacement_retires_the_warm_region() -> varlit::Result<()> {
 
     // The replacement really landed, so the test is about a file that changed.
     let scanned = varlit::VarlitFile::open_readonly(on_spec(), &path)?;
-    let samples = scanned.blocks::<Sample>()?;
+    let samples = crate::pages::all_blocks!(scanned, Sample)?;
     let mut sample = Sample::empty();
     assert!(samples.get(0, &mut sample)?, "a Sample");
     assert_eq!(sample.value, 4_242);

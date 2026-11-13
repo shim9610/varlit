@@ -305,6 +305,9 @@ pub(super) struct MatrixAux {
 pub(super) struct MatrixBlockMeta {
     pub(super) dims: Vec<Ident>,
     pub(super) category: Ident,
+    /// `tile = [rows, cols]`: the tile shape the cells of this block are
+    /// stored in. `None` lets the library choose one from the slot stride.
+    pub(super) tile: Option<[u64; 2]>,
 }
 
 pub(super) struct InlineField {
@@ -423,7 +426,12 @@ impl Parse for FormatInput {
                 continue;
             }
             content.parse::<Token![:]>()?;
-            note_format_key(&mut seen_keys, &key)?;
+            // `commit` names two settings: the record commit policy and a
+            // matrix's `cell_bitmap`. Each may be given once, so a format with
+            // both writes `commit:` twice; the duplicate check is per setting.
+            if key != "commit" {
+                note_format_key(&mut seen_keys, &key)?;
+            }
             if key == "magic" {
                 magic = Some(content.parse()?);
             } else if key == "version" {
@@ -457,8 +465,23 @@ impl Parse for FormatInput {
                 index = parse_index_choice(&content)?;
             } else if key == "commit" {
                 match parse_commit_choice(&content)? {
-                    ParsedCommitChoice::Append(choice) => commit = choice,
-                    ParsedCommitChoice::Matrix(choice) => matrix_commit = Some(choice),
+                    ParsedCommitChoice::Append(choice) => {
+                        note_format_key(&mut seen_keys, &key)?;
+                        commit = choice;
+                    }
+                    ParsedCommitChoice::Matrix(choice) => {
+                        note_format_key(
+                            &mut seen_keys,
+                            &Ident::new("commit_cell_bitmap", key.span()),
+                        )
+                        .map_err(|_| {
+                            syn::Error::new_spanned(
+                                &key,
+                                "duplicate varlit_format key \"commit\" (cell_bitmap)",
+                            )
+                        })?;
+                        matrix_commit = Some(choice);
+                    }
                 }
             } else if key == "integrity" {
                 let value: Ident = content.parse()?;
@@ -1144,12 +1167,14 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
     let kind_name = kind_ident.to_string();
     let mut matrix_dims = Vec::new();
     let mut matrix_category = None;
+    let mut matrix_tile: Option<(Ident, [u64; 2])> = None;
     let kind = match kind_name.as_str() {
         "fixed" => InlineBlockKind::Fixed,
         "variable" => InlineBlockKind::Variable,
         "matrix" => InlineBlockKind::Matrix(MatrixBlockMeta {
             dims: Vec::new(),
             category: Ident::new("__varlit_missing_category", kind_ident.span()),
+            tile: None,
         }),
         _ => {
             return Err(syn::Error::new_spanned(
@@ -1249,10 +1274,35 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
             "category" => {
                 matrix_category = Some(meta.parse()?);
             }
+            "tile" => {
+                if matrix_tile.is_some() {
+                    return Err(syn::Error::new_spanned(key, "duplicate tile"));
+                }
+                let inner;
+                bracketed!(inner in meta);
+                let parsed = Punctuated::<LitInt, Token![,]>::parse_terminated(&inner)?;
+                let values = parsed
+                    .iter()
+                    .map(|value| value.base10_parse::<u64>())
+                    .collect::<Result<Vec<_>>>()?;
+                let [rows, cols] = values[..] else {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "tile takes exactly two extents: tile = [rows, cols]",
+                    ));
+                };
+                if rows == 0 || cols == 0 {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "tile extents must be non-zero",
+                    ));
+                }
+                matrix_tile = Some((key, [rows, cols]));
+            }
             _ => {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected id, version, key, key_values, key_domain, key_index, durability, immediate_if, dims, or category",
+                    "expected id, version, key, key_values, key_domain, key_index, durability, immediate_if, dims, category, or tile",
                 ));
             }
         }
@@ -1277,8 +1327,15 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
             dims: matrix_dims,
             category: matrix_category
                 .ok_or_else(|| syn::Error::new_spanned(&name, "missing matrix category"))?,
+            tile: matrix_tile.map(|(_, tile)| tile),
         })
     } else {
+        if let Some((key, _)) = &matrix_tile {
+            return Err(syn::Error::new_spanned(
+                key,
+                "tile is only supported on matrix blocks",
+            ));
+        }
         if !matrix_dims.is_empty() {
             return Err(syn::Error::new_spanned(
                 &name,

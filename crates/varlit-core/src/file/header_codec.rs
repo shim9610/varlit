@@ -732,6 +732,10 @@ pub(super) fn prepare_user_record_payload<'a>(
         u64::try_from(logical_payload.len())
             .map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
     )?;
+    let logical_len = logical_payload.len() as u64;
+    if record_chunks::chunking_applies(spec, kind, logical_len) {
+        return chunked_user_payload(spec, block_id, logical_payload);
+    }
     let Some(compression) = variable_compression_for_block(spec, block_id) else {
         return Ok(uncompressed_user_payload(logical_payload));
     };
@@ -739,7 +743,6 @@ pub(super) fn prepare_user_record_payload<'a>(
         return Ok(uncompressed_user_payload(logical_payload));
     }
 
-    let logical_len = logical_payload.len() as u64;
     if logical_len > compression.max_uncompressed_len {
         return Err(Error::DecompressedLengthLimitExceeded {
             actual: logical_len,
@@ -775,6 +778,50 @@ pub(super) fn prepare_user_record_payload<'a>(
     })
 }
 
+/// A variable payload longer than one chunk, stored chunked: compressed per
+/// chunk when the block's compression policy applies to it (and, with
+/// `only_if_smaller`, pays off), as plain chunks otherwise.
+fn chunked_user_payload(
+    spec: FormatSpec,
+    block_id: u32,
+    logical_payload: &[u8],
+) -> Result<StoredPayload<'static>> {
+    let logical_len = logical_payload.len() as u64;
+    // The chunk header carries the logical length; the record header's hint
+    // stays 0, as an index summary that does not store hints rebuilds it.
+    let hint = 0;
+    let compression = variable_compression_for_block(spec, block_id);
+    if let Some(compression) = compression {
+        if logical_len > compression.max_uncompressed_len {
+            return Err(Error::DecompressedLengthLimitExceeded {
+                actual: logical_len,
+                limit: compression.max_uncompressed_len,
+            });
+        }
+        if logical_len >= compression.min_uncompressed_len {
+            let compressed = record_chunks::encode_chunked(
+                logical_payload,
+                Some((compression.algorithm, compression.level)),
+            )?;
+            let plain_len = logical_len
+                + record_chunks::CHUNK_HEADER_LEN
+                + record_chunks::CHUNK_ENTRY_LEN * logical_len.div_ceil(record_chunks::CHUNK_LEN);
+            if !compression.only_if_smaller || (compressed.len() as u64) < plain_len {
+                return Ok(StoredPayload {
+                    flags: RECORD_FLAG_CHUNKED | RECORD_FLAG_COMPRESSED,
+                    uncompressed_len_hint: hint,
+                    bytes: Cow::Owned(compressed),
+                });
+            }
+        }
+    }
+    Ok(StoredPayload {
+        flags: RECORD_FLAG_CHUNKED,
+        uncompressed_len_hint: hint,
+        bytes: Cow::Owned(record_chunks::encode_chunked(logical_payload, None)?),
+    })
+}
+
 /// The stored form of a payload that is stored exactly as it was handed in.
 ///
 /// Borrows. The bytes are the caller's and are read, not kept: every caller
@@ -795,6 +842,9 @@ pub(super) fn record_logical_len_from_parts(
     uncompressed_len_hint: u32,
     payload: &[u8],
 ) -> Result<u64> {
+    if flags & RECORD_FLAG_CHUNKED != 0 {
+        return Ok(record_chunks::ChunkHeader::decode(payload)?.logical_len);
+    }
     if flags & RECORD_FLAG_COMPRESSED == 0 {
         return u64::try_from(payload.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX });
     }
@@ -831,6 +881,9 @@ pub(super) fn compressed_logical_len(
     physical_payload: &[u8],
 ) -> Result<u64> {
     validate_record_entry(&spec, entry)?;
+    if entry.is_chunked() {
+        return Ok(record_chunks::ChunkHeader::decode(physical_payload)?.logical_len);
+    }
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     match compression.header_mode {
@@ -855,6 +908,12 @@ pub(super) fn decode_record_payload(
         return Ok(physical_payload);
     }
     validate_record_entry(&spec, entry)?;
+    if entry.is_chunked() {
+        let max = variable_compression_for_block(spec, entry.block_id)
+            .filter(|_| entry.flags & RECORD_FLAG_COMPRESSED != 0)
+            .map_or(u64::MAX, |compression| compression.max_uncompressed_len);
+        return record_chunks::decode_chunked(&physical_payload, max);
+    }
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     let (algorithm, expected_len, compressed_payload) = match compression.header_mode {
@@ -979,6 +1038,12 @@ pub(super) fn validate_record_entry(spec: &FormatSpec, entry: &RecordIndexEntry)
     if unknown_flags != 0 {
         return Err(Error::UnknownRecordFlags(unknown_flags));
     }
+    // Only matrix storage may leave its payload out of the record checksum.
+    if (entry.flags & RECORD_FLAG_IN_PLACE != 0) != (entry.block_id == MATRIX_TILE_BLOCK_ID) {
+        return Err(Error::InvalidCanonicalEncoding(
+            "in-place record flag disagrees with block id",
+        ));
+    }
     if entry.block_id >= RESERVED_BLOCK_ID_START || entry.flags & RECORD_FLAG_INTERNAL != 0 {
         validate_internal_record_entry(entry)?;
     }
@@ -1002,6 +1067,10 @@ fn validate_compressed_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) 
         .ok_or(Error::UnregisteredBlock(entry.block_id))?;
     if descriptor.kind != BlockKind::Variable {
         return Err(Error::InvalidCompressionHeader);
+    }
+    if entry.flags & RECORD_FLAG_CHUNKED != 0 && entry.flags & RECORD_FLAG_COMPRESSED == 0 {
+        // Plain chunks: a variable record of any format.
+        return Ok(());
     }
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
@@ -1031,6 +1100,7 @@ fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
             | SEGMENT_BLOCK_ID
             | MATRIX_CHUNK_BLOCK_ID
             | OPEN_DIGEST_BLOCK_ID => entry.block_version == 1,
+            MATRIX_TILE_BLOCK_ID => (1..=4).contains(&entry.block_version),
             _ => true, // Preserve unknown internal extensions without interpreting them.
         };
         if !supported {

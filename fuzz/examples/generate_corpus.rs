@@ -40,8 +40,9 @@ fn generate_native(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     // A valid container with damaged payload CRC reaches the on-demand read
     // paths immediately. Random bytes almost always stop at the file header.
     let reader = FuzzNativeFormat::open_reader(&path)?.into_inner();
-    let payload_offset = reader
-        .index_entries()
+    let mut entries = vec![varlit::RecordIndexEntry::default(); 64];
+    let page = reader.index_entries(&mut entries)?;
+    let payload_offset = entries[..page.filled]
         .iter()
         .find(|entry| entry.block_id == 1)
         .expect("the native seed contains FuzzPoint")

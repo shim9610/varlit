@@ -1,9 +1,11 @@
 use std::fs::remove_file;
+#[path = "support/pages.rs"]
+mod pages;
 use std::path::PathBuf;
 
 use varlit::{
-    BlockVec, CommitPolicy, IndexPolicy, KeyedBlockVec, TransactionMarkerMode, VarlitBlock,
-    VarlitEmpty, VarlitKeyedBlock, varlit_format,
+    CommitPolicy, IndexPolicy, KeyedBlockVec, TransactionMarkerMode, VarlitBlock, VarlitEmpty,
+    VarlitKeyedBlock, varlit_format,
 };
 
 /// Owned-result shim over the caller-owned-output `KeyedBlockVec::get`.
@@ -17,8 +19,8 @@ where
 }
 
 /// Owned-result shim over the caller-owned-output `BlockVec::get`.
-fn get_at<T: VarlitBlock + VarlitEmpty>(
-    blocks: &BlockVec<T>,
+fn get_at<T: VarlitBlock + VarlitEmpty + Clone>(
+    blocks: &crate::pages::Blocks<T>,
     index: usize,
 ) -> varlit::Result<Option<T>> {
     let mut out = T::empty();
@@ -129,7 +131,7 @@ fn tdms_data_model_reader_writer_can_be_built_on_public_api() -> varlit::Result<
 
     let reader = TdmsModelFormat::open_reader(&path)?;
 
-    let segments = reader.tdms_segments()?;
+    let segments = crate::pages::all_generated!(reader, tdms_segments, tdms_segments_from)?;
     assert_eq!(segments.len(), 2);
     assert_eq!(
         get_at(&segments, 0)?,

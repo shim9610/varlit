@@ -25,6 +25,7 @@ pub const REQUIRED_POINTS: &[&str] = &[
     "checkpoint.head_prefix",
     "checkpoint.head_write",
     "checkpoint.head_sync",
+    "checkpoint.body_sync",
     "generation.commit",
     "append.native_chunk_write",
     "append.sidecar_batch_commit",

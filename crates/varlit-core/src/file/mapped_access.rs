@@ -47,22 +47,47 @@ impl VarlitFile {
             value: entry.payload_len,
         })?;
         let file = self.snapshot.try_clone_file()?;
-        validate_mmap_index_entry(entry, file.metadata()?.len())?;
-        let mmap = if len == 0 {
-            None
+        validate_mmap_index_entry(entry, file.len()?)?;
+        let anchors = self.file.anchor_layout();
+        let split = anchors.is_some_and(|layout| {
+            crate::file::anchored_range_is_split(&layout, entry.payload_offset, entry.payload_len)
+        });
+        let (mmap, owned) = if len == 0 {
+            (None, None)
+        } else if split {
+            // An anchor interrupts this payload: hand out a copy instead.
+            self.spec
+                .read_limits
+                .check(ReadLimitKey::MaterializedBytes, entry.payload_len)?;
+            let mut bytes = mmap_views::AlignedBytes::zeroed(len)?;
+            self.snapshot
+                .read_exact_at(entry.payload_offset, bytes.as_bytes_mut())?;
+            (None, Some(bytes))
         } else {
+            let physical = anchors
+                .map_or(Some(entry.payload_offset), |layout| {
+                    layout.physical(entry.payload_offset)
+                })
+                .ok_or(Error::MmapPayloadOutOfBounds {
+                    offset: entry.payload_offset,
+                    len: entry.payload_len,
+                })?;
             // SAFETY: caller promises external immutability; the checked extent
             // belongs to this pinned file and fits the captured generation.
-            Some(unsafe {
-                memmap2::MmapOptions::new()
-                    .offset(entry.payload_offset)
-                    .len(len)
-                    .map(&file)?
-            })
+            (
+                Some(unsafe {
+                    memmap2::MmapOptions::new()
+                        .offset(physical)
+                        .len(len)
+                        .map(file.raw())?
+                }),
+                None,
+            )
         };
         let window = MmapPayloadWindow {
             offset: entry.payload_offset,
             mmap,
+            owned,
         };
         entry.verify_snapshot_record(self.spec, &self.snapshot, window.as_bytes())?;
         Ok(window)
@@ -100,13 +125,9 @@ impl VarlitFile {
     /// such a format has to be excluded for the mapping's lifetime like any
     /// other; "I call no `replace_*`" is not enough.
     pub unsafe fn mmap_payloads(&self) -> Result<MmapPayloads> {
-        // The index this maps is the *resident* one, and a lazily opened handle
-        // deliberately has none. Without this the answer was `Ok` with zero
-        // entries — `is_empty()` true, every window `None`, no error anywhere.
-        // Refusing by name is what every other directory-needing read does, and
-        // it is the difference between "this handle cannot answer that" and
-        // "there is nothing here".
-        let _ = self.resident_directory("mmap_payloads")?;
+        // The handle's record list when it keeps one, the file walked when it
+        // does not: either way every record of the snapshot is mapped.
+        let list = self.resident_directory("mmap_payloads")?;
         let mapped_len = self.snapshot.len();
         // Start the mapping at the append log, not at byte 0: see
         // `MmapPayloads::base`. Every payload this type hands out lives at or
@@ -118,7 +139,7 @@ impl VarlitFile {
         // The whole-file form charges and requires the captured snapshot's
         // length, as it always has: a truncated file is refused even when it
         // holds no record to map.
-        unsafe { self.map_payload_records(0..self.index.len(), base, span, mapped_len, mapped_len) }
+        unsafe { self.map_payload_records(&list, 0..list.len(), base, span, mapped_len, mapped_len) }
     }
 
     #[cfg(feature = "mmap")]
@@ -150,8 +171,8 @@ impl VarlitFile {
         &self,
         records: std::ops::Range<usize>,
     ) -> Result<MmapPayloads> {
-        let _ = self.resident_directory("mmap_payload_range")?;
-        let total = self.index.len();
+        let list = self.resident_directory("mmap_payload_range")?;
+        let total = list.len();
         if records.start > records.end || records.end > total {
             return Err(Error::MmapRecordRangeOutOfBounds {
                 start: records.start,
@@ -161,11 +182,11 @@ impl VarlitFile {
         }
         if records.is_empty() {
             // SAFETY: nothing is mapped for an empty range.
-            return unsafe { self.map_payload_records(records, 0, 0, 0, 0) };
+            return unsafe { self.map_payload_records(&list, records, 0, 0, 0, 0) };
         }
         let mapped_len = self.snapshot.len();
-        let first = self.index.entry_at(records.start)?;
-        let last = self.index.entry_at(records.end - 1)?;
+        let first = list.record_at(records.start)?;
+        let last = list.record_at(records.end - 1)?;
         validate_mmap_index_entry(&first, mapped_len)?;
         validate_mmap_index_entry(&last, mapped_len)?;
         let span = last
@@ -178,7 +199,7 @@ impl VarlitFile {
         // SAFETY: forwarded verbatim; the caller upholds this function's
         // contract for the mapped records.
         let end = first.record_offset.saturating_add(span);
-        unsafe { self.map_payload_records(records, first.record_offset, span, span, end) }
+        unsafe { self.map_payload_records(&list, records, first.record_offset, span, span, end) }
     }
 
     /// Validates and copies the resident entries at `records`, then maps
@@ -195,6 +216,7 @@ impl VarlitFile {
     #[cfg(feature = "mmap")]
     unsafe fn map_payload_records(
         &self,
+        list: &RecordList<'_>,
         records: std::ops::Range<usize>,
         base: u64,
         span: u64,
@@ -259,7 +281,7 @@ impl VarlitFile {
         // binary-search membership check.
         let mut previous_offset: Option<u64> = None;
         for (position, at) in records.enumerate() {
-            let entry = self.index.entry_at(at)?;
+            let entry = list.record_at(at)?;
             if entry.record_offset < base {
                 return Err(Error::MmapPayloadOutOfBounds {
                     offset: entry.record_offset,
@@ -288,7 +310,7 @@ impl VarlitFile {
             None
         } else {
             let file = self.snapshot.try_clone_file()?;
-            if captured.max(extent_end) > file.metadata()?.len() {
+            if captured.max(extent_end) > file.len()? {
                 return Err(Error::MmapPayloadOutOfBounds {
                     offset: 0,
                     len: captured,
@@ -296,14 +318,57 @@ impl VarlitFile {
             }
             Some(file)
         };
-        let mmap = if let (false, Some(file)) = (map_len == 0, file) {
+        // An anchored file maps the physical extent of the logical one, and
+        // keeps an owned copy of each record an anchor interrupts.
+        let anchors = self.file.anchor_layout();
+        let overflow = || Error::MmapPayloadOutOfBounds {
+            offset: base,
+            len: span,
+        };
+        let (physical_base, physical_len) = match anchors {
+            None => (base, map_len),
+            Some(layout) => {
+                let start = layout.physical(base).ok_or_else(overflow)?;
+                let end = layout.physical_end(extent_end).ok_or_else(overflow)?;
+                (
+                    start,
+                    usize::try_from(end.saturating_sub(start)).map_err(|_| overflow())?,
+                )
+            }
+        };
+        let mut crossing = Vec::new();
+        if let Some(layout) = anchors {
+            let mut copied = 0u64;
+            for entry in &index {
+                let end = entry.checked_physical_end()?;
+                let len = end - entry.record_offset;
+                if !crate::file::anchored_range_is_split(&layout, entry.record_offset, len) {
+                    continue;
+                }
+                copied = copied.saturating_add(len);
+                self.spec
+                    .read_limits
+                    .check(ReadLimitKey::MaterializedBytes, copied)?;
+                let mut bytes = mmap_views::AlignedBytes::zeroed(
+                    usize::try_from(len).map_err(|_| overflow())?,
+                )?;
+                self.snapshot
+                    .read_exact_at(entry.record_offset, bytes.as_bytes_mut())?;
+                crossing.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                    resource: "anchored record copies",
+                    requested: len,
+                })?;
+                crossing.push((entry.record_offset, bytes));
+            }
+        }
+        let mmap = if let (false, Some(file)) = (physical_len == 0, file) {
             // SAFETY: the caller guarantees the mapped extent of the cloned
             // backing object stays immutable and valid for the mapping's life.
             Some(unsafe {
                 memmap2::MmapOptions::new()
-                    .offset(base)
-                    .len(map_len)
-                    .map(&file)?
+                    .offset(physical_base)
+                    .len(physical_len)
+                    .map(file.raw())?
             })
         } else {
             // No record lies in an empty extent, so no accessor can produce a
@@ -317,77 +382,44 @@ impl VarlitFile {
             by_block,
             verified,
             mmap,
+            anchors,
+            physical_base,
+            crossing,
         })
     }
 
     #[cfg(feature = "mmap")]
-    /// Maps one committed matrix cell from this handle's generation.
-    ///
-    /// Charges `MmapLen` for the cell, and `MaterializedBytes` for its COW
-    /// pages only. Bitmap and optional CRC validation use the same generation
-    /// as ordinary cell reads. No complete matrix mapping or copied layout is
-    /// needed. COW payload pages are copied into this private mapping; this is
-    /// not a zero-copy promise for modified cells.
+    /// One committed matrix cell of this handle's generation, checksum
+    /// verified, as an owned window (its bytes are copied: a cell's newest
+    /// value may still be in the write-ahead ring).
     ///
     /// # Safety
     ///
-    /// The caller must keep the underlying file object immutable and valid
-    /// for the entire mapping lifetime, as for [`Self::mmap_matrix`].
+    /// As for [`Self::mmap_matrix`]; this window itself borrows no mapping.
     pub unsafe fn mmap_matrix_cell<T: VarlitMatrixBlock>(
         &self,
         key: MatrixKey,
     ) -> Result<MmapPayloadWindow> {
-        let layout = self.matrix.as_ref().ok_or(Error::MatrixLayoutMissing)?;
-        let pages = self.file.matrix_pages().ok_or(Error::MatrixLayoutMissing)?;
-        let (offset, len, cell_crc) = crate::matrix::cell_payload_parts::<T>(
-            self.spec,
-            layout,
-            key,
-            crate::matrix::BitmapRead::new(pages),
-        )?;
-        self.spec.read_limits.check(ReadLimitKey::MmapLen, len)?;
-        let changed = pages.mapped_window_pages(offset, len)?;
-        self.spec.read_limits.check(
-            ReadLimitKey::MaterializedBytes,
-            changed
-                .checked_mul(4096)
-                .ok_or(Error::InvalidMatrixLayout)?,
-        )?;
-        let file = self.snapshot.try_clone_file()?;
-        validate_mmap_range(offset, len, self.snapshot.len())?;
-        validate_mmap_range(offset, len, file.metadata()?.len())?;
-        let mmap = if len == 0 {
-            None
-        } else {
-            let map_len = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
-            // SAFETY: the caller guarantees the base file's immutability and
-            // lifetime; all COW patches are applied before exposing any slice.
-            let mut mapping = unsafe {
-                memmap2::MmapOptions::new()
-                    .offset(offset)
-                    .len(map_len)
-                    .map_copy(&file)?
-            };
-            pages.patch_mapping_window(offset, &mut mapping)?;
-            Some(mapping.make_read_only()?)
-        };
-        let window = MmapPayloadWindow { offset, mmap };
-        if let Some(cell_crc) = cell_crc {
-            let mut crc = [0; 4];
-            let mut source = pages.read_borrow();
-            source.seek(SeekFrom::Start(cell_crc.offset))?;
-            source.read_exact(&mut crc)?;
-            cell_crc.verify(
-                window.as_bytes(),
-                u32::from_le_bytes(crc),
-                crate::matrix::BitmapRead::new(pages),
-            )?;
-        }
-        Ok(window)
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::MmapLen, T::SLOT_STRIDE)?;
+        let payload = self.matrix_cell_payload::<T>(key)?;
+        let (tiles, source) = self.tiles_read()?;
+        let (geom, tile, slot) = tiles
+            .slot_of(&source, T::ID, key)?
+            .ok_or(Error::MatrixNotCommitted)?;
+        let mut owned = AlignedBytes::zeroed(payload.len())?;
+        owned.as_bytes_mut().copy_from_slice(&payload);
+        Ok(MmapPayloadWindow {
+            offset: tile + geom.slot_at(slot),
+            mmap: None,
+            owned: Some(owned),
+        })
     }
 
     #[cfg(feature = "mmap")]
-    /// Maps the file's matrix regions as a read-only snapshot.
+    /// Maps the file's matrix as a read-only snapshot of this handle's
+    /// generation.
     ///
     /// # Safety
     ///
@@ -396,66 +428,88 @@ impl VarlitFile {
     /// and process for the full lifetime of the returned mapping. The mapping
     /// remains tied to this already-open backing object even if its path is
     /// renamed or replaced.
-    ///
-    /// Once that condition holds, Varlit keeps safe accessors sound by creating
-    /// a read-only mapping from a clone of the existing handle, validating the
-    /// complete matrix extent, checking every requested slot, and tying every
-    /// returned slice to the mapping owner. Use owned reads instead when
-    /// external immutability cannot be guaranteed.
     pub unsafe fn mmap_matrix(&self) -> Result<MmapMatrix> {
-        let layout = self
-            .matrix
-            .as_ref()
-            .ok_or(Error::MatrixLayoutMissing)?
-            .try_clone()?;
-        let mapped_len = self.snapshot.len();
-        // `MmapLen` alone. `FileLen` was checked here too, against the same
-        // value — the mapping's length is the snapshot's length — so it bounded
-        // nothing the line below does not, and it made a caller who declared a
-        // mapping ceiling also have to declare a file ceiling to use it.
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::MmapLen, mapped_len)?;
-        let record_count =
-            u64::try_from(self.index.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "record count",
-            })?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::Records, record_count)?;
-        self.spec.read_limits.check(
-            ReadLimitKey::IndexBytes,
-            index_bytes_for_count(self.index.len())?,
-        )?;
         let file = self.snapshot.try_clone_file()?;
-        let current_len = file.metadata()?.len();
-        if mapped_len > current_len {
+        let physical_len = file.raw().metadata()?.len();
+        // Truncated since this handle captured it: nothing it addresses can
+        // be trusted to be there.
+        let captured = self
+            .file
+            .anchor_layout()
+            .map_or(Some(self.snapshot.len()), |layout| layout.physical_end(self.snapshot.len()))
+            .ok_or(Error::InvalidMatrixLayout)?;
+        if captured > physical_len {
             return Err(Error::MmapPayloadOutOfBounds {
                 offset: 0,
-                len: mapped_len,
+                len: captured,
             });
         }
-        validate_mmap_range(0, layout.append_log_start(), current_len)?;
-        let map_len =
-            usize::try_from(mapped_len).map_err(|_| Error::LengthOverflow { value: mapped_len })?;
-        // SAFETY: The caller guarantees that the cloned backing object remains
-        // immutable and valid for the mapping's entire lifetime.
-        let pages = self.file.matrix_pages().ok_or(Error::MatrixLayoutMissing)?;
-        let changed = pages.mapped_page_count()?;
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::MmapLen, physical_len)?;
+        let (tiles, source) = self.tiles_read()?;
+        let entries = tiles.overlay_entries()?;
+        let patched: u64 = entries.iter().map(|(_, _, len)| u64::from(*len)).sum();
         self.spec.read_limits.check(
             ReadLimitKey::MaterializedBytes,
-            changed
-                .checked_mul(4096)
-                .ok_or(Error::InvalidMatrixLayout)?,
+            patched.div_ceil(4096).saturating_add(entries.len() as u64) * 4096,
         )?;
-        let mut mapping = unsafe { memmap2::MmapOptions::new().len(map_len).map_copy(&file)? };
-        pages.patch_mapping(&mut mapping)?;
-        let mmap = mapping.make_read_only()?;
-        validate_mmap_range(0, layout.append_log_start(), mapped_len)?;
+        let map_len = usize::try_from(physical_len)
+            .map_err(|_| Error::LengthOverflow { value: physical_len })?;
+        // SAFETY: the caller guarantees the backing object stays immutable
+        // and valid for the mapping's lifetime; the mapping is private, so the
+        // patches below never reach the file.
+        let mut mapping =
+            unsafe { memmap2::MmapOptions::new().len(map_len).map_copy(file.raw())? };
+        let layout = self.file.anchor_layout();
+        let mut bytes = Vec::new();
+        for (target, at, len) in entries {
+            bytes.clear();
+            bytes.try_reserve_exact(len as usize).map_err(|_| Error::AllocationFailed {
+                resource: "matrix mapping patch",
+                requested: u64::from(len),
+            })?;
+            bytes.resize(len as usize, 0);
+            crate::matrix_tiles::store::TileSource::read_at(&source, at, &mut bytes)?;
+            let mut write = |physical: u64, from: usize, n: usize| -> Result<()> {
+                let start = physical as usize;
+                mapping
+                    .get_mut(start..start + n)
+                    .ok_or(Error::MmapPayloadOutOfBounds {
+                        offset: physical,
+                        len: n as u64,
+                    })?
+                    .copy_from_slice(&bytes[from..from + n]);
+                Ok(())
+            };
+            match layout {
+                None => write(target, 0, len as usize)?,
+                Some(layout) => layout.split(target, u64::from(len), |segment| {
+                    if let crate::anchor::Segment::Data {
+                        physical,
+                        logical,
+                        len,
+                    } = segment
+                    {
+                        write(physical, (logical - target) as usize, len as usize)?;
+                    }
+                    Ok(())
+                })?,
+            }
+        }
+        let source = MmapSource {
+            mmap: mapping.make_read_only()?,
+            layout,
+        };
+        let tiles = crate::matrix_tiles::api::TiledMatrix::open_reader(
+            self.spec,
+            &source,
+            self.matrix_meta_offset()?,
+        )?;
         Ok(MmapMatrix {
             spec: self.spec,
-            layout,
-            mmap,
+            tiles,
+            source,
         })
     }
 }

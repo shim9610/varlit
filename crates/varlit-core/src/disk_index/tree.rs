@@ -1,5 +1,15 @@
-//! Immutable, append-only index pages. Each handle owns its bounded cache.
-//! Only the sole writer appends pages; published pages are never reused.
+//! Copy-on-write index pages. Each handle owns its bounded cache.
+//!
+//! Two page formats share this module. [`PageFormat::Append`] pages are the
+//! original append-only layout: a page is never rewritten, so a child always
+//! lies before its parent and every page a snapshot can reach stays valid for
+//! the life of the file. [`PageFormat::Reuse`] pages are written into pages a
+//! [`PageAlloc`] hands out, freed pages included. Each such page records the
+//! generation that wrote it (its *birth*), every pointer to it records that
+//! birth too, and a reader that follows a pointer to a page born later than
+//! the pointer says knows the page was reclaimed and rewritten:
+//! [`DiskIndexError::PageReclaimed`]. When a freed page may be reused is the
+//! allocator owner's decision; see `storage`.
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
 use crate::fallible::Arc;
 use std::cell::RefCell;
@@ -10,16 +20,84 @@ pub(super) const PAGE: usize = 4096;
 const HEADER: usize = 32;
 const LEAF_ENTRY: usize = 28 + LATEST_LEN;
 const BRANCH_ENTRY: usize = 28 + 16;
+/// A reuse-format branch entry also carries its child's birth.
+const BRANCH_ENTRY_REUSE: usize = 28 + 24;
 const MAGIC: &[u8; 8] = b"VIXPAGE2";
-fn entry_size(height: u8) -> usize {
-    if height == 0 {
-        LEAF_ENTRY
-    } else {
-        BRANCH_ENTRY
+const MAGIC_REUSE: &[u8; 8] = b"VIXPAGE3";
+
+/// How pages are placed; see the module documentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PageFormat {
+    Append,
+    Reuse,
+}
+
+fn entry_size(format: PageFormat, height: u8) -> usize {
+    match (height, format) {
+        (0, _) => LEAF_ENTRY,
+        (_, PageFormat::Append) => BRANCH_ENTRY,
+        (_, PageFormat::Reuse) => BRANCH_ENTRY_REUSE,
     }
 }
-fn fanout(height: u8) -> usize {
-    (PAGE - HEADER) / entry_size(height)
+fn fanout(format: PageFormat, height: u8) -> usize {
+    (PAGE - HEADER) / entry_size(format, height)
+}
+
+/// Pages a reuse-format writer may write into, and the pages it frees.
+///
+/// A page born in the generation being built is referenced by no published
+/// root once it is replaced, so it is reusable at once. Any other freed page
+/// may still be reachable from a confirmed root, and waits in `pending`
+/// tagged with the generation whose confirmation stops referencing it; the
+/// owner moves it to `reusable` once that is safe (`release`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PageAlloc {
+    pub reusable: Vec<u64>,
+    pub pending: Vec<(u64, u64)>,
+    /// The generation being built: the birth of every page written now.
+    pub building: u64,
+}
+
+impl PageAlloc {
+    pub(super) fn new(building: u64) -> Self {
+        Self {
+            reusable: Vec::new(),
+            pending: Vec::new(),
+            building,
+        }
+    }
+    pub(super) fn take(&mut self) -> Option<u64> {
+        self.reusable.pop()
+    }
+    pub(super) fn free(&mut self, offset: u64, birth: u64) -> DiskIndexResult<()> {
+        if birth == self.building {
+            self.reusable.try_reserve(1).map_err(oom)?;
+            self.reusable.push(offset);
+        } else {
+            self.pending.try_reserve(1).map_err(oom)?;
+            self.pending.push((offset, self.building));
+        }
+        Ok(())
+    }
+    /// Makes every pending page tagged at or before `through` reusable.
+    pub(super) fn release(&mut self, through: u64) -> DiskIndexResult<()> {
+        let ready = self
+            .pending
+            .iter()
+            .filter(|(_, tag)| *tag <= through)
+            .count();
+        self.reusable.try_reserve(ready).map_err(oom)?;
+        let reusable = &mut self.reusable;
+        self.pending.retain(|&(offset, tag)| {
+            if tag <= through {
+                reusable.push(offset);
+                false
+            } else {
+                true
+            }
+        });
+        Ok(())
+    }
 }
 
 fn corrupt(message: &'static str) -> DiskIndexError {
@@ -153,6 +231,8 @@ pub(super) fn write_at(file: &File, mut offset: u64, mut bytes: &[u8]) -> std::i
 pub(super) struct Root {
     pub offset: u64,
     pub count: u64,
+    /// The page's birth generation; 0 for append-format pages.
+    pub birth: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -190,12 +270,15 @@ impl Entry {
         Root {
             offset: u64::from_le_bytes(self.value[..8].try_into().unwrap()),
             count: u64::from_le_bytes(self.value[8..16].try_into().unwrap()),
+            // Zero in an append-format page, whose branch values end at 16.
+            birth: u64::from_le_bytes(self.value[16..24].try_into().unwrap()),
         }
     }
     fn branch(key: Key, root: Root) -> Self {
         let mut value = [0; LATEST_LEN];
         value[..8].copy_from_slice(&root.offset.to_le_bytes());
         value[8..16].copy_from_slice(&root.count.to_le_bytes());
+        value[16..24].copy_from_slice(&root.birth.to_le_bytes());
         Self { key, value }
     }
 }
@@ -203,6 +286,7 @@ impl Entry {
 #[derive(Debug)]
 struct Node {
     height: u8,
+    birth: u64,
     count: u64,
     entries: Vec<Entry>,
     key_bytes: Vec<u8>,
@@ -294,6 +378,7 @@ fn copy_bytes(bytes: &[u8]) -> DiskIndexResult<Vec<u8>> {
 /// Send, not Sync: a reader's cache is never shared between reading threads.
 pub(super) struct Reader {
     file: Arc<File>,
+    format: PageFormat,
     end: u64,
     minimum_offset: u64,
     max_key: usize,
@@ -310,6 +395,7 @@ impl Reader {
     pub fn new(file: Arc<File>, end: u64, max_key: usize, budget: usize) -> Self {
         Self {
             file,
+            format: PageFormat::Append,
             end,
             minimum_offset: PAGE as u64,
             max_key,
@@ -326,12 +412,19 @@ impl Reader {
         self.verify_metadata = enabled;
         self
     }
+    pub(super) fn with_format(mut self, format: PageFormat) -> Self {
+        self.format = format;
+        self
+    }
     pub(super) fn with_minimum_offset(mut self, minimum_offset: u64) -> Self {
         self.minimum_offset = minimum_offset;
         self
     }
     fn node(&self, root: Root) -> DiskIndexResult<Lease<'_, Node>> {
         if let Some(node) = self.cached::<Node>(root.offset) {
+            if node.birth != root.birth {
+                return Err(DiskIndexError::PageReclaimed);
+            }
             if node.count != root.count {
                 return Err(corrupt("index subtree count mismatch"));
             }
@@ -352,21 +445,49 @@ impl Reader {
         read_at(&self.file, root.offset, &mut bytes)?;
         #[cfg(test)]
         self.page_reads.set(self.page_reads.get() + 1);
-        if &bytes[..8] != MAGIC || bytes[9] != 0 || bytes[20..HEADER] != [0; 12] {
-            return Err(corrupt("invalid index page header"));
-        }
+        let format = self.format;
+        let birth = match format {
+            PageFormat::Append => {
+                if &bytes[..8] != MAGIC || bytes[9] != 0 || bytes[20..HEADER] != [0; 12] {
+                    return Err(corrupt("invalid index page header"));
+                }
+                0
+            }
+            PageFormat::Reuse => {
+                if &bytes[..8] != MAGIC_REUSE || bytes[9] != 0 || bytes[28..HEADER] != [0; 4] {
+                    // A reclaimed page may hold anything, including bytes that
+                    // are not a page at all; the pointer's birth decides below
+                    // once the page is at least shaped like one.
+                    return Err(DiskIndexError::PageReclaimed);
+                }
+                u64::from_le_bytes(bytes[20..28].try_into().unwrap())
+            }
+        };
         let checksum = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
         bytes[16..20].fill(0);
-        if self.verify_metadata && crc32fast::hash(&bytes) != checksum {
-            return Err(corrupt("index page checksum mismatch"));
+        // Reuse pages are always checksummed: a page being rewritten in place
+        // is read torn, and only the checksum tells.
+        if (self.verify_metadata || format == PageFormat::Reuse)
+            && crc32fast::hash(&bytes) != checksum
+        {
+            return Err(match format {
+                PageFormat::Append => corrupt("index page checksum mismatch"),
+                PageFormat::Reuse => DiskIndexError::PageReclaimed,
+            });
+        }
+        if birth != root.birth {
+            return Err(DiskIndexError::PageReclaimed);
+        }
+        if format == PageFormat::Reuse && birth == 0 {
+            return Err(corrupt("index page has no birth generation"));
         }
         let height = bytes[8];
         let len = u16::from_le_bytes(bytes[10..12].try_into().unwrap()) as usize;
-        if height > 31 || len == 0 || len > fanout(height) || bytes[12..16] != [0; 4] {
+        if height > 31 || len == 0 || len > fanout(format, height) || bytes[12..16] != [0; 4] {
             return Err(corrupt("invalid index page shape"));
         }
         if self.verify_metadata
-            && bytes[HEADER + len * entry_size(height)..]
+            && bytes[HEADER + len * entry_size(format, height)..]
                 .iter()
                 .any(|x| *x != 0)
         {
@@ -375,8 +496,14 @@ impl Reader {
         let mut entries = Vec::new();
         entries.try_reserve_exact(len).map_err(oom)?;
         let mut count = 0u64;
-        for item in
-            bytes[HEADER..HEADER + len * entry_size(height)].chunks_exact(entry_size(height))
+        // An append-format page only references what was written before it;
+        // a reuse-format page may reference any page of the file.
+        let bound = match format {
+            PageFormat::Append => root.offset,
+            PageFormat::Reuse => self.end,
+        };
+        for item in bytes[HEADER..HEADER + len * entry_size(format, height)]
+            .chunks_exact(entry_size(format, height))
         {
             let key = Key {
                 offset: u64::from_le_bytes(item[..8].try_into().unwrap()),
@@ -395,7 +522,7 @@ impl Reader {
                 || key
                     .offset
                     .checked_add(key.len as u64 + 4)
-                    .is_none_or(|e| e > root.offset)
+                    .is_none_or(|e| e > bound)
             {
                 return Err(corrupt("invalid index key extent"));
             }
@@ -406,13 +533,21 @@ impl Reader {
                 1
             } else {
                 let child = entry.child();
+                let unused = match format {
+                    PageFormat::Append => 16,
+                    PageFormat::Reuse => 24,
+                };
+                // A child is written before its parent, so it is never born
+                // later; a reuse page's height strictly decreasing downward
+                // (checked by every traversal) is what rules out cycles.
                 if child.count == 0
                     || child.offset < self.minimum_offset
                     || child
                         .offset
                         .checked_add(PAGE as u64)
-                        .is_none_or(|e| e > root.offset)
-                    || entry.value[16..].iter().any(|x| *x != 0)
+                        .is_none_or(|e| e > bound)
+                    || entry.value[unused..].iter().any(|x| *x != 0)
+                    || (format == PageFormat::Reuse && (child.birth == 0 || child.birth > birth))
                 {
                     return Err(corrupt("invalid index child"));
                 }
@@ -520,6 +655,7 @@ impl Reader {
         }
         Ok(Node {
             height,
+            birth,
             count,
             entries,
             key_bytes: packed,
@@ -735,6 +871,9 @@ impl Reader {
         let mut minimum: Option<Key> = None;
         loop {
             let validate = |node: &Node| -> DiskIndexResult<()> {
+                if node.birth != root.birth {
+                    return Err(DiskIndexError::PageReclaimed);
+                }
                 if node.count != root.count {
                     return Err(corrupt("index subtree count mismatch"));
                 }
@@ -887,7 +1026,19 @@ pub(super) fn apply(
     root: Root,
     updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
 ) -> DiskIndexResult<Root> {
-    apply_with_limit(file, reader, root, updates.iter(), None)
+    apply_with_limit(file, reader, root, updates.iter(), None, None)
+}
+
+/// [`apply`] for a reuse-format tree: pages come from, and are freed to,
+/// `alloc`.
+pub(super) fn apply_reusing(
+    file: &File,
+    reader: &Reader,
+    root: Root,
+    updates: &BTreeMap<Vec<u8>, [u8; LATEST_LEN]>,
+    alloc: &mut PageAlloc,
+) -> DiskIndexResult<Root> {
+    apply_with_limit(file, reader, root, updates.iter(), None, Some(alloc))
 }
 
 pub(super) fn apply_with_limit<'a>(
@@ -896,15 +1047,20 @@ pub(super) fn apply_with_limit<'a>(
     root: Root,
     updates: impl ExactSizeIterator<Item = (&'a Vec<u8>, &'a [u8; LATEST_LEN])>,
     maximum: Option<u64>,
+    alloc: Option<&mut PageAlloc>,
 ) -> DiskIndexResult<Root> {
     if updates.len() == 0 {
         return Ok(root);
+    }
+    if (reader.format == PageFormat::Reuse) != alloc.is_some() {
+        return Err(corrupt("index page format and allocator disagree"));
     }
     let mut writer = Writer {
         file,
         reader,
         end: file.metadata()?.len().max(PAGE as u64),
         maximum,
+        alloc,
     };
     let mut sorted = Vec::new();
     sorted.try_reserve_exact(updates.len()).map_err(oom)?;
@@ -932,6 +1088,7 @@ struct Writer<'a> {
     reader: &'a Reader,
     end: u64,
     maximum: Option<u64>,
+    alloc: Option<&'a mut PageAlloc>,
 }
 
 impl Writer<'_> {
@@ -965,20 +1122,35 @@ impl Writer<'_> {
             decoded: None,
         })
     }
+    /// Writes one page into a reusable page if the allocator has one, else
+    /// at the end of the file.
+    fn page(&mut self, bytes: &[u8; PAGE]) -> DiskIndexResult<u64> {
+        if let Some(offset) = self.alloc.as_deref_mut().and_then(PageAlloc::take) {
+            write_at(self.file, offset, bytes)?;
+            return Ok(offset);
+        }
+        self.append(bytes)
+    }
     fn nodes(&mut self, height: u8, entries: Vec<Entry>) -> DiskIndexResult<Vec<Entry>> {
+        let format = self.reader.format;
+        let birth = self.alloc.as_ref().map_or(0, |alloc| alloc.building);
         let mut output = Vec::new();
         output
-            .try_reserve_exact(entries.len().div_ceil(fanout(height)))
+            .try_reserve_exact(entries.len().div_ceil(fanout(format, height)))
             .map_err(oom)?;
-        for chunk in entries.chunks(fanout(height)) {
+        for chunk in entries.chunks(fanout(format, height)) {
             let mut bytes = [0; PAGE];
-            bytes[..8].copy_from_slice(MAGIC);
+            bytes[..8].copy_from_slice(match format {
+                PageFormat::Append => MAGIC,
+                PageFormat::Reuse => MAGIC_REUSE,
+            });
             bytes[8] = height;
             bytes[10..12].copy_from_slice(&(chunk.len() as u16).to_le_bytes());
+            bytes[20..28].copy_from_slice(&birth.to_le_bytes());
             let mut count = 0u64;
             for (entry, into) in chunk
                 .iter()
-                .zip(bytes[HEADER..].chunks_exact_mut(entry_size(height)))
+                .zip(bytes[HEADER..].chunks_exact_mut(entry_size(format, height)))
             {
                 into[..8].copy_from_slice(&entry.key.offset.to_le_bytes());
                 into[8..12].copy_from_slice(&(entry.key.len as u32).to_le_bytes());
@@ -991,8 +1163,15 @@ impl Writer<'_> {
             }
             let checksum = crc32fast::hash(&bytes);
             bytes[16..20].copy_from_slice(&checksum.to_le_bytes());
-            let offset = self.append(&bytes)?;
-            output.push(Entry::branch(chunk[0].key.clone(), Root { offset, count }));
+            let offset = self.page(&bytes)?;
+            output.push(Entry::branch(
+                chunk[0].key.clone(),
+                Root {
+                    offset,
+                    count,
+                    birth,
+                },
+            ));
         }
         Ok(output)
     }
@@ -1066,6 +1245,13 @@ impl Writer<'_> {
                 return Err(corrupt("unapplied index updates"));
             }
         }
+        // The node is rewritten whole, so its page is free once this batch's
+        // root replaces the one that reached it.
+        if root.offset != 0
+            && let Some(alloc) = self.alloc.as_deref_mut()
+        {
+            alloc.free(root.offset, root.birth)?;
+        }
         self.nodes(height, output)
     }
 }
@@ -1101,6 +1287,87 @@ mod tests {
         let crc = crc32fast::hash(bytes);
         bytes[16..20].copy_from_slice(&crc.to_le_bytes());
     }
+    fn reuse_reader(file: &Arc<File>) -> Reader {
+        reader(file, 1 << 20).with_format(PageFormat::Reuse)
+    }
+
+    #[test]
+    fn reused_pages_bound_the_file_and_reclaimed_roots_are_detected() {
+        let (_dir, file) = fixture();
+        let keys: Vec<Vec<u8>> = (0u64..2_000).map(|k| k.to_be_bytes().to_vec()).collect();
+        let mut alloc = PageAlloc::new(1);
+        let mut root = Root::default();
+        let mut first_root = None;
+        let mut grown_after_first_rounds = 0;
+        for round in 0u64..40 {
+            let updates: BTreeMap<Vec<u8>, [u8; LATEST_LEN]> = keys
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| (*i as u64 + round).is_multiple_of(7) || round == 0)
+                .map(|(i, key)| (key.clone(), value(round * 10_000 + i as u64)))
+                .collect();
+            root = apply_reusing(&file, &reuse_reader(&file), root, &updates, &mut alloc).unwrap();
+            if round == 0 {
+                first_root = Some(root);
+            }
+            // Each round models one confirmed generation that no reader
+            // still needs: everything it freed becomes reusable.
+            alloc.release(alloc.building).unwrap();
+            alloc.building += 1;
+            if round == 4 {
+                grown_after_first_rounds = file.metadata().unwrap().len();
+            }
+        }
+        // The tree is rewritten in place of the pages it freed: the file stops
+        // growing once the free pool covers a round's worth of pages.
+        let len = file.metadata().unwrap().len();
+        assert!(
+            len <= grown_after_first_rounds + 4 * PAGE as u64,
+            "reuse file grew from {grown_after_first_rounds} to {len}"
+        );
+        let current = reuse_reader(&file);
+        for (i, key) in keys.iter().enumerate() {
+            let last = (0u64..40)
+                .rev()
+                .find(|round| (i as u64 + round).is_multiple_of(7) || *round == 0)
+                .unwrap();
+            assert_eq!(
+                current.get(root, key).unwrap(),
+                Some(value(last * 10_000 + i as u64))
+            );
+        }
+        let mut seen = 0;
+        current
+            .visit(root, &mut |_, _| {
+                seen += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(seen, keys.len());
+        // A root from the first generation reaches pages since rewritten by
+        // later ones: the birth check reports that instead of serving them.
+        let stale = reuse_reader(&file);
+        let first = first_root.unwrap();
+        let outcome = keys
+            .iter()
+            .try_for_each(|key| stale.get(first, key).map(|_| ()));
+        assert!(matches!(outcome, Err(DiskIndexError::PageReclaimed)));
+    }
+
+    #[test]
+    fn pages_freed_from_a_published_generation_wait_for_release() {
+        let mut alloc = PageAlloc::new(5);
+        alloc.free(100, 5).unwrap();
+        alloc.free(200, 3).unwrap();
+        assert_eq!(alloc.reusable, vec![100]);
+        assert_eq!(alloc.pending, vec![(200, 5)]);
+        alloc.release(4).unwrap();
+        assert_eq!(alloc.take(), Some(100));
+        assert_eq!(alloc.take(), None);
+        alloc.release(5).unwrap();
+        assert_eq!(alloc.take(), Some(200));
+    }
+
     fn assert_cache_accounting(reader: &Reader) {
         let cache = reader.cache.borrow();
         let actual = cache
@@ -1235,7 +1502,7 @@ mod tests {
     fn compact_branches_preserve_split_boundaries_and_old_roots() {
         let (_dir, file) = fixture();
         // One more than a full root's leaf capacity forces a second branch level.
-        let count = fanout(0) * fanout(1) + 1;
+        let count = fanout(PageFormat::Append, 0) * fanout(PageFormat::Append, 1) + 1;
         let initial: BTreeMap<_, _> = (0..count as u64)
             .map(|id| ((id * 2 + 2).to_be_bytes().to_vec(), value(id)))
             .collect();
@@ -1263,8 +1530,8 @@ mod tests {
             !cfg!(miri)
                 || id < 2
                 || id + 2 >= count
-                || id.is_multiple_of(fanout(0))
-                || (id + 1).is_multiple_of(fanout(0))
+                || id.is_multiple_of(fanout(PageFormat::Append, 0))
+                || (id + 1).is_multiple_of(fanout(PageFormat::Append, 0))
                 || id.is_multiple_of(49)
         };
         for (id, (key, before)) in initial.iter().enumerate() {
@@ -1375,7 +1642,7 @@ mod corruption_guards {
         let count: u16 = if height == 0 { 1 } else { 2 };
         bytes[10..12].copy_from_slice(&count.to_le_bytes());
         for i in 0..count as usize {
-            let at = HEADER + i * entry_size(height);
+            let at = HEADER + i * entry_size(PageFormat::Append, height);
             bytes[at + 8..at + 12].copy_from_slice(&8u32.to_le_bytes());
             bytes[at + 12..at + 20].copy_from_slice(&((i + 1) as u64).to_be_bytes());
             if height != 0 {
@@ -1396,6 +1663,7 @@ mod corruption_guards {
             let offset = file.metadata().unwrap().len();
             write_at(&file, offset, &bytes).unwrap();
             root = Root {
+                birth: 0,
                 offset,
                 count: if level == 0 { 1 } else { root.count * 2 },
             };
@@ -1512,6 +1780,7 @@ mod corruption_guards {
                 for count in [1, u64::MAX / 2, u64::MAX] {
                     let file = Arc::new(tempfile::tempfile().unwrap());
                     let root = Root {
+                        birth: 0,
                         offset: PAGE as u64,
                         count,
                     };
@@ -1537,6 +1806,7 @@ mod corruption_guards {
             for height in 2..=31 {
                 let (file, leaf) = image(0);
                 let root = Root {
+                    birth: 0,
                     offset: 2 * PAGE as u64,
                     count: 2,
                 };

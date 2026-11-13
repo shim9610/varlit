@@ -66,6 +66,7 @@ static MATRIX_BLOCKS: &[MatrixBlockDescriptor] = &[MatrixBlockDescriptor {
     dimensions: Sample::DIMENSIONS,
     category: Sample::CATEGORY,
     slot_stride: Sample::SLOT_STRIDE,
+    tile: [0, 0],
 }];
 
 fn spec() -> FormatSpec {
@@ -91,80 +92,6 @@ fn dims() -> MatrixDimensions {
 }
 fn key(row: u64, ch: u64) -> MatrixKey {
     MatrixKey::new(row, ch)
-}
-
-#[test]
-fn a_follow_invalidates_a_chunk_directory_built_before_it() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("chunkdir.vrv");
-
-    let mut writer = spec().create_writer_with_dims(&path, dims())?;
-    // Rows 0..8 => the region (chunk 0) plus one chunk record (chunk 1).
-    for row in 0..ROWS_PER_CHUNK * 2 {
-        for ch in 0..CHANNELS {
-            writer.write_matrix_cell(
-                key(row, ch),
-                &Sample {
-                    value: (row * 10 + ch) as u32,
-                },
-            )?;
-            writer.commit_matrix_cell::<Sample>(key(row, ch))?;
-        }
-    }
-    writer.sync()?;
-
-    let mut reader = spec().open_reader(&path)?;
-    // Touch a chunked cell: this builds and caches the chunk directory.
-    // Touching a chunked cell is what builds and caches the directory; without
-    // this read the OnceLock is empty and the follow has nothing to invalidate.
-    assert_eq!(
-        reader.read_cell(key(ROWS_PER_CHUNK, 0))?,
-        Sample {
-            value: (ROWS_PER_CHUNK * 10) as u32
-        },
-    );
-
-    // A new chunk arrives.
-    for row in ROWS_PER_CHUNK * 2..ROWS_PER_CHUNK * 3 {
-        for ch in 0..CHANNELS {
-            writer.write_matrix_cell(
-                key(row, ch),
-                &Sample {
-                    value: (row * 10 + ch) as u32,
-                },
-            )?;
-            writer.commit_matrix_cell::<Sample>(key(row, ch))?;
-        }
-    }
-    writer.sync()?;
-    drop(writer);
-
-    assert!(reader.follow()? > 0, "the new chunk record was adopted");
-
-    // A cell in the chunk the follow brought. The standard it is held to is the
-    // fresh open, not a literal: the two handles must not disagree about a file
-    // they both describe.
-    let target = key(ROWS_PER_CHUNK * 2, 0);
-    let expected = Sample {
-        value: ((ROWS_PER_CHUNK * 2) * 10) as u32,
-    };
-    assert_eq!(spec().open_reader(&path)?.read_cell(target)?, expected);
-    assert_eq!(
-        reader.read_cell(target)?,
-        expected,
-        "the followed handle has the chunk's record but answered from a \
-         directory built before it",
-    );
-
-    // And the chunks it already had are still right, so the invalidation
-    // rebuilt rather than lost.
-    assert_eq!(
-        reader.read_cell(key(ROWS_PER_CHUNK, 0))?,
-        Sample {
-            value: (ROWS_PER_CHUNK * 10) as u32
-        },
-    );
-    Ok(())
 }
 
 #[test]

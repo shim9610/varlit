@@ -454,15 +454,6 @@ impl VarlitFile {
         // ordinary record: writing the chunk after the marker would leave it outside the
         // committed prefix, and writing it after the checkpoint would leave it out
         // of the index that checkpoint serialises.
-        if self.mode == OpenMode::ReadWrite {
-            self.write_open_chunk_record()?;
-        }
-        if self.mode == OpenMode::ReadWrite
-            && self.spec.index_policy.checkpoint_on_flush
-            && self.needs_index_checkpoint()
-        {
-            self.write_index_checkpoint()?;
-        }
         if self.mode == OpenMode::ReadWrite
             && self.spec.commit_policy.marker_on_flush()
             && self.has_uncommitted_since_last_commit()
@@ -484,12 +475,8 @@ impl VarlitFile {
             ));
         }
         self.write_embedded_manifest_if_needed()?;
-        self.write_open_chunk_record()?;
-        if self.spec.index_policy.checkpoint_on_flush && self.needs_index_checkpoint() {
-            self.write_index_checkpoint()?;
-        }
         if !self.has_uncommitted_since_last_commit()
-            && let Some(entry) = self.index.last_entry_of_block(COMMIT_BLOCK_ID)?
+            && let Some(entry) = self.newest_commit_marker()?
         {
             let info = AppendInfo::from(&entry);
             self.close_commit_point();
@@ -508,12 +495,8 @@ impl VarlitFile {
             ));
         }
         self.write_embedded_manifest_if_needed()?;
-        self.write_open_chunk_record()?;
-        if self.spec.index_policy.checkpoint_on_flush && self.needs_index_checkpoint() {
-            self.write_index_checkpoint()?;
-        }
         if !self.has_uncommitted_since_last_commit()
-            && let Some(entry) = self.index.last_entry_of_block(COMMIT_BLOCK_ID)?
+            && let Some(entry) = self.newest_commit_marker()?
         {
             let info = AppendInfo::from(&entry);
             self.close_commit_point();
@@ -596,28 +579,9 @@ impl VarlitFile {
         Ok(())
     }
 
+    /// Publishes this writer's staged matrix changes, if any.
     fn publish_matrix_generation(&mut self) -> Result<()> {
-        let Some(pages) = self.file.matrix_pages() else {
-            return Ok(());
-        };
-        let previous_end = pages.head().native_eof;
-        let end = if self.spec.commit_policy.is_transaction_marker()
-            && self.has_uncommitted_since_last_commit()
-        {
-            // A matrix-only sync must not publish an append tail that writer
-            // recovery would later truncate. Keep at least the old confirmed
-            // EOF, including its segment/digest, and any newly written marker.
-            match self.block_tails.tail(COMMIT_BLOCK_ID) {
-                Some(offset) if offset >= previous_end => {
-                    fault_record_entry(&self.snapshot, self.spec, offset, false)?
-                        .checked_physical_end()?
-                }
-                _ => previous_end,
-            }
-        } else {
-            self.file.metadata()?.len()
-        };
-        self.file.publish_matrix(end)
+        self.publish_tiles()
     }
 
     /// Requests durable persistence of everything written so far.
@@ -642,7 +606,6 @@ impl VarlitFile {
         // so syncing the file without writing the chunk made `sync()` return `Ok` having
         // made nothing durable — while the same call on a region row did.
         if self.mode == OpenMode::ReadWrite {
-            self.write_open_chunk_record()?;
             // The write is an ordinary record append, so it lands *past* any
             // digest or segment this file already ends with — and a digest that
             // is not the last record is one no lazy open can use. `flush` writes out
@@ -655,20 +618,24 @@ impl VarlitFile {
             // something new to describe, so an idle close appends nothing. The
             // header tail region is not — it has no such predicate, because its
             // write is an overwrite of a fixed extent rather than an append, so
-            // an idle close costs one seek and one slot-sized write — 176
+            // an idle close costs one positional slot-sized write — 176
             // bytes on a two-block format, 12 more per declared block; the 360
             // the author guide quotes is the whole two-slot region — and advances
             // the slot generation. It never grows the file and it is never on
-            // the append path; `the_region_write_is_one_seek_per_commit_point`
+            // the append path; `the_region_write_is_one_write_per_commit_point`
             // is what holds that to a count.
             self.close_commit_point();
         }
-        self.file.sync_all()?;
-        if self.mode == OpenMode::ReadWrite
-            && let Err(error) = self.publish_matrix_generation()
-        {
-            self.poison.poison();
-            return Err(error);
+        // A matrix publication ends in a full barrier of this same file, which
+        // makes every record appended before it durable too: one barrier, not
+        // a second one for the records alone.
+        if self.mode == OpenMode::ReadWrite && self.matrix_is_dirty() {
+            if let Err(error) = self.publish_matrix_generation() {
+                self.poison.poison();
+                return Err(error);
+            }
+        } else {
+            self.file.sync_all()?;
         }
         self.sync_created_pathname_once()?;
         self.immediate_state.reset();
@@ -826,20 +793,6 @@ impl VarlitFile {
     }
 
     /// Returns the cumulative number of resident index entries this thread's
-    /// checkpoint flush-cadence machinery has examined.
-    ///
-    /// Fault-testing hook only: regression tests delta-measure this around a
-    /// flush-per-record workload to pin the cadence work at O(1) per flush
-    /// (near-linear cumulative touches) instead of the historical O(N) rescan
-    /// per flush. The counter is thread-local so concurrently running tests
-    /// cannot pollute each other's measurements.
-    #[cfg(feature = "scalable-fault-injection")]
-    #[doc(hidden)]
-    pub fn checkpoint_cadence_index_touches() -> u64 {
-        CHECKPOINT_CADENCE_INDEX_TOUCHES.with(|touches| touches.get())
-    }
-
-    /// Returns the cumulative number of resident index entries this thread's
     /// block-offset-chain predecessor machinery has examined.
     ///
     /// Fault-testing hook only. The append path resolves predecessors from the
@@ -945,6 +898,15 @@ impl VarlitFile {
         record_file::take_record_file_seeks()
     }
 
+    /// Reads and clears this thread's count of writes to the file header's
+    /// tail region. Positional, so the seek counter above no longer sees
+    /// them.
+    #[cfg(any(test, feature = "scalable-fault-injection"))]
+    #[doc(hidden)]
+    pub fn take_header_region_writes() -> u64 {
+        record_file::take_header_region_writes()
+    }
+
     /// Reads and clears this thread's count of resident-index entries rebuilt
     /// from their record headers.
     ///
@@ -960,17 +922,6 @@ impl VarlitFile {
         take_record_entry_faults()
     }
 
-    /// Cumulative bytes this thread has read to answer chunked cell reads.
-    ///
-    /// Fault-testing hook only. This is the unit a growing matrix's read path
-    /// exists to keep small: a chunk is one record, so "read the cell" and
-    /// "read the chunk" differ by orders of magnitude and a regression test can
-    /// tell them apart by an absolute byte count rather than a ratio.
-    #[cfg(feature = "scalable-fault-injection")]
-    #[doc(hidden)]
-    pub fn chunk_bytes_read() -> u64 {
-        CHUNK_BYTES_READ.with(|read| read.get())
-    }
 
     /// The write-side guard: poison check plus open-mode check, returning the
     /// witness the guarded operations demand. See [`Self::ensure_not_poisoned`].
@@ -1129,7 +1080,6 @@ impl VarlitFile {
             self.keyed_tails.invalidate_all();
         }
         self.sequence_state = snapshot.sequence_state;
-        self.checkpoint_cadence = snapshot.checkpoint_cadence;
         self.segment_cursor = snapshot.segment_cursor;
 
         #[cfg(test)]
@@ -1150,87 +1100,6 @@ impl VarlitFile {
         } else {
             operation_error
         }
-    }
-
-    /// The payload length a full checkpoint of the current index would need.
-    fn index_checkpoint_payload_len(&self) -> Result<u64> {
-        const CHECKPOINT_PREFIX_LEN: u64 = 4 + 2 + 8 + 8;
-        let entry_count =
-            u64::try_from(self.index.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "checkpoint entry count",
-            })?;
-        entry_count
-            .checked_mul(SEGMENT_ENTRY_LEN)
-            .and_then(|bytes| bytes.checked_add(CHECKPOINT_PREFIX_LEN))
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "checkpoint payload length",
-            })
-    }
-
-    /// Whether a full checkpoint of the current index would fit the format's
-    /// own record ceilings.
-    ///
-    /// The index only grows, so once this is false it stays false and the
-    /// answer costs one multiply per flush. Every way it can be false is a
-    /// reason `write_index_checkpoint` would refuse, which is why the decision
-    /// belongs here: a checkpoint is derived, and declining to write one costs
-    /// the next open a scan it already knows how to do.
-    fn index_checkpoint_fits(&self) -> bool {
-        let Ok(payload_len) = self.index_checkpoint_payload_len() else {
-            return false;
-        };
-        let limits = &self.spec.read_limits;
-        u64::try_from(self.index.len())
-            .is_ok_and(|count| limits.check(ReadLimitKey::Records, count).is_ok())
-            && limits
-                .check(ReadLimitKey::RecordPayloadLen, payload_len)
-                .is_ok()
-            && limits
-                .check(ReadLimitKey::LogicalPayloadLen, payload_len)
-                .is_ok()
-    }
-
-    fn write_index_checkpoint(&mut self) -> Result<u64> {
-        const CHECKPOINT_PREFIX_LEN: u64 = 4 + 2 + 8 + 8;
-        const CHECKPOINT_ENTRY_LEN: u64 = 4 + 2 + 2 + 8 + 8 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 1;
-        let covered_offset = self.file.metadata()?.len();
-        let entry_count =
-            u64::try_from(self.index.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-                resource: "checkpoint entry count",
-            })?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::Records, entry_count)?;
-        let payload_len = entry_count
-            .checked_mul(CHECKPOINT_ENTRY_LEN)
-            .and_then(|bytes| bytes.checked_add(CHECKPOINT_PREFIX_LEN))
-            .ok_or(Error::ResourceArithmeticOverflow {
-                resource: "checkpoint payload length",
-            })?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::RecordPayloadLen, payload_len)?;
-        self.spec
-            .read_limits
-            .check(ReadLimitKey::LogicalPayloadLen, payload_len)?;
-        let mut payload = Vec::new();
-        let payload_capacity = usize::try_from(payload_len)
-            .map_err(|_| Error::LengthOverflow { value: payload_len })?;
-        payload
-            .try_reserve_exact(payload_capacity)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "checkpoint payload",
-                requested: payload_len,
-            })?;
-        payload.extend_from_slice(INDEX_CHECKPOINT_MAGIC);
-        payload.extend_from_slice(&INDEX_CHECKPOINT_VERSION.to_le_bytes());
-        payload.extend_from_slice(&covered_offset.to_le_bytes());
-        payload.extend_from_slice(&entry_count.to_le_bytes());
-        for entry in self.index.iter() {
-            let entry = entry?;
-            push_index_entry_bytes(&mut payload, &entry, entry.committed);
-        }
-        self.write_record(INDEX_BLOCK_ID, 1, RECORD_FLAG_INTERNAL, &payload)
     }
 
     /// Appends the segment record that closes this commit point.
@@ -1254,10 +1123,26 @@ impl VarlitFile {
         // name that offset before the header that would state it exists. The
         // append core budgets the same value from the same source and refuses
         // to write anywhere else, so the two cannot disagree.
-        let record_offset = self.file.metadata()?.len();
+        let record_offset = self.file.len()?;
+        // The entries this segment covers are re-framed from the file rather
+        // than kept: they are the records between the previous segment and
+        // here, and the handle holds no row for them. The count is known, so
+        // the walk is exact-size.
+        let count = self.index.len() - start;
+        let mut unused = Vec::new();
+        let mut walk = RecordMap::new_page(
+            self,
+            &mut unused,
+            Some(PageCursor {
+                offset: covered_start,
+            }),
+        )?;
         let payload = encode_segment_payload(
             self.spec,
-            self.index.iter().skip(start),
+            CoveredEntries {
+                walk: &mut walk,
+                left: count,
+            },
             covered_start,
             preceding_records,
             record_offset,
@@ -1403,6 +1288,9 @@ impl VarlitFile {
     /// object: a reader that finds the bit set cannot tell an abandoned file
     /// from one a healthy writer is appending to right now.
     fn mark_writer_open(&mut self) -> Result<()> {
+        // A writer's matrix is opened now: its open puts every publication
+        // the ring holds in place before anything else is written.
+        self.ensure_tiles_writer()?;
         if self.spec.liveness_policy != LivenessPolicy::FooterFlags {
             return Ok(());
         }
@@ -1549,5 +1437,46 @@ impl VarlitFile {
         self.write_liveness_flags(0)?;
         self.file.sync_data()?;
         Ok(())
+    }
+}
+
+/// The `left` resident records a segment covers, framed from the file.
+struct CoveredEntries<'w, 'a> {
+    walk: &'w mut RecordMap<'a>,
+    left: usize,
+}
+
+impl Iterator for CoveredEntries<'_, '_> {
+    type Item = Result<RecordIndexEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left == 0 {
+            return None;
+        }
+        self.left -= 1;
+        // The counter and the file must agree: a walk that ends early means
+        // the records the counter saw installed are not where it framed.
+        Some(self.walk.frame().and_then(|entry| {
+            entry.ok_or(Error::InvalidCanonicalEncoding(
+                "a segment covers records the file does not hold",
+            ))
+        }))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl ExactSizeIterator for CoveredEntries<'_, '_> {}
+
+impl VarlitFile {
+    /// The newest commit marker, from the per-block tails the handle keeps in
+    /// O(1) rather than from a directory it may not hold.
+    fn newest_commit_marker(&self) -> Result<Option<RecordIndexEntry>> {
+        self.block_tails
+            .tail(COMMIT_BLOCK_ID)
+            .map(|offset| fault_record_entry(&self.snapshot, self.spec, offset, true))
+            .transpose()
     }
 }

@@ -12,11 +12,16 @@ pub(crate) struct SpillFile {
     position: u64,
 }
 
+/// The largest one scratch file may grow when `VARLIT_SPILL_MAX_BYTES` is not
+/// set. Scratch on a tmpfs `TMPDIR` is memory, so it cannot be unbounded by
+/// default; a workload that needs more says so through the variable.
+pub(crate) const DEFAULT_SPILL_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 pub(crate) fn check_extent(maximum: Option<u64>, end: u64) -> io::Result<()> {
     if maximum.is_some_and(|maximum| end > maximum) {
         return Err(io::Error::new(
             io::ErrorKind::StorageFull,
-            "VARLIT_SPILL_MAX_BYTES exceeded",
+            "scratch file exceeded its maximum (VARLIT_SPILL_MAX_BYTES, 4 GiB by default)",
         ));
     }
     Ok(())
@@ -37,7 +42,8 @@ impl SpillFile {
                         )
                     })
             })
-            .transpose()?;
+            .transpose()?
+            .or(Some(DEFAULT_SPILL_MAX_BYTES));
         let file = match std::env::var_os("VARLIT_SPILL_DIR") {
             Some(directory) if directory.is_empty() => {
                 return Err(io::Error::new(
@@ -215,7 +221,8 @@ mod tests {
             assert!(path.starts_with(selected));
         }
         if matches!(case, "unset" | "fallback") {
-            assert_eq!(file.maximum, None);
+            // Unset is not unbounded: the default ceiling applies.
+            assert_eq!(file.maximum, Some(DEFAULT_SPILL_MAX_BYTES));
             file.write_all(&vec![7; 1024 * 1024])?;
         } else if case == "zero" {
             assert_eq!(

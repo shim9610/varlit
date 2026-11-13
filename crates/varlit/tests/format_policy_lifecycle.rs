@@ -1,6 +1,8 @@
 //! Cross-product regression for format identity and stream/index publication.
 //! Runtime verification settings must not change the declared wire format.
 #![cfg(all(feature = "integrity", feature = "compression-zstd"))]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::*;
 #[allow(dead_code)]
@@ -83,7 +85,9 @@ fn stream_case(spec: FormatSpec) -> TestResult {
     let mut state = path.as_os_str().to_owned();
     state.push(".vks");
     std::fs::remove_file(state)?;
-    let expected = 4 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
+    // The creation nonce, three items and the three sync markers that closed
+    // them, plus an embedded manifest.
+    let expected = 7 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
     assert_eq!(
         bootstrap_stream_checkpoint(spec, &path, options)?.records,
         expected
@@ -152,7 +156,9 @@ fn indexed_case(spec: FormatSpec) -> TestResult {
     assert_eq!(fetch(&reader, 3)?, Some(item(3, 44)));
     drop(reader);
     std::fs::remove_file(disk_index_sidecar_path(&path))?;
-    let expected = 6 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
+    // The creation nonce, five records and the three sync markers that closed
+    // them, plus an embedded manifest.
+    let expected = 9 + u64::from(spec.manifest_policy == ManifestPolicy::Embedded);
     assert_eq!(
         rebuild_disk_index(spec, &path, options, plan)?.records,
         expected

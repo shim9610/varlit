@@ -277,6 +277,9 @@ pub(crate) fn try_arc<T>(value: T) -> std::io::Result<Arc<T>> {
 
 // As with try_box_with, initialization is deferred until ownership storage is
 // available. UniqueArc keeps the uninitialized allocation exclusively owned.
+// No production caller since tiled matrix storage; kept for the proofs that
+// pin its contract.
+#[cfg(any(test, kani))]
 fn try_arc_with<T>(initialize: impl FnOnce() -> Result<T>) -> Result<Arc<T>> {
     let mut storage = triomphe::UniqueArc::try_new_uninit()
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
@@ -290,6 +293,7 @@ impl<T: ?Sized> TryClone for Arc<T> {
         Ok(Arc::clone(self))
     }
 }
+#[cfg(any(test, kani))]
 pub(crate) fn try_make_mut<T: TryClone>(value: &mut Arc<T>) -> Result<&mut T> {
     if Arc::get_mut(value).is_none() {
         // Finish both allocations before replacing the original snapshot.

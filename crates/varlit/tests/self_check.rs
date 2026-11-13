@@ -118,6 +118,7 @@ fn matrix_spec() -> FormatSpec {
         dimensions: MatrixCell::DIMENSIONS,
         category: MatrixCell::CATEGORY,
         slot_stride: MatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     static AUX: &[MatrixAuxDescriptor] = &[MatrixAuxDescriptor {
         name: "scratch",

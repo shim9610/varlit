@@ -11,12 +11,17 @@ use crate::spill_rows::SpillRows;
 const RESIDENT_ROW_BYTES: usize = 8 + 4 + 1;
 type ResidentRow = [u8; RESIDENT_ROW_BYTES];
 
+/// The in-memory working set a handle's spillable rows may use. A lower
+/// `IndexBytes` ceiling lowers it; a higher one does not raise it past the
+/// fixed working set, so a larger ceiling (the untrusted preset sets 1 GiB)
+/// is not turned into a larger resident buffer per handle.
 pub(super) fn buffer_bytes(spec: FormatSpec) -> usize {
+    const WORKING_SET: usize = 2 * 1024 * 1024;
     match spec.read_limits.resolve().max_index_bytes {
-        ReadLimit::Finite(bytes) if bytes != u64::MAX => {
-            usize::try_from(bytes).unwrap_or(usize::MAX)
-        }
-        _ => 2 * 1024 * 1024,
+        ReadLimit::Finite(bytes) => usize::try_from(bytes)
+            .unwrap_or(usize::MAX)
+            .min(WORKING_SET),
+        _ => WORKING_SET,
     }
 }
 
@@ -60,6 +65,15 @@ pub struct ResidentIndex {
     uniform: Option<UniformPrefix>,
     first_sequence_hint: Option<u64>,
     sequence_hint_disabled: bool,
+    /// Records installed since open on a handle that keeps no directory. Such
+    /// a handle stores no row at all — not in memory and not in a spill file —
+    /// so this count is everything it knows: what the `Records` ceiling and an
+    /// append rollback need.
+    counted: usize,
+    /// Whether `counted` is the whole file's resident record count (a writer
+    /// that created the file, opened it with a scan, or published a rewrite)
+    /// rather than only the records since a lazy open.
+    counts_whole_file: bool,
     retained: bool,
 }
 // Full rewrite rows are needed while constructing and validating a new
@@ -166,6 +180,8 @@ impl ResidentIndex {
             uniform,
             first_sequence_hint: None,
             sequence_hint_disabled: false,
+            counted: 0,
+            counts_whole_file: false,
         }
     }
     pub(crate) fn adopt_generation<D: RecordDirectory + ?Sized>(
@@ -210,6 +226,8 @@ impl ResidentIndex {
             uniform: None,
             first_sequence_hint: None,
             sequence_hint_disabled: false,
+            counted: 0,
+            counts_whole_file: false,
         }
     }
     pub(crate) fn none_retained(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
@@ -217,6 +235,61 @@ impl ResidentIndex {
             retained: false,
             frames_verified: false,
             ..Self::empty(snapshot, spec)
+        }
+    }
+    /// A writer that created its file: no record list, and every frame it
+    /// will hold is one it wrote.
+    /// A handle that keeps no list over a generation of `records` resident
+    /// records it has just published.
+    pub(crate) fn none_retained_counting(
+        snapshot: SnapshotFile,
+        spec: FormatSpec,
+        records: usize,
+    ) -> Self {
+        let mut result = Self::none_retained_created(snapshot, spec);
+        result.counted = records;
+        result.counts_whole_file = true;
+        result
+    }
+
+    pub(crate) fn none_retained_created(snapshot: SnapshotFile, spec: FormatSpec) -> Self {
+        Self {
+            retained: false,
+            counts_whole_file: true,
+            ..Self::empty(snapshot, spec)
+        }
+    }
+    /// A writer opened over an existing file: no record list, but the
+    /// boundary knowledge its open already established (bounded by its own
+    /// allowance) is kept for in-place replacement checks.
+    ///
+    /// `records` is how many resident records the open found: positions the
+    /// handle derived at open (its segment cursor) count from the start of
+    /// the file, so the count has to as well.
+    pub(crate) fn none_retained_opened(
+        snapshot: SnapshotFile,
+        spec: FormatSpec,
+        records: usize,
+        frames_verified: bool,
+        boundaries: Option<BoundaryProof>,
+    ) -> Self {
+        let mut result = Self::none_retained(snapshot, spec);
+        result.counted = records;
+        result.counts_whole_file = true;
+        result.frames_verified = frames_verified;
+        result.boundary_cache_unavailable = frames_verified
+            && spec.block_residency.iter().any(|block| !block.resident)
+            && boundaries.is_none();
+        result.boundary_proof = boundaries;
+        result
+    }
+    /// The whole file's resident record count, when this handle knows it
+    /// without a list or a walk.
+    pub(crate) fn whole_file_count(&self) -> Option<usize> {
+        if self.retained {
+            Some(self.len())
+        } else {
+            self.counts_whole_file.then_some(self.counted)
         }
     }
     pub(crate) fn is_retained(&self) -> bool {
@@ -233,7 +306,12 @@ impl ResidentIndex {
         charge: impl FnOnce() -> Result<u64>,
     ) -> Result<ReservedIndexSlot> {
         charge()?;
-        self.slots.reserve_one()?;
+        // A handle without a directory reserves no row. The boundary proof
+        // below is kept either way: it is bounded by its own allowance and is
+        // what lets a writer trust its own appends without a scan.
+        if self.retained {
+            self.slots.reserve_one()?;
+        }
         if !self.boundary_cache_unavailable
             && self.boundary_proof.is_none()
             && self
@@ -265,7 +343,11 @@ impl ResidentIndex {
     }
     pub(crate) fn install(&mut self, slot: ReservedIndexSlot, entry: &RecordIndexEntry) {
         let ReservedIndexSlot(()) = slot;
-        self.slots.push_reserved(encode(entry));
+        if self.retained {
+            self.slots.push_reserved(encode(entry));
+        } else {
+            self.counted += 1;
+        }
         self.note_verified_offset(self.len() - 1, entry.record_offset);
     }
     /// A failed follow cannot leave a partially adopted directory. All old
@@ -277,7 +359,12 @@ impl ResidentIndex {
         let original = self.len();
         let result = (|| {
             for entry in entries {
-                self.slots.push(encode(&entry?))?;
+                let entry = entry?;
+                if self.retained {
+                    self.slots.push(encode(&entry))?;
+                } else {
+                    self.counted += 1;
+                }
             }
             Ok(())
         })();
@@ -305,10 +392,17 @@ impl ResidentIndex {
             self.first_sequence_hint = None;
             self.sequence_hint_disabled = false;
         }
+        if !self.retained {
+            self.counted = self.counted.min(len);
+            return;
+        }
         self.slots.truncate(len.saturating_sub(self.rewritten_len));
         self.rewritten_len = self.rewritten_len.min(len);
     }
     pub(crate) fn len(&self) -> usize {
+        if !self.retained {
+            return self.counted;
+        }
         self.rewritten_len + self.slots.len()
     }
     #[cfg(test)]
@@ -395,7 +489,22 @@ impl ResidentIndex {
                 .uniform
                 .as_ref()
                 .is_some_and(|run| run.contains(offset))
-                || (self.frames_verified && self.offset_floor(offset)? == Some(offset))))
+                || (self.retained
+                    && self.frames_verified
+                    && self.offset_floor(offset)? == Some(offset))))
+    }
+
+    /// Whether the cached proof already covers `offset` (no read needed).
+    pub(crate) fn boundary_cached(&self, offset: u64) -> Result<bool> {
+        match &self.boundary_proof {
+            Some(proof) => proof.contains(offset),
+            None => Ok(false),
+        }
+    }
+
+    /// How far the cached proof's forward scan has reached, if it has started.
+    pub(crate) fn boundary_frontier(&self) -> Option<u64> {
+        self.boundary_proof.as_ref().map(|proof| proof.next)
     }
 
     pub(crate) fn verify_boundary(&mut self, append_start: u64, offset: u64) -> Result<()> {
@@ -639,6 +748,9 @@ impl ResidentIndex {
         }
     }
     fn row(&self, position: usize) -> std::io::Result<Option<ResidentRow>> {
+        if !self.retained {
+            return Ok(None);
+        }
         if position >= self.rewritten_len {
             return self.slots.get(position - self.rewritten_len);
         }
@@ -648,23 +760,6 @@ impl ResidentIndex {
         &self,
     ) -> impl DoubleEndedIterator<Item = Result<RecordIndexEntry>> + ExactSizeIterator + '_ {
         (0..self.len()).map(|at| self.entry_at(at))
-    }
-    pub(crate) fn contains_block(&self, block_id: u32) -> Result<bool> {
-        for entry in self.iter() {
-            if entry?.block_id == block_id {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-    pub(crate) fn last_entry_of_block(&self, block_id: u32) -> Result<Option<RecordIndexEntry>> {
-        for entry in self.iter().rev() {
-            let entry = entry?;
-            if entry.block_id == block_id {
-                return Ok(Some(entry));
-            }
-        }
-        Ok(None)
     }
 }
 

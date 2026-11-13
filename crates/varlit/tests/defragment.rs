@@ -21,6 +21,8 @@
 //! record count cannot tell a correct chain from one that skips a survivor.
 
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
@@ -79,7 +81,7 @@ fn chain_values(path: &std::path::Path) -> varlit::Result<Vec<u64>> {
 }
 
 fn collect_readings(file: &varlit::VarlitFile) -> varlit::Result<Vec<Reading>> {
-    let blocks = file.blocks::<Reading>()?;
+    let blocks = crate::pages::all_blocks!(file, Reading)?;
     let mut cursor = blocks.cursor();
     let mut reading = Reading::empty();
     let mut all = Vec::new();
@@ -199,7 +201,7 @@ fn a_reader_open_across_the_republish_keeps_its_generation() -> varlit::Result<(
     // And it can be told that it is no longer current.
     assert!(!held.is_current()?);
     assert_eq!(
-        held.reopen_readonly()?.blocks::<Reading>()?.len(),
+        crate::pages::all_blocks!(held.reopen_readonly()?, Reading)?.len(),
         7,
         "the reopened handle lands on the defragmented generation",
     );

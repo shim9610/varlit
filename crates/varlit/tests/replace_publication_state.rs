@@ -9,6 +9,8 @@
 //! which the replacement temp file must be preserved and the writer poisoned.
 
 #![allow(unexpected_cfgs)]
+#[path = "support/pages.rs"]
+mod pages;
 
 /// the pure `ReplaceFileW` error classification, testable on every
 /// host because a real 1176/1177 cannot be reproduced on demand.
@@ -157,9 +159,11 @@ mod enabled {
         // Publication already happened: the pathname resolves to the new
         // generation even though the caller saw an error.
         assert_eq!(
-            opt(|o| VarlitFile::open_readonly(spec(), &path)?
-                .blocks::<PubRecord>()?
-                .get(0, o))?,
+            opt(|o| crate::pages::all_blocks!(
+                VarlitFile::open_readonly(spec(), &path)?,
+                PubRecord
+            )?
+            .get(0, o))?,
             Some(PubRecord(2))
         );
 
@@ -171,7 +175,7 @@ mod enabled {
         drop(writer);
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        let blocks = reopened.blocks::<PubRecord>()?;
+        let blocks = crate::pages::all_blocks!(reopened, PubRecord)?;
         assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(2)));
         assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(3)));
         Ok(())
@@ -222,7 +226,7 @@ mod enabled {
         // the target pathname still resolves to the previous generation.
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
         assert_eq!(
-            opt(|o| reopened.blocks::<PubRecord>()?.get(0, o))?,
+            opt(|o| crate::pages::all_blocks!(reopened, PubRecord)?.get(0, o))?,
             Some(PubRecord(1)),
         );
         Ok(())
@@ -244,7 +248,7 @@ mod enabled {
         drop(writer);
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        let blocks = reopened.blocks::<PubRecord>()?;
+        let blocks = crate::pages::all_blocks!(reopened, PubRecord)?;
         assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(5)));
         assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(6)));
         Ok(())
@@ -428,7 +432,7 @@ mod cross_version_and_keyed_refusals {
     fn assert_still_v1(path: &std::path::Path) -> Result<()> {
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), path)?;
         assert_eq!(
-            opt(|o| reader.blocks::<RecordV1>()?.get(0, o))?,
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(0, o))?,
             Some(RecordV1(1))
         );
         Ok(())
@@ -568,11 +572,11 @@ mod cross_version_and_keyed_refusals {
 
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), &path)?;
         assert_eq!(
-            opt(|o| reader.blocks::<RecordV1>()?.get(0, o))?,
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(0, o))?,
             Some(RecordV1(1))
         );
         assert_eq!(
-            opt(|o| reader.blocks::<RecordV1>()?.get(1, o))?,
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(1, o))?,
             Some(RecordV1(2))
         );
         Ok(())
@@ -714,7 +718,7 @@ mod cross_version_and_keyed_refusals {
         drop(writer);
 
         let reader = VarlitFile::open_readonly(keyed_spec(), &path)?;
-        let blocks = reader.blocks::<KeyedRecord>()?;
+        let blocks = crate::pages::all_blocks!(reader, KeyedRecord)?;
         assert_eq!(blocks.len(), 2);
         assert_eq!(opt(|o| blocks.get(0, o))?, Some(KeyedRecord { key: 5 }));
         assert_eq!(opt(|o| blocks.get(1, o))?, Some(KeyedRecord { key: 5 }));

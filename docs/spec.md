@@ -89,7 +89,7 @@ and compile-time schema validation.
   only when the epoch changes. `flush()` does not publish; `sync()` does.
   All matrix reads use the captured root until explicit `follow()`. The companion
   is persistent data and must accompany the primary in backups and moves.
-- `VMAT` layout version 5 stores runtime dimensions, matrix block layout,
+- `VMAT` layout version 6 stores runtime dimensions, matrix block layout,
   commit bitmap offsets, slot region offsets, derived static aux region
   placement, optional offset-table metadata, region CRC metadata,
   `append_log_start`, and the persisted page-index region
@@ -99,6 +99,9 @@ and compile-time schema validation.
   reserved tail shrank from 32 to 16 bytes. The region order is
   `VMAT header | dimension table | block table | commit categories | commit maps
   | slot region | static aux | page index | MCRC | append log`.
+  Regions are contiguous except that the slot region starts at the first
+  4 KiB file offset at or after the end of the commit maps; the gap is a
+  never-written zero extent.
 - The page index is an array of little-endian `u64` slots, each 8 bytes. Slot `0`
   is an occupancy header: the live entry count in the low 48 bits and a check
   value derived from it in the high 16, so the header carries its own redundancy
@@ -116,7 +119,7 @@ and compile-time schema validation.
   the pages it visits from this index unioned with the allocated ranges the
   platform reports, never from the logical page count.
 
-  VMAT v5 reserves a second array after the forward array's full capacity:
+  VMAT v5 and later reserve a second array after the forward array's full capacity:
   `header | forward[page_count] | reverse[page_count]`, with total virtual length
   `(1 + 2 * page_count) * 8`. `reverse[page]` is zero for absent pages, otherwise
   `slot + 1`. Queries cross-check `forward[slot] == page + 1`. Both directions and
@@ -137,7 +140,7 @@ and compile-time schema validation.
 - Static matrix aux regions are declared in the format spec, preallocated after
   slot payloads, excluded from commit bitmap validity, and exposed through
   `matrix_aux_len`, `read_matrix_aux`, and writer-only `write_matrix_aux`.
-- With `integrity: crc32`, `VMAT` v5 includes an `MCRC` v2 table after the slot
+- With `integrity: crc32`, `VMAT` v6 includes an `MCRC` v2 table after the slot
   region, any static aux regions, and the page index. It stores a CRC32 over the metadata tables,
   an 8-byte digest (`crc32` plus a state word) per 4 KiB page of every commit
   map, and a CRC32 plus a validity bit per dense cell slot. A commit-bit
@@ -149,13 +152,13 @@ and compile-time schema validation.
   extent, and those bitmaps are held sparsely in memory after open, so neither
   create-time metadata I/O nor post-open bitmap residency scales with cell
   count.
-- A `VMAT` layout version 1, 2, 3, or 4 artifact is refused at open with
-  `Error::FormatVersionMismatch { expected: 5, actual: <1, 2, 3, or 4> }`; it is
+- A `VMAT` layout version 1, 2, 3, 4, or 5 artifact is refused at open with
+  `Error::FormatVersionMismatch { expected: 6, actual: <1 to 5> }`; it is
   stale and regenerable, not migratable. Version 1 describes the pre-paging
   physical representation, version 2 carries no page-index region, and version 3
   carries the superseded terminator-scanned page-index encoding. Version 4 has
-  no directly addressed reverse array. The `MCRC`
-  integrity table remains version 2.
+  no directly addressed reverse array. Version 5 packs the slot region
+  directly after the commit maps. The `MCRC` integrity table remains version 2.
 - P0 commit operations are logical visibility operations under the explicit
   `flush`/`sync` durability model, not implicit per-cell fsync operations.
 - Same-size matrix overwrites update the existing slot range and must not change
@@ -332,7 +335,7 @@ and compile-time schema validation.
   indexes remain physical stream indexes.
 - `schema_hash: computed;` asks the macro to call `with_computed_schema_hash()` after policies are attached.
 - `index` accepts either a single legacy identifier or a list such as `[scan_on_open, checkpoint_on_flush, block_offset_chain, keyed_offset_chain]`. `segment_on_flush` is deliberately **not** one of them: a block is the unit a declaration names, a segment is varlit's internal lookup unit, and its granularity is varlit's decision. Enable it on the `FormatSpec` with `IndexPolicy::with_segment_on_flush`.
-- `commit` accepts `none`, `record_footer`, or `transaction_marker(on_flush|explicit)`.
+- `commit` accepts `none`, `record_footer`, or `transaction_marker(on_flush|explicit)`, optionally `transaction_marker(<mode>, single_barrier)` (one storage barrier per `commit_durable`; requires `crc32_with_header`, refuses `mark_tail`; file header commit-policy bytes 5/6; commit markers carry the 28-byte `VCM2` payload: anchor offset or `u64::MAX`, record count and checksum chain).
 - Generated typed writers expose both `commit()` and `commit_durable()`.
   `commit()` is a logical visibility marker and does not imply fsync.
   `commit_durable()` writes commit-covered metadata/checkpoints, flushes and
@@ -854,7 +857,9 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - Mmap and zero-copy are opt-in features only. The `zero-copy` crate feature implies the `mmap` feature because the first raw-read API is mmap-backed.
 - Default typed decode remains owned canonical decoding.
 - Initial mmap scope exposes read-only payload windows from unsafe
-  `VarlitFile::mmap_payloads() -> MmapPayloads`.
+  `VarlitFile::mmap_payloads() -> MmapPayloads`, or for resident positions
+  `records` only, `VarlitFile::mmap_payload_range(records) -> MmapPayloads`,
+  whose mapping, copied index and limits cover just that range.
 - `MmapPayloads` owns a read-only mmap plus a cloned snapshot index and `FormatSpec`.
 - `MmapPayloads::payload_window(entry)` accepts only entries that exactly match the cloned snapshot index, preventing forged public offsets from exposing arbitrary file bytes.
 - `MmapPayloads::block_payload_window::<T>(index)` returns the typed block ordinal payload bytes or `None` when out of range.

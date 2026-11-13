@@ -377,11 +377,9 @@ impl VarlitFile {
     }
 
     fn write_header_tails(&mut self, commit_offset: u64) -> Result<()> {
-        // `header_tails` refuses a format declaring matrix blocks, so the
-        // append log starts exactly where the header ends and this *is* the
-        // header length. The refusal is what makes the equality safe to rely
-        // on; if it is ever lifted, this needs the real header length.
-        debug_assert!(!self.spec.has_matrix_blocks());
+        // The append log starts exactly where the header ends, matrix or not:
+        // a matrix lives in records of that log, never between the header
+        // and it, so this *is* the header length.
         let header_len = append_log_start_for_file(self)?;
         let Some(extent) =
             mutable_header_block_extent(header_len, &self.header_extensions, HEADER_TAILS_MAGIC)?
@@ -477,7 +475,7 @@ impl VarlitFile {
     }
 
     fn write_open_digest_record(&mut self) -> Result<()> {
-        let record_offset = self.file.metadata()?.len();
+        let record_offset = self.file.len()?;
         // The high-water mark as it will stand *once this record is down*: the
         // digest takes the next sequence itself, so reporting the state before
         // it would send the next writer back over a number this record used.
@@ -526,7 +524,7 @@ impl VarlitFile {
 
     fn write_embedded_manifest_if_needed(&mut self) -> Result<()> {
         if self.spec.manifest_policy != ManifestPolicy::Embedded
-            || self.index.contains_block(MANIFEST_BLOCK_ID)?
+            || self.block_tails.tail(MANIFEST_BLOCK_ID).is_some()
         {
             return Ok(());
         }
@@ -573,51 +571,4 @@ impl VarlitFile {
         self.uncommitted_since_commit
     }
 
-    /// Decides whether `flush`/`commit` should serialize a fresh full index
-    /// checkpoint.
-    ///
-    /// This throttles only the *checkpoint* serialization; native-record
-    /// durability in `flush` is untouched. Two rules apply :
-    ///
-    /// (a) *Skip when unchanged.* If nothing but commit markers has been
-    ///     appended since the last checkpoint, the checkpoint would be
-    ///     byte-identical, so it is suppressed.
-    ///
-    /// (b) *Geometric spacing.* A new full checkpoint is written only once the
-    ///     live tail has grown by at least
-    ///     `max(INDEX_CHECKPOINT_MIN_RECORDS, records_at_last_checkpoint / 2)`
-    ///     records. Because each checkpoint serializes the whole index, spacing
-    ///     the checkpoints geometrically bounds the total checkpoint bytes to
-    ///     O(N) with O(log N) checkpoints, instead of the O(N^2) bytes produced
-    ///     by a full checkpoint on every flush.
-    ///
-    /// Open/recovery does not depend on this cadence: the scan reads every
-    /// native record and merely validates whatever checkpoints it encounters,
-    /// so sparse checkpoints and a checkpoint-less tail both recover correctly.
-    ///
-    /// The decision itself is O(1) : [`CheckpointCadence`] carries
-    /// the eligible-tail count and the geometric threshold that the original
-    /// implementation recomputed by reverse-searching the resident index on
-    /// every flush, which made cumulative flush CPU O(N^2) for
-    /// flush-per-record workloads.
-    /// (c) *Skip when it would not fit.* A full checkpoint serializes the whole
-    ///     index into one record, so past `(max_record_payload_len - 22) / 73`
-    ///     entries — 919,299 on the 64 MiB default — there is no record that
-    ///     can hold it. `write_index_checkpoint` answered that with
-    ///     `LimitExceeded`, and because `flush` propagates, a file simply
-    ///     stopped being flushable at that record count. The checkpoint is
-    ///     derived: not writing one costs the next open the scan it already
-    ///     falls back to, so the ceiling belongs in the decision, not in the
-    ///     write.
-    fn needs_index_checkpoint(&self) -> bool {
-        // Rule (a): commit markers never grow the eligible tail, so an
-        // unchanged checkpoint is suppressed by `eligible_since_checkpoint`
-        // staying at zero. Rule (b): the threshold was derived from the last
-        // checkpoint's position, whose entry count is a faithful proxy for
-        // that checkpoint's byte cost.
-        let new_records = self.checkpoint_cadence.eligible_since_checkpoint;
-        new_records != 0
-            && new_records >= self.checkpoint_cadence.next_threshold
-            && self.index_checkpoint_fits()
-    }
 }

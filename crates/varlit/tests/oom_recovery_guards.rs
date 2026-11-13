@@ -1,5 +1,8 @@
 //! Allocation refusal uses a synthetic allocator, never host memory exhaustion.
 #![cfg(all(feature = "integrity", feature = "compression-zstd", not(miri)))]
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -437,9 +440,8 @@ fn allocations_refuse_cleanly_and_rewrite_scratch_stays_bounded() -> Result<()> 
     Ok(())
 }
 
-// Sweep the rewrite, including optional post-publication read-directory
-// construction. Success after refusal is valid only if the original directory
-// remains usable; an error is followed by reopening, never a blind append retry.
+// Sweep the rewrite's allocations. An error is followed by reopening, never a
+// blind append retry, and both handles must still read every record.
 fn rewrite_read_directory_refusal_keeps_a_usable_generation() -> Result<()> {
     fn check(reader: &VarlitFile, count: usize) -> Result<()> {
         let mut seen = 0;
@@ -528,9 +530,13 @@ fn rewrite_read_directory_refusal_keeps_a_usable_generation() -> Result<()> {
         returned_refusals > 0,
         "pre-publication refusal was not exercised"
     );
-    assert!(
-        recovered_refusals > 0,
-        "optional read-directory refusal was not exercised"
+    // A writer keeps no record list, so publication no longer builds one
+    // afterwards: there is no post-publication allocation left to refuse, and
+    // every refusal the sweep reaches happens before the new generation is
+    // published.
+    assert_eq!(
+        recovered_refusals, 0,
+        "a refusal after publication means a list is being built again"
     );
     println!(
         "REWRITE_DIRECTORY_REFUSALS returned={returned_refusals} recovered={recovered_refusals}"

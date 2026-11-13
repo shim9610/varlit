@@ -1,6 +1,13 @@
 //! The environment model may fail before, during or after any I/O. A successful
 //! sync persists preceding complete writes. Checksums reject torn heads; they do
 //! not authenticate arbitrary replacement bytes. Old committed data is immutable.
+//!
+//! A commit acknowledges once the primary — the records and the sync marker
+//! that closes them — is durable. Whether it also confirms the sidecar is the
+//! writer's confirm policy; when it does, the confirmation is either the
+//! single-barrier append-only form (version 5) or the two-barrier page-reusing
+//! form (version 6), and either must leave the new generation durable before
+//! the acknowledgement.
 use super::*;
 use core::cell::Cell;
 
@@ -39,6 +46,9 @@ impl Fault {
 
 struct Medium {
     primary_synced: bool,
+    /// Whether this commit confirms the sidecar, and in which form.
+    confirm: bool,
+    two_barrier: bool,
     body_complete: bool,
     /// Whether the generation's sidecar bytes reached storage. A persisted new
     /// head is adopted only when this holds: the head names their checksum.
@@ -57,6 +67,8 @@ impl Medium {
     fn new(primary_synced: bool, poisoned: bool) -> Self {
         Self {
             primary_synced,
+            confirm: kani::any(),
+            two_barrier: kani::any(),
             body_complete: false,
             body_synced: false,
             selected: false,
@@ -124,6 +136,13 @@ impl Medium {
                     kani::assume(complete || persisted != Head::New);
                     self.persisted[slot] = persisted;
                 }
+                CheckpointStep::BodySync => {
+                    // Before any head of this publication is written.
+                    assert!(!self.selected);
+                    if complete || kani::any() {
+                        self.body_synced = self.body_complete;
+                    }
+                }
                 CheckpointStep::HeadSync => {
                     if complete || kani::any() {
                         // sync_data covers the whole sidecar: body and head.
@@ -131,6 +150,10 @@ impl Medium {
                         self.persisted = self.heads;
                     }
                 }
+            }
+            if matches!(step, CheckpointStep::Head) && self.two_barrier {
+                // The two-barrier form only names a body already on storage.
+                assert!(self.body_synced, "head written before its body barrier");
             }
             self.check();
         }
@@ -157,14 +180,28 @@ impl Medium {
                 }
             }
             CommitStep::Publish => {
-                let result =
-                    checkpoint(CheckpointKind::Confirmed, |step| self.checkpoint_step(step));
+                if !self.confirm {
+                    // The sidecar trails: recovery and readers take this commit
+                    // from the primary's verified marker prefix.
+                    return Ok(());
+                }
+                let result = if self.two_barrier {
+                    checkpoint_with_body_barrier(CheckpointKind::Confirmed, |step| {
+                        self.checkpoint_step(step)
+                    })
+                } else {
+                    checkpoint(CheckpointKind::Confirmed, |step| self.checkpoint_step(step))
+                };
                 self.publication_failed = result.is_err();
                 return result;
             }
             CommitStep::Poison => self.poisoned = true,
             CommitStep::Finish => {
-                assert!(self.durable_new(), "acknowledged an undurable commit");
+                // The marker that closes the commit is in the synced primary.
+                assert!(self.primary_synced, "acknowledged an undurable commit");
+                if self.confirm {
+                    assert!(self.durable_new(), "acknowledged an undurable confirmation");
+                }
                 self.finished = true;
             }
         }
@@ -191,9 +228,55 @@ fn successful_commit_is_reachable_and_durable() {
     let mut medium = Medium::new(false, false);
     medium.fault.at = u8::MAX;
     assert!(commit(|step| medium.commit_step(step)).is_ok());
-    assert!(medium.finished && medium.primary_synced && medium.body_synced);
-    assert!(medium.heads[medium.first] == Head::New && medium.persisted[medium.first] == Head::New);
-    assert!(medium.heads[1 - medium.first] == Head::Old);
+    assert!(medium.finished && medium.primary_synced);
+    if medium.confirm {
+        assert!(medium.body_synced);
+        assert!(
+            medium.heads[medium.first] == Head::New && medium.persisted[medium.first] == Head::New
+        );
+        assert!(medium.heads[1 - medium.first] == Head::Old);
+    } else {
+        assert!(
+            medium.heads == [Head::Old; 2],
+            "an unconfirmed commit wrote a head"
+        );
+    }
+}
+
+#[kani::proof]
+#[kani::unwind(10)]
+fn every_two_barrier_publication_syncs_its_body_before_its_head() {
+    let choice: u8 = kani::any();
+    let kind = match choice % 3 {
+        0 => CheckpointKind::Working,
+        1 => CheckpointKind::Dirty,
+        _ => CheckpointKind::Confirmed,
+    };
+    let confirmed = matches!(kind, CheckpointKind::Confirmed);
+    let (mut body, mut body_synced, mut heads, mut syncs) = (false, false, 0u8, 0u8);
+    let result: Result<(), ()> = checkpoint_with_body_barrier(kind, |step| {
+        match step {
+            CheckpointStep::Body => body = true,
+            CheckpointStep::BodySync => {
+                assert!(body && heads == 0);
+                body_synced = true;
+                syncs += 1;
+            }
+            CheckpointStep::SelectHead => assert!(body && (body_synced || !confirmed)),
+            CheckpointStep::Head => {
+                assert!(body && (body_synced || !confirmed));
+                heads += 1;
+            }
+            CheckpointStep::HeadSync => {
+                assert!(heads == 1 && body_synced);
+                syncs += 1;
+            }
+        }
+        Ok(())
+    });
+    assert!(result.is_ok());
+    assert_eq!(heads, 1);
+    assert_eq!(syncs, if confirmed { 2 } else { 0 });
 }
 
 #[kani::proof]
@@ -220,6 +303,7 @@ fn every_publication_writes_one_head_and_only_confirmed_syncs_once() {
                 assert!(heads == 1);
                 syncs += 1;
             }
+            CheckpointStep::BodySync => panic!("single-barrier publication synced its body"),
         }
         Ok(())
     });
@@ -286,10 +370,15 @@ fn follow_error_preserves_the_entire_reader() {
 
 // An abstract frontier invariant with no history-length bound. These are byte
 // frontiers, not a proof of payload decoding or a replacement for the I/O model.
+//
+// `marked` is the end of the primary's verified sync-marker prefix: what
+// recovery keeps and readers expose. It, not the sidecar, bounds what was
+// acknowledged; the sidecar (`confirmed`, `persisted`) trails it.
 #[derive(kani::Arbitrary)]
 struct Frontiers {
     confirmed: u64,
     persisted: u64,
+    marked: u64,
     acknowledged: u64,
     working: u64,
     durable: u64,
@@ -298,11 +387,12 @@ struct Frontiers {
 }
 impl Frontiers {
     fn invariant(&self) -> bool {
-        self.acknowledged <= self.persisted
+        self.acknowledged <= self.marked
             && self.persisted <= self.confirmed
-            && self.confirmed <= self.working
-            && self.confirmed <= self.durable
-            && self.pinned <= self.confirmed
+            && self.confirmed <= self.marked
+            && self.marked <= self.working
+            && self.marked <= self.durable
+            && self.pinned <= self.marked
             && (self.poisoned || self.persisted == self.confirmed)
     }
 }
@@ -329,7 +419,9 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
                 let mut medium = Medium::new(state.durable >= state.working, false);
                 let result = commit(|step| medium.commit_step(step));
                 if medium.primary_synced {
+                    // The marker closing everything written is now durable.
                     state.durable = state.working;
+                    state.marked = state.working;
                 }
                 state.confirmed = if medium.visible_new() {
                     state.working
@@ -343,7 +435,7 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
                 };
                 state.poisoned = medium.poisoned;
                 if result.is_ok() {
-                    state.acknowledged = state.confirmed;
+                    state.acknowledged = state.marked;
                 }
             }
         }
@@ -352,25 +444,28 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
             state.poisoned = true;
         }
         3 => {
-            // Power loss also destroys reader handles; synced data survives.
+            // Power loss also destroys reader handles; synced data survives,
+            // the verified marker prefix included.
             state.confirmed = state.persisted;
             state.working = state.durable;
             state.pinned = 0;
             state.poisoned = true;
         }
         4 => {
-            // Recovery validates the latest confirmed target before truncation.
+            // Recovery cuts the primary back to its verified marker prefix —
+            // never further — republishes the confirmed base, then replays the
+            // kept tail and confirms it.
             let fail: u8 = kani::any();
             let working = Cell::new(state.working);
             let durable = Cell::new(state.durable);
             let persisted = Cell::new(state.persisted);
             let result = restore(
                 || {
-                    working.set(state.confirmed);
+                    working.set(state.marked);
                     if fail == 0 { Err(()) } else { Ok(()) }
                 },
                 || {
-                    durable.set(state.confirmed);
+                    durable.set(state.marked);
                     if fail == 1 { Err(()) } else { Ok(()) }
                 },
                 || {
@@ -382,6 +477,11 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
             state.durable = durable.get();
             state.persisted = persisted.get();
             state.poisoned = result.is_err();
+            if result.is_ok() && kani::any() {
+                // The replay's confirmation succeeded.
+                state.confirmed = state.marked;
+                state.persisted = state.marked;
+            }
         }
         5 => {
             // A clean writer may restart directly, without truncating/restoring.
@@ -405,9 +505,10 @@ fn frontier_invariant_is_preserved_by_an_arbitrary_transition() {
         _ => {
             // Open/follow a reader; failed follow retains its old frontier.
             let fail: bool = kani::any();
+            // Readers expose the verified marker prefix past the confirmed EOF.
             let _ = follow(
                 &mut state.pinned,
-                |_| if fail { Err(()) } else { Ok(state.confirmed) },
+                |_| if fail { Err(()) } else { Ok(state.marked) },
                 |pin, next| *pin = next,
             );
         }
@@ -421,6 +522,7 @@ fn initial_frontier_satisfies_the_inductive_invariant() {
     let state = Frontiers {
         confirmed: frontier,
         persisted: frontier,
+        marked: frontier,
         acknowledged: frontier,
         working: frontier,
         durable: frontier,

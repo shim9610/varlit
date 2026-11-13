@@ -15,7 +15,30 @@ impl VarlitFile {
     /// (`STANDARD` sets it to 1 GiB) even when the requested entry was the
     /// first record in the file.
     pub fn metadata(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        self.metadata_in(self.resident_directory("metadata")?, key)
+        // Without a kept list, a format that chains its blocks reaches its
+        // metadata records newest-first through the chain: the first one that
+        // carries `key` is the answer, and nothing else in the file is read.
+        if !self.index.is_retained()
+            && self.index.whole_file_count().is_some()
+            && self.spec.index_policy.block_offset_chain
+        {
+            let mut budget = MaterializationBudget::new(self.spec);
+            let mut payload = Vec::new();
+            for entry in self.block_chain(METADATA_BLOCK_ID)? {
+                let entry = entry?;
+                budget.reset();
+                let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
+                budget.consume(logical_len)?;
+                entry.read_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
+                let (stored_key, _) = split_metadata_payload(&payload, self.spec.endian)?;
+                if stored_key == key {
+                    let (_, value): (String, Vec<u8>) = budget.decode(&payload, self.spec.endian)?;
+                    return Ok(Some(value));
+                }
+            }
+            return Ok(None);
+        }
+        self.metadata_in(&self.resident_directory("metadata")?, key)
     }
 
     fn metadata_in<D: RecordDirectory + ?Sized>(
@@ -72,7 +95,7 @@ impl VarlitFile {
     /// reused; metadata names and values still allocate separately, and a
     /// larger result may grow the buffer.
     pub fn all_metadata_into(&self, out: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
-        self.all_metadata_into_in(self.resident_directory("all_metadata")?, out)
+        self.all_metadata_into_in(&self.resident_directory("all_metadata")?, out)
     }
 
     fn all_metadata_into_in<D: RecordDirectory + ?Sized>(
@@ -94,6 +117,8 @@ impl VarlitFile {
             let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
             budget.consume(logical_len)?;
             entry.read_payload_snapshot_into(self.spec, &self.snapshot, &mut payload)?;
+            // The pair's own slot is held as well as its decoded bytes.
+            budget.consume(std::mem::size_of::<(String, Vec<u8>)>() as u64)?;
             out.try_reserve(1).map_err(|_| Error::AllocationFailed {
                 resource: "metadata entries",
                 requested: logical_len,
@@ -104,7 +129,28 @@ impl VarlitFile {
     }
 
     pub fn schema_manifest(&self) -> Result<Option<SchemaManifest>> {
-        self.schema_manifest_in(self.resident_directory("schema_manifest")?)
+        // The newest manifest is the newest record of its block, which the
+        // handle already knows the offset of: one record read, not a walk.
+        // Only where the tails are known complete — a handle that created the
+        // file or opened it by scan — rather than taken from a summary that
+        // may not carry internal blocks.
+        if !self.index.is_retained() && self.index.whole_file_count().is_some() {
+            let Some(offset) = self.block_tails.tail(MANIFEST_BLOCK_ID) else {
+                return Ok(None);
+            };
+            let entry = fault_record_entry(&self.snapshot, self.spec, offset, true)?;
+            if entry.block_id != MANIFEST_BLOCK_ID {
+                return Err(Error::InvalidCanonicalEncoding(
+                    "manifest tail names another block",
+                ));
+            }
+            let mut budget = MaterializationBudget::new(self.spec);
+            let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
+            budget.consume(logical_len)?;
+            let payload = entry.read_payload_snapshot(self.spec, &self.snapshot)?;
+            return Ok(Some(decode_schema_manifest(&payload, &mut budget)?));
+        }
+        self.schema_manifest_in(&self.resident_directory("schema_manifest")?)
     }
 
     fn schema_manifest_in<D: RecordDirectory + ?Sized>(
@@ -170,6 +216,7 @@ impl VarlitFile {
             block_id,
             next: self.block_tails.tail(block_id),
             visited: 0,
+            floor: append_log_start_for_file(self)?,
         })
     }
 
@@ -221,6 +268,7 @@ impl VarlitFile {
             snapshot: &self.snapshot,
             next: Some(from),
             visited: 0,
+            floor: append_log_start_for_file(self)?,
         })
     }
 
@@ -291,7 +339,7 @@ impl VarlitFile {
     /// This is the half of "the host manages the memory" that the `_into`
     /// family alone does not give you. [`index_entries_into`](Self::index_entries_into)
     /// hands a host the index; without this, using one of those entries meant
-    /// [`RecordIndexEntry::read_payload`], which reopens the file **by path** —
+    /// `MyFormat::read_payload`, which reopens the file **by path** —
     /// a different object if the path was replaced — and allocates. So the two
     /// halves of the pattern are: take the index into your buffer once, then
     /// read through it into your buffer as often as you like, both bound to
@@ -391,11 +439,11 @@ impl VarlitFile {
     /// Every position-based read goes through here rather than touching
     /// `self.index`, so a handle opened without a directory refuses by name
     /// instead of answering as though the file were empty.
-    fn resident_directory(&self, operation: &'static str) -> Result<&ResidentIndex> {
+    pub(super) fn resident_directory(&self, _operation: &'static str) -> Result<RecordList<'_>> {
         if self.index.is_retained() {
-            Ok(&self.index)
+            Ok(RecordList::Kept(&self.index))
         } else {
-            Err(Error::NoResidentDirectory { operation })
+            Ok(RecordList::Walked(WalkedRecords::new(self)?))
         }
     }
 
@@ -540,19 +588,145 @@ impl VarlitFile {
         RecordMap::new(self, buffer)
     }
 
-    /// The block's records as a lazy collection: one decoded value at a time.
+    /// A [`record_map`](Self::record_map) whose walk starts at `offset`
+    /// instead of the start of the append log.
     ///
-    /// **This allocates** one index entry per matching record, which is what
-    /// makes `get(i)` positional.
-    /// [`block_entries_into`](Self::block_entries_into) fills the caller's
-    /// buffer with those same entries instead.
+    /// This is how a forward reader continues after
+    /// [`follow`](Self::follow): keep the previous map's
+    /// [`resume_offset`](RecordMap::resume_offset), follow, and open a map
+    /// from it. Only the records appended since are framed, the buffer holds
+    /// only what this walk adds, and nothing before `offset` is read — so a
+    /// reader that keeps up costs the new records, and one that starts from
+    /// the beginning costs `fill_to`/`release` batches, whatever the file
+    /// length.
     ///
-    /// Deliberately *not* pointing at
-    /// [`decode_blocks_into`](Self::decode_blocks_into): that one decodes every
-    /// matching record, so it is bounded by the caller's buffer and not by the
-    /// file, which is the opposite of what this collection is for.
-    pub fn blocks<T: VarlitBlock>(&self) -> Result<BlockVec<T>> {
-        self.blocks_in(self.resident_directory("blocks")?)
+    /// `offset` must be a record boundary of this file: the start of the
+    /// append log, or a `resume_offset` taken from a map of the same file. A
+    /// value outside `[start, end]` of this handle's snapshot is refused; one
+    /// inside that is not a boundary fails when the walk frames it (its header
+    /// does not frame as a record), the same refusal a damaged record gets.
+    pub fn record_map_from<'a>(
+        &self,
+        buffer: &'a mut Vec<RecordIndexEntry>,
+        offset: u64,
+    ) -> Result<RecordMap<'a>> {
+        RecordMap::new_from(self, buffer, offset)
+    }
+
+    /// Where this file's anchors are, if it has any. See
+    /// [`crate::AnchorPolicy`].
+    pub fn anchor_layout(&self) -> Option<crate::AnchorLayout> {
+        self.file.anchor_layout()
+    }
+
+    /// Anchor `k` (`k >= 1`), when this handle's snapshot reaches it and it is
+    /// intact: one read at an offset computed from `k`, no index.
+    ///
+    /// Its [`record_start`](crate::Anchor::record_start) is a record boundary
+    /// a [`record_map_from`](Self::record_map_from) walk can start at.
+    pub fn anchor(&self, k: u64) -> Result<Option<crate::Anchor>> {
+        let Some(layout) = self.file.anchor_layout() else {
+            return Ok(None);
+        };
+        match layout.anchor_logical(k) {
+            Some(at) if at < self.snapshot.len() => self.snapshot.anchor(k),
+            _ => Ok(None),
+        }
+    }
+
+    /// A record boundary from which a forward walk reaches the first record
+    /// whose sequence is at least `sequence`, found by binary search over the
+    /// anchors: `O(log(file / spacing))` reads, no index and no scan. Without
+    /// anchors, or before the first one, it is the start of the append log.
+    ///
+    /// Sequences rise along the log, so the record an anchor names bounds
+    /// every record before it.
+    pub fn seek_sequence(&self, sequence: u64) -> Result<u64> {
+        let start = append_log_start_for_file(self)?;
+        let Some(layout) = self.file.anchor_layout() else {
+            return Ok(start);
+        };
+        // The last anchor whose spanning record does not follow `sequence`.
+        let (mut low, mut high) = (0u64, layout.anchors_before(self.snapshot.len()));
+        let mut best = start;
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            let anchor = self
+                .snapshot
+                .anchor(mid)?
+                .ok_or(Error::InvalidCanonicalEncoding(
+                    "an anchor inside the snapshot is damaged",
+                ))?;
+            if anchor.sequence <= sequence {
+                best = anchor.record_start;
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        Ok(best)
+    }
+
+    /// Decodes the first records of block `T` into `out`, in file order, and
+    /// says where to continue.
+    ///
+    /// Both buffers are the caller's: `out`'s length is the page size and its
+    /// elements are decoded into in place (keeping what they own), and
+    /// `payload` is the one read buffer the whole page shares. Nothing is
+    /// allocated per record beyond what decoding into an element needs, and
+    /// nothing outlives the call. [`blocks_from`](Self::blocks_from) continues
+    /// from [`Page::next`]. Every handle answers it, including one that keeps
+    /// no directory.
+    ///
+    /// Each record's materialization is charged on its own, as `get` always
+    /// charged it. A record of `T` written under another block version is
+    /// refused rather than skipped.
+    pub fn blocks<T: VarlitBlock>(&self, payload: &mut Vec<u8>, out: &mut [T]) -> Result<Page> {
+        self.blocks_page(None, payload, out)
+    }
+
+    /// The page of block `T` that starts at `from`; see
+    /// [`blocks`](Self::blocks).
+    pub fn blocks_from<T: VarlitBlock>(
+        &self,
+        from: PageCursor,
+        payload: &mut Vec<u8>,
+        out: &mut [T],
+    ) -> Result<Page> {
+        self.blocks_page(Some(from), payload, out)
+    }
+
+    fn blocks_page<T: VarlitBlock>(
+        &self,
+        from: Option<PageCursor>,
+        payload: &mut Vec<u8>,
+        out: &mut [T],
+    ) -> Result<Page> {
+        crate::collections::ensure_registered_block::<T>(self.spec)?;
+        // A non-resident block is not framed by the walk, and an empty page
+        // would say "nothing was written" rather than "not through this door".
+        crate::collections::ensure_resident_block::<T>(self.spec)?;
+        let endian = T::ENDIAN.unwrap_or(self.spec.endian);
+        self.fill_page(from, out.len(), |filled, entry| {
+            if entry.block_id != T::ID {
+                return Ok(false);
+            }
+            if entry.block_version != T::VERSION {
+                return Err(Error::BlockVersionMismatch {
+                    block_id: T::ID,
+                    expected: T::VERSION,
+                    actual: entry.block_version,
+                });
+            }
+            // A budget per record, owned by this call: each block is charged
+            // on its own, and the budget never leaves the closure as a loan.
+            let mut budget = MaterializationBudget::new(self.spec);
+            let logical_len = entry.logical_payload_len_snapshot(self.spec, &self.snapshot)?;
+            budget.consume(logical_len)?;
+            entry.read_logical_payload_snapshot_into(self.spec, &self.snapshot, payload)?;
+            budget.decode_into(payload, endian, &mut out[filled])?;
+            Ok(true)
+        })
     }
 
     fn blocks_in<T: VarlitBlock, D: RecordDirectory + ?Sized>(
@@ -608,7 +782,7 @@ impl VarlitFile {
         &self,
         out: &mut Vec<RecordIndexEntry>,
     ) -> Result<()> {
-        self.block_entries_into_in::<T, _>(self.resident_directory("block_entries_into")?, out)
+        self.block_entries_into_in::<T, _>(&self.resident_directory("block_entries_into")?, out)
     }
 
     fn block_entries_into_in<T: VarlitBlock, D: RecordDirectory + ?Sized>(
@@ -663,7 +837,7 @@ impl VarlitFile {
     /// The per-record charge is unchanged from `BlockVec::get`: the
     /// materialization ceiling bounds one payload, not the sum over the walk.
     pub fn decode_blocks_into<T: VarlitBlock>(&self, out: &mut Vec<T>) -> Result<()> {
-        self.decode_blocks_into_in::<T, _>(self.resident_directory("decode_blocks_into")?, out)
+        self.decode_blocks_into_in::<T, _>(&self.resident_directory("decode_blocks_into")?, out)
     }
 
     fn decode_blocks_into_in<T: VarlitBlock, D: RecordDirectory + ?Sized>(
@@ -752,7 +926,7 @@ impl VarlitFile {
         M: VarlitMigration<From, To>,
     {
         self.blocks_migrated_into_in::<From, To, M, _>(
-            self.resident_directory("blocks_migrated")?,
+            &self.resident_directory("blocks_migrated")?,
             out,
         )
     }
@@ -843,7 +1017,7 @@ impl VarlitFile {
         T: VarlitKeyedBlock,
         T::Key: Eq + Hash + Clone,
     {
-        self.keyed_blocks_into_in::<T, _>(self.resident_directory("keyed_blocks")?, entries, by_key)
+        self.keyed_blocks_into_in::<T, _>(&self.resident_directory("keyed_blocks")?, entries, by_key)
     }
 
     fn keyed_blocks_into_in<T, D: RecordDirectory + ?Sized>(
@@ -900,6 +1074,9 @@ impl VarlitFile {
                     let key = block.key();
                     if should_apply(state.get(&key), order) {
                         let requested = index_bytes_for_count(state.len().saturating_add(1))?;
+                        self.spec
+                            .read_limits
+                            .check(ReadLimitKey::IndexBytes, requested)?;
                         state.try_reserve(1).map_err(|_| Error::AllocationFailed {
                             resource: "keyed index",
                             requested,
@@ -907,6 +1084,9 @@ impl VarlitFile {
                         state.insert(key, (order, Some(entry.clone())));
                     }
                     let requested = index_bytes_for_count(entries.len().saturating_add(1))?;
+                    self.spec
+                        .read_limits
+                        .check(ReadLimitKey::IndexBytes, requested)?;
                     entries
                         .try_reserve(1)
                         .map_err(|_| Error::AllocationFailed {
@@ -925,6 +1105,9 @@ impl VarlitFile {
                         && should_apply(state.get(&key), order)
                     {
                         let requested = index_bytes_for_count(state.len().saturating_add(1))?;
+                        self.spec
+                            .read_limits
+                            .check(ReadLimitKey::IndexBytes, requested)?;
                         state.try_reserve(1).map_err(|_| Error::AllocationFailed {
                             resource: "keyed index",
                             requested,
@@ -936,6 +1119,9 @@ impl VarlitFile {
             }
         }
         let requested = index_bytes_for_count(state.len())?;
+        self.spec
+            .read_limits
+            .check(ReadLimitKey::IndexBytes, requested)?;
         by_key
             .try_reserve(state.len())
             .map_err(|_| Error::AllocationFailed {
@@ -977,7 +1163,7 @@ impl VarlitFile {
         T::Key: Eq + Hash,
     {
         self.materialized_keyed_blocks_into_in::<T, _>(
-            self.resident_directory("materialized_keyed_blocks")?,
+            &self.resident_directory("materialized_keyed_blocks")?,
             out,
         )
     }
@@ -1032,14 +1218,26 @@ impl VarlitFile {
     /// else to put it — and an empty iterator would say "no records", which is
     /// the answer a directory-less handle must never give.
     pub fn scan(&self) -> impl Iterator<Item = Result<BlockEvent>> + '_ {
-        let refusal = self.resident_directory("scan").err().map(Err).into_iter();
-        let events = self
-            .index
-            .is_retained()
-            .then(|| Self::scan_in(&self.index))
-            .into_iter()
-            .flatten();
-        refusal.chain(events)
+        // The list is built on the first `next`, so a failure to build it is
+        // the first item rather than an empty iterator.
+        let mut pending = Some(());
+        let mut list = None;
+        let mut at = 0usize;
+        std::iter::from_fn(move || {
+            if pending.take().is_some() {
+                match self.resident_directory("scan") {
+                    Ok(built) => list = Some(built),
+                    Err(error) => return Some(Err(error)),
+                }
+            }
+            let records = list.as_ref()?;
+            if at >= records.len() {
+                return None;
+            }
+            let entry = records.record_at(at);
+            at += 1;
+            Some(entry.map(|entry| BlockEvent::from(&entry)))
+        })
     }
 
     fn scan_in<D: RecordDirectory + ?Sized>(
@@ -1094,7 +1292,7 @@ impl VarlitFile {
     /// Returns the number of records verified. A mismatch is
     /// [`Error::ChecksumMismatch`] naming the offending record's offset.
     pub fn verify_all(&self) -> Result<usize> {
-        self.verify_all_in(self.resident_directory("verify_all")?)
+        self.verify_all_in(&self.resident_directory("verify_all")?)
     }
 
     fn verify_all_in<D: RecordDirectory + ?Sized>(&self, dir: &D) -> Result<usize> {
@@ -1143,38 +1341,89 @@ impl VarlitFile {
         Ok(verified)
     }
 
-    /// A snapshot of every index entry, owned by the caller.
-    ///
-    /// **Owned rather than borrowed, and that is the point.** Returning
-    /// `&[RecordIndexEntry]` required the entries to live contiguously inside
-    /// this handle for as long as any caller held the borrow — which is exactly
-    /// the requirement that keeps the whole index resident and makes a
-    /// demand-filled store impossible. An owned snapshot only has to exist
-    /// while its holder does.
-    ///
-    /// `IndexEntries` derefs to `[RecordIndexEntry]`, so `len()`, indexing,
-    /// `iter()` and passing it where a slice is expected all read the same as
-    /// before. What changed is who owns the bytes.
-    ///
-    /// **This allocates.** [`index_entries_into`](Self::index_entries_into)
-    /// takes the caller's buffer instead and is the form to use in a loop: the
-    /// storage is the caller's business, and a library that decides it for them
-    /// allocates once per call for no reason.
     /// How many records the resident directory holds — the positions
     /// [`Self::mmap_payload_range`](VarlitFile::mmap_payload_range) and the
     /// index views address. Copies nothing.
     ///
     /// A lazily opened handle keeps no directory and is refused by name.
     pub fn record_count(&self) -> Result<usize> {
-        Ok(self.resident_directory("record_count")?.len())
+        match self.index.whole_file_count() {
+            Some(count) => Ok(count),
+            None => Ok(self.resident_directory("record_count")?.len()),
+        }
     }
 
-    pub fn index_entries(&self) -> IndexEntries {
-        let mut entries = Vec::new();
-        // The infallible surface is kept because 100-odd call sites read it as
-        // a slice; a caller that wants the refusal calls `_into`.
-        let _ = self.index_entries_into(&mut entries);
-        IndexEntries { entries }
+    /// Writes the first records' index entries into `out`, in file order, and
+    /// says where to continue.
+    ///
+    /// The buffer is the caller's and its length is the page size: this
+    /// allocates nothing and holds nothing, so neither the handle nor the call
+    /// grows with the file. It walks the records from the start of the append
+    /// log — a header (and footer) read per record — until `out` is full or the
+    /// file ends; [`index_entries_from`](Self::index_entries_from) continues
+    /// from [`Page::next`]. Every handle answers it, including one that keeps
+    /// no directory.
+    ///
+    /// The entries are the ones an open scan indexes: non-resident blocks are
+    /// framed and skipped. An empty `out` is refused, since it could never
+    /// make progress.
+    pub fn index_entries(&self, out: &mut [RecordIndexEntry]) -> Result<Page> {
+        self.index_entries_page(None, out)
+    }
+
+    /// The page of index entries that starts at `from`; see
+    /// [`index_entries`](Self::index_entries).
+    pub fn index_entries_from(
+        &self,
+        from: PageCursor,
+        out: &mut [RecordIndexEntry],
+    ) -> Result<Page> {
+        self.index_entries_page(Some(from), out)
+    }
+
+    fn index_entries_page(
+        &self,
+        from: Option<PageCursor>,
+        out: &mut [RecordIndexEntry],
+    ) -> Result<Page> {
+        self.fill_page(from, out.len(), |filled, entry| {
+            out[filled] = entry.clone();
+            Ok(true)
+        })
+    }
+
+    /// Walks from `from` and offers each resident record to `store` until it
+    /// has accepted `capacity` of them or the file ends. `store` returns
+    /// whether it kept the record in slot `filled`.
+    fn fill_page(
+        &self,
+        from: Option<PageCursor>,
+        capacity: usize,
+        mut store: impl FnMut(usize, &RecordIndexEntry) -> Result<bool>,
+    ) -> Result<Page> {
+        if capacity == 0 {
+            return Err(Error::BufferTooSmall {
+                resource: "page",
+                required: 1,
+                provided: 0,
+            });
+        }
+        // The walk never stores into this; it is the map's required buffer.
+        let mut unused = Vec::new();
+        let mut walk = RecordMap::new_page(self, &mut unused, from)?;
+        let mut filled = 0;
+        while filled < capacity {
+            let Some(entry) = walk.frame()? else {
+                return Ok(Page { filled, next: None });
+            };
+            if store(filled, &entry)? {
+                filled += 1;
+            }
+        }
+        Ok(Page {
+            filled,
+            next: walk.page_cursor(),
+        })
     }
 
     /// Fills the caller's buffer with the record index.
@@ -1185,14 +1434,12 @@ impl VarlitFile {
     /// The copy is charged against `ReadLimitKey::IndexBytes`, like the index
     /// it copies.
     pub fn index_entries_into(&self, out: &mut Vec<RecordIndexEntry>) -> Result<()> {
-        self.index_entries_into_in(self.resident_directory("index_entries")?, out)
+        self.index_entries_into_in(&self.resident_directory("index_entries")?, out)
     }
 
     /// Visits the retained directory without copying it into an owned result.
-    pub(crate) fn record_entries(
-        &self,
-    ) -> Result<impl Iterator<Item = Result<RecordIndexEntry>> + '_> {
-        Ok(self.resident_directory("record_entries")?.iter())
+    pub(crate) fn record_entries(&self) -> Result<RecordList<'_>> {
+        self.resident_directory("record_entries")
     }
 
     fn index_entries_into_in<D: RecordDirectory + ?Sized>(
@@ -1292,8 +1539,13 @@ impl VarlitFile {
         if let Some(dir) = self.index.is_retained().then_some(&self.index) {
             return self.key_tail_offsets_into_in::<T, _>(dir, out);
         }
-        let chained = self.keyed_chain_directory(T::ID, "key_tail_offsets")?;
-        self.key_tail_offsets_into_in::<T, _>(&chained, out)
+        // The chains reach exactly the records that move a keyed tail. A
+        // format without them still answers, by walking the file.
+        if self.spec.index_policy.block_offset_chain {
+            let chained = self.keyed_chain_directory(T::ID, "key_tail_offsets")?;
+            return self.key_tail_offsets_into_in::<T, _>(&chained, out);
+        }
+        self.key_tail_offsets_into_in::<T, _>(&self.resident_directory("key_tail_offsets")?, out)
     }
 
     /// The records that can move `block_id`'s keyed tails, in file order.

@@ -51,13 +51,20 @@ fuzz_target!(|data: &[u8]| {
                     let end = chunks.decoded_len();
                     let start = end / 3;
                     let mut next = start;
-                    let result = chunks.stream_range(start..end, &mut [0; 257], 4 * 1024 * 1024, |at, bytes| {
-                        assert_eq!(at, next);
-                        next += bytes.len() as u64;
-                        assert!(next <= end);
-                        Ok(())
-                    });
-                    if result.is_ok() { assert_eq!(next, end); }
+                    let result = chunks.stream_range(
+                        start..end,
+                        &mut [0; 257],
+                        4 * 1024 * 1024,
+                        |at, bytes| {
+                            assert_eq!(at, next);
+                            next += bytes.len() as u64;
+                            assert!(next <= end);
+                            Ok(())
+                        },
+                    );
+                    if result.is_ok() {
+                        assert_eq!(next, end);
+                    }
                 }
             }
         }

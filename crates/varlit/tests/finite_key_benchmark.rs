@@ -1,6 +1,9 @@
 #![cfg(feature = "integrity")]
 //! Controlled representation benchmark. Run with scripts/compare_finite_keys.py.
 //! Ignored by default: creates and fully validates actual temporary payload files.
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::{fs, hint::black_box, time::Instant};
 use varlit::{
     BatchOptions, DiskIndexOptions, DiskIndexPlan, FormatSpec, VarlitDiskKey, VarlitEmpty,

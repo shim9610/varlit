@@ -26,6 +26,8 @@
 // Every case here declares `integrity: crc32`, so without the `integrity`
 // feature the format is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::{Path, PathBuf};
 
@@ -261,7 +263,7 @@ fn without_residency_the_snapshot_still_ends_at_the_last_index_entry() -> varlit
         }
 
         let file = spec.open_readonly(&path)?;
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
         let expected_len = entries.last().expect("a record").physical_end();
 
         // Every entry the index carries is inside the snapshot, and the byte

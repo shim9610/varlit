@@ -11,21 +11,22 @@ fuzz_target!(|data: &[u8]| {
     {
         if let Ok(reader) = FuzzNativeFormat::open_reader(&path) {
             let reader = reader.into_inner();
-            if let Ok(blocks) = reader.blocks::<FuzzPoint>() {
-                for index in 0..blocks.len().min(8) {
-                    let _ = blocks.get(index);
-                }
-            }
-            if let Ok(blocks) = reader.blocks::<FuzzRecord>() {
-                for index in 0..blocks.len().min(8) {
-                    let _ = blocks.get(index);
-                }
-            }
+            // One page of each block type, decoded into caller-owned slots.
+            let mut payload = Vec::new();
+            let mut points: Vec<FuzzPoint> = (0..8).map(|_| varlit::VarlitEmpty::empty()).collect();
+            let _ = reader.blocks::<FuzzPoint>(&mut payload, &mut points);
+            let mut records: Vec<FuzzRecord> =
+                (0..8).map(|_| varlit::VarlitEmpty::empty()).collect();
+            let _ = reader.blocks::<FuzzRecord>(&mut payload, &mut records);
 
             // SAFETY: this target owns the file and does not mutate it while
             // the mapping or any returned window is alive.
             if let Ok(mapped) = unsafe { reader.mmap_payloads() } {
-                for entry in reader.index_entries().iter().take(16) {
+                let mut first = vec![varlit::RecordIndexEntry::default(); 16];
+                let filled = reader
+                    .index_entries(&mut first)
+                    .map_or(0, |page| page.filled);
+                for entry in &first[..filled] {
                     let mut owned = Vec::new();
                     let result = reader.read_payload_into(entry, &mut owned);
                     // The fixture's per-record limit fits its materialisation

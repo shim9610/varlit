@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::collections::HashMap;
 use std::fs::{OpenOptions, remove_file};
 use std::io::Write;
@@ -130,7 +133,7 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropPoint>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropPoint).unwrap();
         prop_assert_eq!(read.len(), points.len());
         let mut got = PropPoint::empty();
         for (index, (x, y)) in points.iter().enumerate() {
@@ -157,7 +160,7 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropVariable>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropVariable).unwrap();
         prop_assert_eq!(read.len(), values.len());
         let mut got = PropVariable::empty();
         for (index, expected) in values.iter().enumerate() {
@@ -273,14 +276,14 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropRewrite>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropRewrite).unwrap();
         prop_assert_eq!(read.len(), expected.len());
         let mut got = PropRewrite::empty();
         for (index, expected_record) in expected.into_iter().enumerate() {
             prop_assert!(read.get(index, &mut got).unwrap());
             prop_assert_eq!(&got, &expected_record);
         }
-        prop_assert_eq!(file.blocks::<PropPoint>().unwrap().len(), 2);
+        prop_assert_eq!(crate::pages::all_blocks!(file, PropPoint).unwrap().len(), 2);
 
         cleanup(&path);
     }
@@ -317,7 +320,7 @@ proptest! {
             prop_assert!(strict_rejected);
         } else {
             let readonly = PropFormat::open_readonly(&path).unwrap();
-            prop_assert_eq!(readonly.blocks::<PropPoint>().unwrap().len(), values.len());
+            prop_assert_eq!(crate::pages::all_blocks!(readonly, PropPoint).unwrap().len(), values.len());
             prop_assert_eq!(std::fs::metadata(&path).unwrap().len(), corrupt_len);
         }
 
@@ -327,7 +330,7 @@ proptest! {
         prop_assert_eq!(report.recovered_len, original_len);
         prop_assert_eq!(report.records_preserved, values.len());
         prop_assert_eq!(std::fs::metadata(&path).unwrap().len(), original_len);
-        prop_assert_eq!(file.blocks::<PropPoint>().unwrap().len(), values.len());
+        prop_assert_eq!(crate::pages::all_blocks!(file, PropPoint).unwrap().len(), values.len());
 
         cleanup(&path);
     }
@@ -347,7 +350,7 @@ proptest! {
 
         let file = PropFormat::open_readonly(&path).unwrap();
         let mut decoded = PropScalarEdges::empty();
-        prop_assert!(file.blocks::<PropScalarEdges>().unwrap().get(0, &mut decoded).unwrap());
+        prop_assert!(crate::pages::all_blocks!(file, PropScalarEdges).unwrap().get(0, &mut decoded).unwrap());
         prop_assert_eq!(decoded.unsigned, value.unsigned);
         prop_assert_eq!(decoded.signed, value.signed);
         prop_assert_eq!(decoded.wide, value.wide);

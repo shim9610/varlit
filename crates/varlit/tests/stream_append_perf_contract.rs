@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::path::{Path, PathBuf};
 
 use varlit::{
@@ -266,8 +269,9 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-    // 20 user records plus the internal creation-nonce record.
-    assert_eq!(reader.verify_all()?, 21);
+    // 20 user records, the internal creation-nonce record and the sync
+    // marker that closed them.
+    assert_eq!(reader.verify_all()?, 22);
     let values = collect_blocks(reader.blocks::<Value>()?)?;
     assert_eq!(values, (0..20).map(Value).collect::<Vec<_>>());
     Ok(())

@@ -671,6 +671,66 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 Self::spec().open_readonly(path)
             }
 
+            /// Reads an entry's stored payload through the pathname, with
+            /// this format compiled in. Path-based and non-snapshot: prefer
+            /// an opened reader.
+            pub fn read_payload<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_payload(Self::spec(), path.as_ref())
+            }
+
+            /// [`Self::read_payload`] under an allocation ceiling.
+            pub fn read_payload_limited<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                limit: u64,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_payload_limited(Self::spec(), path.as_ref(), limit)
+            }
+
+            /// Reads and decodes an entry's logical payload through the
+            /// pathname, with this format compiled in. Path-based and
+            /// non-snapshot: prefer an opened reader.
+            pub fn read_logical_payload<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(Self::spec(), path.as_ref(), u64::MAX, u64::MAX)
+            }
+
+            /// [`Self::read_logical_payload`] under separate stored and
+            /// logical allocation ceilings.
+            pub fn read_logical_payload_limited<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                physical_limit: u64,
+                logical_limit: u64,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(
+                    Self::spec(),
+                    path.as_ref(),
+                    physical_limit,
+                    logical_limit,
+                )
+            }
+
+            /// [`Self::read_logical_payload`] with runtime resource limits
+            /// overlaid on this format's compiled ones.
+            pub fn read_logical_payload_with_resource_limits<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                limits: ::varlit::__core::ResourceLimits,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(
+                    Self::spec().with_resource_limits(limits),
+                    path.as_ref(),
+                    u64::MAX,
+                    u64::MAX,
+                )
+            }
+
             pub fn open_readonly_with_limits<P: AsRef<::std::path::Path>>(
                 path: P,
                 limits: ::varlit::__core::ReadLimits,
@@ -1340,6 +1400,7 @@ pub(super) fn matrix_spec_tokens(
                 dimensions: [#first, #second],
                 category: #category,
                 slot_stride: <#ty as ::varlit::__core::VarlitMatrixBlock>::SLOT_STRIDE,
+                tile: <#ty as ::varlit::__core::VarlitMatrixBlock>::TILE,
             }
         }
     });
@@ -1536,11 +1597,16 @@ pub(super) fn inline_block_tokens(
             .map(|dim| matrix_storage_dimension_name(dim, dims).unwrap_or_else(|| dim.to_string()));
         let category = meta.category.to_string();
         let stride = matrix_slot_stride_tokens(&block.fields);
+        let tile = match meta.tile {
+            Some([rows, cols]) => quote!([#rows, #cols]),
+            None => quote!(::varlit::__core::matrix_default_tile(#stride)),
+        };
         quote! {
             impl ::varlit::__core::VarlitMatrixBlock for #name {
                 const DIMENSIONS: [&'static str; 2] = [#(#matrix_dims,)*];
                 const CATEGORY: &'static str = #category;
                 const SLOT_STRIDE: u64 = #stride;
+                const TILE: [u64; 2] = #tile;
             }
         }
     } else {
@@ -2756,6 +2822,57 @@ pub(super) fn high_cardinality_api_tokens(
                 self.inner.verify_all_with_progress(scan, observer)
             }
 
+            pub fn lookup_entry<T>(
+                &self,
+                key: &T::Key,
+            ) -> ::varlit::__core::Result<::core::option::Option<::varlit::__core::RecordIndexEntry>>
+            where
+                T: ::varlit::__core::VarlitKeyedBlock,
+                T::Key: ::varlit::__core::VarlitDiskKey,
+            {
+                self.inner.lookup_entry::<T>(key)
+            }
+
+            pub fn read_record_into(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_record_into(entry, out)
+            }
+
+            pub fn read_record_from(
+                &self,
+                cursor: ::varlit::__core::RecordCursor,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_record_from(cursor, out)
+            }
+
+            pub fn view_block<T: ::varlit::__core::VarlitView>(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+            ) -> ::varlit::__core::Result<T::View> {
+                self.inner.view_block::<T>(entry)
+            }
+
+            pub fn read_span_into(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                span: ::varlit::__core::FieldSpan,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_span_into(entry, span, out)
+            }
+
+            pub fn decode_field<F: ::varlit::__core::VarlitDecode>(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                span: ::varlit::__core::FieldSpan,
+            ) -> ::varlit::__core::Result<F> {
+                self.inner.decode_field::<F>(entry, span)
+            }
+
             #(#indexed_scan_methods)*
             #(#indexed_reader_methods)*
         }
@@ -3702,11 +3819,27 @@ pub(super) fn reader_block_methods(
     let mut methods: Vec<(TokenStream2, TokenStream2)> = Vec::new();
 
     if block.key_fields.is_empty() {
+        let plural_from = quote::format_ident!("{}_from", plural);
         methods.push((
             quote! {
-                #vis fn #plural(&self) -> ::varlit::__core::Result<::varlit::__core::BlockVec<#ty>>
+                #vis fn #plural(
+                    &self,
+                    payload: &mut ::std::vec::Vec<u8>,
+                    out: &mut [#ty],
+                ) -> ::varlit::__core::Result<::varlit::__core::Page>
             },
-            quote! { { self.inner.blocks::<#ty>() } },
+            quote! { { self.inner.blocks::<#ty>(payload, out) } },
+        ));
+        methods.push((
+            quote! {
+                #vis fn #plural_from(
+                    &self,
+                    from: ::varlit::__core::PageCursor,
+                    payload: &mut ::std::vec::Vec<u8>,
+                    out: &mut [#ty],
+                ) -> ::varlit::__core::Result<::varlit::__core::Page>
+            },
+            quote! { { self.inner.blocks_from::<#ty>(from, payload, out) } },
         ));
         methods.push((
             quote! {

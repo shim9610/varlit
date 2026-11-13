@@ -11,6 +11,8 @@
 //! `PublishedButParentSyncPending` rather than promoted to plain success.
 
 #![allow(unexpected_cfgs)]
+#[path = "support/pages.rs"]
+mod pages;
 
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
@@ -260,7 +262,7 @@ mod enabled {
         drop(writer);
 
         let reader = VarlitFile::open(durable_commit_spec(), &path)?;
-        let committed = reader.blocks::<FaultRecord>()?;
+        let committed = crate::pages::all_blocks!(reader, FaultRecord)?;
         assert_eq!(
             committed.len(),
             1,

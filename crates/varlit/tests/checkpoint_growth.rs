@@ -1,25 +1,21 @@
-//  regression: a resident format with `checkpoint_on_flush` must not
-// serialize the whole index on every flush. Before the geometric-spacing fix,
-// flush-after-every-record produced cumulative checkpoint bytes of
-// `22 + 94N + 73N^2` (see the 2026-07-19 adversarial review), so doubling the
-// record count nearly quadrupled the file. This test pins the amortized O(N)
-// behavior and verifies that sparse checkpoints and a checkpoint-less tail
-// still recover every native record.
+#[path = "support/pages.rs"]
+mod pages;
+
+// Writers no longer write index checkpoints. A checkpoint serialized the whole
+// resident index into one record, built in memory, which is exactly the
+// per-record growth a writer must not have: a billion-record log carried a
+// multi-gigabyte checkpoint payload and the directory behind it. Opening fast
+// is the segment chain's and the anchors' job now.
 //
-//  regression: the checkpoint *decision* must also be O(1) per flush.
-// The first fix linearized the file bytes but still reverse-searched the
-// resident index on every flush (179,392 predicate entry touches at 1,024
-// records vs 11,253,678 at 8,192 in the 2026-07-19 re-verification), keeping
-// cumulative flush CPU O(N^2). The cadence-touch test below delta-measures a
-// thread-local counter of index entries examined by the cadence machinery and
-// pins near-linear cumulative touches, and the reopen test pins that the O(1)
-// writer state recovered at open makes exactly the same checkpoint decisions
-// as an uninterrupted writer.
+// What stays is reading: a file written by an earlier build, checkpoints and
+// all, opens and reads every record. `fixtures/checkpointed-v0.13-pre.varlit`
+// is such a file — 64 records, each flushed, written with the build before
+// this change, holding three checkpoints.
 
 use std::fs::remove_file;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use varlit::{INDEX_BLOCK_ID, VarlitBlock, VarlitEmpty, varlit_format};
+use varlit::{INDEX_BLOCK_ID, VarlitBlock, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 40, version = 1, kind = "fixed")]
@@ -68,215 +64,118 @@ fn write_flush_every_record(path: &PathBuf, records: u32) -> varlit::Result<u64>
     Ok(std::fs::metadata(path)?.len())
 }
 
-#[test]
-fn checkpoint_on_flush_grows_linearly_not_quadratically() -> varlit::Result<()> {
-    let path_64 = temp_path("checkpoint_growth_64");
-    let path_128 = temp_path("checkpoint_growth_128");
-    cleanup(&path_64);
-    cleanup(&path_128);
-
-    let size_64 = write_flush_every_record(&path_64, 64)?;
-    let size_128 = write_flush_every_record(&path_128, 128)?;
-
-    // With per-flush full checkpoints the 73N^2 term made size(128) roughly 4x
-    // size(64). Geometric spacing keeps the checkpoint bytes O(N), so doubling
-    // the records stays well under a 3x growth factor even with generous slack
-    // for the base per-record cost.
-    assert!(
-        size_128 < size_64 * 3,
-        "checkpoint bytes look quadratic: size(64)={size_64}, size(128)={size_128}",
-    );
-
-    cleanup(&path_64);
-    cleanup(&path_128);
-    Ok(())
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpointed-v0.13-pre.varlit")
 }
 
 #[test]
-fn sparse_checkpoints_reopen_sees_every_record() -> varlit::Result<()> {
-    let path = temp_path("checkpoint_growth_reopen");
+fn a_checkpoint_format_writer_writes_no_checkpoint() -> varlit::Result<()> {
+    let path = temp_path("no_checkpoint");
     cleanup(&path);
-
-    let records = 128u32;
-    write_flush_every_record(&path, records)?;
-
+    write_flush_every_record(&path, 256)?;
     let file = GrowthFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<GrowthBlock>()?;
-    assert_eq!(blocks.len() as u32, records);
-    let mut block = GrowthBlock::empty();
-    for value in 0..records {
-        assert!(
-            blocks.get(value as usize, &mut block)?,
-            "record {value} did not survive reopen",
-        );
-        assert_eq!(
-            block,
-            GrowthBlock { value },
-            "record {value} did not survive reopen",
-        );
-    }
-
-    // Geometric spacing must leave the growing tail uncheckpointed: after the
-    // last full checkpoint many more records were appended without a fresh one.
-    // Recovery therefore has to replay a checkpoint-less tail, which the
-    // assertions above already exercised; here we just confirm the cadence is
-    // actually sparse rather than one-checkpoint-per-flush.
-    let checkpoints = file
-        .index_entries()
-        .iter()
-        .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
-        .count();
-    assert!(
-        checkpoints >= 1 && (checkpoints as u32) < records,
-        "expected sparse checkpoints, found {checkpoints} for {records} records",
-    );
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[test]
-fn checkpointless_tail_recovers_from_empty_file() -> varlit::Result<()> {
-    // A short file whose record count never crosses the checkpoint floor stores
-    // no checkpoint at all; the entire history is a checkpoint-less tail that
-    // must still reopen intact.
-    let path = temp_path("checkpoint_growth_no_checkpoint");
-    cleanup(&path);
-
-    write_flush_every_record(&path, 3)?;
-
-    let file = GrowthFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<GrowthBlock>()?;
-    assert_eq!(blocks.len(), 3);
-    let mut block = GrowthBlock::empty();
-    for value in 0..3u32 {
-        assert!(blocks.get(value as usize, &mut block)?);
-        assert_eq!(block, GrowthBlock { value });
-    }
-    let checkpoints = file
-        .index_entries()
-        .iter()
-        .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
-        .count();
-    assert_eq!(checkpoints, 0, "tiny file should not spend a checkpoint");
-
-    cleanup(&path);
-    Ok(())
-}
-
-/// Returns the index positions of every full checkpoint record in `path`.
-fn checkpoint_positions(path: &PathBuf) -> varlit::Result<Vec<usize>> {
-    let file = GrowthFormat::open_readonly(path)?;
-    Ok(file
-        .index_entries()
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.block_id == INDEX_BLOCK_ID)
-        .map(|(position, _)| position)
-        .collect())
-}
-
-// the O(1) flush-cadence state recovered at reopen must make the
-// writer take exactly the same checkpoint decisions as a writer that never
-// restarted. Any recovery bug (forgetting the live tail, resetting the
-// geometric threshold, or double-counting the suffix) shifts or duplicates a
-// checkpoint record and diverges the two index layouts.
-#[test]
-fn reopened_writer_recovers_checkpoint_cadence() -> varlit::Result<()> {
-    let continuous = temp_path("checkpoint_growth_cadence_cont");
-    let restarted = temp_path("checkpoint_growth_cadence_restart");
-    cleanup(&continuous);
-    cleanup(&restarted);
-
-    let records = 96u32;
-    let split = 48u32;
-    write_flush_every_record(&continuous, records)?;
-
-    {
-        let mut file = GrowthFormat::create(&restarted)?;
-        for value in 0..split {
-            file.push(&GrowthBlock { value })?;
-            file.flush()?;
-        }
-    }
-    {
-        let mut file = GrowthFormat::open(&restarted)?;
-        // Nothing eligible was appended since the last flush of the previous
-        // session, so a bare flush after reopen must not spend a checkpoint;
-        // if it did, the layouts below could not match.
-        file.flush()?;
-        for value in split..records {
-            file.push(&GrowthBlock { value })?;
-            file.flush()?;
-        }
-    }
-
-    let continuous_checkpoints = checkpoint_positions(&continuous)?;
-    let restarted_checkpoints = checkpoint_positions(&restarted)?;
-    assert!(
-        !continuous_checkpoints.is_empty(),
-        "workload too small to spend any checkpoint; the comparison is vacuous",
-    );
+    let entries = crate::pages::all_entries!(file);
     assert_eq!(
-        restarted_checkpoints, continuous_checkpoints,
-        "reopened writer diverged from the uninterrupted checkpoint cadence",
+        entries
+            .iter()
+            .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
+            .count(),
+        0,
+        "a writer must not serialize its index into the file"
     );
-
-    // The restart must also not have lost any data.
-    let file = GrowthFormat::open_readonly(&restarted)?;
-    let blocks = file.blocks::<GrowthBlock>()?;
-    assert_eq!(blocks.len() as u32, records);
-    let mut block = GrowthBlock::empty();
-    for value in 0..records {
-        assert!(blocks.get(value as usize, &mut block)?);
-        assert_eq!(block, GrowthBlock { value });
-    }
-    drop(file);
-
-    cleanup(&continuous);
-    cleanup(&restarted);
+    let values: Vec<u32> = crate::pages::all_blocks!(file, GrowthBlock)?
+        .iter()
+        .map(|block| block.value)
+        .collect();
+    assert_eq!(values, (0..256).collect::<Vec<_>>());
     Ok(())
 }
 
-// cumulative index-entry touches by the checkpoint cadence machinery
-// must stay near-linear in the number of flush-per-record appends. The
-// pre-fix predicate re-walked the resident index on every flush, so doubling
-// the record count roughly quadrupled the touches; the O(1) state keeps the
-// ratio at ~2x. The counter is thread-local, so concurrent tests in this
-// binary cannot pollute the delta measurements.
-#[cfg(feature = "scalable-fault-injection")]
 #[test]
-fn checkpoint_cadence_touches_grow_linearly() -> varlit::Result<()> {
-    use varlit::VarlitFile;
-    fn measure(records: u32, name: &str) -> varlit::Result<u64> {
-        let path = temp_path(name);
-        cleanup(&path);
-        let before = VarlitFile::checkpoint_cadence_index_touches();
-        write_flush_every_record(&path, records)?;
-        let after = VarlitFile::checkpoint_cadence_index_touches();
-        cleanup(&path);
-        Ok(after - before)
+fn the_file_grows_linearly_with_flushes() -> varlit::Result<()> {
+    // With no checkpoint, flushing after every record costs the same bytes per
+    // record at any size: doubling the records doubles the file.
+    let small = temp_path("linear_small");
+    let large = temp_path("linear_large");
+    cleanup(&small);
+    cleanup(&large);
+    let at_1k = write_flush_every_record(&small, 1024)?;
+    let at_2k = write_flush_every_record(&large, 2048)?;
+    assert!(
+        at_2k <= at_1k * 2 + 4096,
+        "2,048 records took {at_2k} bytes against {at_1k} for 1,024"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_file_written_with_checkpoints_still_opens_and_reads() -> varlit::Result<()> {
+    let file = GrowthFormat::open_readonly(fixture())?;
+    let entries = crate::pages::all_entries!(file);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
+            .count(),
+        3,
+        "the fixture is the checkpointed file it claims to be"
+    );
+    let values: Vec<u32> = crate::pages::all_blocks!(file, GrowthBlock)?
+        .iter()
+        .map(|block| block.value)
+        .collect();
+    assert_eq!(values, (0..64).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[test]
+fn a_damaged_old_checkpoint_falls_back_to_a_scan_without_hiding_data() -> varlit::Result<()> {
+    let path = temp_path("damaged_old_checkpoint");
+    cleanup(&path);
+    std::fs::copy(fixture(), &*path)?;
+    let checkpoint = crate::pages::all_entries!(GrowthFormat::open_readonly(&path)?)
+        .into_iter()
+        .find(|entry| entry.block_id == INDEX_BLOCK_ID)
+        .expect("the fixture holds a checkpoint");
+    let mut bytes = std::fs::read(&*path)?;
+    bytes[checkpoint.payload_offset as usize + 30] ^= 0x5a;
+    std::fs::write(&*path, bytes)?;
+    let file = GrowthFormat::open_readonly(&path)?;
+    let values: Vec<u32> = crate::pages::all_blocks!(file, GrowthBlock)?
+        .iter()
+        .map(|block| block.value)
+        .collect();
+    assert_eq!(values, (0..64).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[test]
+fn appending_to_a_checkpointed_file_adds_no_checkpoint() -> varlit::Result<()> {
+    let path = temp_path("append_old");
+    cleanup(&path);
+    std::fs::copy(fixture(), &*path)?;
+    {
+        let mut file = GrowthFormat::open(&path)?;
+        for value in 64..128 {
+            file.push(&GrowthBlock { value })?;
+            file.flush()?;
+        }
     }
-
-    let touches_256 = measure(256, "checkpoint_growth_touches_256")?;
-    let touches_512 = measure(512, "checkpoint_growth_touches_512")?;
-
-    // O(1) cadence work per append/flush: generous constant-factor slack, but
-    // nowhere near the ~8,500 touches the per-flush rescan needed at N=256.
-    assert!(
-        touches_256 <= 4 * 256 + 64,
-        "cadence touches look super-linear at 256 records: {touches_256}",
+    let file = GrowthFormat::open_readonly(&path)?;
+    let entries = crate::pages::all_entries!(file);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
+            .count(),
+        3,
+        "the old checkpoints stay and no new one is written"
     );
-    assert!(
-        touches_512 <= 4 * 512 + 64,
-        "cadence touches look super-linear at 512 records: {touches_512}",
-    );
-    // Near-linear growth: doubling the input must not triple the touches
-    // (the quadratic predicate produced ~4x here).
-    assert!(
-        touches_512 <= 3 * touches_256,
-        "cadence touches grow super-linearly: 256 -> {touches_256}, 512 -> {touches_512}",
-    );
+    let values: Vec<u32> = crate::pages::all_blocks!(file, GrowthBlock)?
+        .iter()
+        .map(|block| block.value)
+        .collect();
+    assert_eq!(values, (0..128).collect::<Vec<_>>());
     Ok(())
 }
 
@@ -321,64 +220,4 @@ fn cleanup(path: &PathBuf) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => panic!("failed to remove {}: {error}", lock.display()),
     }
-}
-
-/// **The cost.** Opening a `checkpoint_on_flush` file does not read the
-/// checkpoints it walks past.
-///
-/// An index checkpoint's payload *is* the resident index as of its own
-/// position, and the cadence spaces them geometrically, so the checkpoints in a
-/// file sum to O(N) entries. The scan used to read every one of them off disk,
-/// decode the entry array into a `Vec`, hand it to `inspect_index_checkpoint`
-/// — which drops the validation result on the floor (`let _ = validate_index_
-/// checkpoint(...)`) — and free it. The whole read existed to raise
-/// `LimitExceeded` from two fields, and `count` sits at bytes 14..22.
-///
-/// So the open now reads 22 bytes per checkpoint instead of the checkpoint.
-/// **The instrument is bytes read, not entries**: `take_open_scan_bytes`
-/// counts record bytes the scan advances over, which is the framing walk and
-/// does not move when a payload read is removed — the file's own size is what
-/// bounds this, and the assertion is against the payload bytes that are no
-/// longer pulled.
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn opening_a_checkpointed_file_does_not_read_the_checkpoints() -> varlit::Result<()> {
-    const RECORDS: u32 = 512;
-    let path = temp_path("checkpoint_open_reads");
-    cleanup(&path);
-    let file_len = write_flush_every_record(&path, RECORDS)?;
-
-    // Every checkpoint in the file, and the bytes their payloads hold.
-    let opened = GrowthFormat::open(&path)?;
-    let checkpoint_payload_bytes: u64 = opened
-        .index_entries()
-        .iter()
-        .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
-        .map(|entry| entry.payload_len)
-        .sum();
-    let checkpoints = opened
-        .index_entries()
-        .iter()
-        .filter(|entry| entry.block_id == INDEX_BLOCK_ID)
-        .count() as u64;
-    drop(opened);
-
-    assert!(
-        checkpoints >= 4,
-        "the fixture wrote {checkpoints} checkpoints, too few for this to measure anything"
-    );
-    // 22 bytes per checkpoint against the payloads themselves. The ratio is the
-    // point: the payloads are index-sized and the prefixes are not.
-    let prefixes = checkpoints * 22;
-    println!(
-        "(checkpoint open) {RECORDS} records, {file_len}-byte file: {checkpoints} checkpoints, \
-         payloads={checkpoint_payload_bytes} bytes, prefixes={prefixes} bytes"
-    );
-    assert!(
-        prefixes * 8 < checkpoint_payload_bytes,
-        "the checkpoints hold {checkpoint_payload_bytes} payload bytes against {prefixes} bytes \
-         of prefix; if those are close the fixture is too small to show what the open stopped \
-         reading"
-    );
-    Ok(())
 }

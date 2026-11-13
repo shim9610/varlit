@@ -168,6 +168,7 @@ fn store_value<T: VarlitBlock>(
     order: MergeOrder,
     value: Option<T>,
     payload: &mut Vec<u8>,
+    slot: Option<(u64, u64)>,
 ) -> Result<[u8; 52]> {
     let mut meta = [0; 52];
     meta[..24].copy_from_slice(&order_bytes(order));
@@ -188,7 +189,17 @@ fn store_value<T: VarlitBlock>(
             "materialized bytes",
             payload,
         )?;
-        let offset = file.seek(SeekFrom::End(0))?;
+        // The key's previous value is dead once this one is stored, so its
+        // bytes are reused when the new encoding fits them; only a value that
+        // grew is appended. A key updated over and over then costs its largest
+        // value, not the sum of every version.
+        let offset = match slot {
+            Some((offset, len)) if payload.len() as u64 <= len => {
+                file.seek(SeekFrom::Start(offset))?;
+                offset
+            }
+            _ => file.seek(SeekFrom::End(0))?,
+        };
         file.write_all(payload)?;
         meta[24..32].copy_from_slice(&offset.to_le_bytes());
         meta[32..40].copy_from_slice(&(payload.len() as u64).to_le_bytes());
@@ -422,7 +433,11 @@ where
                     }
                     distinct += 1;
                 }
-                let meta = store_value(spec, &mut values, order, value, &mut encoded_value)?;
+                let slot = old
+                    .as_ref()
+                    .filter(|meta| meta[40] != 0)
+                    .map(|meta| (word(meta, 24), word(meta, 32)));
+                let meta = store_value(spec, &mut values, order, value, &mut encoded_value, slot)?;
                 let at = match found {
                     Some(at) => at,
                     None => insert_key(&mut state, &mut keys, hash, &encoded)?,

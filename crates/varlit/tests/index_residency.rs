@@ -12,6 +12,8 @@
 // independent of the checksum, but the fixture is not, so the file moves
 // with the feature rather than the fixture being rewritten.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::{Path, PathBuf};
 
@@ -115,29 +117,27 @@ fn residency_is_bounded_by_the_resident_blocks_alone() -> varlit::Result<()> {
 
         // A commit marker per flush is resident too, and there is one.
         let file = lean_spec().open_readonly(&path)?;
-        let lines_resident = file
-            .index_entries()
+        let lines_resident = crate::pages::all_entries!(file)
             .iter()
             .filter(|entry| entry.block_id == 70)
             .count();
         assert_eq!(lines_resident, 0, "no line record may be resident");
         assert_eq!(
-            file.index_entries()
+            crate::pages::all_entries!(file)
                 .iter()
                 .filter(|entry| entry.block_id == 71)
                 .count() as u32,
             summaries,
         );
         assert!(
-            (file.index_entries().len() as u32) < summaries + 8,
+            (crate::pages::all_entries!(file).len() as u32) < summaries + 8,
             "resident entries must track summaries ({summaries}), not lines ({lines})",
         );
 
         // The same bytes through a retaining spec hold every record.
         let every = full_spec().open_readonly(&path)?;
         assert_eq!(
-            every
-                .index_entries()
+            crate::pages::all_entries!(every)
                 .iter()
                 .filter(|entry| entry.block_id == 70)
                 .count() as u32,
@@ -166,16 +166,14 @@ fn a_reopen_does_not_reissue_a_non_resident_sequence() -> varlit::Result<()> {
     // Not vacuous: if the appended region were unreachable the assertions below
     // would hold over the surviving prefix alone.
     assert_eq!(
-        every
-            .index_entries()
+        crate::pages::all_entries!(every)
             .iter()
             .filter(|entry| entry.block_id == 70)
             .count(),
         32,
         "the appended non-resident records must be committed and visible",
     );
-    let sequences: Vec<u64> = every
-        .index_entries()
+    let sequences: Vec<u64> = crate::pages::all_entries!(every)
         .iter()
         .map(|entry| entry.sequence)
         .collect();
@@ -202,7 +200,7 @@ fn a_non_resident_block_is_readable_through_the_chain_alone() -> varlit::Result<
     write(lean_spec(), &path, lines, 8)?;
 
     let file = lean_spec().open_readonly(&path)?;
-    let resident_before = file.index_entries().len();
+    let resident_before = crate::pages::all_entries!(file).len();
 
     let mut read_back = Vec::new();
     for step in file.block_chain(70)? {
@@ -218,7 +216,7 @@ fn a_non_resident_block_is_readable_through_the_chain_alone() -> varlit::Result<
         "the chain must yield every line, newest first",
     );
     // Walking must not grow the resident index — that is the whole point.
-    assert_eq!(file.index_entries().len(), resident_before);
+    assert_eq!(crate::pages::all_entries!(file).len(), resident_before);
     Ok(())
 }
 
@@ -303,10 +301,10 @@ fn a_non_resident_block_refuses_the_resident_readers() -> varlit::Result<()> {
     write(lean_spec(), &path, 32, 8)?;
     let file = lean_spec().open_readonly(&path)?;
     assert!(matches!(
-        file.blocks::<Line>(),
+        crate::pages::all_blocks!(file, Line),
         Err(varlit::Error::BlockNotResident { block_id: 70 }),
     ));
-    assert_eq!(file.blocks::<Summary>()?.len(), 4);
+    assert_eq!(crate::pages::all_blocks!(file, Summary)?.len(), 4);
     Ok(())
 }
 
@@ -326,7 +324,7 @@ fn a_generation_rewrite_is_refused_for_a_non_resident_format() -> varlit::Result
     // Every record is still there.
     drop(file);
     let every = full_spec().open_readonly(&path)?;
-    assert_eq!(every.blocks::<Line>()?.len(), 16);
+    assert_eq!(crate::pages::all_blocks!(every, Line)?.len(), 16);
     Ok(())
 }
 
@@ -374,7 +372,7 @@ fn a_non_resident_block_still_appends_and_survives_a_reopen() -> varlit::Result<
         file.flush()?;
     }
     let every = full_spec().open_readonly(&path)?;
-    let read = every.blocks::<Line>()?;
+    let read = crate::pages::all_blocks!(every, Line)?;
     assert_eq!(read.len(), 48);
     for value in 0..48u32 {
         assert_eq!(
@@ -416,15 +414,13 @@ fn a_markerless_reopen_does_not_reissue_a_non_resident_sequence() -> varlit::Res
 
     let every = full_markerless.open_readonly(&path)?;
     assert_eq!(
-        every
-            .index_entries()
+        crate::pages::all_entries!(every)
             .iter()
             .filter(|entry| entry.block_id == 70)
             .count(),
         20,
     );
-    let mut sequences: Vec<u64> = every
-        .index_entries()
+    let mut sequences: Vec<u64> = crate::pages::all_entries!(every)
         .iter()
         .map(|entry| entry.sequence)
         .collect();
@@ -665,4 +661,65 @@ fn filled<T: varlit::VarlitEmpty>(
 ) -> varlit::Result<Option<T>> {
     let mut out = T::empty();
     Ok(read(&mut out)?.then_some(out))
+}
+
+/// A format with a non-resident block opens at its newest anchor like any
+/// other: the anchor's summary names the non-resident block's tail, so the
+/// chain still reaches every record, and a writer opened there continues the
+/// sequence without re-issuing one written before the anchor.
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn a_non_resident_format_opens_at_its_newest_anchor() -> varlit::Result<()> {
+    let anchored = lean_spec().with_anchors(varlit::AnchorPolicy::every(13, true));
+    let path = temp_path("anchored_non_resident");
+    write(anchored, &path, 20_000, 50)?;
+    let framed_by = |open: &dyn Fn() -> varlit::Result<()>| -> varlit::Result<u64> {
+        let before = varlit::VarlitFile::records_framed();
+        open()?;
+        Ok(varlit::VarlitFile::records_framed() - before)
+    };
+    let reader = framed_by(&|| anchored.open_readonly(&path).map(drop))?;
+    let writer = framed_by(&|| anchored.open(&path).map(drop))?;
+    // 20,400 records over dozens of 8 KiB spacings.
+    assert!(
+        reader < 2_000 && writer < 2_000,
+        "an anchored open framed {reader} / {writer} records"
+    );
+    {
+        let file = anchored.open_readonly(&path)?;
+        assert_eq!(file.block_chain(Line::ID)?.count(), 20_000);
+        assert_eq!(file.record_count()?, 400 + 1);
+    }
+    {
+        let mut file = anchored.open(&path)?;
+        for value in 20_000..20_100u32 {
+            file.push(&Line { value })?;
+        }
+        file.flush()?;
+    }
+    let every = full_spec()
+        .with_anchors(varlit::AnchorPolicy::every(13, true))
+        .open_readonly(&path)?;
+    let sequences: Vec<u64> = crate::pages::all_entries!(every)
+        .iter()
+        .map(|entry| entry.sequence)
+        .collect();
+    let mut sorted = sequences.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), sequences.len(), "a sequence was re-issued");
+    assert_eq!(every.block_chain(Line::ID)?.count(), 20_100);
+    // Every record, resident or not, is reached by offset from a handle
+    // that opened at an anchor, and reads back what the full scan reads.
+    let truth = crate::pages::all_entries!(every);
+    let anchored_file = anchored.open_readonly(&path)?;
+    let mut payload = Vec::new();
+    let mut expected = Vec::new();
+    for entry in &truth {
+        assert_eq!(&anchored_file.record_entry_at(entry.record_offset)?, entry);
+        anchored_file.read_payload_into(entry, &mut payload)?;
+        every.read_payload_into(entry, &mut expected)?;
+        assert_eq!(payload, expected);
+    }
+    Ok(())
 }

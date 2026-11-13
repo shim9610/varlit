@@ -1,5 +1,8 @@
 //! Successful writer outputs remain readable across compatible read policies.
 //! This is an end-to-end regression, not a proof over arbitrary files.
+#[path = "support/pages.rs"]
+mod pages;
+
 use varlit::{
     CommitPolicy, Endian, IntegrityPolicy, ReadLimits, ReadValidation, TransactionMarkerMode,
     VarlitBlock, VarlitFile, varlit_format,
@@ -74,8 +77,8 @@ fn values(epoch: usize) -> (Scalars, Capture) {
 }
 
 fn assert_values(reader: &VarlitFile, count: usize) -> varlit::Result<()> {
-    let scalars = reader.blocks::<Scalars>()?;
-    let captures = reader.blocks::<Capture>()?;
+    let scalars = crate::pages::all_blocks!(reader, Scalars)?;
+    let captures = crate::pages::all_blocks!(reader, Capture)?;
     assert_eq!(scalars.len(), count);
     assert_eq!(captures.len(), count);
     for epoch in 0..count {
@@ -148,7 +151,7 @@ fn successful_native_files_keep_values_across_reopen_and_read_policies() -> varl
                     let checksummed = if integrity == IntegrityPolicy::None {
                         0
                     } else {
-                        reader.index_entries().iter().count()
+                        crate::pages::all_entries!(reader).iter().count()
                     };
                     assert_eq!(reader.verify_all()?, checksummed);
                 }

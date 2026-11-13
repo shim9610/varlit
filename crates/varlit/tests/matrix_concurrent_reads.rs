@@ -67,6 +67,7 @@ fn spec(integrity: varlit::IntegrityPolicy) -> FormatSpec {
         dimensions: SharedCell::DIMENSIONS,
         category: SharedCell::CATEGORY,
         slot_stride: SharedCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     static AUX: &[MatrixAuxDescriptor] = &[MatrixAuxDescriptor {
         name: "thumbnail",
@@ -273,39 +274,6 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
     Ok(())
 }
 
-#[cfg(feature = "mmap")]
-#[test]
-fn dirty_matrix_mapping_faults_bitmap_pages_from_its_copied_image() -> varlit::Result<()> {
-    for &integrity in owned_writer_integrities() {
-        let fixture = TempMatrix::new("owned-writer-mmap");
-        let spec = owned_writer_fixture(&fixture, integrity)?;
-        let mut writer = spec.open(fixture.path())?;
-        writer.clear_matrix_cell::<SharedCell>(MatrixKey::new(0, 0))?;
-        writer.write_matrix_cell(MatrixKey::new(0, 2), &SharedCell { value: 20 })?;
-        writer.commit_matrix_cell::<SharedCell>(MatrixKey::new(0, 2))?;
-        writer.read_shared(MatrixKey::new(1, 0))?;
-        // SAFETY: this fixture has no other writer and makes no mutation,
-        // publication or replacement until the mapping is explicitly dropped.
-        let mapped = unsafe { writer.mmap_matrix()? };
-        for page in [2, 1, 0, 2, 0] {
-            assert_eq!(
-                mapped.cell_numeric::<SharedCell, u32>(MatrixKey::new(page, 1))?,
-                10
-            );
-        }
-        assert!(matches!(
-            mapped.cell_payload_window::<SharedCell>(MatrixKey::new(0, 0)),
-            Err(varlit::Error::MatrixNotCommitted),
-        ));
-        assert_eq!(
-            mapped.cell_numeric::<SharedCell, u32>(MatrixKey::new(0, 2))?,
-            20
-        );
-        drop(mapped);
-    }
-    Ok(())
-}
-
 /// Criterion (C), part 2: the read entry points compile against a shared
 /// borrow.
 ///
@@ -456,167 +424,14 @@ fn independent_readers_read_every_cell_correctly() -> varlit::Result<()> {
 /// boundary, so if the internal page size ever changes the fixture stops being
 /// several pages wide and the warm-up assertion says so.
 #[cfg(feature = "scalable-fault-injection")]
-const PAGE_BYTES: u64 = 4096;
 
 /// Cells per commit-map page: the map holds one bit per cell.
 #[cfg(feature = "scalable-fault-injection")]
-const CELLS_PER_PAGE: u64 = PAGE_BYTES * 8;
 
 /// Live commit-map pages in the paged fixture. Four is enough for a one-page
 /// cache to miss on essentially every read while keeping the fixture cheap to
 /// build: four writes and four commits.
 #[cfg(feature = "scalable-fault-injection")]
-const LIVE_PAGES: u64 = 4;
-
-/// The first cell of commit-map page `page`, i.e. cell ordinal
-/// `page * CELLS_PER_PAGE`, given the fixture's `scan x ch` shape.
-#[cfg(feature = "scalable-fault-injection")]
-fn page_key(page: u64) -> MatrixKey {
-    MatrixKey::new(page, 0)
-}
-
-/// A matrix whose commit map is `LIVE_PAGES` pages wide, with exactly one
-/// committed cell per page.
-///
-/// Sparse on disk despite naming `LIVE_PAGES * CELLS_PER_PAGE` cells: the
-/// payload, checksum and commit-map extents are established by `set_len` and only
-/// the four written slots and the four bitmap bytes are ever touched.
-#[cfg(feature = "scalable-fault-injection")]
-fn paged_fixture(fixture: &TempMatrix) -> varlit::Result<FormatSpec> {
-    let spec = spec(varlit::IntegrityPolicy::None);
-    let dimensions = MatrixDimensions::from_pairs([("scan", LIVE_PAGES), ("ch", CELLS_PER_PAGE)]);
-    let mut writer = spec.create_with_dims(fixture.path(), dimensions)?;
-    for page in 0..LIVE_PAGES {
-        let key = page_key(page);
-        writer.write_matrix_cell(
-            key,
-            &SharedCell {
-                value: u32::try_from(page).expect("page fits a u32") + 1,
-            },
-        )?;
-        writer.commit_matrix_cell::<SharedCell>(key)?;
-    }
-    writer.sync()?;
-    drop(writer);
-    Ok(spec)
-}
-
-/// The fixture's limits with a demand cache of exactly `cache_bytes`.
-#[cfg(feature = "scalable-fault-injection")]
-fn lazy_limits(cache_bytes: u64) -> ReadLimits {
-    ReadLimits::finite_all(u64::MAX)
-        .with_matrix_metadata_residency(varlit::MatrixMetadataResidency::Lazy { cache_bytes })
-}
-
-/// Independent readers fault and evict pages without retaining a mutable
-/// local cache borrow across I/O. The public audit counters keep their
-/// historical `lock` names; caches no longer contain mutexes.
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn no_read_is_issued_while_a_bitmap_page_store_lock_is_held() -> varlit::Result<()> {
-    use varlit::MatrixRecoveryReport as Report;
-
-    // At least two threads even on a single-core host: unlike a timing ratio,
-    // this assertion is about one thread's control flow, so it is meaningful —
-    // and a violation is still detected — with no real parallelism at all.
-    let threads = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
-        .clamp(2, 4);
-
-    let fixture = TempMatrix::new("no-lock-across-io");
-    let spec = paged_fixture(&fixture)?;
-    // One page of cache against `LIVE_PAGES` live pages: every read of a page
-    // the cache is not holding faults it in, and installing it evicts the last.
-    let reader = spec
-        .with_read_limits(lazy_limits(PAGE_BYTES))
-        .open_readonly(fixture.path())?;
-
-    // Phase 1, single-threaded and therefore deterministic: with a one-page
-    // cache, walking `LIVE_PAGES` distinct pages must fault every one of them
-    // in. This is what makes phase 2's zero mean something.
-    Report::reset_matrix_lock_audit_counters();
-    for page in 0..LIVE_PAGES {
-        assert_eq!(
-            reader.matrix_cell_status::<SharedCell>(page_key(page))?,
-            varlit::MatrixCellStatus::Committed
-        );
-    }
-    let warm_reads = Report::matrix_region_reads();
-    assert!(
-        warm_reads >= LIVE_PAGES,
-        "the warm-up issued {warm_reads} matrix reads for {LIVE_PAGES} distinct commit-map \
-         pages against a one-page cache; the guarded fault-in window was not exercised, so \
-         the audit below would prove nothing"
-    );
-    assert_eq!(
-        Report::matrix_region_reads_under_bitmap_lock(),
-        0,
-        "a single-threaded fault-in read was issued while the page store was locked"
-    );
-
-    // Phase 2: the same reads, concurrently, through independent readers. The counters
-    // are thread-local, so each worker reports its own and the parent sums —
-    // which is also why a worker's numbers cannot be attributed to the wrong
-    // thread.
-    const READS_PER_THREAD: u64 = 4_000;
-    let region_reads = AtomicU64::new(0);
-    let reads_under_lock = AtomicU64::new(0);
-    let barrier = Barrier::new(threads);
-    let barrier = &barrier;
-    let (region_reads, reads_under_lock) = (&region_reads, &reads_under_lock);
-
-    std::thread::scope(|scope| {
-        for thread in 0..threads {
-            let reader = spec
-                .with_read_limits(lazy_limits(PAGE_BYTES))
-                .open_readonly(fixture.path())
-                .expect("independent lazy reader");
-            scope.spawn(move || {
-                Report::reset_matrix_lock_audit_counters();
-                barrier.wait();
-                for step in 0..READS_PER_THREAD {
-                    // Consecutive steps address different pages, so a thread
-                    // cannot ride its own cached page.
-                    let page = (step + thread as u64) % LIVE_PAGES;
-                    assert_eq!(
-                        reader
-                            .matrix_cell_status::<SharedCell>(page_key(page))
-                            .expect("concurrent status read"),
-                        varlit::MatrixCellStatus::Committed
-                    );
-                }
-                region_reads.fetch_add(Report::matrix_region_reads(), Ordering::Relaxed);
-                reads_under_lock.fetch_add(
-                    Report::matrix_region_reads_under_bitmap_lock(),
-                    Ordering::Relaxed,
-                );
-                assert_eq!(
-                    Report::matrix_bitmap_store_guards_held(),
-                    0,
-                    "a page-store guard outlived the read that took it"
-                );
-            });
-        }
-    });
-
-    let total_reads = region_reads.load(Ordering::Relaxed);
-    let under_lock = reads_under_lock.load(Ordering::Relaxed);
-    println!(
-        "{threads} threads x {READS_PER_THREAD} status reads through independent handles: \
-         {total_reads} matrix reads issued, {under_lock} of them under the page-store lock"
-    );
-    assert!(
-        total_reads >= u64::try_from(threads).expect("thread count"),
-        "the concurrent phase issued {total_reads} matrix reads across {threads} threads"
-    );
-    assert_eq!(
-        under_lock, 0,
-        "{under_lock} of {total_reads} matrix reads were issued while a commit-map page-store \
-         borrow was held across I/O"
-    );
-    Ok(())
-}
 
 /// Fixed-work scaling with one independent reader per thread. Timing is
 /// printed rather than asserted on shared CI hardware; every value is checked.

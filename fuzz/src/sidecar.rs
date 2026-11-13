@@ -492,8 +492,9 @@ fn probe_indexed(path: &Path, committed: &Model, _should_be_clean: bool, permit_
         Ok(reader) => {
             assert_eq!(reader.verify_all().ok(), Some(committed.records + 1));
             for key in 0..16 {
-                let actual = match reader.get_disk_item(&key) {
-                    Ok(value) => value,
+                let mut slot = <DiskItem as varlit::VarlitEmpty>::empty();
+                let actual = match reader.get_disk_item(&key, &mut slot) {
+                    Ok(found) => found.then_some(slot),
                     // Index pages are validated lazily; corrupt input may be
                     // rejected at the first affected lookup, never return a
                     // wrong successful value or silently lose committed data.
