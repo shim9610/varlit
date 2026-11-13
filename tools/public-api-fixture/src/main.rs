@@ -457,15 +457,23 @@ fn check_format_roundtrip(dir: &std::path::Path) {
         .expect("native reader");
     let storage: Option<varlit::MatrixStorageDiagnostics> = native.matrix_storage_diagnostics();
     assert!(storage.is_some());
+    // Fixed blocks read a page at a time into the caller's buffer.
     let mut samples: Vec<Sample> = Vec::new();
-    let mut sample_out = Sample::empty();
-    let sample_blocks = reader.samples().expect("fixed collection");
-    let mut sample_cursor = sample_blocks.cursor();
-    while sample_cursor
-        .next_into(&mut sample_out)
-        .expect("read fixed blocks")
-    {
-        samples.push(sample_out.clone());
+    let mut sample_out = vec![Sample::empty(); 2];
+    let mut payload = Vec::new();
+    let mut page = reader
+        .samples(&mut payload, &mut sample_out)
+        .expect("fixed collection");
+    loop {
+        samples.extend_from_slice(&sample_out[..page.filled]);
+        match page.next {
+            Some(next) => {
+                page = reader
+                    .samples_from(next, &mut payload, &mut sample_out)
+                    .expect("read fixed blocks")
+            }
+            None => break,
+        }
     }
     assert_eq!(samples, vec![sample]);
     // A keyed variable block reads back through `KeyedBlockVec`, so both the
