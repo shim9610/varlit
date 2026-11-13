@@ -43,6 +43,7 @@
     "bitmap_directory::BitmapDirectory::contains",
     "bitmap_directory::BitmapDirectory::push",
     "bitmap_directory::BitmapDirectory::truncate",
+    "chunk_len",
     "core::slice::contains",
     "core::str::contains",
     "disk_index::tree::Reader::charge",
@@ -129,7 +130,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:ccb8b4321cd823ff]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -194,7 +195,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:ad63d72405f5c015]",
+            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -331,7 +332,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:ccb8b4321cd823ff]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -411,7 +412,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:ad63d72405f5c015]",
+            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -1166,7 +1167,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:a750c21c496bc946]",
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:85caf8d53fe815bf]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1383,7 +1384,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:a750c21c496bc946]",
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_at(_1: &file::VarlitFile, _2: u64, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:85caf8d53fe815bf]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -2054,17 +2055,17 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:ccb8b4321cd823ff]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:5c3fd4abdbd08812]",
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:5c3fd4abdbd08812]",
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2201,17 +2202,17 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:ccb8b4321cd823ff]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:5c3fd4abdbd08812]",
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:5c3fd4abdbd08812]",
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2402,6 +2403,96 @@
         "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
         "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
         "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects"
+      ]
+    },
+    "record-chunk-table": {
+      "symbols": [
+        "ChunkHeader::chunk_len",
+        "ChunkHeader::data_at",
+        "chunk_extent"
+      ],
+      "result_policy": {
+        "chunk_extent": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:f902ebe5c0116d97]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:4ea0073161ac82fb]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fill_chunked(_1: &snapshot::SnapshotFile, _2: &file::RecordIndexEntry, _3: u64, _4: &mut [u8], _5: bool, _6: &mut ChunkCache) -> std::result::Result<RecordPage, error::Error> [body:98d8f6f83f1bfd5f]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "target": "chunk_extent",
+            "result": "checked"
+          }
+        ],
+        "all": [
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:dbc514f92edde9c0]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:bbd2e9399d3847a9]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fill_chunked(_1: &snapshot::SnapshotFile, _2: &file::RecordIndexEntry, _3: u64, _4: &mut [u8], _5: bool, _6: &mut ChunkCache) -> std::result::Result<RecordPage, error::Error> [body:469c75a3382a610e]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "target": "chunk_extent",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "file::record_chunks::resource_proofs::chunk_geometry_covers_the_payload_exactly",
+        "file::record_chunks::resource_proofs::chunk_extent_accepts_exactly_well_formed_entries"
       ]
     }
   },
