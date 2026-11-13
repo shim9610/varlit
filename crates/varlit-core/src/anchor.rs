@@ -76,7 +76,14 @@ impl AnchorPolicy {
         if !self.is_anchored() {
             return None;
         }
-        let block = 1u64 << (BLOCK_SHIFT_BASE + (self.flags & BLOCK_SHIFT_MASK) as u32);
+        // The shift comes from a file header's flags byte and reaches 73;
+        // `validate` refuses anything past 2^40, so saturating only keeps an
+        // unvalidated policy from panicking.
+        let block =
+            match 1u64.checked_shl(BLOCK_SHIFT_BASE + (self.flags & BLOCK_SHIFT_MASK) as u32) {
+                Some(block) => block,
+                None => u64::MAX,
+            };
         let hole = if self.flags & SMALL_HOLE != 0 {
             256
         } else {
@@ -86,12 +93,12 @@ impl AnchorPolicy {
     }
 
     pub fn validate(self) -> Result<Self> {
+        if self.is_anchored() && (self.flags & BLOCK_SHIFT_MASK) as u32 + BLOCK_SHIFT_BASE > 40 {
+            return Err(Error::InvalidFormatSpec(
+                "anchor spacing exceeds 2^40 bytes",
+            ));
+        }
         if let Some((block, hole)) = self.spacing() {
-            if (self.flags & BLOCK_SHIFT_MASK) as u32 + BLOCK_SHIFT_BASE > 40 {
-                return Err(Error::InvalidFormatSpec(
-                    "anchor spacing exceeds 2^40 bytes",
-                ));
-            }
             AnchorLayout::new(0, block, hole)?;
         }
         Ok(self)
@@ -560,6 +567,23 @@ mod tests {
         assert!(AnchorPolicy::every(10, true).validate().is_ok());
         // Unanchored flags other than zero are still refused.
         assert!(AnchorPolicy::from_flags(1).is_err());
+    }
+
+    #[test]
+    fn every_header_flags_byte_is_refused_or_accepted_without_panicking() {
+        // A damaged header can name a spacing exponent up to 73, past what a
+        // u64 shift holds (found by fuzzing).
+        for flags in 0..=u8::MAX {
+            if let Ok(Some((block, _))) = AnchorPolicy::from_flags(flags).map(AnchorPolicy::spacing)
+            {
+                assert!(block <= 1 << 40);
+            }
+        }
+        assert!(AnchorPolicy::from_flags(ANCHORED | BLOCK_SHIFT_MASK).is_err());
+        assert_eq!(
+            AnchorPolicy::every(73, false).spacing(),
+            Some((u64::MAX, 4096))
+        );
     }
 
     fn layout() -> AnchorLayout {
