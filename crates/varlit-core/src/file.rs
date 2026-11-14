@@ -5785,7 +5785,8 @@ where
             resource: "record count",
         })?;
     let mut key_bearing = 0usize;
-    for entry in file.index.iter() {
+    // Walks the file when the handle opened from an anchor without a list.
+    for entry in file.resident_directory("estimate_keyed_merge")?.iter() {
         let block_id = entry?.block_id;
         if block_id == T::ID || block_id == TOMBSTONE_BLOCK_ID || block_id == OP_BLOCK_ID {
             key_bearing += 1;

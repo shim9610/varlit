@@ -1057,12 +1057,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:869a5b54df3e9cd0]",
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:869a5b54df3e9cd0]",
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1259,12 +1259,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:869a5b54df3e9cd0]",
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:869a5b54df3e9cd0]",
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },

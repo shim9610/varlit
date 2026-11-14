@@ -343,7 +343,11 @@ where
         {
             let input = VarlitFile::open_readonly(spec, path)?;
             let mut payload = Vec::new();
-            for (ordinal, entry) in input.index.iter().enumerate() {
+            // A large input can open from an anchor and keep no record list;
+            // the handle's own directory walks the file in that case, so the
+            // ordinals still match the positions a kept list would give.
+            let records = input.resident_directory("merge_keyed_files")?;
+            for (ordinal, entry) in records.iter().enumerate() {
                 let entry = entry?;
                 if ![T::ID, TOMBSTONE_BLOCK_ID, OP_BLOCK_ID].contains(&entry.block_id) {
                     continue;

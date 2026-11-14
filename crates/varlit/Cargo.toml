@@ -47,6 +47,10 @@ trybuild.workspace = true
 zerocopy = { workspace = true, features = ["derive"] }
 
 [[example]]
+name = "mixed_load_bench"
+required-features = ["integrity"]
+
+[[example]]
 name = "scalable_load"
 required-features = ["integrity"]
 

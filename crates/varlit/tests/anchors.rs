@@ -723,3 +723,94 @@ fn lookups_between_anchors_match_a_full_scan() -> varlit::Result<()> {
     }
     Ok(())
 }
+
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 40, version = 1, kind = "variable", key = "id")]
+struct Account {
+    #[varlit(field_id = 1)]
+    id: u64,
+    #[varlit(field_id = 2)]
+    note: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, VarlitBlock)]
+#[varlit(id = 41, version = 1, kind = "variable")]
+struct AccountOp {
+    #[varlit(field_id = 1)]
+    note: Vec<u8>,
+}
+
+impl varlit::VarlitMerge for Account {
+    type Op = AccountOp;
+
+    fn apply_op(&mut self, op: Self::Op) -> varlit::Result<()> {
+        self.note = op.note;
+        Ok(())
+    }
+}
+
+varlit_format! {
+    pub struct AnchoredKeyed {
+        magic: b"VANCKEY1";
+        version: 1;
+        endian: little;
+        schema_hash: computed;
+        integrity: crc32_with_header;
+        index: [scan_on_open, block_offset_chain];
+        blocks: [Account, AccountOp];
+    }
+}
+
+fn account(id: u64) -> Account {
+    Account {
+        id,
+        note: vec![(id % 251) as u8; 64],
+    }
+}
+
+/// A file large enough to open from an anchor keeps no record list, so merge
+/// and compact must walk the file instead of reading a list that is not there.
+/// These used to fail with `UnexpectedEof` once an input crossed an anchor.
+#[test]
+fn merge_and_compact_read_inputs_that_open_from_an_anchor() -> varlit::Result<()> {
+    use varlit::{compact_keyed_file, compact_keyed_files, merge_keyed_files};
+    let spec = AnchoredKeyed::spec().with_anchors(AnchorPolicy::every(13, true));
+    let directory = tempfile::tempdir()?;
+    let base = directory.path().join("base.varlit");
+    let delta = directory.path().join("delta.varlit");
+    let merged = directory.path().join("merged.varlit");
+    let compacted = directory.path().join("compacted.varlit");
+    let direct = directory.path().join("direct.varlit");
+    const RECORDS: u64 = 2_000;
+    {
+        let mut file = spec.create(&base)?;
+        for id in 0..RECORDS {
+            file.push(&account(id))?;
+        }
+        file.flush()?;
+    }
+    {
+        let mut file = spec.create(&delta)?;
+        for id in 0..RECORDS / 4 {
+            file.push_op::<Account>(&id, &AccountOp { note: vec![7; 16] })?;
+        }
+        for id in RECORDS / 4..RECORDS / 2 {
+            file.delete::<Account>(&id)?;
+        }
+        file.flush()?;
+    }
+    // The inputs span many 8 KiB anchor spacings.
+    assert!(std::fs::metadata(&base)?.len() > 16 * 8192);
+
+    merge_keyed_files::<Account, _>(spec, &base, &[&delta], &merged)?;
+    compact_keyed_file::<Account, _>(spec, &merged, &compacted)?;
+    compact_keyed_files::<Account, _>(spec, &base, &[&delta], &direct)?;
+
+    let live = (RECORDS - RECORDS / 4) as usize;
+    for path in [&merged, &compacted, &direct] {
+        let file = spec.open_readonly(path)?;
+        let values = file.materialized_keyed_blocks::<Account>()?;
+        assert_eq!(values.len(), live);
+    }
+    Ok(())
+}
