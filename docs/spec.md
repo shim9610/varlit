@@ -73,104 +73,262 @@ and compile-time schema validation.
 
 ## Preallocated Matrix Wire Contract
 
-> The current code stores matrices as tiles inside the primary file
-> (`crates/varlit-core/src/matrix_tiles`) and writes no `VMAT` region and no
-> `.vmg` companion. This section still describes the earlier `VMAT` layout and
-> has not been rewritten for tiled storage.
+All integers below are little-endian. "CRC32" is the IEEE CRC32 computed by
+`crc32fast`. Offsets inside matrix structures (ring position, directory
+entries, frame targets, the metadata record's ring offset) are logical offsets
+of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
+(engine) and `crates/varlit-core/src/file/matrix_tiles_io.rs` (native host).
 
-- Matrix support is a separate storage mode from the append-log record region.
-- Files whose static spec contains matrix blocks store a 24-byte `VMNC`
-  creation-nonce region and then a `VMAT` layout region immediately after the
-  normal Varlit file header.
-- Matrix offsets are logical offsets. The primary contains the immutable base
-  layout; changes are stored in the required `<primary>.<nonce>.vmg` companion
-  (`VARVEMG1`). A root maps 4096-byte logical pages through a fixed-radix directory
-  to immutable physical pages. Checksummed alternating heads publish a generation,
-  root and confirmed native-log EOF. Head offsets 8, 16, 24, 32 and 40 contain
-  little-endian u64 generation, root, companion end, native EOF and compaction
-  epoch respectively; the head CRC covers them all. The epoch starts at zero,
-  increments only on explicit companion compaction, and survives subsequent
-  normal publications. Readers diff roots within one epoch and rebuild metadata
-  only when the epoch changes. `flush()` does not publish; `sync()` does.
-  All matrix reads use the captured root until explicit `follow()`. The companion
-  is persistent data and must accompany the primary in backups and moves.
-- `VMAT` layout version 6 stores runtime dimensions, matrix block layout,
-  commit bitmap offsets, slot region offsets, derived static aux region
-  placement, optional offset-table metadata, region CRC metadata,
-  `append_log_start`, and the persisted page-index region
-  (`page_index_off`, `page_index_len`).
-- The two page-index fields are header fields 13 and 14, appended after
-  `append_log_start` so every previously defined field keeps its index; the
-  reserved tail shrank from 32 to 16 bytes. The region order is
-  `VMAT header | dimension table | block table | commit categories | commit maps
-  | slot region | static aux | page index | MCRC | append log`.
-  Regions are contiguous except that the slot region starts at the first
-  4 KiB file offset at or after the end of the commit maps; the gap is a
-  never-written zero extent.
-- The page index is an array of little-endian `u64` slots, each 8 bytes. Slot `0`
-  is an occupancy header: the live entry count in the low 48 bits and a check
-  value derived from it in the high 16, so the header carries its own redundancy
-  and a torn or corrupted count is detectable rather than believed. A matrix
-  whose page count would exceed `2^48 - 1` is refused at layout time instead of
-  being written with an unrepresentable header. Slots `1..=count` are the
-  entries, each holding `page + 1`, so a zero entry *inside* the counted prefix
-  is provably damage rather than an ambiguous end-of-array — that distinction is
-  the whole reason the count exists. `u64::MAX` in the header is the
-  rebuild-in-progress marker; it is not a representable valid header at any
-  capacity, so a reader that encounters it fails closed rather than reading a
-  half-rebuilt index as authoritative. Entries are written before the page and
-  digest they describe, so the worst a torn append can do is name a page that
-  still reads as uninitialised zeros, which open already accepts. Open derives
-  the pages it visits from this index unioned with the allocated ranges the
-  platform reports, never from the logical page count.
+### Records
 
-  VMAT v5 and later reserve a second array after the forward array's full capacity:
-  `header | forward[page_count] | reverse[page_count]`, with total virtual length
-  `(1 + 2 * page_count) * 8`. `reverse[page]` is zero for absent pages, otherwise
-  `slot + 1`. Queries cross-check `forward[slot] == page + 1`. Both directions and
-  the count are updated within the same working generation. An I/O failure
-  poisons the writer; the incomplete root cannot be published. Readers retain
-  their confirmed root and fetch original metadata windows on demand.
+- A matrix lives in internal records of the append log. There is no matrix
+  region between the file header and the append log; in a native matrix file
+  the append log starts where the file header ends, as in any other file.
+- Every matrix storage record has block id `MATRIX_TILE_BLOCK_ID`
+  (`0xFFFF_FFF3`) and flags `RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE`
+  (`0x8000 | 0x4000`). The block version names the record kind:
 
-  Layout version 3 used a terminator-scanned array with no count field, which is
-  why a v3 artifact is refused rather than migrated (see the version contract
-  below): under that encoding a damaged entry was indistinguishable from the end
-  of the array, so damage silently hid every later page.
-- The append-log scanner starts at `append_log_start` for matrix files and at the
-  normal header length for non-matrix files.
-- Matrix slot payloads are fixed-stride, bounded, and addressed directly by
-  deterministic key formulas such as `scan * n_channels + ch`.
-- Matrix commit bitmaps are the normal read-time validity authority. Slot bytes
-  are ignored when the matching commit bit is clear.
-- Static matrix aux regions are declared in the format spec, preallocated after
-  slot payloads, excluded from commit bitmap validity, and exposed through
-  `matrix_aux_len`, `read_matrix_aux`, and writer-only `write_matrix_aux`.
-- With `integrity: crc32`, `VMAT` v6 includes an `MCRC` v2 table after the slot
-  region, any static aux regions, and the page index. It stores a CRC32 over the metadata tables,
-  an 8-byte digest (`crc32` plus a state word) per 4 KiB page of every commit
-  map, and a CRC32 plus a validity bit per dense cell slot. A commit-bit
-  mutation rehashes only the affected page, and a page whose state word says
-  "uninitialized" must still read as all zeros, which is what distinguishes a
-  never-written page from one deliberately written with zeros.
-- Matrix creation writes only the descriptor tables and the `MCRC` header; the
-  commit maps, per-cell checksums, and validity bitmaps are a sparse zero
-  extent, and those bitmaps are held sparsely in memory after open, so neither
-  create-time metadata I/O nor post-open bitmap residency scales with cell
-  count.
-- A `VMAT` layout version 1, 2, 3, 4, or 5 artifact is refused at open with
-  `Error::FormatVersionMismatch { expected: 6, actual: <1 to 5> }`; it is
-  stale and regenerable, not migratable. Version 1 describes the pre-paging
-  physical representation, version 2 carries no page-index region, and version 3
-  carries the superseded terminator-scanned page-index encoding. Version 4 has
-  no directly addressed reverse array. Version 5 packs the slot region
-  directly after the commit maps. The `MCRC` integrity table remains version 2.
-- P0 commit operations are logical visibility operations under the explicit
-  `flush`/`sync` durability model, not implicit per-cell fsync operations.
-- Same-size matrix overwrites update the existing slot range and must not change
-  file length. The overwrite clears the affected commit bit until the caller
-  commits the replacement payload.
-- Recovery may rebuild a damaged commit bitmap only from stronger evidence such
-  as per-entry CRCs; normal reads do not infer validity from slot bytes.
+  | Block version | Kind | Payload |
+  | --- | --- | --- |
+  | 1 | metadata | the `VMTA` record below, one per matrix |
+  | 2 | ring | the write-ahead ring, one per matrix |
+  | 3 | directory | one 4096-byte directory page |
+  | 4 | tile | one `VTIL` tile |
+
+- Each record is appended once and its payload is then rewritten in place. For
+  a record with `RECORD_FLAG_IN_PLACE` the record checksum leaves the payload
+  out (it still covers what the integrity policy covers outside the payload);
+  the payload carries its own CRC32s
+  (`checksum_record_fields` in `file.rs`). The record validator refuses
+  `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
+  missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
+  flag disagrees with block id")`, and a block version outside `1..=4` with
+  `InvalidCanonicalEncoding("unsupported internal record version")`. The
+  sync-marker chain of an indexed primary also leaves these payloads out of
+  its checksums.
+- Creation appends the metadata record, then the ring record, and syncs. In a
+  native file the metadata record is the first record of the append log: its
+  payload is read at `append_log_start + 32`. In an indexed primary it is
+  located among the first 8 records of the log. Tiles and directory pages are
+  appended later, the first time a cell in them is written, so a tile that was
+  never written does not exist in the file.
+- The matrix tile layout version is **1** (`LAYOUT_VERSION` in
+  `matrix_tiles/geometry.rs`). It is stored in the metadata record and in
+  every tile header. The schema hash of a matrix block folds `matrix-tile-v1`
+  and the block's effective tile shape. A 0.12.x file stores its matrix in a
+  `VMAT` region and cannot be read by this layout; with a declared schema hash
+  its open is refused with `SchemaHashMismatch`, because a matrix spec no
+  longer hashes as the `VMAT` build did
+  (`a_tiled_spec_no_longer_hashes_as_the_v6_layout_did`).
+
+### Metadata Record (`VMTA`)
+
+| Bytes | Field |
+| --- | --- |
+| 0..4 | magic `b"VMTA"` |
+| 4..6 | layout version `u16` |
+| 6..8 | growing flag `u16`: non-zero when the format declares a growing dimension |
+| 8..12 | matrix block count `u32` |
+| 12..16 | zero |
+| 16..24 | extent of block dimension 0 at create, `u64` |
+| 24..32 | extent of block dimension 1 at create, `u64` |
+| 32..40 | ring record payload offset `u64` |
+| 40..48 | ring record payload length `u64` |
+| 48..64 | 16-byte creation nonce |
+| 64..68 | CRC32 of bytes 0..64 |
+| 68..72 | zero |
+
+- From byte 72, one 16-byte directory root per matrix block in spec order:
+  root page offset `u64`, then directory height `u64`. Offset `0` means the
+  block has no tile yet.
+- After the roots comes the extra area, at offsets relative to the start of
+  the metadata payload:
+  - one 8-byte unit per `single` commit category, in declaration order; byte 0
+    non-zero means committed;
+  - then, starting at the next multiple of 256, one bitmap per `per_channel`
+    commit category in declaration order, `ceil(channels / 8)` bytes rounded
+    up to a multiple of 256; channel `c` is bit `c % 8` of byte `c / 8`;
+  - then one region per declared aux, `byte_len` rounded up to a multiple of
+    256, in declaration order.
+- Per-channel bitmaps and aux regions are staged in whole 256-byte pages
+  counted from the start of the extra area. The extra area has no checksum of
+  its own.
+- On open, the reader checks the magic, the layout version, the CRC32, that the block count and the growing flag match
+  the spec, and that the ring length is within
+  `[MIN_RING, MAX_RING_BYTES]` = `[69632, 64 MiB]`. Any failure is
+  `InvalidMatrixLayout`. The extents are taken from the record; the block
+  shapes, commit categories and aux sizes come from the spec, whose schema
+  hash fixes them.
+
+### Cells, Tiles And Slots
+
+- Each matrix block has a tile shape `[rows, cols]`: the declared `tile`, or,
+  when none is declared, `matrix_default_tile(slot_stride)` — the largest
+  power of two of cells whose `slot_stride + 4` bytes fit 64 KiB (at least
+  one), split as `[cells / cols, cols]` with `cols = 2^ceil(log2(cells) / 2)`.
+  Spec validation refuses an empty tile, one over `2^20` cells, or one whose
+  cells take more than 64 MiB.
+- Cell `(scan, ch)` is in tile `(scan / rows, ch / cols)`, at slot
+  `(scan % rows) * cols + ch % cols`.
+- Tile payload:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VTIL"` |
+  | 4..6 | layout version `u16` |
+  | 6..8 | zero |
+  | 8..12 | block id `u32` |
+  | 12..16 | zero |
+  | 16..24 | tile row `u64` |
+  | 24..32 | tile column `u64` |
+  | 32..36 | CRC32 of bytes 0..32 |
+  | 36..40 | zero |
+  | 40.. | commit bitmap: `ceil(cells / 8)` bytes, then its CRC32 |
+  | next multiple of 8 | `cells` slots of `slot_stride + 4` bytes |
+
+- Slot `s` is committed when bit `s % 8` of bitmap byte `s / 8` is set. The
+  bitmap and its CRC32 are one unit, rewritten whole and resealed on every
+  change. There is one commit bitmap per tile per block, and a block's
+  `category` is the commit category its bits belong to.
+- A slot holds the encoded payload (`slot_stride` bytes) followed by the CRC32
+  of the payload. A slot that was never written is all zero. A new tile is
+  appended with zeroed slots and an empty, sealed bitmap.
+- Writing a cell stores payload and CRC32 in its slot and clears its commit
+  bit. Committing a cell checks the slot CRC first: a slot whose tile does not
+  exist, or which is all zero, is `MatrixCellNotWritten`; any other mismatch is
+  `MatrixChecksumMismatch`. Clearing a cell clears its bit and leaves its bytes,
+  so committing it again without a write publishes the value it held.
+- Reading a cell: a key outside the extents is `MatrixKeyOutOfBounds`
+  (dimension 0 is unbounded when the format declares a growing dimension); a
+  missing tile or a clear bit is `MatrixNotCommitted`; a bitmap whose CRC32 does
+  not match is `InvalidMatrixLayout`; a slot whose CRC32 does not match is
+  `MatrixChecksumMismatch` when the read-validation policy's `data_crc` is on.
+  Slot bytes are not read when the bit is clear.
+- Tile headers are checked by `verify_matrix_metadata`, together with each
+  bitmap's CRC32. A damaged tile is a `Recoverable` `CommitMap` finding with a
+  `ClearCategory` action for its category. `clear_matrix_category` rewrites
+  the bitmaps of that category without checking them, and
+  `rebuild_matrix_commit_from_crc` sets the bit of every slot whose CRC32
+  holds (`damage_in_place_is_reported_and_a_category_clear_recovers`).
+
+### Tile Directory
+
+- Each block's tiles are found through a radix directory keyed by the Morton
+  code of the tile coordinates: bit `i` of the tile row goes to key bit `2i`,
+  bit `i` of the tile column to key bit `2i + 1`. A tile row or column above
+  `u32::MAX` is `InvalidMatrixLayout`.
+- A directory page is `DIR_FANOUT = 512` `u64` offsets (4096 bytes); each level
+  resolves 9 key bits. From the root, level `height - 1` down to level 0, the
+  entry index is `(key >> (9 * level)) & 511`. A level-0 entry is the tile's
+  payload offset; a higher entry is the next page's offset; `0` is absent.
+- A height of 0 or above 8 under a non-zero root is `InvalidMatrixLayout`. A
+  key wider than the height resolves is an absent tile.
+- When a key needs more levels, the writer appends a new root page whose entry
+  0 is the old root, so existing keys keep their paths
+  (`every_direction_grows_without_moving_a_tile`). Tiles and pages never move
+  once appended.
+
+### Write-Ahead Ring
+
+The ring record's payload holds two 128-byte header slots at offsets 0 and
+128, and frames from offset 4096 to the end of the payload, written
+circularly.
+
+- Ring header:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VRNG"` |
+  | 4..6 | version `u16` = 1 |
+  | 8..16 | `seq` |
+  | 16..24 | `checkpointed`: every generation up to it is in place and durable |
+  | 24..32 | `mark`: the file may hold values of generations up to it |
+  | 32..40 | `reclaimed`: frames of generations up to it may be overwritten |
+  | 40..48 | `tail`: ring offset of the oldest kept frame |
+  | 48..56 | `tail_gen`: generation of the frame at `tail` |
+  | 56..64 | `head`: ring offset just past the newest committed frame |
+  | 64..72 | `published`: newest committed generation |
+  | 72..76 | CRC32 of bytes 0..72 |
+
+  Ring offsets are relative to the start of the frame area. A header with
+  sequence `seq` is written to slot `seq % 2`. A slot is valid when its magic,
+  version and CRC32 match and `reclaimed <= checkpointed <= published`. The
+  current header is the valid slot with the higher `seq`; when neither slot is
+  valid after eight reads, the result is `InvalidMatrixLayout`.
+- Frame: a 32-byte header, `count` entries, zero padding, and a CRC32 of
+  everything before it; the total length is a multiple of 8.
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VWFR"` |
+  | 4..8 | flags `u32`: `1` commit, `2` wrap |
+  | 8..16 | generation `u64` |
+  | 16..20 | frame length `u32`, CRC32 included |
+  | 20..24 | entry count `u32` |
+  | 24..32 | `requires` `u64`: the file length the frame's targets lie within |
+
+  Each entry is a target offset `u64`, a length `u32`, and that many bytes to
+  be written at the target. A wrap marker is a 40-byte frame with the wrap
+  flag and no entries; it sends the scan to ring offset 0. With fewer than 40
+  bytes left before the end of the ring, the scan wraps without a marker.
+- A publication is one generation: one or more frames carrying the same
+  generation number, the last with the commit flag. The writer keeps each frame
+  at most a quarter of the ring.
+- A scan reads frames from `tail` and stops at the first frame with a wrong
+  magic, a `requires` past the file's current length, a length under 36,
+  not a multiple of 8 or past the end of the ring, a generation other than the
+  expected next one, a CRC32 mismatch, or entries that overrun the frame.
+  Entries of a generation count only once its commit frame is read; frames of
+  a generation that never committed are ignored
+  (`unpublished_and_torn_publications_never_reach_a_reopen`).
+- Publishing (`sync()`, `immediate()`, `commit_durable()`, the durable cell
+  writes) writes the staged ranges as frames. When the generation appended
+  records, the file is synced before its frames are written. The frames are
+  then synced, and the ring header is rewritten with the new `published` and
+  `head`. `flush()` does not publish. Bytes staged into a record appended
+  since the last publication are written to it directly, not through the ring,
+  since nothing published points at it yet.
+- Staged ranges are whole units: a slot, a bitmap unit, a directory entry, a
+  root, a single-commit unit, or a 256-byte page of the extra area.
+- Checkpoint: when a frame does not fit, the writer puts the oldest committed
+  generations in place until the frame fits and at least half the ring is
+  free. It first writes a header raising `mark` to the last generation being
+  applied, then writes the newest bytes of each target in place, syncs, writes
+  a header with `checkpointed`, `reclaimed`, `tail` and `tail_gen` advanced,
+  and syncs again. A frame the ring cannot make room for, or a single staged
+  range too large for a frame, is `LimitExceeded`.
+- Ring size: `FormatSpec::with_matrix_ring_bytes`, or by default twice the
+  slot bytes of the create-time extents over all blocks, clamped to
+  `[256 KiB, 16 MiB]` and to the record payload limit. A declared size over
+  `MAX_RING_BYTES` (64 MiB) is `LimitExceeded`. The writer raises a size below
+  `MIN_RING` to `MIN_RING` and rounds it up to a multiple of 8.
+
+### Snapshots And Overlay
+
+- A reader's snapshot is the `published` generation it last adopted. On open
+  it scans the ring from `tail` and keeps an overlay: for every range written
+  by a generation after `checkpointed`, where its newest bytes are in the
+  ring. A read takes the file bytes and lays the overlay over them.
+- After reading, the reader rereads the ring header. When `mark` is above its
+  snapshot, the file may hold newer values, and the read is
+  `MatrixSnapshotExpired { snapshot, checkpointed }` instead of a mix of
+  generations
+  (`a_reader_that_falls_behind_the_ring_is_told_to_follow`). When a range it
+  laid from the ring was reclaimed during the read, the read is repeated (up
+  to eight times, then `MatrixSnapshotExpired`). An open whose scan is spoiled by a concurrent
+  reclaim retries up to 32 times before `MatrixSnapshotExpired`.
+- `follow()` adopts the newest `published` generation, scanning only frames
+  after its snapshot; when the ring has reclaimed frames past the snapshot it
+  rebuilds the overlay from what the ring keeps. Queries never advance the
+  snapshot.
+- Opening a writer scans the ring the same way and takes the newest generation
+  whose frames verify as `published`, rewriting the header when it disagrees;
+  nothing is written in place on open, so an open reader's snapshot stays
+  readable across a writer reopen.
+- A matrix overwrite does not grow the file: slots change in place and the
+  ring has a fixed size. Only a first write into a tile appends the tile and
+  any directory pages it needs
+  (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`).
 
 ## Runtime Policy
 
@@ -564,10 +722,11 @@ This section pins the P0-P2 implementation contracts so worker agents can implem
   generation's offsets. In-place replacement is refused, because nothing rewrites
   the segment describing the record it restamps.
 - **The append-log start above is the file's, not the header's.** In a matrix
-  file the matrix region sits between the header and the append log, so both the
-  coverage a writer records and the boundary the walk demands the oldest link
-  reach are `MatrixLayout::append_log_start()`. A matrix format may declare
-  `segment_on_flush` and gets the same segment-chain traversal.
+  file it is still where the file header ends: the matrix's storage records are
+  the first records of the append log, and the segment chain covers them like
+  any other record (`a_matrix_file_begins_its_log_with_its_matrix_records`). A
+  matrix format may declare `segment_on_flush` and gets the same segment-chain
+  traversal (`a_matrix_file_builds_and_walks_a_segment_chain`).
 
 ### Open Digest
 
@@ -738,10 +897,11 @@ compute it and freeze it at a chosen point":
 - Sealing is refused on any other policy, rather than doing nothing: `None` has
   no checksum to freeze and `Rolling` recomputes on every write, so one call
   would mean three different things.
-- A format declaring matrix blocks is refused. The matrix creation nonce and
-  matrix layout header sit at fixed offsets *after* the file header, and a
-  reserved region moves both — the same refusal `index: header_tails` carries,
-  for the same reason.
+- A format declaring matrix blocks may declare the region: the matrix's
+  records start after the file header, wherever it ends
+  (`header_tails_and_header_slots_combine_with_a_matrix`). A matrix block
+  cannot be one of the region's blocks; `validate` refuses that with
+  `InvalidFormatSpec("header_slots cannot hold a matrix block")`.
 - A republishing `replace` carries the region across verbatim. `VBTT` is reset
   to cold there because every offset it records becomes a lie; this region
   records no offsets, so preserving it is what "the file kept its metadata"
@@ -869,7 +1029,11 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - `MmapPayloads::payload_window(entry)` accepts only entries that exactly match the cloned snapshot index, preventing forged public offsets from exposing arbitrary file bytes.
 - `MmapPayloads::block_payload_window::<T>(index)` returns the typed block ordinal payload bytes or `None` when out of range.
 - Unsafe `VarlitFile::mmap_matrix()` and `VarlitReader::mmap_matrix()` expose
-  `MmapMatrix`, a read-only mmap plus a cloned VMAT layout snapshot.
+  `MmapMatrix`: a private copy-on-write mapping of the file in which every
+  range the handle's snapshot holds in the write-ahead ring is copied into its
+  place when the mapping is made, plus a tile reader opened over that mapping.
+  The overlay bytes copied are charged against `MaterializedBytes`, the mapped
+  length against `MmapLen`.
 - Every file-backed mmap constructor requires the caller to prevent mutation,
   truncation, replacement, or backing-object invalidation through every handle,
   thread, and process for the mapping's complete lifetime.
@@ -879,7 +1043,8 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
   lifetimes. Raw views additionally validate kind, version, endian, exact size,
   and alignment.
 - `MmapMatrix::cell_payload_window::<T>(key)` returns a committed matrix slot
-  payload window and verifies the per-cell CRC when matrix integrity is enabled.
+  payload window. It checks the commit bit and verifies the slot's CRC32,
+  returning `MatrixChecksumMismatch` on a mismatch.
   A slot that an anchor splits is not contiguous in the file; its window is a
   copy made on first use and kept with the mapping (at most one per anchor).
 - Initial zero-copy scope is limited to explicit raw fixed blocks whose implementor promises endian, alignment, and layout compatibility.
@@ -887,9 +1052,10 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
 - `VarlitRawFixedBlock` is an unsafe opt-in trait over `VarlitBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout`.
 - `raw_fixed` requires fixed block kind, registered id/version/kind, record version match, matching raw endian, exact `size_of::<T>()` payload length, and valid `align_of::<T>()` alignment.
 - Raw matrix access is exposed as `unsafe MmapMatrix::raw_cell::<T>(key)` where
-  `T: VarlitRawMatrixBlock`; it requires matrix block kind, committed status,
-  matching raw endian, exact `size_of::<T>()` slot length, valid alignment, and
-  per-cell CRC verification when enabled.
+  `T: VarlitRawMatrixBlock`; it requires matrix block kind, matching raw
+  endian, committed status and a matching slot CRC32 (through
+  `cell_payload_window`), exact `size_of::<T>()` slot length, and valid
+  alignment.
 - Raw zero-copy calls require the caller to guarantee the mapped bytes are not
   mutated by any handle, thread, or process for the lifetime of returned
   references.

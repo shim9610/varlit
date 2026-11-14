@@ -83,10 +83,12 @@ types can be skipped.
 
 ## Matrix Blocks
 
-Matrix blocks are for bounded runtime-sized grids that need direct cell access
-and copy-on-write same-size overwrite. They are not append-log records. A matrix file
-stores runtime dimensions at create time, preallocates deterministic slot
-regions, and uses commit bitmaps as the only normal read-time validity source.
+Matrix blocks are for runtime-sized grids that need direct cell access and
+same-size overwrite. A matrix file stores its runtime dimensions at create time
+in a metadata record and keeps cells in fixed-shape tiles, which are internal
+records of the append log appended the first time one of their cells is
+written. Each tile's commit bitmap is the only normal read-time validity
+source.
 
 The intended authoring shape is:
 
@@ -144,16 +146,23 @@ prevent. If the per-cell length is genuinely not known until create time, it is
 not a fixed array in a cell; make it a third matrix dimension, or an append-log
 variable block.
 
-Matrix storage uses dense `(scan, ch)` addressing and bounded slot payloads.
-Append-log blocks may coexist after the preallocated logical matrix regions.
+Matrix storage uses `(scan, ch)` addressing and fixed-stride slot payloads.
+A block may declare its tile shape (`tile = [rows, cols]`); otherwise it gets
+the largest power of two of cells whose slots fit 64 KiB. The tile shape is
+part of the schema hash. Append-log blocks coexist with the matrix records in
+the same log.
 
-Each reader captures one confirmed generation of slot bytes, commit maps, CRC
-metadata and aux data. The writer stages copy-on-write pages, including on
-same-cell overwrite; readers remain safe while it writes. Explicit `sync()` or
-Immediate publishes the new root; `flush()` and drop do not. Readers advance
-through `follow(&mut self)` and queries take `&self`. Use one reader per thread.
-The required `.vmg` companion and compaction rules are documented in the
-[durability model](durability-model.md).
+Each reader captures one confirmed generation of slot bytes, commit bitmaps
+and aux data. The writer overwrites cells in place through a write-ahead ring
+inside the primary file; readers remain safe while it writes. Explicit `sync()`
+or Immediate publishes the staged changes as a new generation; `flush()` and
+drop do not. Readers advance through `follow(&mut self)` and queries take
+`&self`. Use one reader per thread. A reader that falls further behind than
+the ring holds gets `MatrixSnapshotExpired` and must `follow()`; the ring size
+is set with `FormatSpec::with_matrix_ring_bytes`. Everything is in the primary
+file; there is no companion file. The byte layout is in the
+[matrix wire contract](spec.md#preallocated-matrix-wire-contract), and the
+durability rules in the [durability model](durability-model.md).
 
 Rules to keep stable:
 
@@ -482,9 +491,10 @@ The checksum is FNV-1a 32 rather than a crc32, so it works without the
 Nothing, measurably: the header bytes and `computed_schema_hash()` are the ones
 your format produced before the option existed. Two refusals to know about — the
 capacity is part of the schema hash, so it cannot be changed for an existing
-file, and a format declaring matrix blocks is refused outright because the
-matrix creation nonce and layout header sit at fixed offsets after the file
-header that a reserved region would move.
+file, and a matrix block cannot be one of the region's blocks
+(`InvalidFormatSpec`). A format declaring matrix blocks may declare the region:
+the matrix's records start after the file header, wherever it ends
+(`header_tails_and_header_slots_combine_with_a_matrix`).
 
 ## Commit And Offset Chains
 
@@ -653,10 +663,10 @@ own chain, one chain shared by all keyed blocks, and the rebuild walks it whole
 because it cannot know which entries belong to the block being asked about
 without decoding them.
 
-**What it refuses.** A format declaring matrix blocks (the matrix layout sits at
-a fixed offset after the header, which the region moves), and
-`open_digest_on_flush` — the two are answers to the same question with different
-safety properties, so declare one.
+**What it refuses.** `open_digest_on_flush` — the two are answers to the
+same question with different safety properties, so declare one. A format
+declaring matrix blocks is not refused: the matrix's records are in the append
+log after the header (`header_tails_and_header_slots_combine_with_a_matrix`).
 
 **What it gives up on an in-place replacement.** `replace_fixed` and
 `unsafe replace_fixed_in_place_exclusive` reset the region to cold, so the next

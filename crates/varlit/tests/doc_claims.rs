@@ -59,20 +59,23 @@ fn collect(dir: &Path, extension: &str, root: &Path, out: &mut Vec<(String, Stri
     }
 }
 
-fn shipped_vmat_version() -> u16 {
-    let source = fs::read_to_string(repo_root().join("crates/varlit-core/src/matrix.rs"))
-        .expect("crates/varlit-core/src/matrix.rs is readable");
-    let marker = "const VMAT_VERSION: u16 = ";
+fn shipped_matrix_tile_layout_version() -> u16 {
+    let path = "crates/varlit-core/src/matrix_tiles/geometry.rs";
+    let source =
+        fs::read_to_string(repo_root().join(path)).unwrap_or_else(|err| panic!("{path}: {err}"));
+    let marker = "const LAYOUT_VERSION: u16 = ";
     let start = source
         .find(marker)
-        .expect("matrix.rs declares const VMAT_VERSION")
+        .unwrap_or_else(|| panic!("{path} declares const LAYOUT_VERSION"))
         + marker.len();
     let rest = &source[start..];
-    let end = rest.find(';').expect("VMAT_VERSION declaration terminates");
+    let end = rest
+        .find(';')
+        .expect("LAYOUT_VERSION declaration terminates");
     rest[..end]
         .trim()
         .parse()
-        .expect("VMAT_VERSION is a u16 literal")
+        .expect("LAYOUT_VERSION is a u16 literal")
 }
 
 fn published_version_claims(
@@ -122,28 +125,20 @@ fn release_docs_and_installation_match_the_package_version() {
 }
 
 #[test]
-#[ignore = "VMAT is replaced by tiled matrix storage; the docs are rewritten in the docs pass, \
-            and this check moves to the tile layout version with them"]
-fn current_wire_claims_match_the_written_vmat_version() {
+fn current_wire_claims_match_the_written_matrix_tile_layout_version() {
     let files = normative_files();
-    let expected = shipped_vmat_version();
+    let expected = shipped_matrix_tile_layout_version();
     let mut checked = std::collections::BTreeSet::new();
-    for (prefix, suffix) in [
-        ("## VMAT Version ", " Header"),
-        ("layout_version        u16 = ", ""),
-        ("little-endian in layout version ", ""),
-        ("`VMAT` layout version ", " stores"),
-        ("matrix layout is `VMAT` version ", ""),
-        ("| Matrix layout | `VMAT_VERSION` | **", "**"),
-    ] {
-        for (path, line, value) in published_version_claims(&files, prefix, suffix) {
-            assert_eq!(value, expected, "{path}:{line}");
-            checked.insert(path);
-        }
+    for (path, line, value) in
+        published_version_claims(&files, "matrix tile layout version is **", "**")
+    {
+        assert_eq!(value, expected, "{path}:{line}");
+        checked.insert(path);
     }
-    for path in ["docs/spec.md", "docs/migration-guide.md"] {
-        assert!(checked.contains(path), "missing wire version in {path}");
-    }
+    assert!(
+        checked.contains("docs/spec.md"),
+        "missing matrix tile layout version in docs/spec.md"
+    );
 }
 
 #[test]
