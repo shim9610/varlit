@@ -18,15 +18,18 @@ workload; [API reference](api-reference.md) gives the supported options.
 A matrix is stored as tiles inside the primary file. A tile is an internal
 append-log record written the first time any of its cells is written; cells are
 then overwritten in place. Each publication goes through a write-ahead ring in
-the same file and syncs the file once before it is visible. A reader that falls
-further behind than the ring holds gets `MatrixSnapshotExpired` and must
-`follow()`. `verify_matrix_metadata()` visits the tiles that exist; its cost is
+the same file and syncs the file once (twice when it appended tiles) before it
+is visible; a publication that needs ring space also runs a checkpoint, which
+syncs twice more. A reader that falls further behind than the ring holds gets
+`MatrixSnapshotExpired` and must `follow()`. `verify_matrix_metadata()` visits the tiles that exist; its cost is
 proportional to written tiles, not to the cells a reader intends to access.
 
-`MatrixMetadataVerification` and `MatrixMetadataResidency` are still accepted in
-`ReadLimits`, but the tiled matrix path does not consult them. Budget accounting
-covers nominal page/cache payload, not allocator overhead or total process
-memory. Some caller output operations still require materialization.
+`MatrixMetadataVerification`, `MatrixMetadataResidency`,
+`with_matrix_generation_cache_bytes` and `with_matrix_directory_cache_bytes`
+are still accepted in `ReadLimits`, but the tiled matrix path does not consult
+them. Budget accounting covers nominal page/cache payload, not allocator
+overhead or total process memory. Some caller output operations still require
+materialization.
 
 Overwrites do not grow a tiled matrix, so `compact_matrix()` requires a clean,
 synced writer and reclaims nothing. A tiled matrix does not rely on sparse
@@ -35,12 +38,14 @@ those as not applicable. See [storage diagnostics](storage-diagnostics.md).
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic
 channel-selective reads of interleaved payloads are not provided; use planar
-blocks or read the containing block. Recovery refuses unreadable validity
-evidence. There is no supported operation to discard unverifiable visibility;
-repair the evidence or recreate the matrix. A fatal-corruption error may still
-suggest enabling forensics when it is already enabled; forensics does not make
-unreadable validity evidence usable. After clearing an incomplete
-category, reopen before trying to rebuild its commit map.
+blocks or read the containing block. A tile whose commit bitmap fails its
+checksum makes reads and writes of that tile's cells fail with
+`InvalidMatrixLayout` until `clear_matrix_category` resets the category; the
+same writer can then call `rebuild_matrix_commit_from_crc` without reopening.
+That rebuild commits every written cell whose slot checksum holds, including
+cells that were never committed or were cleared, because a slot checksum shows
+that a cell was written, not that it was committed. Directory pages, commit
+flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 
 <a id="2-native-apis-bounded-memory-does-not-remove-scan-and-scratch-io"></a>
 <a id="21-native-open-can-still-scan-the-input"></a>
@@ -90,8 +95,10 @@ reader and creates its cursors there. Readers hold a confirmed generation until
 explicit `follow()`. Failed adoption preserves the old view; unstable publication
 can return `WouldBlock` for a retry. The writer does not wait for reader retries.
 Large missed changes may exceed staging limits and require reopening or a caller
-budget decision. A reader with quarantined/fatal matrix metadata must reopen
-after repair.
+budget decision. A matrix reader keeps its snapshot only while the write-ahead
+ring holds the publications after it; once a checkpoint writes a newer
+generation in place, its reads return `MatrixSnapshotExpired` until it
+follows.
 
 A primary replaced at its pathname leaves existing readers on the old file
 object. Poll `is_current()` and reopen when that replacement matters; `follow()`
@@ -106,8 +113,8 @@ open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
-Indexed and matrix compaction retains old files until old owners close. On
-Windows, companion replacement requires filesystem support for the native POSIX
+Indexed compaction retains old files until old owners close. On Windows,
+companion replacement requires filesystem support for the native POSIX
 rename semantics used by the implementation. Failure returns an OS error and
 poisons the writer; reconcile and reopen. Lock files coordinate cooperating
 writers. Unsupported native locking returns an error; advisory locks do not
@@ -162,7 +169,7 @@ or key preservation cannot be established. See [SECURITY.md](../SECURITY.md).
 
 `experimental-matrix-reuse` requires explicit feature and runtime opt-in and uses
 its own format/compatibility rules. It does not make every matrix operation
-interchangeable with the ordinary generation format.
+interchangeable with the native tiled matrix format.
 
 <a id="6-not-verified"></a>
 <a id="61-the-unix-code-paths-and-what-the-first-linux-run-found"></a>

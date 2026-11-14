@@ -1,46 +1,36 @@
 # Matrix Recovery Model
 
-This document defines the recovery vocabulary and primitive actions for
-preallocated matrix storage. Recovery is structured as detect, classify, plan,
-and apply. Varlit reports facts and safe primitive options; callers choose
-domain policy.
+This document describes how a tiled matrix detects damage, what it reports, and
+the primitive actions that repair it. Varlit reports facts and offers primitive
+actions; callers choose domain policy. Crash recovery of the write-ahead ring
+(which publications survive a crash) is described in the
+[durability model](durability-model.md#crash-and-reopen).
 
-## Regions
+## What Is Checked
 
-Matrix recovery reasons about named regions:
+A matrix lives inside the primary file as internal records: a metadata record,
+the write-ahead ring, radix directory pages and tiles. Each check below is in
+the code path named; nothing else is checked.
 
-- file header
-- matrix layout header
-- dimension table
-- matrix block table
-- commit map
-- offset table
-- slot region
-- per-entry CRC table
-- region CRC table
-- append-log region
-- sidecar metadata
+| Stored object | Check | Where | Failure |
+| --- | --- | --- | --- |
+| Metadata record (extents, ring position and length, creation nonce) | magic, layout version, block count, growing flag, CRC32, ring length within the format bounds | every matrix open | `InvalidMatrixLayout` |
+| Ring header (two slots) | magic, version, CRC32 per slot; the valid slot with the higher sequence is used | every open, follow and read | `InvalidMatrixLayout` when neither slot is valid after retries |
+| Ring frame | magic, generation sequence, length, CRC32 over the whole frame, the file length it depends on | every scan of the ring (writer open, reader open, follow, checkpoint) | the scan stops there; that generation and later ones are not adopted |
+| Tile commit bitmap | CRC32 over the bitmap | every read that consults it, every commit-bit change, `matrix_resume_signal` | `InvalidMatrixLayout` |
+| Tile header (magic, layout version, block id, tile coordinates) | CRC32 | `verify_matrix_metadata()` only | a `Recoverable` finding |
+| Cell slot (payload and its CRC32) | CRC32 of the payload | cell reads when the read-validation policy checks data CRCs (by default unless the format declares `integrity: none`); `commit_matrix_cell()` always | `MatrixChecksumMismatch` |
+| Directory pages, single and per-channel commit flags, aux bytes | none | — | — |
 
-`integrity: none` matrix files set the region CRC table offset and length to
-zero. `integrity: crc32` matrix files write a VMAT `MCRC` table and enable
-CRC-backed classification.
-
-## CRC Coverage
-
-Implemented CRC scopes are:
-
-- dimension table
-- matrix block table
-- commit category table
-- commit map regions
-- per-cell slot payload CRCs
-
-Commit map rebuild requires per-entry CRC or equivalent stronger evidence. A
-CRC-free file can clear damaged commit maps or categories, but it cannot prove
-slot validity during rebuild.
-
-Each corruption report names the region, severity, recoverability, and
-suggested actions.
+Every slot stores the CRC32 of its payload whatever the integrity policy, so
+the per-cell evidence that `rebuild_matrix_commit_from_crc` uses is present in
+every tiled matrix. An unwritten slot is all zero, and a written slot never
+is: a nonzero payload is not, and the CRC32 stored after an all-zero payload
+is not zero. So a written slot is told apart from an unwritten one without
+extra state. `commit_matrix_cell()` refuses
+an unwritten slot with `MatrixCellNotWritten` and a slot whose CRC32 does not
+match with `MatrixChecksumMismatch` (`a_zero_valued_cell_can_be_committed`,
+`a_cell_never_written_still_refuses_to_commit`).
 
 ## Classification
 
@@ -60,29 +50,13 @@ pub enum MatrixCorruptionKind {
 }
 ```
 
-Fatal examples:
+The tiled implementation produces one kind of finding: a `Recoverable`
+`CommitMap` finding from `verify_matrix_metadata()` for a tile whose header or
+commit bitmap fails its check. The other kinds and severities remain in the
+public enums but no current code path produces them. Damage found by an
+ordinary read is returned as that read's error, not recorded as a finding.
 
-- file magic mismatch
-- unsupported matrix layout version
-- impossible dimensions or overflowing layout math
-- matrix block table CRC failure when no redundant source exists
-
-Recoverable examples:
-
-- commit map CRC failure when per-entry CRC can rebuild the map
-- one cell slot CRC failure that can clear the cell bit
-- category-wide damage that can clear one category
-- incomplete append-log tail after matrix regions
-- sidecar missing while the main file is intact
-
-Advisory examples:
-
-- sidecar exists but is inactive
-- partial progress is detected and requires caller choice
-
-## Recovery Plan
-
-Open with recovery classification returns a report:
+## Recovery Report
 
 ```rust
 pub struct MatrixRecoveryReport {
@@ -100,137 +74,80 @@ pub enum MatrixRecoveryAction {
 }
 ```
 
-Applying a recovery action is explicit. The default strict open path reports
-fatal or recoverable corruption without mutating the file. The current writer
-API exposes `clear_matrix_cell_by_category`, `clear_matrix_category`, and
-`apply_matrix_recovery_action` for safe clear/no-op actions. Typed CRC rebuild
-continues to use `rebuild_matrix_commit_from_crc::<T>()` because the block type
-is required to validate the matrix descriptor.
+`matrix_recovery_report()` returns an empty report: an open runs no
+verification pass and holds no findings. `verify_matrix_metadata()` visits
+every tile that exists in the handle's view, checks its header and commit
+bitmap, and returns a report with one `Recoverable` `CommitMap` finding per
+damaged tile and one `ClearCategory` recommendation per category that has a
+damaged tile. It reports; it does not block later access, and its cost is
+proportional to the written tiles.
 
-Open-time recovery classification currently reports metadata and commit-map CRC
-failures. Committed cell reads verify the corresponding per-cell slot CRC and
-return `MatrixChecksumMismatch` if slot bytes no longer match the committed CRC
-evidence.
+There is no quarantine. `MatrixCommitQuarantined` and `MatrixFatalCorruption`
+remain in `Error`, but no tiled matrix operation returns them, and
+`FormatSpec::with_matrix_fatal_forensics()` is accepted but not consulted.
 
-A commit-map CRC mismatch never leaves the unverified bits reader-visible. The
-verification pass that finds it (`MatrixMetadataVerification::AtOpen`, the
-default) produces a `Recoverable` `CommitMap` finding, and the presence of that
-finding **is** the quarantine: the category is failed closed as a whole. Status
-and value reads return `MatrixCommitQuarantined(category)` rather than
-`NotCommitted`; commits and per-cell clear operations reject the category; and
-`matrix_resume_signal` / `matrix_sidecar_resume_signal` refuse it too, because a
-progress figure is an answer like any other. Only an explicit whole-category
-recovery action lifts it. Cell categories may use typed CRC rebuild; single and
-per-channel categories have no per-entry reconstruction evidence and therefore
-recommend `ClearCategory`. Neither route exists for a format that declares a
-growing matrix dimension: `clear_matrix_category` refuses a quarantined category
-before it touches anything (`Error::MatrixCommitQuarantined`), and
-`rebuild_matrix_commit_from_crc` refuses such a format outright
-(`Error::InvalidFormatSpec`, "a growing matrix's chunks carry no per-cell
-checksum table"), so a growing-matrix quarantine has no primitive that lifts it.
-Both refusals are measured in `crates/varlit/tests/matrix_chunks.rs`, by
-`a_quarantined_category_refuses_the_category_clear` and
-`the_entry_points_that_do_not_apply_say_so_by_name`.
+`apply_matrix_recovery_action` runs `ClearCell` as
+`clear_matrix_cell_by_category` and `ClearCategory` as `clear_matrix_category`.
+It refuses `RebuildCommitMap` with `InvalidFormatSpec` because the rebuild needs
+the block type: call `rebuild_matrix_commit_from_crc::<T>()`. `Resume`,
+`Restart` and `DiscardSidecar` are caller decisions and do nothing.
 
-> **Changed in 0.5.0, and it is why the resume signals refuse.** Quarantine used
-> to retain the damaged map as "recovery evidence" and substitute an all-clear
-> internal map, and a few answers came from that substitute — a resume query on a
-> quarantined category reported `Clean`, i.e. "nothing in progress" for a map known
-> to be damaged. Verification retains nothing now, so there is no map to answer
-> from. `clear_matrix_category` remains the recovery path and, for a format with
-> no growing matrix dimension, still does not refuse; it reports 0 cells cleared,
-> because it cannot count bits it is discarding when every count authenticates
-> what it reads. See
-> [API Changes §A.5](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/api-changes.md#a5-changed-behaviour-at-an-unchanged-signature-in-050).
+Every action is a writer call. Its changes are staged like any other matrix
+change and reach readers at the next publication (`sync()`); a reader that is
+open keeps its snapshot until it follows.
 
-## Rebuild Commit Map
+## Recovering A Damaged Commit Bitmap
 
-`RebuildCommitMap` treats commit bits as damaged and reconstructs them from
-entry-level evidence:
+A tile whose commit bitmap fails its CRC32 makes every read of that tile's
+cells, every write, commit or clear of one of them, and the category's
+`matrix_resume_signal` fail with `InvalidMatrixLayout`. Cells in other tiles
+of the category stay readable.
 
-1. clear the target commit map or category in memory
-2. for every logical cell in the keyspace:
-   - compute the slot offset
-   - validate slot bounds
-   - validate per-entry CRC if present
-   - optionally validate decode according to the block codec
-   - set the bit only when all enabled checks pass
-3. write the rebuilt commit map
-4. recompute the commit map CRC
-5. sync according to durability policy
+`clear_matrix_category(category)` reads each tile's bitmap without checking
+it, sets every bit to zero, reseals the bitmap and returns how many bits were
+set. It is the operation that recovers a damaged bitmap.
+`rebuild_matrix_commit_from_crc::<T>()` also rewrites each tile's bitmap whole
+without reading its old bits.
 
-The current write API exposes this primitive as
-`rebuild_matrix_commit_from_crc::<T>()`. It sets a bit only when the current
-slot CRC matches the stored per-cell CRC and the MCRC slot-valid bit says the
-slot was committed. The slot-valid evidence distinguishes a legitimate
-committed all-zero payload from an untouched all-zero slot.
+`damage_in_place_is_reported_and_a_category_clear_recovers` flips a bitmap
+bit, checks that a read fails and that `verify_matrix_metadata()` reports a
+finding, then, in one writer session with no reopen, clears the category,
+rebuilds it from the slot checksums, syncs, and reads both cells back.
 
-### Incomplete Evidence Refuses The Rebuild
+## Rebuild Commit Bits From Slot Checksums
 
-Because a bit is set only where slot-valid evidence says the CRC is meaningful,
-evidence that could not be read is *not* neutral: a validity page missing from
-a damaged page index reads as absent, and the rebuild would publish those cells
-as uncommitted. That is a destructive republication of the commit view derived
-from bytes nobody read, and until F-04 it was reachable.
+`rebuild_matrix_commit_from_crc::<T>()` visits every tile of `T`'s block that
+exists, reads all of its slots, and rewrites its commit bitmap: a bit is set
+exactly when the slot's stored CRC32 matches its payload. It returns the
+number of cells committed afterwards. Growing and fixed matrices are handled
+the same way.
 
-Each block's CRC-validity map now carries its own completeness status,
-separately from the "the bytes I loaded were authentic" statement, and
-`rebuild_matrix_commit_from_crc::<T>()` checks it first: if that block's
-validity page index could not be enumerated in full, the rebuild returns
-`Error::MatrixFatalCorruption` and writes nothing.
-
-The refusal is unconditional. `FormatSpec::with_matrix_fatal_forensics` relaxes
-*reading* fatal state so an operator can inspect a damaged file; it does not
-authorize publishing a new commit map from evidence the reader already flagged
-as unreadable, which is the same rule the interrupted-rebuild poison follows.
-Repair or regenerate the validity evidence and retry. There is deliberately no
-implicit path that discards unverifiable visibility; an operator who genuinely
-wants that outcome should clear the category explicitly, which says so in the
-operation's own name.
-
-The other consumer of the same evidence was checked and already fails closed:
-a committed cell read whose validity bit is absent returns
-`MatrixChecksumMismatch` rather than silently accepting the slot.
-
-Successful rebuild writes the new map and CRC before publishing it in memory,
-then clears the quarantine finding for that category.
-
-The rebuild republishes the whole persisted page index, and it does so by
-publishing a new generation rather than editing the live one: a reserved marker
-goes into the occupancy header and is made durable before the entry region is
-cleared, and the real count is written last. An interruption therefore leaves a
-matrix that opens with a `Fatal` `MatrixCorruptionKind::CommitMap` finding whose
-report recommends `RebuildCommitMap` — never a short index that silently hides
-committed pages. The reserved marker is `u64::MAX` in the occupancy-header slot,
-which is not a representable occupancy count at any capacity, so a reader that
-predates the marker also rejects it as a damaged header rather than reading a
-partial rebuild as authoritative. The scheme needs no layout-version bump; `VMAT`
-stays at version 4.
-
-Because fatal findings are fail-closed by default, acting on a recommended
-`RebuildCommitMap` for a fatal finding requires reopening with
-`FormatSpec::with_matrix_fatal_forensics()`. If the rebuild itself fails after
-it has marked the index, the layout stays fail-closed for the rest of that
-session, since the in-memory index mirror describes the previous generation;
-reopen with forensics and rebuild again.
-
-If no per-entry CRC or equivalent evidence exists, Varlit must not claim that a
-rebuilt bit proves the cell is valid. It may offer a weaker `ClearCategory`
-recommendation instead.
+A matching CRC32 shows that the slot was written and is intact. It does not
+show that the cell was committed before the damage. A cell written and never
+committed, or committed and later cleared with `clear_matrix_cell`, keeps its
+bytes and is committed by the rebuild. Clear or rewrite such cells afterwards
+if that matters. A slot whose payload no longer matches its CRC32 is left
+uncommitted. The CRC32 detects accidental damage, not deliberate rewriting.
 
 ## Cell And Category Clearing
 
-Clearing a cell or category changes only the commit map and affected CRC
-metadata. Slot bytes may remain on disk. Readers must reject cleared cells with
-`NotCommitted`.
+Clearing a cell or a category changes only commit bits. Slot bytes stay, so
+committing a cleared cell again without a new write makes its old value
+visible again. Reads of a cleared cell return `NotCommitted` /
+`MatrixNotCommitted`.
 
-The current implementation exposes this as `clear_matrix_cell_by_category`,
-`clear_matrix_category`, and `MatrixRecoveryAction::ClearCell` /
-`ClearCategory` through `apply_matrix_recovery_action`.
+The writer API is `clear_matrix_cell::<T>(key)`,
+`clear_matrix_cell_by_category(category, key)`, `clear_matrix_category(category)`
+and `MatrixRecoveryAction::ClearCell` / `ClearCategory` through
+`apply_matrix_recovery_action`. `clear_matrix_category` returns the number of
+commit bits it cleared and counts zero on a second call
+(`matrix_recovery_clear_category_and_cell_actions_are_applied`,
+`clearing_a_category_counts_the_open_chunk_and_refuses_a_written_one`). It
+reaches every tile of the category, including tiles past a growing
+dimension's declared extent (`the_bulk_clear_reaches_every_written_chunk_and_reaches_the_file`).
 
-This is the primary safe action for localized slot damage: preserve the file,
-hide only the affected logical data, and leave domain recomputation to the
-caller.
+This is the action for localized slot damage: keep the file, hide the
+affected cells, and leave recomputation to the caller.
 
 ## Sidecar And Resume Signals
 
@@ -272,16 +189,21 @@ remain caller-owned.
 
 The caller decides whether to resume, restart, or discard.
 
-## Acceptance Tests
+## Tests
 
-Recovery tests should cover:
-
-- one-byte commit map corruption classified as recoverable
-- rebuilding a commit map from valid entry CRCs
-- slot corruption clearing only the affected cell
-- fatal classification for header/layout corruption
-- incomplete append tail classified separately from matrix region corruption
-- sidecar partial progress signal after simulated interruption
-- verified sidecar CRC mismatch produces discard recommendation
-- recovery clear-cell and clear-category actions hide data without rewriting
-  slot payloads
+- `damage_in_place_is_reported_and_a_category_clear_recovers`
+  (`crates/varlit/tests/matrix_tiles.rs`): a flipped slot byte is
+  `MatrixChecksumMismatch` for that cell only; a flipped bitmap byte fails the
+  tile's reads and is a `verify_matrix_metadata()` finding; a category clear
+  followed by a CRC rebuild recovers both cells.
+- `unpublished_and_torn_publications_never_reach_a_reopen`
+  (`matrix_tiles.rs`): a damaged newest ring frame is not adopted, and the
+  publication before it stands.
+- `matrix_recovery_clear_category_and_cell_actions_are_applied`
+  (`crates/varlit/tests/matrix.rs`): clear-category and `ClearCell` hide
+  committed cells; the resume signal afterwards is `Clean`.
+- `matrix_verified_sidecar_checks_parent_identity_and_payload_crc`
+  (`matrix.rs`, `integrity` feature): verified sidecar identity and payload
+  checks.
+- The ring crash tests in `crates/varlit-core/src/matrix_tiles/tests.rs`,
+  listed in the [durability model](durability-model.md#crash-and-reopen).

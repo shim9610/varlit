@@ -19,6 +19,18 @@ matrix spec's schema hash includes its tile shape, so matrix files written by
 format declares a schema hash); recreate them from their source. Stream/indexed sidecars written by 0.13.0 cannot be read by
 0.12.x.
 
+Matrix code keeps compiling, with these behavior changes. The `ReadLimits`
+settings `with_matrix_metadata_residency`, `with_matrix_metadata_verification`,
+`with_matrix_generation_cache_bytes` and `with_matrix_directory_cache_bytes`,
+and `FormatSpec::with_matrix_fatal_forensics()`, are accepted and have no
+effect. Open runs no matrix verification; call `verify_matrix_metadata()`.
+`MatrixCommitQuarantined` and `MatrixFatalCorruption` are no longer returned; a
+damaged tile commit bitmap is `InvalidMatrixLayout` until
+`clear_matrix_category` resets it. A matrix reader that falls behind the
+write-ahead ring now gets `MatrixSnapshotExpired` and must `follow()`.
+`compact_matrix()` reclaims nothing, and `matrix_generation_path()` returns the
+primary path. See [durability](durability-model.md#matrix-storage-and-publication).
+
 Typed reads now decode into a value you own instead of returning one; see
 [caller-owned decoding](api-changes.md#caller-owned-decoding) for the full
 table. The mechanical rewrite:
@@ -79,9 +91,6 @@ there is no automatic migration path for these surfaces:
   whenever its emitted bytes change. Wrapping such a codec in
   `Option`/`Vec`/array/map/tuple does not satisfy the requirement: the
   container fold propagates the missing identity outward.
-- Matrix native files gained a creation-nonce region after the native file
-  header. Matrix files created before this change are refused with
-  `InvalidMatrixLayout`; recreate them. Non-matrix native files are unchanged.
 - The matrix sidecar envelope is version 3. Version-1/2 sidecars are refused
   as `MatrixSidecarMismatch("sidecar version")` and simply regenerate —
   sidecars are regenerable resume state, not data.
@@ -91,31 +100,6 @@ there is no automatic migration path for these surfaces:
   refused (with `SchemaHashMismatch` when the format declares a schema hash);
   recreate those files.
   There is no automatic matrix migration tool.
-
-- Matrix open no longer walks every logical bitmap page: the pages it visits come
-  from the page index unioned with the filesystem allocated-range map, merged in
-  one linear pass with no sort. Recorded trade-off — where no allocation map is
-  available, a stray byte written out of band into a page the matrix never
-  published is no longer detected at open.
-- A damaged page-index entry is no longer silent. In layout version 3 a zeroed
-  entry terminated enumeration and hid every later committed page; in version 4
-  it is a `Fatal` `MatrixCorruptionKind::CommitMap` finding and enumeration
-  continues past it. Files that previously opened "clean" with a damaged index
-  will now report a fatal finding, which is the correct outcome.
-- An interrupted whole-map commit rebuild is now a fail-closed state instead of
-  a silent one. `rebuild_matrix_commit_from_crc` publishes `u64::MAX` into the
-  page-index occupancy header and syncs it before clearing the entry region,
-  and replaces it with the real count only once every entry, digest and page is
-  durable. A matrix left holding the marker opens with a `Fatal`
-  `MatrixCorruptionKind::CommitMap` finding recommending `RebuildCommitMap`,
-  never as a short index that silently hides committed pages. This needs no
-  layout-version bump — the marker is never a resting state, and a reader that
-  predates it rejects it as a damaged header, which is also fail-closed. Acting
-  on the recommendation requires `FormatSpec::with_matrix_fatal_forensics()`,
-  since fatal findings are fail-closed by default.
-- A matrix whose bitmap page count would exceed `2^48 - 1` (about 1 EiB of
-  bitmap) is refused at layout time with `Error::InvalidMatrixLayout`. No
-  realistic configuration reaches this.
 - `PackedBitmap::new`/`get`/`set` and its decode now report
   `Error::InvalidCanonicalEncoding` / `Error::LengthOverflow` and a
   non-matrix allocation resource instead of `Error::InvalidMatrixLayout`, since
@@ -324,8 +308,8 @@ For keyed data, first decide the migration boundary:
 
 ## Matrix Byte Copy Scaffold
 
-For preallocated matrix data, unchanged fixed-stride cell payloads can be copied
-without decoding and re-encoding:
+Unchanged fixed-stride matrix cell payloads can be copied without decoding and
+re-encoding:
 
 ```rust
 let mut old = OldMatrixFormat::open_reader("old.varlit")?;
@@ -337,7 +321,8 @@ out.copy_matrix_cell_bytes_from::<OldCell, NewCell>(&mut old, key)?;
 `OldCell::DIMENSIONS` and `NewCell::DIMENSIONS` must match exactly, and
 `SLOT_STRIDE` must be equal. The source cell must be committed; the read path
 still verifies enabled source CRC evidence. The target writer writes the bytes
-into the target slot and commits the target cell. Semantic conversions,
+into the target slot and commits the target cell; like any matrix change, the
+copy reaches readers at the target's next `sync()`. Semantic conversions,
 keyspace iteration, and output publication policy remain caller-owned.
 
 ## Field Evolution

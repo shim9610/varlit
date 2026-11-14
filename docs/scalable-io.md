@@ -673,12 +673,12 @@ compile. Open a fresh reader on the same path for each reading thread. The
 underlying files are common; each reader's caches and cursor state remain
 independent. There is no implicit reader clone or shared-reader mutex.
 
-Matrix bitmap caches also belong to each reader and use local `RefCell` access,
-without a cache mutex. Configure them at open using
-`ReadLimits::with_matrix_metadata_residency(MatrixMetadataResidency::Lazy {
-cache_bytes })`. The default is 2 MiB per bitmap (clamped by the bitmap limit),
-allocated on demand. Total memory adds across bitmaps and readers. This changes
-ownership, not matrix generation visibility; see
+A matrix reader also owns its matrix state: a fixed-size table of resolved
+tile positions, sized at open from the declared extents, and an overlay of the
+ranges published since the last checkpoint, which grows with the publications
+the write-ahead ring holds. It keeps no commit-bitmap cache, and
+`ReadLimits::with_matrix_metadata_residency` does not size anything. Memory adds
+across readers; see
 [concurrency limitations](known-limitations.md#42-where-a-reader-gets-a-snapshot-rather-than-live-state).
 
 Ordinary queries (`get`, `lookup`, `blocks`, `events`, `verify_all`) take `&self`.
@@ -686,12 +686,12 @@ Ordinary queries (`get`, `lookup`, `blocks`, `events`, `verify_all`) take `&self
 `next(&mut self)` advances only its cursor. Neither requires a writable primary
 file or a writer transaction.
 
-Matrix follow compares immutable COW roots and skips equal subtrees. It patches
-changed bitmap index entries and invalidates only affected bitmap cache pages;
-under default verification, only changed metadata pages are reverified. The
-persisted `compaction_epoch` changes only on explicit `compact_matrix()`. A new
-epoch selects a full metadata rebuild; ordinary syncs preserve it so readers
-that skip generations still detect replacement. Follow never compacts by itself.
+Matrix follow reads the write-ahead ring from where the reader's snapshot
+ends and adds the newly published ranges to its overlay; when a checkpoint has
+reclaimed ring space past the snapshot, it rebuilds the overlay from what the
+ring still holds. Ranges already in place after a checkpoint leave the overlay.
+Follow does not write and does not checkpoint. See
+[durability](durability-model.md#what-readers-see).
 
 
 Each handle opens the sidecar read-only and each snapshot owns its bounded page
