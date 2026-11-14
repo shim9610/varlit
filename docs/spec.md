@@ -73,6 +73,11 @@ and compile-time schema validation.
 
 ## Preallocated Matrix Wire Contract
 
+> The current code stores matrices as tiles inside the primary file
+> (`crates/varlit-core/src/matrix_tiles`) and writes no `VMAT` region and no
+> `.vmg` companion. This section still describes the earlier `VMAT` layout and
+> has not been rewritten for tiled storage.
+
 - Matrix support is a separate storage mode from the append-log record region.
 - Files whose static spec contains matrix blocks store a 24-byte `VMNC`
   creation-nonce region and then a `VMAT` layout region immediately after the

@@ -67,8 +67,10 @@ staging memory. See [batch sizing](scalable-io.md#choose-the-physical-block-befo
 
 Each reader captures a confirmed snapshot. Move a reader to its worker thread
 before creating typed cursors, and use `follow` or `follow_blocks` to adopt new
-publications. Matrix readers likewise hold one confirmed generation. A reader
-that has not followed keeps its existing view. Readers own their buffers and
+publications. A matrix reader also holds one confirmed generation; one that
+falls behind the write-ahead ring gets `MatrixSnapshotExpired` and must
+`follow()`. A reader that has not followed keeps its existing view. Readers own
+their buffers and
 caches independently.
 
 Feed multiple producers into one writer through a bounded queue. The library
@@ -81,8 +83,7 @@ physical blocks and from the number of publications.
 - Need block-key lookup: use [indexed handles](scalable-io.md), with a group key
   and slot/range inside the returned block. Declared finite key domains avoid a
   general key tree where the domain is bounded.
-- Need direct cell addressing: use [matrix declarations](format-author-guide.md)
-  and review their generation and companion-file requirements.
+- Need direct cell addressing: use [matrix declarations](format-author-guide.md).
 - Need a small, directly indexed native file: see the [API reference](api-reference.md).
 - Need checks or limits: start with the [read-policy table](api-reference.md#read-validation).
 - Need failure handling: read the [durability model](durability-model.md) before

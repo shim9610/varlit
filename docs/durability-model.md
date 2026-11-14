@@ -323,9 +323,10 @@ marker without some bytes before it, so the marker (v2 payload `VCM2`) names
 what it commits: the newest marker known durable when it was written (its
 *anchor*, the last marker a completed `commit_durable` barrier covered), and
 the count and order-sensitive checksum chain of every record after the
-anchor's commit point. Every open route — scan, segment chain, header tails,
-open digest — verifies the newest marker's run of records with full checksums
-before treating it as a commit point. A run that does not verify is not
+anchor's commit point. Every open route (scan, segment chain, header tails,
+open digest) verifies the newest marker's run of records with full checksums
+before treating it as a commit point; `crates/varlit/tests/single_barrier_commit.rs`
+covers the scan, lazy-or-scan, header-tails and anchored routes. A run that does not verify is not
 committed: the file ends at the anchor's commit point, a read-only open shows
 exactly that prefix without changing the file, and a writer open truncates the
 rest. Non-durable `commit()` markers after the anchor roll back with it.
@@ -413,14 +414,16 @@ Published-outcome errors must preserve the distinction between a failed operatio
 and an operation that completed but needs recovery or notification. Allocation
 refusal must not turn the latter into an apparently retryable append.
 
-`write_matrix_cell_durable` now reserves the event box and an error box **before
-mutation** using `try_box`. The error box initially holds a scalar placeholder;
-a later failure moves its actual source into that already allocated slot. Thus
-both boxes retain their existing public types without a post-commit allocation.
-The hook receives the same event. A refusal of either reservation returns before
-writing the cell; a post-commit hook failure still returns
-`MatrixCommittedButHookFailed`. The successful durable-write path pays two
-allocations, measured separately in the ownership qualification.
+`write_matrix_cell_durable` reserves both boxes with `try_box`: the error box
+before the working cell is written, the event box after that write and before
+the cell is committed. The error box initially holds a scalar placeholder;
+a later failure moves its actual source into that already allocated slot, so
+both boxes keep their existing public types without a post-commit allocation.
+The hook receives a clone of the event. A refusal of either reservation returns
+before the cell is committed; a post-commit hook failure still returns
+`MatrixCommittedButHookFailed` (both checked in
+`crates/varlit/tests/fallible_publication.rs`). The successful durable-write
+path pays these two allocations.
 
 Record append, index publication and replacement errors use fallible boxing.
 If detailed source/path storage cannot be allocated, they return

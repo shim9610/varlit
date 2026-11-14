@@ -15,31 +15,23 @@ workload; [API reference](api-reference.md) gives the supported options.
 
 ## Matrix I/O and storage
 
-Matrix metadata verification at open visits the union of persisted live pages
-and filesystem-reported allocated pages. Work is proportional to those candidate
-pages, not to the cells the reader intends to access. The verification pass uses
-reusable page storage; bytes read are not retained bitmap residency.
-`MatrixMetadataVerification::OnDemand` defers that reporting. An explicit
-`ReadValidation` override also controls optional checks. Bounds, resource limits,
-generation authentication and publication guards remain required in every mode.
+A matrix is stored as tiles inside the primary file. A tile is an internal
+append-log record written the first time any of its cells is written; cells are
+then overwritten in place. Each publication goes through a write-ahead ring in
+the same file and syncs the file once before it is visible. A reader that falls
+further behind than the ring holds gets `MatrixSnapshotExpired` and must
+`follow()`. `verify_matrix_metadata()` visits the tiles that exist; its cost is
+proportional to written tiles, not to the cells a reader intends to access.
 
-`Lazy` is the default matrix residency policy. Budget accounting covers nominal
-page/cache payload, not allocator overhead or total process memory. Some caller
-output operations still require materialization. Residency and metadata
-verification are Rust runtime policies, with no `varlit_format!` DSL key.
+`MatrixMetadataVerification` and `MatrixMetadataResidency` are still accepted in
+`ReadLimits`, but the tiled matrix path does not consult them. Budget accounting
+covers nominal page/cache payload, not allocator overhead or total process
+memory. Some caller output operations still require materialization.
 
-A matrix requires its primary and nonce-named `.vmg` generation companion.
-Coordinate backups and renames with the writer and copy both. Generation files
-grow until explicit `compact_matrix()`; native chunk reclamation is separate.
-Old readers and mappings can retain old physical files after compaction.
-
-Sparse reservation and hole punching depend on the filesystem. Without native
-or adapter range removal, a clear writes zeros and can cost the whole declared
-range. An unavailable allocation map falls back to persisted live-page indexes;
-that misses out-of-band bytes in pages never published. Generation enumeration
-for allocation hints stops at 65,536 entries. See [storage diagnostics](storage-diagnostics.md).
-Inspect actual fallback counters on the thread that performed the operation;
-a compile-time capability flag does not establish mounted-volume support.
+Overwrites do not grow a tiled matrix, so `compact_matrix()` requires a clean,
+synced writer and reclaims nothing. A tiled matrix does not rely on sparse
+files, allocation maps or hole punching; `matrix_storage_diagnostics()` reports
+those as not applicable. See [storage diagnostics](storage-diagnostics.md).
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic
 channel-selective reads of interleaved payloads are not provided; use planar
@@ -77,8 +69,8 @@ Explicit requests for an owned full key map can still exceed admission limits.
 
 External merge and rewrites require scratch disk, a complete rewrite generation
 and per-record/key workspace. `VARLIT_SPILL_DIR` selects disposable spill storage;
-`VARLIT_SPILL_MAX_BYTES` limits each spill file, not aggregate storage. Defaults
-add no cap. Atomic replacements stay beside their destination. Filesystem-full
+`VARLIT_SPILL_MAX_BYTES` limits each spill file, not aggregate storage; unset,
+each file is capped at 4 GiB. Atomic replacements stay beside their destination. Filesystem-full
 and short-write errors propagate. Scratch on tmpfs consumes memory beyond process
 RSS accounting. See [spill policy](scalable-io.md#private-spill-policy).
 
@@ -99,8 +91,7 @@ explicit `follow()`. Failed adoption preserves the old view; unstable publicatio
 can return `WouldBlock` for a retry. The writer does not wait for reader retries.
 Large missed changes may exceed staging limits and require reopening or a caller
 budget decision. A reader with quarantined/fatal matrix metadata must reopen
-after repair. Ordinary matrix follow diffs changed roots; compaction epochs can
-require a layout rebuild.
+after repair.
 
 A primary replaced at its pathname leaves existing readers on the old file
 object. Poll `is_current()` and reopen when that replacement matters; `follow()`

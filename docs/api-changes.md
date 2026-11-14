@@ -8,13 +8,17 @@ supported version. This release has breaking changes:
 
 - Typed reads decode into a value the caller owns (see
   [caller-owned decoding](#caller-owned-decoding)).
-- Matrix files use layout `VMAT` v6. v5 files written by 0.12.x are refused
-  with `FormatVersionMismatch { expected: 6, actual: 5 }`; recreate them.
+- Matrix storage is tiled and the `VMAT` layout is removed. A matrix spec's
+  schema hash now includes its tile shape, so matrix files written by 0.12.x
+  are refused (with `SchemaHashMismatch` when the format declares a schema
+  hash); recreate them.
 - Stream/indexed sidecars written by 0.13.0 are not readable by earlier
   versions.
 
-Schema fingerprints, native record bytes, VCHK and experimental STREUSE2
-formats are preserved. Stricter validation can reject damaged metadata that an
+VCHK and experimental STREUSE2 formats are unchanged. In a format with data
+checksums, a variable record longer than 64 KiB is now written with a CRC per
+64 KiB chunk (a `VRCK` table inside the payload, marked by a new record flag);
+0.12.x refuses that flag as unknown. Stricter validation can reject damaged metadata that an
 older reader accepted.
 
 | Addition | Application use |
@@ -74,10 +78,9 @@ unspecified contents.
 | Change | Effect |
 | --- | --- |
 | `transaction_marker(<mode>, single_barrier)` (`TransactionMarkerMode::{OnFlushSingleBarrier, ExplicitSingleBarrier}`, `CommitPolicy::single_barrier`) | `commit_durable` with one storage barrier instead of two; open verifies the newest transaction before committing it. Opt-in; requires `crc32_with_header`. See [durability model](durability-model.md#single-barrier-commit) |
-| Stream/indexed `sync()` | Two storage barriers per publication instead of six: the Dirty checkpoint is no longer synced, and the confirmed checkpoint and one `VIXHEAD2` head share one sidecar sync. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
+| Stream/indexed `sync()` | One storage barrier on the primary per sync, closed by a sync marker. The sidecar is written and synced only when the primary has grown past `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records) and at compaction; readers and recovery replay the rest from the primary. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
 | `MmapPayloads::decode_block_into(&entry, &mut scratch, &mut out)` | Decode straight from a read-only mapping, with the same id/version, checksum, length and materialization checks as the copying read |
-| Matrix layout `VMAT` v6 | The slot region starts on a 4 KiB boundary, so a cell whose stride is a multiple of 4 KiB fills whole generation pages: a cold read of such a cell is one positional read instead of three. v5 matrix files are refused with `FormatVersionMismatch { expected: 6, actual: 5 }`; recreate them |
-| Matrix generation reads | A read that starts or ends inside a page reads its covering pages with one positional read (at most 1 MiB, bounded scratch) and checks every page CRC, instead of a separate read per edge page. Same bytes, checks and errors |
+| Tiled matrix storage | Cells live in tiles of the spec's `tile = [rows, cols]` shape and are overwritten in place through a write-ahead ring inside the file; overwrites do not grow the file (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`). A reader that falls behind the ring gets `MatrixSnapshotExpired`. The `VMAT` layout and its generation log are removed; 0.12.x matrix files are refused (with `SchemaHashMismatch` when the format declares a schema hash) |
 | `unsafe mmap_payload_range(records)`, `record_count()` (`VarlitFile`, `VarlitReader`) | Map only the records at resident positions `records`. `MmapLen`, `Records` and `IndexBytes` are charged for the range, not the file; a following reader maps only `seen..record_count()?`. Out-of-range positions return `MmapRecordRangeOutOfBounds` |
 
 Additions supporting this:
@@ -160,8 +163,8 @@ Existing writer-poisoning and recovery rules still apply; see
 ### Temporary storage and repeated reads
 
 `VARLIT_SPILL_DIR` selects an existing writable directory for disposable spills.
-`VARLIT_SPILL_MAX_BYTES` optionally limits each spill file's logical length;
-unset remains uncapped. Database size is not capped, and atomic replacement
+`VARLIT_SPILL_MAX_BYTES` limits each spill file's logical length; unset, the
+limit is 4 GiB. Database size is not capped, and atomic replacement
 files still live beside their destination. Configure these variables before
 starting handles or worker threads. See [spill policy](scalable-io.md#private-spill-policy).
 

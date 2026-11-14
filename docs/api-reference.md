@@ -56,7 +56,7 @@ implementations keep their original behavior.
 
 Supported values include `Vec`, `String`, `PathBuf`, `HashMap`, `VecDeque`, `Box`,
 `Option`, scalar/copy arrays, and Varlit's `BlockVec`, `KeyedBlockVec`,
-`MatrixLayout`, `ChunkedBytes`, `PackedBitmap`, `MatrixDimensions` and
+`ChunkedBytes`, `PackedBitmap`, `MatrixDimensions` and
 `LayoutValue`. Shared owners clone their reference count without allocating.
 `BTreeMap` has no `TryClone` implementation in this change.
 
@@ -340,18 +340,6 @@ Three consequences are part of the residency declaration:
 * Cache misses and evictions preserve the captured confirmed generation.
   Only `follow(&mut self)` adopts later published pages.
 
-Matrix generation directory walks automatically bound node visits by the number
-of 4096-byte pages that fit after the companion header in the captured checkpoint.
-Opening checks that this checkpoint fits within the companion file. Each walk
-also applies `max_scan_bytes / 4096` as an optional tighter ceiling; callers do
-not need to set it to obtain the checkpoint-derived bound. Empty leaves and
-cached nodes consume this work budget too. Ordinary `follow()` uses separate
-bounds for the old and new roots and continues to skip unchanged subtrees;
-concurrent writer appends do not enlarge an already captured reader's bound.
-Exhaustion returns `Error::Io` with `InvalidData`. This bounds traversal work;
-it does not perform a complete duplicate-reference check at open. A deliberately
-small scan ceiling can also reject a valid traversal.
-
 ### MatrixMetadataVerification
 
 `ReadLimits::matrix_metadata_verification` declares **when** a matrix's commit
@@ -496,7 +484,7 @@ another handle appends afterwards are not visible until it advances with
 
 ### Reads that fill a buffer you own
 
-**Every typed read decodes into a value you own.** `get`, `cursor().next_into`,
+Every typed read decodes into a value you own. `get`, `cursor().next_into`,
 `StreamingBlocks::next_into`, `read_block_at`, `decode_block_into`,
 `read_header_block`, `read_matrix_cell`, indexed `get` and their generated
 wrappers take `out: &mut T` and decode into it, reusing the `Vec`s and `String`s
@@ -1190,11 +1178,10 @@ by shared reference. Writes and `follow()` still require `&mut self`.
 A shared borrow does not make the handle safe to share between threads.
 
 Reader handles are `Send + !Sync`: each reading thread owns a reader and its
-private caches, and creates its cursors there. Bitmap caches use owner-local
-`RefCell`; there is no bitmap mutex or shared Windows handle registry. Each
-query reads the captured confirmed generation, including cache misses.
-`follow(&mut self)` adopts a later generation explicitly. Old readers never
-delay publication or compaction.
+private caches, and creates its cursors there. Each query reads the reader's
+snapshot; `follow(&mut self)` adopts later publications explicitly. A reader
+does not hold back the writer: one that falls further behind than the
+write-ahead ring holds gets `MatrixSnapshotExpired` instead of a mixed answer.
 
 `crates/varlit/tests/matrix_concurrent_reads.rs` checks the shared-borrow entry
 points, `Send` handle bounds and correct cell values through independent readers.
@@ -1204,24 +1191,14 @@ asserting a speedup. The ignored
 benchmark, not a CI performance guarantee. Historical shared-handle throughput
 figures do not describe the current ownership model.
 
-The generation page cache defaults to 2 MiB and is configured at open with
-`ReadLimits::with_matrix_generation_cache_bytes(bytes)` (zero disables it).
-
-The original forward/reverse directory has a separate owner-local cache:
-`ReadLimits::with_matrix_directory_cache_bytes(bytes)`, default 1 MiB per bitmap,
-clamped to `max_matrix_bitmap_bytes`. Cache admission charges 4096 bytes plus a
-128-byte entry allowance. Zero or an undersized budget reads without retaining
-windows. Fixed read buffers are additional. Misses read the original generation;
-no temporary mirror is built at open or follow. The legacy
-`matrix_resident_page_index_bytes` diagnostic excludes this optional cache.
-VMAT v5 adds the directly addressed reverse array and v6 aligns the slot region
-to 4 KiB; older layouts are rejected.
-OnDemand validates headers at open and entries as accessed. AtOpen also streams
-all entries; explicit verification and CRC rebuild validate the directory too.
-It is separate from the per-bitmap residency budget. `matrix_generation()` exposes
-the captured generation and `matrix_generation_path()` names the required `.vmg`
-companion. `compact_matrix()` on a synced writer reclaims obsolete matrix pages
-without invalidating existing readers. See [durability](durability-model.md).
+`ReadLimits::with_matrix_generation_cache_bytes(bytes)` and
+`with_matrix_directory_cache_bytes(bytes)` are still accepted, but tiled matrix
+reads do not use them. Matrix files written with the removed `VMAT` layout are
+refused. `matrix_generation()` exposes the captured generation. A tiled matrix
+keeps its write-ahead ring in the primary file, so `matrix_generation_path()`
+returns the primary path; there is no companion file. `compact_matrix()`
+requires a synced writer and has nothing to reclaim, because overwrites do not
+grow the file. See [durability](durability-model.md).
 
 | API | Meaning |
 | --- | --- |
@@ -1344,7 +1321,8 @@ call's only published outcomes; every other error means the cell was not
 committed.
 
 The helper reserves its event and error boxes before mutation with `try_box`.
-Refusal of either reservation returns before writing the cell. A later source
+The error box is reserved before the cell is written and the event box before it
+is committed; refusal of either returns before the commit bit is set. A later source
 error moves into the reserved box, so the existing post-commit variants require
 no additional allocation. Successful durable cell writes therefore include two
 small allocations. Record/index/replacement paths instead retain inline
@@ -1645,7 +1623,7 @@ let mut seen = 0;
 loop {
     reader.follow()?;
     let now = reader.record_count()?;
-    // SAFETY: published records are never rewritten; the writer only appends.
+    // SAFETY: the caller guarantees no process rewrites these records while mapped.
     let fresh = unsafe { reader.mmap_payload_range(seen..now)? };
     for entry in fresh.index_entries() {
         fresh.decode_block_into(entry, &mut scratch, &mut out)?;
@@ -1662,8 +1640,8 @@ The matrix route checks cell visibility and optional CRC from the held generatio
 Record windows apply the selected read checks before exposing bytes, including
 with `IntegrityVerification::OnDemand`. Unset policy preserves the declared CRC
 checks. Whole-file mappings verify a record on first access and retain a one-byte
-success flag per record when optional checks are selected; `TRUSTED` omits that
-certificate allocation. Repeated checked reads reuse successful verification for
+success flag per record when optional checks are selected; `TRUSTED` omits those
+flags. Repeated checked reads reuse successful verification for
 the immutable mapping's lifetime. Individual windows perform selected checks once
 at construction. CRC detects corruption; it does not authenticate a sender.
 `MmapLen` bounds that cell's bytes; `MaterializedBytes` bounds intersecting COW
@@ -1853,7 +1831,7 @@ minor-version policy as the rest of the library.
 | `MatrixSidecarMismatch(reason)` | matrix sidecar rejected: wrong native identity, layout generation, creation nonce, or sidecar version; regenerate the sidecar |
 | `InvalidMatrixLayout` | matrix layout bytes are not valid for this build — including a matrix file created before the creation-nonce region existed; recreate the matrix file |
 | `MatrixSizeMismatch` | encoded matrix payload does not match slot stride |
-| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1 to 5 matrix file (v6 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
+| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes; the artifact is stale and regenerable. A matrix file written with the removed `VMAT` layout is instead refused with `SchemaHashMismatch` when the format declares a schema hash |
 | `KeyedChainRequiresKeyedApi { block_id }` | generic `push`/`push_info` cannot maintain the keyed offset chain; use `push_keyed`/`push_keyed_info` or the generated keyed writer |
 | `LimitExceeded { resource: "variable field ids" }` | decoding charged the materialization budget for distinct variable field ids above 63 and the budget ran out |
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |

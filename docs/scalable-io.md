@@ -21,7 +21,7 @@ index its question needs with `record_map`. Lazy open returns errors without
 automatic scanning; explicitly choose `open_readonly_scan` / `open_scan`, or
 `*_lazy_or_scan[_with_report]` for the former automatic recovery behavior.
 These policies change which metadata
-is read at open; benchmark results are pending a controlled local rerun.
+is read at open; this guide does not publish measurements for them.
 
 Ordinary keyed merge/compact also spills bounded index buffers, but still needs
 scratch disk and per-record decoding workspace. A `record_map` walk remains a
@@ -52,8 +52,8 @@ falling back to another location. Set process configuration before opening
 handles or starting worker threads; each new spill captures the current policy.
 
 `VARLIT_SPILL_MAX_BYTES` is an optional unsigned decimal ceiling on the logical
-length of **each** private spill file. Unset adds no cap; `0` refuses nonempty
-spills. It is not a database-size limit, total directory quota, free-space
+length of **each** private spill file. Unset applies a 4 GiB default ceiling;
+`0` refuses nonempty spills. It is not a database-size limit, total directory quota, free-space
 reservation or process-memory limit. Filesystem-full and partial-write errors
 still propagate. Use a filesystem quota if an aggregate limit is required.
 Files used for atomic replacement stay beside their destination. On `tmpfs`,

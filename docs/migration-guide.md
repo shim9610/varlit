@@ -11,9 +11,13 @@ pre-1.0 minor versions as separate compatibility ranges, so `"0.12.1"` does not
 select this release. Damaged metadata accepted by older readers may now return
 an error.
 
-Files: native files need no conversion. Matrix files written by 0.12.x (layout
-`VMAT` v5) are refused with `FormatVersionMismatch`; recreate them from their
-source. Stream/indexed sidecars written by 0.13.0 cannot be read by 0.12.x.
+Files: native files need no conversion. In a format with data checksums,
+0.13.0 writes a variable record longer than 64 KiB with per-chunk CRCs under a
+new record flag, which 0.12.x refuses. Matrix storage is now tiled and a
+matrix spec's schema hash includes its tile shape, so matrix files written by
+0.12.x (layout `VMAT` v5) are refused (with `SchemaHashMismatch` when the
+format declares a schema hash); recreate them from their source. Stream/indexed sidecars written by 0.13.0 cannot be read by
+0.12.x.
 
 Typed reads now decode into a value you own instead of returning one; see
 [caller-owned decoding](api-changes.md#caller-owned-decoding) for the full
@@ -33,7 +37,7 @@ let mut record = Frame::empty();
 while cursor.next_into(&mut record)? { use_it(&record); }
 ```
 
-Keep `out` outside the loop: that is what removes the per-record allocation.
+Keep `out` outside the loop so each read can reuse its existing allocations.
 To collect a whole block type into a `Vec`, `VarlitFile::decode_blocks_into`
 reuses the vector's existing elements. A hand-written `VarlitBlock` that you
 read through these APIs needs an `impl VarlitEmpty`; overriding
@@ -81,14 +85,12 @@ there is no automatic migration path for these surfaces:
 - The matrix sidecar envelope is version 3. Version-1/2 sidecars are refused
   as `MatrixSidecarMismatch("sidecar version")` and simply regenerate —
   sidecars are regenerable resume state, not data.
-- The current matrix layout is `VMAT` version 6 with `MCRC` version 2.
-  Version 6 starts the slot region on a 4 KiB boundary. Version 5 added directly addressed page-to-slot metadata after the counted
-  forward array. The directory occupies `(1 + 2 * page_count) * 8` virtual bytes;
-  untouched windows remain zero extents. OnDemand readers retain offsets and
-  bounded caches instead of reconstructing the complete live-page directory.
-  Layout versions 1 through 5 are refused with
-  `Error::FormatVersionMismatch { expected: 6, actual: <1 to 5> }`; recreate those files.
-  There is no automatic matrix migration tool. Non-matrix formats are unchanged.
+- In 0.13.0 the `VMAT` matrix layout (version 5 with `MCRC` version 2 in
+  0.12.x) is replaced by tiled matrix storage. The schema hash of a matrix spec
+  includes its tile shape, so files written with any `VMAT` layout version are
+  refused (with `SchemaHashMismatch` when the format declares a schema hash);
+  recreate those files.
+  There is no automatic matrix migration tool.
 
 - Matrix open no longer walks every logical bitmap page: the pages it visits come
   from the page index unioned with the filesystem allocated-range map, merged in

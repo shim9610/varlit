@@ -12,8 +12,12 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 
 - Breaking: typed reads decode into a value the caller owns (`out: &mut T`)
   instead of returning one.
-- Breaking: matrix files use layout `VMAT` v6. v5 files written by 0.12.x are
-  refused with `FormatVersionMismatch`; recreate them.
+- Breaking: matrices are stored as tiles in the primary file, overwritten in
+  place through a write-ahead ring; the `VMAT` layout and the `.vmg` companion
+  file are gone. A matrix spec's schema hash now includes its tile shape, so
+  matrix files written by 0.12.x are refused (with `SchemaHashMismatch` when the
+  format declares a schema hash); recreate them. A reader that falls behind the
+  ring gets `MatrixSnapshotExpired` and must `follow()`.
 - Variable records longer than 64 KiB in formats with data checksums are stored
   chunked (record flag `0x0002`) with a CRC per 64 KiB chunk. 0.12.x rejects
   such records as having an unknown flag. Stream/indexed sidecars written by

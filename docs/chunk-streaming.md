@@ -51,8 +51,7 @@ match chunks.decode_to_vec_limited(64 * 1024) {
 the content. An out-of-bounds or reversed range returns `InvalidChunkedRange`.
 Empty ranges need no decoder or buffer. A nonempty range requires at least one
 buffer byte; `BufferTooSmall` reports that requirement before any callback.
-Increasing the buffer is optional and improves batching; it is never expanded
-by the library.
+A larger buffer allows fewer, larger callbacks; the library does not resize it.
 
 After `BufferTooSmall`, the caller can provide a nonempty buffer and retry.
 For whole-output admission failure, choose `stream_range` explicitly; changing
@@ -65,7 +64,7 @@ are still decoded to validate complete lengths and CRCs. Corruption in the
 unselected chunks' contents is not checked. Seeking scans table entries before
 the range, without decompressing those earlier chunks or constructing an index.
 
-Delivery is **provisional until the method returns success**. A bad checksum at
+Delivery is provisional until the method returns success. A bad checksum at
 the end of a chunk can follow callbacks, so a callback must not publish results
 or perform irreversible actions on the assumption they are already verified.
 Callback errors stop immediately and propagate unchanged. A retry starts the
@@ -73,10 +72,10 @@ requested range again; it does not resume after a previously delivered prefix.
 Staged files belong to the caller and are not removed automatically.
 
 `max_window_bytes` bounds the zstd history window, rounded down to a power of
-two, with a 1024-byte minimum. For example, 8 MiB permits windows up to 8 MiB;
+two; a value below 1024 is refused with `LimitExceeded`. For example, 8 MiB permits windows up to 8 MiB;
 a larger blob is still readable if each selected frame fits that window.
 A lower window policy can reject a valid frame even with a sufficiently large
-output buffer. The cap is checked against every selected frame before streaming
+output buffer. The cap is checked against each selected frame before that frame is streamed
 and is also passed to zstd. This preflight includes legacy v0.4–v0.7 frames, whose native
 streaming adapters bypass the modern window check. zstd does not support
 streaming v0.1–v0.3 frames; whole-output decoding of older versions keeps its
