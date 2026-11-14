@@ -484,9 +484,11 @@ pub enum Error {
     #[error("matrix commit category {0} is missing from the layout")]
     MatrixCommitMissing(String),
 
+    /// Not produced by tiled matrix storage; kept for API compatibility.
     #[error("matrix commit category {0} is quarantined after integrity failure")]
     MatrixCommitQuarantined(String),
 
+    /// Not produced by tiled matrix storage; kept for API compatibility.
     #[error(
         "matrix recovery report contains fatal findings; default access is fail-closed, use FormatSpec::with_matrix_fatal_forensics for forensic access"
     )]
@@ -666,6 +668,8 @@ pub enum Error {
     ///   these formats.
     ///
     /// Both are refusals to *modify*; reads of the chunk are unaffected.
+    ///
+    /// Not produced by tiled matrix storage, which writes no chunk records.
     #[error("matrix chunk {chunk} cannot be reopened: {reason}")]
     MatrixChunkNotReopenable { chunk: u64, reason: &'static str },
 

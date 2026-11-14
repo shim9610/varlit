@@ -222,51 +222,27 @@ pub struct MatrixRecoveryReport {
     pub recommended_actions: Vec<MatrixRecoveryAction>,
 }
 
-/// Always-available cost qualification for whole-range zeroing.
+/// Range-zeroing counters, kept for API compatibility.
 ///
-/// Whole-category clear, whole-map rebuild, and page-index rebuild all ask the
-/// filesystem to remove a byte range. Where removal is unavailable the range is
-/// streamed as zero bytes, which costs `Theta(bitmap bytes)`. These accessors
-/// are deliberately *not* behind a test-only feature: a caller that depends on
-/// the cheap path must be able to detect at runtime that it did not get it.
+/// The removed matrix layout zeroed byte ranges when it cleared or rebuilt a
+/// commit map, and streamed zero bytes where the filesystem could not remove a
+/// range. Tiled storage allocates what it writes and never zeroes a range, so
+/// both counters always return `0`.
 impl MatrixRecoveryReport {
-    /// Whether this build targets a platform with a range-removal call at all.
-    ///
-    /// Necessary but **not** sufficient: the call still fails on filesystems
-    /// without sparse-file support, in which case the streaming fallback runs
-    /// and [`Self::matrix_last_zero_range_streamed_bytes`] reports it.
+    /// Whether this build targets a platform with a range-removal call.
     pub const fn matrix_sparse_zeroing_supported() -> bool {
         cfg!(any(windows, target_os = "linux", target_os = "macos"))
     }
 
-    /// Bytes the most recent *single* range-zeroing request on this thread had
-    /// to stream because the range could not be removed.
-    ///
-    /// `0` means that one range was removed without writing it, and any nonzero
-    /// value is proof that the caller is on the `Theta(bytes)` fallback path —
-    /// but the scope is deliberately narrow in two ways a caller must respect:
-    ///
-    /// * **One request, not one operation.** A whole-category clear issues
-    ///   several range requests (validity bitmap, page indexes, page digests,
-    ///   commit map). This reports only the last of them, so a `0` here does
-    ///   not prove the whole clear avoided streaming. To qualify an operation,
-    ///   read [`Self::matrix_total_zero_range_streamed_bytes`] before and after
-    ///   it: the delta is nonzero exactly when some request streamed.
-    /// * **This thread only.** Both counters are thread-local. A clear
-    ///   performed on a worker thread is invisible to a reader on another
-    ///   thread, which would see `0` and wrongly conclude it took the cheap
-    ///   path. Sample the counters on the thread that ran the operation.
+    /// Bytes the most recent range-zeroing request on this thread streamed.
+    /// Always `0` under tiled storage.
     pub fn matrix_last_zero_range_streamed_bytes() -> u64 {
         // Tiled storage never zeroes a range: it allocates what it writes.
         0
     }
 
-    /// Bytes streamed by every range-zeroing request **on this thread** since
-    /// it started, across all matrices.
-    ///
-    /// This is the counter to qualify a whole operation with: take it before
-    /// and after, on the thread performing the operation, and a nonzero delta
-    /// is exact proof that at least one range had to be streamed.
+    /// Bytes streamed by every range-zeroing request on this thread. Always
+    /// `0` under tiled storage.
     pub fn matrix_total_zero_range_streamed_bytes() -> u64 {
         0
     }
@@ -438,7 +414,7 @@ pub struct MatrixStorageDiagnostics {
     /// The actual file answered a bounded allocation-map probe.
     pub allocation_map_available: bool,
     /// This build has a native hole-punch API. A filesystem may still refuse
-    /// individual requests; the zero-range byte counters report that fallback.
+    /// individual requests. Tiled storage makes no such requests.
     pub hole_punch_api_available: bool,
     /// Windows refused the create-time sparse-file request.
     pub sparse_mark_failed: bool,

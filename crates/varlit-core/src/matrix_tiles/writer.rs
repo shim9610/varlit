@@ -96,9 +96,11 @@ impl TileWriter {
         )
     }
 
-    /// Opens an existing matrix for writing. Every publication the ring
-    /// still holds is put in place first, so the writer starts with an empty
-    /// ring; a publication whose frames are torn never happened.
+    /// Opens an existing matrix for writing. Publications the ring still
+    /// holds are adopted as an overlay over the tiles, not written in place;
+    /// a publication whose frames are torn or uncommitted never happened. The
+    /// ring header is rewritten only when the frames show a newer publication
+    /// than the header records.
     pub(crate) fn open(store: &mut dyn TileStore, geom: Geometry, meta: u64) -> Result<Self> {
         let mut fixed = [0u8; META_FIXED_LEN as usize];
         store.read_at(meta, &mut fixed)?;

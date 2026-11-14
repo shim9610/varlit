@@ -322,9 +322,8 @@ fn decode_digest_payload(
 }
 /// Carries one matrix chunk: `rows_per_chunk` rows of every matrix block.
 ///
-/// A chunk is what makes a matrix dimension grow past the extent declared at
-/// create. Chunk 0 *is* the matrix region; chunk `k > 0` is a record with the
-/// region's layout. See [`crate::GrowingMatrixDimension`].
+/// Reserved. The chunked matrix layout wrote these records; tiled matrix
+/// storage grows by adding tiles and writes none.
 pub const MATRIX_CHUNK_BLOCK_ID: u32 = 0xFFFF_FFF6;
 /// Smallest live-tail growth that forces a fresh full index checkpoint.
 ///
@@ -584,10 +583,10 @@ impl MatrixNumeric for f64 {
     }
 }
 
-/// Optional barriers for a durable matrix cell write. The file is the physical
-/// generation store, not the logical matrix image: only synchronize it, do not
-/// seek to matrix offsets or modify it. Both callbacks precede generation-head
-/// publication. The notification hook runs only after publication and sync.
+/// Optional barriers for a durable matrix cell write. The file is the primary
+/// file that holds the matrix: only synchronize it, do not seek or modify it.
+/// Both callbacks run before the write is published. The notification hook
+/// runs only after publication and sync.
 pub trait MatrixDurabilityBarrier {
     fn sync_matrix_data(&mut self, file: &mut File) -> Result<()>;
     fn sync_matrix_commit(&mut self, file: &mut File) -> Result<()>;
@@ -3059,7 +3058,8 @@ impl VarlitReader {
     pub fn matrix_generation(&self) -> Option<u64> {
         self.file.matrix_generation()
     }
-    /// Required companion file for matrix storage; copy/rename it with the primary.
+    /// The file holding the matrix: the primary file itself, since tiled
+    /// storage keeps no companion. `None` when the format has no matrix blocks.
     pub fn matrix_generation_path(&self) -> Option<&Path> {
         self.file.matrix_generation_path()
     }
@@ -3607,9 +3607,8 @@ impl VarlitReader {
 
     /// Verifies this matrix's commit metadata now, and reports what was found.
     ///
-    /// See [`VarlitFile::verify_matrix_metadata`]: the same pass a
-    /// `MatrixMetadataVerification::AtOpen` open runs, on demand, retaining one
-    /// page buffer. It reports; it does not arm the quarantine.
+    /// See [`VarlitFile::verify_matrix_metadata`]: checks every tile header
+    /// and commit bitmap. It reports; it does not change what reads do.
     pub fn verify_matrix_metadata(&self) -> Result<MatrixRecoveryReport> {
         self.file.verify_matrix_metadata()
     }
@@ -3719,7 +3718,8 @@ impl VarlitWriter {
     pub fn matrix_generation(&self) -> Option<u64> {
         self.file.matrix_generation()
     }
-    /// Required companion file for matrix storage; copy/rename it with the primary.
+    /// The file holding the matrix: the primary file itself, since tiled
+    /// storage keeps no companion. `None` when the format has no matrix blocks.
     pub fn matrix_generation_path(&self) -> Option<&Path> {
         self.file.matrix_generation_path()
     }
@@ -4368,7 +4368,7 @@ impl VarlitWriter {
     /// barrier; the same post-commit contract applies, including
     /// [`Error::MatrixCommittedButHookFailed`] and
     /// [`Error::MatrixCommittedButDurabilityUnproven`]. Both barrier callbacks
-    /// precede generation publication and receive the physical generation file.
+    /// run before publication and receive the primary file.
     pub fn write_matrix_cell_durable_with_barrier<T, B, F>(
         &mut self,
         key: MatrixKey,
@@ -4635,9 +4635,8 @@ impl VarlitWriter {
 
     /// Verifies this matrix's commit metadata now, and reports what was found.
     ///
-    /// See [`VarlitFile::verify_matrix_metadata`]: the same pass a
-    /// `MatrixMetadataVerification::AtOpen` open runs, on demand, retaining one
-    /// page buffer. It reports; it does not arm the quarantine.
+    /// See [`VarlitFile::verify_matrix_metadata`]: checks every tile header
+    /// and commit bitmap. It reports; it does not change what reads do.
     pub fn verify_matrix_metadata(&self) -> Result<MatrixRecoveryReport> {
         self.file.verify_matrix_metadata()
     }

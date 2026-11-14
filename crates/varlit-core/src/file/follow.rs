@@ -201,16 +201,16 @@ impl VarlitFile {
     /// # What it deliberately does not do
     ///
     /// **Primary-file replacement requires reopening.** Follow retains the
-    /// primary file object this handle opened. Matrix companion compaction is
-    /// different: its persisted compaction epoch explicitly permits adopting
-    /// the replacement companion while retaining that same primary object.
+    /// primary file object this handle opened.
     ///
-    /// **Matrix generations advance atomically with their confirmed log EOF.**
-    /// Ordinary publications diff immutable roots and update only changed bitmap
-    /// index entries, verification pages and cache entries. Only a changed
-    /// compaction epoch rebuilds the whole layout. Failed preparation leaves
-    /// the captured generation intact. Matrix-only advancement returns zero
-    /// appended bytes; inspect `matrix_generation()` to distinguish it.
+    /// **A matrix advances to the newest published generation.** Follow reads
+    /// the matrix's write-ahead ring and adopts the publications it holds,
+    /// rebuilding from the tiles when the ring has already dropped frames this
+    /// handle had not seen. Reads on a handle that does not follow get
+    /// [`crate::Error::MatrixSnapshotExpired`] once its generation has left the
+    /// ring, instead of a mixed answer. A matrix-only
+    /// publication returns zero appended bytes; inspect `matrix_generation()`
+    /// to distinguish it.
     ///
     /// **A read-write handle gains nothing and answers `0`.** varlit admits one
     /// writer per object, and that writer's own appends already extend its

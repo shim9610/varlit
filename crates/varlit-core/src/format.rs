@@ -57,29 +57,12 @@ impl ReadLimit {
     }
 }
 
-/// How much of a matrix's persisted commit metadata a reader keeps resident.
+/// How much of a matrix's commit metadata a reader would keep resident.
 ///
-/// Nothing about a file changes with this option: it is purely a reader-side
-/// residency policy, so the same file can be opened with any bound by any
-/// process, and a file written by any version reads under all of them.
-///
-/// **Residency is always demand-filled and bounded; the only declaration left
-/// is the bound.** A commit-map page becomes resident when a bit inside it is
-/// addressed and is evicted least-recently-used when admitting another would
-/// exceed the declared `cache_bytes`. Memory therefore follows the working set
-/// and never the file, which is the only residency model a TB-scale open can
-/// have.
-///
-/// *When* commit metadata is checked is a **separate** policy,
-/// [`MatrixMetadataVerification`]. Until 0.5.0 this enum carried an
-/// `EagerVerified` variant that loaded every published page at open, and the
-/// complete [`crate::MatrixRecoveryReport`] was a side effect of that load —
-/// which made "verify the whole commit map" and "keep the whole commit map"
-/// look like one decision. They are two, they are now two options, and
-/// verification retains nothing (see [`MatrixMetadataVerification::AtOpen`]).
-///
-/// Which cache an *undeclared* policy resolves to is [`Self::DEFAULT`], whose
-/// bound is [`Self::DEFAULT_CACHE_BYTES`] clamped to `max_matrix_bitmap_bytes`.
+/// Tiled matrix storage does not read this setting: it is accepted, stored,
+/// composed by [`ReadLimits::overlay`], and resolved by
+/// [`ReadLimits::effective_matrix_metadata_residency`], but no read or open
+/// consults it. It is kept so existing format declarations still compile.
 ///
 /// `#[non_exhaustive]`, like [`ReadLimit`]: a downstream `match` needs a
 /// wildcard arm. Adding [`Self::Missing`] in 0.5.0 already broke every
@@ -103,100 +86,23 @@ pub enum MatrixMetadataResidency {
     /// [`ReadLimits::with_matrix_metadata_residency`] leaves a format-declared
     /// policy alone, and one that did wins.
     Missing,
-    /// Open reads the persisted page index and nothing else. A commit-map page
-    /// is read, authenticated against its stored page digest, and cached the
-    /// first time a bit inside it is addressed; the least recently used cached
-    /// page is dropped when admitting another would exceed `cache_bytes`.
-    ///
-    /// Cost: `O(live pages)` *index* bytes read at open — no page payload, no
-    /// allocation-map scan — and at most `cache_bytes` resident payload bytes
-    /// per demand-loaded bitmap for the session, whatever the file's size or
-    /// live page count. Per bitmap, not per reader: each commit category and
-    /// each block's validity map owns a cache of its own, so a format declaring
-    /// `n` such maps bounds itself at `n * cache_bytes` rather than
-    /// `cache_bytes`. The bound is still independent of the file.
-    ///
-    /// Three consequences are part of the declaration, not accidents:
-    ///
-    /// * **A page is authenticated when it is faulted in.** A page whose bytes
-    ///   disagree with its stored digest is reported as
-    ///   [`crate::Error::MatrixFatalCorruption`] by the read that touches it, so
-    ///   no read ever answers from unverified bytes. That is a per-page refusal,
-    ///   not a verdict on the map: the verdict —
-    ///   [`crate::MatrixRecoveryReport`]'s commit-map findings, the category
-    ///   quarantine ([`crate::Error::MatrixCommitQuarantined`]), and the
-    ///   `RebuildCommitMap` / `ClearCategory` recommendations — comes from
-    ///   [`MatrixMetadataVerification`], which is on by default and is
-    ///   independent of what this bound retains.
-    /// * **A page absent from the persisted index still reads as clear, and
-    ///   that is not a guess.** The index is loaded in full at open and is
-    ///   authoritative for which pages hold state; "not cached" and "not
-    ///   published" are distinct states and only the second answers zero. An
-    ///   index that could not be enumerated in full is a fatal finding at open.
-    /// * **Cache misses retain generation identity.** Every loaded page belongs
-    ///   to the reader's captured confirmed root. Eviction changes residency,
-    ///   not visibility; only `follow(&mut self)` adopts a later generation.
+    /// A bounded cache of `cache_bytes` per bitmap. Not consulted by tiled
+    /// matrix storage.
     Lazy {
-        /// Ceiling on the cached commit-map payload, in bytes, per bitmap.
-        /// Rounded up to a whole 4096-byte page internally, with a one-page
-        /// floor, and refused at open when it exceeds
-        /// `max_matrix_bitmap_bytes` — a *declared* cache above a declared
-        /// ceiling would be a way to raise that ceiling. The cache varlit
-        /// derives for [`Self::Missing`], where [`Self::DEFAULT`] is this
-        /// variant, is clamped to the ceiling instead
-        /// ([`ReadLimits::default_matrix_metadata_cache_bytes`]), so a default is
-        /// never the reason an open fails.
+        /// Declared cache bound, in bytes, per bitmap.
         cache_bytes: u64,
     },
 }
 
 impl MatrixMetadataResidency {
-    /// The policy [`Self::Missing`] resolves to: the one place the default
-    /// lives, and the one line that changes it.
-    ///
-    /// It is [`Self::Lazy`] with [`Self::DEFAULT_CACHE_BYTES`], clamped to
-    /// whatever `max_matrix_bitmap_bytes` is in force
-    /// ([`ReadLimits::default_matrix_metadata_cache_bytes`]). An open therefore
-    /// reads a header and 8 bytes per live page, retains no commit-map payload
-    /// at all, and can never be refused because a matrix's live set is wider
-    /// than the resident ceiling.
-    ///
-    /// Until 0.5.0 this was `EagerVerified`, which materialised every published
-    /// page for the session — 131,240 bytes over 32 commit-map pages for a
-    /// matrix with *one* live page, `O(live pages)` resident for the session,
-    /// and `max_matrix_bitmap_bytes` turned into an availability limit that
-    /// could leave a matrix unopenable. What kept it was not its cost but that
-    /// the commit-map half of [`crate::MatrixRecoveryReport`] was a *side
-    /// effect* of that load: the `Recoverable` commit-map finding, the category
-    /// quarantine, the `RebuildCommitMap` / `ClearCategory` recommendations and
-    /// the strict-recovery writer gate were all produced by pages the demand
-    /// path does not read.
-    ///
-    /// That coupling is gone. Verification is [`MatrixMetadataVerification`],
-    /// it defaults to [`MatrixMetadataVerification::AtOpen`], it visits the same
-    /// candidate set the eager load visited — the persisted page index *unioned
-    /// with* the platform allocation map, whose second term is the only thing
-    /// that sees stray bytes in a page nothing ever published — and it retains
-    /// one 4096-byte buffer while doing it. So every one of those findings is
-    /// still produced at open, and none of them costs residency.
+    /// The policy [`Self::Missing`] resolves to: [`Self::Lazy`] with
+    /// [`Self::DEFAULT_CACHE_BYTES`], clamped to `max_matrix_bitmap_bytes`.
     pub const DEFAULT: Self = Self::Lazy {
         cache_bytes: Self::DEFAULT_CACHE_BYTES,
     };
 
-    /// Cache ceiling the unstated default resolves to, before it is clamped
-    /// down to `max_matrix_bitmap_bytes`.
-    ///
-    /// Derived, not chosen: it is one thirty-second of
-    /// `ReadLimits::STANDARD.max_matrix_bitmap_bytes` (64 MiB / 32 = 2 MiB =
-    /// 512 commit-map pages). Both halves of that ratio are load-bearing.
-    ///
-    /// * Small enough to be honest. A cache is a *bound*, and 1/32 of the
-    ///   resident ceiling is visibly a working-set bound rather than a
-    ///   disguised whole-file load. It does not move when the file does: the
-    ///   same 2 MiB bounds a 4 KiB matrix and a 4 TiB one.
-    ///
-    /// The cache covers the active pages, independently of declared matrix
-    /// dimensions. Wider matrices fault pages in and evict by recency.
+    /// Cache bound the unstated default resolves to before clamping: one
+    /// thirty-second of `ReadLimits::STANDARD.max_matrix_bitmap_bytes`.
     pub const DEFAULT_CACHE_BYTES: u64 = match ReadLimits::STANDARD.max_matrix_bitmap_bytes {
         ReadLimit::Finite(ceiling) => ceiling / 32,
         _ => 2 * 1024 * 1024,
@@ -235,40 +141,12 @@ const _: () = assert!(
     "MatrixMetadataResidency::DEFAULT must name a real policy"
 );
 
-/// **When** a matrix's persisted commit metadata is authenticated as a whole.
+/// When a matrix's commit metadata would be verified as a whole.
 ///
-/// The companion of [`MatrixMetadataResidency`], and separate from it on
-/// purpose. Verification reads the persisted page index *unioned with* the
-/// platform's allocation map, authenticates every page in that candidate set
-/// against its stored digest, and folds the result into
-/// [`crate::MatrixRecoveryReport`]. Residency decides what stays in memory
-/// afterwards; verification decides whether the check happens at all. Before
-/// 0.5.0 one eager load did both, which made the complete recovery report look
-/// like something only a whole-file-resident open could produce.
-///
-/// What verification produces, and nothing else does:
-///
-/// * the `Recoverable` [`crate::MatrixCorruptionKind::CommitMap`] finding for a
-///   category whose map disagrees with its digests;
-/// * the quarantine behind [`crate::Error::MatrixCommitQuarantined`], which
-///   fails **every** access to that category closed — reader and writer, and so
-///   also the [`crate::RecoveryPolicy::Strict`] writer gate — rather than
-///   refusing only the pages a reader happens to touch;
-/// * the `RebuildCommitMap` / `ClearCategory` recommendations that make the
-///   documented recovery path reachable;
-/// * detection of damage in a page the persisted index does not name, which is
-///   what the allocation-map term of the candidate set exists for.
-///
-/// What it costs: `O(live pages + allocated pages)` bytes **read**, and one
-/// 4096-byte page buffer **retained**, reused across every page and every
-/// bitmap. Nothing it reads becomes resident, so it is `O(1)` in memory whatever
-/// the cell count, the live-page count, or the file size.
-///
-/// Per-page authentication is *not* this option: a page faulted in by the demand
-/// path is always checked against its digest before a bit of it is reported
-/// ([`MatrixMetadataResidency::Lazy`]), under every variant here. That is why
-/// there is no `Never`: turning verification off removes the *verdict*, never
-/// the check on bytes a read actually answers from.
+/// Tiled matrix storage does not read this setting: it is accepted, stored,
+/// composed and resolved by [`ReadLimits::effective_matrix_metadata_verification`],
+/// but no open verifies tile headers or commit bitmaps because of it. Call
+/// `verify_matrix_metadata` to check them; normal reads do not.
 ///
 /// `#[non_exhaustive]` for the same reason as [`MatrixMetadataResidency`]: match
 /// the variant you care about and let a wildcard carry the rest, or call
@@ -283,44 +161,15 @@ pub enum MatrixMetadataVerification {
     /// [`ReadLimits::effective_matrix_metadata_verification`], and only there —
     /// to [`Self::DEFAULT`].
     Missing,
-    /// Verify while opening, so a damaged matrix announces itself at open and a
-    /// writer is refused before it can mutate a category whose map is damaged.
-    ///
-    /// This is [`Self::DEFAULT`]: an undeclared format behaves exactly as it did
-    /// before residency and verification were separated, minus the residency.
+    /// Verify while opening. Not acted on by tiled matrix storage.
     AtOpen,
-    /// Do not verify while opening; verify when asked, by calling
-    /// `verify_matrix_metadata`.
-    ///
-    /// Open then reads the persisted page index and nothing else, and asks the
-    /// filesystem nothing — no allocation-map query either, since the union has
-    /// no reader. Two consequences, both deliberate:
-    ///
-    /// * **The report is silent about commit-map damage until it is asked.** No
-    ///   quarantine is armed, so a reader is refused only on the pages it
-    ///   touches and a writer is not stopped from mutating a damaged category.
-    /// * **`verify_matrix_metadata` reports; it does not retroactively
-    ///   quarantine.** The fail-closed gate is derived once, at open, from the
-    ///   findings the layout is assembled with, and nothing may install one
-    ///   afterwards. A caller that wants the gate reopens with [`Self::AtOpen`].
-    ///
-    /// Use it where open latency is the scarce resource and the caller owns the
-    /// integrity schedule — a scrub pass, or a reader that verifies once per
-    /// file rather than once per open.
+    /// Verify only when `verify_matrix_metadata` is called, which is what
+    /// tiled matrix storage does under every variant.
     OnDemand,
 }
 
 impl MatrixMetadataVerification {
-    /// The policy [`Self::Missing`] resolves to: the one place the default
-    /// lives, and the one line that changes it.
-    ///
-    /// [`Self::AtOpen`], because the alternative is a silent loss of behaviour.
-    /// Making residency lazy is a memory decision a caller cannot observe going
-    /// wrong; making verification lazy would silently stop a damaged matrix from
-    /// announcing itself and silently un-gate a strict-recovery writer. The
-    /// memory cost that used to accompany detection at open is gone — one page
-    /// buffer, nothing retained — so the default keeps the behaviour and drops
-    /// the cost.
+    /// The policy [`Self::Missing`] resolves to.
     pub const DEFAULT: Self = Self::AtOpen;
 
     /// Call-time policy wins, `Missing` means the caller said nothing.
@@ -1933,29 +1782,16 @@ pub struct BlockResidencyDescriptor {
 /// each chunk covers.
 ///
 /// A matrix's dimensions are otherwise fixed at create, which cannot model a
-/// stream whose extent is unknown when the file is made — you learn a grid is
-/// full when it fills. Declaring this makes rows past the declared extent land
-/// in *chunks*: ordinary internal records in the append log, each covering
-/// `rows_per_chunk` rows of every matrix block.
-///
-/// **The declared extent is chunk 0.** The dimension's value at create must
-/// equal `rows_per_chunk`, so the matrix region *is* the first chunk and every
-/// later chunk has its byte-for-byte layout. Nothing about the region changes.
-///
-/// One chunk is buffered at a time, which is what bounds memory, but *which*
-/// chunk is not fixed: a write addressing an already-written chunk writes the
-/// open one out and loads that chunk back, and the rewrite lands where the
-/// record already sits. The two format options that make that rewrite
-/// impossible — `chunk_compression` and `segment_on_flush`, both off by
-/// default — refuse by name through [`Error::MatrixChunkNotReopenable`]
-/// instead. A cell that never received a value keeps its clear commit bit and
-/// reads as `MatrixNotCommitted` — writing the chunk asks no question about
-/// completeness.
+/// stream whose extent is unknown when the file is made. Declaring this makes
+/// dimension 0 unbounded: rows past the declared extent land in new tiles,
+/// added as they are written. The dimension's value at create must still equal
+/// `rows_per_chunk`. A cell that never received a value keeps its clear commit
+/// bit and reads as `MatrixNotCommitted`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GrowingMatrixDimension {
     /// The dimension that grows. Must be `dimensions[0]` of every matrix block.
     pub name: &'static str,
-    /// Rows per chunk, and the declared value of `name` at create.
+    /// The declared value of `name` at create. Rows no longer form chunks.
     pub rows_per_chunk: u64,
 }
 
@@ -2322,9 +2158,8 @@ pub struct FormatSpec {
     pub block_identities: &'static [(u32, Option<Endian>, bool, u64)],
     pub layout: LayoutSpec,
     pub read_limits: ReadLimits,
-    /// Explicit opt-in that keeps matrix data access available when the
-    /// matrix recovery report contains `Fatal` findings. Defaults to false:
-    /// safe accessors fail closed with [`Error::MatrixFatalCorruption`].
+    /// Accepted and stored, but unused: tiled matrix storage never produces
+    /// [`Error::MatrixFatalCorruption`], so there is no access to opt into.
     pub matrix_fatal_forensics: bool,
     /// Whether files this spec creates carry fixed-offset anchors. Not part of
     /// the schema: a file's own header says whether it is anchored, and that is
@@ -2538,9 +2373,8 @@ impl FormatSpec {
 
     /// Declares the matrix dimension that grows past its declared extent.
     ///
-    /// `rows_per_chunk` is both the chunk height and the value `name` must be
-    /// given at create: the matrix region is chunk 0, and every later chunk is
-    /// a record with the region's layout. See [`GrowingMatrixDimension`].
+    /// `rows_per_chunk` is the value `name` must be given at create. See
+    /// [`GrowingMatrixDimension`].
     pub const fn with_growing_matrix_dimension(
         mut self,
         name: &'static str,
@@ -2629,11 +2463,8 @@ impl FormatSpec {
         self
     }
 
-    /// Explicit forensic/recovery opt-in for matrix files whose recovery
-    /// report contains `Fatal` findings (for example a matrix metadata CRC
-    /// mismatch). Without this opt-in, every safe matrix accessor on such a
-    /// file fails closed with [`Error::MatrixFatalCorruption`]; the recovery
-    /// report itself stays readable either way.
+    /// Sets [`Self::matrix_fatal_forensics`]. Accepted but unused: tiled
+    /// matrix storage never produces [`Error::MatrixFatalCorruption`].
     pub const fn with_matrix_fatal_forensics(mut self) -> Self {
         self.matrix_fatal_forensics = true;
         self

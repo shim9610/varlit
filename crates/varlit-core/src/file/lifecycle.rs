@@ -156,12 +156,10 @@ impl VarlitFile {
         if !spec.has_matrix_blocks() {
             return Self::create_impl(spec, path, exclusive);
         }
-        // Chunk 0 *is* the matrix region, and `chunk_for_row` divides by
-        // `rows_per_chunk` to find it. If the declared extent were any other
-        // value the two would disagree: with an extent of 100 and chunks of 4,
-        // row 50 routes to chunk 12 while the region already holds it, and the
-        // region's rows 4..100 become unreachable. Refused at create, where the
-        // dimension value first exists.
+        // The growing dimension's declared value must equal `rows_per_chunk`.
+        // Tiled storage leaves dimension 0 unbounded and adds tiles as rows
+        // arrive, so the value no longer routes anything; the check keeps the
+        // declaration's meaning unchanged for formats written against it.
         if let Some(growing) = spec.growing_matrix {
             let declared = dims
                 .get(growing.name)
