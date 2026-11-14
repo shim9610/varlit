@@ -766,3 +766,26 @@ fn header_tails_and_header_slots_combine_with_a_matrix() -> varlit::Result<()> {
     assert_eq!(mark.at, 29);
     Ok(())
 }
+
+#[test]
+fn diagnosing_a_tiled_matrix_file_reports_no_storage_warnings() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("diagnose");
+    let mut writer = spec().create_writer_with_dims(&path, dims(16, 16))?;
+    put(&mut writer, MatrixKey::new(1, 2), 7)?;
+    writer.sync()?;
+    drop(writer);
+    let report = spec().diagnose_file(&path);
+    let storage: Vec<_> = report
+        .items
+        .iter()
+        .filter(|item| item.code.starts_with("matrix.storage."))
+        .map(|item| item.code)
+        .collect();
+    assert!(
+        storage.is_empty(),
+        "tiled storage uses no sparse files, allocation maps or range removal, \
+         so none of their warnings apply: {storage:?}"
+    );
+    Ok(())
+}

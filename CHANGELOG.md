@@ -130,6 +130,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   call. Opening a file still reports a torn tail.
 - Fix `MmapMatrix::cell_payload_window` refusing cells whose slot an anchor
   splits (`MmapPayloadOutOfBounds`); such a cell is copied once on first use.
+- `diagnose_file` no longer reports `matrix.storage.sparse_disabled`,
+  `matrix.storage.allocation_map_unavailable` and
+  `matrix.storage.hole_punch_unavailable` on every matrix file. They described
+  the removed layout; tiled storage uses none of those capabilities.
 - Refuse matrix overlay ranges whose offset would overflow with
   `InvalidMatrixLayout` instead of panicking (found by `matrix_arbitrary`).
 - Add the `mixed_load_bench` example: a concurrent writer and follower on a

@@ -504,9 +504,9 @@ impl VarlitFile {
             .then(crate::MatrixStorageDiagnostics::not_applicable)
     }
 
-    /// Findings of the last verification. Tiled storage checks each tile's
-    /// header and commit bitmap when it reads them and reports damage as an
-    /// error of that read, so there is nothing held back to report.
+    /// Always empty under tiled storage, which keeps no findings from open.
+    /// Call [`Self::verify_matrix_metadata`] to check tile headers and commit
+    /// bitmaps; reads do not check them.
     pub fn matrix_recovery_report(&self) -> MatrixRecoveryReport {
         MatrixRecoveryReport {
             findings: Vec::new(),

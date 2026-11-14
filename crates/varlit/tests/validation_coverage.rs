@@ -1203,6 +1203,10 @@ const CONTRACTS: &[Contract] = &[
         valid { let bytes=varlit::encode_to_vec(&IntoWindowRequiredOnly{w:3},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out)?; assert_eq!(out,IntoWindow{w:3,added:Vec::new()}); Ok(()) },
         invalid { let bytes=varlit::encode_to_vec(&IntoWindowDefaultOnly{added:vec![1]},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; assert!(matches!(varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out),Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
+    contract!("core/format.rs::format::MatrixMetadataResidency::variant:Lazy@34b063ac24393ce2",
+        valid { let declared = varlit::MatrixMetadataResidency::Lazy { cache_bytes: 8192 }; assert_eq!(varlit::ReadLimits::STANDARD.with_matrix_metadata_residency(declared).effective_matrix_metadata_residency(), declared); Ok(()) },
+        invalid { let resolved = varlit::ReadLimits::STANDARD.effective_matrix_metadata_residency(); assert_ne!(resolved, varlit::MatrixMetadataResidency::Missing); assert_ne!(resolved, varlit::MatrixMetadataResidency::Lazy { cache_bytes: 8192 }); Ok(()) }
+    ),
     contract!("core/format.rs::format::ReadValidation::const:FULL@65630b1aec77469e",
         valid { assert_eq!(read_policy_probe(varlit::ReadValidation::FULL, false, false)??, Probe { value: 19 }); Ok(()) },
         invalid { let result = read_policy_probe(varlit::ReadValidation::FULL, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }

@@ -1779,7 +1779,5 @@ minor-version policy as the rest of the library.
 what it writes and does not use sparse files or range removal, and the
 zero-range counters on `MatrixRecoveryReport` always return 0. See
 [storage diagnostics](storage-diagnostics.md) for the field definitions.
-`diagnose_file` turns these fixed values into three `Environment` warnings
-(`matrix.storage.sparse_disabled`, `matrix.storage.allocation_map_unavailable`,
-`matrix.storage.hole_punch_unavailable`) on every matrix file without
-rejecting it; their hint text still describes the removed page-index layout.
+`diagnose_file` reports no storage warnings for a matrix file, since none of
+these capabilities is used.

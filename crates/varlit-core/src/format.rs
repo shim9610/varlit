@@ -549,10 +549,9 @@ impl ReadLimits {
     }
 
     /// Declares the matrix commit-metadata verification policy (see
-    /// [`MatrixMetadataVerification`]). Leaving it unset resolves to
-    /// [`MatrixMetadataVerification::DEFAULT`], which verifies at open; pass
-    /// [`MatrixMetadataVerification::OnDemand`] to move that work to an explicit
-    /// `verify_matrix_metadata` call.
+    /// [`MatrixMetadataVerification`]). Accepted but not acted on by tiled
+    /// matrix storage, which verifies only when `verify_matrix_metadata` is
+    /// called.
     pub const fn with_matrix_metadata_verification(
         mut self,
         verification: MatrixMetadataVerification,
