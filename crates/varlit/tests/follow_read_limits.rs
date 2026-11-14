@@ -16,6 +16,9 @@
 //! `reader_follow.rs` pins it.
 
 #![cfg(all(feature = "integrity", feature = "scalable-fault-injection"))]
+#[path = "support/pages.rs"]
+mod pages;
+
 use varlit::{VarlitBlock, varlit_format};
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -88,6 +91,6 @@ fn a_follow_is_refused_by_the_ceiling_that_refuses_an_open() -> varlit::Result<(
     // settled before the first entry is installed, so nothing in the install
     // loop can fail partway through it.
     assert_eq!(n(&reader)?, held);
-    assert!(reader.blocks::<Reading>().is_ok());
+    assert!(crate::pages::all_blocks!(reader, Reading).is_ok());
     Ok(())
 }

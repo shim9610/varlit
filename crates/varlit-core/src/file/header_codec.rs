@@ -1,6 +1,7 @@
 //! header codec implementation, kept within the original parent privacy boundary.
 use super::*;
 
+#[cfg(test)]
 pub(super) fn encode_index_checkpoint_payload(
     spec: FormatSpec,
     entries: &[RecordIndexEntry],
@@ -596,6 +597,8 @@ pub(super) fn commit_policy_byte(policy: CommitPolicy) -> u8 {
         CommitPolicy::RecordFooter => 2,
         CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::OnFlush) => 3,
         CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::Explicit) => 4,
+        CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::OnFlushSingleBarrier) => 5,
+        CommitPolicy::TransactionMarker(crate::TransactionMarkerMode::ExplicitSingleBarrier) => 6,
     }
 }
 
@@ -608,6 +611,12 @@ pub(super) fn commit_policy_from_byte(value: u8) -> Result<CommitPolicy> {
         )),
         4 => Ok(CommitPolicy::TransactionMarker(
             crate::TransactionMarkerMode::Explicit,
+        )),
+        5 => Ok(CommitPolicy::TransactionMarker(
+            crate::TransactionMarkerMode::OnFlushSingleBarrier,
+        )),
+        6 => Ok(CommitPolicy::TransactionMarker(
+            crate::TransactionMarkerMode::ExplicitSingleBarrier,
         )),
         _ => Err(Error::InvalidSchemaManifest),
     }
@@ -723,6 +732,10 @@ pub(super) fn prepare_user_record_payload<'a>(
         u64::try_from(logical_payload.len())
             .map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
     )?;
+    let logical_len = logical_payload.len() as u64;
+    if record_chunks::chunking_applies(spec, kind, logical_len) {
+        return chunked_user_payload(spec, block_id, logical_payload);
+    }
     let Some(compression) = variable_compression_for_block(spec, block_id) else {
         return Ok(uncompressed_user_payload(logical_payload));
     };
@@ -730,7 +743,6 @@ pub(super) fn prepare_user_record_payload<'a>(
         return Ok(uncompressed_user_payload(logical_payload));
     }
 
-    let logical_len = logical_payload.len() as u64;
     if logical_len > compression.max_uncompressed_len {
         return Err(Error::DecompressedLengthLimitExceeded {
             actual: logical_len,
@@ -766,6 +778,85 @@ pub(super) fn prepare_user_record_payload<'a>(
     })
 }
 
+/// [`prepare_user_record_payload`] for a logical payload a writer encoded at
+/// `buffer[room..]`, with `room` bytes set aside in front of it.
+///
+/// A payload stored as plain chunks gets its header and table written into
+/// that room and is borrowed where it was encoded, instead of being copied
+/// into a new buffer of its own size. Every other payload is prepared exactly
+/// as [`prepare_user_record_payload`] prepares it.
+pub(super) fn prepare_user_record_payload_in_room<'a>(
+    spec: FormatSpec,
+    block_id: u32,
+    kind: BlockKind,
+    buffer: &'a mut [u8],
+    room: usize,
+) -> Result<StoredPayload<'a>> {
+    let logical_len = buffer
+        .len()
+        .checked_sub(room)
+        .ok_or(Error::InvalidCanonicalEncoding(
+            "payload room past its buffer",
+        ))? as u64;
+    if record_chunks::chunking_applies(spec, kind, logical_len)
+        && variable_compression_for_block(spec, block_id).is_none()
+    {
+        spec.read_limits
+            .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
+        let start = record_chunks::lay_plain_chunks(buffer, room)?;
+        return Ok(StoredPayload {
+            flags: RECORD_FLAG_CHUNKED,
+            uncompressed_len_hint: 0,
+            bytes: Cow::Borrowed(&buffer[start..]),
+        });
+    }
+    prepare_user_record_payload(spec, block_id, kind, &buffer[room..])
+}
+
+/// A variable payload longer than one chunk, stored chunked: compressed per
+/// chunk when the block's compression policy applies to it (and, with
+/// `only_if_smaller`, pays off), as plain chunks otherwise.
+fn chunked_user_payload(
+    spec: FormatSpec,
+    block_id: u32,
+    logical_payload: &[u8],
+) -> Result<StoredPayload<'static>> {
+    let logical_len = logical_payload.len() as u64;
+    // The chunk header carries the logical length; the record header's hint
+    // stays 0, as an index summary that does not store hints rebuilds it.
+    let hint = 0;
+    let compression = variable_compression_for_block(spec, block_id);
+    if let Some(compression) = compression {
+        if logical_len > compression.max_uncompressed_len {
+            return Err(Error::DecompressedLengthLimitExceeded {
+                actual: logical_len,
+                limit: compression.max_uncompressed_len,
+            });
+        }
+        if logical_len >= compression.min_uncompressed_len {
+            let compressed = record_chunks::encode_chunked(
+                logical_payload,
+                Some((compression.algorithm, compression.level)),
+            )?;
+            let plain_len = logical_len
+                + record_chunks::CHUNK_HEADER_LEN
+                + record_chunks::CHUNK_ENTRY_LEN * logical_len.div_ceil(record_chunks::CHUNK_LEN);
+            if !compression.only_if_smaller || (compressed.len() as u64) < plain_len {
+                return Ok(StoredPayload {
+                    flags: RECORD_FLAG_CHUNKED | RECORD_FLAG_COMPRESSED,
+                    uncompressed_len_hint: hint,
+                    bytes: Cow::Owned(compressed),
+                });
+            }
+        }
+    }
+    Ok(StoredPayload {
+        flags: RECORD_FLAG_CHUNKED,
+        uncompressed_len_hint: hint,
+        bytes: Cow::Owned(record_chunks::encode_chunked(logical_payload, None)?),
+    })
+}
+
 /// The stored form of a payload that is stored exactly as it was handed in.
 ///
 /// Borrows. The bytes are the caller's and are read, not kept: every caller
@@ -786,6 +877,9 @@ pub(super) fn record_logical_len_from_parts(
     uncompressed_len_hint: u32,
     payload: &[u8],
 ) -> Result<u64> {
+    if flags & RECORD_FLAG_CHUNKED != 0 {
+        return Ok(record_chunks::ChunkHeader::decode(payload)?.logical_len);
+    }
     if flags & RECORD_FLAG_COMPRESSED == 0 {
         return u64::try_from(payload.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX });
     }
@@ -812,6 +906,34 @@ pub(super) fn record_logical_len_from_parts(
     Ok(logical_len)
 }
 
+#[cfg(feature = "mmap")]
+/// The decompressed length a compressed record declares, read from its
+/// physical bytes (or the entry's hint) without decompressing, so a reader can
+/// admit it against its limits first.
+pub(super) fn compressed_logical_len(
+    spec: FormatSpec,
+    entry: &RecordIndexEntry,
+    physical_payload: &[u8],
+) -> Result<u64> {
+    validate_record_entry(&spec, entry)?;
+    if entry.is_chunked() {
+        return Ok(record_chunks::ChunkHeader::decode(physical_payload)?.logical_len);
+    }
+    let compression = variable_compression_for_block(spec, entry.block_id)
+        .ok_or(Error::InvalidCompressionHeader)?;
+    match compression.header_mode {
+        CompressionHeaderMode::RecordExplicit => {
+            decode_compression_envelope(physical_payload).map(|(_, len, _)| len)
+        }
+        CompressionHeaderMode::FileExplicit | CompressionHeaderMode::FormatContract => {
+            if entry.uncompressed_len_hint == 0 {
+                return Err(Error::InvalidCompressionHeader);
+            }
+            Ok(u64::from(entry.uncompressed_len_hint))
+        }
+    }
+}
+
 pub(super) fn decode_record_payload(
     spec: FormatSpec,
     entry: &RecordIndexEntry,
@@ -820,7 +942,13 @@ pub(super) fn decode_record_payload(
     if !entry.is_compressed() {
         return Ok(physical_payload);
     }
-    validate_record_entry(spec, entry)?;
+    validate_record_entry(&spec, entry)?;
+    if entry.is_chunked() {
+        let max = variable_compression_for_block(spec, entry.block_id)
+            .filter(|_| entry.flags & RECORD_FLAG_COMPRESSED != 0)
+            .map_or(u64::MAX, |compression| compression.max_uncompressed_len);
+        return record_chunks::decode_chunked(&physical_payload, max);
+    }
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     let (algorithm, expected_len, compressed_payload) = match compression.header_mode {
@@ -883,6 +1011,63 @@ pub(super) fn encode_compression_envelope(
     Ok(payload)
 }
 
+/// [`decode_record_payload`] for a compressed record without chunks, into
+/// the caller's buffer and through a decompression context the caller
+/// keeps: nothing is allocated once both have been used.
+pub(super) fn decode_compressed_payload_into(
+    spec: FormatSpec,
+    entry: &RecordIndexEntry,
+    physical_payload: &[u8],
+    out: &mut Vec<u8>,
+    decompressor: &mut Option<crate::compression_buffers::Decompressor>,
+) -> Result<()> {
+    validate_record_entry(&spec, entry)?;
+    let compression = variable_compression_for_block(spec, entry.block_id)
+        .ok_or(Error::InvalidCompressionHeader)?;
+    let (algorithm, expected_len, compressed_payload) = match compression.header_mode {
+        CompressionHeaderMode::RecordExplicit => decode_compression_envelope(physical_payload)?,
+        CompressionHeaderMode::FileExplicit | CompressionHeaderMode::FormatContract => {
+            if entry.uncompressed_len_hint == 0 {
+                return Err(Error::InvalidCompressionHeader);
+            }
+            (
+                compression.algorithm,
+                u64::from(entry.uncompressed_len_hint),
+                physical_payload,
+            )
+        }
+    };
+    if expected_len > compression.max_uncompressed_len {
+        return Err(Error::DecompressedLengthLimitExceeded {
+            actual: expected_len,
+            limit: compression.max_uncompressed_len,
+        });
+    }
+    let len = usize::try_from(expected_len).map_err(|_| Error::LengthOverflow {
+        value: expected_len,
+    })?;
+    if out.capacity() < len {
+        out.clear();
+        out.try_reserve_exact(len)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "decompressed payload",
+                requested: expected_len,
+            })?;
+    }
+    out.resize(len, 0);
+    match algorithm {
+        CompressionAlgorithm::Zstd => {
+            if decompressor.is_none() {
+                *decompressor = Some(crate::compression_buffers::Decompressor::new()?);
+            }
+            decompressor
+                .as_mut()
+                .expect("set above")
+                .decompress_into(compressed_payload, out)
+        }
+    }
+}
+
 pub(super) fn decode_compression_envelope(
     payload: &[u8],
 ) -> Result<(CompressionAlgorithm, u64, &[u8])> {
@@ -939,14 +1124,33 @@ pub(super) fn uses_format_contract_compression(spec: FormatSpec) -> bool {
     )
 }
 
-pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
+#[inline]
+pub(super) fn validate_record_entry(spec: &FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
     let unknown_flags = entry.flags & !RECORD_KNOWN_FLAGS;
     if unknown_flags != 0 {
         return Err(Error::UnknownRecordFlags(unknown_flags));
     }
+    // Only matrix storage may leave its payload out of the record checksum.
+    if (entry.flags & RECORD_FLAG_IN_PLACE != 0) != (entry.block_id == MATRIX_TILE_BLOCK_ID) {
+        return Err(Error::InvalidCanonicalEncoding(
+            "in-place record flag disagrees with block id",
+        ));
+    }
+    if entry.block_id >= RESERVED_BLOCK_ID_START || entry.flags & RECORD_FLAG_INTERNAL != 0 {
+        validate_internal_record_entry(entry)?;
+    }
     if !entry.is_compressed() {
         return Ok(());
     }
+    validate_compressed_record_entry(*spec, entry)
+}
+
+// Borrow the policy through the common validator: taking FormatSpec by value
+// can copy the whole structure before the branch even when this cold helper is never
+// called. Compressed records retain every policy check below.
+#[cold]
+#[inline(never)]
+fn validate_compressed_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) -> Result<()> {
     if entry.flags & RECORD_FLAG_INTERNAL != 0 || entry.block_id >= RESERVED_BLOCK_ID_START {
         return Err(Error::InvalidCompressionHeader);
     }
@@ -956,9 +1160,48 @@ pub(super) fn validate_record_entry(spec: FormatSpec, entry: &RecordIndexEntry) 
     if descriptor.kind != BlockKind::Variable {
         return Err(Error::InvalidCompressionHeader);
     }
+    if entry.flags & RECORD_FLAG_CHUNKED != 0 && entry.flags & RECORD_FLAG_COMPRESSED == 0 {
+        // Plain chunks: a variable record of any format.
+        return Ok(());
+    }
     let compression = variable_compression_for_block(spec, entry.block_id)
         .ok_or(Error::InvalidCompressionHeader)?;
     ensure_compression_algorithm_available(compression.algorithm)
+}
+
+// Control-record versions belong to a cold path. Keeping the version table out
+// of the common user-record validator preserves its small, inlineable shape.
+#[cold]
+#[inline(never)]
+fn validate_internal_record_entry(entry: &RecordIndexEntry) -> Result<()> {
+    let reserved = entry.block_id >= RESERVED_BLOCK_ID_START;
+    if reserved != (entry.flags & RECORD_FLAG_INTERNAL != 0) {
+        return Err(Error::InvalidCanonicalEncoding(
+            "record internal flag disagrees with block id",
+        ));
+    }
+    if reserved {
+        let supported = match entry.block_id {
+            INDEX_BLOCK_ID => (1..=INDEX_CHECKPOINT_VERSION).contains(&entry.block_version),
+            MANIFEST_BLOCK_ID => (1..=MANIFEST_PAYLOAD_VERSION).contains(&entry.block_version),
+            TOMBSTONE_BLOCK_ID
+            | OP_BLOCK_ID
+            | METADATA_BLOCK_ID
+            | COMMIT_BLOCK_ID
+            | CREATION_NONCE_BLOCK_ID
+            | SEGMENT_BLOCK_ID
+            | MATRIX_CHUNK_BLOCK_ID
+            | OPEN_DIGEST_BLOCK_ID => entry.block_version == 1,
+            MATRIX_TILE_BLOCK_ID => (1..=4).contains(&entry.block_version),
+            _ => true, // Preserve unknown internal extensions without interpreting them.
+        };
+        if !supported {
+            return Err(Error::InvalidCanonicalEncoding(
+                "unsupported internal record version",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn file_header_extensions(spec: FormatSpec) -> Result<Vec<u8>> {
@@ -1251,7 +1494,10 @@ pub(super) const HEADER_SLOT_ENTRY_HEADER_LEN: usize = 4 + 2 + 2 + 4;
 /// forbids. So this is an FNV-1a 32 written by hand, for the same reason and
 /// by the same precedent as the liveness block's.
 pub(super) fn header_slots_checksum(bytes: &[u8]) -> u32 {
-    let mut hash = 2_166_136_261u32;
+    header_slots_checksum_continue(2_166_136_261, bytes)
+}
+
+fn header_slots_checksum_continue(mut hash: u32, bytes: &[u8]) -> u32 {
     for byte in bytes {
         hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(16_777_619);
@@ -1276,14 +1522,18 @@ impl HeaderSlotsView<'_> {
     /// What the checksum should be: everything in the payload except the four
     /// bytes holding the checksum itself.
     pub(super) fn expected_checksum(&self, capacity: usize) -> u32 {
-        let mut covered = Vec::with_capacity(12 + self.entries.len());
-        covered.extend_from_slice(&HEADER_SLOTS_VERSION.to_le_bytes());
-        covered.extend_from_slice(&self.flags.to_le_bytes());
-        covered.extend_from_slice(&(capacity as u32).to_le_bytes());
-        covered.extend_from_slice(&(self.used as u32).to_le_bytes());
-        covered.extend_from_slice(self.entries);
-        header_slots_checksum(&covered)
+        let prefix = header_slots_prefix(self.flags, capacity as u32, self.used as u32);
+        header_slots_checksum_continue(header_slots_checksum(&prefix), self.entries)
     }
+}
+
+fn header_slots_prefix(flags: u16, capacity: u32, used: u32) -> [u8; 12] {
+    let mut prefix = [0; 12];
+    prefix[..2].copy_from_slice(&HEADER_SLOTS_VERSION.to_le_bytes());
+    prefix[2..4].copy_from_slice(&flags.to_le_bytes());
+    prefix[4..8].copy_from_slice(&capacity.to_le_bytes());
+    prefix[8..12].copy_from_slice(&used.to_le_bytes());
+    prefix
 }
 
 /// Frames the region's payload, or says why these bytes are not one.
@@ -1330,12 +1580,15 @@ pub(super) fn decode_header_slots(spec: FormatSpec, payload: &[u8]) -> Result<He
 /// overrunning entry is refused rather than skipped, because a region that
 /// cannot be walked is corrupt and answering from half of it would be worse
 /// than saying so.
-pub(super) fn walk_header_slot_entries(
-    entries: &[u8],
+pub(super) fn walk_header_slot_entries<'a>(
+    spec: &FormatSpec,
+    entries: &'a [u8],
     used: usize,
-    mut visit: impl FnMut(u32, u16, &[u8]) -> Result<()>,
+    mut visit: impl FnMut(u32, u16, &'a [u8]) -> Result<()>,
 ) -> Result<()> {
     let mut offset = 0usize;
+    let mut inline_seen = 0u64;
+    let mut extra_seen = Vec::<u64>::new();
     while offset < used {
         let rest = used - offset;
         if rest < HEADER_SLOT_ENTRY_HEADER_LEN {
@@ -1343,6 +1596,50 @@ pub(super) fn walk_header_slot_entries(
         }
         let head = &entries[offset..offset + HEADER_SLOT_ENTRY_HEADER_LEN];
         let block_id = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+        let ids = spec.header_slots.blocks;
+        // Dense declarations allow a direct candidate, regardless of the order
+        // of stored entries. Verify the candidate against the actual schema;
+        // sparse/unordered declarations retain the general membership search.
+        let position = if let [only] = ids {
+            (*only == block_id).then_some(0)
+        } else {
+            let candidate = ids
+                .first()
+                .map(|first| block_id.wrapping_sub(*first) as usize);
+            candidate
+                .filter(|&at| ids.get(at) == Some(&block_id))
+                .or_else(|| ids.iter().position(|id| *id == block_id))
+        }
+        .ok_or(Error::InvalidCanonicalEncoding(
+            "undeclared header slot block",
+        ))?;
+        let word = if position < 64 {
+            &mut inline_seen
+        } else {
+            if extra_seen.is_empty() {
+                let words = (spec.header_slots.blocks.len() - 64).div_ceil(64);
+                let bytes = (words as u64)
+                    .checked_mul(8)
+                    .ok_or(Error::InvalidCompressionHeader)?;
+                spec.read_limits
+                    .check(ReadLimitKey::MaterializedBytes, bytes)?;
+                extra_seen
+                    .try_reserve_exact(words)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "header slot membership",
+                        requested: bytes,
+                    })?;
+                extra_seen.resize(words, 0);
+            }
+            &mut extra_seen[position / 64 - 1]
+        };
+        let bit = 1u64 << (position % 64);
+        if *word & bit != 0 {
+            return Err(Error::InvalidCanonicalEncoding(
+                "duplicate header slot block",
+            ));
+        }
+        *word |= bit;
         let block_version = u16::from_le_bytes([head[4], head[5]]);
         let reserved = u16::from_le_bytes([head[6], head[7]]);
         if reserved != 0 {
@@ -1380,12 +1677,11 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
         })?;
     region.extend_from_slice(HEADER_SLOTS_MAGIC);
     region.extend_from_slice(&payload_len_u32.to_le_bytes());
-    region.extend_from_slice(&encode_header_slots_payload(
-        spec,
-        0,
-        &vec![0u8; capacity],
-        false,
-    )?);
+    let prefix = header_slots_prefix(0, capacity as u32, 0);
+    region.extend_from_slice(&prefix);
+    region.resize(framed_len, 0);
+    let checksum = header_slots_checksum_continue(header_slots_checksum(&prefix), &region[24..]);
+    region[20..24].copy_from_slice(&checksum.to_le_bytes());
     debug_assert_eq!(region.len(), framed_len);
     Ok(region)
 }
@@ -1411,13 +1707,8 @@ pub(super) fn encode_header_slots_payload(
         u32::try_from(used).map_err(|_| Error::InvalidFormatSpec("header_slots used overflows"))?;
     let capacity_u32 = u32::try_from(capacity)
         .map_err(|_| Error::InvalidFormatSpec("header_slots capacity overflows"))?;
-    let mut covered = Vec::with_capacity(12 + capacity);
-    covered.extend_from_slice(&HEADER_SLOTS_VERSION.to_le_bytes());
-    covered.extend_from_slice(&flags.to_le_bytes());
-    covered.extend_from_slice(&capacity_u32.to_le_bytes());
-    covered.extend_from_slice(&used_u32.to_le_bytes());
-    covered.extend_from_slice(entries);
-    let checksum = header_slots_checksum(&covered);
+    let covered = header_slots_prefix(flags, capacity_u32, used_u32);
+    let checksum = header_slots_checksum_continue(header_slots_checksum(&covered), entries);
 
     let mut payload = Vec::new();
     let payload_len = crate::format::HEADER_SLOTS_PREFIX_LEN as usize + capacity;
@@ -1427,7 +1718,7 @@ pub(super) fn encode_header_slots_payload(
             resource: "header slots payload",
             requested: payload_len as u64,
         })?;
-    payload.extend_from_slice(&covered[..12]);
+    payload.extend_from_slice(&covered);
     payload.extend_from_slice(&checksum.to_le_bytes());
     payload.extend_from_slice(entries);
     debug_assert_eq!(payload.len(), payload_len);
@@ -1795,7 +2086,9 @@ pub(super) fn compress_with_algorithm(
 ) -> Result<Vec<u8>> {
     match algorithm {
         CompressionAlgorithm::Zstd => {
-            zstd::bulk::compress(payload, level.to_zstd_level()).map_err(Error::Io)
+            let mut compressor = crate::compression_buffers::Compressor::new(level)?;
+            compressor.compress(payload)?;
+            Ok(compressor.into_buffer())
         }
     }
 }
@@ -1820,7 +2113,7 @@ pub(super) fn decompress_with_algorithm(
         value: expected_len,
     })?;
     match algorithm {
-        CompressionAlgorithm::Zstd => zstd::bulk::decompress(payload, capacity).map_err(Error::Io),
+        CompressionAlgorithm::Zstd => crate::compression_buffers::decompress(payload, capacity),
     }
 }
 

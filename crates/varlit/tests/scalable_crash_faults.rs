@@ -1,9 +1,6 @@
 #![allow(unexpected_cfgs)]
-
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires main-agent scalable-fault-injection feature and hook wiring"]
-fn scalable_crash_faults_require_feature_wiring() {}
+#[path = "support/pages.rs"]
+mod pages;
 
 #[cfg(feature = "scalable-fault-injection")]
 mod enabled {
@@ -22,10 +19,16 @@ mod enabled {
         BatchOptions, BlockDescriptor, BlockKind, Decoder, DiskIndexBatchOptions, DiskIndexOptions,
         DiskIndexPlan, DiskIndexedBlock, Encoder, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
         ManifestPolicy, ReadLimits, RecoveryPolicy, Result as VarlitResult, StreamOptions,
-        VarlitBlock, VarlitDecode, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
-        VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType, WriterLockBreakPolicy,
-        bootstrap_stream_checkpoint, clear_stale_writer_lock, rebuild_disk_index,
+        VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitIndexedReader,
+        VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType,
+        WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock,
+        rebuild_disk_index,
     };
+
+    mod histories {
+        use super::*;
+        include!("support/publication_histories.rs");
+    }
 
     const CHILD_ENV: &str = "VARLIT_SCALABLE_FAULT_CHILD";
     const SCENARIO_ENV: &str = "VARLIT_SCALABLE_FAULT_SCENARIO";
@@ -88,6 +91,12 @@ mod enabled {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct StreamRecord(u64);
 
+    impl VarlitEmpty for StreamRecord {
+        fn empty() -> Self {
+            Self(0)
+        }
+    }
+
     impl VarlitEncode for StreamRecord {
         const WIRE_TYPE: WireType = WireType::U64;
 
@@ -117,6 +126,12 @@ mod enabled {
     struct IndexedRecord {
         key: u64,
         value: u64,
+    }
+
+    impl VarlitEmpty for IndexedRecord {
+        fn empty() -> Self {
+            Self { key: 0, value: 0 }
+        }
     }
 
     impl VarlitEncode for IndexedRecord {
@@ -327,7 +342,72 @@ mod enabled {
         }
     }
 
-    #[cfg(not(windows))]
+    /// The Linux counterpart. Where `core_pattern` pipes to a crash reporter
+    /// (Ubuntu's apport), the kernel runs it for every aborted child and holds
+    /// the exit until it returns — about a second each, measured at 1.07 s
+    /// apart in `apport.log`, which made the matrix's 494 aborts take nearly
+    /// nine minutes. A non-dumpable process skips the core-dump path entirely,
+    /// so the reporter is never started. This touches only the child's own
+    /// process flag, not any system setting.
+    #[cfg(target_os = "linux")]
+    fn suppress_interactive_fault_reporting() {
+        const PR_SET_DUMPABLE: i32 = 4;
+
+        unsafe extern "C" {
+            fn prctl(option: i32, ...) -> i32;
+        }
+
+        // SAFETY: `PR_SET_DUMPABLE` takes one integer argument (0 or 1) and
+        // only changes this process's dumpable flag.
+        let result = unsafe { prctl(PR_SET_DUMPABLE, 0_u64) };
+        assert_eq!(result, 0, "PR_SET_DUMPABLE failed");
+    }
+
+    /// The macOS counterpart. ReportCrash learns of a crash through the Mach
+    /// `EXC_CRASH` exception, and writes a report for every aborted child —
+    /// the same per-child cost as `WerFault.exe` and apport. Clearing this
+    /// task's `EXC_CRASH` port keeps the exception from reaching it; LLVM
+    /// disables its crash reports the same way (`LLVM_DISABLE_CRASH_REPORT`
+    /// in `Support/Unix/Signals.inc`). Only this child's own task is changed.
+    #[cfg(target_os = "macos")]
+    fn suppress_interactive_fault_reporting() {
+        type MachPort = u32;
+        const MACH_PORT_NULL: MachPort = 0;
+        const EXC_MASK_CRASH: u32 = 1 << 10;
+        const EXCEPTION_STATE_IDENTITY: i32 = 3;
+        const MACH_EXCEPTION_CODES: i32 = 0x8000_0000_u32 as i32;
+        #[cfg(target_arch = "aarch64")]
+        const THREAD_STATE_NONE: i32 = 5;
+        #[cfg(target_arch = "x86_64")]
+        const THREAD_STATE_NONE: i32 = 13;
+
+        unsafe extern "C" {
+            static mach_task_self_: MachPort;
+            fn task_set_exception_ports(
+                task: MachPort,
+                exception_mask: u32,
+                new_port: MachPort,
+                behavior: i32,
+                new_flavor: i32,
+            ) -> i32;
+        }
+
+        // SAFETY: `mach_task_self_` is the process's own task port, which
+        // libSystem initializes before `main`. The call takes only plain
+        // integers and changes this task's crash exception port.
+        let result = unsafe {
+            task_set_exception_ports(
+                mach_task_self_,
+                EXC_MASK_CRASH,
+                MACH_PORT_NULL,
+                EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES,
+                THREAD_STATE_NONE,
+            )
+        };
+        assert_eq!(result, 0, "task_set_exception_ports failed: {result}");
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     fn suppress_interactive_fault_reporting() {}
 
     fn run_child(scenario: Scenario, root: &Path, selection: &str, trace: &Path) -> ExitStatus {
@@ -776,9 +856,15 @@ mod enabled {
     }
 
     fn read_stream(root: &Path) -> VarlitResult<Vec<StreamRecord>> {
-        VarlitStreamReader::open(stream_spec(), native_path(root), stream_options())?
-            .blocks::<StreamRecord>()?
-            .collect()
+        let mut blocks =
+            VarlitStreamReader::open(stream_spec(), native_path(root), stream_options())?
+                .blocks::<StreamRecord>()?;
+        let mut record = StreamRecord::empty();
+        let mut records = Vec::new();
+        while blocks.next_into(&mut record)? {
+            records.push(record);
+        }
+        Ok(records)
     }
 
     fn read_indexed(
@@ -792,9 +878,10 @@ mod enabled {
             index_plan(),
         )?;
         let mut values = Vec::new();
+        let mut value = IndexedRecord::empty();
         for key in keys {
-            if let Some(value) = reader.get::<IndexedRecord>(&key)? {
-                values.push(value);
+            if reader.get::<IndexedRecord>(&key, &mut value)? {
+                values.push(value.clone());
             }
         }
         Ok(values)

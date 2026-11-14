@@ -1,8 +1,8 @@
+use crate::fallible::Arc;
 use std::fs;
 use std::hash::Hasher;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::{Endian, Error, LayoutScanReport, LayoutSegmentInfo, LayoutTailInfo, Result};
 
@@ -924,7 +924,7 @@ impl AdapterInputFile {
         let path = temporary.path().to_path_buf();
         Ok(Self {
             path,
-            temporary: Some(Arc::new(temporary)),
+            temporary: Some(crate::fallible::try_arc(temporary)?),
         })
     }
 

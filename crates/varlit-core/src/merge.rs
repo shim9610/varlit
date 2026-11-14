@@ -41,7 +41,7 @@ where
 /// - time: `Theta(records + decoded bytes) + O(N log N) + O(K-live log K-live)`,
 ///   where the `O(N log N)` term is the input open's sequence-uniqueness sort
 ///   over its `N` records; it degrades to `Theta(N)` when the input's sequences
-///   ascend with offset, but the sort is the guaranteed bound (PERF3-05);
+///   ascend with offset, but the sort is the guaranteed bound ;
 /// - memory: `O(K-ever + resident input index + 8N uniqueness temporary +
 ///   retained live values)`, where `K-ever` is the number of distinct keys in
 ///   `input`.
@@ -59,7 +59,7 @@ where
     T::Key: Eq + Hash,
     P: AsRef<Path>,
 {
-    // API2-03: every public keyed generic entry point evaluates the
+    // every public keyed generic entry point evaluates the
     // compile-time keyedness contract post-monomorphization.
     let () = KeyedBlockContract::<T>::OK;
     let empty: &[P] = &[];
@@ -88,7 +88,7 @@ where
     T::Key: Eq + Hash,
     P: AsRef<Path>,
 {
-    // API2-03: every public keyed generic entry point evaluates the
+    // every public keyed generic entry point evaluates the
     // compile-time keyedness contract post-monomorphization.
     let () = KeyedBlockContract::<T>::OK;
     let empty: &[P] = &[];

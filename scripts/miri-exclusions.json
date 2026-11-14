@@ -24,6 +24,10 @@
     "reason": "The redb test oracle requires unsupported fcntl syscall 72. Retained in native tests and ASan."
   },
   {
+    "test": "disk_index::storage::failure_tests::independently_torn_heads_never_mix_publication_generations",
+    "reason": "The 8,450-image filesystem sweep exceeded a measured 300-second Miri trial on nightly-2026-10-12. Required native release contracts and ASan retain the complete sweep; production decoding is not stubbed."
+  },
+  {
     "test": "file::tests::atomic_replace_invokes_parent_directory_sync",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
@@ -68,10 +72,6 @@
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
   {
-    "test": "indexed::tests::dirty_index_restore_uses_checkpoint_without_native_scan",
-    "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
-  },
-  {
     "test": "indexed::tests::equal_length_primary_files_reject_swapped_sidecars",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
@@ -108,6 +108,10 @@
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
   {
+    "test": "indexed::tests::rebuild_refuses_truncated_record_instead_of_publishing_a_prefix",
+    "reason": "Reproduced with nightly-2026-10-12: index creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
     "test": "indexed::tests::rebuild_retires_a_sidecar_published_for_a_replaced_primary",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
@@ -117,30 +121,6 @@
   },
   {
     "test": "indexed::tests::sidecar_batch_bound_splits_before_native_publication",
-    "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
-  },
-  {
-    "test": "matrix::page_store_lru_tests::a_page_released_by_a_clear_leaves_the_recency_order",
-    "reason": "Existing long performance-contract exclusion, measured beyond 300 seconds; native tests and ASan retain it."
-  },
-  {
-    "test": "matrix::page_store_lru_tests::a_recency_touch_costs_a_bounded_number_of_probes",
-    "reason": "Existing long performance-contract exclusion, measured beyond 300 seconds; native tests and ASan retain it."
-  },
-  {
-    "test": "matrix::page_store_lru_tests::a_writer_materialised_page_is_never_evicted",
-    "reason": "Existing long performance-contract exclusion, measured beyond 300 seconds; native tests and ASan retain it."
-  },
-  {
-    "test": "matrix_generation::tests::root_diff_skips_unchanged_subtrees_and_tracks_compaction_epochs",
-    "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
-  },
-  {
-    "test": "matrix_generation::tests::seeded_page_writes_match_a_byte_model_across_sync_reopen_and_compaction",
-    "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
-  },
-  {
-    "test": "matrix_generation::tests::tiny_pending_budget_spills_without_publishing_and_compacts_in_batches",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
   {
@@ -160,8 +140,8 @@
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   },
   {
-    "test": "stream::tests::dirty_checkpoint_restore_truncates_without_scanning",
-    "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+    "test": "stream::tests::confirmed_partial_record_is_an_error_for_both_cursors",
+    "reason": "Reproduced on nightly-2026-10-12 after CI job 124899646500: stream creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Native tests and ASan retain this partial-record check."
   },
   {
     "test": "stream::tests::low_level_stream_methods_cannot_bypass_keyed_chain_indexing",
@@ -186,5 +166,49 @@
   {
     "test": "stream::tests::stream_writer_matches_resident_native_bytes",
     "reason": "Reproduced with nightly-2026-10-12: `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "disk_index::tree::corruption_guards::checksummed_hostile_heights_and_counts_terminate",
+    "reason": "795 valid-CRC hostile files form a native CPU/resource corpus; required release contracts run it. The direct_cycles_are_rejected_by_lookup_and_visit test remains under Miri."
+  },
+  {
+    "test": "disk_index::oracle::lookup_profiles",
+    "reason": "Explicitly ignored native release timing profile; not an executed Miri contract."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_pib",
+    "reason": "Explicitly ignored native sparse-file probe requiring integrity and filesystem support; not an executed Miri contract."
+  },
+  {
+    "test": "pib_probe::real_file_positional_io_at_one_tib_smoke",
+    "reason": "Explicitly ignored native sparse-file probe requiring integrity and filesystem support; not an executed Miri contract."
+  },
+  {
+    "test": "indexed::tests::sync_publishes_on_the_primary_alone_and_readers_take_the_tail",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::the_confirm_policy_bounds_the_unconfirmed_tail",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::a_torn_last_sync_is_cut_back_to_the_marker_before_it",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::damage_before_a_later_marker_is_refused_not_cut",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::repeated_updates_reuse_sidecar_pages_and_stale_readers_are_told",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "stream::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   }
 ]

@@ -7,6 +7,32 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The selected lazy-open metadata is absent, stale or structurally invalid.
+    /// No full scan was attempted. Choose an explicit scan or `lazy_or_scan` API
+    /// if reconstruction is appropriate. Specific I/O/allocation/checksum errors
+    /// are returned directly instead of being converted into this variant.
+    #[error("lazy-open metadata {metadata:?} is unavailable; no full scan was attempted")]
+    LazyOpenMetadataUnavailable { metadata: crate::LazyOpenSource },
+
+    /// AtOpen payload verification cannot be fulfilled by metadata-only open.
+    #[error("AtOpen integrity verification requires an explicit scanning open")]
+    LazyOpenVerificationRequiresScan,
+
+    /// Detailed error allocation failed. This inline context preserves whether
+    /// an append/publication happened or is uncertain; do not blindly retry it.
+    #[error("could not allocate detailed error after {context:?}")]
+    ErrorContextAllocationFailed { context: AllocationFailureContext },
+
+    #[error("{resource} buffer is too small: need {required} bytes, got {provided}")]
+    BufferTooSmall {
+        resource: &'static str,
+        required: usize,
+        provided: usize,
+    },
+
+    #[error("invalid chunked byte range {start}..{end} for decoded length {len}")]
+    InvalidChunkedRange { start: u64, end: u64, len: u64 },
+
     #[error("invalid follow cursor: {0}")]
     InvalidFollowCursor(&'static str),
 
@@ -119,6 +145,13 @@ pub enum Error {
         offset: u64,
         len: u64,
         snapshot_len: u64,
+    },
+
+    #[error("record range {start}..{end} is outside the {records} resident records")]
+    MmapRecordRangeOutOfBounds {
+        start: usize,
+        end: usize,
+        records: usize,
     },
 
     #[error("missing required field {field} ({field_id})")]
@@ -263,7 +296,7 @@ pub enum Error {
     WriterLockBreakRefused(String),
 
     /// The diagnostic `<target>.lock` marker path does not name a dedicated,
-    /// unaliased regular file, so Varlit refuses to truncate or write it (F-07).
+    /// unaliased regular file, so Varlit refuses to truncate or write it.
     ///
     /// The marker carries pid/timestamp diagnostics and the break-policy
     /// machinery; acquiring it truncates and rewrites the object it names.
@@ -325,7 +358,7 @@ pub enum Error {
     /// rebind to it and was poisoned.
     ///
     /// `parent_sync` carries the *second* durability fact when two independent
-    /// failures happen in the same publication (F-07). The parent-directory
+    /// failures happen in the same publication. The parent-directory
     /// sync runs first, immediately after the atomic rename; when it fails the
     /// publication is still real, so the writer rebinds anyway and the caller
     /// normally learns about the pending sync through
@@ -460,7 +493,7 @@ pub enum Error {
     MatrixFatalCorruption,
 
     /// The durable matrix write completed and the cell is committed and synced;
-    /// only the caller's post-commit notification hook failed (F-04).
+    /// only the caller's post-commit notification hook failed.
     ///
     /// This is a *published* outcome in the same family as
     /// [`Error::PublishedButParentSyncPending`] and
@@ -558,6 +591,14 @@ pub enum Error {
     #[error("matrix cell is not committed")]
     MatrixNotCommitted,
 
+    /// A reader's snapshot fell further behind than the write-ahead ring
+    /// keeps: the file holds newer values than the snapshot for some cells.
+    /// `follow()` (or a reopen) moves the reader to the newest generation.
+    #[error(
+        "matrix snapshot {snapshot} expired: generations up to {checkpointed} were written in place; follow to continue"
+    )]
+    MatrixSnapshotExpired { snapshot: u64, checkpointed: u64 },
+
     #[error("matrix cell was not written before commit")]
     MatrixCellNotWritten,
 
@@ -572,8 +613,8 @@ pub enum Error {
     /// leave files that open slower than their spec says they should.
     ///
     /// A segment and a digest solve the same problem: what an open needs that
-    /// lives in no single record. Pick one. The table in
-    /// `VarlitFile::open_readonly_lazy` measures both.
+    /// lives in no single record. Select a scanning/indexed writer when
+    /// checkpoint or segment serialization is required.
     #[error(
         "a lazy writer open cannot serve {policy}, which serializes the resident index it does \
          not keep; a digest and an index segment answer the same question, so declare one"
@@ -711,8 +752,20 @@ pub enum Error {
 }
 
 impl Error {
+    /// Hands an error to an `std::io` interface without hiding an OS error.
+    ///
+    /// An [`Error::Io`] gives back the original I/O error, so a caller that
+    /// sees it converted again receives the same kind and OS code (`EFBIG`,
+    /// `ENOSPC`) rather than an `Other` wrapping it.
+    pub(crate) fn into_io(self) -> std::io::Error {
+        match self {
+            Error::Io(error) => error,
+            other => std::io::Error::other(other),
+        }
+    }
+
     /// Folds an already-known parent-directory sync failure into a published
-    /// outcome that would otherwise drop it (F-07).
+    /// outcome that would otherwise drop it.
     ///
     /// A replacement publication learns two independent durability facts in a
     /// fixed order: whether the parent-directory sync succeeded, and whether
@@ -732,12 +785,59 @@ impl Error {
                 sequence,
                 source,
                 parent_sync: None,
-            } => Error::PublishedButRebindFailed {
-                sequence,
-                source,
-                parent_sync: Some(Box::new(parent_sync)),
+            } => match crate::fallible::try_box(parent_sync) {
+                Ok(parent_sync) => Error::PublishedButRebindFailed {
+                    sequence,
+                    source,
+                    parent_sync: Some(parent_sync),
+                },
+                Err(_) => Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedRebind {
+                        sequence,
+                        parent_sync_pending: true,
+                    },
+                },
+            },
+            Error::ErrorContextAllocationFailed {
+                context: AllocationFailureContext::PublishedRebind { sequence, .. },
+            } => Error::ErrorContextAllocationFailed {
+                context: crate::AllocationFailureContext::PublishedRebind {
+                    sequence,
+                    parent_sync_pending: true,
+                },
             },
             other => other,
         }
+    }
+}
+
+/// Allocation-free operation facts retained when a detailed error cannot be boxed.
+/// Each variant states a completed append/publication or an explicitly uncertain
+/// outcome. Detailed source errors and path text may be unavailable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AllocationFailureContext {
+    /// The append happened; its requested Immediate boundary failed.
+    Appended { sequence: u64 },
+    /// The record was published; the derived index needs repair.
+    PublishedIndex { sequence: u64 },
+    /// The replacement was published; this handle could not rebind to it.
+    PublishedRebind {
+        sequence: u64,
+        parent_sync_pending: bool,
+    },
+    /// The commit marker was written; durability remains unconfirmed.
+    Committed { sequence: u64 },
+    /// The replacement was published; parent-directory sync remains pending.
+    ParentSyncPending,
+    /// The experimental generation is durable; cleanup failed.
+    ReusePublished { generation: u64 },
+    /// The experimental generation may have been published; inspect before retry.
+    ReusePublicationUncertain { generation: u64 },
+}
+
+impl From<crate::DiskIndexError> for Error {
+    fn from(error: crate::DiskIndexError) -> Self {
+        crate::disk_index::index_error(error)
     }
 }

@@ -1,0 +1,480 @@
+{
+  "contracts": {
+    "definitions": {
+      "chunks::table_extent": [
+        "ensures"
+      ],
+      "compression_buffers::resource_steps::block_extent": [
+        "ensures"
+      ],
+      "compression_buffers::resource_steps::output_capacity": [
+        "ensures"
+      ],
+      "compression_buffers::resource_steps::stream_progress": [
+        "ensures"
+      ],
+      "decode_state::callback_exit": [
+        "ensures"
+      ],
+      "decode_state::charge": [
+        "ensures"
+      ],
+      "decode_state::read_end": [
+        "ensures"
+      ],
+      "decode_state::same_scope": [
+        "ensures"
+      ],
+      "disk_index::tree::height_matches": [
+        "ensures"
+      ],
+      "disk_index::tree::take_visit": [
+        "ensures",
+        "modifies"
+      ]
+    },
+    "ordinary": {
+      "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation": [
+        "parse_entry",
+        "std :: alloc :: alloc"
+      ],
+      "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds": [
+        "std :: alloc :: alloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::memory_proofs::refused_scalar_box_does_not_initialize": [
+        "std :: alloc :: alloc"
+      ],
+      "fallible::proofs::box_initializer_runs_only_after_reservation": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::box_value_refusal_or_unique_ownership": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::boxed_clone_reserves_before_payload_callback": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::byte_clone_preserves_source_on_every_refusal": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::copy_on_write_refusal_preserves_shared_source": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::empty_vector_model_obeys_its_standard_contract": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "std :: alloc :: alloc",
+        "std :: alloc :: dealloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::full_width_clone_capacity_refuses_without_abort": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::nested_clone_0_releases_every_partial_owner": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::nested_clone_1_releases_every_partial_owner": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::nested_clone_2_releases_every_partial_owner": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::nested_clone_3_releases_every_partial_owner": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::shared_initializer_refusal_and_last_owner_drop": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::shared_value_refusal_or_unique_ownership": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::shared_vector_initialization_preserves_payload": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::string_clone_preserves_source_on_every_refusal": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ],
+      "fallible::proofs::uninitialized_box_alignment_and_zero_size": [
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow",
+        "std :: alloc :: alloc",
+        "std :: alloc :: alloc_zeroed",
+        "std :: alloc :: dealloc",
+        "std :: alloc :: realloc",
+        "std :: vec :: Vec :: < u8 > :: new"
+      ]
+    },
+    "proofs": {
+      "chunks::contract_proofs::table_extent_contract_is_total_and_exact": "table_extent",
+      "compression_buffers::resource_steps::contract_proofs::block_contract_is_total_and_exact": "block_extent",
+      "compression_buffers::resource_steps::contract_proofs::reservation_contract_is_total_and_exact": "output_capacity",
+      "compression_buffers::resource_steps::contract_proofs::streaming_contract_is_total_and_exact": "stream_progress",
+      "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames": "callback_exit",
+      "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state": "charge",
+      "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state": "read_end",
+      "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects": "same_scope",
+      "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success": "take_visit",
+      "disk_index::tree::contract_proofs::height_contract_is_total_and_exact": "height_matches"
+    },
+    "replacements": {
+      "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation": {
+        "parse_entry": "forbidden_entry_read",
+        "std :: alloc :: alloc": "forbidden_allocation"
+      },
+      "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds": {
+        "std :: alloc :: alloc": "guarded_allocate",
+        "std :: vec :: Vec :: < u8 > :: new": "crate :: fallible :: proofs :: model_empty_vec"
+      },
+      "fallible::memory_proofs::refused_scalar_box_does_not_initialize": {
+        "std :: alloc :: alloc": "refuse"
+      },
+      "fallible::proofs::box_initializer_runs_only_after_reservation": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::box_value_refusal_or_unique_ownership": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::boxed_clone_reserves_before_payload_callback": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::byte_clone_preserves_source_on_every_refusal": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::copy_on_write_refusal_preserves_shared_source": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::empty_vector_model_obeys_its_standard_contract": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::full_width_clone_capacity_refuses_without_abort": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::nested_clone_0_releases_every_partial_owner": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::nested_clone_1_releases_every_partial_owner": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::nested_clone_2_releases_every_partial_owner": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::nested_clone_3_releases_every_partial_owner": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::shared_initializer_refusal_and_last_owner_drop": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::shared_value_refusal_or_unique_ownership": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::shared_vector_initialization_preserves_payload": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::string_clone_preserves_source_on_every_refusal": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      },
+      "fallible::proofs::uninitialized_box_alignment_and_zero_size": {
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: deallocate": "model_global_dealloc",
+        "< std :: alloc :: Global as std :: alloc :: Allocator > :: grow": "model_global_grow",
+        "std :: alloc :: alloc": "model_alloc",
+        "std :: alloc :: alloc_zeroed": "model_zeroed",
+        "std :: alloc :: dealloc": "model_dealloc",
+        "std :: alloc :: realloc": "model_realloc",
+        "std :: vec :: Vec :: < u8 > :: new": "model_empty_vec"
+      }
+    },
+    "verified": {
+      "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation": [
+        "table_extent"
+      ]
+    }
+  },
+  "functions": {
+    "catalogue": "798dda586f9a3e6c",
+    "count": 3444
+  },
+  "schema": 1,
+  "sources": {
+    "Cargo.lock": "1f52c13d724b9694",
+    "Cargo.toml": "6337e3197f482750",
+    "crates/varlit-core/Cargo.toml": "bc99a3636caec896",
+    "crates/varlit-core/src/adapter.rs": "39aa1f5b6f00b4bf",
+    "crates/varlit-core/src/anchor.rs": "fcc6a606c5e8516e",
+    "crates/varlit-core/src/chunks.rs": "07dc152c5452fa93",
+    "crates/varlit-core/src/codec.rs": "fb7f219c32c5312f",
+    "crates/varlit-core/src/collections.rs": "692f5de82ab9b60b",
+    "crates/varlit-core/src/compression_buffers.rs": "5c701e03f12d4e92",
+    "crates/varlit-core/src/compression_steps.rs": "168aea74dc67a36e",
+    "crates/varlit-core/src/conformance.rs": "d174e01f97dbb7e4",
+    "crates/varlit-core/src/decode_state.rs": "c9c4d05e6ef86f32",
+    "crates/varlit-core/src/diagnostics.rs": "86bee05dc93161bc",
+    "crates/varlit-core/src/disk_index.rs": "01dcf34fc4902989",
+    "crates/varlit-core/src/disk_index/oracle.rs": "3393c8ce061bc0c6",
+    "crates/varlit-core/src/disk_index/publication_proofs.rs": "d8ae5c075cbe3b14",
+    "crates/varlit-core/src/disk_index/slots.rs": "970a4cc69786b888",
+    "crates/varlit-core/src/disk_index/storage.rs": "e62221c1b0641ad3",
+    "crates/varlit-core/src/disk_index/storage/failure_tests.rs": "ed08b06a44d5e430",
+    "crates/varlit-core/src/disk_index/tree.rs": "de7f6791b2954557",
+    "crates/varlit-core/src/error.rs": "22f0a413ba1f78bb",
+    "crates/varlit-core/src/experimental_matrix.rs": "a8fa277ed676bc52",
+    "crates/varlit-core/src/external_merge.rs": "e8aaf6cd733b8adb",
+    "crates/varlit-core/src/fallible.rs": "e1a81259c5beb0d7",
+    "crates/varlit-core/src/fallible/memory_proofs.rs": "4eea1dc71b1748cf",
+    "crates/varlit-core/src/fallible/proofs.rs": "ce2f7f38c0326c02",
+    "crates/varlit-core/src/file.rs": "9f953e480ea6798a",
+    "crates/varlit-core/src/file/append.rs": "b750c0f5d5b7887f",
+    "crates/varlit-core/src/file/directory.rs": "101a2ac3ad305d88",
+    "crates/varlit-core/src/file/follow.rs": "4b244bb7f727fb6a",
+    "crates/varlit-core/src/file/header_codec.rs": "10698c9274ecdea9",
+    "crates/varlit-core/src/file/header_slots.rs": "72af0cb7ef44bbc1",
+    "crates/varlit-core/src/file/lifecycle.rs": "8a8ca06a4500f7c1",
+    "crates/varlit-core/src/file/locks.rs": "3b6541e29fe5ee69",
+    "crates/varlit-core/src/file/mapped_access.rs": "fa226adfd36c6546",
+    "crates/varlit-core/src/file/matrix_access.rs": "72c0ef9cfa7ae98c",
+    "crates/varlit-core/src/file/matrix_tiles_io.rs": "4f9c1d8c68cc30f8",
+    "crates/varlit-core/src/file/mmap_views.rs": "824ab65758023fe0",
+    "crates/varlit-core/src/file/mutation.rs": "69d28f6d6ea38170",
+    "crates/varlit-core/src/file/publication.rs": "41572106d804ecea",
+    "crates/varlit-core/src/file/record_chunks.rs": "4ef19a0e1b2a4e79",
+    "crates/varlit-core/src/file/record_fields.rs": "e65eda2fcb7595b8",
+    "crates/varlit-core/src/file/record_file.rs": "1165dce73866633c",
+    "crates/varlit-core/src/file/record_read.rs": "12577957a7b8d28b",
+    "crates/varlit-core/src/file/record_view.rs": "2b1a94cdaa38f8a5",
+    "crates/varlit-core/src/file/replacement_target.rs": "21c81bfbaa9b0f49",
+    "crates/varlit-core/src/file/scan.rs": "8f28097e8295101e",
+    "crates/varlit-core/src/file/tests.rs": "a975d73e3e0eea09",
+    "crates/varlit-core/src/file/validation_tests.rs": "a1b6689220acb669",
+    "crates/varlit-core/src/format.rs": "cadb6ec24863e5ac",
+    "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
+    "crates/varlit-core/src/indexed.rs": "3363eb6b4133dfb5",
+    "crates/varlit-core/src/indexed/matrix.rs": "698681d2090fea92",
+    "crates/varlit-core/src/layout.rs": "a42fd91c6b7c5af2",
+    "crates/varlit-core/src/lib.rs": "07ae86522fdeb422",
+    "crates/varlit-core/src/matrix.rs": "31e1b7f2e8ceb822",
+    "crates/varlit-core/src/matrix_bulk.rs": "7957f00c3edccae5",
+    "crates/varlit-core/src/matrix_tiles/api.rs": "6fa95bf98f60f237",
+    "crates/varlit-core/src/matrix_tiles/geometry.rs": "1c6f31c4ab697de5",
+    "crates/varlit-core/src/matrix_tiles/host.rs": "269ef80db008360b",
+    "crates/varlit-core/src/matrix_tiles/mod.rs": "f18653067a9aaa93",
+    "crates/varlit-core/src/matrix_tiles/ranges.rs": "68987b874292196f",
+    "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "975c30ef580ea212",
+    "crates/varlit-core/src/matrix_tiles/store.rs": "e1f3ea9e55f112f5",
+    "crates/varlit-core/src/matrix_tiles/tests.rs": "8d52afc878acfad6",
+    "crates/varlit-core/src/matrix_tiles/view.rs": "5b77d9480bcef52a",
+    "crates/varlit-core/src/matrix_tiles/wal.rs": "5b4fe85ab3c99589",
+    "crates/varlit-core/src/matrix_tiles/writer.rs": "24c4a71b35211827",
+    "crates/varlit-core/src/merge.rs": "fff6cea04e233a49",
+    "crates/varlit-core/src/native_directory.rs": "17fa89cbc6abd656",
+    "crates/varlit-core/src/native_layout.rs": "36625800c3cd536f",
+    "crates/varlit-core/src/native_rewrite.rs": "ecf84ccef1b09524",
+    "crates/varlit-core/src/native_scan.rs": "a9dc91fc1d769442",
+    "crates/varlit-core/src/packed_rows.rs": "09749c226bff6ca6",
+    "crates/varlit-core/src/pib_probe.rs": "08e8a58d0c5c0cd0",
+    "crates/varlit-core/src/primary_file.rs": "9d77c74f21922f19",
+    "crates/varlit-core/src/publication_protocol.rs": "7af0846959fd9a25",
+    "crates/varlit-core/src/publication_protocol/proofs.rs": "c8832e850941fe13",
+    "crates/varlit-core/src/scalable_extent.rs": "e58d4c19651ee682",
+    "crates/varlit-core/src/scalable_fault.rs": "a8c0c20f5784dded",
+    "crates/varlit-core/src/scan_control.rs": "04755457d42e059a",
+    "crates/varlit-core/src/snapshot.rs": "16a384227370c42c",
+    "crates/varlit-core/src/spill_file.rs": "a93073904d56ccb7",
+    "crates/varlit-core/src/spill_rows.rs": "7d52652d3c977107",
+    "crates/varlit-core/src/stream.rs": "42d771fd401d6286",
+    "crates/varlit-core/src/sync_marker.rs": "c7ccc6b6a117d407",
+    "crates/varlit-core/src/test_pages.rs": "bac01e8a51504b24",
+    "crates/varlit-core/src/traits.rs": "bee6bf6334561a61",
+    "crates/varlit-core/src/verification/buffered_row.rs": "f55517868cadee1c",
+    "crates/varlit-core/src/verification/chunk_contracts.rs": "8acb0884ec8b8aa0",
+    "crates/varlit-core/src/verification/chunks.rs": "c8d6a441f094b935",
+    "crates/varlit-core/src/verification/compression.rs": "80c60cad8e14fbbf",
+    "crates/varlit-core/src/verification/compression_contracts.rs": "c8ffefdc5d758991",
+    "crates/varlit-core/src/verification/decode_transitions.rs": "255fbffa71052d3a",
+    "crates/varlit-core/src/verification/decoder.rs": "2f270ad2081b9bcf",
+    "crates/varlit-core/src/verification/decoder_callers.rs": "1749e610ad95aabe",
+    "crates/varlit-core/src/verification/generated_file.rs": "738fb17577782e4d",
+    "crates/varlit-core/src/verification/materialization.rs": "508e98b1419b6551",
+    "crates/varlit-core/src/verification/record_chunks.rs": "ef2bb604ebc285f1",
+    "crates/varlit-core/src/verification/record_extent.rs": "ede02ba4b88295a8",
+    "crates/varlit-core/src/verification/spill.rs": "1a96c226a0019d8d",
+    "crates/varlit-core/src/verification/traversal.rs": "3ec80a8690c5c704",
+    "crates/varlit-core/src/verification/traversal_contracts.rs": "bc347d57d1cbe74c",
+    "crates/varlit-core/src/verification/uniform_prefix.rs": "b1f28689e621911d",
+    "crates/varlit-core/src/writer_permit.rs": "c29e25880a294922",
+    "crates/varlit-macros/Cargo.toml": "e37aa72ddb6adb38",
+    "crates/varlit-macros/src/finite_key.rs": "92c91f42fb264f16",
+    "crates/varlit-macros/src/lib.rs": "850307c2b46a97ac",
+    "crates/varlit-macros/src/modules/block_derive.rs": "cb48a5bc0d4051ea",
+    "crates/varlit-macros/src/modules/format_emit.rs": "29b70c4cf1a5a594",
+    "crates/varlit-macros/src/modules/format_parse.rs": "5b072bd6ceacfe4a",
+    "crates/varlit/Cargo.toml": "a26473c1eda4b0cb",
+    "crates/varlit/src/lib.rs": "554cf0710108071d"
+  }
+}

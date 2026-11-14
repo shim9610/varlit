@@ -1,0 +1,378 @@
+{
+  "schema": 1,
+  "owners": {
+    "decoder": {
+      "type": "codec::Decoder",
+      "aliases": [
+        "Decoder"
+      ],
+      "source": "crates/varlit-core/src/codec.rs",
+      "struct": "Decoder",
+      "fields": [
+        "endian",
+        "input",
+        "position",
+        "small_field_ids",
+        "large_field_ids",
+        "materialization_limit",
+        "materialization_remaining",
+        "callback_scope"
+      ],
+      "protected": [
+        "endian",
+        "input",
+        "position",
+        "materialization_limit",
+        "materialization_remaining",
+        "callback_scope"
+      ],
+      "writers": {
+        "codec::<impl at crates/varlit-core/src/codec.rs>::new_limited": {
+          "fields": [
+            "*"
+          ],
+          "proofs": [
+            "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure"
+          ],
+          "initializes": {
+            "values": {
+              "input": "param:1",
+              "endian": "param:2",
+              "position": "const 0_usize",
+              "materialization_limit": "param:3",
+              "materialization_remaining": "param:3",
+              "callback_scope": "none"
+            }
+          }
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::with_callback": {
+          "fields": [
+            "*",
+            "position",
+            "materialization_remaining"
+          ],
+          "proofs": [
+            "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+            "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames"
+          ],
+          "initializes": {
+            "values": {
+              "input": "self:input",
+              "endian": "self:endian",
+              "position": "self:position",
+              "materialization_limit": "self:materialization_limit",
+              "materialization_remaining": "self:materialization_remaining",
+              "callback_scope": "some:borrow-local:u8"
+            }
+          },
+          "guarded_commit": "restore"
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::decode_nested": {
+          "fields": [
+            "materialization_remaining"
+          ],
+          "proofs": [
+            "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode"
+          ]
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::decode_nested_into": {
+          "fields": [
+            "materialization_remaining"
+          ],
+          "proofs": [
+            "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_an_in_place_decode"
+          ]
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::charge_materialization": {
+          "fields": [
+            "materialization_remaining"
+          ],
+          "proofs": [
+            "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure",
+            "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state"
+          ],
+          "transition": {
+            "helper": "charge",
+            "arguments": [
+              "field:materialization_remaining",
+              "param:2"
+            ],
+            "field": "materialization_remaining"
+          }
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::read_exact": {
+          "fields": [
+            "position"
+          ],
+          "proofs": [
+            "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
+            "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state"
+          ],
+          "transition": {
+            "helper": "read_end",
+            "arguments": [
+              "field:position",
+              "param:2",
+              "length:field:input"
+            ],
+            "field": "position"
+          }
+        },
+        "codec::<impl at crates/varlit-core/src/codec.rs>::drop": {
+          "fields": [
+            "*"
+          ],
+          "proofs": [
+            "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode"
+          ],
+          "initializes": {
+            "source_owner": "callback_guard",
+            "values": {
+              "input": "self:input",
+              "endian": "self:endian",
+              "materialization_limit": "self:limit",
+              "callback_scope": "self:scope",
+              "position": "length:self:input",
+              "materialization_remaining": "const 0_u64"
+            }
+          }
+        }
+      },
+      "field_types": [
+        "Endian",
+        "&'a[u8]",
+        "usize",
+        "u64",
+        "Option<HashSet<u32>>",
+        "u64",
+        "u64",
+        "Option<&'au8>"
+      ]
+    },
+    "materialization": {
+      "type": "collections::MaterializationBudget",
+      "aliases": [
+        "MaterializationBudget"
+      ],
+      "source": "crates/varlit-core/src/collections.rs",
+      "struct": "MaterializationBudget",
+      "fields": [
+        "limit",
+        "remaining"
+      ],
+      "protected": [
+        "limit",
+        "remaining"
+      ],
+      "writers": {
+        "collections::<impl at crates/varlit-core/src/collections.rs>::new": {
+          "fields": [
+            "*"
+          ],
+          "proofs": [
+            "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
+          ],
+          "initializes": {
+            "equal": [
+              [
+                "limit",
+                "remaining"
+              ]
+            ]
+          }
+        },
+        "collections::<impl at crates/varlit-core/src/collections.rs>::reset": {
+          "fields": [
+            "remaining"
+          ],
+          "proofs": [
+            "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
+          ]
+        },
+        "collections::<impl at crates/varlit-core/src/collections.rs>::consume": {
+          "fields": [
+            "remaining"
+          ],
+          "proofs": [
+            "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
+            "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state"
+          ],
+          "transition": {
+            "helper": "charge",
+            "arguments": [
+              "field:remaining",
+              "param:2"
+            ],
+            "field": "remaining"
+          }
+        }
+      },
+      "field_types": [
+        "u64",
+        "u64"
+      ]
+    },
+    "callback_guard": {
+      "type": "codec::CallbackGuard",
+      "aliases": [
+        "CallbackGuard"
+      ],
+      "source": "crates/varlit-core/src/codec.rs",
+      "struct": "CallbackGuard",
+      "fields": [
+        "decoder",
+        "input",
+        "endian",
+        "limit",
+        "scope"
+      ],
+      "protected": [
+        "input",
+        "endian",
+        "limit",
+        "scope"
+      ],
+      "nested": {
+        "decoder": "decoder"
+      },
+      "writers": {
+        "codec::<impl at crates/varlit-core/src/codec.rs>::with_existing_callback": {
+          "fields": [
+            "*"
+          ],
+          "proofs": [
+            "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+            "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+            "codec::caller_proofs::active_callback_step_preserves_invariant_or_rejects_replacement"
+          ],
+          "initializes": {
+            "source_owner": "decoder",
+            "values": {
+              "decoder": "param:1",
+              "input": "self:input",
+              "endian": "self:endian",
+              "limit": "self:materialization_limit",
+              "scope": "self:callback_scope"
+            }
+          },
+          "guarded_commit": "forget",
+          "guard": "same_scope"
+        }
+      },
+      "field_types": [
+        "&'dmutDecoder<'i>",
+        "&'i[u8]",
+        "Endian",
+        "u64",
+        "Option<&'iu8>"
+      ],
+      "requires_admission_before_forget": true
+    },
+    "decode_budget": {
+      "type": "collections::DecodeBudget",
+      "aliases": [
+        "DecodeBudget"
+      ],
+      "source": "crates/varlit-core/src/collections.rs",
+      "struct": "DecodeBudget",
+      "fields": [
+        "budget"
+      ],
+      "protected": [],
+      "nested": {
+        "budget": "materialization"
+      },
+      "sealed_lease": true,
+      "allowed_calls": [
+        "DecodeBudget::decode",
+        "MaterializationBudget::decode",
+        "collections::MaterializationBudget::decode",
+        "collections::DecodeBudget::decode",
+        "MaterializationBudget::consume",
+        "collections::MaterializationBudget::consume",
+        "MaterializationBudget::decode_view",
+        "collections::MaterializationBudget::decode_view"
+      ],
+      "writers": {
+        "collections::<impl at crates/varlit-core/src/collections.rs>::decode_view": {
+          "fields": [
+            "*"
+          ],
+          "proofs": [
+            "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+          ],
+          "initializes": {
+            "source_owner": "materialization",
+            "values": {
+              "budget": "param:1"
+            }
+          }
+        }
+      },
+      "field_types": [
+        "&'amutMaterializationBudget"
+      ]
+    },
+    "builtin_evidence": {
+      "type": "codec::BuiltinCodec",
+      "aliases": [
+        "BuiltinCodec"
+      ],
+      "source": "crates/varlit-core/src/codec.rs",
+      "struct": "BuiltinCodec",
+      "fields": [
+        "invariant",
+        "callback_free"
+      ],
+      "protected": [
+        "invariant",
+        "callback_free"
+      ],
+      "field_types": [
+        "std::marker::PhantomData<fn(T)->T>",
+        "bool"
+      ],
+      "writers": {},
+      "sealed_evidence": true
+    }
+  },
+  "field_leases": [
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode",
+      "target": "Decoder::decode_from_slice_accounted",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode",
+      "target": "codec::Decoder::decode_from_slice_accounted",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into",
+      "target": "Decoder::decode_from_slice_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into",
+      "target": "codec::Decoder::decode_from_slice_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
+    }
+  ],
+  "callback_boundaries": [
+    "codec::<impl at crates/varlit-core/src/codec.rs>::with_callback",
+    "codec::<impl at crates/varlit-core/src/codec.rs>::with_existing_callback"
+  ],
+  "callback_adapters": [
+    "codec::<impl at crates/varlit-core/src/codec.rs>::call"
+  ],
+  "adapter_count": 3,
+  "builtin_evidence": true
+}

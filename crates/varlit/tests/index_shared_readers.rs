@@ -1,4 +1,4 @@
-//! Shared indexed-handle contracts (PERF-06/PERF-07).
+//! Shared indexed-handle contracts.
 //!
 //! Independent in-process indexed handles must share one sidecar database per
 //! native file identity: two readers — or a reader beside a synced writer —
@@ -13,8 +13,9 @@ use std::path::Path;
 use varlit::{
     BlockDescriptor, BlockKind, Decoder, DiskIndexEntry, DiskIndexOptions, DiskIndexPlan,
     DiskIndexedBlock, Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
-    ManifestPolicy, ReadLimits, RecoveryPolicy, Result, VarlitBlock, VarlitDecode, VarlitEncode,
-    VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, WireType, rebuild_disk_index,
+    ManifestPolicy, ReadLimits, RecoveryPolicy, Result, VarlitBlock, VarlitDecode, VarlitEmpty,
+    VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, WireType,
+    rebuild_disk_index,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +48,21 @@ impl VarlitBlock for Item {
     const ENDIAN: Option<Endian> = None;
     const SCHEMA_FINGERPRINT: u64 = 0x5348_4152_4544_4931;
     const IS_KEYED: bool = true;
+}
+
+impl VarlitEmpty for Item {
+    fn empty() -> Self {
+        Self {
+            key: 0,
+            value: String::new(),
+        }
+    }
+}
+
+/// Owned-result shim over the caller-owned-output indexed read.
+fn get_item(reader: &VarlitIndexedReader, key: &u64) -> Result<Option<Item>> {
+    let mut out = Item::empty();
+    Ok(reader.get::<Item>(key, &mut out)?.then_some(out))
 }
 
 impl VarlitKeyedBlock for Item {
@@ -119,8 +135,8 @@ fn independent_readers_share_one_sidecar_database() -> Result<()> {
     let first = VarlitIndexedReader::open(spec, &path, options, plan)?;
     let second = VarlitIndexedReader::open(spec, &path, options, plan)?;
     for reader in [&first, &second] {
-        assert_eq!(reader.get::<Item>(&0)?, Some(item(0, "value-0")));
-        assert_eq!(reader.get::<Item>(&1)?, None);
+        assert_eq!(get_item(reader, &0)?, Some(item(0, "value-0")));
+        assert_eq!(get_item(reader, &1)?, None);
         assert!(matches!(
             reader.lookup::<Item>(&1)?,
             DiskIndexEntry::Tombstone { .. }
@@ -129,9 +145,9 @@ fn independent_readers_share_one_sidecar_database() -> Result<()> {
     }
     drop(first);
     // Dropping one shared handle must not close the database under the other.
-    assert_eq!(second.get::<Item>(&2)?, Some(item(2, "value-2")));
+    assert_eq!(get_item(&second, &2)?, Some(item(2, "value-2")));
     let third = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(third.get::<Item>(&2)?, Some(item(2, "value-2")));
+    assert_eq!(get_item(&third, &2)?, Some(item(2, "value-2")));
     Ok(())
 }
 
@@ -149,24 +165,25 @@ fn dirty_generation_reads_the_saved_root_without_writer_admission() -> Result<()
 
     // A reader opens beside the synced writer through the shared database.
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, "one")));
+    assert_eq!(get_item(&reader, &1)?, Some(item(1, "one")));
 
     // A new reader uses the saved clean root without taking write admission.
     writer.push_info(&item(2, "two"))?;
     let mut following = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(following.get::<Item>(&1)?, Some(item(1, "one")));
-    assert_eq!(following.get::<Item>(&2)?, None);
+    assert_eq!(get_item(&following, &1)?, Some(item(1, "one")));
+    assert_eq!(get_item(&following, &2)?, None);
     assert_eq!(following.follow()?, 0);
     // The pre-existing reader keeps serving its pinned snapshot.
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, "one")));
+    assert_eq!(get_item(&reader, &1)?, Some(item(1, "one")));
 
     writer.sync()?;
     let fresh = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(fresh.get::<Item>(&2)?, Some(item(2, "two")));
-    assert_eq!(following.follow()?, 1);
-    assert_eq!(following.get::<Item>(&2)?, Some(item(2, "two")));
+    assert_eq!(get_item(&fresh, &2)?, Some(item(2, "two")));
+    // The synced record and the sync marker that closed it.
+    assert_eq!(following.follow()?, 2);
+    assert_eq!(get_item(&following, &2)?, Some(item(2, "two")));
     // The older reader still serves the generation it pinned at open.
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, "one")));
+    assert_eq!(get_item(&reader, &1)?, Some(item(1, "one")));
     Ok(())
 }
 
@@ -186,20 +203,21 @@ fn rebuild_replaces_the_sidecar_for_fresh_handles() -> Result<()> {
     drop(writer);
 
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, "one")));
+    assert_eq!(get_item(&reader, &1)?, Some(item(1, "one")));
     drop(reader);
 
     // Rebuild replaces the clean sidecar object in place. New handles must
     // open the replacement database, not a stale shared entry for the
     // replaced file object.
     let report = rebuild_disk_index(spec, &path, options, plan)?;
-    // Three user records plus the internal creation-nonce record (STO-01).
-    assert_eq!(report.records, 4);
+    // Three user records, the internal creation-nonce record and one sync
+    // marker.
+    assert_eq!(report.records, 5);
     let first = VarlitIndexedReader::open(spec, &path, options, plan)?;
     let second = VarlitIndexedReader::open(spec, &path, options, plan)?;
     for reader in [&first, &second] {
-        assert_eq!(reader.get::<Item>(&1)?, Some(item(1, "one")));
-        assert_eq!(reader.get::<Item>(&2)?, None);
+        assert_eq!(get_item(reader, &1)?, Some(item(1, "one")));
+        assert_eq!(get_item(reader, &2)?, None);
         assert_eq!(reader.historical_distinct_keys()?, 2);
     }
     drop(first);
@@ -211,7 +229,7 @@ fn rebuild_replaces_the_sidecar_for_fresh_handles() -> Result<()> {
     writer.sync()?;
     drop(writer);
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(reader.get::<Item>(&3)?, Some(item(3, "three")));
+    assert_eq!(get_item(&reader, &3)?, Some(item(3, "three")));
     assert!(sidecar(&path).exists());
     Ok(())
 }
@@ -246,8 +264,8 @@ fn concurrent_opens_of_unrelated_and_same_sidecars_all_succeed() -> Result<()> {
             handles.push(scope.spawn(move || -> Result<()> {
                 let first = VarlitIndexedReader::open(spec, path, options, plan)?;
                 let second = VarlitIndexedReader::open(spec, path, options, plan)?;
-                assert_eq!(first.get::<Item>(&7)?, Some(item(7, "seven")));
-                assert_eq!(second.get::<Item>(&7)?, Some(item(7, "seven")));
+                assert_eq!(get_item(&first, &7)?, Some(item(7, "seven")));
+                assert_eq!(get_item(&second, &7)?, Some(item(7, "seven")));
                 Ok(())
             }));
         }
@@ -260,8 +278,8 @@ fn concurrent_opens_of_unrelated_and_same_sidecars_all_succeed() -> Result<()> {
     // The registry stays consistent afterwards: fresh handles still share.
     let first = VarlitIndexedReader::open(spec, &paths[0], options, plan)?;
     let second = VarlitIndexedReader::open(spec, &paths[0], options, plan)?;
-    assert_eq!(first.get::<Item>(&7)?, Some(item(7, "seven")));
-    assert_eq!(second.get::<Item>(&7)?, Some(item(7, "seven")));
+    assert_eq!(get_item(&first, &7)?, Some(item(7, "seven")));
+    assert_eq!(get_item(&second, &7)?, Some(item(7, "seven")));
     Ok(())
 }
 
@@ -277,7 +295,7 @@ fn crc_point_lookups_verify_payloads_and_detect_corruption() -> Result<()> {
     let marker = "crc-corruption-target-payload-0123456789abcdef";
     let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
     // Push the corruption target past the primary generation witness window
-    // (STO-01): a byte flipped inside that window is a generation change and
+    // a byte flipped inside that window is a generation change and
     // is refused at open, which is a different contract from the per-record
     // checksum this test pins. Everything asserted below is unchanged.
     for key in 100..200u64 {
@@ -292,7 +310,7 @@ fn crc_point_lookups_verify_payloads_and_detect_corruption() -> Result<()> {
     // Under CRC policies the candidate read is frame-only; the payload is
     // read once and verified against the record checksum during decode.
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-    assert_eq!(reader.get::<Item>(&1)?, Some(item(1, marker)));
+    assert_eq!(get_item(&reader, &1)?, Some(item(1, marker)));
     assert!(matches!(
         reader.lookup::<Item>(&1)?,
         DiskIndexEntry::Put { .. }
@@ -302,7 +320,7 @@ fn crc_point_lookups_verify_payloads_and_detect_corruption() -> Result<()> {
         reader.lookup::<Item>(&3)?,
         DiskIndexEntry::Tombstone { .. }
     ));
-    assert_eq!(reader.get::<Item>(&3)?, None);
+    assert_eq!(get_item(&reader, &3)?, None);
     drop(reader);
 
     // Flip one payload byte. The frame (header/footer) stays intact, so the
@@ -318,11 +336,11 @@ fn crc_point_lookups_verify_payloads_and_detect_corruption() -> Result<()> {
 
     let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
     assert!(matches!(
-        reader.get::<Item>(&1),
+        get_item(&reader, &1),
         Err(Error::ChecksumMismatch { .. })
     ));
     // The untouched record still verifies and decodes.
-    assert_eq!(reader.get::<Item>(&2)?, Some(item(2, "intact")));
+    assert_eq!(get_item(&reader, &2)?, Some(item(2, "intact")));
     Ok(())
 }
 
@@ -343,10 +361,10 @@ fn independently_opened_files_keep_their_own_snapshots() -> Result<()> {
     }
     for (index, reader) in readers.iter().enumerate() {
         assert_eq!(
-            reader.get::<Item>(&(index as u64))?,
+            get_item(reader, &(index as u64))?,
             Some(item(index as u64, "value"))
         );
-        assert_eq!(reader.get::<Item>(&100)?, None);
+        assert_eq!(get_item(reader, &100)?, None);
     }
     Ok(())
 }

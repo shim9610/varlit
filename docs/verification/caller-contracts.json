@@ -1,0 +1,2631 @@
+{
+  "schema": 1,
+  "compiler": "1.95.0",
+  "scope": "Compiler-resolved direct callers and one explicitly registered function-item edge. Selected result-use and CFG domination checks. Not whole-program semantic refinement.",
+  "non_contract_resolutions": [
+    "<B as native_scan::ScanBuffer>::reset",
+    "<MatrixRead<'_> as std::io::Read>::read_exact",
+    "<PrimaryFile as std::io::Read>::read_exact",
+    "<R as std::io::Read>::read_exact",
+    "<SpillBytes as std::io::Read>::read_exact",
+    "<T as Resident>::charge",
+    "<impl MatrixIo as std::io::Read>::read_exact",
+    "<impl Read + Seek as std::io::Read>::read_exact",
+    "<native_scan::BufferedScan as native_scan::ScanBuffer>::reset",
+    "<std::fs::File as std::io::Read>::read_exact",
+    "AdapterCheckReport::push",
+    "AnchorLayout::physical_end",
+    "BTreeSet::contains",
+    "BoundaryProof::contains",
+    "DCtx::reset",
+    "DiskIndexWriteBatch::commit",
+    "FormatDiagnostics::push",
+    "HashSet::contains",
+    "ImmediateState::reset",
+    "ManifestCursor::read_exact",
+    "OffsetRemap::push",
+    "PackedRows::push",
+    "PreparedDirect::commit",
+    "PreparedPublication::commit",
+    "ReuseWriter::reset",
+    "RewrittenRows::contains",
+    "SpillRows::push",
+    "SpillRows::truncate",
+    "TileReader::follow",
+    "TileWriter::checkpoint",
+    "TiledMatrix::follow",
+    "VarlitIndexedReader::follow",
+    "VarlitReader::follow",
+    "VarlitStreamReader::follow",
+    "VarlitStreamWriter::checkpoint",
+    "Vec::push",
+    "Vec::truncate",
+    "bitmap_directory::BitmapDirectory::contains",
+    "bitmap_directory::BitmapDirectory::push",
+    "bitmap_directory::BitmapDirectory::truncate",
+    "chunk_len",
+    "core::slice::contains",
+    "core::str::contains",
+    "disk_index::tree::Reader::charge",
+    "file::BlockTails::restore",
+    "file::VarlitFile::commit",
+    "file::VarlitFile::follow",
+    "file::VarlitFile::push",
+    "file::resident_index::ResidentIndex::truncate",
+    "indexed::VarlitIndexedReader::follow",
+    "matrix::Cursor::read_exact",
+    "matrix::MatrixRegion::contains",
+    "matrix::ResidentBitmapBudget::charge",
+    "matrix::ResidentBitmapBudget::resume",
+    "native_rewrite::RewriteDirectory::push",
+    "reset",
+    "scan::ScannedIndex::physical_end",
+    "std::ffi::OsString::push",
+    "std::fs::OpenOptions::truncate",
+    "std::ops::RangeInclusive::contains",
+    "stream::VarlitStreamWriter::checkpoint"
+  ],
+  "contracts": {
+    "record-extent": {
+      "symbols": [
+        "file::RecordIndexEntry::checked_physical_end",
+        "file::RecordIndexEntry::physical_end"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:07d46cd1ed8120f1]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:07d46cd1ed8120f1]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:d0d43141529a6ba3]",
+            "target": "file::RecordIndexEntry::physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:27081c79ed0535a3]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:ce4d0466fe6c35ef]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:ef26f6c6201dddf3]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::recover_marked_tail(_1: &mut file::VarlitFile, _2: u64) -> std::result::Result<usize, error::Error> [body:25ddf4cd662c57cd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::recover_marked_tail(_1: &mut file::VarlitFile, _2: u64) -> std::result::Result<usize, error::Error> [body:25ddf4cd662c57cd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::check_directory_describes_this_file(_1: &file::VarlitFile, _2: &D) -> std::result::Result<(), error::Error> [body:78388d1a8a86b690]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::defragment::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:6d5722f9e2544dfc]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::defragment::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:6d5722f9e2544dfc]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:ae876f32bcc037e7]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block::{closure#2}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:ebeaab1ce903967d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::walk_to_boundary(_1: &file::VarlitFile, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:4fe70c60d57973d4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:896ba0f4c08f0e6c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::extend_boundary_proof(_1: &mut file::resident_index::ResidentIndex, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:9eba2718b7a10fb7]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:d5884a3217181be2]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::replay_tail(_1: &mut indexed::VarlitIndexedWriter, _2: u64, _3: disk_index::DiskIndexPlan) -> std::result::Result<(), error::Error> [body:17740ee44e3d84d8]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "native_record_to_layout_segment(_1: &file::RecordIndexEntry) -> std::result::Result<LayoutSegmentInfo, error::Error> [body:1cbfd5f7ae31d6ff]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "push_scanned_entry(_1: format::FormatSpec, _2: &mut scan::ScannedIndex, _3: &mut Vec<file::RecordIndexEntry>, _4: file::RecordIndexEntry, _5: u64) -> std::result::Result<u64, error::Error> [body:a69af9e4d04ecfdd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_stream_entry_at(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:173f86c44d068155]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "rebuild_index(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: format::FormatSpec, _4: &snapshot::SnapshotFile, _5: disk_index::DiskIndexPlan, _6: ScanOptions<'_>, _7: F) -> std::result::Result<DiskIndexRebuildReport, error::Error> [body:cd6dcc8f72d5456e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_physical_descriptor(_1: format::FormatSpec, _2: &file::RecordIndexEntry) -> std::result::Result<DiskIndexPhysicalRecord, error::Error> [body:1ca0a1403a7ea2b4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::commit_boundary_applied(_1: &mut scan::ScannedIndex, _2: &[file::RecordIndexEntry]) -> std::result::Result<(), error::Error> [body:b14b7bf7658e3864]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "registered-function-item"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut scan::NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::validate_payload_extent(_1: &file::RecordIndexEntry, _2: u64) -> std::result::Result<(), error::Error> [body:96d8236699ea412b]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::truncate_uncommitted_tail_if_needed::{closure#0}(_1: {closure@crates/varlit-core/src/file/scan.rs}, _2: file::RecordIndexEntry) -> std::result::Result<u64, error::Error> [body:af94125c2d42e99d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::walk_segment_chain(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &mut Vec<file::RecordIndexEntry>, _5: u64) -> std::result::Result<scan::ScannedIndex, error::Error> [body:ad40a59f7be08682]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:740df7887574a41e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_checkpoint(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: &file::RecordIndexEntry, _4: &dyn file::RecordDirectory, _5: usize, _6: u64) -> std::result::Result<(), error::Error> [body:9ef298a9fa30979e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:f28d30ea47abc427]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:07d46cd1ed8120f1]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "corroborate_header_tails(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: &HeaderTailsSlot) -> std::result::Result<Option<file::OpenDigest>, error::Error> [body:07d46cd1ed8120f1]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "derive_index_state(_1: impl Iterator<Item = Result<RecordIndexEntry>>, _2: bool) -> std::result::Result<DerivedIndexState, error::Error> [body:d0d43141529a6ba3]",
+            "target": "file::RecordIndexEntry::physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame(_1: &mut RecordMap<'_>) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:27081c79ed0535a3]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::frame_from(_1: &WalkedRecords, _2: &mut u64) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:ce4d0466fe6c35ef]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::note(_1: &mut RewriteSummary, _2: &file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:ef26f6c6201dddf3]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::recover_marked_tail(_1: &mut file::VarlitFile, _2: u64) -> std::result::Result<usize, error::Error> [body:25ddf4cd662c57cd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::recover_marked_tail(_1: &mut file::VarlitFile, _2: u64) -> std::result::Result<usize, error::Error> [body:25ddf4cd662c57cd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::check_directory_describes_this_file(_1: &file::VarlitFile, _2: &D) -> std::result::Result<(), error::Error> [body:78388d1a8a86b690]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mapped_access.rs>::map_payload_records(_1: &file::VarlitFile, _2: &RecordList<'_>, _3: std::ops::Range<usize>, _4: u64, _5: u64, _6: u64, _7: u64) -> std::result::Result<MmapPayloads, error::Error> [body:996c2ab50d83a50c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mapped_access.rs>::mmap_payload_range(_1: &file::VarlitFile, _2: std::ops::Range<usize>) -> std::result::Result<MmapPayloads, error::Error> [body:50e1c58b00393b23]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::defragment::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:6d5722f9e2544dfc]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::defragment::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:6d5722f9e2544dfc]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:ae876f32bcc037e7]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block::{closure#2}(_1: &mut {closure@crates/varlit-core/src/file/mutation.rs}) -> std::result::Result<(), error::Error> [body:ebeaab1ce903967d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::walk_to_boundary(_1: &file::VarlitFile, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:4fe70c60d57973d4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:896ba0f4c08f0e6c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::extend_boundary_proof(_1: &mut file::resident_index::ResidentIndex, _2: u64, _3: u64) -> std::result::Result<(), error::Error> [body:9eba2718b7a10fb7]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:d5884a3217181be2]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::replay_tail(_1: &mut indexed::VarlitIndexedWriter, _2: u64, _3: disk_index::DiskIndexPlan) -> std::result::Result<(), error::Error> [body:17740ee44e3d84d8]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "mmap_views::validate_mmap_index_entry(_1: &file::RecordIndexEntry, _2: u64) -> std::result::Result<(), error::Error> [body:5d14b010fde88de9]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "native_record_to_layout_segment(_1: &file::RecordIndexEntry) -> std::result::Result<LayoutSegmentInfo, error::Error> [body:1cbfd5f7ae31d6ff]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "push_scanned_entry(_1: format::FormatSpec, _2: &mut scan::ScannedIndex, _3: &mut Vec<file::RecordIndexEntry>, _4: file::RecordIndexEntry, _5: u64) -> std::result::Result<u64, error::Error> [body:a69af9e4d04ecfdd]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_stream_entry_at(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:173f86c44d068155]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "rebuild_index(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: format::FormatSpec, _4: &snapshot::SnapshotFile, _5: disk_index::DiskIndexPlan, _6: ScanOptions<'_>, _7: F) -> std::result::Result<DiskIndexRebuildReport, error::Error> [body:cd6dcc8f72d5456e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_physical_descriptor(_1: format::FormatSpec, _2: &file::RecordIndexEntry) -> std::result::Result<DiskIndexPhysicalRecord, error::Error> [body:1ca0a1403a7ea2b4]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::commit_boundary_applied(_1: &mut scan::ScannedIndex, _2: &[file::RecordIndexEntry]) -> std::result::Result<(), error::Error> [body:b14b7bf7658e3864]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "registered-function-item"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut scan::NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::validate_payload_extent(_1: &file::RecordIndexEntry, _2: u64) -> std::result::Result<(), error::Error> [body:96d8236699ea412b]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::truncate_uncommitted_tail_if_needed::{closure#0}(_1: {closure@crates/varlit-core/src/file/scan.rs}, _2: file::RecordIndexEntry) -> std::result::Result<u64, error::Error> [body:af94125c2d42e99d]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::walk_segment_chain(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &mut Vec<file::RecordIndexEntry>, _5: u64) -> std::result::Result<scan::ScannedIndex, error::Error> [body:ad40a59f7be08682]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:740df7887574a41e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_checkpoint(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: &file::RecordIndexEntry, _4: &dyn file::RecordDirectory, _5: usize, _6: u64) -> std::result::Result<(), error::Error> [body:9ef298a9fa30979e]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_generation_file_inner(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: &dyn file::RecordDirectory, _5: bool) -> std::result::Result<(), error::Error> [body:f28d30ea47abc427]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "verify_single_barrier_commit(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64, _5: u64) -> std::result::Result<Option<u64>, error::Error> [body:bb2c02f1b0790647]",
+            "target": "file::RecordIndexEntry::checked_physical_end",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "file::record_extent_proofs::checked_extent_matches_wide_arithmetic",
+        "native_layout::generated_file_proofs::successful_native_header_roundtrips_all_fields",
+        "native_layout::generated_file_proofs::valid_native_footer_roundtrips_all_fields"
+      ]
+    },
+    "observed-prefix": {
+      "symbols": [
+        "UniformPrefix::observe",
+        "UniformPrefix::push",
+        "UniformPrefix::truncate",
+        "UniformPrefix::contains"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::has_uniform_boundary::{closure#0}(_1: {closure@crates/varlit-core/src/native_directory.rs}, _2: &UniformPrefix) -> bool [body:ecfb410951f001f6]",
+            "target": "UniformPrefix::contains",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::has_verified_boundary::{closure#0}(_1: {closure@crates/varlit-core/src/native_directory.rs}, _2: &UniformPrefix) -> bool [body:ecfb410951f001f6]",
+            "target": "UniformPrefix::contains",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::note_verified_offset(_1: &mut file::resident_index::ResidentIndex, _2: usize, _3: u64) -> () [body:6a46e1a96d38791e]",
+            "target": "UniformPrefix::observe",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::observe(_1: &mut Option<UniformPrefix>, _2: usize, _3: u64) -> () [body:111ba2f3aae96d3f]",
+            "target": "UniformPrefix::push",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::truncate(_1: &mut file::resident_index::ResidentIndex, _2: usize) -> () [body:898928fc58ce654f]",
+            "target": "UniformPrefix::truncate",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "native_rewrite::<impl at crates/varlit-core/src/native_rewrite.rs>::push(_1: &mut native_rewrite::RewriteDirectory, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:97bf7e42f9c1f6e3]",
+            "target": "UniformPrefix::observe",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::has_uniform_boundary::{closure#0}(_1: {closure@crates/varlit-core/src/native_directory.rs}, _2: &UniformPrefix) -> bool [body:ecfb410951f001f6]",
+            "target": "UniformPrefix::contains",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::has_verified_boundary::{closure#0}(_1: {closure@crates/varlit-core/src/native_directory.rs}, _2: &UniformPrefix) -> bool [body:ecfb410951f001f6]",
+            "target": "UniformPrefix::contains",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::note_verified_offset(_1: &mut file::resident_index::ResidentIndex, _2: usize, _3: u64) -> () [body:6a46e1a96d38791e]",
+            "target": "UniformPrefix::observe",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::observe(_1: &mut Option<UniformPrefix>, _2: usize, _3: u64) -> () [body:111ba2f3aae96d3f]",
+            "target": "UniformPrefix::push",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::truncate(_1: &mut file::resident_index::ResidentIndex, _2: usize) -> () [body:898928fc58ce654f]",
+            "target": "UniformPrefix::truncate",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "native_rewrite::<impl at crates/varlit-core/src/native_rewrite.rs>::push(_1: &mut native_rewrite::RewriteDirectory, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:97bf7e42f9c1f6e3]",
+            "target": "UniformPrefix::observe",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "file::resident_index::uniform_prefix_proofs::observed_prefix_never_invents_membership",
+        "file::resident_index::uniform_prefix_proofs::full_width_prefix_initialization_establishes_invariant",
+        "file::resident_index::uniform_prefix_proofs::full_width_prefix_observation_preserves_invariant",
+        "file::resident_index::uniform_prefix_proofs::full_width_bounded_prefix_truncation_only_removes_rows"
+      ]
+    },
+    "publication-metadata": {
+      "symbols": [
+        "disk_index::validate_metadata",
+        "validate_checkpoint_metadata",
+        "decode_frontier"
+      ],
+      "result_policy": {
+        "disk_index::validate_metadata": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:530b83c3abfa246f]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::validate_checkpoint(_1: &DiskIndexStore, _2: &Checkpoint) -> std::result::Result<(), disk_index::DiskIndexError> [body:4a11a6aa3179f1ba]",
+            "target": "validate_checkpoint_metadata",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:c8df6bcd39e684f1]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:2497c7c515a3412a]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "validate_restored_root(_1: &disk_index::DiskIndexMetadata, _2: &disk_index::DiskIndexPersistentState) -> std::result::Result<(), disk_index::DiskIndexError> [body:7d08cb14e567bb5a]",
+            "target": "validate_checkpoint_metadata",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:530b83c3abfa246f]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::validate_checkpoint(_1: &DiskIndexStore, _2: &Checkpoint) -> std::result::Result<(), disk_index::DiskIndexError> [body:4a11a6aa3179f1ba]",
+            "target": "validate_checkpoint_metadata",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "decode_frontier",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::decode_metadata(_1: &[u8]) -> std::result::Result<disk_index::DiskIndexMetadata, disk_index::DiskIndexError> [body:e0d56a0b87971c8f]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:ab4c55c1f0579793]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:1278125398c3e8d3]",
+            "target": "disk_index::validate_metadata",
+            "result": "checked"
+          },
+          {
+            "caller": "validate_restored_root(_1: &disk_index::DiskIndexMetadata, _2: &disk_index::DiskIndexPersistentState) -> std::result::Result<(), disk_index::DiskIndexError> [body:7d08cb14e567bb5a]",
+            "target": "validate_checkpoint_metadata",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "disk_index::publication_proofs::accepted_metadata_has_consistent_publication_frontiers",
+        "disk_index::publication_proofs::valid_clean_frontiers_are_not_rejected",
+        "disk_index::publication_proofs::restore_cannot_change_the_confirmed_frontier",
+        "disk_index::publication_proofs::valid_checkpoint_restore_is_not_rejected",
+        "disk_index::publication_proofs::wire_frontier_decode_enforces_sequence_exhaustion"
+      ]
+    },
+    "publication-protocol": {
+      "symbols": [
+        "commit",
+        "checkpoint",
+        "restore",
+        "follow",
+        "publication_protocol::resume",
+        "older_head"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::follow_records(_1: &mut indexed::VarlitIndexedReader) -> std::result::Result<u64, error::Error> [body:ac1f19008b06752b]",
+            "target": "follow",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::sync_with(_1: &mut indexed::VarlitIndexedWriter, _2: bool) -> std::result::Result<(), error::Error> [body:ab7954cd38946829]",
+            "target": "commit",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:c8df6bcd39e684f1]",
+            "target": "checkpoint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish::{closure#4}(_1: &mut {closure@crates/varlit-core/src/disk_index/storage.rs}, _2: CheckpointStep) -> std::result::Result<(), disk_index::DiskIndexError> [body:7610ed64ea6b53b7]",
+            "target": "older_head",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse::{closure#0}(_1: &mut {closure@crates/varlit-core/src/disk_index/storage.rs}, _2: CheckpointStep) -> std::result::Result<(), disk_index::DiskIndexError> [body:a0e3b4773acbb78f]",
+            "target": "older_head",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::reconcile_confirmed_heads(_1: &Store) -> std::result::Result<(), disk_index::DiskIndexError> [body:de70d85e5b9fd9c3]",
+            "target": "publication_protocol::resume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(stream::VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:365eb6fab630d561]",
+            "target": "restore",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::follow_records(_1: &mut indexed::VarlitIndexedReader) -> std::result::Result<u64, error::Error> [body:ac1f19008b06752b]",
+            "target": "follow",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::sync_with(_1: &mut indexed::VarlitIndexedWriter, _2: bool) -> std::result::Result<(), error::Error> [body:ab7954cd38946829]",
+            "target": "commit",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:ab4c55c1f0579793]",
+            "target": "checkpoint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish::{closure#4}(_1: &mut {closure@crates/varlit-core/src/disk_index/storage.rs}, _2: CheckpointStep) -> std::result::Result<(), disk_index::DiskIndexError> [body:5d22104eb71b0c6e]",
+            "target": "older_head",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse::{closure#0}(_1: &mut {closure@crates/varlit-core/src/disk_index/storage.rs}, _2: CheckpointStep) -> std::result::Result<(), disk_index::DiskIndexError> [body:faafd37f85ccbf82]",
+            "target": "older_head",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::reconcile_confirmed_heads(_1: &Store) -> std::result::Result<(), disk_index::DiskIndexError> [body:3de70e98deaa6661]",
+            "target": "publication_protocol::resume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(stream::VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:365eb6fab630d561]",
+            "target": "restore",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "publication_protocol::proofs::commit_survives_every_io_failure_effect",
+        "publication_protocol::proofs::successful_commit_is_reachable_and_durable",
+        "publication_protocol::proofs::every_publication_writes_one_head_and_only_confirmed_syncs_once",
+        "publication_protocol::proofs::every_two_barrier_publication_syncs_its_body_before_its_head",
+        "publication_protocol::proofs::recovery_never_publishes_before_truncate_and_sync",
+        "publication_protocol::proofs::follow_error_preserves_the_entire_reader",
+        "publication_protocol::proofs::frontier_invariant_is_preserved_by_an_arbitrary_transition",
+        "publication_protocol::proofs::initial_frontier_satisfies_the_inductive_invariant",
+        "publication_protocol::proofs::poisoned_writer_never_reaches_publication",
+        "publication_protocol::proofs::resumed_writer_cannot_acknowledge_a_volatile_head"
+      ]
+    },
+    "compression-steps": {
+      "symbols": [
+        "output_capacity",
+        "block_extent",
+        "stream_progress"
+      ],
+      "result_policy": {
+        "output_capacity": "checked-or-propagated",
+        "block_extent": "checked-or-propagated",
+        "stream_progress": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [],
+        "all": [
+          {
+            "caller": "compression_buffers::<impl at crates/varlit-core/src/compression_buffers.rs>::decode(_1: &mut StreamDecompressor, _2: &[u8], _3: &mut [u8], _4: u64, _5: impl FnMut(u64, &[u8]) -> Result<()>) -> std::result::Result<(), error::Error> [body:f36521acd22b969b]",
+            "target": "stream_progress",
+            "result": "checked"
+          },
+          {
+            "caller": "compression_buffers::decompress(_1: &[u8], _2: usize) -> std::result::Result<Vec<u8>, error::Error> [body:6bd089165b89af66]",
+            "target": "output_capacity",
+            "result": "checked"
+          },
+          {
+            "caller": "frame_sizes(_1: &[u8]) -> std::result::Result<(Option<u64>, u64), error::Error> [body:125fdeff49c4a48a]",
+            "target": "block_extent",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "compression_buffers::resource_steps::proofs::output_requests_respect_both_limits",
+        "compression_buffers::resource_steps::proofs::arbitrary_block_step_progresses_or_rejects",
+        "compression_buffers::resource_steps::proofs::streaming_step_is_bounded_and_strictly_progresses",
+        "compression_buffers::resource_steps::contract_proofs::reservation_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::block_contract_is_total_and_exact",
+        "compression_buffers::resource_steps::contract_proofs::streaming_contract_is_total_and_exact"
+      ]
+    },
+    "limited-spill": {
+      "symbols": [
+        "limited_write_all",
+        "check_extent"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::append(_1: &mut Writer<'_>, _2: &[u8]) -> std::result::Result<u64, disk_index::DiskIndexError> [body:d80ee7bcd5cbe547]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "limited_write_all(_1: &mut u64, _2: &[u8], _3: u64, _4: impl FnMut(&[u8]) -> io::Result<usize>) -> std::result::Result<(), std::io::Error> [body:621c80af9c264079]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "spill_file::<impl at crates/varlit-core/src/spill_file.rs>::write(_1: &mut SpillFile, _2: &[u8]) -> std::result::Result<usize, std::io::Error> [body:80029bcc52582d9e]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "spill_file::<impl at crates/varlit-core/src/spill_file.rs>::write_all(_1: &mut SpillFile, _2: &[u8]) -> std::result::Result<(), std::io::Error> [body:c53489fac8384358]",
+            "target": "limited_write_all",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::append(_1: &mut disk_index::tree::Writer<'_>, _2: &[u8]) -> std::result::Result<u64, disk_index::DiskIndexError> [body:d80ee7bcd5cbe547]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "limited_write_all(_1: &mut u64, _2: &[u8], _3: u64, _4: impl FnMut(&[u8]) -> io::Result<usize>) -> std::result::Result<(), std::io::Error> [body:621c80af9c264079]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "spill_file::<impl at crates/varlit-core/src/spill_file.rs>::write(_1: &mut SpillFile, _2: &[u8]) -> std::result::Result<usize, std::io::Error> [body:80029bcc52582d9e]",
+            "target": "check_extent",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "spill_file::<impl at crates/varlit-core/src/spill_file.rs>::write_all(_1: &mut SpillFile, _2: &[u8]) -> std::result::Result<(), std::io::Error> [body:c53489fac8384358]",
+            "target": "limited_write_all",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "spill_file::proofs::limited_writes_preserve_progress_across_failure_and_retry",
+        "spill_file::proofs::valid_limited_writes_are_not_rejected"
+      ]
+    },
+    "chunk-parser": {
+      "symbols": [
+        "table_extent",
+        "parse_header",
+        "parse_entry"
+      ],
+      "result_policy": {
+        "table_extent": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited(_1: &ChunkedBytes, _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:704c504b0539238a]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited::{closure#2}(_1: {closure@crates/varlit-core/src/chunks.rs}, _2: &mut Vec<u8>) -> std::result::Result<(), error::Error> [body:a032c0b72f2fcf5f]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::stream_range(_1: &ChunkedBytes, _2: std::ops::Range<u64>, _3: &mut [u8], _4: usize, _5: impl FnMut(u64, &[u8]) -> Result<()>) -> std::result::Result<(), error::Error> [body:8003511a21c86889]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "table_extent",
+            "result": "checked"
+          }
+        ],
+        "all": [
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited(_1: &ChunkedBytes, _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:704c504b0539238a]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited::{closure#2}(_1: {closure@crates/varlit-core/src/chunks.rs}, _2: &mut Vec<u8>) -> std::result::Result<(), error::Error> [body:4641c2486eaf50be]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::stream_range(_1: &ChunkedBytes, _2: std::ops::Range<u64>, _3: &mut [u8], _4: usize, _5: impl FnMut(u64, &[u8]) -> Result<()>) -> std::result::Result<(), error::Error> [body:9a91b49beb4300b6]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::stream_range(_1: &ChunkedBytes, _2: std::ops::Range<u64>, _3: &mut [u8], _4: usize, _5: impl FnMut(u64, &[u8]) -> Result<()>) -> std::result::Result<(), error::Error> [body:9a91b49beb4300b6]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::stream_range(_1: &ChunkedBytes, _2: std::ops::Range<u64>, _3: &mut [u8], _4: usize, _5: impl FnMut(u64, &[u8]) -> Result<()>) -> std::result::Result<(), error::Error> [body:9a91b49beb4300b6]",
+            "target": "table_extent",
+            "result": "checked"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "validate_chunked_bytes(_1: &[u8], _2: bool) -> std::result::Result<bool, error::Error> [body:4b7249ab015f2011]",
+            "target": "table_extent",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "chunks::resource_proofs::full_width_chunk_table_bounds_iteration_by_real_input",
+        "chunks::resource_proofs::arbitrary_chunk_entry_bytes_are_checked",
+        "chunks::resource_proofs::full_width_chunk_header_fields_are_validated",
+        "chunks::resource_proofs::bounded_whole_chunk_validator_accepts_a_complete_container",
+        "chunks::contract_proofs::table_extent_contract_is_total_and_exact",
+        "chunks::resource_proofs::incomplete_chunk_table_rejects_before_entry_read_or_allocation"
+      ]
+    },
+    "materialization": {
+      "symbols": [
+        "collections::MaterializationBudget::consume",
+        "collections::MaterializationBudget::reset"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "consume_manifest_items(_1: &mut collections::MaterializationBudget, _2: usize) -> std::result::Result<(), error::Error> [body:51fe474d4b82ad7c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:102f787e357ccdd9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_stream_tombstone_key(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry) -> std::result::Result<Option<<T as traits::VarlitKeyedBlock>::Key>, error::Error> [body:9767037a6a4f3734]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "diagnose_file::{closure#0}(_1: &{closure@crates/varlit-core/src/diagnostics.rs}) -> std::result::Result<(), error::Error> [body:7bdcb6d4b997718c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "extract_descriptor_put(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: usize) -> std::result::Result<DiskIndexUpdate, error::Error> [body:c4406ac3876ae27b]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "extract_plan_update(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: disk_index::DiskIndexPlan, _4: &file::RecordIndexEntry, _5: usize) -> std::result::Result<Option<DiskIndexUpdate>, error::Error> [body:3d845c3a442d6d04]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::keyed_tail_map::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/append.rs}, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:f3c64dfe1a03f873]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::keyed_tail_map::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/append.rs}, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:f3c64dfe1a03f873]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::all_metadata_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<(String, Vec<u8>)>) -> std::result::Result<(), error::Error> [body:c2fb03d6580b5b32]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::all_metadata_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<(String, Vec<u8>)>) -> std::result::Result<(), error::Error> [body:c2fb03d6580b5b32]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_migrated_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<To>) -> std::result::Result<(), error::Error> [body:1fc6c49c339a046f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry, _4: Option<&[u8]>) -> std::result::Result<bool, error::Error> [body:9401c2b4ec3cb77f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:4dcb8760af11a236]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:4dcb8760af11a236]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata(_1: &file::VarlitFile, _2: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:5bc3ce2d93297bb1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata(_1: &file::VarlitFile, _2: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:5bc3ce2d93297bb1]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata_in(_1: &file::VarlitFile, _2: &D, _3: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:b98423e020e77967]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata_in(_1: &file::VarlitFile, _2: &D, _3: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:b98423e020e77967]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4425a7bde8a73ff8]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::schema_manifest(_1: &file::VarlitFile) -> std::result::Result<Option<file::SchemaManifest>, error::Error> [body:9011dc370a591222]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::schema_manifest_in(_1: &file::VarlitFile, _2: &D) -> std::result::Result<Option<file::SchemaManifest>, error::Error> [body:431614434bc9e783]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:ae876f32bcc037e7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::header_codec::<impl at crates/varlit-core/src/file/header_codec.rs>::read_string(_1: &mut ManifestCursor<'_>, _2: usize, _3: &mut collections::MaterializationBudget) -> std::result::Result<String, error::Error> [body:5296854e89288f8a]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::read_put_payload(_1: &indexed::VarlitIndexedReader, _2: &file::RecordIndexEntry, _3: &mut collections::MaterializationBudget) -> std::result::Result<Vec<u8>, error::Error> [body:d41db82c81bcf06f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "load_value(_1: format::FormatSpec, _2: &mut SpillBytes, _3: &[u8; 52], _4: &mut collections::MaterializationBudget) -> std::result::Result<T, error::Error> [body:779bf7419d001509]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "locate_key(_1: format::FormatSpec, _2: &BufferedIndex, _3: &mut SpillBytes, _4: u64, _5: &K, _6: collections::MaterializationBudget) -> std::result::Result<Option<u64>, error::Error> [body:f6c81120548c4bb8]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "apply_merge_entries(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &D, _4: MergeShard, _5: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, (file::MergeOrder, Option<T>)>, _6: &mut collections::MaterializationBudget, _7: u64) -> std::result::Result<(), error::Error> [body:172983f7fc4847c7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "consume_manifest_items(_1: &mut collections::MaterializationBudget, _2: usize) -> std::result::Result<(), error::Error> [body:51fe474d4b82ad7c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_keyed_key(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>) -> std::result::Result<<T as traits::VarlitKeyedBlock>::Key, error::Error> [body:102f787e357ccdd9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_stream_tombstone_key(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry) -> std::result::Result<Option<<T as traits::VarlitKeyedBlock>::Key>, error::Error> [body:9767037a6a4f3734]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "diagnose_file::{closure#0}(_1: &{closure@crates/varlit-core/src/diagnostics.rs}) -> std::result::Result<(), error::Error> [body:7bdcb6d4b997718c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "extract_descriptor_put(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: usize) -> std::result::Result<DiskIndexUpdate, error::Error> [body:c4406ac3876ae27b]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "extract_plan_update(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: disk_index::DiskIndexPlan, _4: &file::RecordIndexEntry, _5: usize) -> std::result::Result<Option<DiskIndexUpdate>, error::Error> [body:3d845c3a442d6d04]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::keyed_tail_map::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/append.rs}, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:f3c64dfe1a03f873]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/append.rs>::keyed_tail_map::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/append.rs}, _2: file::RecordIndexEntry) -> std::result::Result<(), error::Error> [body:f3c64dfe1a03f873]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::all_metadata_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<(String, Vec<u8>)>) -> std::result::Result<(), error::Error> [body:c2fb03d6580b5b32]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::all_metadata_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<(String, Vec<u8>)>) -> std::result::Result<(), error::Error> [body:c2fb03d6580b5b32]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_migrated_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<To>) -> std::result::Result<(), error::Error> [body:1fc6c49c339a046f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry, _4: Option<&[u8]>) -> std::result::Result<bool, error::Error> [body:9401c2b4ec3cb77f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:4dcb8760af11a236]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::decode_blocks_fill(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<T>, _4: &mut usize) -> std::result::Result<(), error::Error> [body:4dcb8760af11a236]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::key_tail_offsets_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, u64>) -> std::result::Result<(), error::Error> [body:86b518e878d4bdd1]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::keyed_blocks_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<file::RecordIndexEntry>, _4: &mut std::collections::HashMap<<T as traits::VarlitKeyedBlock>::Key, file::RecordIndexEntry>) -> std::result::Result<(), error::Error> [body:b48546ec336f351c]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata(_1: &file::VarlitFile, _2: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:5bc3ce2d93297bb1]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata(_1: &file::VarlitFile, _2: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:5bc3ce2d93297bb1]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata_in(_1: &file::VarlitFile, _2: &D, _3: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:b98423e020e77967]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::metadata_in(_1: &file::VarlitFile, _2: &D, _3: &str) -> std::result::Result<Option<Vec<u8>>, error::Error> [body:b98423e020e77967]",
+            "target": "collections::MaterializationBudget::reset",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::read_block_payload(_1: &file::VarlitFile, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut collections::MaterializationBudget) -> std::result::Result<(), error::Error> [body:4425a7bde8a73ff8]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::schema_manifest(_1: &file::VarlitFile) -> std::result::Result<Option<file::SchemaManifest>, error::Error> [body:9011dc370a591222]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::schema_manifest_in(_1: &file::VarlitFile, _2: &D) -> std::result::Result<Option<file::SchemaManifest>, error::Error> [body:431614434bc9e783]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/mutation.rs>::replace_block(_1: &mut file::VarlitFile, _2: usize, _3: &T) -> std::result::Result<ReplacementInfo, error::Error> [body:ae876f32bcc037e7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::header_codec::<impl at crates/varlit-core/src/file/header_codec.rs>::read_string(_1: &mut ManifestCursor<'_>, _2: usize, _3: &mut collections::MaterializationBudget) -> std::result::Result<String, error::Error> [body:5296854e89288f8a]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::read_put_payload(_1: &indexed::VarlitIndexedReader, _2: &file::RecordIndexEntry, _3: &mut collections::MaterializationBudget) -> std::result::Result<Vec<u8>, error::Error> [body:d41db82c81bcf06f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "load_value(_1: format::FormatSpec, _2: &mut SpillBytes, _3: &[u8; 52], _4: &mut collections::MaterializationBudget) -> std::result::Result<T, error::Error> [body:779bf7419d001509]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "locate_key(_1: format::FormatSpec, _2: &BufferedIndex, _3: &mut SpillBytes, _4: u64, _5: &K, _6: collections::MaterializationBudget) -> std::result::Result<Option<u64>, error::Error> [body:f6c81120548c4bb8]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "mmap_views::<impl at crates/varlit-core/src/file/mmap_views.rs>::decode_block_into(_1: &MmapPayloads, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:0fd0816d386491a7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "mmap_views::<impl at crates/varlit-core/src/file/mmap_views.rs>::decode_block_into(_1: &MmapPayloads, _2: &file::RecordIndexEntry, _3: &mut Vec<u8>, _4: &mut T) -> std::result::Result<(), error::Error> [body:0fd0816d386491a7]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
+        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+      ]
+    },
+    "index-visits": {
+      "symbols": [
+        "take_visit",
+        "height_matches"
+      ],
+      "result_policy": {
+        "take_visit": "checked-or-propagated",
+        "height_matches": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "target": "height_matches",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "target": "height_matches",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "target": "take_visit",
+            "result": "checked"
+          }
+        ],
+        "all": [
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "target": "height_matches",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "target": "height_matches",
+            "result": "checked"
+          },
+          {
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "target": "take_visit",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "disk_index::tree::resource_proofs::every_node_visit_consumes_finite_fuel",
+        "disk_index::tree::resource_proofs::accepted_child_height_strictly_decreases",
+        "disk_index::tree::contract_proofs::fuel_contract_preserves_failure_and_decreases_success",
+        "disk_index::tree::contract_proofs::height_contract_is_total_and_exact"
+      ]
+    },
+    "decoder-memory": {
+      "symbols": [
+        "Decoder::charge_materialization",
+        "Decoder::preflight_count",
+        "Decoder::preflight_hash_map_count",
+        "Decoder::read_exact",
+        "Decoder::decode_nested",
+        "Decoder::decode_from_slice_accounted",
+        "Decoder::decode_nested_into",
+        "Decoder::decode_from_slice_accounted_into"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "VarlitDecode::decode_array(_1: &mut Decoder<'_>) -> std::result::Result<[Self; N], error::Error> [body:f02fdb84b2496890]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_array(_1: &mut Decoder<'_>) -> std::result::Result<[bool; N], error::Error> [body:6d828626ef37fc9c]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_array(_1: &mut Decoder<'_>) -> std::result::Result<[u8; N], error::Error> [body:df1e9036b0e2d658]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut Decoder<'_>) -> std::result::Result<String, error::Error> [body:b99ca42b55d9ebda]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut Decoder<'_>) -> std::result::Result<String, error::Error> [body:b99ca42b55d9ebda]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut Decoder<'_>) -> std::result::Result<Vec<String>, error::Error> [body:deaa21eae897194f]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut Decoder<'_>) -> std::result::Result<Vec<T>, error::Error> [body:5c87fd2d2a175e82]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut Decoder<'_>) -> std::result::Result<std::collections::HashMap<K, V>, error::Error> [body:704763e769e0f556]",
+            "target": "Decoder::preflight_hash_map_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:9c8e3203f548ffca]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:9c8e3203f548ffca]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut Vec<String>, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:c0e400a1daa89730]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut Vec<T>, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:65d39da97b201551]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<bool>) -> std::result::Result<(), error::Error> [body:79d4b0ee0cde51a1]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<f32>) -> std::result::Result<(), error::Error> [body:f093bfb9f9b4a2c5]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<f64>) -> std::result::Result<(), error::Error> [body:1fac1e0ae93ec987]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<i128>) -> std::result::Result<(), error::Error> [body:fbd9fd0dfdcf3d31]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<i16>) -> std::result::Result<(), error::Error> [body:47be4195fe6f8687]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<i32>) -> std::result::Result<(), error::Error> [body:bac363ecf6cce85e]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<i64>) -> std::result::Result<(), error::Error> [body:abb2a6e16b96821f]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<i8>) -> std::result::Result<(), error::Error> [body:8e12d82d0b18f13a]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<u128>) -> std::result::Result<(), error::Error> [body:089fb9e359dbe12f]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<u16>) -> std::result::Result<(), error::Error> [body:c71f16b50d036859]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<u32>) -> std::result::Result<(), error::Error> [body:a6f3d6735aab8489]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut Decoder<'_>, _2: &mut Vec<u64>) -> std::result::Result<(), error::Error> [body:68d741f1eec68fe3]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::note_field_id(_1: &mut Decoder<'_>, _2: u32) -> std::result::Result<(), error::Error> [body:7f63cd532abc002c]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_count(_1: &mut Decoder<'_>, _2: usize, _3: usize, _4: usize, _5: &str) -> std::result::Result<(), error::Error> [body:0d59cf387ecef7bf]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_hash_map_count(_1: &mut Decoder<'_>, _2: usize, _3: &str) -> std::result::Result<(), error::Error> [body:fd05801b94f5aa8f]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_map_count(_1: &mut Decoder<'_>, _2: usize, _3: &str) -> std::result::Result<(), error::Error> [body:3985de6980209a24]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_fixed_run(_1: &mut Decoder<'_>, _2: usize, _3: usize, _4: &str) -> std::result::Result<&[u8], error::Error> [body:d2afbfc16b22a3e2]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u128(_1: &mut Decoder<'_>) -> std::result::Result<u128, error::Error> [body:70a77f517e703a5a]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u16(_1: &mut Decoder<'_>) -> std::result::Result<u16, error::Error> [body:438ab62d0a2c5f19]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u32(_1: &mut Decoder<'_>) -> std::result::Result<u32, error::Error> [body:388ec834cf2cab3d]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u64(_1: &mut Decoder<'_>) -> std::result::Result<u64, error::Error> [body:c4f22661fd4972ad]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u8(_1: &mut Decoder<'_>) -> std::result::Result<u8, error::Error> [body:0c531b8b7388df17]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:5136768c46ceb98c]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:5136768c46ceb98c]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode(_1: &mut collections::MaterializationBudget, _2: &[u8], _3: format::Endian) -> std::result::Result<T, error::Error> [body:e276e1cf5a8a96bb]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into(_1: &mut collections::MaterializationBudget, _2: &[u8], _3: format::Endian, _4: &mut T) -> std::result::Result<(), error::Error> [body:2202b59ccd654206]",
+            "target": "Decoder::decode_from_slice_accounted_into",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_byte_array_on_stack(_1: &mut Decoder<'_>) -> std::result::Result<[u8; N], error::Error> [body:326a3b70a7ffd0fa]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_fixed_array_with(_1: &mut Decoder<'_>, _2: T, _3: impl Fn([u8; W]) -> T) -> std::result::Result<[T; N], error::Error> [body:0064adf1294840c3]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "matrix_bulk::<impl at crates/varlit-core/src/matrix_bulk.rs>::decode_cells::{closure#1}(_1: {closure@crates/varlit-core/src/matrix_bulk.rs}, _2: &mut [u8]) -> std::result::Result<(), error::Error> [body:acc6a264d372de5d]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_cells::{closure#2}(_1: {closure@crates/varlit-core/src/matrix_tiles/host.rs}, _2: &mut [u8]) -> std::result::Result<(), error::Error> [body:15e628675ace7faa]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_region::{closure#1}(_1: {closure@crates/varlit-core/src/matrix_tiles/host.rs}, _2: &mut [u8]) -> std::result::Result<matrix::MatrixPage, error::Error> [body:152acd914c3ce1f5]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_fields::<impl at crates/varlit-core/src/file/record_fields.rs>::decode_into::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_fields.rs}) -> std::result::Result<(), error::Error> [body:5154639684ca3653]",
+            "target": "Decoder::decode_from_slice_accounted_into",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:30a3de65caf0e2ad]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:30a3de65caf0e2ad]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "VarlitDecode::decode_array(_1: &mut codec::Decoder<'_>) -> std::result::Result<[Self; N], error::Error> [body:96e3f098a1f62686]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_array(_1: &mut codec::Decoder<'_>) -> std::result::Result<[bool; N], error::Error> [body:a3ce233652cf79ce]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_array(_1: &mut codec::Decoder<'_>) -> std::result::Result<[u8; N], error::Error> [body:e8ff3d9c32f6287c]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut codec::Decoder<'_>) -> std::result::Result<String, error::Error> [body:9890f8135c5f1ad9]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut codec::Decoder<'_>) -> std::result::Result<String, error::Error> [body:9890f8135c5f1ad9]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut codec::Decoder<'_>) -> std::result::Result<Vec<String>, error::Error> [body:34a6e26a2462ea93]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut codec::Decoder<'_>) -> std::result::Result<Vec<T>, error::Error> [body:68660b8c0bf2e7f5]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit(_1: &mut codec::Decoder<'_>) -> std::result::Result<std::collections::HashMap<K, V>, error::Error> [body:7074bad76b9cd9cf]",
+            "target": "Decoder::preflight_hash_map_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:0e98ac7021f21e32]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:0e98ac7021f21e32]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut Vec<String>, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:d6bb622f9a19d2ad]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut Vec<T>, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:d451d4b72501f95b]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<bool>) -> std::result::Result<(), error::Error> [body:85ddbcd05db59e92]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<f32>) -> std::result::Result<(), error::Error> [body:432e56de50b23e86]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<f64>) -> std::result::Result<(), error::Error> [body:bfa6ee0814236337]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<i128>) -> std::result::Result<(), error::Error> [body:81ae55cc2690cdb5]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<i16>) -> std::result::Result<(), error::Error> [body:c1ebfeb1395d4d2b]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<i32>) -> std::result::Result<(), error::Error> [body:d66491ff5058b589]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<i64>) -> std::result::Result<(), error::Error> [body:57d8f4a55bb2d524]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<i8>) -> std::result::Result<(), error::Error> [body:229e1a2355a669dd]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u128>) -> std::result::Result<(), error::Error> [body:81e7005a8e67a446]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u16>) -> std::result::Result<(), error::Error> [body:1c01670c059ce9c2]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u32>) -> std::result::Result<(), error::Error> [body:0d6e8fcee0b77510]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::fill_fixed(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u64>) -> std::result::Result<(), error::Error> [body:9db1c0ac699494ce]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::note_field_id(_1: &mut codec::Decoder<'_>, _2: u32) -> std::result::Result<(), error::Error> [body:d599d168a8d2cf36]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_count(_1: &mut codec::Decoder<'_>, _2: usize, _3: usize, _4: usize, _5: &str) -> std::result::Result<(), error::Error> [body:b668645a8aa2a28e]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_hash_map_count(_1: &mut codec::Decoder<'_>, _2: usize, _3: &str) -> std::result::Result<(), error::Error> [body:413bb22771cc5576]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::preflight_map_count(_1: &mut codec::Decoder<'_>, _2: usize, _3: &str) -> std::result::Result<(), error::Error> [body:d278ddd9186f3bea]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_fixed_run(_1: &mut codec::Decoder<'_>, _2: usize, _3: usize, _4: &str) -> std::result::Result<&[u8], error::Error> [body:ca7e9aba60f00ecf]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u128(_1: &mut codec::Decoder<'_>) -> std::result::Result<u128, error::Error> [body:d03aee3a962af9e8]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u16(_1: &mut codec::Decoder<'_>) -> std::result::Result<u16, error::Error> [body:a9fcb853129a4801]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u32(_1: &mut codec::Decoder<'_>) -> std::result::Result<u32, error::Error> [body:fe804edbf5c5cf7f]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u64(_1: &mut codec::Decoder<'_>) -> std::result::Result<u64, error::Error> [body:f0b53702eab9d4fd]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_u8(_1: &mut codec::Decoder<'_>) -> std::result::Result<u8, error::Error> [body:b50d13495933f9b9]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:359e6670ef5bf73d]",
+            "target": "Decoder::charge_materialization",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:359e6670ef5bf73d]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode(_1: &mut collections::MaterializationBudget, _2: &[u8], _3: format::Endian) -> std::result::Result<T, error::Error> [body:08fa980a1338f3ab]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_into(_1: &mut collections::MaterializationBudget, _2: &[u8], _3: format::Endian, _4: &mut T) -> std::result::Result<(), error::Error> [body:d7a14c32da03c158]",
+            "target": "Decoder::decode_from_slice_accounted_into",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_byte_array_on_stack(_1: &mut codec::Decoder<'_>) -> std::result::Result<[u8; N], error::Error> [body:5b5206dd7ae5e384]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_fixed_array_with(_1: &mut codec::Decoder<'_>, _2: T, _3: impl Fn([u8; W]) -> T) -> std::result::Result<[T; N], error::Error> [body:a3a9c74c5bde9a9d]",
+            "target": "Decoder::preflight_count",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::read_run_into(_1: &MatrixReader, _2: matrix::MatrixKey, _3: &mut [T]) -> std::result::Result<(), MatrixReuseError> [body:9f2a4fea5e4dbc99]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "matrix_bulk::<impl at crates/varlit-core/src/matrix_bulk.rs>::decode_cells::{closure#1}(_1: {closure@crates/varlit-core/src/matrix_bulk.rs}, _2: &mut [u8]) -> std::result::Result<(), error::Error> [body:6217eaab483c9544]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_cells::{closure#2}(_1: {closure@crates/varlit-core/src/matrix_tiles/host.rs}, _2: &mut [u8]) -> std::result::Result<(), error::Error> [body:b2837070ae1ad32a]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_region::{closure#1}(_1: {closure@crates/varlit-core/src/matrix_tiles/host.rs}, _2: &mut [u8]) -> std::result::Result<matrix::MatrixPage, error::Error> [body:aff47a083b12b221]",
+            "target": "Decoder::decode_from_slice_accounted",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "record_fields::<impl at crates/varlit-core/src/file/record_fields.rs>::decode_into::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_fields.rs}) -> std::result::Result<(), error::Error> [body:2effb44e756ac4e3]",
+            "target": "Decoder::decode_from_slice_accounted_into",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:aa837d63b43e5c12]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "split_metadata_payload(_1: &[u8], _2: format::Endian) -> std::result::Result<(&str, &[u8]), error::Error> [body:aa837d63b43e5c12]",
+            "target": "Decoder::read_exact",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "codec::resource_proofs::full_width_decoder_charge_preserves_budget_on_failure",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_zero_width_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_small_wire_work",
+        "codec::resource_proofs::full_width_collection_preflight_bounds_above_input_wire_work",
+        "codec::resource_proofs::input_cursor_advances_exactly_or_stays_unchanged",
+        "codec::resource_proofs::nested_failure_cannot_refund_a_successful_charge",
+        "codec::resource_proofs::retained_sibling_decodes_share_one_budget_even_after_errors",
+        "codec::resource_proofs::hashmap_preflight_accounts_for_overlapping_tables",
+        "codec::caller_proofs::complete_byte_decode_admits_before_allocating_and_never_refunds",
+        "codec::caller_proofs::nested_two_stage_contract_preserves_parent_and_committed_charges",
+        "codec::caller_proofs::arbitrary_returning_callback_preserves_the_owned_numeric_invariant",
+        "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_nested_or_accounted_decode",
+        "codec::caller_proofs::safe_whole_value_replacement_cannot_escape_an_in_place_decode",
+        "codec::caller_proofs::active_callback_step_preserves_invariant_or_rejects_replacement"
+      ]
+    },
+    "fallible-ownership": {
+      "symbols": [
+        "try_box",
+        "try_box_uninit",
+        "try_box_with",
+        "try_arc",
+        "try_arc_with",
+        "try_make_mut"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "adapter::<impl at crates/varlit-core/src/adapter.rs>::from_bytes(_1: &str, _2: &[u8]) -> std::result::Result<AdapterInputFile, error::Error> [body:4bb9862f4a83f4da]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "boxed_error(_1: error::Error, _2: error::Error, _3: impl FnOnce(Box<Error>) -> Error) -> error::Error [body:901fe3f596aa8b1e]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "boxed_path_error::{closure#0}(_1: {closure@crates/varlit-core/src/fallible.rs}, _2: String) -> std::result::Result<error::Error, error::Error> [body:089486c274a42704]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:78f07e5e6a9c5ab9]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:435c3f27bcadf272]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fallible::<impl at crates/varlit-core/src/fallible.rs>::try_clone(_1: &Box<T>) -> std::result::Result<Box<T>, error::Error> [body:f3cf4acabeb1f9fc]",
+            "target": "try_box_with",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:f57d2cbf8056d44a]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::new(_1: &mut PrimaryFile) -> std::result::Result<WindowedReader<'_>, error::Error> [body:13623b9d16e0c4ec]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan_control::<impl at crates/varlit-core/src/scan_control.rs>::try_new() -> std::result::Result<ScanCancellationToken, error::Error> [body:f2524dfc491c0c4a]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "snapshot::<impl at crates/varlit-core/src/snapshot.rs>::from_file_with_len(_1: impl Into<PrimaryFile>, _2: u64) -> std::result::Result<snapshot::SnapshotFile, error::Error> [body:6fc27498b660c521]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::open_version(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: bool, _4: bool, _5: u32) -> std::result::Result<Store, disk_index::DiskIndexError> [body:45ae69eecf08554a]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "try_box(_1: T) -> std::result::Result<Box<T>, error::Error> [body:c35dba6c29fd69bd]",
+            "target": "try_box_uninit",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "try_box_with(_1: impl FnOnce() -> Result<T>) -> std::result::Result<Box<T>, error::Error> [body:ca53adcd6a8f6c89]",
+            "target": "try_box_uninit",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "adapter::<impl at crates/varlit-core/src/adapter.rs>::from_bytes(_1: &str, _2: &[u8]) -> std::result::Result<AdapterInputFile, error::Error> [body:4bb9862f4a83f4da]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "boxed_error(_1: error::Error, _2: error::Error, _3: impl FnOnce(Box<Error>) -> Error) -> error::Error [body:901fe3f596aa8b1e]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "boxed_path_error::{closure#0}(_1: {closure@crates/varlit-core/src/fallible.rs}, _2: String) -> std::result::Result<error::Error, error::Error> [body:089486c274a42704]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::new(_1: usize) -> std::result::Result<ScratchIndex, error::Error> [body:de82c4016740880d]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:78f07e5e6a9c5ab9]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:435c3f27bcadf272]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:c971e1cd3cc0aed5]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:c971e1cd3cc0aed5]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::create(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:c971e1cd3cc0aed5]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::open(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixReader, MatrixReuseError> [body:20e3a0065ee7b214]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::open(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixReader, MatrixReuseError> [body:20e3a0065ee7b214]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::open(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:bc0513ea5bf2fcba]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::open(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:bc0513ea5bf2fcba]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::open(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: matrix::MatrixDimensions, _4: MatrixOptions) -> std::result::Result<MatrixWriter, MatrixReuseError> [body:bc0513ea5bf2fcba]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::sync(_1: &mut MatrixWriter) -> std::result::Result<(), MatrixReuseError> [body:0d59e32d1c7965b0]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::sync(_1: &mut MatrixWriter) -> std::result::Result<(), MatrixReuseError> [body:0d59e32d1c7965b0]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fallible::<impl at crates/varlit-core/src/fallible.rs>::try_clone(_1: &Box<T>) -> std::result::Result<Box<T>, error::Error> [body:f3cf4acabeb1f9fc]",
+            "target": "try_box_with",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::new() -> std::result::Result<file::ReadAhead, error::Error> [body:d430519abc2c5be4]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:f57d2cbf8056d44a]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::new(_1: &mut PrimaryFile) -> std::result::Result<WindowedReader<'_>, error::Error> [body:13623b9d16e0c4ec]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "scan_control::<impl at crates/varlit-core/src/scan_control.rs>::try_new() -> std::result::Result<ScanCancellationToken, error::Error> [body:f2524dfc491c0c4a]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "snapshot::<impl at crates/varlit-core/src/snapshot.rs>::from_file_with_len(_1: impl Into<PrimaryFile>, _2: u64) -> std::result::Result<snapshot::SnapshotFile, error::Error> [body:6fc27498b660c521]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::open_version(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: bool, _4: bool, _5: u32) -> std::result::Result<Store, disk_index::DiskIndexError> [body:45ae69eecf08554a]",
+            "target": "try_arc",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "try_box(_1: T) -> std::result::Result<Box<T>, error::Error> [body:c35dba6c29fd69bd]",
+            "target": "try_box_uninit",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "try_box_with(_1: impl FnOnce() -> Result<T>) -> std::result::Result<Box<T>, error::Error> [body:ca53adcd6a8f6c89]",
+            "target": "try_box_uninit",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "fallible::proofs::box_value_refusal_or_unique_ownership",
+        "fallible::proofs::box_initializer_runs_only_after_reservation",
+        "fallible::proofs::uninitialized_box_alignment_and_zero_size",
+        "fallible::proofs::byte_clone_preserves_source_on_every_refusal",
+        "fallible::proofs::string_clone_preserves_source_on_every_refusal",
+        "fallible::proofs::nested_clone_0_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_1_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_2_releases_every_partial_owner",
+        "fallible::proofs::nested_clone_3_releases_every_partial_owner",
+        "fallible::proofs::shared_initializer_refusal_and_last_owner_drop",
+        "fallible::proofs::copy_on_write_refusal_preserves_shared_source",
+        "fallible::proofs::full_width_clone_capacity_refuses_without_abort",
+        "fallible::proofs::shared_vector_initialization_preserves_payload",
+        "fallible::proofs::boxed_clone_reserves_before_payload_callback",
+        "fallible::proofs::empty_vector_model_obeys_its_standard_contract",
+        "fallible::proofs::shared_value_refusal_or_unique_ownership"
+      ]
+    },
+    "scalar-owner-memory": {
+      "symbols": [],
+      "result_policy": {},
+      "callers": {
+        "default": [],
+        "all": []
+      },
+      "required_harnesses": [
+        "fallible::memory_proofs::initialized_scalar_box_and_clone",
+        "fallible::memory_proofs::refused_scalar_box_does_not_initialize"
+      ]
+    },
+    "buffered-private-row": {
+      "symbols": [
+        "buffered_row_at"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "spill_rows::<impl at crates/varlit-core/src/spill_rows.rs>::buffered_row(_1: &SpillRows<N>, _2: usize) -> Option<&[u8; N]> [body:36e5c640029b8ea5]",
+            "target": "buffered_row_at",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "spill_rows::<impl at crates/varlit-core/src/spill_rows.rs>::buffered_row(_1: &SpillRows<N>, _2: usize) -> Option<&[u8; N]> [body:36e5c640029b8ea5]",
+            "target": "buffered_row_at",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "spill_rows::buffered_row_proofs::full_width_buffered_rows_match_the_actual_window"
+      ]
+    },
+    "untrusted-sequence-candidate": {
+      "symbols": [
+        "sequence_candidate_row"
+      ],
+      "result_policy": {},
+      "callers": {
+        "default": [
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::matches_sequence_hint(_1: &mut file::resident_index::ResidentIndex, _2: u64, _3: u64) -> std::result::Result<bool, error::Error> [body:90914f2ec47c0b26]",
+            "target": "sequence_candidate_row",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
+          {
+            "caller": "file::resident_index::<impl at crates/varlit-core/src/native_directory.rs>::matches_sequence_hint(_1: &mut file::resident_index::ResidentIndex, _2: u64, _3: u64) -> std::result::Result<bool, error::Error> [body:90914f2ec47c0b26]",
+            "target": "sequence_candidate_row",
+            "result": "model/caller-specific"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "file::resident_index::uniform_prefix_proofs::full_width_sequence_candidate_matches_wide_subtraction"
+      ]
+    },
+    "decode-state-transitions": {
+      "symbols": [
+        "decode_state::charge",
+        "decode_state::read_end",
+        "decode_state::callback_exit",
+        "decode_state::same_scope"
+      ],
+      "result_policy": {
+        "decode_state::charge": "checked-or-propagated",
+        "decode_state::read_end": "checked-or-propagated",
+        "decode_state::callback_exit": "checked-or-propagated",
+        "decode_state::same_scope": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::charge_materialization(_1: &mut Decoder<'_>, _2: u64, _3: &str) -> std::result::Result<(), error::Error> [body:17d6239d13d57662]",
+            "target": "decode_state::charge",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_exact(_1: &mut Decoder<'_>, _2: usize) -> std::result::Result<&[u8], error::Error> [body:cf64f2bb2e3e3e7b]",
+            "target": "decode_state::read_end",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::with_callback(_1: &mut Decoder<'_>, _2: <C as DecoderCallback>::Input) -> std::result::Result<<C as DecoderCallback>::Output, error::Error> [body:1ff6def28b22454f]",
+            "target": "decode_state::callback_exit",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::with_existing_callback(_1: &mut Decoder<'_>, _2: <C as DecoderCallback>::Input) -> std::result::Result<<C as DecoderCallback>::Output, error::Error> [body:52bbf2eec7a06491]",
+            "target": "decode_state::same_scope",
+            "result": "checked"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::consume(_1: &mut collections::MaterializationBudget, _2: u64) -> std::result::Result<(), error::Error> [body:0b071d00222f5036]",
+            "target": "decode_state::charge",
+            "result": "checked"
+          }
+        ],
+        "all": [
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::charge_materialization(_1: &mut codec::Decoder<'_>, _2: u64, _3: &str) -> std::result::Result<(), error::Error> [body:17d6239d13d57662]",
+            "target": "decode_state::charge",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::read_exact(_1: &mut codec::Decoder<'_>, _2: usize) -> std::result::Result<&[u8], error::Error> [body:cf64f2bb2e3e3e7b]",
+            "target": "decode_state::read_end",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::with_callback(_1: &mut codec::Decoder<'_>, _2: <C as DecoderCallback>::Input) -> std::result::Result<<C as DecoderCallback>::Output, error::Error> [body:98c8f3db1d383ecb]",
+            "target": "decode_state::callback_exit",
+            "result": "checked"
+          },
+          {
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::with_existing_callback(_1: &mut codec::Decoder<'_>, _2: <C as DecoderCallback>::Input) -> std::result::Result<<C as DecoderCallback>::Output, error::Error> [body:52bbf2eec7a06491]",
+            "target": "decode_state::same_scope",
+            "result": "checked"
+          },
+          {
+            "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::consume(_1: &mut collections::MaterializationBudget, _2: u64) -> std::result::Result<(), error::Error> [body:0b071d00222f5036]",
+            "target": "decode_state::charge",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "decode_state::proofs::charge_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::cursor_transition_is_exact_for_every_unsigned_state",
+        "decode_state::proofs::callback_transition_accepts_exactly_preserved_frames",
+        "decode_state::proofs::scope_admission_distinguishes_absence_identity_and_other_objects"
+      ]
+    },
+    "record-chunk-table": {
+      "symbols": [
+        "ChunkHeader::chunk_len",
+        "ChunkHeader::data_at",
+        "chunk_extent"
+      ],
+      "result_policy": {
+        "chunk_extent": "checked-or-propagated"
+      },
+      "callers": {
+        "default": [
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:f902ebe5c0116d97]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:4ea0073161ac82fb]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks::{closure#0}(_1: {closure@crates/varlit-core/src/file/record_chunks.rs}, _2: TryFromIntError) -> error::Error [body:122555683dfd095b]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "target": "chunk_extent",
+            "result": "checked"
+          }
+        ],
+        "all": [
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunk_extent(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64) -> std::result::Result<(u64, u64, u32), error::Error> [body:02cd334f292114ae]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:2bf60ad89878f374]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:2bf60ad89878f374]",
+            "target": "chunk_extent",
+            "result": "checked"
+          },
+          {
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:dbc514f92edde9c0]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:bbd2e9399d3847a9]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks::{closure#0}(_1: {closure@crates/varlit-core/src/file/record_chunks.rs}, _2: TryFromIntError) -> error::Error [body:122555683dfd095b]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "target": "chunk_extent",
+            "result": "checked"
+          }
+        ]
+      },
+      "required_harnesses": [
+        "file::record_chunks::resource_proofs::chunk_geometry_covers_the_payload_exactly",
+        "file::record_chunks::resource_proofs::chunk_extent_accepts_exactly_well_formed_entries"
+      ]
+    }
+  },
+  "domination": {
+    "default": [
+      {
+        "caller": ">::visit_at(_1: &disk_index::tree::Reader",
+        "guard": "take_visit",
+        "effects": [
+          "Reader::node",
+          "Reader::visit_at"
+        ]
+      },
+      {
+        "caller": ">::visit_at(_1: &disk_index::tree::Reader",
+        "guard": "height_matches",
+        "effects": [
+          "Reader::visit_at"
+        ]
+      },
+      {
+        "caller": "validate_chunked_bytes(_1:",
+        "guard": "table_extent",
+        "effects": [
+          "parse_entry"
+        ]
+      },
+      {
+        "caller": "disk_index::decode_metadata(_1:",
+        "guard": "disk_index::validate_metadata",
+        "effects": [
+          "@return-ok"
+        ]
+      },
+      {
+        "caller": ">::publish(_1: &mut Store",
+        "guard": "disk_index::validate_metadata",
+        "effects": [
+          "checkpoint"
+        ]
+      }
+    ],
+    "all": [
+      {
+        "caller": ">::visit_at(_1: &disk_index::tree::Reader",
+        "guard": "take_visit",
+        "effects": [
+          "Reader::node",
+          "Reader::visit_at"
+        ]
+      },
+      {
+        "caller": ">::visit_at(_1: &disk_index::tree::Reader",
+        "guard": "height_matches",
+        "effects": [
+          "Reader::visit_at"
+        ]
+      },
+      {
+        "caller": "validate_chunked_bytes(_1:",
+        "guard": "table_extent",
+        "effects": [
+          "parse_entry"
+        ]
+      },
+      {
+        "caller": "disk_index::decode_metadata(_1:",
+        "guard": "disk_index::validate_metadata",
+        "effects": [
+          "@return-ok"
+        ]
+      },
+      {
+        "caller": ">::publish(_1: &mut Store",
+        "guard": "disk_index::validate_metadata",
+        "effects": [
+          "checkpoint"
+        ]
+      },
+      {
+        "caller": "decompress(_1: &[u8]",
+        "guard": "output_capacity",
+        "effects": [
+          "Vec::try_reserve_exact"
+        ]
+      },
+      {
+        "caller": ">::stream_range(_1: &ChunkedBytes",
+        "guard": "table_extent",
+        "effects": [
+          "parse_entry"
+        ]
+      }
+    ]
+  },
+  "aliases": {
+    "codec::Decoder::preflight_count": "Decoder::preflight_count",
+    "codec::Decoder::read_exact": "Decoder::read_exact",
+    "codec::Decoder::charge_materialization": "Decoder::charge_materialization",
+    "codec::Decoder::preflight_hash_map_count": "Decoder::preflight_hash_map_count",
+    "codec::Decoder::decode_from_slice_accounted": "Decoder::decode_from_slice_accounted",
+    "codec::Decoder::decode_nested": "Decoder::decode_nested",
+    "codec::Decoder::decode_nested_into": "Decoder::decode_nested_into",
+    "codec::Decoder::decode_from_slice_accounted_into": "Decoder::decode_from_slice_accounted_into",
+    "charge": "decode_state::charge",
+    "read_end": "decode_state::read_end",
+    "callback_exit": "decode_state::callback_exit",
+    "same_scope": "decode_state::same_scope"
+  },
+  "indirect_contracts": [
+    {
+      "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::commit_boundary_applied(_1: &mut scan::ScannedIndex, _2: &[file::RecordIndexEntry]) -> std::result::Result<(), error::Error> [body:b14b7bf7658e3864]",
+      "target": "file::RecordIndexEntry::checked_physical_end"
+    }
+  ]
+}

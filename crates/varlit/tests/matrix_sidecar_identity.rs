@@ -1,11 +1,11 @@
-// DUR-04/05 regression for matrix sidecar identity and publication.
+// /05 regression for matrix sidecar identity and publication.
 //
-// DUR-04: a sidecar must be bound to one specific native file. Before manifest
+// a sidecar must be bound to one specific native file. Before manifest
 // v2 a same-spec, same-generation sibling file happily adopted another file's
 // sidecar. v2 records the native OS-object fingerprint and matrix layout
 // generation, so file B rejects file A's sidecar.
 //
-// DUR-05: publication is a same-directory temp write + atomic replace, so a
+// publication is a same-directory temp write + atomic replace, so a
 // failed publish that never reaches the replace step leaves the previously
 // published sidecar fully intact instead of truncating it in place.
 
@@ -18,7 +18,7 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     ManifestPolicy, MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, MatrixResumeSignal, ReadLimits,
-    RecoveryPolicy, VarlitBlock, VarlitDecode, VarlitEncode, VarlitMatrixBlock,
+    RecoveryPolicy, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitMatrixBlock,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +41,12 @@ impl VarlitDecode for IdentityCell {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl VarlitEmpty for IdentityCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -80,6 +86,7 @@ fn identity_spec() -> FormatSpec {
         dimensions: IdentityCell::DIMENSIONS,
         category: IdentityCell::CATEGORY,
         slot_stride: IdentityCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"MID",
@@ -159,7 +166,7 @@ fn same_spec_sibling_file_sidecar_is_rejected() -> varlit::Result<()> {
     Ok(())
 }
 
-// DUR2-03: recreating a matrix on the same pathname reuses the same OS file
+// recreating a matrix on the same pathname reuses the same OS file
 // object with identical schema, dimensions and layout offsets, so before the
 // per-create creation nonce every sidecar published against the previous
 // logical matrix (the review reproduced a stale generation-41 sidecar being
@@ -236,7 +243,7 @@ fn same_object_matrix_recreation_rejects_stale_sidecar() -> varlit::Result<()> {
     Ok(())
 }
 
-// API2-02: the exclusive matrix creation path keeps one handle from the
+// the exclusive matrix creation path keeps one handle from the
 // ownership claim through initialization, so diagnostics never has to close a
 // claim handle and re-open the pathname with truncation.
 #[test]
@@ -265,10 +272,9 @@ fn create_new_with_dims_is_exclusive_and_initializes_the_claimed_handle() -> var
     // The refused create left the existing matrix untouched.
     {
         let reader = varlit::VarlitFile::open_readonly(spec, &path)?;
-        assert_eq!(
-            reader.read_matrix_cell::<IdentityCell>(MatrixKey::new(0, 0))?,
-            IdentityCell { value: 7 }
-        );
+        let mut cell = IdentityCell::empty();
+        reader.read_matrix_cell::<IdentityCell>(MatrixKey::new(0, 0), &mut cell)?;
+        assert_eq!(cell, IdentityCell { value: 7 });
     }
 
     cleanup(&path);

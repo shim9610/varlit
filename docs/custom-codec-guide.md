@@ -190,7 +190,7 @@ impl VarlitDecode for Samples {
 }
 ```
 
-### Prove it with a negative self-test
+### Test allocation accounting with a negative control
 
 A codec that charges correctly and one that does not are indistinguishable on
 well-formed input: both round-trip. The difference is only visible when the
@@ -226,8 +226,9 @@ fn samples_refuse_to_materialize_past_the_budget() {
 ```
 
 Delete the `charge_materialization` line and the first assertion fails with
-`Ok(..)`. That failure is the whole point of the test: it is the only automated
-signal that distinguishes a charged codec from an uncharged one.
+`Ok(..)`. This regression detects the omitted charge for the tested value and
+limit. It does not establish correct allocation accounting for every value or
+branch of a custom codec.
 
 ## Codec Rules
 
@@ -248,6 +249,15 @@ signal that distinguishes a charged codec from an uncharged one.
 For variable blocks, the derive macro wraps each field payload with field id,
 wire type, and length. Unknown field ids with known wire types are skipped.
 Unknown wire type values are malformed data.
+
+## Fallible ownership in custom codecs
+
+The 0.13.0 [fallible ownership helpers](api-reference.md#fallible-ownership)
+can be used by custom codecs, but do not replace decoder budget accounting.
+`TryClone` implementations must use fallible allocation for newly owned fields,
+clean up partial output and preserve their source on refusal. Existing `Clone`
+does not inherit that contract. Read-check selection also does not disable a
+custom codec's required bounds or Rust value-validity checks.
 
 ## Raw Mmap And Zero-Copy
 

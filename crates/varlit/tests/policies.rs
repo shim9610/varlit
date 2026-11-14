@@ -1,6 +1,10 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{OpenOptions, remove_file};
 use std::io::Write;
+#[cfg(feature = "integrity")]
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -89,6 +93,12 @@ struct MapBlock {
 struct PackedPair {
     left: u32,
     right: u32,
+}
+
+impl varlit::VarlitEmpty for PackedPair {
+    fn empty() -> Self {
+        Self { left: 0, right: 0 }
+    }
 }
 
 impl VarlitEncode for PackedPair {
@@ -252,10 +262,8 @@ varlit_format! {
     }
 }
 
-/// Mirrors the private `INDEX_CHECKPOINT_MIN_RECORDS` floor in varlit-core's
-/// `file.rs`. PERF-02 geometric checkpoint spacing writes the first full index
-/// checkpoint only once the live tail has grown by at least this many records,
-/// so checkpoint-mechanism tests must push at least this many blocks.
+/// The record count the checkpoint-format tests write: enough that a writer
+/// which still checkpointed (the old floor was 16) would have done so.
 const CHECKPOINT_MIN_RECORDS: u32 = 16;
 
 #[test]
@@ -313,7 +321,7 @@ fn typed_read_rejects_unexpected_block_version() -> varlit::Result<()> {
 
     let file = ContractFormat::open_readonly(&path)?;
     assert!(matches!(
-        file.blocks::<ContractBlockV2>(),
+        crate::pages::all_blocks!(file, ContractBlockV2),
         Err(Error::BlockVersionMismatch {
             block_id: 20,
             expected: 1,
@@ -396,7 +404,10 @@ fn rich_codec_roundtrips_options_arrays_sequences_and_bytes() -> varlit::Result<
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<RichBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        opt(|o| crate::pages::all_blocks!(file, RichBlock)?.get(0, o))?,
+        Some(value)
+    );
 
     cleanup(&path);
     Ok(())
@@ -438,7 +449,10 @@ fn map_codec_roundtrips_in_canonical_key_order() -> varlit::Result<()> {
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<MapBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        opt(|o| crate::pages::all_blocks!(file, MapBlock)?.get(0, o))?,
+        Some(value)
+    );
 
     cleanup(&path);
     Ok(())
@@ -462,7 +476,10 @@ fn user_defined_codec_type_roundtrips_as_block_field() -> varlit::Result<()> {
     }
 
     let file = ContractFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CustomCodecBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        opt(|o| crate::pages::all_blocks!(file, CustomCodecBlock)?.get(0, o))?,
+        Some(value)
+    );
     assert_eq!(
         <CustomCodecBlock as VarlitBlock>::FIELDS[0].wire_type,
         WireType::U64
@@ -498,7 +515,7 @@ fn variable_unknown_field_policy_is_skip_known_wire_reject_unknown_wire() -> var
 }
 
 #[test]
-fn metadata_and_checkpoint_are_written_as_internal_blocks() -> varlit::Result<()> {
+fn metadata_is_written_and_no_checkpoint_is() -> varlit::Result<()> {
     let path = temp_path("metadata_checkpoint");
     cleanup(&path);
 
@@ -506,8 +523,6 @@ fn metadata_and_checkpoint_are_written_as_internal_blocks() -> varlit::Result<()
         let mut file = CheckpointFormat::create(&path)?;
         file.write_metadata("creator", b"varlit")?;
         file.write_metadata("creator", b"varlit-2")?;
-        // Geometric checkpoint spacing (PERF-02) writes the first full checkpoint
-        // only once the tail grows past INDEX_CHECKPOINT_MIN_RECORDS (16) records.
         for value in 0..CHECKPOINT_MIN_RECORDS {
             file.push(&ContractBlock { value })?;
         }
@@ -517,8 +532,9 @@ fn metadata_and_checkpoint_are_written_as_internal_blocks() -> varlit::Result<()
     let file = CheckpointFormat::open_readonly(&path)?;
     assert_eq!(file.metadata("creator")?, Some(b"varlit-2".to_vec()));
     assert_eq!(file.all_metadata()?.len(), 2);
+    // A writer no longer serializes its index into the file.
     assert!(
-        file.index_entries()
+        !crate::pages::all_entries!(file)
             .iter()
             .any(|entry| entry.block_id == INDEX_BLOCK_ID)
     );
@@ -545,7 +561,7 @@ fn embedded_manifest_is_optional_and_retrievable() -> varlit::Result<()> {
     {
         let mut file = ManifestFormat::create(&present_path)?;
         assert!(
-            file.index_entries()
+            crate::pages::all_entries!(file)
                 .iter()
                 .any(|entry| entry.block_id == MANIFEST_BLOCK_ID)
         );
@@ -581,7 +597,7 @@ fn embedded_manifest_is_optional_and_retrievable() -> varlit::Result<()> {
     assert_eq!(defaulted.fields.len(), 1);
     assert_eq!(defaulted.fields[0].presence, FieldPresence::Defaulted);
     assert_eq!(
-        file.blocks::<ContractBlock>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(file, ContractBlock)?.get(0, o))?,
         Some(ContractBlock { value: 4 })
     );
 
@@ -625,7 +641,7 @@ fn explicit_migration_reads_source_version_while_normal_read_rejects_mismatch() 
 
     let file = ContractFormat::open_readonly(&path)?;
     assert!(matches!(
-        file.blocks::<ContractBlockV2>(),
+        crate::pages::all_blocks!(file, ContractBlockV2),
         Err(Error::BlockVersionMismatch {
             block_id: 20,
             expected: 1,
@@ -636,81 +652,6 @@ fn explicit_migration_reads_source_version_while_normal_read_rejects_mismatch() 
         file.blocks_migrated::<ContractBlock, ContractBlockV2, ContractMigration>()?,
         vec![ContractBlockV2 { value: 15 }]
     );
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[test]
-fn checkpoint_open_uses_latest_checkpoint_and_scans_tail() -> varlit::Result<()> {
-    let path = temp_path("checkpoint_tail");
-    cleanup(&path);
-
-    // Push enough records to force a full checkpoint on flush (PERF-02 geometric
-    // spacing), then append a few more before sync so the reopen must both use
-    // the checkpoint and scan the tail that follows it.
-    let checkpointed = CHECKPOINT_MIN_RECORDS;
-    let tail = 3u32;
-    let total = checkpointed + tail;
-    {
-        let mut file = CheckpointFormat::create(&path)?;
-        for value in 0..checkpointed {
-            file.push(&ContractBlock { value })?;
-        }
-        file.flush()?;
-        for value in checkpointed..total {
-            file.push(&ContractBlock { value })?;
-        }
-        file.sync()?;
-    }
-
-    let file = CheckpointFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<ContractBlock>()?;
-    assert_eq!(blocks.len(), total as usize);
-    assert_eq!(blocks.get(0)?, Some(ContractBlock { value: 0 }));
-    assert_eq!(
-        blocks.get(total as usize - 1)?,
-        Some(ContractBlock { value: total - 1 })
-    );
-    assert!(
-        file.index_entries()
-            .iter()
-            .any(|entry| entry.block_id == INDEX_BLOCK_ID)
-    );
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[test]
-fn corrupt_checkpoint_falls_back_to_full_scan_without_hiding_data() -> varlit::Result<()> {
-    let path = temp_path("checkpoint_corrupt");
-    cleanup(&path);
-
-    // Push enough records to force a full checkpoint on flush (PERF-02), then
-    // corrupt it: the reopen must fall back to a full native scan and still
-    // surface every record.
-    let record_count = CHECKPOINT_MIN_RECORDS;
-    let checkpoint_payload_offset = {
-        let mut file = CheckpointFormat::create(&path)?;
-        for value in 0..record_count {
-            file.push(&ContractBlock { value })?;
-        }
-        file.flush()?;
-        file.index_entries()
-            .iter()
-            .find(|entry| entry.block_id == INDEX_BLOCK_ID)
-            .expect("checkpoint")
-            .payload_offset
-    };
-
-    tamper_byte(&path, checkpoint_payload_offset)?;
-    let file = CheckpointFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<ContractBlock>()?;
-    assert_eq!(blocks.len(), record_count as usize);
-    for value in 0..record_count {
-        assert_eq!(blocks.get(value as usize)?, Some(ContractBlock { value }));
-    }
 
     cleanup(&path);
     Ok(())
@@ -738,7 +679,7 @@ fn strict_open_rejects_and_recover_truncates_partial_tail() -> varlit::Result<()
     ));
     assert_eq!(std::fs::metadata(&path)?.len(), corrupt_len);
     let readonly = recovering_spec.open_readonly(&path)?;
-    assert_eq!(readonly.blocks::<ContractBlock>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(readonly, ContractBlock)?.len(), 2);
     drop(readonly);
     assert_eq!(std::fs::metadata(&path)?.len(), corrupt_len);
 
@@ -747,7 +688,7 @@ fn strict_open_rejects_and_recover_truncates_partial_tail() -> varlit::Result<()
         assert_eq!(report.original_len, original_len + 4);
         assert_eq!(report.recovered_len, original_len);
         assert_eq!(report.records_preserved, 2);
-        assert_eq!(file.blocks::<ContractBlock>()?.len(), 2);
+        assert_eq!(crate::pages::all_blocks!(file, ContractBlock)?.len(), 2);
     }
 
     append_incomplete_payload(&path)?;
@@ -772,7 +713,7 @@ fn crc_integrity_detects_payload_tampering() -> varlit::Result<()> {
         let mut file = CrcFormat::create(&path)?;
         file.push(&ContractBlock { value: 123 })?;
         file.flush()?;
-        file.index_entries()[0].payload_offset
+        crate::pages::all_entries!(file)[0].payload_offset
     };
 
     tamper_byte(&path, payload_offset)?;
@@ -789,7 +730,7 @@ fn crc_integrity_detects_payload_tampering() -> varlit::Result<()> {
     ));
     let lazy = CrcFormat::open_readonly(&path)?;
     assert!(matches!(
-        lazy.blocks::<ContractBlock>()?.get(0),
+        opt(|o| crate::pages::all_blocks!(lazy, ContractBlock)?.get(0, o)),
         Err(Error::ChecksumMismatch { .. })
     ));
     drop(lazy);
@@ -1036,7 +977,7 @@ fn explicit_age_based_lock_break_is_opt_in() -> varlit::Result<()> {
             WriterLockBreakPolicy::BreakIfOlderThan(Duration::ZERO),
         )?;
         assert_eq!(
-            file.blocks::<ContractBlock>()?.get(0)?,
+            opt(|o| crate::pages::all_blocks!(file, ContractBlock)?.get(0, o))?,
             Some(ContractBlock { value: 88 })
         );
         let info = ContractFormat::spec()
@@ -1079,9 +1020,10 @@ fn stale_lock_can_be_cleared_without_opening_the_data_file() -> varlit::Result<(
     drop(child);
     assert_eq!(ContractFormat::spec().inspect_writer_lock(&path)?, None);
     assert_eq!(
-        ContractFormat::open_readonly(&path)?
-            .blocks::<ContractBlock>()?
-            .get(0)?,
+        opt(
+            |o| crate::pages::all_blocks!(ContractFormat::open_readonly(&path)?, ContractBlock)?
+                .get(0, o)
+        )?,
         Some(ContractBlock { value: 144 })
     );
 
@@ -1185,6 +1127,7 @@ fn append_incomplete_payload(path: &Path) -> varlit::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "integrity")]
 fn tamper_byte(path: &Path, offset: u64) -> varlit::Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     file.seek(SeekFrom::Start(offset))?;
@@ -1270,4 +1213,14 @@ fn append_raw_field_header(output: &mut Vec<u8>, field_id: u32, wire_type: u16, 
 fn cleanup(path: &Path) {
     let _ = remove_file(path);
     let _ = remove_file(writer_lock_path(path));
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

@@ -12,7 +12,7 @@
 //! `error: proc-macro derive panicked / = help: message: "r#type" is not a
 //! valid identifier`, so the compile failure is itself the finding.
 
-use varlit::{VarlitBlock, VarlitKeyedBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, VarlitKeyedBlock, varlit_format};
 
 /// Surface 1: the derive attribute.
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -102,20 +102,11 @@ fn dsl_raw_identifier_key_survives_the_attribute_round_trip() -> varlit::Result<
     keys.sort_unstable();
     assert_eq!(keys, vec![7u64, 9u64]);
     // Keyed lookup by the raw field's value finds the right record.
-    assert_eq!(
-        keyed
-            .get(&7u64)?
-            .expect("record keyed by r#type == 7")
-            .label,
-        "alpha"
-    );
-    assert_eq!(
-        keyed
-            .get(&9u64)?
-            .expect("record keyed by r#type == 9")
-            .label,
-        "beta"
-    );
+    let mut found = DslRawKey::empty();
+    assert!(keyed.get(&7u64, &mut found)?, "record keyed by r#type == 7");
+    assert_eq!(found.label, "alpha");
+    assert!(keyed.get(&9u64, &mut found)?, "record keyed by r#type == 9");
+    assert_eq!(found.label, "beta");
 
     Ok(())
 }

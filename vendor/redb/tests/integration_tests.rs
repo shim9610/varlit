@@ -4191,6 +4191,34 @@ fn compact_does_not_block_on_held_write_transaction_with_savepoint() {
     db.compact().unwrap();
 }
 
+// The same with no savepoint: a held write transaction is a transaction in progress, not a
+// wait in begin_write() that the caller can never end
+#[test]
+fn compact_does_not_block_on_held_write_transaction() {
+    let tmpfile = create_tempfile();
+    let mut db = Database::create(tmpfile.path()).unwrap();
+    let txn = db.begin_write().unwrap();
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let result = db.compact();
+        sender.send(()).unwrap();
+        (db, result)
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("compact() deadlocked on the caller's own write transaction");
+    let (mut db, result) = handle.join().unwrap();
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, CompactionError::TransactionInProgress),
+        "expected TransactionInProgress, got {err:?}"
+    );
+
+    txn.abort().unwrap();
+    db.compact().unwrap();
+}
+
 // A persistent savepoint created by a still-uncommitted transaction must already block
 // compaction, and must stop doing so if that transaction is aborted
 #[test]
@@ -4268,7 +4296,7 @@ impl<K: Key + 'static, V: Value + 'static, T: ReadableTable<K, V>> ReadableTable
     }
 
     #[cfg(feature = "experimental-api-5")]
-    fn range<'a>(&self, range: impl KeyRange<'a, K>) -> redb::Result<Range<'_, K, V>> {
+    fn range(&self, range: impl KeyRange<K>) -> redb::Result<Range<'_, K, V>> {
         self.inner.range(range)
     }
 
@@ -4288,7 +4316,6 @@ impl<K: Key + 'static, V: Value + 'static, T: ReadableTable<K, V>> ReadableTable
         self.inner.last()
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn lower_bound<'a>(
         &self,
         bound: std::ops::Bound<impl Borrow<K::SelfType<'a>>>,
@@ -4296,7 +4323,6 @@ impl<K: Key + 'static, V: Value + 'static, T: ReadableTable<K, V>> ReadableTable
         self.inner.lower_bound(bound)
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn upper_bound<'a>(
         &self,
         bound: std::ops::Bound<impl Borrow<K::SelfType<'a>>>,
@@ -4331,7 +4357,7 @@ impl<K: Key + 'static, V: Key + 'static, T: ReadableMultimapTable<K, V>> Readabl
     }
 
     #[cfg(feature = "experimental-api-5")]
-    fn range<'a>(&self, range: impl KeyRange<'a, K>) -> redb::Result<MultimapRange<'_, K, V>> {
+    fn range(&self, range: impl KeyRange<K>) -> redb::Result<MultimapRange<'_, K, V>> {
         self.inner.range(range)
     }
 
@@ -4344,22 +4370,6 @@ impl<K: Key + 'static, V: Key + 'static, T: ReadableMultimapTable<K, V>> Readabl
         KR: Borrow<K::SelfType<'a>> + 'a,
     {
         self.inner.range(range)
-    }
-
-    #[cfg(feature = "experimental-api-5")]
-    fn lower_bound<'a>(
-        &self,
-        bound: std::ops::Bound<impl Borrow<K::SelfType<'a>>>,
-    ) -> redb::Result<redb::MultimapCursor<'_, K, V>> {
-        self.inner.lower_bound(bound)
-    }
-
-    #[cfg(feature = "experimental-api-5")]
-    fn upper_bound<'a>(
-        &self,
-        bound: std::ops::Bound<impl Borrow<K::SelfType<'a>>>,
-    ) -> redb::Result<redb::MultimapCursor<'_, K, V>> {
-        self.inner.upper_bound(bound)
     }
 }
 
@@ -4399,6 +4409,8 @@ fn custom_table_type() {
         _value: Default::default(),
     };
     assert_eq!("hello", table.get(0).unwrap().unwrap().value());
+    let mut cursor = table.lower_bound(std::ops::Bound::Included(&0)).unwrap();
+    assert_eq!("hello", cursor.peek_next().unwrap().unwrap().1.value());
     let table = DelegatingMultimapTable {
         inner: txn.open_multimap_table(definition_multimap).unwrap(),
         _key: Default::default(),

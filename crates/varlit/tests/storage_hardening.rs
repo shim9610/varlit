@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::fs::{File, OpenOptions, remove_file};
 use std::io::{Seek, SeekFrom, Write};
 use std::panic::catch_unwind;
@@ -106,23 +109,23 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
 
     let mut file = StorageFormat::create(&path)?;
     file.push(&value)?;
-    let entry = file.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(file)[0].clone();
     drop(file);
 
     assert_eq!(
-        entry.read_payload_limited(&path, logical.len() as u64)?,
+        StorageFormat::read_payload_limited(&entry, &path, logical.len() as u64)?,
         logical
     );
     assert!(matches!(
-        entry.read_payload_limited(&path, logical.len() as u64 - 1),
+        StorageFormat::read_payload_limited(&entry, &path, logical.len() as u64 - 1),
         Err(Error::LimitExceeded {
             resource: "payload",
             ..
         })
     ));
     assert_eq!(
-        entry.read_logical_payload_limited(
-            StorageFormat::spec(),
+        StorageFormat::read_logical_payload_limited(
+            &entry,
             &path,
             logical.len() as u64,
             logical.len() as u64
@@ -134,7 +137,7 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
     beyond_eof.payload_offset = std::fs::metadata(&path)?.len();
     beyond_eof.payload_len = 1;
     assert!(matches!(
-        beyond_eof.read_payload(&path),
+        StorageFormat::read_payload(&beyond_eof, &path),
         Err(Error::UnexpectedEof)
     ));
 
@@ -142,14 +145,14 @@ fn payload_reads_check_extent_limit_and_physical_end() -> varlit::Result<()> {
     let mut missing_footer = entry.clone();
     missing_footer.footer_offset = Some(payload_end);
     assert!(matches!(
-        missing_footer.read_payload_limited(&path, logical.len() as u64),
+        StorageFormat::read_payload_limited(&missing_footer, &path, logical.len() as u64),
         Err(Error::UnexpectedEof)
     ));
 
     let mut misplaced_footer = entry.clone();
     misplaced_footer.footer_offset = Some(payload_end - 1);
     assert!(matches!(
-        misplaced_footer.read_payload(&path),
+        StorageFormat::read_payload(&misplaced_footer, &path),
         Err(Error::CorruptTail { .. })
     ));
 
@@ -191,7 +194,7 @@ fn sparse_payload_rejects_standard_limit_before_reading() -> varlit::Result<()> 
     };
 
     assert!(matches!(
-        entry.read_payload(&path),
+        StorageFormat::read_payload(&entry, &path),
         Err(Error::LimitExceeded {
             resource: "record payload length",
             ..
@@ -208,7 +211,7 @@ fn hostile_on_disk_payload_lengths_fail_without_panicking_or_allocating() -> var
     cleanup(&path);
     let mut writer = StorageFormat::create(&path)?;
     writer.push(&StorageValue { value: 17 })?;
-    let entry = writer.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(writer)[0].clone();
     drop(writer);
 
     let payload_len_offset = entry.record_offset + 16;
@@ -241,13 +244,13 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
 
     let mut file = StorageCompressionFormat::create(&path)?;
     file.push(&value)?;
-    let entry = file.index_entries()[0].clone();
+    let entry = crate::pages::all_entries!(file)[0].clone();
     assert!(entry.payload_len > logical.len() as u64);
     drop(file);
 
     assert_eq!(
-        entry.read_logical_payload_limited(
-            StorageCompressionFormat::spec(),
+        StorageCompressionFormat::read_logical_payload_limited(
+            &entry,
             &path,
             entry.payload_len,
             logical.len() as u64
@@ -255,8 +258,8 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
         logical
     );
     assert!(matches!(
-        entry.read_logical_payload_limited(
-            StorageCompressionFormat::spec(),
+        StorageCompressionFormat::read_logical_payload_limited(
+            &entry,
             &path,
             entry.payload_len - 1,
             logical.len() as u64
@@ -269,9 +272,8 @@ fn logical_limit_does_not_cap_compressed_storage_overhead() -> varlit::Result<()
 
     let runtime =
         varlit::ReadLimits::missing().with_max_logical_payload_len(logical.len() as u64 - 1);
-    let limited_spec = StorageCompressionFormat::spec().with_resource_limits(runtime);
     assert!(matches!(
-        entry.read_logical_payload_limited(limited_spec, &path, u64::MAX, u64::MAX,),
+        StorageCompressionFormat::read_logical_payload_with_resource_limits(&entry, &path, runtime),
         Err(Error::LimitExceeded {
             resource: "logical payload length",
             ..
@@ -292,7 +294,7 @@ fn mmap_constructor_rejects_a_stale_index_extent() -> varlit::Result<()> {
     drop(file);
 
     let reader = StorageFormat::open_readonly(&path)?;
-    let truncated_len = reader.index_entries()[0].payload_offset;
+    let truncated_len = crate::pages::all_entries!(reader)[0].payload_offset;
     OpenOptions::new()
         .write(true)
         .open(&path)?
@@ -317,7 +319,7 @@ fn mmap_constructor_rejects_truncated_empty_snapshot() -> varlit::Result<()> {
     drop(StorageFormat::create(&path)?);
 
     let reader = StorageFormat::open_readonly(&path)?;
-    assert!(reader.index_entries().is_empty());
+    assert!(crate::pages::all_entries!(reader).is_empty());
     OpenOptions::new().write(true).open(&path)?.set_len(1)?;
 
     // No state is reused after a panic; this checks rejection, not unwind recovery.
@@ -373,14 +375,14 @@ fn cleanup(path: &PathBuf) {
     let _ = remove_file(PathBuf::from(lock));
 }
 
-// STO3-01 (report finding STO-01): keyed compact/merge opens its rewrite temp
+// keyed compact/merge opens its rewrite temp
 // through `VarlitFile::create`, which creates `<temp>.lock`. Dropping that
 // writer cleared the marker's contents but left the file, so a *successful*
 // compact deposited an empty marker for a pathname whose native file no longer
 // exists. Markers for real user paths are deliberately persistent stable
 // identities; only this generated, exclusively owned temp pathname is litter.
 //
-// DUR3-01 (report finding DUR-01): `sync` synced file contents but never the
+// `sync` synced file contents but never the
 // parent directory for a pathname the handle created, while atomic replacement
 // did. `sync` now makes the created pathname durable too, once.
 
@@ -437,7 +439,7 @@ fn rewrite_leftovers(directory: &std::path::Path) -> varlit::Result<Vec<String>>
     Ok(leftovers)
 }
 
-/// STO3-01: the reviewers' fixture. A compact that succeeds must leave nothing
+/// the reviewers' fixture. A compact that succeeds must leave nothing
 /// behind for the temp it generated, while the markers for the caller's own
 /// paths keep behaving exactly as designed.
 #[test]
@@ -491,7 +493,10 @@ fn successful_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::
     // The publication really happened, so the check above is about hygiene and
     // not about a compact that silently did nothing.
     let compacted = StorageKeyedFormat::open(&output)?;
-    assert_eq!(compacted.blocks::<StorageKeyedValue>()?.len(), 64);
+    assert_eq!(
+        crate::pages::all_blocks!(compacted, StorageKeyedValue)?.len(),
+        64
+    );
     drop(compacted);
 
     // Markers for the caller's own paths are stable identities and stay put:
@@ -514,7 +519,7 @@ fn successful_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::
     Ok(())
 }
 
-/// STO3-01: a compact that fails before publication must not leave the temp's
+/// a compact that fails before publication must not leave the temp's
 /// marker either - the temp itself is deleted, so its marker would name
 /// nothing.
 #[test]
@@ -555,7 +560,7 @@ fn refused_keyed_compact_leaves_no_marker_for_its_internal_temp() -> varlit::Res
     Ok(())
 }
 
-/// DUR3-01: `sync` on a file this handle created reports durability for the
+/// `sync` on a file this handle created reports durability for the
 /// pathname as well as the contents, and repeating it stays cheap and typed.
 #[test]
 fn create_and_sync_reports_pathname_durability() -> varlit::Result<()> {
@@ -572,7 +577,7 @@ fn create_and_sync_reports_pathname_durability() -> varlit::Result<()> {
     drop(file);
 
     let reopened = StorageFormat::open(&*path)?;
-    assert_eq!(reopened.blocks::<StorageValue>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(reopened, StorageValue)?.len(), 2);
     drop(reopened);
 
     // An existing pathname is not re-established by opening it, and syncing a
@@ -665,12 +670,15 @@ fn rewrite_temp_is_removed_when_preparation_fails_after_creation() -> varlit::Re
         "a successful compact must still leave nothing behind"
     );
     let compacted = StorageKeyedFormat::open(&output)?;
-    assert_eq!(compacted.blocks::<StorageKeyedValue>()?.len(), 8);
+    assert_eq!(
+        crate::pages::all_blocks!(compacted, StorageKeyedValue)?.len(),
+        8
+    );
     Ok(())
 }
 
 /// STO4-P2: the guard must not touch the one temp whose retention is the
-/// documented contract (DUR2-01).
+/// documented contract.
 #[cfg(feature = "scalable-fault-injection")]
 #[test]
 fn indeterminate_merge_publication_still_retains_its_rewrite_temp() -> varlit::Result<()> {
@@ -702,7 +710,7 @@ fn indeterminate_merge_publication_still_retains_its_rewrite_temp() -> varlit::R
     Ok(())
 }
 
-// F-07: the diagnostic `<target>.lock` marker is truncated and rewritten on
+// the diagnostic `<target>.lock` marker is truncated and rewritten on
 // acquisition and truncated again on drop. Those writes must never reach an
 // object the marker path merely aliases. Both aliasing shapes are refused
 // with `Error::WriterLockMarkerNotDedicated`, on both platforms, and the
@@ -724,7 +732,7 @@ fn an_ordinary_lock_marker_is_still_accepted() -> varlit::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()> {
     let path = temp_path("marker_hardlink");
@@ -751,6 +759,10 @@ fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<(
         "the aliased object must not have been written through"
     );
     let _ = remove_file(lock_marker(&path));
+    // Refusal must leave the alias removable and the ordinary create route retryable.
+    let writer = StorageFormat::create(&path)?;
+    drop(writer);
+    assert_eq!(std::fs::read(&victim)?, b"");
     cleanup(&path);
     Ok(())
 }
@@ -780,40 +792,6 @@ fn a_symlinked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()>
         std::fs::metadata(&victim)?.len(),
         0,
         "the symlink target must not have been written through"
-    );
-    let _ = remove_file(lock_marker(&path));
-    cleanup(&path);
-    Ok(())
-}
-
-/// Windows hard links need no privilege; symbolic links do, so the reparse
-/// case is covered by `a_reparse_point_lock_marker_is_refused` only when the
-/// host grants the privilege, and is skipped rather than failing otherwise.
-#[cfg(windows)]
-#[test]
-fn a_hard_linked_lock_marker_is_refused_and_left_untouched() -> varlit::Result<()> {
-    let path = temp_path("marker_hardlink");
-    cleanup(&path);
-    let directory = path.parent().expect("temp parent").to_path_buf();
-    let victim = directory.join("unrelated-empty-file");
-    std::fs::write(&victim, b"")?;
-    std::fs::hard_link(&victim, lock_marker(&path))?;
-
-    let error = StorageFormat::create(&path).expect_err("an aliased marker must be refused");
-    assert!(
-        matches!(
-            error,
-            Error::WriterLockMarkerNotDedicated {
-                reason: "the marker object has more than one hard link",
-                ..
-            }
-        ),
-        "expected a typed marker refusal, got {error:?}"
-    );
-    assert_eq!(
-        std::fs::metadata(&victim)?.len(),
-        0,
-        "the aliased object must not have been written through"
     );
     let _ = remove_file(lock_marker(&path));
     cleanup(&path);
@@ -863,7 +841,7 @@ fn a_reparse_point_lock_marker_is_refused_and_left_untouched() -> varlit::Result
     Ok(())
 }
 
-/// F-08: `docs/custom-codec-guide.md` gained a mandatory
+/// `docs/custom-codec-guide.md` gained a mandatory
 /// "Charge Every Owned Allocation" section whose compliant example and
 /// negative self-test are the guide's whole answer to "how do I know my codec
 /// charges?". Markdown code blocks compile in no job, so a copy of that

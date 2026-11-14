@@ -4,12 +4,14 @@
 //! still scale within the chosen cache, while spilled opens must remain flat.
 //! Caller-owned scratch arrays retain their explicit owned-result semantics.
 //! Its own binary provides a thread-attributed counting allocator.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 struct CountingAllocator;
 
@@ -147,8 +149,11 @@ fn spilled_open_peak_and_retained_memory_do_not_scale_with_record_count() -> var
         let peak = PEAK_BYTES.with(Cell::get) - baseline;
         costs.push((retained, peak));
         assert_eq!(reader.scan().count(), count as usize);
-        assert!(retained < 16 * 1024, "retained {retained}");
-        assert!(peak < 64 * 1024, "peak {peak}");
+        // The handle keeps one fixed 16 KiB read window from open onwards,
+        // so that reads after it allocate nothing.
+        const HANDLE_WINDOW: isize = 16 * 1024;
+        assert!(retained < 16 * 1024 + HANDLE_WINDOW, "retained {retained}");
+        assert!(peak < 64 * 1024 + HANDLE_WINDOW, "peak {peak}");
     }
     eprintln!("paged open (retained, peak): {costs:?}");
     assert!(costs[1].0 <= costs[0].0 + 4096);
@@ -318,7 +323,7 @@ fn a_walk_of_n_records_allocates_one_payload_buffer_not_n() -> varlit::Result<()
     build(&large_path, LARGE)?;
     let spec = IndexResidencyFormat::spec();
 
-    // `blocks().iter()` is the probe: the collection is built BEFORE the
+    // `blocks().cursor()` is the probe: the collection is built BEFORE the
     // window opens, so the only allocations inside it are the per-record
     // payload buffers this test is about. `Sample` is all scalars, so decoding
     // one allocates nothing of its own and cannot mask the result.
@@ -327,11 +332,12 @@ fn a_walk_of_n_records_allocates_one_payload_buffer_not_n() -> varlit::Result<()
     // no integrity policy and `verify_all` returns 0 without reading anything.
     let walk = |path: &Path| -> varlit::Result<(isize, isize)> {
         let file = varlit::VarlitFile::open_readonly(spec, path)?;
-        let blocks = file.blocks::<Sample>()?;
+        let blocks = crate::pages::all_blocks!(file, Sample)?;
+        let mut cursor = blocks.cursor();
+        let mut sample = Sample::empty();
         let (bytes_before, allocs_before) = totals();
         let mut seen = 0usize;
-        for value in blocks.iter() {
-            let _ = value?;
+        while cursor.next_into(&mut sample)? {
             seen += 1;
         }
         let (bytes_after, allocs_after) = totals();
@@ -407,7 +413,8 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
     // Warm both buffers on the first record, then measure the rest: what is
     // being asserted is that steady-state reads allocate nothing, not that the
     // very first one does.
-    let _: Sample = file.decode_block_into(&index[0], &mut payload)?;
+    let mut sample = Sample::empty();
+    file.decode_block_into(&index[0], &mut payload, &mut sample)?;
 
     let (bytes_before, allocs_before) = totals();
     let mut decoded = 0usize;
@@ -415,7 +422,7 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
         if entry.block_id != Sample::ID {
             continue;
         }
-        let sample: Sample = file.decode_block_into(entry, &mut payload)?;
+        file.decode_block_into(entry, &mut payload, &mut sample)?;
         decoded += usize::from(sample.value < u64::from(RECORDS));
     }
     let (bytes_after, allocs_after) = totals();
@@ -436,7 +443,7 @@ fn the_host_owns_the_buffers_and_chooses_whether_to_keep_the_index() -> varlit::
     for _ in 0..4 {
         let file = varlit::VarlitFile::open_readonly_with_scratch(spec, &path, &mut scan_scratch)?;
         file.index_entries_into(&mut index)?;
-        let _: Sample = file.decode_block_into(&index[1], &mut payload)?;
+        file.decode_block_into(&index[1], &mut payload, &mut sample)?;
         drop(file);
     }
     let (bytes_after, allocs_after) = totals();
@@ -531,13 +538,14 @@ fn a_host_supplied_directory_answers_every_read_the_same() -> varlit::Result<()>
     assert_eq!(round_tripped, index);
 
     // and the lazy collection resolves positions identically
-    let resident_vec = file.blocks::<Sample>()?;
+    let resident_vec = crate::pages::all_blocks!(file, Sample)?;
     let supplied_vec = supplied.blocks::<Sample>()?;
     assert_eq!(resident_vec.len(), supplied_vec.len());
-    assert_eq!(
-        resident_vec.get(RECORDS as usize - 1)?,
-        supplied_vec.get(RECORDS as usize - 1)?
-    );
+    let mut from_resident = Sample::empty();
+    let mut from_supplied = Sample::empty();
+    assert!(resident_vec.get(RECORDS as usize - 1, &mut from_resident)?);
+    assert!(supplied_vec.get(RECORDS as usize - 1, &mut from_supplied)?);
+    assert_eq!(from_resident, from_supplied);
 
     // metadata and manifest, which walk the same directory for a different
     // block id
@@ -613,9 +621,16 @@ fn a_handle_can_keep_no_directory_and_still_answer_every_read() -> varlit::Resul
     );
     // Measured 2026-08-05, Linux/ext4, 20,000 records:
     // The slot array is not allocated at all; the remainder is the header
-    // extensions and the block-tail table, both O(schema).
+    // extensions and the block-tail table, both O(schema), plus the open
+    // scan's fixed 16 KiB read window. Measured 2026-11-13: 16,618 bytes at
+    // 20,000 records and the same 16,618 at 80,000, so none of it scales.
+    // Since then the handle also sizes its own 16 KiB read window at open
+    // rather than on its first read: 33,006 bytes, still independent of the
+    // record count.
+    const SCAN_WINDOW: isize = 16 * 1024;
+    const HANDLE_WINDOW: isize = 16 * 1024;
     assert!(
-        without_directory_bytes < slot_array / 100,
+        without_directory_bytes < slot_array / 100 + SCAN_WINDOW + HANDLE_WINDOW,
         "opening without a directory allocated {without_directory_bytes} bytes against \
          {with_directory_bytes} with one; the slot array is {slot_array} bytes. Anything \
          near that means it is still being built and then dropped."
@@ -672,36 +687,26 @@ fn a_handle_can_keep_no_directory_and_still_answer_every_read() -> varlit::Resul
 
     // and reading one record through an entry the caller holds
     let mut payload = Vec::new();
-    let sample: Sample = file.decode_block_into(&index[7], &mut payload)?;
+    let mut sample = Sample::empty();
+    file.decode_block_into(&index[7], &mut payload, &mut sample)?;
     assert_eq!(sample.value, 7);
 
-    // --- 3. the handle's own reads refuse by name, not by emptiness ---
-    fn refused<T>(result: varlit::Result<T>, expected: &str) {
-        match result {
-            Err(varlit::Error::NoResidentDirectory { operation }) => {
-                assert_eq!(operation, expected)
-            }
-            Err(other) => panic!("expected NoResidentDirectory, got {other}"),
-            Ok(_) => panic!("a directory-less handle answered `{expected}` instead of refusing"),
-        }
-    }
-    refused(file.blocks::<Sample>().map(|_| ()), "blocks");
-    refused(file.verify_all().map(|_| ()), "verify_all");
-    refused(file.metadata("owner").map(|_| ()), "metadata");
-    refused(file.index_entries_into(&mut entries), "index_entries");
-    refused(
-        file.decode_blocks_into::<Sample>(&mut decoded),
-        "decode_blocks_into",
-    );
-
-    // `scan` returns an iterator, so its refusal is the first item rather than
-    // an empty walk.
-    let scanned = file.scan().collect::<Vec<_>>();
+    // --- 3. the handle's own reads walk the file instead of refusing ---
+    let samples = index
+        .iter()
+        .filter(|entry| entry.block_id == Sample::ID)
+        .count();
+    assert_eq!(crate::pages::all_blocks!(file, Sample)?.len(), samples);
     assert_eq!(
-        scanned.len(),
-        1,
-        "the refusal must not look like an empty file"
+        file.verify_all()?,
+        varlit::VarlitFile::open_readonly(spec, &large_path)?.verify_all()?
     );
-    refused(scanned.into_iter().next().expect("one item"), "scan");
+    file.index_entries_into(&mut entries)?;
+    assert_eq!(entries, index);
+    file.decode_blocks_into::<Sample>(&mut decoded)?;
+    assert_eq!(decoded.len(), samples);
+    // `scan` answers every record, not an empty walk.
+    let scanned = file.scan().collect::<varlit::Result<Vec<_>>>()?;
+    assert_eq!(scanned.len(), index.len());
     Ok(())
 }

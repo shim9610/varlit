@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 
-use varlit::{LazyOpenSource, Result, VarlitFile, varlit_format};
+use varlit::{LazyOpenSource, Result, VarlitEmpty, VarlitFile, varlit_format};
 
 varlit_format! {
     pub format KeyedResumeFormat {
@@ -116,8 +116,10 @@ fn a_lazy_keyed_resume_answers_what_the_scan_answers() -> Result<()> {
 
     // Not merely equal — the offsets must be the *newest* record per key, which
     // is what the second round exists to make checkable.
+    let mut scratch = Vec::new();
+    let mut block = Channel::empty();
     for (key, offset) in &lazy_channels {
-        let block: Channel = lazy.read_block_at(*offset)?;
+        lazy.read_block_at(*offset, &mut scratch, &mut block)?;
         assert_eq!(block.index, *key);
         assert_eq!(block.value, 1, "the tail must be the second round's record");
     }

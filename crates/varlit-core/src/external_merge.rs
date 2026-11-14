@@ -35,8 +35,8 @@ impl BufferedIndex {
             let sorted = self
                 .pending
                 .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect::<BTreeMap<_, _>>();
+                .map(|(k, v)| Ok((k.try_clone()?, *v)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
             self.disk.as_mut().unwrap().apply(&sorted)?;
             self.pending.clear();
             self.bytes = 0;
@@ -57,7 +57,7 @@ impl BufferedIndex {
             let mut sorted: Vec<_> = self.pending.iter().collect();
             sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
             for (key, value) in sorted {
-                visitor(key.clone(), *value)?;
+                visitor(key.try_clone()?, *value)?;
             }
             Ok(())
         }
@@ -82,7 +82,7 @@ impl BufferedIndex {
 /// need no rewrite. Each buffer is separately bounded; no publication occurs.
 struct SpillBytes {
     memory: std::io::Cursor<Vec<u8>>,
-    disk: Option<File>,
+    disk: Option<crate::spill_file::SpillFile>,
     limit: usize,
 }
 impl SpillBytes {
@@ -119,7 +119,7 @@ impl Write for SpillBytes {
                 .checked_add(bytes.len() as u64)
                 .ok_or(std::io::ErrorKind::InvalidInput)?;
             if end > self.limit as u64 {
-                let mut file = tempfile::tempfile()?;
+                let mut file = crate::spill_file::SpillFile::new()?;
                 file.write_all(self.memory.get_ref())?;
                 file.seek(SeekFrom::Start(self.memory.position()))?;
                 self.disk = Some(file);
@@ -168,6 +168,7 @@ fn store_value<T: VarlitBlock>(
     order: MergeOrder,
     value: Option<T>,
     payload: &mut Vec<u8>,
+    slot: Option<(u64, u64)>,
 ) -> Result<[u8; 52]> {
     let mut meta = [0; 52];
     meta[..24].copy_from_slice(&order_bytes(order));
@@ -188,7 +189,17 @@ fn store_value<T: VarlitBlock>(
             "materialized bytes",
             payload,
         )?;
-        let offset = file.seek(SeekFrom::End(0))?;
+        // The key's previous value is dead once this one is stored, so its
+        // bytes are reused when the new encoding fits them; only a value that
+        // grew is appended. A key updated over and over then costs its largest
+        // value, not the sum of every version.
+        let offset = match slot {
+            Some((offset, len)) if payload.len() as u64 <= len => {
+                file.seek(SeekFrom::Start(offset))?;
+                offset
+            }
+            _ => file.seek(SeekFrom::End(0))?,
+        };
         file.write_all(payload)?;
         meta[24..32].copy_from_slice(&offset.to_le_bytes());
         meta[32..40].copy_from_slice(&(payload.len() as u64).to_le_bytes());
@@ -332,7 +343,11 @@ where
         {
             let input = VarlitFile::open_readonly(spec, path)?;
             let mut payload = Vec::new();
-            for (ordinal, entry) in input.index.iter().enumerate() {
+            // A large input can open from an anchor and keep no record list;
+            // the handle's own directory walks the file in that case, so the
+            // ordinals still match the positions a kept list would give.
+            let records = input.resident_directory("merge_keyed_files")?;
+            for (ordinal, entry) in records.iter().enumerate() {
                 let entry = entry?;
                 if ![T::ID, TOMBSTONE_BLOCK_ID, OP_BLOCK_ID].contains(&entry.block_id) {
                     continue;
@@ -358,7 +373,11 @@ where
                     let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(spec.endian))?;
                     (value.key(), Some(value), None)
                 } else if entry.block_id == TOMBSTONE_BLOCK_ID {
-                    entry.read_payload_snapshot_into(spec, &input.snapshot, &mut payload)?;
+                    entry.read_payload_snapshot_into(
+                        spec.with_strict_read_validation(),
+                        &input.snapshot,
+                        &mut payload,
+                    )?;
                     let Some(key) =
                         decode_internal_key_payload::<T>(spec.endian, &payload, &mut budget)?
                     else {
@@ -366,7 +385,11 @@ where
                     };
                     (key, None, None)
                 } else {
-                    entry.read_payload_snapshot_into(spec, &input.snapshot, &mut payload)?;
+                    entry.read_payload_snapshot_into(
+                        spec.with_strict_read_validation(),
+                        &input.snapshot,
+                        &mut payload,
+                    )?;
                     let Some((key, op)) =
                         decode_internal_op_payload::<T>(spec.endian, &payload, &mut budget)?
                     else {
@@ -377,7 +400,7 @@ where
                 crate::codec::encode_into_limited(
                     &key,
                     spec.endian,
-                    *budget.remaining_policy(),
+                    budget.remaining(),
                     "materialized bytes",
                     &mut encoded,
                 )?;
@@ -414,7 +437,11 @@ where
                     }
                     distinct += 1;
                 }
-                let meta = store_value(spec, &mut values, order, value, &mut encoded_value)?;
+                let slot = old
+                    .as_ref()
+                    .filter(|meta| meta[40] != 0)
+                    .map(|meta| (word(meta, 24), word(meta, 32)));
+                let meta = store_value(spec, &mut values, order, value, &mut encoded_value, slot)?;
                 let at = match found {
                     Some(at) => at,
                     None => insert_key(&mut state, &mut keys, hash, &encoded)?,
@@ -453,6 +480,42 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(miri))]
+    #[test]
+    fn spill_byte_policy_failure_keeps_the_existing_prefix() -> Result<()> {
+        if std::env::var_os("VARLIT_SPILL_BYTE_CHILD").is_none() {
+            let directory = tempfile::tempdir()?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["file::external_merge::tests::spill_byte_policy_failure_keeps_the_existing_prefix", "--exact", "--nocapture"])
+                .env("VARLIT_SPILL_BYTE_CHILD", "1")
+                .env("VARLIT_SPILL_DIR", directory.path())
+                .env("VARLIT_SPILL_MAX_BYTES", "32")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return Ok(());
+        }
+        let mut bytes = SpillBytes::new(16);
+        bytes.write_all(&[7; 8])?;
+        assert_eq!(
+            bytes.write_all(&[8; 32]).unwrap_err().kind(),
+            std::io::ErrorKind::StorageFull
+        );
+        bytes.seek(SeekFrom::Start(0))?;
+        let mut prefix = [0; 8];
+        bytes.read_exact(&mut prefix)?;
+        assert_eq!(prefix, [7; 8]);
+        bytes.write_all(&[9; 8])?;
+        bytes.seek(SeekFrom::Start(8))?;
+        bytes.read_exact(&mut prefix)?;
+        assert_eq!(prefix, [9; 8]);
+        Ok(())
+    }
+
     #[test]
     fn scratch_buffers_stay_in_memory_until_full_and_keep_offsets_on_spill() -> Result<()> {
         let mut bytes = SpillBytes::new(64);

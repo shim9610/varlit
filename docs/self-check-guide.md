@@ -4,7 +4,12 @@ This guide is for application developers who need to decide whether a failure is
 caused by a Varlit library bug, a bad format declaration, a wrong API call, a
 feature flag mismatch, or damaged file bytes.
 
-## Static Format Diagnostics
+## Repository verification
+
+See the [verification guide](verification.md) for native tests, public API
+contracts, Kani, Loom, dependency checks and exact recorded CI results. The
+read-validation, range-streaming and fallible-ownership APIs are available in
+[0.13.0](api-changes.md#0130).
 
 For the repository's portable memory-safety gate, install the qualified Miri
 toolchain and run:
@@ -12,16 +17,21 @@ toolchain and run:
 ```sh
 rustup toolchain install nightly-2026-10-12 --profile minimal --component miri
 python3 scripts/check_miri.py
+python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
 ```
 
 The gate records its toolchain, exact selected tests and complete output in
 `target/miri-report/`. Exclusions and reasons are in
 `scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
+All 55 exclusions also have alternatives and remaining gaps in
+`scripts/miri-exclusion-audit.json`. Alternatives are not equivalent Miri proofs.
 Directory `fsync`, native pathname cleanup and the real-file redb oracle require
 native tests and ASan. Miri does not establish filesystem durability or cover
 the mmap/Windows surface. Default alias and validity checks remain enabled.
 CI also runs the six `codec_array_allocation` integration tests under the same
 interpreter, covering partial drops, array framing and the custom-codec path.
+
+## Static Format Diagnostics
 
 Run diagnostics before creating long-lived files:
 
@@ -50,9 +60,12 @@ for item in &report.items {
 }
 ```
 
-This opens the file read-only, validates record payloads logically, checks
-compression and CRC feature gates, compares embedded manifests when present, and
-reports matrix recovery findings.
+This opens the file read-only, reads logical payload bytes for records in the
+resident directory under the format's ordinary read policy, checks compression
+and CRC feature gates, compares embedded manifests when present, and reports
+matrix recovery findings. It does not decode application types or certify
+coverage of all records. Use the [application qualification template](#application-qualification-template)
+for registered typed decoding and explicit coverage results.
 
 ## End-To-End Self Test
 
@@ -117,6 +130,104 @@ report. The consequence is no longer invisible — the next run's re-acquisition
 fails loudly — but a caller that never runs the self-test still gets no signal
 from that path.
 
+## Application qualification template
+
+No Kani, Lean or compiler plugin is required in an application. Add `tempfile`
+as a development dependency, then adapt the runnable
+[`check_format` example](../crates/varlit/examples/check_format.rs) to your
+actual `varlit_format!` declaration. In this repository, run:
+
+```sh
+cargo run --locked -p varlit --example check_format
+```
+
+In your application's `tests/format_check.rs`, provide at least one value for
+every declared block. Use boundary values and representative nested data as
+additional samples:
+
+```rust
+#[test]
+fn application_format_roundtrips() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let samples = AppFormat::self_test(directory.path().join("samples.varlit"))
+        .with_block(Point { x: u64::MAX, y: i64::MIN })
+        .with_keyed_block(Reading { station: 42, samples: vec![0, 1, u64::MAX] })
+        .cleanup(true)
+        .run_strict();
+    assert!(samples.passed(), "{samples:#?}");
+    Ok(())
+}
+```
+
+Run `cargo test --test format_check` in that project and in its CI.
+`run_strict()` requires a value roundtrip sample for every declared block,
+strict read checks, no unresolved format warnings and no skipped steps. A missing
+sample names the block ID and fails before any file is created. Uncommitted-cell
+and auxiliary-byte probes do not replace value samples. Existing `run()` keeps
+its permissive behavior. Matrix samples use `with_dims` and
+`with_matrix_cell`; they test the supplied cells, not every matrix coordinate.
+
+### Inspect an API-produced artifact
+
+After explicitly publishing writes and closing the writer, inspect the actual
+output with the same format:
+
+```rust
+let report = AppFormat::check_file("output.varlit")?;
+for condition in report.checks() {
+    println!("{} {:?} block={:?} offset={:?}: {} {:?}",
+        condition.code, condition.status, condition.block_id, condition.offset,
+        condition.message, condition.error);
+}
+assert!(report.passed(), "{report:#?}");
+```
+
+The macro registers every declared block type automatically, including
+user-derived types. This read-only check validates native structure, schema
+pinning, embedded manifest identity when present, stored cyclic redundancy
+checks (CRCs), complete typed payload decoding and keyed predecessor identity.
+It includes nonresident records and typed tombstone keys, including
+delete/reinsert chains. An ordinary trusted-read policy cannot disable these
+explicit checks. Physical bytes beyond the inspected publication prevent
+a pass. No writer lock is acquired, removed or repaired.
+
+| Status | Meaning |
+| --- | --- |
+| `Passed` | This condition completed for the inspected bytes |
+| `Violated` | A required condition failed; inspect the error and location |
+| `Unverified` | Coverage or prerequisites are missing, or inspection was refused/interrupted |
+| `NotApplicable` | The format does not require this condition, such as a data CRC it does not store |
+
+`passed()` requires every condition to be `Passed` or `NotApplicable`.
+No observed records for a declared type, disabled/mismatched computed schema
+pinning, an existing writer marker, or insufficient resource limits cannot
+silently pass. Use a fixture containing every block to qualify the whole
+format; an incomplete fixture is not thereby a corrupt file. To inspect
+legitimate larger records, supply finite limits with
+`AppFormat::check_file_with_resource_limits(path, limits)`.
+
+Full matrix-cell payload coverage, custom physical-layout payload mappings and
+declared disk-index companion coherence currently report `Unverified`.
+Merge-operation keys and envelopes are inspected, but their separate operation
+codecs are not registered and therefore also prevent a pass. Custom
+physical layout headers and segment structure are still inspected. Runtime
+sidecar plans attached outside the format declaration are not discovered; this
+checker does not qualify those application-owned companions.
+
+The file and its companions must remain unchanged throughout inspection; marker
+absence alone cannot establish this. Custom codec/key callbacks must terminate,
+respect Rust safety and avoid modifying the inspected files. Catchable callback
+panics produce `Unverified`; aborts and nonterminating callbacks cannot be
+recovered by this API. Read `report.preconditions()` with the results.
+
+These are explicit, potentially full-file checks, outside ordinary reads and
+appends. Work includes the native structural/CRC walks and typed decoding;
+scratch is reused between records, while decoded values and custom keys use
+their normal codec allocation contracts. No constant-time or total process-memory
+bound is implied. A sample pass establishes only those sample roundtrips; an
+artifact pass applies only to that inspection under its listed preconditions.
+Neither is a formal proof for all values, future mutations or crash durability.
+
 ## Resource-Limit Failures
 
 Resource errors are policy results, not automatically library defects:
@@ -151,7 +262,7 @@ python -m venv .venv-tdms
 
 The TDMS harnesses check Varlit-authored example files against `npTDMS` and
 `npTDMS`-authored scalar type matrix files against a Varlit-based example
-adapter. The covered TDMS proof set includes signed/unsigned integer widths,
+adapter. The tested TDMS cases include signed/unsigned integer widths,
 single/double floats, booleans, strings, timestamps, complex single/double
 floats, changed raw-data-index segments, `same-as-previous` raw-index reuse,
 mixed objects in one segment, and Varlit append into an npTDMS-authored file.
@@ -161,8 +272,9 @@ npTDMS-authored direction omits those two because npTDMS 1.11.0 does not author
 them correctly through its normal `ChannelObject` writer path. The BMP harness
 checks a non-TDMS layout in both directions with Pillow.
 
-For TDMS-style work, remember that the repository contains adapter proofs, not
-a Varlit-provided TDMS reader/writer. Varlit owns the generic physical-layout
+For TDMS-style work, the repository contains adapter interoperability examples
+and tests, not a Varlit-provided TDMS reader/writer. Varlit owns the generic
+physical-layout
 capabilities — declaring headers, lead-ins, metadata and raw regions and footers,
 validating literal and caller fields, finalized offsets and segment bounds,
 appending complete segments, and exposing offsets, lengths, byte ranges and
@@ -219,6 +331,27 @@ writer process-kill recovery, native/redb oracles and bounded memory. Real-file
 runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.
+
+The default concurrent workload reads continuously until the writer finishes.
+It measures saturation behavior, with variable total read work. For a paired
+performance comparison, add `--reader-checks-per-epoch 16384` to an indexed
+concurrent case on both sides. Each mutation epoch overlaps the writer with an
+exact batch per reader, then waits for both to finish. Pinned readers retain
+the original snapshot; following readers use the previous confirmed epoch.
+The runner checks every reader's count and deterministic key/snapshot trace.
+No sleep or additional cache budget is used. Keep the original saturation
+results as well, and record CPU quota/throttling before attributing a wall-time
+difference to the library. The fixed-work completion time includes the wait
+for readers; per-epoch `reader_wait_ns` reports it separately.
+
+Compare reports with `python3 scripts/compare_load.py --before before/report.json
+--after after/report.json`; repeat each flag for separate alternating runs.
+Each side needs at least three samples. The comparator rejects unequal work,
+snapshot traces, CPU quotas or workload settings. By default it fails a greater
+than 5% increase in median completion time, CPU time or bytes written, or in
+maximum observed process RSS. Decide the tolerance before measuring; do not
+raise it or discard slow samples to obtain a pass. This local gate does not
+replace latency-distribution review or account for every source of host noise.
 
 For continuous testing, first inspect the space requirement without running:
 

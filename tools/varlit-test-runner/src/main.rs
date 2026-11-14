@@ -197,18 +197,18 @@ impl TestSession {
     }
 
     fn create_in(parent: &Path) -> io::Result<Self> {
-        let nonce = SystemTime::now()
+        let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        Self::create_in_with_nonce(parent, nonce)
+        Self::create_in_with_suffix(parent, suffix)
     }
 
-    fn create_in_with_nonce(parent: &Path, nonce: u128) -> io::Result<Self> {
+    fn create_in_with_suffix(parent: &Path, suffix: u128) -> io::Result<Self> {
         fs::create_dir_all(parent)?;
         for attempt in 0..CREATE_ATTEMPTS {
             let root = parent.join(format!(
-                "{SESSION_PREFIX}{}-{nonce}-{attempt}",
+                "{SESSION_PREFIX}{}-{suffix}-{attempt}",
                 std::process::id()
             ));
             match fs::create_dir(&root) {
@@ -516,14 +516,14 @@ mod tests {
     #[test]
     fn preexisting_candidate_is_never_reused() -> io::Result<()> {
         let parent = TestSession::create()?;
-        let nonce = 7;
+        let suffix = 7;
         let collision = parent
             .path()
-            .join(format!("{SESSION_PREFIX}{}-{nonce}-0", std::process::id()));
+            .join(format!("{SESSION_PREFIX}{}-{suffix}-0", std::process::id()));
         fs::create_dir(&collision)?;
         fs::write(collision.join("must-not-be-overwritten"), b"existing")?;
 
-        let session = TestSession::create_in_with_nonce(parent.path(), nonce)?;
+        let session = TestSession::create_in_with_suffix(parent.path(), suffix)?;
         assert_ne!(session.path(), collision);
         assert_eq!(fs::read_dir(session.path())?.count(), 0);
         assert!(collision.join("must-not-be-overwritten").is_file());

@@ -1,4 +1,4 @@
-use varlit::{varlit_format, DiskIndexOptions, StreamOptions, VarlitKeyedBlock};
+use varlit::{varlit_format, DiskIndexOptions, StreamOptions, VarlitEmpty, VarlitKeyedBlock};
 
 varlit_format! {
     pub format HighCardinalityFormat {
@@ -53,7 +53,8 @@ fn indexed_api(
     writer: &mut HighCardinalityFormatIndexedWriter,
 ) -> varlit::Result<()> {
     let key = (2, 3);
-    let _frame = reader.get_frame(&key)?;
+    let mut out = Frame::empty();
+    let _found = reader.get_frame(&key, &mut out)?;
     let frame = Frame {
         scan: key.0,
         frame: key.1,

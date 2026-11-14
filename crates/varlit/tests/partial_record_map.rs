@@ -14,6 +14,8 @@
 //! prefix a full open would have produced. `a_completed_map_is_the_open_scans_index`
 //! is that check, and it is the reason the walk skips non-resident blocks and
 //! stops at the snapshot end rather than the file length.
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{RecordDirectory, VarlitBlock, VarlitFile, varlit_format};
 // Only the frame-counted tests below name this type; `records_framed` is behind
@@ -85,8 +87,8 @@ fn a_completed_map_is_the_open_scans_index() -> varlit::Result<()> {
     // Entry for entry, not merely record for record: the walk must reproduce
     // the committed flag, the footer chain and the payload extents the scan
     // produced, or a read answered through the map is a different read.
-    assert_eq!(map.entries(), &*file.index_entries());
-    assert_eq!(count, file.index_entries().len());
+    assert_eq!(map.entries(), &*crate::pages::all_entries!(file));
+    assert_eq!(count, crate::pages::all_entries!(file).len());
     Ok(())
 }
 
@@ -97,7 +99,7 @@ fn find_stops_at_the_answer_instead_of_at_the_end() -> varlit::Result<()> {
     let path = directory.path().join("stops.varlit");
     build(&path, 20_000)?;
     let file = MapFormat::open_readonly(&path)?;
-    let total = file.index_entries().len();
+    let total = crate::pages::all_entries!(file).len();
     assert!(total > 20_000);
 
     // The whole index, for comparison: every record framed.
@@ -188,10 +190,8 @@ fn the_map_is_a_directory_every_read_already_understands() -> varlit::Result<()>
     ));
 
     // The reads the handle itself must refuse are answered against the prefix.
-    assert!(matches!(
-        file.blocks::<Tick>(),
-        Err(varlit::Error::NoResidentDirectory { .. })
-    ));
+    // A paged read walks the file, so it needs no directory.
+    assert!(!crate::pages::all_blocks!(file, Tick)?.is_empty());
     let mut ticks = Vec::new();
     file.with_directory(&map)?
         .block_entries_into::<Tick>(&mut ticks)?;
@@ -219,7 +219,7 @@ fn clear_rewinds_and_release_keeps_the_ground_covered() -> varlit::Result<()> {
     let path = directory.path().join("clear.varlit");
     build(&path, 300)?;
     let file = MapFormat::open_readonly(&path)?;
-    let total = file.index_entries().len();
+    let total = crate::pages::all_entries!(file).len();
 
     let mut buffer = Vec::new();
     let mut map = file.record_map(&mut buffer)?;
@@ -240,7 +240,7 @@ fn clear_rewinds_and_release_keeps_the_ground_covered() -> varlit::Result<()> {
     assert!(!map.is_complete());
     let (_n, walked) = framed(|| map.fill_to(3));
     assert_eq!(walked, 3);
-    assert_eq!(map.entries(), &file.index_entries()[..3]);
+    assert_eq!(map.entries(), &crate::pages::all_entries!(file)[..3]);
 
     // The bounded-memory pass: every record seen, `k` entries live at a time,
     // and no record read twice.

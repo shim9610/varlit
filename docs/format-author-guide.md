@@ -345,8 +345,12 @@ format authors should still enforce domain limits in custom codecs, adapters,
 compression `max_len`, or caller validation.
 
 For caller-managed compressed blobs, prefer
-`ChunkedBytes::decode_to_vec_limited(limit)` over unbounded decoding when the
-limit is part of the format contract.
+`ChunkedBytes::decode_to_vec_limited(limit)` when a domain ceiling should replace
+the standard decoded-output ceiling. If whole-output materialization is refused,
+the caller can choose the `stream_range` API (available in 0.13.0) with a fixed
+buffer and explicit decoder-window policy. That requires an already available `ChunkedBytes`
+and does not override the enclosing record's limits. Callback output remains
+provisional until success; see [range streaming](chunk-streaming.md).
 
 For physical records, use
 `RecordIndexEntry::read_payload_limited(path, physical_limit)` to cap stored
@@ -357,6 +361,14 @@ before either allocation. These are caller policy controls; Varlit does not gues
 a global domain ceiling.
 
 ## Integrity Policy
+
+The declarations below specify stored checksums. The 0.13.0
+`ReadLimits::with_read_validation` API independently selects optional read checks;
+it does not change these declarations or their schema fingerprints. An unset
+override preserves existing behavior. CRC-on choices require a checksum-bearing
+format; all choices retain bounds, decoder limits and publication guards. Use
+the [read-validation table](api-reference.md#read-validation) to configure a
+runtime override rather than changing the format's stored integrity policy.
 
 `integrity: none` performs structural parsing only. It does not detect payload
 bit flips unless decoding happens to fail.
@@ -416,7 +428,8 @@ Then:
 let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
 
-let mark = file.read_header_block::<Watermark>()?;   // takes &self, no I/O
+let mut mark = Watermark::empty();
+let found = file.read_header_block::<Watermark>(&mut mark)?; // &self, no I/O
 let left = file.header_slots_free_bytes()?;
 ```
 
@@ -521,10 +534,6 @@ nothing reads. Each segment record carries 73 bytes per record it covers, so the
 bytes it costs are set by how often you flush; it pays for itself at a commit
 point every few hundred records and not at a commit point per record.
 
-Measured with a commit point every 256 records and 4 KiB payloads: an 852 MB,
-200,000-record file opens in 370 ms instead of 5,867 ms, framing 782 records
-instead of 200,782.
-
 **Finish writing with `flush()`.** Open finds the chain by looking at the record
 at the end of the file, so a writer that stops on a data record leaves nothing to
 start from and the open scans the whole file — correct, but with none of the
@@ -535,7 +544,7 @@ for i in 0..n {
     writer.push(&block)?;
     if i % 256 == 255 { writer.flush()?; }
 }
-writer.flush()?;   // <-- without this, n = 50_000 opens in 1,272 ms, not 60 ms
+writer.flush()?;   // Ensure the final record exposes the segment chain.
 ```
 
 A file it cannot account for — one written before you enabled it, one whose
@@ -563,16 +572,6 @@ let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;             // reads nothing yet
 let hit = map.find(|entry| entry.block_id == Note::ID)?; // walks until it finds
 ```
-
-**Which of the two you want is a disk-size question**, and it is the only
-question. Measured on a 31 MB, 50,000-record file with a commit point every 500
-records:
-
-| | read syscalls at open | on-disk cost | builds an index? |
-| --- | --- | --- | --- |
-| neither (scan) | 100,316 | — | yes |
-| `segment_on_flush` | 516 | **+3.67 MB** | yes |
-| `open_digest_on_flush` | **20** | **+12.8 KB** | no |
 
 A segment carries an index entry per record it covers, so what it costs on disk
 tracks your record count. A digest carries 12 bytes per *distinct block id*, so
@@ -630,9 +629,8 @@ assert_eq!(source, LazyOpenSource::HeaderTails);
 format**, the same at two hundred records and at two billion. The `+ 10` is one
 slot per block id varlit reserves for its own records. The update rides
 the durability request that already ends a commit, so there is **no extra
-`fsync`**. Measured on the two-block fixture: a scanning open frames every
-record; this one frames **4** — the commit marker plus one per distinct block id
-— and frames the same 4 on a file ten times larger.
+`fsync`**. Opening from header tails reads the commit marker and declared block
+tails instead of scanning every data-record header.
 
 **What it requires.** `block_offset_chain`, which it turns on for you;
 `integrity: crc32` (or `crc32_with_header`); and a `transaction_marker` commit

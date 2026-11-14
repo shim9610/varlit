@@ -141,7 +141,7 @@ Both refusals are measured in `crates/varlit/tests/matrix_chunks.rs`, by
 > no growing matrix dimension, still does not refuse; it reports 0 cells cleared,
 > because it cannot count bits it is discarding when every count authenticates
 > what it reads. See
-> [API Changes §A.5](api-changes.md#a5-changed-behaviour-at-an-unchanged-signature-in-050).
+> [API Changes §A.5](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/docs/api-changes.md#a5-changed-behaviour-at-an-unchanged-signature-in-050).
 
 ## Rebuild Commit Map
 

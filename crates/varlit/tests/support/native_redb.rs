@@ -68,19 +68,22 @@ fn verify(
     times: &mut Timings,
 ) {
     let table = transaction.open_table(TABLE).unwrap();
+    // Caller-owned outputs, reused across every key like a real read loop.
+    let mut item = <Item as varlit::VarlitEmpty>::empty();
+    let mut other = <Other as varlit::VarlitEmpty>::empty();
     for key in keys {
         let name = String::from_utf8(key[1..].to_vec()).unwrap();
         let actual = timed(&mut times.native_read, || {
             if key[0] == 1 {
                 reader
-                    .get_item(&name)
+                    .get_item(&name, &mut item)
                     .unwrap()
-                    .map(|v| encoded(v.value, &v.payload))
+                    .then(|| encoded(item.value, &item.payload))
             } else {
                 reader
-                    .get_other(&name)
+                    .get_other(&name, &mut other)
                     .unwrap()
-                    .map(|v| encoded(v.value, &v.payload))
+                    .then(|| encoded(other.value, &other.payload))
             }
         });
         let reference = timed(&mut times.redb_read, || {

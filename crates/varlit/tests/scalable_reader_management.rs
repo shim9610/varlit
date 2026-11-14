@@ -4,7 +4,17 @@ use std::sync::{
     Barrier,
     atomic::{AtomicBool, Ordering},
 };
-use varlit::{BatchOptions, DiskIndexError, DiskIndexOptions, Error, StreamOptions, varlit_format};
+use varlit::{
+    BatchOptions, DiskIndexError, DiskIndexOptions, Error, StreamOptions, VarlitEmpty,
+    varlit_format,
+};
+
+/// The value of the latest `Item` for `key`, through the caller-owned read.
+fn item_value(reader: &ManagedIndexedReader, key: u64) -> varlit::Result<u64> {
+    let mut item = Item::empty();
+    assert!(reader.get_item(&key, &mut item)?);
+    Ok(item.value)
+}
 
 varlit_format! {
     pub format Managed {
@@ -51,32 +61,36 @@ fn moving_reader_with_live_local_cursors_keeps_positions_independent() -> varlit
             // Move the reader, never a cursor or a shared reader reference.
             let reader = reader;
             barrier.wait();
+            let mut item = Item::empty();
             for key in 0..10000 {
+                assert!(reader.get_item(&key, &mut item)?);
                 assert_eq!(
-                    reader.get_item(&key)?,
-                    Some(Item {
+                    item,
+                    Item {
                         key,
                         value: key * 3
-                    })
+                    }
                 );
             }
             reader.verify_all()?;
             Ok(())
         });
         barrier.wait();
+        let mut item = Item::empty();
         for key in 0..10000 {
             for cursor in &mut cursors {
+                assert!(cursor.next_into(&mut item)?);
                 assert_eq!(
-                    cursor.next().transpose()?,
-                    Some(Item {
+                    item,
+                    Item {
                         key,
                         value: key * 3
-                    })
+                    }
                 );
             }
         }
         for cursor in &mut cursors {
-            assert!(cursor.next().is_none());
+            assert!(!cursor.next_into(&mut item)?);
         }
         worker.join().expect("reader panicked")
     })
@@ -86,13 +100,18 @@ fn moving_reader_with_live_local_cursors_keeps_positions_independent() -> varlit
 fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("retention.varlit");
-    let options = DiskIndexOptions::default();
+    // Lag is counted in confirmed sidecar generations, so confirm each sync.
+    let options = DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..DiskIndexOptions::default()
+    };
     let mut writer = Managed::create_indexed_writer(&path, options)?;
     writer.push_item(&Item { key: 1, value: 1 })?;
     writer.immediate()?;
     let mut old = Managed::open_indexed_reader(&path, options)?;
     let mut idle = Managed::open_indexed_reader(&path, options)?;
-    let cursor = idle.items()?;
+    let mut cursor = idle.items()?;
+    let mut item = Item::empty();
     let before = old.snapshot_status()?;
     for value in 2..=8 {
         writer.push_item(&Item { key: 1, value })?;
@@ -101,26 +120,30 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
     let lag = old.snapshot_status()?;
     assert_eq!(lag.generation, before.generation);
     assert_eq!(lag.confirmed_generation - lag.generation, 7);
-    assert_eq!(lag.records_behind, 7);
+    // Seven records and their seven sync markers.
+    assert_eq!(lag.records_behind, 14);
     assert!(lag.bytes_behind > 0);
     assert!(idle.release_snapshot());
     assert!(!idle.release_snapshot());
     assert!(!idle.snapshot_status()?.pinned);
     assert!(
-        matches!(idle.get_item(&1), Err(Error::DiskIndex(error)) if matches!(*error, DiskIndexError::SnapshotReleased))
+        matches!(idle.get_item(&1, &mut item), Err(Error::DiskIndex(error)) if matches!(*error, DiskIndexError::SnapshotReleased))
     );
-    assert_eq!(
-        cursor.collect::<varlit::Result<Vec<_>>>()?,
-        vec![Item { key: 1, value: 1 }]
-    );
+    let mut walked = Vec::new();
+    while cursor.next_into(&mut item)? {
+        walked.push(item.clone());
+    }
+    assert_eq!(walked, vec![Item { key: 1, value: 1 }]);
     writer.push_item(&Item { key: 1, value: 9 })?; // Unconfirmed remains invisible.
-    assert_eq!(idle.follow()?, 7);
-    assert_eq!(idle.get_item(&1)?.unwrap().value, 8);
+    assert_eq!(idle.follow()?, 14);
+    assert!(idle.get_item(&1, &mut item)?);
+    assert_eq!(item.value, 8);
     assert!(idle.snapshot_status()?.pinned);
     assert!(idle.release_snapshot());
     assert_eq!(idle.follow()?, 0); // Re-pin even without a new generation.
-    assert_eq!(idle.get_item(&1)?.unwrap().value, 8);
-    assert_eq!(old.follow()?, 7);
+    assert!(idle.get_item(&1, &mut item)?);
+    assert_eq!(item.value, 8);
+    assert_eq!(old.follow()?, 14);
     drop(old);
     drop(idle);
     writer.immediate()?;
@@ -131,21 +154,32 @@ fn indexed_snapshot_release_reports_lag_and_reacquires_while_dirty() -> varlit::
 fn stream_release_preserves_cursor_and_follow_releases_old_generation() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("stream.varlit");
-    let options = StreamOptions::default();
+    // Lag is counted in confirmed sidecar generations, so confirm each sync.
+    let options = StreamOptions {
+        state: DiskIndexOptions {
+            confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+            ..DiskIndexOptions::default()
+        },
+        ..StreamOptions::default()
+    };
     let mut writer = Feed::create_stream_writer(&path, options)?;
     writer.push_sample(&Sample { value: 1 })?;
     writer.immediate()?;
     let mut reader = Feed::open_stream_reader(&path, options)?;
     let mut cursor = reader.samples()?;
     assert!(reader.release_snapshot());
-    assert_eq!(cursor.next().transpose()?, Some(Sample { value: 1 }));
+    let mut sample = Sample::empty();
+    assert!(cursor.next_into(&mut sample)?);
+    assert_eq!(sample, Sample { value: 1 });
     writer.push_sample(&Sample { value: 2 })?;
     writer.immediate()?;
     writer.push_sample(&Sample { value: 3 })?;
-    assert_eq!(reader.snapshot_status()?.records_behind, 1);
-    assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
-    assert_eq!(cursor.next().transpose()?, Some(Sample { value: 2 }));
-    assert!(cursor.next().is_none());
+    // The sample and its sync marker.
+    assert_eq!(reader.snapshot_status()?.records_behind, 2);
+    assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
+    assert!(cursor.next_into(&mut sample)?);
+    assert_eq!(sample, Sample { value: 2 });
+    assert!(!cursor.next_into(&mut sample)?);
     assert!(reader.release_snapshot());
     assert_eq!(reader.follow()?, 0);
     assert!(reader.snapshot_status()?.pinned);
@@ -175,7 +209,9 @@ fn cold_reader_retries_never_reject_or_interrupt_the_single_writer() -> varlit::
                             match Managed::open_indexed_reader(&path, options) {
                                 Ok(mut reader) => {
                                     reader.follow()?;
-                                    assert!(reader.get_item(&1)?.unwrap().value <= 16);
+                                    let mut item = Item::empty();
+                                    assert!(reader.get_item(&1, &mut item)?);
+                                    assert!(item.value <= 16);
                                 }
                                 Err(Error::IndexBusy) if std::time::Instant::now() < deadline => {
                                     std::thread::yield_now();
@@ -240,23 +276,28 @@ fn compaction_keeps_old_readers_and_follow_adopts_new_file() -> varlit::Result<(
     drop(current);
     assert!(report.after_bytes < report.before_bytes);
     assert_eq!(report.historical_distinct_keys, 200);
+    let mut item = Item::empty();
     for key in 0..200 {
-        assert_eq!(old.get_item(&key)?.unwrap().value, 1);
+        assert!(old.get_item(&key, &mut item)?);
+        assert_eq!(item.value, 1);
     }
-    assert_eq!(cursor.next().transpose()?.unwrap().value, 1);
+    assert!(cursor.next_into(&mut item)?);
+    assert_eq!(item.value, 1);
     writer.push_item(&Item { key: 0, value: 20 })?;
     assert!(writer.compact_index().is_err()); // Never inserts an implicit sync.
     old.follow()?;
-    assert_eq!(old.get_item(&0)?.unwrap().value, 19);
+    assert!(old.get_item(&0, &mut item)?);
+    assert_eq!(item.value, 19);
     writer.immediate()?;
     old.follow()?;
-    assert_eq!(old.get_item(&0)?.unwrap().value, 20);
+    assert!(old.get_item(&0, &mut item)?);
+    assert_eq!(item.value, 20);
     drop(writer);
     let mut reopened = Managed::open_indexed_writer(&path, options)?;
     reopened.push_item(&Item { key: 0, value: 21 })?;
     reopened.immediate()?;
     old.follow()?;
-    assert_eq!(old.get_item(&0)?.unwrap().value, 21);
+    assert_eq!(item_value(&old, 0)?, 21);
     Ok(())
 }
 
@@ -267,7 +308,7 @@ fn independent_process_reader_child() -> varlit::Result<()> {
     let options = DiskIndexOptions::default();
     let mut reader = Managed::open_indexed_reader(&path, options)?;
     let pinned = Managed::open_indexed_reader(&path, options)?;
-    assert_eq!(reader.get_item(&0)?.unwrap().value, 1);
+    assert_eq!(item_value(&reader, 0)?, 1);
     std::fs::write(path.with_extension("ready"), b"ready")?;
     // Bound a stalled publication, not all 256 durable commits on a busy disk.
     let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -275,10 +316,10 @@ fn independent_process_reader_child() -> varlit::Result<()> {
     let mut checks = 0;
     loop {
         reader.follow()?;
-        let a = reader.get_item(&0)?.unwrap().value;
-        let b = reader.get_item(&1)?.unwrap().value;
+        let a = item_value(&reader, 0)?;
+        let b = item_value(&reader, 1)?;
         assert_eq!(a, b, "mixed confirmed generations");
-        assert_eq!(pinned.get_item(&0)?.unwrap().value, 1);
+        assert_eq!(item_value(&pinned, 0)?, 1);
         if a != last_value {
             assert!(a > last_value, "confirmed generation moved backwards");
             last_value = a;
@@ -287,7 +328,7 @@ fn independent_process_reader_child() -> varlit::Result<()> {
         checks += 1;
         if path.with_extension("done").exists() {
             reader.follow()?;
-            assert_eq!(reader.get_item(&0)?.unwrap().value, 257);
+            assert_eq!(item_value(&reader, 0)?, 257);
             break;
         }
         assert!(

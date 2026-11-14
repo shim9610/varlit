@@ -12,7 +12,7 @@ pub(super) trait ScanBuffer: RecordDirectory {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>>;
@@ -56,7 +56,7 @@ impl ScanBuffer for Vec<RecordIndexEntry> {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>> {
@@ -72,21 +72,25 @@ impl ScanBuffer for Vec<RecordIndexEntry> {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct BufferedScan {
     rows: SpillRows<77>,
-    spec: FormatSpec,
+    budget: usize,
     committed: bool,
     kept: usize,
     marker_seen: bool,
     suffix: Vec<RecordIndexEntry>, // at most SEGMENT and DIGEST after a marker
     previous: Option<u64>,
-    sequences: Option<crate::disk_index::ScratchIndex>,
+    sequences: Option<SequenceSet>,
 }
 impl BufferedScan {
     pub(super) fn new(spec: FormatSpec) -> Self {
+        Self::with_budget(resident_index::slot_budget(spec))
+    }
+    fn with_budget(budget: usize) -> Self {
         Self {
-            rows: SpillRows::new(resident_index::buffer_bytes(spec)),
-            spec,
+            rows: SpillRows::new(budget),
+            budget,
             committed: false,
             kept: 0,
             marker_seen: false,
@@ -95,7 +99,20 @@ impl BufferedScan {
             sequences: None,
         }
     }
-    fn encode(entry: &RecordIndexEntry) -> [u8; 77] {
+    /// A publication replay needs empty logical state, not a second allocation
+    /// of the same staging capacity. SpillRows truncation hides every old row
+    /// and clears cached reads; subsequent spills overwrite the abandoned tail.
+    /// The normal reset still releases all staging after publication/failure.
+    pub(super) fn rewind_for_replay(&mut self) {
+        self.rows.truncate(0);
+        self.committed = false;
+        self.kept = 0;
+        self.marker_seen = false;
+        self.suffix.clear();
+        self.previous = None;
+        self.sequences = None;
+    }
+    pub(super) fn encode(entry: &RecordIndexEntry) -> [u8; 77] {
         let mut row = [0; 77];
         row[..4].copy_from_slice(&entry.block_id.to_le_bytes());
         row[4..6].copy_from_slice(&entry.block_version.to_le_bytes());
@@ -117,14 +134,8 @@ impl BufferedScan {
         row[73..77].copy_from_slice(&entry.mutable_flags.to_le_bytes());
         row
     }
-    fn remember_sequence(index: &mut crate::disk_index::ScratchIndex, sequence: u64) -> Result<()> {
-        let key = sequence.to_be_bytes().to_vec();
-        if index.get(&key)?.is_some() {
-            return Err(Error::InvalidCanonicalEncoding(
-                "duplicate native record sequence",
-            ));
-        }
-        index.apply(&std::collections::BTreeMap::from([(key, [0; 52])]))
+    pub(super) fn remember_sequence(index: &mut SequenceSet, sequence: u64) -> Result<()> {
+        index.insert(sequence)
     }
 }
 impl RecordDirectory for BufferedScan {
@@ -141,7 +152,7 @@ impl RecordDirectory for BufferedScan {
 }
 impl ScanBuffer for BufferedScan {
     fn reset(&mut self) {
-        *self = Self::new(self.spec);
+        *self = Self::with_budget(self.budget);
     }
     fn reserve_entry(&mut self, spec: FormatSpec) -> Result<()> {
         spec.read_limits
@@ -151,7 +162,7 @@ impl ScanBuffer for BufferedScan {
     }
     fn push_entry(&mut self, entry: RecordIndexEntry) -> Result<()> {
         if self.sequences.is_none() && self.previous.is_some_and(|prev| prev >= entry.sequence) {
-            let mut index = crate::disk_index::ScratchIndex::new(0)?;
+            let mut index = SequenceSet::new()?;
             for old in self.entries() {
                 Self::remember_sequence(&mut index, old?.sequence)?;
             }
@@ -197,7 +208,7 @@ impl ScanBuffer for BufferedScan {
     fn segments(
         &mut self,
         spec: FormatSpec,
-        file: &mut File,
+        file: &mut crate::primary_file::PrimaryFile,
         start: u64,
         end: u64,
     ) -> Result<Option<ScannedIndex>> {
@@ -216,5 +227,181 @@ impl ScanBuffer for BufferedScan {
             self.rows.push(Self::encode(&entry))?;
         }
         Ok(Some(scanned))
+    }
+}
+
+/// A private pending range. A resumed range is only a discovery hint: before
+/// publishing a commit found across calls, follow validates the current range
+/// again. No staged entry or checksum verdict is published from the cache.
+#[derive(Debug)]
+pub(super) struct FollowScan {
+    pub(super) progress: Option<ScanProgress>,
+    pub(super) rows: BufferedScan,
+    pub(super) observed_len: u64,
+    pub(super) observed_modified: Option<SystemTime>,
+    pub(super) writer_marker: Option<File>,
+    pub(super) writer_epoch: Option<WriterCacheEpoch>,
+    marker_path: PathBuf,
+}
+impl FollowScan {
+    pub(super) fn new(spec: FormatSpec, from: u64, path: &Path) -> Result<Self> {
+        let mut marker_path = OsString::new();
+        marker_path
+            .try_reserve_exact(path.as_os_str().len().saturating_add(5))
+            .map_err(|_| Error::AllocationFailed {
+                resource: "follow marker path",
+                requested: path.as_os_str().len().saturating_add(5) as u64,
+            })?;
+        marker_path.push(path.as_os_str());
+        marker_path.push(".lock");
+        let marker_path = PathBuf::from(marker_path);
+        let marker = open_follow_marker(&marker_path);
+        let writer_epoch = marker.as_ref().and_then(writer_cache_epoch);
+        Ok(Self {
+            progress: Some(ScanProgress::new(spec, from, 0, Some(from))?),
+            rows: BufferedScan::new(spec),
+            observed_len: from,
+            observed_modified: None,
+            writer_marker: marker,
+            writer_epoch,
+            marker_path,
+        })
+    }
+    pub(super) fn epoch(&mut self) -> Option<WriterCacheEpoch> {
+        // Open the current marker while retaining the previous object pin.
+        // Thus unlink/recreate cannot reuse the old object's identity.
+        let marker = open_follow_marker(&self.marker_path);
+        let epoch = marker.as_ref().and_then(writer_cache_epoch);
+        self.writer_marker = marker;
+        epoch
+    }
+}
+fn open_follow_marker(path: &Path) -> Option<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path).ok()?;
+        let metadata = file.metadata().ok()?;
+        (metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+            .then_some(file)
+    }
+    #[cfg(not(windows))]
+    {
+        let file = options.open(path).ok()?;
+        file.metadata().ok()?.is_file().then_some(file)
+    }
+}
+
+/// The sequences a scan has seen, for refusing a duplicate once they are no
+/// longer in increasing order.
+///
+/// New sequences gather in a bounded in-memory batch and go into the scratch
+/// tree one batch at a time. The tree copies every page an update touches, so
+/// one update per record rewrote a leaf and its ancestors for every record —
+/// several 4 KiB pages each, never reclaimed. A sorted batch touches each
+/// leaf once.
+pub(crate) struct SequenceSet {
+    index: crate::disk_index::ScratchIndex,
+    pending: std::collections::BTreeSet<u64>,
+}
+
+impl std::fmt::Debug for SequenceSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SequenceSet")
+            .field("pending", &self.pending.len())
+            .finish()
+    }
+}
+
+/// Sequences held in memory before a batch goes to the tree: 64 Ki of them,
+/// a few MiB at most.
+const SEQUENCE_BATCH: usize = 64 * 1024;
+
+impl SequenceSet {
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            index: crate::disk_index::ScratchIndex::new(0)?,
+            pending: std::collections::BTreeSet::new(),
+        })
+    }
+
+    /// Records `sequence`, refusing one already seen.
+    pub(crate) fn insert(&mut self, sequence: u64) -> Result<()> {
+        let duplicate = || Error::InvalidCanonicalEncoding("duplicate native record sequence");
+        if self.pending.contains(&sequence) || self.index.get(&sequence.to_be_bytes())?.is_some() {
+            return Err(duplicate());
+        }
+        self.pending.insert(sequence);
+        if self.pending.len() >= SEQUENCE_BATCH {
+            let mut batch = std::collections::BTreeMap::new();
+            for sequence in std::mem::take(&mut self.pending) {
+                let mut key = Vec::new();
+                key.try_reserve_exact(8)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "sequence key",
+                        requested: 8,
+                    })?;
+                key.extend_from_slice(&sequence.to_be_bytes());
+                batch.insert(key, [0; 52]);
+            }
+            self.index.apply(&batch)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+
+    #[test]
+    fn replay_rewinds_rows_and_commit_state_before_reusing_storage() -> Result<()> {
+        let spec = FormatSpec::builder()
+            .magic(b"VREPLAY1")
+            .build()?
+            .with_resource_limits(crate::ReadLimits::STANDARD);
+        let mut scan = BufferedScan::new(spec);
+        let mut entry = read_index_entry_payload(&[0; 73], 3);
+        entry.block_id = 1;
+        entry.sequence = 7;
+        entry.record_offset = 100;
+        scan.reserve_entry(spec)?;
+        scan.push_entry(entry.clone())?;
+        scan.committed = true;
+        scan.kept = 1;
+        scan.marker_seen = true;
+        scan.suffix.push(entry);
+        scan.rewind_for_replay();
+        assert_eq!(scan.record_count(), 0);
+        assert!(!scan.committed && !scan.marker_seen);
+        assert_eq!(scan.kept, 0);
+        assert!(scan.suffix.is_empty() && scan.previous.is_none() && scan.sequences.is_none());
+        let mut next = read_index_entry_payload(&[0; 73], 3);
+        next.block_id = 2;
+        next.sequence = 0;
+        next.record_offset = 1000;
+        scan.reserve_entry(spec)?;
+        scan.push_entry(next)?;
+        assert_eq!(scan.record_count(), 1);
+        let observed = scan.record_at(0)?;
+        assert_eq!(
+            (observed.block_id, observed.sequence, observed.record_offset),
+            (2, 0, 1000)
+        );
+        assert!(!observed.committed);
+        assert!(scan.record_at(1).is_err());
+        Ok(())
     }
 }

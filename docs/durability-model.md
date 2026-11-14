@@ -285,7 +285,7 @@ Unchanged bitmap and physical-page caches survive. Different epochs trigger the
 full layout load against the replacement file. Follow never initiates compaction.
 All fallible work precedes adoption; a refused delta leaves the old root, bitmap
 state and log EOF visible. A damaged or quarantined old directory requires
-reopening for recovery. VMAT v5 stores both forward and directly addressed reverse
+reopening for recovery. VMAT v5 and later store both forward and directly addressed reverse
 metadata inside the same generation; readers do not reconstruct a private mirror.
 A failure while updating either direction poisons the writer, so a partially
 updated working root cannot become a confirmed generation.
@@ -313,6 +313,29 @@ The durable append-log order is:
 2. flush and `sync_data` those bytes
 3. write the commit marker
 4. flush and `sync_all` the marker
+
+### Single-barrier commit
+
+`transaction_marker(on_flush, single_barrier)` /
+`transaction_marker(explicit, single_barrier)` drop step 2: records and marker
+are written and made durable by one `sync_all`. Storage may then persist the
+marker without some bytes before it, so the marker (v2 payload `VCM2`) names
+what it commits: the newest marker known durable when it was written (its
+*anchor*, the last marker a completed `commit_durable` barrier covered), and
+the count and order-sensitive checksum chain of every record after the
+anchor's commit point. Every open route — scan, segment chain, header tails,
+open digest — verifies the newest marker's run of records with full checksums
+before treating it as a commit point. A run that does not verify is not
+committed: the file ends at the anchor's commit point, a read-only open shows
+exactly that prefix without changing the file, and a writer open truncates the
+rest. Non-durable `commit()` markers after the anchor roll back with it.
+
+The mode requires `integrity: crc32_with_header` (so every byte of every record
+is under a checksum open can check) and refuses `recovery: mark_tail`. A writer
+handle pays one extra `sync_all` before its first record, so that what an
+earlier handle left unsynced is durable before it becomes the anchor. Strict
+`open_*_lazy` routes return an error for an unverified newest transaction;
+`*_lazy_or_scan` falls back to the scan.
 
 Matrix `commit_*` updates working visibility without a hidden fsync. A reader
 sees those changes only after explicit generation publication.
@@ -386,59 +409,39 @@ process-crash tests, not a substitute for power-loss testing of a storage device
 
 ## Allocator Failure And Published Outcomes
 
-The sentence above is a statement about the value a call **returns**, and F-06
-is the reason it now says so. Both post-commit variants box their event and
-their source to keep `Error` small, so constructing either one allocates twice
-*after* the cell is authoritative. A review harness failed the very next
-allocation at each branch: both children terminated on a 56-byte allocation
-while the reopened file contained the committed values.
+Published-outcome errors must preserve the distinction between a failed operation
+and an operation that completed but needs recovery or notification. Allocation
+refusal must not turn the latter into an apparently retryable append.
 
-Varlit has one policy on allocator failure, and it applies to every contract in
-this document, not only to the matrix ones:
+`write_matrix_cell_durable` now reserves the event box and an error box **before
+mutation** using `try_box`. The error box initially holds a scalar placeholder;
+a later failure moves its actual source into that already allocated slot. Thus
+both boxes retain their existing public types without a post-commit allocation.
+The hook receives the same event. A refusal of either reservation returns before
+writing the cell; a post-commit hook failure still returns
+`MatrixCommittedButHookFailed`. The successful durable-write path pays two
+allocations, measured separately in the ownership qualification.
 
-- **Content-sized allocations** — anything whose size is chosen by file bytes,
-  a caller-supplied count, or any other quantity a producer of the input can
-  influence — are charged against a `ReadLimits` ceiling *before* the memory is
-  taken and are then reserved fallibly. A refusal is the typed
-  `Error::AllocationFailed` or `Error::LimitExceeded { resource, .. }`, and the
-  operation reports it without mutating anything. This is the class that
-  hostile input can reach, and it is the class the limits exist for.
-- **Shape-sized allocations** — fixed-size allocations bounded by the program's
-  own compile-time shape, such as the two boxes a published-outcome variant
-  holds — use ordinary infallible allocation. `Box::new` has no fallible form,
-  and the Rust default is to abort the process when the allocator refuses.
-  Varlit does not pretend otherwise.
+Record append, index publication and replacement errors use fallible boxing.
+If detailed source/path storage cannot be allocated, they return
+`Error::ErrorContextAllocationFailed` with an inline `AllocationFailureContext`:
+append/commit sequence, published index, replacement rebind (including pending
+parent sync), published replacement, or experimental reuse generation and its
+uncertainty. Details can be lost; the completed/uncertain outcome is retained.
+A caller must inspect that outcome before retrying. Disk-index wrapping preserves
+a primary publication error even when an additional wrapper cannot be allocated.
 
-The division matters because only a content-sized allocation is one a producer
-of the input can steer, which is why that class carries the ceilings and the
-typed refusals and the other does not.
+This replaces the earlier abort-on-error-box policy. Preallocation of a scalar
+placeholder makes it possible to reserve space before the eventual source error
+exists; recursion in `Error` does not prevent allocating that box in advance.
 
-The consequence for every published-outcome variant in this document is
-precise: a shape-sized allocation failure after publication
-**terminates the process** rather than substituting a different error. No caller ever observes a
-*wrong* outcome; a caller can observe *no* outcome, which is the same thing a
-`SIGKILL` or a power loss delivers at that instant. The on-disk state is the
-published state, so the correct recovery is the one this document already
-prescribes for a crash: reopen the file and read what is there. In the F-06
-harness the reopened file held the committed cell, which is exactly the claim
-the variant would have made.
-
-Three alternatives were considered and rejected for the post-commit path:
-
-- pre-staging the outcome boxes before the commit removes the event
-  allocation but not `Box::new(source)` — the source only exists once the step
-  has failed, and `Error` is recursive, so it cannot be carried inline. It also
-  puts two allocations on the success path of every durable cell write to serve
-  a path that ends in `abort`;
-- a non-recursive post-commit outcome type cannot carry the caller's own hook
-  error, which is an arbitrary `Error` and may itself own heap;
-- a fallible-allocation form of the whole error family would make every
-  `Result` in the crate depend on an allocator that has already failed.
-
-The same policy is why round 12's `SparseBitmap::clone` in the CRC rebuild was
-*removed* rather than made fallible: deleting a shape-sized allocation is worth
-doing where it is free, and dressing one up in a `Result` it cannot honour is
-not.
+These paths do not prove global allocation safety. Existing public `Clone` and
+infallible convenience APIs remain compatible, `BTreeMap` allocation is deferred,
+and formatting, application codecs/callbacks and other dependency internals need
+separate coverage. An allocator that aborts internally, reference-count overflow,
+an OS OOM kill or a power loss cannot be converted to an ordinary Rust error by
+these helpers. Other allocation errors also retain their existing writer
+poison/recovery rules; there is no blanket promise that retrying is safe.
 
 ## Sync Granularity
 

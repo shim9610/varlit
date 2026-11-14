@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::fs::{OpenOptions, remove_file};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -5,7 +8,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "integrity")]
 use varlit::ReadLimits;
-use varlit::{Error, RecoveryPolicy, VarlitBlock, VarlitFile, VarlitMerge, varlit_format};
+use varlit::{
+    Error, RecoveryPolicy, VarlitBlock, VarlitEmpty, VarlitFile, VarlitMerge, varlit_format,
+};
+
+/// Record 0 of `blocks`, decoded into a fresh value.
+fn first_value(blocks: &crate::pages::Blocks<NativeValue>) -> varlit::Result<Option<NativeValue>> {
+    let mut out = NativeValue::empty();
+    Ok(blocks.get(0, &mut out)?.then_some(out))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, VarlitBlock)]
 #[varlit(id = 901, version = 1, kind = "fixed")]
@@ -123,21 +134,22 @@ fn native_reader_and_lazy_collection_stay_on_original_path_generation() -> varli
 
     write_native_value(&path, 10)?;
     let reader = NativeSecurityFormat::open_readonly(&path)?;
-    let lazy = reader.blocks::<NativeValue>()?;
+    let lazy = crate::pages::all_blocks!(reader, NativeValue)?;
     write_native_value(&replacement, 20)?;
 
     remove_file(&path)?;
     std::fs::rename(&replacement, &path)?;
 
     assert_eq!(
-        reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&crate::pages::all_blocks!(reader, NativeValue)?)?,
         Some(NativeValue { value: 10 })
     );
-    assert_eq!(lazy.get(0)?, Some(NativeValue { value: 10 }));
+    assert_eq!(first_value(&lazy)?, Some(NativeValue { value: 10 }));
     assert_eq!(
-        NativeSecurityFormat::open_readonly(&path)?
-            .blocks::<NativeValue>()?
-            .get(0)?,
+        first_value(&crate::pages::all_blocks!(
+            NativeSecurityFormat::open_readonly(&path)?,
+            NativeValue
+        )?)?,
         Some(NativeValue { value: 20 })
     );
 
@@ -154,22 +166,23 @@ fn fixed_cow_preserves_old_reader_and_supports_record_footers() -> varlit::Resul
     write_native_value(&path, 1)?;
 
     let old_reader = NativeSecurityFormat::open_readonly(&path)?;
-    let old_lazy = old_reader.blocks::<NativeValue>()?;
+    let old_lazy = crate::pages::all_blocks!(old_reader, NativeValue)?;
     {
         let mut writer = NativeSecurityFormat::open(&path)?;
         writer.replace_fixed(0, &NativeValue { value: 2 })?;
         writer.flush()?;
     }
 
-    assert_eq!(old_lazy.get(0)?, Some(NativeValue { value: 1 }));
+    assert_eq!(first_value(&old_lazy)?, Some(NativeValue { value: 1 }));
     assert_eq!(
-        old_reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&crate::pages::all_blocks!(old_reader, NativeValue)?)?,
         Some(NativeValue { value: 1 })
     );
     assert_eq!(
-        NativeSecurityFormat::open_readonly(&path)?
-            .blocks::<NativeValue>()?
-            .get(0)?,
+        first_value(&crate::pages::all_blocks!(
+            NativeSecurityFormat::open_readonly(&path)?,
+            NativeValue
+        )?)?,
         Some(NativeValue { value: 2 })
     );
 
@@ -194,7 +207,7 @@ fn exclusive_in_place_replace_is_explicitly_not_snapshot_safe() -> varlit::Resul
     writer.flush()?;
 
     assert_eq!(
-        old_reader.blocks::<NativeValue>()?.get(0)?,
+        first_value(&crate::pages::all_blocks!(old_reader, NativeValue)?)?,
         Some(NativeValue { value: 3 })
     );
 
@@ -213,7 +226,7 @@ fn duplicate_native_sequences_are_rejected() -> varlit::Result<()> {
         file.push(&NativeValue { value: 1 })?;
         file.push(&NativeValue { value: 2 })?;
         file.flush()?;
-        file.index_entries()[1].record_offset
+        crate::pages::all_entries!(file)[1].record_offset
     };
 
     let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
@@ -241,7 +254,7 @@ fn record_limit_failure_is_fatal_to_recovery_and_preserves_file() -> varlit::Res
         let mut file = NativeSecurityFormat::create(&path)?;
         file.push(&NativeValue { value: 1 })?;
         file.flush()?;
-        file.index_entries()[0].record_offset
+        crate::pages::all_entries!(file)[0].record_offset
     };
 
     let before = std::fs::metadata(&path)?.len();
@@ -303,10 +316,9 @@ fn keyed_tombstone_order_uses_sequence_before_physical_ordinal() -> varlit::Resu
     }
 
     let reader = NativeSecurityFormat::open_readonly(&path)?;
-    assert_eq!(
-        reader.keyed_blocks::<KeyedValue>()?.get(&7)?,
-        Some(KeyedValue { id: 7, value: 3 })
-    );
+    let mut keyed = KeyedValue::empty();
+    assert!(reader.keyed_blocks::<KeyedValue>()?.get(&7, &mut keyed)?);
+    assert_eq!(keyed, KeyedValue { id: 7, value: 3 });
     assert_eq!(
         reader.materialized_keyed_blocks::<KeyedValue>()?.get(&7),
         Some(&KeyedValue { id: 7, value: 3 })

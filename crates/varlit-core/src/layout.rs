@@ -1,3 +1,4 @@
+use crate::TryClone;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
@@ -28,7 +29,7 @@ pub enum LayoutValue {
 impl LayoutValue {
     pub fn to_bytes(&self, field: &'static str) -> Result<Vec<u8>> {
         match self {
-            Self::Bytes(bytes) => Ok(bytes.clone()),
+            Self::Bytes(bytes) => bytes.try_clone(),
             _ => Err(Error::LayoutFieldTypeMismatch(field)),
         }
     }
@@ -684,7 +685,10 @@ fn inspect_layout_file_report_inner<P: AsRef<Path>>(
 
     ensure_custom_layout_spec(spec)?;
     ensure_layout_open_limits(spec)?;
-    let snapshot = SnapshotFile::new(File::open(path.as_ref())?)?;
+    let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+        File::open(path.as_ref())?,
+        None,
+    ))?;
     let file_len = snapshot.len();
     let header = match read_file_header(spec, &snapshot) {
         Ok(header) => header,
@@ -840,7 +844,7 @@ impl LayoutWriter {
                 .create(true)
                 .truncate(false)
                 .open(&path)?;
-            // DUR2-05: bind the single-writer object lock before any
+            // bind the single-writer object lock before any
             // destructive initialization. Opening with `.truncate(true)`
             // would clear the new object inside the pre-bind window where a
             // losing concurrent creator could still hold an unbound handle
@@ -905,7 +909,10 @@ impl LayoutWriter {
             crate::file::with_writer_lock_value(lock, |lock| {
                 let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
                 lock.bind_native(&file, &path)?;
-                let snapshot = SnapshotFile::new(file.try_clone()?)?;
+                let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+                    file.try_clone()?,
+                    None,
+                ))?;
                 let header = read_file_header(spec, &snapshot)?;
                 // Counting, not retaining: the writer's only use for the scan is
                 // the per-name tally the walk already maintains, so nothing here
@@ -1004,7 +1011,7 @@ impl LayoutWriter {
         let (segment_count_index, original_segment_count, next_segment_count) =
             self.segment_count_checkpoint(descriptor.name)?;
 
-        // Shape B, mechanical enforcement (round 12). This writer's flag is not
+        // Shape B, mechanical enforcement. This writer's flag is not
         // a one-way poison: it marks the segment write *in flight*, so a
         // `LayoutWriter` observed part-way through a body refuses every
         // operation, and only a failed rollback leaves it refusing for good.
@@ -1161,7 +1168,7 @@ impl LayoutWriter {
     /// The one poison check for this writer, and the only source of the
     /// witness its guarded operations demand.
     ///
-    /// Shape B, mechanical enforcement (round 12). `PoisonFlag` owns the state
+    /// Shape B, mechanical enforcement. `PoisonFlag` owns the state
     /// and lives in `crate::writer_permit`, so nothing in this file can read or
     /// assign it; the only way to reach [`Self::write_segment_body`] — which
     /// holds every byte this writer puts on disk after creation — is to hold
@@ -1269,7 +1276,10 @@ impl LayoutReader {
         ensure_custom_layout_spec(spec)?;
         ensure_layout_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let snapshot = SnapshotFile::new(File::open(&path)?)?;
+        let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
+            File::open(&path)?,
+            None,
+        ))?;
         let header = read_file_header(spec, &snapshot)?;
         let slots = scan_layout_segment_slots(spec, &snapshot, header.len, header.index_bytes)?;
         Ok(Self {
@@ -1991,7 +2001,7 @@ fn read_static_layout_fields(
         })?;
     for field in descriptors {
         let value = read_layout_value_from_slice(&bytes, relative, *field, endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2635,7 +2645,7 @@ fn read_layout_segment_at(
     for field in descriptor.lead_in.fields {
         let value_offset = position;
         let value = read_layout_value_from_slice(&lead_in_bytes, relative, *field, spec.endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2795,7 +2805,7 @@ fn read_footer_layout_fields(
         })?;
     for field in descriptors {
         let value = read_layout_value_from_slice(&bytes, relative, *field, endian)?;
-        let stored_value = value.clone();
+        let stored_value = value.try_clone()?;
         match field.source {
             LayoutFieldSource::LiteralBytes(expected) => match value {
                 LayoutValue::Bytes(actual) if actual == expected => {}
@@ -2936,7 +2946,7 @@ fn normalize_layout_value(
         (LayoutFieldType::Bytes { len }, LayoutValue::Bytes(bytes))
             if len == bytes.len() as u64 =>
         {
-            LayoutValue::Bytes(bytes.clone())
+            LayoutValue::Bytes(bytes.try_clone()?)
         }
         (LayoutFieldType::U8, LayoutValue::U8(value)) => LayoutValue::U8(*value),
         (LayoutFieldType::U8, LayoutValue::U64(value)) => LayoutValue::U8(
@@ -3235,4 +3245,17 @@ fn write_i64<W: Write>(writer: &mut W, value: i64, endian: Endian) -> Result<()>
     };
     writer.write_all(&bytes)?;
     Ok(())
+}
+
+impl TryClone for LayoutValue {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(match self {
+            Self::Bytes(value) => Self::Bytes(value.try_clone()?),
+            Self::U8(v) => Self::U8(*v),
+            Self::U16(v) => Self::U16(*v),
+            Self::U32(v) => Self::U32(*v),
+            Self::U64(v) => Self::U64(*v),
+            Self::I64(v) => Self::I64(*v),
+        })
+    }
 }

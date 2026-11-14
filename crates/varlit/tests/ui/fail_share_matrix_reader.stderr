@@ -1,12 +1,12 @@
-error[E0277]: `OnceCell<varlit_core::file::ChunkDirectory>` cannot be shared between threads safely
+error[E0277]: `OnceCell<varlit_core::matrix_tiles::api::TiledMatrix>` cannot be shared between threads safely
  --> tests/ui/fail_share_matrix_reader.rs:5:24
   |
 5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OnceCell<varlit_core::file::ChunkDirectory>` cannot be shared between threads safely
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OnceCell<varlit_core::matrix_tiles::api::TiledMatrix>` cannot be shared between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `OnceCell<varlit_core::file::ChunkDirectory>`
+  = help: within `VarlitReader`, the trait `Sync` is not implemented for `OnceCell<varlit_core::matrix_tiles::api::TiledMatrix>`
   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::OnceLock` instead
 note: required because it appears within the type `VarlitFile`
  --> $WORKSPACE/crates/varlit-core/src/file.rs
@@ -27,26 +27,16 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
 
-error[E0277]: `OnceCell<Option<Arc<File>>>` cannot be shared between threads safely
+error[E0277]: `RefCell<varlit_core::file::record_read::ChunkCache>` cannot be shared between threads safely
  --> tests/ui/fail_share_matrix_reader.rs:5:24
   |
 5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OnceCell<Option<Arc<File>>>` cannot be shared between threads safely
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::file::record_read::ChunkCache>` cannot be shared between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `OnceCell<Option<Arc<File>>>`
-  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::OnceLock` instead
-note: required because it appears within the type `varlit_core::matrix::region_reader::MatrixReadPool`
- --> $WORKSPACE/crates/varlit-core/src/matrix/region_reader.rs
-  |
-  | pub struct MatrixReadPool {
-  |            ^^^^^^^^^^^^^^
-note: required because it appears within the type `varlit_core::file::record_file::RecordFile`
- --> $WORKSPACE/crates/varlit-core/src/file/record_file.rs
-  |
-  | pub struct RecordFile {
-  |            ^^^^^^^^^^
+  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::file::record_read::ChunkCache>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
 note: required because it appears within the type `VarlitFile`
  --> $WORKSPACE/crates/varlit-core/src/file.rs
   |
@@ -76,7 +66,7 @@ error[E0277]: `RefCell<(usize, Vec<u8>)>` cannot be shared between threads safel
   |
   = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<(usize, Vec<u8>)>`
   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
-note: required because it appears within the type `varlit_core::spill_rows::SpillRows<16>`
+note: required because it appears within the type `varlit_core::spill_rows::SpillRows<13>`
  --> $WORKSPACE/crates/varlit-core/src/spill_rows.rs
   |
   | pub(crate) struct SpillRows<const N: usize> {
@@ -105,33 +95,33 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
 
-error[E0277]: `RefCell<varlit_core::matrix_generation::Cache>` cannot be shared between threads safely
+error[E0277]: `RefCell<varlit_core::packed_rows::Cache<62>>` cannot be shared between threads safely
  --> tests/ui/fail_share_matrix_reader.rs:5:24
   |
 5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::matrix_generation::Cache>` cannot be shared between threads safely
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::packed_rows::Cache<62>>` cannot be shared between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::matrix_generation::Cache>`
+  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::packed_rows::Cache<62>>`
   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
-note: required because it appears within the type `varlit_core::matrix_generation::View`
- --> $WORKSPACE/crates/varlit-core/src/matrix_generation.rs
+note: required because it appears within the type `varlit_core::packed_rows::PackedRows<62>`
+ --> $WORKSPACE/crates/varlit-core/src/packed_rows.rs
   |
-  | pub(crate) struct View {
-  |                   ^^^^
-note: required because it appears within the type `varlit_core::matrix_generation::MatrixFile`
- --> $WORKSPACE/crates/varlit-core/src/matrix_generation.rs
-  |
-  | pub(crate) struct MatrixFile {
+  | pub(crate) struct PackedRows<const N: usize> {
   |                   ^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::matrix_generation::MatrixFile>`
- --> $RUST/core/src/option.rs
-note: required because it appears within the type `varlit_core::file::record_file::RecordFile`
- --> $WORKSPACE/crates/varlit-core/src/file/record_file.rs
+note: required because it appears within the type `varlit_core::file::resident_index::RewrittenRows`
+ --> $WORKSPACE/crates/varlit-core/src/native_directory.rs
   |
-  | pub struct RecordFile {
-  |            ^^^^^^^^^^
+  | enum RewrittenRows {
+  |      ^^^^^^^^^^^^^
+note: required because it appears within the type `Option<varlit_core::file::resident_index::RewrittenRows>`
+ --> $RUST/core/src/option.rs
+note: required because it appears within the type `varlit_core::file::resident_index::ResidentIndex`
+ --> $WORKSPACE/crates/varlit-core/src/native_directory.rs
+  |
+  | pub struct ResidentIndex {
+  |            ^^^^^^^^^^^^^
 note: required because it appears within the type `VarlitFile`
  --> $WORKSPACE/crates/varlit-core/src/file.rs
   |
@@ -151,155 +141,33 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
 
-error[E0277]: `RefCell<varlit_core::matrix::PageStore>` cannot be shared between threads safely
+error[E0277]: `RefCell<varlit_core::packed_rows::Cache<13>>` cannot be shared between threads safely
  --> tests/ui/fail_share_matrix_reader.rs:5:24
   |
 5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::matrix::PageStore>` cannot be shared between threads safely
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::packed_rows::Cache<13>>` cannot be shared between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::matrix::PageStore>`
+  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::packed_rows::Cache<13>>`
   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
-note: required because it appears within the type `varlit_core::matrix::SparseBitmap`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
+note: required because it appears within the type `varlit_core::packed_rows::PackedRows<13>`
+ --> $WORKSPACE/crates/varlit-core/src/packed_rows.rs
   |
-  | struct SparseBitmap {
-  |        ^^^^^^^^^^^^
-note: required because it appears within the type `varlit_core::matrix::MatrixCommitLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
+  | pub(crate) struct PackedRows<const N: usize> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `varlit_core::file::resident_index::RewrittenRows`
+ --> $WORKSPACE/crates/varlit-core/src/native_directory.rs
   |
-  | struct MatrixCommitLayout {
-  |        ^^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `PhantomData<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/core/src/marker.rs
-note: required because it appears within the type `alloc::raw_vec::RawVec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/raw_vec/mod.rs
-note: required because it appears within the type `Vec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/vec/mod.rs
-note: required because it appears within the type `varlit_core::matrix::MatrixLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | pub struct MatrixLayout {
-  |            ^^^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::matrix::MatrixLayout>`
+  | enum RewrittenRows {
+  |      ^^^^^^^^^^^^^
+note: required because it appears within the type `Option<varlit_core::file::resident_index::RewrittenRows>`
  --> $RUST/core/src/option.rs
-note: required because it appears within the type `VarlitFile`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+note: required because it appears within the type `varlit_core::file::resident_index::ResidentIndex`
+ --> $WORKSPACE/crates/varlit-core/src/native_directory.rs
   |
-  | pub struct VarlitFile {
-  |            ^^^^^^^^^^
-note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | pub struct VarlitReader {
-  |            ^^^^^^^^^^^^
-  = note: required for `Arc<VarlitReader>` to implement `Send`
-note: required because it's used within this closure
- --> tests/ui/fail_share_matrix_reader.rs:5:24
-  |
-5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |                        ^^^^^^^
-note: required by a bound in `spawn`
- --> $RUST/std/src/thread/functions.rs
-
-error[E0277]: `std::cell::Cell<Option<(u64, Option<u64>)>>` cannot be shared between threads safely
- --> tests/ui/fail_share_matrix_reader.rs:5:24
-  |
-5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cell::Cell<Option<(u64, Option<u64>)>>` cannot be shared between threads safely
-  |     |
-  |     required by a bound introduced by this call
-  |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `std::cell::Cell<Option<(u64, Option<u64>)>>`
-  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
-note: required because it appears within the type `varlit_core::matrix::bitmap_directory::BitmapDirectory`
- --> $WORKSPACE/crates/varlit-core/src/bitmap_directory.rs
-  |
-  | pub(super) struct BitmapDirectory {
-  |                   ^^^^^^^^^^^^^^^
-note: required because it appears within the type `varlit_core::matrix::SparseBitmap`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | struct SparseBitmap {
-  |        ^^^^^^^^^^^^
-note: required because it appears within the type `varlit_core::matrix::MatrixCommitLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | struct MatrixCommitLayout {
-  |        ^^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `PhantomData<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/core/src/marker.rs
-note: required because it appears within the type `alloc::raw_vec::RawVec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/raw_vec/mod.rs
-note: required because it appears within the type `Vec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/vec/mod.rs
-note: required because it appears within the type `varlit_core::matrix::MatrixLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | pub struct MatrixLayout {
-  |            ^^^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::matrix::MatrixLayout>`
- --> $RUST/core/src/option.rs
-note: required because it appears within the type `VarlitFile`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | pub struct VarlitFile {
-  |            ^^^^^^^^^^
-note: required because it appears within the type `VarlitReader`
- --> $WORKSPACE/crates/varlit-core/src/file.rs
-  |
-  | pub struct VarlitReader {
-  |            ^^^^^^^^^^^^
-  = note: required for `Arc<VarlitReader>` to implement `Send`
-note: required because it's used within this closure
- --> tests/ui/fail_share_matrix_reader.rs:5:24
-  |
-5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |                        ^^^^^^^
-note: required by a bound in `spawn`
- --> $RUST/std/src/thread/functions.rs
-
-error[E0277]: `RefCell<varlit_core::matrix::matrix_directory::DirectoryCache>` cannot be shared between threads safely
- --> tests/ui/fail_share_matrix_reader.rs:5:24
-  |
-5 |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
-  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `RefCell<varlit_core::matrix::matrix_directory::DirectoryCache>` cannot be shared between threads safely
-  |     |
-  |     required by a bound introduced by this call
-  |
-  = help: within `VarlitReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::matrix::matrix_directory::DirectoryCache>`
-  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
-note: required because it appears within the type `varlit_core::matrix::matrix_directory::DirectDirectory`
- --> $WORKSPACE/crates/varlit-core/src/matrix_directory.rs
-  |
-  | pub(super) struct DirectDirectory {
-  |                   ^^^^^^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::matrix::matrix_directory::DirectDirectory>`
- --> $RUST/core/src/option.rs
-note: required because it appears within the type `varlit_core::matrix::SparseBitmap`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | struct SparseBitmap {
-  |        ^^^^^^^^^^^^
-note: required because it appears within the type `varlit_core::matrix::MatrixCommitLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | struct MatrixCommitLayout {
-  |        ^^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `PhantomData<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/core/src/marker.rs
-note: required because it appears within the type `alloc::raw_vec::RawVec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/raw_vec/mod.rs
-note: required because it appears within the type `Vec<varlit_core::matrix::MatrixCommitLayout>`
- --> $RUST/alloc/src/vec/mod.rs
-note: required because it appears within the type `varlit_core::matrix::MatrixLayout`
- --> $WORKSPACE/crates/varlit-core/src/matrix.rs
-  |
-  | pub struct MatrixLayout {
-  |            ^^^^^^^^^^^^
-note: required because it appears within the type `Option<varlit_core::matrix::MatrixLayout>`
- --> $RUST/core/src/option.rs
+  | pub struct ResidentIndex {
+  |            ^^^^^^^^^^^^^
 note: required because it appears within the type `VarlitFile`
  --> $WORKSPACE/crates/varlit-core/src/file.rs
   |

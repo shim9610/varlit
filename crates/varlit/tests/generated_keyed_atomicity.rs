@@ -1,4 +1,7 @@
-// F-01 (round 9): no user-defined trait may run after a generated keyed
+#[path = "support/pages.rs"]
+mod pages;
+
+// no user-defined trait may run after a generated keyed
 // mutation is authoritative.
 //
 // Round 8 fixed one instance of this: the generated `delete_*` cloned the
@@ -90,6 +93,12 @@ fn note(which: UserTrait) {
 #[derive(Debug)]
 pub struct PanicKey(pub u64);
 
+impl varlit::VarlitEmpty for PanicKey {
+    fn empty() -> Self {
+        Self(0)
+    }
+}
+
 impl Clone for PanicKey {
     fn clone(&self) -> Self {
         note(UserTrait::Clone);
@@ -160,8 +169,7 @@ struct Snapshot {
 fn snapshot(path: &Path) -> varlit::Result<Snapshot> {
     let len = std::fs::metadata(path)?.len();
     let file = PanicKeyFormat::open(path)?;
-    let index = file
-        .index_entries()
+    let index = crate::pages::all_entries!(file)
         .iter()
         .map(|entry| {
             (
@@ -176,9 +184,8 @@ fn snapshot(path: &Path) -> varlit::Result<Snapshot> {
     let keyed = file.keyed_blocks::<Tracked>()?;
     let mut visible: Vec<(u64, u32)> = Vec::new();
     for key in keyed.keys() {
-        let block = keyed
-            .get(key)?
-            .expect("a key enumerated from the map must resolve");
+        let block =
+            filled(|o| keyed.get(key, o))?.expect("a key enumerated from the map must resolve");
         visible.push((block.id.0, block.value));
     }
     visible.sort_unstable();
@@ -501,4 +508,23 @@ fn the_writer_still_deletes_after_a_key_trait_panic() -> varlit::Result<()> {
         "the retried delete must have removed key 1 and left key 2 alone",
     );
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

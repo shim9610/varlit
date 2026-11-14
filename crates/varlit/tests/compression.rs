@@ -1,6 +1,11 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::fs::remove_file;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "compression-zstd")]
+use varlit::VarlitEmpty;
 #[cfg(all(feature = "compression-zstd", feature = "integrity"))]
 use varlit::decode_from_slice;
 #[cfg(feature = "compression-zstd")]
@@ -11,6 +16,20 @@ use varlit::{
     ManifestPolicy, ReadLimits, RecoveryPolicy, VariableCompression, encode_to_vec,
 };
 use varlit::{ChunkedBytes, Error, VarlitBlock, varlit_format};
+
+#[cfg(feature = "compression-zstd")]
+/// The header flags byte of a file created with the default anchor policy:
+/// anchored (bit 7), 4 KiB holes (bit 6 clear), spacing 2^(10 + 12) = 4 MiB.
+const DEFAULT_ANCHOR_FLAGS: u8 = 0x80 | (22 - 10);
+
+/// Record 0 of `blocks`, decoded into a fresh value.
+#[cfg(feature = "compression-zstd")]
+fn first_of<T: VarlitBlock + VarlitEmpty + Clone>(
+    blocks: crate::pages::Blocks<T>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(blocks.get(0, &mut out)?.then_some(out))
+}
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 600, version = 1, kind = "variable")]
@@ -258,7 +277,7 @@ fn record_explicit_variable_blocks_roundtrip_with_physical_scan() -> varlit::Res
                 if compression.header_mode == CompressionHeaderMode::RecordExplicit
         ));
 
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
 
         let compressed = entries
             .iter()
@@ -267,9 +286,12 @@ fn record_explicit_variable_blocks_roundtrip_with_physical_scan() -> varlit::Res
         assert!(compressed.is_compressed());
         assert!(compressed.uncompressed_len_hint > 0);
         assert!(compressed.payload_len < logical_len);
-        assert_eq!(&compressed.read_payload(&path)?[..4], b"VCMP");
+        assert_eq!(
+            &RecordCompressionFormat::read_payload(compressed, &path)?[..4],
+            b"VCMP"
+        );
 
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
 
         let fixed_entry = entries
             .iter()
@@ -290,8 +312,14 @@ fn record_explicit_variable_blocks_roundtrip_with_physical_scan() -> varlit::Res
     }
 
     let file = RecordCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
-    assert_eq!(file.blocks::<FixedBlock>()?.get(0)?, Some(fixed));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, FixedBlock)?)?,
+        Some(fixed)
+    );
 
     cleanup(&path);
     Ok(())
@@ -317,7 +345,10 @@ fn mmap_windows_expose_physical_compressed_payloads() -> varlit::Result<()> {
         .block_payload_window::<CompressibleBlock>(0)?
         .expect("compressed payload window");
     assert_eq!(&window[..4], b"VCMP");
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
 
     drop(mmap);
     drop(file);
@@ -335,14 +366,14 @@ fn file_explicit_uses_varlit2_header_and_raw_compressed_payload() -> varlit::Res
     {
         let mut file = FileExplicitCompressionFormat::create(&path)?;
         file.push(&value)?;
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
         let entry = entries
             .iter()
             .find(|entry| entry.block_id == CompressibleBlock::ID)
             .expect("compressed block");
         assert!(entry.is_compressed());
         assert!(entry.uncompressed_len_hint > 0);
-        let physical = entry.read_payload(&path)?;
+        let physical = FileExplicitCompressionFormat::read_payload(entry, &path)?;
         assert_ne!(&physical[..4], b"VCMP");
         file.flush()?;
     }
@@ -351,7 +382,7 @@ fn file_explicit_uses_varlit2_header_and_raw_compressed_payload() -> varlit::Res
     assert_eq!(&bytes[5..11], b"VARVE2");
     assert_eq!(u16_at(&bytes, 11), 1);
     assert_eq!(bytes[13], 1);
-    assert_eq!(bytes[14], 0);
+    assert_eq!(bytes[14], DEFAULT_ANCHOR_FLAGS);
     assert_eq!(u32_at(&bytes, 23), 28);
     assert_eq!(&bytes[27..31], b"VCHD");
 
@@ -382,7 +413,10 @@ fn file_explicit_uses_varlit2_header_and_raw_compressed_payload() -> varlit::Res
         )));
 
     let file = FileExplicitCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
 
     cleanup(&path);
     Ok(())
@@ -406,7 +440,7 @@ fn file_explicit_with_record_footer_uses_varlit3_header_and_extensions() -> varl
     assert_eq!(&bytes[6..12], b"VARVE3");
     assert_eq!(u16_at(&bytes, 12), 1);
     assert_eq!(bytes[14], 1);
-    assert_eq!(bytes[15], 0);
+    assert_eq!(bytes[15], DEFAULT_ANCHOR_FLAGS);
     assert_eq!(u32_at(&bytes, 24), 28);
     assert_eq!(&bytes[28..32], b"VCHD");
 
@@ -415,7 +449,10 @@ fn file_explicit_with_record_footer_uses_varlit3_header_and_extensions() -> varl
     assert_eq!(inspected.segments[0].segment_start, 56);
 
     let file = FileExplicitFooterCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
 
     cleanup(&path);
     Ok(())
@@ -439,7 +476,10 @@ fn format_contract_requires_computed_schema_hash() -> varlit::Result<()> {
         file.flush()?;
     }
     let file = spec.open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
 
     cleanup(&path);
     Ok(())
@@ -474,13 +514,13 @@ fn block_specific_record_explicit_compression_overrides_global_none() -> varlit:
         let mut file = spec.create(&path)?;
         file.push(&value)?;
         file.push(&FixedBlock { value: 99 })?;
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
         let compressed = entries
             .iter()
             .find(|entry| entry.block_id == CompressibleBlock::ID)
             .expect("compressed variable block");
         assert!(compressed.is_compressed());
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
         let fixed = entries
             .iter()
             .find(|entry| entry.block_id == FixedBlock::ID)
@@ -490,7 +530,10 @@ fn block_specific_record_explicit_compression_overrides_global_none() -> varlit:
     }
 
     let file = spec.open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(value));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(value)
+    );
     cleanup(&path);
     Ok(())
 }
@@ -570,10 +613,13 @@ fn compressed_checkpoint_and_rewrite_preserve_length_hint() -> varlit::Result<()
     }
     {
         let mut file = CheckpointCompressionFormat::open(&path)?;
-        assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(first));
+        assert_eq!(
+            first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+            Some(first)
+        );
         file.replace_rewrite(0, &second)?;
         file.flush()?;
-        let entries = file.index_entries();
+        let entries = crate::pages::all_entries!(file);
         let entry = entries
             .iter()
             .find(|entry| entry.block_id == CompressibleBlock::ID)
@@ -583,7 +629,10 @@ fn compressed_checkpoint_and_rewrite_preserve_length_hint() -> varlit::Result<()
     }
 
     let file = CheckpointCompressionFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<CompressibleBlock>()?.get(0)?, Some(second));
+    assert_eq!(
+        first_of(crate::pages::all_blocks!(file, CompressibleBlock)?)?,
+        Some(second)
+    );
 
     cleanup(&path);
     Ok(())

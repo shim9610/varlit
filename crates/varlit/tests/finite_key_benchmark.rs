@@ -1,10 +1,13 @@
 #![cfg(feature = "integrity")]
 //! Controlled representation benchmark. Run with scripts/compare_finite_keys.py.
 //! Ignored by default: creates and fully validates actual temporary payload files.
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::{fs, hint::black_box, time::Instant};
 use varlit::{
-    BatchOptions, DiskIndexOptions, DiskIndexPlan, FormatSpec, VarlitDiskKey, VarlitIndexedReader,
-    VarlitIndexedWriter, VarlitKeyedBlock, varlit_format,
+    BatchOptions, DiskIndexOptions, DiskIndexPlan, FormatSpec, VarlitDiskKey, VarlitEmpty,
+    VarlitIndexedReader, VarlitIndexedWriter, VarlitKeyedBlock, varlit_format,
 };
 mod raw_numeric {
     use super::*;
@@ -68,7 +71,7 @@ const LABELS: [&str; 4] = [
     "schema/channel/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/002",
     "schema/channel/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/003",
 ];
-trait Bench: VarlitKeyedBlock {
+trait Bench: VarlitKeyedBlock + VarlitEmpty {
     fn spec() -> FormatSpec;
     fn plan() -> DiskIndexPlan;
     fn input_key(code: u64) -> Self::Key;
@@ -257,17 +260,19 @@ where
     let input_keys: Vec<_> = (0..keys).map(T::input_key).collect();
     let mut reader = VarlitIndexedReader::open(spec, &path, options, plan).unwrap();
     assert_eq!(reader.historical_distinct_keys().unwrap(), keys);
-    let pass = |count: u64| {
+    let mut value = T::empty();
+    let mut pass = |count: u64| {
         let start = Instant::now();
         for i in 0..count {
             let code = (i * 4051) % keys;
-            let value = reader
-                .get::<T>(&input_keys[code as usize])
-                .unwrap()
-                .unwrap();
+            assert!(
+                reader
+                    .get::<T>(&input_keys[code as usize], &mut value)
+                    .unwrap()
+            );
             let expected = latest(code);
             value.check(code, expected, payload);
-            black_box(value);
+            black_box(&value);
         }
         start.elapsed().as_secs_f64() * 1000.0
     };
@@ -275,8 +280,10 @@ where
     let warm_query_ms = pass(queries);
     let start = Instant::now();
     let mut count = 0;
-    for (i, value) in reader.blocks::<T>().unwrap().enumerate() {
-        value.unwrap().check(code_at(i as u64), i as u64, payload);
+    let mut scan = reader.blocks::<T>().unwrap();
+    let mut value = T::empty();
+    while scan.next_into(&mut value).unwrap() {
+        value.check(code_at(count), count, payload);
         count += 1;
     }
     assert_eq!(count, records);
@@ -287,11 +294,12 @@ where
     reader.follow().unwrap();
     assert_eq!(reader.historical_distinct_keys().unwrap(), keys);
     for code in 0..keys {
-        reader
-            .get::<T>(&input_keys[code as usize])
-            .unwrap()
-            .unwrap()
-            .check(code, latest(code), payload);
+        assert!(
+            reader
+                .get::<T>(&input_keys[code as usize], &mut value)
+                .unwrap()
+        );
+        value.check(code, latest(code), payload);
     }
     let start = Instant::now();
     for i in 0..1_000_000 {

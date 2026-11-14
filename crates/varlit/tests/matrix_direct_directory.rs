@@ -42,19 +42,44 @@ fn independent_matrix_directories_survive_zero_cache_follow_and_compaction() -> 
     writer.compact_matrix()?;
     reader.follow()?;
     for page in 0..128 {
-        assert_eq!(held.read_matrix_cell::<Left>(key(page))?.value, page);
+        assert_eq!(
+            filled_out(|o| held.read_matrix_cell::<Left>(key(page), o))?.value,
+            page
+        );
         if page % 2 == 0 {
             assert_eq!(
                 reader.matrix_cell_status::<Left>(key(page))?,
                 MatrixCellStatus::NotCommitted
             );
         } else {
-            assert_eq!(reader.read_matrix_cell::<Left>(key(page))?.value, page);
+            assert_eq!(
+                filled_out(|o| reader.read_matrix_cell::<Left>(key(page), o))?.value,
+                page
+            );
         }
         assert_eq!(
-            reader.read_matrix_cell::<Right>(key(page))?.value,
+            filled_out(|o| reader.read_matrix_cell::<Right>(key(page), o))?.value,
             1127 - page
         );
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

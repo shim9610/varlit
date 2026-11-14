@@ -16,6 +16,8 @@
 // every shared helper dead under `default`, so the file moves as a unit; the
 // `all-features` CI job is where it runs.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -25,7 +27,7 @@ use varlit::{
     BlockDescriptor, BlockKind, COMMIT_BLOCK_ID, CommitPolicy, Endian, FormatSpec, IndexPolicy,
     IntegrityPolicy, MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixKey, RecordIndexEntry, SEGMENT_BLOCK_ID,
-    TransactionMarkerMode, VarlitBlock, VarlitMatrixBlock, varlit_format,
+    TransactionMarkerMode, VarlitBlock, VarlitEmpty, VarlitMatrixBlock, varlit_format,
 };
 // Only the frame-counted tests below open a file through this type directly.
 #[cfg(feature = "scalable-fault-injection")]
@@ -35,6 +37,12 @@ use varlit::VarlitFile;
 #[varlit(id = 60, version = 1, kind = "fixed")]
 struct Line {
     value: u32,
+}
+
+/// Record `index` of `blocks`, decoded into a fresh value.
+fn line_at(blocks: &crate::pages::Blocks<Line>, index: usize) -> varlit::Result<Option<Line>> {
+    let mut out = Line::empty();
+    Ok(blocks.get(index, &mut out)?.then_some(out))
 }
 
 varlit_format! {
@@ -100,7 +108,7 @@ fn write_lines(spec: FormatSpec, path: &Path, lines: u32, per_flush: u32) -> var
 /// entry: what block, which sequence, where, how long, and committed or not.
 type EntryShape = (u32, u64, u64, u64, bool);
 
-fn entry_shape(entries: varlit::IndexEntries) -> Vec<EntryShape> {
+fn entry_shape(entries: Vec<varlit::RecordIndexEntry>) -> Vec<EntryShape> {
     entries
         .iter()
         .map(|entry| {
@@ -157,8 +165,7 @@ fn a_format_without_segments_writes_no_segment_record() -> varlit::Result<()> {
     write_lines(plain_spec(), &path, 64, 8)?;
     let file = plain_spec().open_readonly(&path)?;
     assert!(
-        !file
-            .index_entries()
+        !crate::pages::all_entries!(file)
             .iter()
             .any(|entry| entry.block_id == SEGMENT_BLOCK_ID),
     );
@@ -175,7 +182,7 @@ fn each_flush_appends_one_segment_record_last() -> varlit::Result<()> {
     write_lines(segment_spec(), &path, 32, 8)?;
 
     let file = segment_spec().open_readonly(&path)?;
-    let entries = file.index_entries();
+    let entries = crate::pages::all_entries!(file);
     let segments: Vec<&RecordIndexEntry> = entries
         .iter()
         .filter(|entry| entry.block_id == SEGMENT_BLOCK_ID)
@@ -229,13 +236,17 @@ fn open_frames_commit_points_not_records() -> varlit::Result<()> {
     write_lines(plain_spec(), &scanned, lines, per_flush)?;
     write_lines(segment_spec(), &chained, lines, per_flush)?;
 
+    // Only the open is measured; walking the index afterwards frames every
+    // record by design.
     let before_scan = VarlitFile::records_framed();
-    let scan_index = entry_shape(plain_spec().open_readonly(&scanned)?.index_entries());
+    let scan_file = plain_spec().open_readonly(&scanned)?;
     let scan_frames = VarlitFile::records_framed() - before_scan;
+    let scan_index = entry_shape(crate::pages::all_entries!(scan_file));
 
     let before_chain = VarlitFile::records_framed();
-    let chain_index = entry_shape(segment_spec().open_readonly(&chained)?.index_entries());
+    let chain_file = segment_spec().open_readonly(&chained)?;
     let chain_frames = VarlitFile::records_framed() - before_chain;
+    let chain_index = entry_shape(crate::pages::all_entries!(chain_file));
 
     // The scan frames every record it indexes.
     assert!(
@@ -258,7 +269,9 @@ fn the_chain_and_the_scan_produce_the_same_index() -> varlit::Result<()> {
     let path = temp_path("chain_equals_scan");
     write_lines(segment_spec(), &path, 96, 7)?;
 
-    let chained = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let chained = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     // `AtOpen` verification is one of the two cases that must take the scan;
     // it indexes the same file through the other path.
     let scanned_spec = segment_spec().with_read_limits(
@@ -266,7 +279,9 @@ fn the_chain_and_the_scan_produce_the_same_index() -> varlit::Result<()> {
             .read_limits
             .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
     );
-    let scanned = entry_shape(scanned_spec.open_readonly(&path)?.index_entries());
+    let scanned = entry_shape(crate::pages::all_entries!(
+        scanned_spec.open_readonly(&path)?
+    ));
     assert_eq!(chained, scanned);
     Ok(())
 }
@@ -278,10 +293,10 @@ fn every_record_survives_the_chained_open() -> varlit::Result<()> {
     write_lines(segment_spec(), &path, lines, 13)?;
 
     let file = segment_spec().open_readonly(&path)?;
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(blocks.len() as u32, lines);
     for value in 0..lines {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -302,7 +317,7 @@ fn a_writer_reopen_keeps_appending_a_valid_chain() -> varlit::Result<()> {
     }
 
     let file = segment_spec().open_readonly(&path)?;
-    let entries = file.index_entries();
+    let entries = crate::pages::all_entries!(file);
     let segments: Vec<&RecordIndexEntry> = entries
         .iter()
         .filter(|entry| entry.block_id == SEGMENT_BLOCK_ID)
@@ -311,10 +326,10 @@ fn a_writer_reopen_keeps_appending_a_valid_chain() -> varlit::Result<()> {
     for pair in segments.windows(2) {
         assert_eq!(pair[1].prev_same_block_offset, Some(pair[0].record_offset));
     }
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(blocks.len(), 48);
     for value in 0..48u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -325,7 +340,7 @@ fn the_segment_record_sits_inside_the_commit_boundary() -> varlit::Result<()> {
     write_lines(segment_spec(), &path, 16, 8)?;
 
     let file = segment_spec().open_readonly(&path)?;
-    let entries = file.index_entries();
+    let entries = crate::pages::all_entries!(file);
     let last_marker = entries
         .iter()
         .rposition(|entry| entry.block_id == COMMIT_BLOCK_ID)
@@ -347,7 +362,9 @@ fn the_segment_record_sits_inside_the_commit_boundary() -> varlit::Result<()> {
 /// The index a scan of this file produces, for comparing a fallback against.
 fn scanned_shape(path: &Path) -> varlit::Result<Vec<EntryShape>> {
     let spec = plain_spec();
-    Ok(entry_shape(spec.open_readonly(path)?.index_entries()))
+    Ok(entry_shape(crate::pages::all_entries!(
+        spec.open_readonly(path)?
+    )))
 }
 
 #[test]
@@ -357,7 +374,9 @@ fn a_file_written_before_segments_were_enabled_falls_back() -> varlit::Result<()
 
     // No chain at all: the last record is a commit marker, not a segment.
     let expected = scanned_shape(&path)?;
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -373,7 +392,9 @@ fn a_record_appended_after_the_chain_falls_back() -> varlit::Result<()> {
         let mut file = segment_spec().open(&path)?;
         file.push(&Line { value: 999 })?;
     }
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, scanned_shape(&path)?);
     // The trailing data record is uncommitted and stops at the boundary, but
     // the segment in front of it does not: it describes only records the marker
@@ -428,8 +449,7 @@ fn segments_do_not_grow_when_a_writer_stops_uncommitted() -> varlit::Result<()> 
             })?;
         }
         let file = segment_spec().open_readonly(&path)?;
-        let largest = file
-            .index_entries()
+        let largest = crate::pages::all_entries!(file)
             .iter()
             .filter(|entry| entry.block_id == SEGMENT_BLOCK_ID)
             .map(|entry| entry.payload_len)
@@ -463,14 +483,14 @@ fn a_chain_past_the_segment_ceiling_still_opens() -> varlit::Result<()> {
     }
     // Twelve commit points against a ceiling of four.
     let file = capped.open_readonly(&path)?;
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(
         blocks.len(),
         12,
         "the scan fallback must index every record"
     );
     for value in 0..12u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     // And a writer open must not refuse it either.
     let mut writer = capped.open(&path)?;
@@ -503,7 +523,9 @@ fn a_corrupt_trailer_falls_back_rather_than_refusing() -> varlit::Result<()> {
         bytes[at] ^= 0xFF;
         let probe = temp_path("corrupt_trailer_probe");
         std::fs::write(&*probe, &bytes)?;
-        let actual = entry_shape(segment_spec().open_readonly(&probe)?.index_entries());
+        let actual = entry_shape(crate::pages::all_entries!(
+            segment_spec().open_readonly(&probe)?
+        ));
         assert_eq!(actual, expected, "trailer byte {byte} must fall back");
     }
     Ok(())
@@ -525,7 +547,9 @@ fn a_chain_with_no_commit_marker_falls_back() -> varlit::Result<()> {
 
     let before = std::fs::read(&*path)?;
     // Read-only never truncates, and must agree with the scan.
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, scanned_shape(&path)?);
     assert!(actual.is_empty(), "nothing in it is committed");
     assert_eq!(std::fs::read(&*path)?, before, "a read must not write");
@@ -535,12 +559,12 @@ fn a_chain_with_no_commit_marker_falls_back() -> varlit::Result<()> {
     // left, so the handle stays usable and the file stays readable.
     {
         let mut file = segment_spec().open(&path)?;
-        assert!(file.index_entries().is_empty());
+        assert!(crate::pages::all_entries!(file).is_empty());
         file.push(&Line { value: 1 })?;
         file.flush()?;
     }
     let reopened = segment_spec().open_readonly(&path)?;
-    assert_eq!(reopened.blocks::<Line>()?.len(), 1);
+    assert_eq!(crate::pages::all_blocks!(reopened, Line)?.len(), 1);
     Ok(())
 }
 
@@ -554,7 +578,9 @@ fn a_truncated_tail_falls_back() -> varlit::Result<()> {
     // payload bytes rather than a footer.
     truncate_to(&path, full - 16)?;
     let expected = scanned_shape(&path)?;
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, expected);
     assert!(!actual.is_empty());
     Ok(())
@@ -567,8 +593,7 @@ fn a_corrupt_segment_payload_falls_back() -> varlit::Result<()> {
     let expected = scanned_shape(&path)?;
 
     let file = segment_spec().open_readonly(&path)?;
-    let tip = file
-        .index_entries()
+    let tip = crate::pages::all_entries!(file)
         .iter()
         .rfind(|entry| entry.block_id == SEGMENT_BLOCK_ID)
         .cloned()
@@ -578,7 +603,9 @@ fn a_corrupt_segment_payload_falls_back() -> varlit::Result<()> {
     // stops matching, so the walk refuses the link.
     flip_byte(&path, tip.payload_offset + 40)?;
 
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -590,8 +617,7 @@ fn a_broken_chain_link_falls_back() -> varlit::Result<()> {
     let expected = scanned_shape(&path)?;
 
     let file = segment_spec().open_readonly(&path)?;
-    let tip = file
-        .index_entries()
+    let tip = crate::pages::all_entries!(file)
         .iter()
         .rfind(|entry| entry.block_id == SEGMENT_BLOCK_ID)
         .cloned()
@@ -602,7 +628,9 @@ fn a_broken_chain_link_falls_back() -> varlit::Result<()> {
     let footer = tip.footer_offset.expect("segments carry a record footer");
     flip_byte(&path, footer + 8)?;
 
-    let actual = entry_shape(segment_spec().open_readonly(&path)?.index_entries());
+    let actual = entry_shape(crate::pages::all_entries!(
+        segment_spec().open_readonly(&path)?
+    ));
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -616,7 +644,7 @@ fn a_recovery_open_still_scans() -> varlit::Result<()> {
     // evidence, so recovery must not take it.
     let expected = scanned_shape(&path)?;
     let recovered = segment_spec().open_recover(&path)?;
-    assert_eq!(entry_shape(recovered.index_entries()), expected);
+    assert_eq!(entry_shape(crate::pages::all_entries!(recovered)), expected);
     Ok(())
 }
 
@@ -687,6 +715,7 @@ fn matrix_segment_spec() -> FormatSpec {
         dimensions: Cell::DIMENSIONS,
         category: Cell::CATEGORY,
         slot_stride: Cell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"SEGMTX00",
@@ -736,31 +765,27 @@ fn write_matrix_lines(
 }
 
 #[test]
-fn a_matrix_file_puts_the_append_log_after_the_matrix_region() -> varlit::Result<()> {
-    // The premise of the two tests below. If this ever stops holding, they stop
-    // discriminating and say so here rather than passing quietly.
-    let path = temp_path("matrix_region_is_between");
+fn a_matrix_file_begins_its_log_with_its_matrix_records() -> varlit::Result<()> {
+    // The premise of the two tests below: a matrix's storage is records in
+    // the append log, first among them, so the chain covers them as it
+    // covers every record.
+    let path = temp_path("matrix_records_first");
     write_matrix_lines(matrix_segment_spec(), &path, 16, 8)?;
     let reader = matrix_segment_spec().open_reader(&path)?;
-    let first = reader
-        .index_entries()
-        .first()
-        .expect("the file holds records")
-        .record_offset;
+    let entries = crate::pages::all_entries!(reader);
+    let first = entries.first().expect("the file holds records");
 
-    let plain = temp_path("matrix_region_is_between_plain");
+    let plain = temp_path("matrix_records_first_plain");
     write_lines(segment_spec(), &plain, 16, 8)?;
-    let plain_first = segment_spec()
-        .open_readonly(&plain)?
-        .index_entries()
+    let plain_first = crate::pages::all_entries!(segment_spec().open_readonly(&plain)?)
         .first()
         .expect("the file holds records")
         .record_offset;
 
-    assert!(
-        first > plain_first,
-        "a matrix file's first record must sit past the matrix region: \
-         {first} vs {plain_first} without one",
+    assert_eq!(first.block_id, varlit::MATRIX_TILE_BLOCK_ID);
+    assert_eq!(
+        first.record_offset, plain_first,
+        "a matrix file's log starts where any file's does: there is no region before it",
     );
     Ok(())
 }
@@ -771,12 +796,14 @@ fn a_matrix_file_builds_and_walks_a_segment_chain() -> varlit::Result<()> {
     write_matrix_lines(matrix_segment_spec(), &path, 32, 8)?;
 
     let reader = matrix_segment_spec().open_reader(&path)?;
-    let entries = reader.index_entries();
+    let entries = crate::pages::all_entries!(reader);
     let segments: Vec<&RecordIndexEntry> = entries
         .iter()
         .filter(|entry| entry.block_id == SEGMENT_BLOCK_ID)
         .collect();
-    assert_eq!(segments.len(), 4, "one segment record per commit point");
+    // One per flush, and the one the create closes over the matrix's own
+    // records.
+    assert_eq!(segments.len(), 4 + 1, "one segment record per commit point");
     assert_eq!(
         entries.last().map(|entry| entry.block_id),
         Some(SEGMENT_BLOCK_ID),
@@ -793,7 +820,7 @@ fn a_matrix_file_builds_and_walks_a_segment_chain() -> varlit::Result<()> {
     );
     assert_eq!(
         entry_shape(entries),
-        entry_shape(scanned_spec.open_reader(&path)?.index_entries()),
+        entry_shape(crate::pages::all_entries!(scanned_spec.open_reader(&path)?)),
     );
     Ok(())
 }
@@ -812,13 +839,12 @@ fn a_matrix_file_open_frames_commit_points_not_records() -> varlit::Result<()> {
     write_matrix_lines(matrix_segment_spec(), &path, lines, per_flush)?;
 
     let before = VarlitFile::records_framed();
-    let indexed = matrix_segment_spec()
-        .open_reader(&path)?
-        .index_entries()
-        .len();
+    let reader = matrix_segment_spec().open_reader(&path)?;
     let framed = VarlitFile::records_framed() - before;
+    let indexed = crate::pages::all_entries!(reader).len();
 
-    let commit_points = u64::from(lines / per_flush);
+    // One per flush, and the create's.
+    let commit_points = u64::from(lines / per_flush) + 1;
     assert_eq!(
         framed, commit_points,
         "a matrix file must take the chain, not fall back to the scan: \
@@ -826,9 +852,10 @@ fn a_matrix_file_open_frames_commit_points_not_records() -> varlit::Result<()> {
     );
     // And it must not have got there by indexing less: the data records, the
     // commit markers and the segment records.
+    // The matrix's metadata, ring, directory page and tile are records too.
     assert_eq!(
         indexed,
-        lines as usize + 2 * commit_points as usize,
+        lines as usize + 2 * commit_points as usize + 4,
         "the chain must still account for every record",
     );
     Ok(())
@@ -883,40 +910,14 @@ fn flush_survives_a_checkpoint_that_cannot_fit() -> varlit::Result<()> {
     drop(file);
 
     let file = TinyRecordFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(blocks.len(), 64);
     for value in 0..64u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     // Skipped, not written badly: no checkpoint record is in the file at all.
     assert!(
-        !file
-            .index_entries()
-            .iter()
-            .any(|entry| entry.block_id == varlit::INDEX_BLOCK_ID),
-    );
-    Ok(())
-}
-
-#[test]
-fn a_checkpoint_that_fits_is_still_written() -> varlit::Result<()> {
-    // The skip must be the ceiling talking, not the predicate going quiet.
-    let path = temp_path("checkpoint_still_written");
-    let spec = TinyRecordFormat::spec().with_read_limits(
-        TinyRecordFormat::spec()
-            .read_limits
-            .with_max_record_payload_len(65_536),
-    );
-    let mut file = spec.create(&path)?;
-    for value in 0..64u32 {
-        file.push(&Line { value })?;
-        file.flush()?;
-    }
-    drop(file);
-
-    let file = spec.open_readonly(&path)?;
-    assert!(
-        file.index_entries()
+        !crate::pages::all_entries!(file)
             .iter()
             .any(|entry| entry.block_id == varlit::INDEX_BLOCK_ID),
     );
@@ -974,11 +975,11 @@ fn a_re_encoded_checkpoint_still_validates_strictly() -> varlit::Result<()> {
     drop(file);
 
     let file = GapFormat::open_readonly(&path)?;
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(blocks.len(), 64);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..64u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1015,11 +1016,11 @@ fn an_in_place_replacement_is_refused() -> varlit::Result<()> {
     file.replace(0, &Line { value: 4242 })?;
     drop(file);
     let reopened = segment_spec().open_readonly(&path)?;
-    let blocks = reopened.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(reopened, Line)?;
     assert_eq!(blocks.len(), 16);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..16u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1042,7 +1043,7 @@ fn a_replacement_generation_re_encodes_the_chain() -> varlit::Result<()> {
     }
 
     let file = segment_spec().open_readonly(&path)?;
-    let entries = file.index_entries();
+    let entries = crate::pages::all_entries!(file);
     let segments: Vec<&RecordIndexEntry> = entries
         .iter()
         .filter(|entry| entry.block_id == SEGMENT_BLOCK_ID)
@@ -1053,15 +1054,15 @@ fn a_replacement_generation_re_encodes_the_chain() -> varlit::Result<()> {
     }
     // And the chained open agrees with a scan of the published generation.
     assert_eq!(
-        entry_shape(file.index_entries()),
+        entry_shape(crate::pages::all_entries!(file)),
         scanned_shape(&path)?,
         "the re-encoded chain must describe the generation it was published in",
     );
-    let blocks = file.blocks::<Line>()?;
+    let blocks = crate::pages::all_blocks!(file, Line)?;
     assert_eq!(blocks.len(), 25);
-    assert_eq!(blocks.get(0)?, Some(Line { value: 4242 }));
+    assert_eq!(line_at(&blocks, 0)?, Some(Line { value: 4242 }));
     for value in 1..25u32 {
-        assert_eq!(blocks.get(value as usize)?, Some(Line { value }));
+        assert_eq!(line_at(&blocks, value as usize)?, Some(Line { value }));
     }
     Ok(())
 }
@@ -1149,7 +1150,7 @@ fn a_checkpoint_and_a_segment_chain_cannot_both_be_declared() {
 /// **The chain is a property of the file, not of the spec that opens it.**
 ///
 /// `segment_chain_open_is_allowed` used to require `spec.index_policy
-/// .segment_on_flush` — the *writer's* policy — so a reader whose spec did not
+/// segment_on_flush` — the *writer's* policy — so a reader whose spec did not
 /// declare the chain ignored one that was on disk in front of it and walked the
 /// file header-to-EOF instead. The writer's policy governs whether flushing
 /// appends a segment. Whether an open can use one is decided by the bytes.
@@ -1180,7 +1181,7 @@ fn a_chained_file_opens_without_scanning_it_whatever_the_reader_declared() -> va
     let opened = unaware.open_readonly(&path)?;
     let by_chain_bytes = varlit::VarlitFile::take_open_scan_bytes();
     assert_eq!(
-        opened.blocks::<Line>()?.len(),
+        crate::pages::all_blocks!(opened, Line)?.len(),
         512,
         "the chain-seeded open did not recover every record"
     );
@@ -1209,8 +1210,8 @@ fn a_chained_file_opens_without_scanning_it_whatever_the_reader_declared() -> va
 
     // And the two paths agree on the index itself, not merely on its length.
     let chained = segment_spec().open_readonly(&path)?;
-    let by_chain = chained.blocks::<Line>()?;
-    let by_scan = scanned.blocks::<Line>()?;
+    let by_chain = crate::pages::all_blocks!(chained, Line)?;
+    let by_scan = crate::pages::all_blocks!(scanned, Line)?;
     assert_eq!(
         by_chain.len(),
         by_scan.len(),
@@ -1218,8 +1219,8 @@ fn a_chained_file_opens_without_scanning_it_whatever_the_reader_declared() -> va
     );
     for position in 0..by_chain.len() {
         assert_eq!(
-            by_chain.get(position)?,
-            by_scan.get(position)?,
+            line_at(&by_chain, position)?,
+            line_at(&by_scan, position)?,
             "the two open paths disagreed at record {position}"
         );
     }

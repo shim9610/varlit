@@ -165,7 +165,7 @@ const CHAINED_BEFORE: u64 = 52_334;
 /// composite-key change.
 ///
 /// The merged tree measures 26,333, exactly `RECORDS` fewer, and the reason is
-/// not this fix. F-52 removed the `logical_payload.to_vec()` in
+/// not this fix.  removed the `logical_payload.to_vec()` in
 /// `uncompressed_user_payload`, and the scalable prepare path
 /// (`file.rs:11460`) goes through it once per record — so a one-allocation
 /// saving times 2,000 records lands on this same measurement. The two fixes
@@ -242,7 +242,7 @@ fn the_keyed_chain_still_stores_rows_under_the_key_they_are_read_by() -> varlit:
         frame: 9,
         payload: b"latest".to_vec(),
     })?;
-    // ... and a batch push, which threads the key through a different call path.
+    // .. and a batch push, which threads the key through a different call path.
     writer
         .push_frames(
             (64..128u32).map(|ordinal| Frame {
@@ -259,8 +259,7 @@ fn the_keyed_chain_still_stores_rows_under_the_key_they_are_read_by() -> varlit:
 
     let reader = ChainedKeyFormat::open_indexed_reader(&path, options())?;
     for ordinal in [0u32, 1, 9, 63, 64, 127] {
-        let value = reader
-            .get_frame(&(ordinal / 8, ordinal))?
+        let value = filled(|o| reader.get_frame(&(ordinal / 8, ordinal), o))?
             .expect("every written key is readable");
         if ordinal == 9 {
             assert_eq!(value.payload, b"latest");
@@ -268,10 +267,32 @@ fn the_keyed_chain_still_stores_rows_under_the_key_they_are_read_by() -> varlit:
             assert_eq!(value.payload, ordinal.to_le_bytes());
         }
     }
-    assert!(reader.get_frame(&(0, 3))?.is_none(), "the delete was lost");
     assert!(
-        reader.get_frame(&(0, 200))?.is_none(),
+        filled(|o| reader.get_frame(&(0, 3), o))?.is_none(),
+        "the delete was lost"
+    );
+    assert!(
+        filled(|o| reader.get_frame(&(0, 200), o))?.is_none(),
         "a key that was never written was found"
     );
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

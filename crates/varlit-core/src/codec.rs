@@ -54,7 +54,7 @@ impl WireType {
     }
 }
 
-/// FNV-1a 64 state for structural codec identities (API-04).
+/// FNV-1a 64 state for structural codec identities.
 ///
 /// The derive expands the same folding inline so a generated
 /// `SCHEMA_FINGERPRINT` is a const expression over its fields' real
@@ -119,7 +119,7 @@ pub(crate) const fn container_schema_id_with_arity(
 pub trait VarlitEncode {
     const WIRE_TYPE: WireType;
 
-    /// Structural identity of the bytes this codec emits (API-04).
+    /// Structural identity of the bytes this codec emits.
     ///
     /// [`WireType`] is far too coarse to separate two custom codecs that both
     /// encode as [`WireType::Nested`] but disagree on layout, and a derived
@@ -145,9 +145,327 @@ pub trait VarlitEncode {
     const SCHEMA_ID: u64 = 0;
 
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()>;
+
+    /// Encode consecutive values exactly as repeated [`Self::encode_varlit`]
+    /// calls would. Fixed-width built-in scalars override this with one limit
+    /// check and one fallible reservation; other codecs keep the default.
+    #[doc(hidden)]
+    fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()>
+    where
+        Self: Sized,
+    {
+        for value in values {
+            value.encode_varlit(encoder)?;
+        }
+        Ok(())
+    }
+}
+
+/// A value to decode into: the starting point for the read APIs that fill a
+/// caller-owned value. It need not be meaningful, only valid and cheap.
+/// Derived blocks implement it field by field.
+pub trait VarlitEmpty {
+    fn empty() -> Self;
+}
+
+macro_rules! empty_zero {
+    ($($ty:ty => $zero:expr),+ $(,)?) => {
+        $(impl VarlitEmpty for $ty {
+            #[inline]
+            fn empty() -> Self {
+                $zero
+            }
+        })+
+    };
+}
+empty_zero!(
+    () => (), bool => false, u8 => 0, u16 => 0, u32 => 0, u64 => 0, u128 => 0,
+    i8 => 0, i16 => 0, i32 => 0, i64 => 0, i128 => 0, f32 => 0.0, f64 => 0.0,
+    String => String::new()
+);
+impl<T> VarlitEmpty for Vec<T> {
+    fn empty() -> Self {
+        Vec::new()
+    }
+}
+impl<T> VarlitEmpty for Option<T> {
+    fn empty() -> Self {
+        None
+    }
+}
+impl<T: VarlitEmpty, const N: usize> VarlitEmpty for [T; N] {
+    fn empty() -> Self {
+        std::array::from_fn(|_| T::empty())
+    }
+}
+impl<K, V> VarlitEmpty for BTreeMap<K, V> {
+    fn empty() -> Self {
+        BTreeMap::new()
+    }
+}
+impl<K, V, S: Default> VarlitEmpty for HashMap<K, V, S> {
+    fn empty() -> Self {
+        HashMap::default()
+    }
+}
+impl<A: VarlitEmpty, B: VarlitEmpty> VarlitEmpty for (A, B) {
+    fn empty() -> Self {
+        (A::empty(), B::empty())
+    }
+}
+impl<A: VarlitEmpty, B: VarlitEmpty, C: VarlitEmpty> VarlitEmpty for (A, B, C) {
+    fn empty() -> Self {
+        (A::empty(), B::empty(), C::empty())
+    }
+}
+impl<A: VarlitEmpty, B: VarlitEmpty, C: VarlitEmpty, D: VarlitEmpty> VarlitEmpty for (A, B, C, D) {
+    fn empty() -> Self {
+        (A::empty(), B::empty(), C::empty(), D::empty())
+    }
+}
+
+/// Internal evidence for a library-owned codec implementation.
+/// The private invariant field binds the evidence to its exact output type.
+///
+/// Safe downstream code cannot construct evidence or reuse another type's:
+/// ```compile_fail
+/// use varlit_core::BuiltinCodec;
+/// let _: BuiltinCodec<()> = BuiltinCodec { invariant: std::marker::PhantomData };
+/// ```
+/// ```compile_fail
+/// use varlit_core::{BuiltinCodec, Decoder, Result, VarlitDecode, WireType};
+/// struct Custom;
+/// impl VarlitDecode for Custom {
+///     const WIRE_TYPE: WireType = WireType::Unit;
+///     const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = <u64 as VarlitDecode>::__VARLIT_BUILTIN;
+///     fn decode_varlit(_: &mut Decoder<'_>) -> Result<Self> { Ok(Self) }
+/// }
+/// ```
+#[doc(hidden)]
+pub struct BuiltinCodec<T> {
+    invariant: std::marker::PhantomData<fn(T) -> T>,
+    callback_free: bool,
+}
+
+/// A builtin codec's way to fill its value straight from a record's storage,
+/// without the encoded bytes passing through an intermediate buffer. Only
+/// this crate can make one.
+#[doc(hidden)]
+pub struct BulkCodec<T> {
+    /// Encoded bytes per element, and the name its budget charge goes by.
+    width: usize,
+    resource: &'static str,
+    fill: fn(&mut T, &mut BulkField<'_>) -> Result<()>,
+}
+
+impl<T> BulkCodec<T> {
+    /// Checks a declared element count against the data that follows it, as
+    /// a slice decode bounds it by its remaining input, and returns the
+    /// count with what to charge the materialization budget (under which
+    /// name) before [`Self::fill`] reserves anything.
+    pub(crate) fn admit(&self, declared: u64, data_len: u64) -> Result<(usize, u64, &'static str)> {
+        let len =
+            usize::try_from(declared).map_err(|_| Error::LengthOverflow { value: declared })?;
+        if declared > data_len / self.width as u64 {
+            return Err(Error::UnexpectedEof);
+        }
+        let bytes = len
+            .checked_mul(self.width)
+            .ok_or(Error::ResourceArithmeticOverflow {
+                resource: self.resource,
+            })?;
+        Ok((len, bytes as u64, self.resource))
+    }
+
+    pub(crate) fn fill(&self, out: &mut T, field: &mut BulkField<'_>) -> Result<()> {
+        (self.fill)(out, field)
+    }
+}
+
+/// One admitted, length-prefixed field value whose data is still in storage.
+#[doc(hidden)]
+pub struct BulkField<'a> {
+    pub(crate) endian: Endian,
+    /// The element count, admitted and charged.
+    pub(crate) len: usize,
+    /// Bytes of the value after its prefix.
+    pub(crate) data_len: u64,
+    /// Fills the whole slice with the next (checked) data bytes.
+    pub(crate) read: &'a mut dyn FnMut(&mut [u8]) -> Result<()>,
+}
+
+impl BulkField<'_> {
+    /// What a slice decode reports for data past the value.
+    fn finish(&self, consumed: u64) -> Result<()> {
+        match self.data_len - consumed {
+            0 => Ok(()),
+            remaining => Err(Error::TrailingBytes {
+                remaining: usize::try_from(remaining).unwrap_or(usize::MAX),
+            }),
+        }
+    }
+}
+
+/// A type whose all-zero bit pattern is a value, so freshly zeroed memory
+/// from the allocator is already initialized storage for it.
+///
+/// # Safety
+///
+/// Implemented only for primitive numbers.
+unsafe trait ZeroInit: Copy + 'static {}
+// SAFETY: zero is a `u8`.
+unsafe impl ZeroInit for u8 {}
+
+/// Sizes `out` to `len` for a fill that overwrites every element.
+///
+/// A vector with room is reused as it is: nothing is reallocated or cleared.
+/// Otherwise its storage is replaced by zeroed memory straight from the
+/// allocator, which for a large request is fresh pages rather than a pass
+/// writing zeros.
+fn size_for_fill<T: ZeroInit>(out: &mut Vec<T>, len: usize, resource: &'static str) -> Result<()> {
+    if out.capacity() >= len {
+        if out.len() >= len {
+            out.truncate(len);
+        } else {
+            // SAFETY: zero is a `T`, so the spare capacity up to `len` can be
+            // zeroed in place and counted as initialized.
+            unsafe {
+                let spare = out.as_mut_ptr().add(out.len());
+                std::ptr::write_bytes(spare, 0, len - out.len());
+                out.set_len(len);
+            }
+        }
+        return Ok(());
+    }
+    let refused = || Error::AllocationFailed {
+        resource,
+        requested: allocation_request::<T>(len),
+    };
+    let layout = std::alloc::Layout::array::<T>(len).map_err(|_| refused())?;
+    // The old contents are about to be overwritten, so its block is freed
+    // before the new one is taken: the two are never live together, and
+    // growing a value peaks at the new size instead of old + new. A refused
+    // allocation leaves `out` empty, as a failed fill does.
+    *out = Vec::new();
+    // SAFETY: `len > capacity >= 0` and `T` is not zero-sized, so the layout
+    // has a nonzero size. The block has `T`'s array layout for `len`
+    // elements, every one a zero `T`, and comes from the global allocator
+    // that `Vec` frees it with.
+    *out = unsafe {
+        let block = std::alloc::alloc_zeroed(layout).cast::<T>();
+        if block.is_null() {
+            return Err(refused());
+        }
+        Vec::from_raw_parts(block, len, len)
+    };
+    Ok(())
+}
+
+fn fill_bytes_from_storage(
+    out: &mut Vec<u8>,
+    field: &mut BulkField<'_>,
+    resource: &'static str,
+) -> Result<()> {
+    let len = field.len;
+    size_for_fill(out, len, resource)?;
+    if let Err(error) = (field.read)(out) {
+        out.clear();
+        return Err(error);
+    }
+    field.finish(len as u64)
+}
+
+fn fill_string_from_storage(out: &mut String, field: &mut BulkField<'_>) -> Result<()> {
+    // The string's own allocation is the destination; it is validated in
+    // place and handed back, or left empty.
+    let mut bytes = std::mem::take(out).into_bytes();
+    fill_bytes_from_storage(&mut bytes, field, "string")?;
+    *out = String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
+    Ok(())
+}
+
+fn fill_bools_from_storage(out: &mut Vec<bool>, field: &mut BulkField<'_>) -> Result<()> {
+    // The vector's allocation is filled and validated as bytes, and only
+    // then counted as booleans again.
+    let mut taken = std::mem::ManuallyDrop::new(std::mem::take(out));
+    // SAFETY: `bool` and `u8` have the same size and alignment, a `bool` is
+    // a valid `u8`, and `taken` gives up its allocation here without dropping.
+    let mut bytes = unsafe {
+        Vec::from_raw_parts(
+            taken.as_mut_ptr().cast::<u8>(),
+            taken.len(),
+            taken.capacity(),
+        )
+    };
+    fill_bytes_from_storage(&mut bytes, field, "sequence entries")?;
+    check_bool_bytes(&bytes)?;
+    let mut bytes = std::mem::ManuallyDrop::new(bytes);
+    // SAFETY: as above, and every byte was just checked to be 0 or 1.
+    *out = unsafe {
+        Vec::from_raw_parts(
+            bytes.as_mut_ptr().cast::<bool>(),
+            bytes.len(),
+            bytes.capacity(),
+        )
+    };
+    Ok(())
+}
+
+/// A fixed-width number every bit pattern of which is a value, so its
+/// storage can be filled as bytes and fixed up in place.
+trait RawNumeric: ZeroInit {
+    fn to_native(self, endian: Endian) -> Self;
+}
+
+macro_rules! raw_numeric {
+    ($($ty:ty),+) => {$(
+        // SAFETY: zero is a value of every primitive number.
+        unsafe impl ZeroInit for $ty {}
+        impl RawNumeric for $ty {
+            #[inline(always)]
+            fn to_native(self, endian: Endian) -> Self {
+                let bytes = self.to_ne_bytes();
+                match endian {
+                    Endian::Little => <$ty>::from_le_bytes(bytes),
+                    Endian::Big => <$ty>::from_be_bytes(bytes),
+                }
+            }
+        }
+    )+};
+}
+raw_numeric!(i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64);
+
+fn fill_numeric_from_storage<T: RawNumeric>(
+    out: &mut Vec<T>,
+    field: &mut BulkField<'_>,
+) -> Result<()> {
+    let len = field.len;
+    // Admission already multiplied these without overflow.
+    let bytes = len * size_of::<T>();
+    size_for_fill(out, len, "sequence entries")?;
+    // SAFETY: `out` holds `len` initialized `T`s, so its storage is `bytes`
+    // initialized, writable bytes; `T` is a primitive number without padding
+    // for which every bit pattern is a value, and `u8` has alignment 1.
+    let raw = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), bytes) };
+    if let Err(error) = (field.read)(raw) {
+        out.clear();
+        return Err(error);
+    }
+    let endian = field.endian;
+    if cfg!(target_endian = "little") != matches!(endian, Endian::Little) {
+        for value in out.iter_mut() {
+            *value = value.to_native(endian);
+        }
+    }
+    field.finish(bytes as u64)
 }
 
 pub trait VarlitDecode: Sized {
+    #[doc(hidden)]
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = None;
+    /// Set by the builtin codecs that can fill their value from storage.
+    #[doc(hidden)]
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = None;
     const WIRE_TYPE: WireType;
 
     /// Structural identity of the bytes this codec accepts; see
@@ -157,6 +475,16 @@ pub trait VarlitDecode: Sized {
     const SCHEMA_ID: u64 = 0;
 
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self>;
+
+    /// Decode into an existing value. Codecs that own heap storage override
+    /// this to reuse it; the default decodes a fresh value through the
+    /// checked boundary and assigns it. Must accept exactly what
+    /// [`Self::decode_varlit`] accepts, charge the same budget and leave `out`
+    /// equal to what it would return. On error `out` is valid but unspecified.
+    fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+        *out = decoder.decode_value::<Self>()?;
+        Ok(())
+    }
 
     /// Decode a fixed array, including its input and materialization checks.
     ///
@@ -183,9 +511,37 @@ pub trait VarlitDecode: Sized {
 pub struct Encoder {
     endian: Endian,
     output: Vec<u8>,
+    /// Bytes already in `output` before this encode began. Limits and the
+    /// lengths they report count only what this encoder appended.
+    base: usize,
     max_len: Option<u64>,
     limit_resource: &'static str,
-    overflow: Option<(u64, u64)>,
+    failure: Option<EncoderFailure>,
+}
+
+// Retain only the failure facts that encoding can produce. Storing the general
+// Error (which can contain a boxed I/O error) would remove Encoder's public
+// UnwindSafe/RefUnwindSafe auto traits even when that variant is never used.
+#[derive(Debug)]
+enum EncoderFailure {
+    LimitExceeded { actual: u64, limit: u64 },
+    AllocationFailed { requested: u64 },
+}
+
+impl EncoderFailure {
+    fn into_error(self, resource: &'static str) -> Error {
+        match self {
+            Self::LimitExceeded { actual, limit } => Error::LimitExceeded {
+                resource,
+                actual,
+                limit,
+            },
+            Self::AllocationFailed { requested } => Error::AllocationFailed {
+                resource,
+                requested,
+            },
+        }
+    }
 }
 
 impl Encoder {
@@ -193,9 +549,10 @@ impl Encoder {
         Self {
             endian,
             output: Vec::new(),
+            base: 0,
             max_len: None,
             limit_resource: "encoded payload",
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -203,9 +560,10 @@ impl Encoder {
         Self {
             endian,
             output: Vec::new(),
+            base: 0,
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
     }
 
@@ -224,10 +582,36 @@ impl Encoder {
         Self {
             endian,
             output,
+            base: 0,
             max_len: Some(max_len),
             limit_resource: resource,
-            overflow: None,
+            failure: None,
         }
+    }
+
+    /// [`Encoder::new_limited_with_buffer`] that appends after the bytes
+    /// already in `output` instead of clearing them. `max_len` and every
+    /// reported length count only the appended bytes, so a value staged into
+    /// a shared chunk buffer is limited exactly as if it had its own buffer.
+    pub(crate) fn new_limited_appending(
+        endian: Endian,
+        max_len: u64,
+        resource: &'static str,
+        output: Vec<u8>,
+    ) -> Self {
+        Self {
+            endian,
+            base: output.len(),
+            output,
+            max_len: Some(max_len),
+            limit_resource: resource,
+            failure: None,
+        }
+    }
+
+    /// Bytes appended by this encoder (excludes any pre-existing prefix).
+    fn appended_len(&self) -> usize {
+        self.output.len() - self.base
     }
 
     /// Hands the buffer back whichever way the encode went.
@@ -237,15 +621,8 @@ impl Encoder {
     /// writer that needs it for the next record — a failed encode must not cost
     /// the writer its scratch.
     pub(crate) fn into_buffer_and_result(self) -> (Vec<u8>, Result<()>) {
-        match self.overflow {
-            Some((actual, limit)) => (
-                self.output,
-                Err(Error::LimitExceeded {
-                    resource: self.limit_resource,
-                    actual,
-                    limit,
-                }),
-            ),
+        match self.failure {
+            Some(error) => (self.output, Err(error.into_error(self.limit_resource))),
             None => (self.output, Ok(())),
         }
     }
@@ -259,18 +636,14 @@ impl Encoder {
     }
 
     pub(crate) fn try_into_inner(self) -> Result<Vec<u8>> {
-        if let Some((actual, limit)) = self.overflow {
-            return Err(Error::LimitExceeded {
-                resource: self.limit_resource,
-                actual,
-                limit,
-            });
+        if let Some(error) = self.failure {
+            return Err(error.into_error(self.limit_resource));
         }
         Ok(self.output)
     }
 
     /// Encodes a nested value into its own buffer while inheriting this
-    /// encoder's remaining output budget (DEF-02).
+    /// encoder's remaining output budget.
     ///
     /// A nested field encoded through this method can never buffer past the
     /// limit its parent writer entry point imposed: the child encoder is
@@ -281,7 +654,7 @@ impl Encoder {
         let Some(max_len) = self.max_len else {
             return encode_to_vec(value, self.endian);
         };
-        let remaining = max_len.saturating_sub(self.output.len() as u64);
+        let remaining = max_len.saturating_sub(self.appended_len() as u64);
         encode_to_vec_limited(value, self.endian, remaining, self.limit_resource)
     }
 
@@ -290,14 +663,25 @@ impl Encoder {
             self.output.extend_from_slice(bytes);
             return;
         }
-        if self.overflow.is_some() {
+        if self.failure.is_some() {
             return;
         }
-        let actual = (self.output.len() as u64).checked_add(bytes.len() as u64);
+        let actual = (self.appended_len() as u64).checked_add(bytes.len() as u64);
         if let Some(limit) = self.max_len
             && actual.is_none_or(|actual| actual > limit)
         {
-            self.overflow = Some((actual.unwrap_or(u64::MAX), limit));
+            self.failure = Some(EncoderFailure::LimitExceeded {
+                actual: actual.unwrap_or(u64::MAX),
+                limit,
+            });
+            return;
+        }
+        if bytes.len() > self.output.capacity() - self.output.len()
+            && self.output.try_reserve(bytes.len()).is_err()
+        {
+            self.failure = Some(EncoderFailure::AllocationFailed {
+                requested: actual.unwrap_or(u64::MAX),
+            });
             return;
         }
         self.output.extend_from_slice(bytes);
@@ -305,6 +689,76 @@ impl Encoder {
 
     pub fn write_u8(&mut self, value: u8) {
         self.write_all(&[value]);
+    }
+
+    /// Writes fixed-width elements with the bytes, limit failure and output
+    /// prefix that one scalar write per element would produce.
+    ///
+    /// A limited encoder checks the limit before reserving, then reserves only
+    /// the elements that fit, once and fallibly. When an element would cross
+    /// the limit the fitting prefix is written and the failure reports the
+    /// same `actual` length the per-element path reports. An unlimited encoder
+    /// keeps the infallible `extend` behaviour of [`Self::write_all`].
+    fn write_fixed_slice<T: Copy, const W: usize>(
+        &mut self,
+        values: &[T],
+        little: impl Fn(T) -> [u8; W],
+        big: impl Fn(T) -> [u8; W],
+    ) {
+        if values.is_empty() || self.failure.is_some() {
+            return;
+        }
+        let mut count = values.len();
+        let mut exceeded = None;
+        if let Some(limit) = self.max_len {
+            let used = self.appended_len() as u64;
+            let fitting = limit.saturating_sub(used) / W as u64;
+            if fitting < count as u64 {
+                // `fitting < count` so it fits in usize.
+                count = fitting as usize;
+                exceeded =
+                    Some(used.saturating_add(fitting.saturating_add(1).saturating_mul(W as u64)));
+            }
+        }
+        let Some(bytes) = count.checked_mul(W) else {
+            self.failure = Some(EncoderFailure::AllocationFailed {
+                requested: u64::MAX,
+            });
+            return;
+        };
+        if self.max_len.is_some() {
+            if bytes > self.output.capacity() - self.output.len()
+                && self.output.try_reserve(bytes).is_err()
+            {
+                self.failure = Some(EncoderFailure::AllocationFailed {
+                    requested: (self.appended_len() as u64).saturating_add(bytes as u64),
+                });
+                return;
+            }
+        } else {
+            self.output.reserve(bytes);
+        }
+        let start = self.output.len();
+        self.output.resize(start + bytes, 0);
+        let (destination, _) = self.output[start..].as_chunks_mut::<W>();
+        match self.endian {
+            Endian::Little => {
+                for (out, value) in destination.iter_mut().zip(values) {
+                    *out = little(*value);
+                }
+            }
+            Endian::Big => {
+                for (out, value) in destination.iter_mut().zip(values) {
+                    *out = big(*value);
+                }
+            }
+        }
+        if let Some(actual) = exceeded {
+            self.failure = Some(EncoderFailure::LimitExceeded {
+                actual,
+                limit: self.max_len.unwrap_or(u64::MAX),
+            });
+        }
     }
 
     pub fn write_u16(&mut self, value: u16) {
@@ -345,21 +799,108 @@ pub struct Decoder<'a> {
     large_field_ids: Option<HashSet<u32>>,
     materialization_limit: u64,
     materialization_remaining: u64,
+    // A short-lived borrow makes an active callback frame unforgeable by safe
+    // custom codecs, including whole-value replacement with a fresh Decoder.
+    callback_scope: Option<&'a u8>,
 }
 
-/// Materialization charged per distinct variable field id above the small-id
-/// mask (RES-01). A `HashSet<u32>` bucket costs four payload bytes plus one
-/// control byte at a 7/8 load factor; eight bytes over-approximates that so
-/// the charge can never undercount the reservation it guards.
-const FIELD_ID_SET_ENTRY_BYTES: u64 = 2 * size_of::<u32>() as u64;
+// Sealed static adapters keep every extensible trait call inside the checked
+// boundary and let the compiler inline builtin codecs without an FnOnce shim.
+trait DecoderCallback {
+    /// What the adapter is handed besides the frame: nothing for a value
+    /// decode, the caller's destination for an in-place decode.
+    type Input;
+    type Output;
+    const BUILTIN: bool;
+    const CALLBACK_FREE: bool;
+    fn call(input: Self::Input, decoder: &mut Decoder<'_>) -> Result<Self::Output>;
+}
+struct ValueCallback<T>(std::marker::PhantomData<T>);
+struct ArrayCallback<T, const N: usize>(std::marker::PhantomData<T>);
+struct IntoCallback<'o, T>(std::marker::PhantomData<&'o mut T>);
+impl<T: VarlitDecode> DecoderCallback for ValueCallback<T> {
+    type Input = ();
+    type Output = T;
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call((): (), decoder: &mut Decoder<'_>) -> Result<T> {
+        T::decode_varlit(decoder)
+    }
+}
+impl<T: VarlitDecode, const N: usize> DecoderCallback for ArrayCallback<T, N> {
+    type Input = ();
+    type Output = [T; N];
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call((): (), decoder: &mut Decoder<'_>) -> Result<[T; N]> {
+        T::decode_array(decoder)
+    }
+}
+impl<'o, T: VarlitDecode> DecoderCallback for IntoCallback<'o, T> {
+    type Input = &'o mut T;
+    type Output = ();
+    const BUILTIN: bool = T::__VARLIT_BUILTIN.is_some();
+    const CALLBACK_FREE: bool = matches!(
+        T::__VARLIT_BUILTIN,
+        Some(BuiltinCodec {
+            callback_free: true,
+            ..
+        })
+    );
+    #[inline(always)]
+    fn call(out: &'o mut T, decoder: &mut Decoder<'_>) -> Result<()> {
+        T::decode_varlit_into(out, decoder)
+    }
+}
+
+// Nested checked calls already have a short-lived, unforgeable frame borrow.
+// Reuse that decoder instead of moving its field-id set at every scalar call.
+struct CallbackGuard<'d, 'i> {
+    decoder: &'d mut Decoder<'i>,
+    input: &'i [u8],
+    endian: Endian,
+    limit: u64,
+    scope: Option<&'i u8>,
+}
+impl Drop for CallbackGuard<'_, '_> {
+    #[inline]
+    fn drop(&mut self) {
+        *self.decoder = Decoder {
+            input: self.input,
+            endian: self.endian,
+            materialization_limit: self.limit,
+            callback_scope: self.scope,
+            position: self.input.len(),
+            materialization_remaining: 0,
+            small_field_ids: 0,
+            large_field_ids: None,
+        };
+    }
+}
 
 impl<'a> Decoder<'a> {
     pub const STANDARD_MATERIALIZATION_LIMIT: u64 = 1024 * 1024 * 1024;
 
+    #[inline]
     pub fn new(input: &'a [u8], endian: Endian) -> Self {
         Self::new_limited(input, endian, Self::STANDARD_MATERIALIZATION_LIMIT)
     }
 
+    #[inline]
     pub fn new_limited(input: &'a [u8], endian: Endian, materialization_limit: u64) -> Self {
         Self {
             endian,
@@ -369,9 +910,11 @@ impl<'a> Decoder<'a> {
             large_field_ids: None,
             materialization_limit,
             materialization_remaining: materialization_limit,
+            callback_scope: None,
         }
     }
 
+    #[inline(always)]
     pub fn decode_from_slice_limited<T: VarlitDecode>(
         input: &'a [u8],
         endian: Endian,
@@ -387,7 +930,36 @@ impl<'a> Decoder<'a> {
         materialization_remaining: &mut u64,
     ) -> Result<T> {
         let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
+        *materialization_remaining = 0;
         let result = decoder.decode_complete();
+        *materialization_remaining = decoder.materialization_remaining;
+        result
+    }
+
+    /// [`Self::decode_from_slice_limited`] into an existing value; see
+    /// [`Self::decode_value_into`].
+    pub fn decode_from_slice_limited_into<T: VarlitDecode>(
+        input: &'a [u8],
+        endian: Endian,
+        materialization_limit: u64,
+        out: &mut T,
+    ) -> Result<()> {
+        let mut decoder = Self::new_limited(input, endian, materialization_limit);
+        decoder.decode_complete_into(out)
+    }
+
+    /// [`Self::decode_from_slice_accounted`] into an existing value.
+    pub fn decode_from_slice_accounted_into<T: VarlitDecode>(
+        input: &'a [u8],
+        endian: Endian,
+        materialization_remaining: &mut u64,
+        out: &mut T,
+    ) -> Result<()> {
+        let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
+        *materialization_remaining = 0;
+        let result = decoder.decode_complete_into(out);
         *materialization_remaining = decoder.materialization_remaining;
         result
     }
@@ -406,12 +978,28 @@ impl<'a> Decoder<'a> {
 
     pub fn decode_nested<T: VarlitDecode>(&mut self, input: &[u8]) -> Result<T> {
         let mut nested = Decoder::new_limited(input, self.endian, self.materialization_remaining);
+        self.materialization_remaining = 0;
         let result = nested.decode_complete();
         self.materialization_remaining = nested.materialization_remaining;
         result
     }
 
+    /// [`Self::decode_nested`] into an existing value; see
+    /// [`Self::decode_value_into`].
+    pub fn decode_nested_into<T: VarlitDecode>(&mut self, input: &[u8], out: &mut T) -> Result<()> {
+        let mut nested = Decoder::new_limited(input, self.endian, self.materialization_remaining);
+        self.materialization_remaining = 0;
+        let result = nested.decode_complete_into(out);
+        self.materialization_remaining = nested.materialization_remaining;
+        result
+    }
+
+    #[inline]
     pub fn charge_materialization(&mut self, bytes: u64, resource: &'static str) -> Result<()> {
+        if let Some(next) = crate::decode_state::charge(self.materialization_remaining, bytes) {
+            self.materialization_remaining = next;
+            return Ok(());
+        }
         let consumed = self
             .materialization_limit
             .checked_sub(self.materialization_remaining)
@@ -419,19 +1007,138 @@ impl<'a> Decoder<'a> {
         let actual = consumed
             .checked_add(bytes)
             .ok_or(Error::ResourceArithmeticOverflow { resource })?;
-        if actual > self.materialization_limit {
-            return Err(Error::LimitExceeded {
-                resource,
-                actual,
-                limit: self.materialization_limit,
+        Err(Error::LimitExceeded {
+            resource,
+            actual,
+            limit: self.materialization_limit,
+        })
+    }
+
+    /// Decode one value while preserving this decoder's input and budget authority.
+    ///
+    /// Custom codecs should use this method when composing other codecs. A codec
+    /// that returns with a fresh decoder or violates its cursor/budget boundary
+    /// is rejected. Completed charges survive errors. A callback panic or invalid
+    /// replacement exhausts this frame's input and remaining budget.
+    #[inline(always)]
+    pub fn decode_value<T: VarlitDecode>(&mut self) -> Result<T> {
+        self.with_callback::<ValueCallback<T>>(())
+    }
+
+    /// [`Self::decode_value`] into an existing value, reusing what it owns
+    /// (vector and string capacity) where its codec supports that. Runs
+    /// through the same checked frame, budget and validation. On error `out`
+    /// is valid but its contents are unspecified.
+    #[inline(always)]
+    pub fn decode_value_into<T: VarlitDecode>(&mut self, out: &mut T) -> Result<()> {
+        self.with_callback::<IntoCallback<'_, T>>(out)
+    }
+
+    #[inline(always)]
+    fn with_callback<C: DecoderCallback>(&mut self, input: C::Input) -> Result<C::Output> {
+        if C::CALLBACK_FREE || (C::BUILTIN && self.callback_scope.is_some()) {
+            return C::call(input, self);
+        }
+        if self.callback_scope.is_some() {
+            return self.with_existing_callback::<C>(input);
+        }
+        let scope = 0u8;
+        let start = self.position;
+        let before = self.materialization_remaining;
+        // Borrow input only for this call. An active frame cannot be retained
+        // in a 'static slot and reused to forge a later invocation's authority.
+        let mut frame = Decoder {
+            endian: self.endian,
+            input: self.input,
+            position: start,
+            small_field_ids: self.small_field_ids,
+            large_field_ids: self.large_field_ids.take(),
+            materialization_limit: self.materialization_limit,
+            materialization_remaining: before,
+            callback_scope: Some(&scope),
+        };
+        // Establish the safe unwind/rejection state before invoking user code.
+        self.position = self.input.len();
+        self.materialization_remaining = 0;
+        let result = C::call(input, &mut frame);
+        let linked = frame
+            .callback_scope
+            .is_some_and(|actual| std::ptr::eq(actual, &scope))
+            && std::ptr::eq(frame.input, self.input)
+            && frame.endian as u8 == self.endian as u8
+            && frame.materialization_limit == self.materialization_limit;
+        if !crate::decode_state::callback_exit(
+            linked,
+            start,
+            frame.position,
+            self.input.len(),
+            before,
+            frame.materialization_remaining,
+        ) {
+            // Preserve a callback error rather than destroying and replacing
+            // it. Successful values are released before rejecting the frame.
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        self.position = frame.position;
+        self.materialization_remaining = frame.materialization_remaining;
+        self.small_field_ids = frame.small_field_ids;
+        self.large_field_ids = frame.large_field_ids.take();
+        result
+    }
+
+    #[inline(always)]
+    fn with_existing_callback<C: DecoderCallback>(
+        &mut self,
+        destination: C::Input,
+    ) -> Result<C::Output> {
+        let input = self.input;
+        let endian = self.endian;
+        let limit = self.materialization_limit;
+        let scope = self.callback_scope;
+        let guard = CallbackGuard {
+            decoder: self,
+            input,
+            endian,
+            limit,
+            scope,
+        };
+        let result = C::call(destination, guard.decoder);
+        // All safe methods preserve the numeric invariant and immutable frame
+        // fields; the MIR closure gate covers every writer. Fresh replacement
+        // cannot reproduce the private, short-lived scope borrow.
+        if !crate::decode_state::same_scope(scope, guard.decoder.callback_scope) {
+            return match result {
+                Err(error) => Err(error),
+                Ok(_value) => Err(Error::InvalidCanonicalEncoding(
+                    "codec replaced or invalidated decoder state",
+                )),
+            };
+        }
+        // The guard owns only borrows/scalars. On successful admission its
+        // rollback is unnecessary; forgetting it releases no owned resource.
+        std::mem::forget(guard);
+        result
+    }
+
+    #[inline(always)]
+    fn decode_complete_into<T: VarlitDecode>(&mut self, out: &mut T) -> Result<()> {
+        self.decode_value_into(out)?;
+        if self.remaining() != 0 {
+            return Err(Error::TrailingBytes {
+                remaining: self.remaining(),
             });
         }
-        self.materialization_remaining -= bytes;
         Ok(())
     }
 
+    #[inline(always)]
     fn decode_complete<T: VarlitDecode>(&mut self) -> Result<T> {
-        let value = T::decode_varlit(self)?;
+        let value = self.decode_value::<T>()?;
         if self.remaining() != 0 {
             return Err(Error::TrailingBytes {
                 remaining: self.remaining(),
@@ -440,20 +1147,21 @@ impl<'a> Decoder<'a> {
         Ok(value)
     }
 
+    #[inline]
     pub fn read_exact(&mut self, len: usize) -> Result<&'a [u8]> {
-        let end = self.position.checked_add(len).ok_or(Error::UnexpectedEof)?;
-        if end > self.input.len() {
-            return Err(Error::UnexpectedEof);
-        }
+        let end = crate::decode_state::read_end(self.position, len, self.input.len())
+            .ok_or(Error::UnexpectedEof)?;
         let bytes = &self.input[self.position..end];
         self.position = end;
         Ok(bytes)
     }
 
+    #[inline]
     pub fn read_u8(&mut self) -> Result<u8> {
         Ok(self.read_exact(1)?[0])
     }
 
+    #[inline]
     pub fn read_u16(&mut self) -> Result<u16> {
         let mut bytes = [0; 2];
         bytes.copy_from_slice(self.read_exact(2)?);
@@ -463,6 +1171,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u32(&mut self) -> Result<u32> {
         let mut bytes = [0; 4];
         bytes.copy_from_slice(self.read_exact(4)?);
@@ -472,6 +1181,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut bytes = [0; 8];
         bytes.copy_from_slice(self.read_exact(8)?);
@@ -481,6 +1191,7 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    #[inline]
     pub fn read_u128(&mut self) -> Result<u128> {
         let mut bytes = [0; 16];
         bytes.copy_from_slice(self.read_exact(16)?);
@@ -488,6 +1199,23 @@ impl<'a> Decoder<'a> {
             Endian::Little => u128::from_le_bytes(bytes),
             Endian::Big => u128::from_be_bytes(bytes),
         })
+    }
+
+    /// Consumes `count` fixed-width elements as one input slice.
+    ///
+    /// Callers run [`Self::preflight_count`] first, which already bounds
+    /// `count` by the remaining input and charges the materialization budget;
+    /// this only performs the bounds-checked read.
+    fn read_fixed_run(
+        &mut self,
+        count: usize,
+        width: usize,
+        resource: &'static str,
+    ) -> Result<&'a [u8]> {
+        let bytes = count
+            .checked_mul(width)
+            .ok_or(Error::ResourceArithmeticOverflow { resource })?;
+        self.read_exact(bytes)
     }
 
     pub fn read_len(&mut self) -> Result<usize> {
@@ -546,7 +1274,7 @@ impl<'a> Decoder<'a> {
     /// Preflight for a node-per-entry map (`BTreeMap`), whose storage really is
     /// driven by the entries it has already accepted.
     ///
-    /// API3-04: the charge used to be `len * size_of::<(K, V)>()`, which
+    /// the charge used to be `len * size_of::<(K, V)>()`, which
     /// treats a `BTreeMap` as if it stored entries packed end to end. It does
     /// not. A std B-tree node carries a fixed-capacity array - it allocates
     /// room for `2B - 1 = 11` entries whatever its fill - behind a header
@@ -580,7 +1308,7 @@ impl<'a> Decoder<'a> {
 
     /// Preflight for an open-addressed hash table (`HashMap`), whose storage is
     /// driven by the *declared* count long before any entry is validated
-    /// (SAFE-01).
+    ///
     ///
     /// `preflight_count` floors a zero-byte entry at a one-byte charge, which
     /// is a wild under-estimate for a hash table: a `HashMap<(), ()>` pays a
@@ -604,15 +1332,24 @@ impl<'a> Decoder<'a> {
                 "collection count cannot make bounded input progress",
             ));
         }
-        let bytes = hash_table_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
-            resource,
-            actual: u64::MAX,
-            limit: self.materialization_limit,
-        })?;
+        // Growth retains the old table until the new table is populated. Both
+        // allocations fit the final-count bound individually. Charge two tables
+        // when the declared count can exceed the upfront reservation. Payload charges remain separate.
+        let bytes =
+            hash_map_decode_reservation_bytes::<(K, V)>(len).ok_or(Error::LimitExceeded {
+                resource,
+                actual: u64::MAX,
+                limit: self.materialization_limit,
+            })?;
         self.charge_materialization(bytes, resource)
     }
 
     fn note_field_id(&mut self, field_id: u32) -> Result<()> {
+        if field_id == 0 {
+            return Err(Error::InvalidCanonicalEncoding(
+                "variable field id must be nonzero",
+            ));
+        }
         if field_id < u64::BITS {
             let mask = 1u64 << field_id;
             if self.small_field_ids & mask != 0 {
@@ -629,12 +1366,29 @@ impl<'a> Decoder<'a> {
         {
             return Err(Error::InvalidCanonicalEncoding("duplicate variable field"));
         }
-        // RES-01: every other decoder-owned container charges the
+        // every other decoder-owned container charges the
         // materialization budget before it reserves. Duplicate detection for
         // ids above the small-id mask is the one decoder-owned set whose
         // growth is driven purely by attacker-chosen field ids, so charge
         // before reserving rather than after.
-        self.charge_materialization(FIELD_ID_SET_ENTRY_BYTES, "variable field ids")?;
+        let count = self.large_field_ids.as_ref().map_or(0, HashSet::len);
+        let bound = |count| {
+            hash_table_reservation_bytes::<u32>(count)
+                .and_then(|bytes| bytes.checked_mul(2))
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })
+        };
+        // Cover both old and new tables during a rehash, including power-of-two
+        // capacity rounding and control bytes. Charge only the bound's growth.
+        let charge = bound(
+            count
+                .checked_add(1)
+                .ok_or(Error::ResourceArithmeticOverflow {
+                    resource: "variable field ids",
+                })?,
+        )? - bound(count)?;
+        self.charge_materialization(charge, "variable field ids")?;
         let field_ids = self.large_field_ids.get_or_insert_with(HashSet::new);
         let requested = u64::try_from(field_ids.len())
             .unwrap_or(u64::MAX)
@@ -664,11 +1418,52 @@ pub fn write_field(
     wire_type: WireType,
     payload: &[u8],
 ) -> Result<()> {
+    if field_id == 0 {
+        return Err(Error::InvalidCanonicalEncoding(
+            "variable field id must be nonzero",
+        ));
+    }
     encoder.write_u32(field_id);
     encoder.write_u16(wire_type as u16);
     encoder.write_u16(0);
     encoder.write_u64(payload.len() as u64);
     encoder.write_all(payload);
+    Ok(())
+}
+
+/// Writes one variable-block field with its value encoded directly into the
+/// parent buffer: the header is written with a zero length, the value is
+/// encoded in place, then the length is patched.
+///
+/// Produces the same bytes as `write_field` over `encode_nested_to_vec`, with
+/// no intermediate buffer, copy or allocation. The value is bounded by the
+/// encoder's own limit; on a limit or allocation failure the encoder records
+/// it, the length is left unpatched and `try_into_inner` reports the error.
+#[doc(hidden)]
+pub fn encode_field_in_place<T: VarlitEncode + ?Sized>(
+    encoder: &mut Encoder,
+    field_id: u32,
+    value: &T,
+) -> Result<()> {
+    if field_id == 0 {
+        return Err(Error::InvalidCanonicalEncoding(
+            "variable field id must be nonzero",
+        ));
+    }
+    encoder.write_u32(field_id);
+    encoder.write_u16(T::WIRE_TYPE as u16);
+    encoder.write_u16(0);
+    encoder.write_u64(0);
+    let start = encoder.output.len();
+    value.encode_varlit(encoder)?;
+    if encoder.failure.is_none() {
+        let length = (encoder.output.len() - start) as u64;
+        let bytes = match encoder.endian {
+            Endian::Little => length.to_le_bytes(),
+            Endian::Big => length.to_be_bytes(),
+        };
+        encoder.output[start - 8..start].copy_from_slice(&bytes);
+    }
     Ok(())
 }
 
@@ -697,9 +1492,9 @@ pub fn read_field_header(decoder: &mut Decoder<'_>) -> Result<FieldHeader> {
 }
 
 pub fn encode_to_vec<T: VarlitEncode>(value: &T, endian: Endian) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new(endian);
+    let mut encoder = Encoder::new_limited(endian, u64::MAX, "encoded payload");
     value.encode_varlit(&mut encoder)?;
-    Ok(encoder.into_inner())
+    encoder.try_into_inner()
 }
 
 pub(crate) fn encode_to_vec_limited<T: VarlitEncode>(
@@ -731,6 +1526,16 @@ pub(crate) fn encode_into_limited<T: VarlitEncode>(
     encoded.and(finished)
 }
 
+/// [`decode_from_slice`] into an existing value; see [`Decoder::decode_value_into`].
+pub fn decode_from_slice_into<T: VarlitDecode>(
+    bytes: &[u8],
+    endian: Endian,
+    out: &mut T,
+) -> Result<()> {
+    let mut decoder = Decoder::new(bytes, endian);
+    decoder.decode_complete_into(out)
+}
+
 pub fn decode_from_slice<T: VarlitDecode>(bytes: &[u8], endian: Endian) -> Result<T> {
     Decoder::decode_from_slice_limited(bytes, endian, Decoder::STANDARD_MATERIALIZATION_LIMIT)
 }
@@ -745,6 +1550,10 @@ impl VarlitEncode for () {
 }
 
 impl VarlitDecode for () {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Unit;
     const SCHEMA_ID: u64 = leaf_schema_id(b"unit");
 
@@ -763,14 +1572,28 @@ macro_rules! unsigned {
                 encoder.$write(*self);
                 Ok(())
             }
+
+            fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+                encoder.write_fixed_slice(values, <$ty>::to_le_bytes, <$ty>::to_be_bytes);
+                Ok(())
+            }
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 decoder.$read()
+            }
+
+            fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+                decode_fixed_array(decoder, 0, <$ty>::from_le_bytes, <$ty>::from_be_bytes)
             }
         }
     };
@@ -786,14 +1609,28 @@ macro_rules! signed {
                 encoder.$write(*self as $uty);
                 Ok(())
             }
+
+            fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+                encoder.write_fixed_slice(values, <$ty>::to_le_bytes, <$ty>::to_be_bytes);
+                Ok(())
+            }
         }
 
         impl VarlitDecode for $ty {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+                invariant: std::marker::PhantomData,
+                callback_free: true,
+            });
             const WIRE_TYPE: WireType = WireType::$wire;
             const SCHEMA_ID: u64 = leaf_schema_id(stringify!($ty).as_bytes());
 
+            #[inline]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                 Ok(decoder.$read()? as Self)
+            }
+
+            fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+                decode_fixed_array(decoder, 0, <$ty>::from_le_bytes, <$ty>::from_be_bytes)
             }
         }
     };
@@ -807,12 +1644,22 @@ impl VarlitEncode for u8 {
         encoder.write_u8(*self);
         Ok(())
     }
+
+    fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+        encoder.write_fixed_slice(values, |v| [v], |v| [v]);
+        Ok(())
+    }
 }
 
 impl VarlitDecode for u8 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::U8;
     const SCHEMA_ID: u64 = leaf_schema_id(b"u8");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         decoder.read_u8()
     }
@@ -845,12 +1692,22 @@ impl VarlitEncode for bool {
         encoder.write_u8(u8::from(*self));
         Ok(())
     }
+
+    fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+        encoder.write_fixed_slice(values, |v| [u8::from(v)], |v| [u8::from(v)]);
+        Ok(())
+    }
 }
 
 impl VarlitDecode for bool {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::Bool;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bool");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         match decoder.read_u8()? {
             0 => Ok(false),
@@ -858,6 +1715,29 @@ impl VarlitDecode for bool {
             _ => Err(Error::InvalidCanonicalEncoding(
                 "boolean value must be 0 or 1",
             )),
+        }
+    }
+
+    fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+        decoder.preflight_count(N, 1, size_of::<bool>(), "array")?;
+        let bytes = decoder.read_fixed_run(N, 1, "array")?;
+        check_bool_bytes(bytes)?;
+        if size_of::<Option<bool>>().saturating_mul(N) <= ARRAY_STACK_DECODE_BUDGET {
+            let mut out = [false; N];
+            for (slot, &byte) in out.iter_mut().zip(bytes) {
+                *slot = byte == 1;
+            }
+            Ok(out)
+        } else {
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(N)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "array",
+                    requested: allocation_request::<bool>(N),
+                })?;
+            values.extend(bytes.iter().map(|&byte| byte == 1));
+            values.try_into().map_err(|_| Error::UnexpectedEof)
         }
     }
 }
@@ -870,14 +1750,28 @@ impl VarlitEncode for f32 {
         encoder.write_u32(self.to_bits());
         Ok(())
     }
+
+    fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+        encoder.write_fixed_slice(values, f32::to_le_bytes, f32::to_be_bytes);
+        Ok(())
+    }
 }
 
 impl VarlitDecode for f32 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F32;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f32");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u32()?))
+    }
+
+    fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+        decode_fixed_array(decoder, 0.0, f32::from_le_bytes, f32::from_be_bytes)
     }
 }
 
@@ -889,14 +1783,28 @@ impl VarlitEncode for f64 {
         encoder.write_u64(self.to_bits());
         Ok(())
     }
+
+    fn __varlit_encode_slice(values: &[Self], encoder: &mut Encoder) -> Result<()> {
+        encoder.write_fixed_slice(values, f64::to_le_bytes, f64::to_be_bytes);
+        Ok(())
+    }
 }
 
 impl VarlitDecode for f64 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
     const WIRE_TYPE: WireType = WireType::F64;
     const SCHEMA_ID: u64 = leaf_schema_id(b"f64");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self::from_bits(decoder.read_u64()?))
+    }
+
+    fn decode_array<const N: usize>(decoder: &mut Decoder<'_>) -> Result<[Self; N]> {
+        decode_fixed_array(decoder, 0.0, f64::from_le_bytes, f64::from_be_bytes)
     }
 }
 
@@ -912,26 +1820,54 @@ impl VarlitEncode for Vec<u8> {
 }
 
 impl VarlitDecode for Vec<u8> {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = Some(BulkCodec {
+        width: 1,
+        resource: "byte vector",
+        fill: |out, field| fill_bytes_from_storage(out, field, "byte vector"),
+    });
     const WIRE_TYPE: WireType = WireType::Bytes;
     const SCHEMA_ID: u64 = leaf_schema_id(b"bytes");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        let len = decoder.read_len()?;
-        if len > decoder.remaining() {
-            return Err(Error::UnexpectedEof);
-        }
-        decoder.charge_materialization(len as u64, "byte vector")?;
-        let bytes = decoder.read_exact(len)?;
         let mut value = Vec::new();
-        value
-            .try_reserve_exact(len)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "byte vector",
-                requested: len as u64,
-            })?;
-        value.extend_from_slice(bytes);
+        fill_bytes(decoder, &mut value, "byte vector")?;
         Ok(value)
     }
+
+    #[inline]
+    fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+        fill_bytes(decoder, out, "byte vector")
+    }
+}
+
+/// Length-prefixed bytes into `out`, reusing its capacity: input bound and
+/// budget charge before any reservation.
+#[inline]
+fn fill_bytes(decoder: &mut Decoder<'_>, out: &mut Vec<u8>, resource: &'static str) -> Result<()> {
+    let len = decoder.read_len()?;
+    if len > decoder.remaining() {
+        return Err(Error::UnexpectedEof);
+    }
+    decoder.charge_materialization(len as u64, resource)?;
+    let bytes = decoder.read_exact(len)?;
+    out.clear();
+    if out.capacity() < len {
+        // Growing would copy contents that are being replaced; free the old
+        // block first so the two are never live together.
+        *out = Vec::new();
+    }
+    out.try_reserve_exact(len)
+        .map_err(|_| Error::AllocationFailed {
+            resource,
+            requested: len as u64,
+        })?;
+    out.extend_from_slice(bytes);
+    Ok(())
 }
 
 impl VarlitEncode for String {
@@ -946,9 +1882,19 @@ impl VarlitEncode for String {
 }
 
 impl VarlitDecode for String {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: true,
+    });
+    const __VARLIT_BULK: Option<BulkCodec<Self>> = Some(BulkCodec {
+        width: 1,
+        resource: "string",
+        fill: fill_string_from_storage,
+    });
     const WIRE_TYPE: WireType = WireType::String;
     const SCHEMA_ID: u64 = leaf_schema_id(b"string");
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         if len > decoder.remaining() {
@@ -965,6 +1911,28 @@ impl VarlitDecode for String {
             })?;
         value.extend_from_slice(bytes);
         String::from_utf8(value).map_err(|_| Error::InvalidUtf8)
+    }
+
+    #[inline]
+    fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+        let len = decoder.read_len()?;
+        if len > decoder.remaining() {
+            return Err(Error::UnexpectedEof);
+        }
+        decoder.charge_materialization(len as u64, "string")?;
+        let text = std::str::from_utf8(decoder.read_exact(len)?).map_err(|_| Error::InvalidUtf8)?;
+        out.clear();
+        if out.capacity() < len {
+            // As for byte vectors: never hold the replaced block and the new one.
+            *out = String::new();
+        }
+        out.try_reserve_exact(len)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "string",
+                requested: len as u64,
+            })?;
+        out.push_str(text);
+        Ok(())
     }
 }
 
@@ -993,15 +1961,38 @@ impl<T> VarlitDecode for Option<T>
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"option", &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        if bool::decode_varlit(decoder)? {
-            Ok(Some(T::decode_varlit(decoder)?))
+        if decoder.decode_value::<bool>()? {
+            Ok(Some(decoder.decode_value::<T>()?))
         } else {
             Ok(None)
         }
+    }
+
+    fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+        if decoder.decode_value::<bool>()? {
+            match out {
+                Some(inner) => decoder.decode_value_into(inner)?,
+                None => *out = Some(decoder.decode_value::<T>()?),
+            }
+        } else {
+            *out = None;
+        }
+        Ok(())
     }
 }
 
@@ -1013,10 +2004,7 @@ where
     const SCHEMA_ID: u64 = container_schema_id_with_arity(b"array", N as u64, &[T::SCHEMA_ID]);
 
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-        for value in self {
-            value.encode_varlit(encoder)?;
-        }
-        Ok(())
+        T::__varlit_encode_slice(self, encoder)
     }
 }
 
@@ -1052,7 +2040,7 @@ where
 {
     let mut slots: [Option<T>; N] = [const { None }; N];
     for slot in &mut slots {
-        *slot = Some(T::decode_varlit(decoder)?);
+        *slot = Some(decoder.decode_value::<T>()?);
     }
     Ok(slots.map(|value| value.expect("every array slot was filled by the loop above")))
 }
@@ -1067,6 +2055,61 @@ fn decode_byte_array_on_stack<const N: usize>(decoder: &mut Decoder<'_>) -> Resu
         .read_exact(N)?
         .try_into()
         .map_err(|_| Error::UnexpectedEof)
+}
+
+/// `decode_array` for fixed-width scalars: the default array path's preflight,
+/// one input read, and the same stack/heap split, without per-element calls.
+fn decode_fixed_array<T: Copy, const W: usize, const N: usize>(
+    decoder: &mut Decoder<'_>,
+    zero: T,
+    little: impl Fn([u8; W]) -> T,
+    big: impl Fn([u8; W]) -> T,
+) -> Result<[T; N]> {
+    match decoder.endian() {
+        Endian::Little => decode_fixed_array_with(decoder, zero, little),
+        Endian::Big => decode_fixed_array_with(decoder, zero, big),
+    }
+}
+
+/// [`decode_fixed_array`] for one byte order; `convert` is a concrete,
+/// inlinable function so the element loop can be vectorized.
+fn decode_fixed_array_with<T: Copy, const W: usize, const N: usize>(
+    decoder: &mut Decoder<'_>,
+    zero: T,
+    convert: impl Fn([u8; W]) -> T,
+) -> Result<[T; N]> {
+    decoder.preflight_count(N, W, size_of::<T>(), "array")?;
+    let bytes = decoder.read_fixed_run(N, W, "array")?;
+    let (chunks, _) = bytes.as_chunks::<W>();
+    // Same stack/heap boundary as the default `decode_array`, so a declared
+    // array length that the default sends to the heap still goes there.
+    if size_of::<Option<T>>().saturating_mul(N) <= ARRAY_STACK_DECODE_BUDGET {
+        let mut out = [zero; N];
+        for (slot, chunk) in out.iter_mut().zip(chunks) {
+            *slot = convert(*chunk);
+        }
+        Ok(out)
+    } else {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(N)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "array",
+                requested: allocation_request::<T>(N),
+            })?;
+        values.extend(chunks.iter().map(|chunk| convert(*chunk)));
+        values.try_into().map_err(|_| Error::UnexpectedEof)
+    }
+}
+
+/// Validates canonical booleans (0 or 1) for a run of bytes.
+fn check_bool_bytes(bytes: &[u8]) -> Result<()> {
+    if bytes.iter().any(|&byte| byte > 1) {
+        return Err(Error::InvalidCanonicalEncoding(
+            "boolean value must be 0 or 1",
+        ));
+    }
+    Ok(())
 }
 
 /// Decodes `[T; N]` through one fallible heap reservation — the behaviour every
@@ -1084,7 +2127,7 @@ where
             requested: allocation_request::<T>(N),
         })?;
     for _ in 0..N {
-        values.push(T::decode_varlit(decoder)?);
+        values.push(decoder.decode_value::<T>()?);
     }
     values.try_into().map_err(|_| Error::UnexpectedEof)
 }
@@ -1093,11 +2136,22 @@ impl<T, const N: usize> VarlitDecode for [T; N]
 where
     T: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            T::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Seq;
     const SCHEMA_ID: u64 = container_schema_id_with_arity(b"array", N as u64, &[T::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-        T::decode_array(decoder)
+        decoder.with_callback::<ArrayCallback<T, N>>(())
     }
 }
 
@@ -1124,9 +2178,26 @@ where
     K: VarlitDecode + Ord,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"btreemap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_map_count::<K, V>(len, "BTreeMap entries")?;
@@ -1135,10 +2206,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1156,7 +2227,7 @@ where
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
+        let pending_value = decoder.decode_value::<V>()?;
         if values.insert(pending_key, pending_value).is_some() {
             return Err(Error::InvalidCanonicalEncoding("duplicate BTreeMap key"));
         }
@@ -1173,8 +2244,34 @@ where
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
     fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-        let mut entries: Vec<(&K, &V)> = self.iter().collect();
-        entries.sort_by_key(|(key, _)| *key);
+        // Refuse impossible output before allocating one reference pair per
+        // entry. Custom Nested/Seq codecs may be zero-width, so only charge
+        // the minimum guaranteed by their declared wire type here.
+        if let Some(limit) = encoder.max_len {
+            let per_entry =
+                minimum_wire_size(K::WIRE_TYPE) as u64 + minimum_wire_size(V::WIRE_TYPE) as u64;
+            let actual = (self.len() as u64)
+                .checked_mul(per_entry)
+                .and_then(|n| n.checked_add(8))
+                .and_then(|n| n.checked_add(encoder.output.len() as u64))
+                .unwrap_or(u64::MAX);
+            if actual > limit {
+                return Err(Error::LimitExceeded {
+                    resource: encoder.limit_resource,
+                    actual,
+                    limit,
+                });
+            }
+        }
+        let mut entries: Vec<(&K, &V)> = Vec::new();
+        entries
+            .try_reserve_exact(self.len())
+            .map_err(|_| Error::AllocationFailed {
+                resource: "HashMap encoding entries",
+                requested: allocation_request::<(&K, &V)>(self.len()),
+            })?;
+        entries.extend(self.iter());
+        entries.sort_unstable_by_key(|(key, _)| *key);
         encoder.write_u64(entries.len() as u64);
         for (key, value) in entries {
             key.encode_varlit(encoder)?;
@@ -1189,14 +2286,31 @@ where
     K: VarlitDecode + Ord + Eq + Hash,
     V: VarlitDecode,
 {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            K::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ) && matches!(
+            V::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
     const WIRE_TYPE: WireType = WireType::Nested;
     const SCHEMA_ID: u64 = container_schema_id(b"hashmap", &[K::SCHEMA_ID, V::SCHEMA_ID]);
 
+    #[inline]
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let len = decoder.read_len()?;
         decoder.preflight_hash_map_count::<K, V>(len, "HashMap entries")?;
         let mut values = HashMap::new();
-        // SAFE-01: reserve only a bounded prefix of the declared count, so a
+        // reserve only a bounded prefix of the declared count, so a
         // hostile count cannot materialize a table before a single entry has
         // been proven decodable. The charge above already bounds the table this
         // map can reach; this bounds what it can reach *on a claim alone*.
@@ -1211,10 +2325,10 @@ where
             return Ok(values);
         }
 
-        let mut pending_key = K::decode_varlit(decoder)?;
+        let mut pending_key = decoder.decode_value::<K>()?;
         for _ in 1..len {
-            let pending_value = V::decode_varlit(decoder)?;
-            let next_key = K::decode_varlit(decoder)?;
+            let pending_value = decoder.decode_value::<V>()?;
+            let next_key = decoder.decode_value::<K>()?;
             match pending_key.cmp(&next_key) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -1226,18 +2340,31 @@ where
                     ));
                 }
             }
-            if values.insert(pending_key, pending_value).is_some() {
-                return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-            }
+            insert_hash_map_entry(&mut values, pending_key, pending_value)?;
             pending_key = next_key;
         }
 
-        let pending_value = V::decode_varlit(decoder)?;
-        if values.insert(pending_key, pending_value).is_some() {
-            return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
-        }
+        let pending_value = decoder.decode_value::<V>()?;
+        insert_hash_map_entry(&mut values, pending_key, pending_value)?;
         Ok(values)
     }
+}
+
+fn insert_hash_map_entry<K: Eq + Hash, V>(
+    values: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+) -> Result<()> {
+    if values.len() == values.capacity() {
+        values.try_reserve(1).map_err(|_| Error::AllocationFailed {
+            resource: "HashMap entries",
+            requested: allocation_request::<(K, V)>(values.len().saturating_add(1)),
+        })?;
+    }
+    if values.insert(key, value).is_some() {
+        return Err(Error::InvalidCanonicalEncoding("duplicate HashMap key"));
+    }
+    Ok(())
 }
 
 macro_rules! vec_seq_codec {
@@ -1250,18 +2377,17 @@ macro_rules! vec_seq_codec {
 
                 fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
                     encoder.write_u64(self.len() as u64);
-                    for value in self {
-                        value.encode_varlit(encoder)?;
-                    }
-                    Ok(())
+                    <$ty as VarlitEncode>::__varlit_encode_slice(self, encoder)
                 }
             }
 
             impl VarlitDecode for Vec<$ty> {
+                const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true });
                 const WIRE_TYPE: WireType = WireType::Seq;
                 const SCHEMA_ID: u64 =
                     container_schema_id(b"seq", &[<$ty as VarlitDecode>::SCHEMA_ID]);
 
+                #[inline]
                 fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                     let len = decoder.read_len()?;
                     decoder.preflight_count(
@@ -1276,30 +2402,354 @@ macro_rules! vec_seq_codec {
                         requested: allocation_request::<$ty>(len),
                     })?;
                     for _ in 0..len {
-                        values.push(<$ty>::decode_varlit(decoder)?);
+                        values.push(decoder.decode_value::<$ty>()?);
                     }
                     Ok(values)
+                }
+
+                fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+                    let len = decoder.read_len()?;
+                    decoder.preflight_count(
+                        len,
+                        $minimum_wire_bytes,
+                        size_of::<$ty>(),
+                        "sequence entries",
+                    )?;
+                    out.truncate(len);
+                    let reused = out.len();
+                    out.try_reserve_exact(len - reused).map_err(|_| Error::AllocationFailed {
+                        resource: "sequence entries",
+                        requested: allocation_request::<$ty>(len),
+                    })?;
+                    for element in out.iter_mut() {
+                        decoder.decode_value_into(element)?;
+                    }
+                    for _ in reused..len {
+                        out.push(decoder.decode_value::<$ty>()?);
+                    }
+                    Ok(())
                 }
             }
         )+
     }
 }
 
-vec_seq_codec!(
-    (bool, 1),
-    (i8, 1),
-    (u16, 2),
-    (i16, 2),
-    (u32, 4),
-    (i32, 4),
-    (u64, 8),
-    (i64, 8),
-    (u128, 16),
-    (i128, 16),
-    (f32, 4),
-    (f64, 8),
-    (String, 8)
+/// `Vec<T>` for fixed-width scalars. Same wire bytes, preflight, budget charge
+/// and reservation as [`vec_seq_codec`]; the elements are converted from one
+/// bounds-checked input slice instead of one decoder call per element.
+macro_rules! vec_fixed_codec {
+    ($(($ty:ty, $width:expr, $little:expr, $big:expr, $check:expr, $bulk:expr)),+ $(,)?) => {
+        $(
+            impl VarlitEncode for Vec<$ty> {
+                const WIRE_TYPE: WireType = WireType::Seq;
+                const SCHEMA_ID: u64 =
+                    container_schema_id(b"seq", &[<$ty as VarlitEncode>::SCHEMA_ID]);
+
+                fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+                    encoder.write_u64(self.len() as u64);
+                    <$ty as VarlitEncode>::__varlit_encode_slice(self, encoder)
+                }
+            }
+
+            impl VarlitDecode for Vec<$ty> {
+                const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true });
+                const __VARLIT_BULK: Option<BulkCodec<Self>> = $bulk;
+                const WIRE_TYPE: WireType = WireType::Seq;
+                const SCHEMA_ID: u64 =
+                    container_schema_id(b"seq", &[<$ty as VarlitDecode>::SCHEMA_ID]);
+
+                #[inline]
+                fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+                    let mut values = Vec::new();
+                    Self::fill_fixed(decoder, &mut values)?;
+                    Ok(values)
+                }
+
+                #[inline]
+                fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+                    Self::fill_fixed(decoder, out)
+                }
+            }
+
+            impl FillFixedVec for Vec<$ty> {
+                /// Decodes into `values`, reusing its capacity.
+                #[inline]
+                fn fill_fixed(decoder: &mut Decoder<'_>, values: &mut Self) -> Result<()> {
+                    let len = decoder.read_len()?;
+                    // Bounds `len` by the remaining input and charges the budget
+                    // before any reservation, exactly as the element-wise codec.
+                    decoder.preflight_count(len, $width, size_of::<$ty>(), "sequence entries")?;
+                    values.clear();
+                    values.try_reserve_exact(len).map_err(|_| Error::AllocationFailed {
+                        resource: "sequence entries",
+                        requested: allocation_request::<$ty>(len),
+                    })?;
+                    let bytes = decoder.read_fixed_run(len, $width, "sequence entries")?;
+                    let check: fn(&[u8]) -> Result<()> = $check;
+                    check(bytes)?;
+                    let chunks = bytes.as_chunks::<$width>().0;
+                    // Capacity is already reserved: these extends never
+                    // reallocate. One loop per byte order, so each converts
+                    // with a direct, inlinable call the compiler can vectorize.
+                    match decoder.endian() {
+                        Endian::Little => values.extend(chunks.iter().map(|chunk| ($little)(*chunk))),
+                        Endian::Big => values.extend(chunks.iter().map(|chunk| ($big)(*chunk))),
+                    }
+                    Ok(())
+                }
+            }
+        )+
+    }
+}
+
+/// Shared body of the fixed-width `Vec` codecs (fresh and in place).
+trait FillFixedVec: Sized {
+    fn fill_fixed(decoder: &mut Decoder<'_>, values: &mut Self) -> Result<()>;
+}
+
+fn no_check(_: &[u8]) -> Result<()> {
+    Ok(())
+}
+
+vec_fixed_codec!(
+    (
+        bool,
+        1,
+        |b: [u8; 1]| b[0] == 1,
+        |b: [u8; 1]| b[0] == 1,
+        check_bool_bytes,
+        Some(BulkCodec {
+            width: 1,
+            resource: "sequence entries",
+            fill: fill_bools_from_storage
+        })
+    ),
+    (
+        i8,
+        1,
+        i8::from_le_bytes,
+        i8::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i8>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i8>,
+        })
+    ),
+    (
+        u16,
+        2,
+        u16::from_le_bytes,
+        u16::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u16>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u16>,
+        })
+    ),
+    (
+        i16,
+        2,
+        i16::from_le_bytes,
+        i16::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i16>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i16>,
+        })
+    ),
+    (
+        u32,
+        4,
+        u32::from_le_bytes,
+        u32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u32>,
+        })
+    ),
+    (
+        i32,
+        4,
+        i32::from_le_bytes,
+        i32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i32>,
+        })
+    ),
+    (
+        u64,
+        8,
+        u64::from_le_bytes,
+        u64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u64>,
+        })
+    ),
+    (
+        i64,
+        8,
+        i64::from_le_bytes,
+        i64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i64>,
+        })
+    ),
+    (
+        u128,
+        16,
+        u128::from_le_bytes,
+        u128::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<u128>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<u128>,
+        })
+    ),
+    (
+        i128,
+        16,
+        i128::from_le_bytes,
+        i128::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<i128>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<i128>,
+        })
+    ),
+    (
+        f32,
+        4,
+        f32::from_le_bytes,
+        f32::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<f32>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<f32>,
+        })
+    ),
+    (
+        f64,
+        8,
+        f64::from_le_bytes,
+        f64::from_be_bytes,
+        no_check,
+        Some(BulkCodec {
+            width: size_of::<f64>(),
+            resource: "sequence entries",
+            fill: fill_numeric_from_storage::<f64>,
+        })
+    )
 );
+
+vec_seq_codec!((String, 8));
+
+/// A sequence of whole records (`Vec<T>` where `T` is a block type), stored
+/// record after record like a compound array.
+///
+/// Lets an application hand its records to a block field as they are, without
+/// splitting them into one vector per field first. Each record uses its own
+/// codec; fixed-width members of a record take the bulk scalar paths.
+///
+/// Decoding charges `len * size_of::<T>()` to the materialization budget
+/// before anything is reserved, reserves no more than the remaining input could
+/// carry, and grows fallibly from there, so a forged length cannot force a
+/// large allocation.
+impl<T: crate::VarlitBlock> VarlitEncode for Vec<T> {
+    const WIRE_TYPE: WireType = WireType::Seq;
+    const SCHEMA_ID: u64 = container_schema_id(b"recordseq", &[<T as VarlitEncode>::SCHEMA_ID]);
+
+    fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+        encoder.write_u64(self.len() as u64);
+        T::__varlit_encode_slice(self, encoder)
+    }
+}
+
+impl<T: crate::VarlitBlock> VarlitDecode for Vec<T> {
+    const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec {
+        invariant: std::marker::PhantomData,
+        callback_free: matches!(
+            <T as VarlitDecode>::__VARLIT_BUILTIN,
+            Some(BuiltinCodec {
+                callback_free: true,
+                ..
+            })
+        ),
+    });
+    const WIRE_TYPE: WireType = WireType::Seq;
+    const SCHEMA_ID: u64 = container_schema_id(b"recordseq", &[<T as VarlitDecode>::SCHEMA_ID]);
+
+    fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+        let len = decoder.read_len()?;
+        decoder.preflight_count(
+            len,
+            minimum_wire_size(<T as VarlitDecode>::WIRE_TYPE),
+            size_of::<T>(),
+            "record sequence entries",
+        )?;
+        let mut values = Vec::new();
+        let initial = len.min(decoder.remaining());
+        values
+            .try_reserve_exact(initial)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "record sequence entries",
+                requested: allocation_request::<T>(initial),
+            })?;
+        for _ in 0..len {
+            if values.len() == values.capacity() {
+                values.try_reserve(1).map_err(|_| Error::AllocationFailed {
+                    resource: "record sequence entries",
+                    requested: allocation_request::<T>(values.len().saturating_add(1)),
+                })?;
+            }
+            values.push(decoder.decode_value::<T>()?);
+        }
+        Ok(values)
+    }
+
+    fn decode_varlit_into(out: &mut Self, decoder: &mut Decoder<'_>) -> Result<()> {
+        let len = decoder.read_len()?;
+        decoder.preflight_count(
+            len,
+            minimum_wire_size(<T as VarlitDecode>::WIRE_TYPE),
+            size_of::<T>(),
+            "record sequence entries",
+        )?;
+        out.truncate(len);
+        for element in out.iter_mut() {
+            decoder.decode_value_into(element)?;
+        }
+        for _ in out.len()..len {
+            if out.len() == out.capacity() {
+                // Grow by what the remaining input could carry, never by the
+                // claimed count alone.
+                let step = (len - out.len()).min(decoder.remaining().max(1));
+                out.try_reserve(step).map_err(|_| Error::AllocationFailed {
+                    resource: "record sequence entries",
+                    requested: allocation_request::<T>(out.len().saturating_add(step)),
+                })?;
+            }
+            out.push(decoder.decode_value::<T>()?);
+        }
+        Ok(())
+    }
+}
 
 const fn minimum_wire_size(wire_type: WireType) -> usize {
     match wire_type {
@@ -1324,7 +2774,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// all of which scale with `Group::WIDTH`:
 ///
 /// * the trailing duplicated control group appended after the control array;
-/// * the minimum bucket count of a small table (SAFE2-01: hashbrown rounds a
+/// * the minimum bucket count of a small table (: hashbrown rounds a
 ///   small table with a one-byte-or-smaller entry up to a whole group so the
 ///   control array is never shorter than one SIMD load);
 /// * the control array's alignment, which is `max(Group::WIDTH, align_of::<T>())`
@@ -1341,7 +2791,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// tables of fewer than fifteen entries. Charging more than hashbrown allocates
 /// is always sound here; charging less is the defect this constant exists to
 /// prevent.
-/// Entry-slot multiplier for the `BTreeMap` materialization model (API3-04).
+/// Entry-slot multiplier for the `BTreeMap` materialization model.
 ///
 /// A std B-tree node allocates a fixed array of `2B - 1 = 11` entry slots
 /// whatever its fill, and is only guaranteed to hold `B - 1 = 5` of them, so
@@ -1351,7 +2801,7 @@ fn allocation_request<T>(len: usize) -> u64 {
 /// library cannot silently turn the model into an under-charge.
 const BTREE_ENTRY_SLOT_FACTOR: usize = 3;
 
-/// Per-entry allowance for B-tree node headers and child pointers (API3-04).
+/// Per-entry allowance for B-tree node headers and child pointers.
 ///
 /// A leaf node header is a parent pointer, a parent index and a length; an
 /// internal node adds `2B = 12` child pointers. Amortised over the guaranteed
@@ -1363,7 +2813,7 @@ const BTREE_ENTRY_HEADER_BYTES: usize = 16;
 const HASH_TABLE_GROUP_BYTES: u64 = 32;
 
 /// Entries a map codec reserves for before it has validated a single entry
-/// (SAFE-01).
+///
 ///
 /// The declared count is attacker-chosen, so a table sized from it up front is
 /// an allocation granted on nothing but a claim. Reserving a small fixed prefix
@@ -1372,6 +2822,16 @@ const HASH_TABLE_GROUP_BYTES: u64 = 32;
 /// through `insert`'s own amortized doubling, which performs no syscalls and no
 /// per-entry allocation.
 const MAP_PREALLOCATION_ENTRIES: usize = 1024;
+
+fn hash_map_decode_reservation_bytes<T>(len: usize) -> Option<u64> {
+    // The bounded upfront reservation guarantees no growth for small maps.
+    let copies = if len > MAP_PREALLOCATION_ENTRIES {
+        2
+    } else {
+        1
+    };
+    hash_table_reservation_bytes::<T>(len)?.checked_mul(copies)
+}
 
 /// Upper bound on the heap a `HashMap<K, V>` allocates when asked to hold `len`
 /// entries, with `T = (K, V)`.
@@ -1392,7 +2852,7 @@ const MAP_PREALLOCATION_ENTRIES: usize = 1024;
 ///   comment here — that "small-table specializations only ever allocate less"
 ///   — was false, and why the old two-bucket model undercharged
 ///   `HashMap<(), ()>` by charging 19 bytes for a table that really costs 32
-///   bytes of control storage alone (SAFE2-01/F-02).
+///   bytes of control storage alone.
 /// * Every bucket owns one `T` *and* one control byte — the true floor is never
 ///   one byte per entry, not even for a zero-sized `T`.
 /// * The allocation additionally carries one trailing duplicated control group,
@@ -1463,12 +2923,14 @@ macro_rules! tuple_codec {
         where
             $($name: VarlitDecode),+
         {
+            const __VARLIT_BUILTIN: Option<BuiltinCodec<Self>> = Some(BuiltinCodec { invariant: std::marker::PhantomData, callback_free: true $(&& matches!($name::__VARLIT_BUILTIN, Some(BuiltinCodec { callback_free:true, .. })))+ });
             const WIRE_TYPE: WireType = WireType::Nested;
             const SCHEMA_ID: u64 =
                 container_schema_id(b"tuple", &[$(<$name as VarlitDecode>::SCHEMA_ID),+]);
 
+            #[inline(always)]
             fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-                Ok(($($name::decode_varlit(decoder)?,)+))
+                Ok(($(decoder.decode_value::<$name>()?,)+))
             }
         }
     };
@@ -1481,6 +2943,355 @@ tuple_codec!(A, B, C, D);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- bulk fixed-width scalar paths vs. the element-wise reference ----
+
+    fn lcg(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *state ^ (*state >> 29)
+    }
+
+    /// Reference encoding: the length prefix plus one scalar call per element,
+    /// which is exactly what the codec did before the bulk path.
+    fn elementwise_vec<T: VarlitEncode>(values: &[T], endian: Endian) -> Vec<u8> {
+        let mut encoder = Encoder::new_limited(endian, u64::MAX, "encoded payload");
+        encoder.write_u64(values.len() as u64);
+        for value in values {
+            value.encode_varlit(&mut encoder).unwrap();
+        }
+        encoder.try_into_inner().unwrap()
+    }
+
+    fn elementwise_decode<T: VarlitDecode>(bytes: &[u8], endian: Endian) -> Result<Vec<T>> {
+        let mut decoder = Decoder::new(bytes, endian);
+        let len = decoder.read_len()?;
+        let mut values = Vec::new();
+        for _ in 0..len {
+            values.push(decoder.decode_value::<T>()?);
+        }
+        Ok(values)
+    }
+
+    fn check_vec<T>(values: Vec<T>, same: impl Fn(&T, &T) -> bool)
+    where
+        T: VarlitEncode + VarlitDecode + std::fmt::Debug,
+        Vec<T>: VarlitEncode + VarlitDecode,
+    {
+        for endian in [Endian::Little, Endian::Big] {
+            let bulk = encode_to_vec(&values, endian).unwrap();
+            assert_eq!(
+                bulk,
+                elementwise_vec(&values, endian),
+                "encoded bytes differ"
+            );
+            let decoded: Vec<T> = decode_from_slice(&bulk, endian).unwrap();
+            let reference: Vec<T> = elementwise_decode(&bulk, endian).unwrap();
+            assert_eq!(decoded.len(), values.len());
+            for ((a, b), c) in decoded.iter().zip(&values).zip(&reference) {
+                assert!(same(a, b) && same(a, c), "decoded {a:?} expected {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_vec_codecs_match_elementwise_bytes_and_values() {
+        let mut state = 0x5EED;
+        for len in [0usize, 1, 2, 3, 7, 64, 1000, 5000] {
+            let mut r = || lcg(&mut state);
+            check_vec(
+                (0..len).map(|_| r() & 1 == 1).collect::<Vec<bool>>(),
+                |a, b| a == b,
+            );
+            check_vec((0..len).map(|_| r() as i8).collect::<Vec<i8>>(), |a, b| {
+                a == b
+            });
+            check_vec(
+                (0..len).map(|_| r() as u16).collect::<Vec<u16>>(),
+                |a, b| a == b,
+            );
+            check_vec(
+                (0..len).map(|_| r() as i16).collect::<Vec<i16>>(),
+                |a, b| a == b,
+            );
+            check_vec(
+                (0..len).map(|_| r() as u32).collect::<Vec<u32>>(),
+                |a, b| a == b,
+            );
+            check_vec(
+                (0..len).map(|_| r() as i32).collect::<Vec<i32>>(),
+                |a, b| a == b,
+            );
+            check_vec((0..len).map(|_| r()).collect::<Vec<u64>>(), |a, b| a == b);
+            check_vec(
+                (0..len).map(|_| r() as i64).collect::<Vec<i64>>(),
+                |a, b| a == b,
+            );
+            check_vec(
+                (0..len)
+                    .map(|_| (r() as u128) << 64 | r() as u128)
+                    .collect::<Vec<u128>>(),
+                |a, b| a == b,
+            );
+            check_vec(
+                (0..len)
+                    .map(|_| ((r() as u128) << 64 | r() as u128) as i128)
+                    .collect::<Vec<i128>>(),
+                |a, b| a == b,
+            );
+            // Arbitrary bit patterns, including NaN payloads, must survive exactly.
+            check_vec(
+                (0..len)
+                    .map(|_| f32::from_bits(r() as u32))
+                    .collect::<Vec<f32>>(),
+                |a, b| a.to_bits() == b.to_bits(),
+            );
+            check_vec(
+                (0..len).map(|_| f64::from_bits(r())).collect::<Vec<f64>>(),
+                |a, b| a.to_bits() == b.to_bits(),
+            );
+        }
+        check_vec(vec![i64::MIN, -1, 0, i64::MAX], |a, b| a == b);
+        check_vec(vec![i8::MIN, -1, 0, i8::MAX], |a, b| a == b);
+    }
+
+    fn check_array<T, const N: usize>(values: [T; N], same: impl Fn(&T, &T) -> bool)
+    where
+        T: VarlitEncode + VarlitDecode + std::fmt::Debug,
+    {
+        for endian in [Endian::Little, Endian::Big] {
+            let bulk = encode_to_vec(&values, endian).unwrap();
+            let mut reference = Encoder::new_limited(endian, u64::MAX, "encoded payload");
+            for value in &values {
+                value.encode_varlit(&mut reference).unwrap();
+            }
+            assert_eq!(
+                bulk,
+                reference.try_into_inner().unwrap(),
+                "array bytes differ"
+            );
+            let decoded: Box<[T; N]> = Box::new(decode_from_slice(&bulk, endian).unwrap());
+            for (a, b) in decoded.iter().zip(&values) {
+                assert!(same(a, b), "decoded {a:?} expected {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_array_codecs_match_elementwise_on_both_sides_of_the_stack_budget() {
+        let mut state = 7;
+        let mut r = || lcg(&mut state);
+        check_array([0u16; 0], |a, b| a == b);
+        check_array(
+            std::array::from_fn::<u16, 500, _>(|_| r() as u16),
+            |a, b| a == b,
+        );
+        check_array(std::array::from_fn::<i8, 10, _>(|_| r() as i8), |a, b| {
+            a == b
+        });
+        check_array(
+            std::array::from_fn::<bool, 3, _>(|_| r() & 1 == 1),
+            |a, b| a == b,
+        );
+        check_array(std::array::from_fn::<u8, 33, _>(|_| r() as u8), |a, b| {
+            a == b
+        });
+        // The boundary counts `Option<T>` slots, as the default path does:
+        // 2048 x Option<u32> is exactly 16 KiB; one more goes to the heap.
+        check_array(
+            *Box::new(std::array::from_fn::<u32, 2048, _>(|_| r() as u32)),
+            |a, b| a == b,
+        );
+        check_array(
+            *Box::new(std::array::from_fn::<u32, 2049, _>(|_| r() as u32)),
+            |a, b| a == b,
+        );
+        check_array(
+            *Box::new(std::array::from_fn::<f32, 16384, _>(|_| {
+                f32::from_bits(r() as u32)
+            })),
+            |a, b| a.to_bits() == b.to_bits(),
+        );
+        check_array(
+            *Box::new(std::array::from_fn::<bool, 20000, _>(|_| r() & 1 == 1)),
+            |a, b| a == b,
+        );
+        check_array(
+            std::array::from_fn::<f64, 7, _>(|_| f64::from_bits(r())),
+            |a, b| a.to_bits() == b.to_bits(),
+        );
+    }
+
+    #[test]
+    fn bulk_encode_reproduces_elementwise_limit_failures_and_prefixes() {
+        let values: Vec<u32> = (0..50).collect();
+        let full = 8 + 50 * 4;
+        for limit in 0..=(full as u64 + 3) {
+            for endian in [Endian::Little, Endian::Big] {
+                let mut bulk =
+                    Encoder::new_limited_with_buffer(endian, limit, "encoded payload", Vec::new());
+                let bulk_result = values.encode_varlit(&mut bulk);
+                let (bulk_bytes, bulk_finished) = bulk.into_buffer_and_result();
+
+                let mut reference =
+                    Encoder::new_limited_with_buffer(endian, limit, "encoded payload", Vec::new());
+                reference.write_u64(values.len() as u64);
+                for value in &values {
+                    value.encode_varlit(&mut reference).unwrap();
+                }
+                let (reference_bytes, reference_finished) = reference.into_buffer_and_result();
+
+                assert!(bulk_result.is_ok());
+                assert_eq!(
+                    bulk_bytes, reference_bytes,
+                    "prefix differs at limit {limit}"
+                );
+                match (bulk_finished, reference_finished) {
+                    (Ok(()), Ok(())) => assert!(limit >= full as u64),
+                    (
+                        Err(Error::LimitExceeded {
+                            actual: a,
+                            limit: la,
+                            ..
+                        }),
+                        Err(Error::LimitExceeded {
+                            actual: b,
+                            limit: lb,
+                            ..
+                        }),
+                    ) => assert_eq!((a, la), (b, lb), "limit failure differs at {limit}"),
+                    other => panic!("mismatched outcomes at limit {limit}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_decode_keeps_input_and_budget_guards_before_reserving() {
+        // A length claim larger than the remaining input fails before reserving.
+        let mut claim = Vec::new();
+        claim.extend_from_slice(&u64::MAX.to_le_bytes());
+        claim.extend_from_slice(&[0; 6]);
+        assert!(matches!(
+            decode_from_slice::<Vec<u16>>(&claim, Endian::Little),
+            Err(Error::UnexpectedEof | Error::LengthOverflow { .. })
+        ));
+        // Truncated by one element.
+        let mut bytes = encode_to_vec(&vec![1u32, 2, 3], Endian::Little).unwrap();
+        bytes.pop();
+        assert!(matches!(
+            decode_from_slice::<Vec<u32>>(&bytes, Endian::Little),
+            Err(Error::UnexpectedEof)
+        ));
+        // A budget below the materialized size is refused before allocation.
+        let big = encode_to_vec(&vec![0u64; 1024], Endian::Little).unwrap();
+        assert!(matches!(
+            Decoder::decode_from_slice_limited::<Vec<u64>>(&big, Endian::Little, 1024 * 8 - 1),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert_eq!(
+            Decoder::decode_from_slice_limited::<Vec<u64>>(&big, Endian::Little, 1024 * 8)
+                .unwrap()
+                .len(),
+            1024
+        );
+        // Array input shorter than N.
+        let short = encode_to_vec(&[1u16; 4], Endian::Little).unwrap();
+        assert!(matches!(
+            decode_from_slice::<[u16; 5]>(&short, Endian::Little),
+            Err(Error::UnexpectedEof)
+        ));
+    }
+
+    /// Replacing the decoder from inside an in-place decode is rejected the
+    /// same way as from inside a value decode, whether the codec keeps the
+    /// default `decode_varlit_into` or overrides it.
+    #[test]
+    fn in_place_decode_rejects_decoder_replacement() {
+        struct ReplaceInValue;
+        impl VarlitDecode for ReplaceInValue {
+            const WIRE_TYPE: WireType = WireType::Nested;
+            fn decode_varlit(d: &mut Decoder<'_>) -> Result<Self> {
+                *d = Decoder::new_limited(&[], Endian::Little, u64::MAX);
+                Ok(Self)
+            }
+        }
+        struct ReplaceInInto;
+        impl VarlitDecode for ReplaceInInto {
+            const WIRE_TYPE: WireType = WireType::Nested;
+            fn decode_varlit(_d: &mut Decoder<'_>) -> Result<Self> {
+                Ok(Self)
+            }
+            fn decode_varlit_into(_out: &mut Self, d: &mut Decoder<'_>) -> Result<()> {
+                *d = Decoder::new_limited(&[], Endian::Little, u64::MAX);
+                Ok(())
+            }
+        }
+        let mut parent = Decoder::new_limited(&[], Endian::Little, 100);
+        let mut out = ReplaceInValue;
+        assert!(matches!(
+            parent.decode_nested_into(&[], &mut out),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(parent.materialization_remaining(), 0);
+        let mut parent = Decoder::new_limited(&[], Endian::Little, 100);
+        let mut out = ReplaceInInto;
+        assert!(matches!(
+            parent.decode_nested_into(&[], &mut out),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        assert_eq!(parent.materialization_remaining(), 0);
+        // A well-behaved in-place decode keeps the unspent budget.
+        let bytes = encode_to_vec(&vec![1u32, 2, 3], Endian::Little).unwrap();
+        let mut parent = Decoder::new_limited(&[], Endian::Little, 100);
+        let mut out: Vec<u32> = Vec::new();
+        parent.decode_nested_into(&bytes, &mut out).unwrap();
+        assert_eq!(out, vec![1, 2, 3]);
+        assert_eq!(parent.materialization_remaining(), 100 - 12);
+    }
+
+    #[test]
+    fn bulk_bool_decode_rejects_non_canonical_bytes() {
+        let mut vec_bytes = encode_to_vec(&vec![true, false, true], Endian::Little).unwrap();
+        *vec_bytes.last_mut().unwrap() = 2;
+        assert!(matches!(
+            decode_from_slice::<Vec<bool>>(&vec_bytes, Endian::Little),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        let mut small = encode_to_vec(&[false; 3], Endian::Little).unwrap();
+        small[1] = 0xFF;
+        assert!(matches!(
+            decode_from_slice::<[bool; 3]>(&small, Endian::Little),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        let mut large = encode_to_vec(&*Box::new([true; 20000]), Endian::Little).unwrap();
+        large[19999] = 3;
+        assert!(matches!(
+            decode_from_slice::<[bool; 20000]>(&large, Endian::Little),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+    }
+
+    #[test]
+    fn encoder_preserves_public_auto_traits_and_catch_unwind_usage() {
+        fn assert_traits<
+            T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
+        >() {
+        }
+        assert_traits::<Encoder>();
+
+        let encoder = Encoder::new(Endian::Little);
+        assert_eq!(
+            std::panic::catch_unwind(|| encoder.endian()).unwrap(),
+            Endian::Little
+        );
+        assert!(
+            std::panic::catch_unwind(move || encoder.into_inner())
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn limited_encoder_stops_before_the_over_limit_allocation() {
@@ -1509,7 +3320,7 @@ mod tests {
             .encode_nested_to_vec(&vec![2u8; 4])
             .expect("nested value within the remaining budget");
         assert_eq!(nested.len(), 12);
-        // ... while a value larger than the remaining budget is refused with
+        // .. while a value larger than the remaining budget is refused with
         // the parent's typed resource before it is buffered.
         let error = encoder
             .encode_nested_to_vec(&vec![3u8; 1024])
@@ -1556,7 +3367,7 @@ mod tests {
         buckets * (size_of::<(K, V)>() as u64 + 1) + 16
     }
 
-    /// SAFE2-01/F-02. The reservation model must never charge less than the
+    /// The reservation model must never charge less than the
     /// table `try_reserve` really allocates, at *every* capacity — including
     /// the small-table classes `1..=14`, where the previous two-bucket model
     /// charged `HashMap<(), ()>` 19 bytes for a 16-bucket table.
@@ -1613,3 +3424,187 @@ mod tests {
         }
     }
 }
+
+/// The fills that put a field's data straight into the value's storage,
+/// driven from memory so they also run under Miri.
+#[cfg(test)]
+mod storage_fill_tests {
+    use super::*;
+
+    /// Fills `out` as a field walk does: the value's encoding minus its
+    /// 8-byte prefix is served in pieces of `piece` bytes.
+    fn fill<T: VarlitDecode>(
+        out: &mut T,
+        encoded: &[u8],
+        endian: Endian,
+        piece: usize,
+    ) -> Result<()> {
+        let prefix: [u8; 8] = encoded[..8].try_into().unwrap();
+        let declared = match endian {
+            Endian::Little => u64::from_le_bytes(prefix),
+            Endian::Big => u64::from_be_bytes(prefix),
+        };
+        let data = &encoded[8..];
+        let mut at = 0;
+        let mut read = |buf: &mut [u8]| -> Result<()> {
+            for part in buf.chunks_mut(piece) {
+                let end = at + part.len();
+                part.copy_from_slice(data.get(at..end).ok_or(Error::UnexpectedEof)?);
+                at = end;
+            }
+            Ok(())
+        };
+        let bulk = T::__VARLIT_BULK.expect("a storage fill");
+        let (len, charge, _) = bulk.admit(declared, data.len() as u64)?;
+        assert!(charge >= len as u64);
+        bulk.fill(
+            out,
+            &mut BulkField {
+                endian,
+                len,
+                data_len: data.len() as u64,
+                read: &mut read,
+            },
+        )
+    }
+
+    fn agrees<T>(value: T, stale: T)
+    where
+        T: VarlitEncode + VarlitDecode + PartialEq + std::fmt::Debug + Clone,
+    {
+        for endian in [Endian::Little, Endian::Big] {
+            let encoded = encode_to_vec(&value, endian).unwrap();
+            let whole: T = Decoder::new(&encoded, endian).decode_value().unwrap();
+            assert_eq!(whole, value);
+            for piece in [1, 7, 4096] {
+                // Into an empty value, a larger one and a smaller one.
+                for mut out in [stale.clone(), value.clone()] {
+                    fill(&mut out, &encoded, endian, piece).unwrap();
+                    assert_eq!(out, value);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn storage_fills_agree_with_slice_decodes() {
+        agrees(vec![1u8, 2, 3, 250], vec![9u8; 40]);
+        agrees(Vec::<u8>::new(), vec![9u8; 4]);
+        agrees(
+            String::from("storage ≠ slice"),
+            String::from("x").repeat(90),
+        );
+        agrees(vec![true, false, true, true], vec![false; 30]);
+        agrees(vec![-3i8, 7, i8::MIN], vec![1i8; 9]);
+        agrees(vec![0x0102u16, 0xFFFE, 7], Vec::new());
+        agrees(vec![-5i32, i32::MAX], vec![1i32; 12]);
+        agrees(vec![u64::MAX, 1, 0x0102_0304_0506_0708], vec![3u64]);
+        agrees(vec![i128::MIN, 5], vec![0i128; 3]);
+        agrees(vec![1.5f32, -0.0, f32::MAX], vec![0f32; 2]);
+        agrees(vec![f64::MIN_POSITIVE, 2.5e300], vec![0f64; 7]);
+    }
+
+    #[test]
+    fn storage_fills_refuse_what_slice_decodes_refuse() {
+        let encoded = encode_to_vec(&vec![7u16, 8, 9], Endian::Little).unwrap();
+        // A count the data cannot hold, and data past the count.
+        let mut wide = Vec::<u64>::new();
+        assert!(matches!(
+            fill(&mut wide, &encoded, Endian::Little, 4),
+            Err(Error::UnexpectedEof)
+        ));
+        let mut narrow = Vec::<u8>::new();
+        assert!(matches!(
+            fill(&mut narrow, &encoded, Endian::Little, 4),
+            Err(Error::TrailingBytes { remaining: 3 })
+        ));
+        // Bytes that are not booleans or text leave the value empty.
+        let mut flags = vec![true; 5];
+        assert!(
+            fill(
+                &mut flags,
+                &encode_to_vec(&vec![1u8, 2], Endian::Little).unwrap(),
+                Endian::Little,
+                1
+            )
+            .is_err()
+        );
+        assert!(flags.is_empty());
+        let mut text = String::from("kept?");
+        assert!(matches!(
+            fill(
+                &mut text,
+                &encode_to_vec(&vec![0xFFu8, 0xFE], Endian::Little).unwrap(),
+                Endian::Little,
+                1
+            ),
+            Err(Error::InvalidUtf8)
+        ));
+        assert!(text.is_empty());
+        // A read that fails part-way leaves no half-filled value behind.
+        let long = encode_to_vec(&vec![5u32; 10], Endian::Little).unwrap();
+        let mut out = vec![1u32; 3];
+        assert!(fill(&mut out, &long[..20], Endian::Little, 4).is_err());
+        assert!(
+            out.is_empty()
+                || out
+                    .iter()
+                    .all(|value| *value == 1 || *value == 5 || *value == 0)
+        );
+        // Admission names what to charge before anything is reserved.
+        let bytes = <Vec<u8> as VarlitDecode>::__VARLIT_BULK.unwrap();
+        assert_eq!(bytes.admit(64, 64).unwrap(), (64, 64, "byte vector"));
+        let wide = <Vec<u64> as VarlitDecode>::__VARLIT_BULK.unwrap();
+        assert_eq!(wide.admit(3, 24).unwrap(), (3, 24, "sequence entries"));
+        assert!(matches!(wide.admit(4, 24), Err(Error::UnexpectedEof)));
+    }
+}
+
+#[cfg(test)]
+mod field_guard_tests {
+    use super::*;
+    #[test]
+    fn zero_field_id_is_refused_by_both_codec_directions() {
+        let mut encoder = Encoder::new(Endian::Little);
+        assert!(matches!(
+            write_field(&mut encoder, 0, WireType::U8, &[1]),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+        let mut bytes = [0u8; 17];
+        bytes[4..6].copy_from_slice(&(WireType::U8 as u16).to_le_bytes());
+        bytes[8..16].copy_from_slice(&1u64.to_le_bytes());
+        let mut decoder = Decoder::new(&bytes, Endian::Little);
+        assert!(matches!(
+            read_field_header(&mut decoder),
+            Err(Error::InvalidCanonicalEncoding(_))
+        ));
+    }
+    #[test]
+    fn field_set_budget_covers_growth_and_rehash() {
+        let bytes = [];
+        let mut decoder = Decoder::new_limited(&bytes, Endian::Little, 1 << 20);
+        for id in 64..10064 {
+            decoder.note_field_id(id).unwrap();
+            let count = (id - 63) as usize;
+            let charged = (1 << 20) - decoder.materialization_remaining();
+            assert_eq!(
+                charged,
+                2 * hash_table_reservation_bytes::<u32>(count).unwrap()
+            );
+        }
+        let mut small = Decoder::new_limited(&bytes, Endian::Little, 8);
+        assert!(matches!(
+            small.note_field_id(64),
+            Err(Error::LimitExceeded { .. })
+        ));
+        assert!(small.large_field_ids.is_none());
+    }
+}
+
+#[cfg(kani)]
+#[path = "verification/decoder.rs"]
+mod resource_proofs;
+
+#[cfg(kani)]
+#[path = "verification/decoder_callers.rs"]
+pub(crate) mod caller_proofs;

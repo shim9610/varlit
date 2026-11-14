@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use varlit::experimental_matrix::{
     MatrixOptions, MatrixReader, MatrixReuseError, MatrixWriter, set_test_hook,
 };
-use varlit::{MatrixDimensions, MatrixKey, varlit_format};
+use varlit::{MatrixDimensions, MatrixKey, VarlitEmpty, VarlitMatrixBlock, varlit_format};
 varlit_format! {
     pub format PageModel {
         magic: b"RUSEFUZ2"; version:1; endian:little;
@@ -16,6 +16,15 @@ varlit_format! {
     }
 }
 const N: usize = 12;
+/// One cell decoded into a fresh caller-owned value.
+fn read<T: VarlitMatrixBlock + VarlitEmpty>(
+    r: &MatrixReader,
+    key: MatrixKey,
+) -> Result<T, MatrixReuseError> {
+    let mut out = T::empty();
+    r.get::<T>(key, &mut out)?;
+    Ok(out)
+}
 const POINTS: &[&str] = &[
     "matrix_reuse.intent_durable",
     "matrix_reuse.payload_written",
@@ -59,7 +68,7 @@ fn options(data: &[u8]) -> MatrixOptions {
 }
 fn check(r: &MatrixReader, values: &[Option<u64>; N], tags: &[Option<u64>; N]) {
     for i in 0..N {
-        match (values[i], r.get::<Blob>(key(i))) {
+        match (values[i], read::<Blob>(r, key(i))) {
             (Some(e), Ok(v)) => {
                 assert_eq!(v.epoch, e);
                 assert_eq!(v.bytes, [e as u8; 5000]);
@@ -67,7 +76,7 @@ fn check(r: &MatrixReader, values: &[Option<u64>; N], tags: &[Option<u64>; N]) {
             (None, Err(MatrixReuseError::Missing)) => {}
             (expected, actual) => panic!("blob {i}: expected {expected:?}, got {actual:?}"),
         }
-        match (tags[i], r.get::<Tag>(key(i))) {
+        match (tags[i], read::<Tag>(r, key(i))) {
             (Some(e), Ok(v)) => assert_eq!(v.epoch, e),
             (None, Err(MatrixReuseError::Missing)) => {}
             (expected, actual) => panic!("tag {i}: expected {expected:?}, got {actual:?}"),
@@ -283,14 +292,14 @@ pub fn run(data: &[u8], publication: bool) {
             std::fs::write(&path, bytes).unwrap();
             let mut errors = 0;
             for i in 0..N {
-                match r.get::<Blob>(key(i)) {
+                match read::<Blob>(&r, key(i)) {
                     Ok(v) => {
                         assert_eq!(v.epoch, 2);
                         assert_eq!(v.bytes, [2; 5000]);
                     }
                     Err(_) => errors += 1,
                 }
-                match r.get::<Tag>(key(i)) {
+                match read::<Tag>(&r, key(i)) {
                     Ok(v) => assert_eq!(v.epoch, 2),
                     Err(_) => errors += 1,
                 }

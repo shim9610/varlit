@@ -32,7 +32,9 @@ let mut writer = MatrixWriter::create(spec, "samples.reuse", dims, options)?;
 let reader = writer.reader()?; // independent reader, private cache
 writer.put(MatrixKey::new(0, 0), &Sample { value: 42 })?;
 writer.sync()?; // publish this batch and make it durable
-assert_eq!(reader.get::<Sample>(MatrixKey::new(0, 0))?.value, 42);
+let mut sample = Sample { value: 0 };
+reader.get::<Sample>(MatrixKey::new(0, 0), &mut sample)?;
+assert_eq!(sample.value, 42);
 # Ok::<(), varlit::experimental_matrix::MatrixReuseError>(())
 ```
 

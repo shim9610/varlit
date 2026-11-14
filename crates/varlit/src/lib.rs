@@ -32,7 +32,7 @@
 //! # Getting started
 //!
 //! ```
-//! use varlit::varlit_format;
+//! use varlit::{VarlitEmpty, varlit_format};
 //!
 //! varlit_format! {
 //!     pub format AppFormat {
@@ -48,14 +48,14 @@
 //!             fixed Point(id = 1) {
 //!                 x: u32,
 //!                 y: u32,
-//!             }
+//! }
 //!
 //!             variable User(id = 2, key = [id]) {
 //!                 id: u64,
 //!                 name: String,
-//!             }
-//!         }
-//!     }
+//! }
+//! }
+//! }
 //! }
 //!
 //! # fn main() -> varlit::Result<()> {
@@ -70,9 +70,12 @@
 //! }
 //!
 //! let reader = AppFormat::open_reader(&path)?;
-//! let points: Vec<Point> = reader.points()?.iter().collect::<varlit::Result<_>>()?;
+//! let mut points: Vec<Point> = Vec::new();
+//! reader.points_decoded_into(&mut points)?; // decodes into a Vec you own
 //! assert_eq!(points, vec![Point { x: 1, y: 2 }]);
-//! assert_eq!(reader.users()?.get(&7)?.unwrap().name, "Ada");
+//! let mut user = User::empty(); // reads decode into a value you own
+//! assert!(reader.users()?.get(&7, &mut user)?);
+//! assert_eq!(user.name, "Ada");
 //! # std::fs::remove_dir_all(&dir).unwrap();
 //! # Ok(())
 //! # }
@@ -120,7 +123,7 @@
 //! | `durability-model.md` | what `flush`, `sync`, and `commit_durable` promise |
 //! | `recovery-model.md` | how damaged files are classified and what may be rebuilt |
 //! | `scalable-io.md` | the default streaming and disk-index path |
-//! | `known-limitations.md` | the scale contracts, their measured bounds, and what is not verified |
+//! | `known-limitations.md` | the scale contracts, resource budgets, and what is not verified |
 //! | `migration-guide.md` | version-to-version behaviour changes |
 //!
 //! [`ChunkedBytes`]: crate::ChunkedBytes

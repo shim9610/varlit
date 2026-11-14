@@ -1,6 +1,8 @@
 //! Record read entry points take `&self` within the reader's owning thread.
 //! Multiple local borrows remain valid. Concurrent threads open separate readers;
 //! ownership can move because handles are Send, while sharing is rejected by !Sync.
+#[path = "support/pages.rs"]
+mod pages;
 
 use varlit::{VarlitBlock, varlit_format};
 
@@ -40,10 +42,10 @@ fn build(path: &std::path::Path) -> varlit::Result<()> {
 fn read_everything(file: &varlit::VarlitFile) -> varlit::Result<usize> {
     let mut touched = 0usize;
 
-    touched += file.blocks::<Tick>()?.len();
+    touched += crate::pages::all_blocks!(file, Tick)?.len();
     touched += file.keyed_blocks::<Item>()?.len();
     touched += file.scan().collect::<varlit::Result<Vec<_>>>()?.len();
-    touched += file.index_entries().len();
+    touched += crate::pages::all_entries!(file).len();
 
     let mut entries = Vec::new();
     file.index_entries_into(&mut entries)?;
@@ -67,10 +69,10 @@ fn read_everything(file: &varlit::VarlitFile) -> varlit::Result<usize> {
 /// The same for the read-only facade.
 fn read_everything_through_reader(reader: &varlit::VarlitReader) -> varlit::Result<usize> {
     let mut touched = 0usize;
-    touched += reader.blocks::<Tick>()?.len();
+    touched += crate::pages::all_blocks!(reader, Tick)?.len();
     touched += reader.keyed_blocks::<Item>()?.len();
     touched += reader.scan().collect::<varlit::Result<Vec<_>>>()?.len();
-    touched += reader.index_entries().len();
+    touched += crate::pages::all_entries!(reader).len();
     touched += usize::from(reader.metadata("owner")?.is_some());
     touched += reader.all_metadata()?.len();
     touched += reader.verify_all()?;
@@ -89,7 +91,7 @@ fn read_everything_through_reader(reader: &varlit::VarlitReader) -> varlit::Resu
 /// now the call that faults every entry off disk.
 fn read_everything_through_writer(writer: &varlit::VarlitWriter) -> varlit::Result<usize> {
     let mut touched = 0usize;
-    touched += writer.index_entries().len();
+    touched += crate::pages::all_entries!(writer).len();
     let mut entries = Vec::new();
     writer.index_entries_into(&mut entries)?;
     touched += entries.len();

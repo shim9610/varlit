@@ -1,11 +1,15 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::path::{Path, PathBuf};
 
 use varlit::{
     BatchOptions, BlockDescriptor, BlockKind, CommitPolicy, Decoder, DiskIndexBatchOptions,
     DiskIndexError, DiskIndexOptions, Encoder, Endian, Error, FormatSpec, IndexPolicy,
     IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result, ScanOptions,
-    ScanProgressPhase, StreamOptions, VarlitBlock, VarlitDecode, VarlitEncode, VarlitStreamReader,
-    VarlitStreamWriter, WireType, bootstrap_stream_checkpoint_with_progress,
+    ScanProgressPhase, StreamOptions, StreamingBlocks, VarlitBlock, VarlitDecode, VarlitEmpty,
+    VarlitEncode, VarlitStreamReader, VarlitStreamWriter, WireType,
+    bootstrap_stream_checkpoint_with_progress,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +66,30 @@ impl VarlitBlock for Extra {
     const ENDIAN: Option<Endian> = None;
     const IS_KEYED: bool = false;
     const SCHEMA_FINGERPRINT: u64 = 0x5045_5246_4354_0062;
+}
+
+impl VarlitEmpty for Value {
+    fn empty() -> Self {
+        Self(0)
+    }
+}
+
+impl VarlitEmpty for Extra {
+    fn empty() -> Self {
+        Self(0)
+    }
+}
+
+/// Drains a streaming walk into a `Vec`; the first error ends it.
+fn collect_blocks<T: VarlitBlock + VarlitEmpty + Clone>(
+    mut blocks: StreamingBlocks<T>,
+) -> Result<Vec<T>> {
+    let mut out = T::empty();
+    let mut all = Vec::new();
+    while blocks.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
 }
 
 static BLOCKS: &[BlockDescriptor] = &[
@@ -154,7 +182,7 @@ fn scalar_pushes_survive_sync_and_reopen() -> Result<()> {
     }
     {
         let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-        let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+        let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..7).map(Value).collect::<Vec<_>>());
         assert_eq!(last_offset_of_block(&reader, Value::ID)?, previous);
     }
@@ -167,7 +195,7 @@ fn scalar_pushes_survive_sync_and_reopen() -> Result<()> {
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-    let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+    let values = collect_blocks(reader.blocks::<Value>()?)?;
     assert_eq!(values, (0..8).map(Value).collect::<Vec<_>>());
     Ok(())
 }
@@ -199,9 +227,9 @@ fn interleaved_scalar_and_plural_appends_stay_consistent() -> Result<()> {
     }
     let (last_value, last_extra) = {
         let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-        let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+        let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..7).map(Value).collect::<Vec<_>>());
-        let extras = reader.blocks::<Extra>()?.collect::<Result<Vec<_>>>()?;
+        let extras = collect_blocks(reader.blocks::<Extra>()?)?;
         assert_eq!(extras, [Extra(100)]);
         (
             last_offset_of_block(&reader, Value::ID)?,
@@ -241,9 +269,10 @@ fn crc_typed_scan_decodes_all_values() -> Result<()> {
         writer.sync()?;
     }
     let reader = VarlitStreamReader::open(spec, &path, small_chunk_options())?;
-    // 20 user records plus the internal creation-nonce record (STO-01).
-    assert_eq!(reader.verify_all()?, 21);
-    let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+    // 20 user records, the internal creation-nonce record and the sync
+    // marker that closed them.
+    assert_eq!(reader.verify_all()?, 22);
+    let values = collect_blocks(reader.blocks::<Value>()?)?;
     assert_eq!(values, (0..20).map(Value).collect::<Vec<_>>());
     Ok(())
 }
@@ -260,7 +289,7 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
     {
         let mut writer = VarlitStreamWriter::create(spec, &path, small_chunk_options())?;
         // The corrupted record must sit past the primary generation witness
-        // window (STO-01); a byte flipped inside that window is a generation
+        // window ; a byte flipped inside that window is a generation
         // change refused at open, which is a different contract from the
         // per-record checksum this test pins. Assertions are unchanged.
         for value in 0..400 {
@@ -306,13 +335,11 @@ fn crc_typed_scan_skips_foreign_payloads_and_gates_decode() -> Result<()> {
     // A typed scan of another block must not read (or checksum) the corrupt
     // foreign payload; before the single-read contract this scan failed with
     // a checksum mismatch on the skipped record.
-    let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+    let values = collect_blocks(reader.blocks::<Value>()?)?;
     assert_eq!(values, (0..406).map(Value).collect::<Vec<_>>());
     // Decoding the corrupt record itself must fail: the one payload read that
     // feeds typed decode is also the checksum verification.
-    let extra_error = reader
-        .blocks::<Extra>()?
-        .collect::<Result<Vec<_>>>()
+    let extra_error = collect_blocks(reader.blocks::<Extra>()?)
         .expect_err("decoding the corrupted record must fail");
     assert!(matches!(extra_error, Error::ChecksumMismatch { .. }));
     // Whole-file verification keeps its payload checksum pre-pass.
@@ -364,11 +391,6 @@ fn bootstrap_aborts_when_pathname_identity_changes_before_publish() -> Result<()
     );
     Ok(())
 }
-
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "sidecar commit counting requires the scalable-fault-injection trace hooks"]
-fn scalar_appends_bound_sidecar_commits_requires_feature() {}
 
 #[cfg(feature = "scalable-fault-injection")]
 mod commit_contract {
@@ -446,7 +468,7 @@ mod commit_contract {
             native_path(directory.path()),
             small_chunk_options(),
         )?;
-        let values = reader.blocks::<Value>()?.collect::<Result<Vec<_>>>()?;
+        let values = collect_blocks(reader.blocks::<Value>()?)?;
         assert_eq!(values, (0..CHILD_RECORDS).map(Value).collect::<Vec<_>>());
         Ok(())
     }
@@ -476,7 +498,7 @@ mod commit_contract {
     }
 }
 
-/// STO-01 must not add per-append work to the streaming hot path. The primary
+///  must not add per-append work to the streaming hot path. The primary
 /// generation witness covers a bounded prefix, so once that window is full the
 /// witness is frozen for the file's life and no further append recomputes it.
 #[cfg(feature = "scalable-fault-injection")]

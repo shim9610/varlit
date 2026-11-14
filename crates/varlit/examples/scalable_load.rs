@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use varlit::{
     BatchOptions, BlockDescriptor, BlockKind, DiskIndexBatchOptions, DiskIndexOptions,
     DiskIndexPlan, DiskIndexedBlock, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
-    ManifestPolicy, ReadLimits, RecoveryPolicy, StreamOptions, VarlitBlock, VarlitIndexedReader,
-    VarlitIndexedWriter, VarlitStreamReader, VarlitStreamWriter,
+    ManifestPolicy, ReadLimits, RecoveryPolicy, StreamOptions, VarlitBlock, VarlitEmpty,
+    VarlitIndexedReader, VarlitIndexedWriter, VarlitStreamReader, VarlitStreamWriter,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -54,6 +54,7 @@ static INDEXED: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Record>()];
 #[derive(Clone)]
 struct Config {
     phase: String,
+    open_count: usize,
     mode: String,
     root: PathBuf,
     total: u64,
@@ -66,6 +67,7 @@ struct Config {
     pinned_readers: usize,
     crc: bool,
     pause_us: u64,
+    checks_per_epoch: u64,
     seconds: u64,
 }
 
@@ -83,6 +85,7 @@ impl Config {
             |name: &str, default: &str| options.remove(name).unwrap_or_else(|| default.into());
         let config = Self {
             phase: get("--phase", "write"),
+            open_count: get("--open-count", "1000").parse()?,
             mode: get("--mode", "indexed"),
             root: PathBuf::from(get("--root", "")),
             total: get("--total-bytes", "21474836480").parse()?,
@@ -95,6 +98,7 @@ impl Config {
             pinned_readers: get("--pinned-readers", "1").parse()?,
             crc: get("--crc", "true").parse()?,
             pause_us: get("--reader-pause-us", "0").parse()?,
+            checks_per_epoch: get("--reader-checks-per-epoch", "0").parse()?,
             seconds: get("--seconds", "10").parse()?,
         };
         if !options.is_empty() {
@@ -118,6 +122,11 @@ impl Config {
         }
         if !["raw", "stream", "indexed"].contains(&config.mode.as_str()) {
             return Err("unknown mode".into());
+        }
+        if config.checks_per_epoch > 0
+            && (config.mode != "indexed" || config.readers == 0 || config.pause_us != 0)
+        {
+            return Err("fixed reader work requires indexed mode, readers and no pause".into());
         }
         Ok(config)
     }
@@ -178,6 +187,7 @@ impl Config {
             ManifestPolicy::None,
             BLOCKS,
         )
+        .with_block_identities(&[Record::IDENTITY, StreamRecord::IDENTITY])
         .with_read_limits(ReadLimits::STANDARD.with_max_sidecar_len(4 * 1024 * 1024 * 1024))
     }
     fn plan(&self) -> DiskIndexPlan {
@@ -325,8 +335,10 @@ fn check_point(
     epoch: u64,
 ) -> Result<Duration> {
     let started = Instant::now();
-    let actual = reader.get::<Record>(&key)?;
+    let mut found = Record::empty();
+    let present = reader.get::<Record>(&key, &mut found)?;
     let elapsed = started.elapsed();
+    let actual = present.then_some(found);
     match (config.expected(key, epoch), actual) {
         (None, None) => Ok(()),
         (Some(generation), Some(record))
@@ -380,6 +392,45 @@ fn indexed_worker(
     Ok(())
 }
 
+// Each command performs exactly one deterministic batch. A missing snapshot
+// keeps the pinned view. Bounded request/reply channels limit in-flight work;
+// disconnection propagates failures without leaving a worker at a barrier.
+fn fixed_indexed_worker(
+    id: usize,
+    mut job: Job,
+    receive: mpsc::Receiver<Option<Job>>,
+    done: mpsc::SyncSender<()>,
+    config: &Config,
+    bank: &Payloads,
+) -> Result<()> {
+    let mut rng = id as u64 + 123;
+    let mut times = Latencies::default();
+    let mut snapshots = 1;
+    let mut batches = 0;
+    let mut trace_hash = 0u64;
+    let started = Instant::now();
+    while let Ok(next) = receive.recv() {
+        if let Some(next) = next {
+            job = next;
+            snapshots += 1;
+        }
+        for _ in 0..config.checks_per_epoch {
+            let key = random(&mut rng) % (config.visible_keys(job.epoch) + 32);
+            times.observe(check_point(&job.reader, config, bank, key, job.epoch)?);
+            trace_hash = trace_hash.wrapping_mul(31).wrapping_add(key);
+            trace_hash = trace_hash.wrapping_mul(31).wrapping_add(job.epoch);
+        }
+        batches += 1;
+        done.send(())?;
+    }
+    println!(
+        "{{\"event\":\"reader\",\"id\":{id},\"snapshots\":{snapshots},\"batches\":{batches},\"trace_hash\":{trace_hash},\"seconds\":{},\"latency\":{}}}",
+        started.elapsed().as_secs_f64(),
+        times.json()
+    );
+    Ok(())
+}
+
 fn stream_worker(
     id: usize,
     reader: VarlitStreamReader,
@@ -391,12 +442,13 @@ fn stream_worker(
     let mut scans = 0;
     while !stop.load(Ordering::Acquire) {
         let mut ordinal = 0;
-        for value in reader.blocks::<StreamRecord>()? {
+        let mut blocks = reader.blocks::<StreamRecord>()?;
+        let mut record = StreamRecord::empty();
+        while blocks.next_into(&mut record)? {
             if stop.load(Ordering::Acquire) {
                 break;
             }
             let now = Instant::now();
-            let record = value?;
             if record.key != u64::MAX {
                 if record.key != config.key_at(ordinal)
                     || record.generation != ordinal / config.per_epoch()
@@ -557,9 +609,24 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
         let _stop_on_error = StopOnDrop(&stop);
         let mut workers = Vec::new();
         let mut senders = Vec::new();
+        let mut fixed_senders: Vec<(mpsc::SyncSender<Option<Job>>, mpsc::Receiver<()>)> =
+            Vec::new();
         let mut append_latency = Latencies::default();
         let mut sync_latency = Latencies::default();
         for epoch in 0..config.epochs() {
+            let dispatch = Instant::now();
+            for (id, (send, _)) in fixed_senders.iter().enumerate() {
+                let next = if id >= config.pinned_readers && epoch > config.base_epochs() {
+                    Some(Job {
+                        reader: indexed_reader(config)?,
+                        epoch: epoch - 1,
+                    })
+                } else {
+                    None
+                };
+                send.send(next).map_err(|_| "fixed reader worker failed")?;
+            }
+            let dispatch_time = dispatch.elapsed();
             let append = Instant::now();
             let calls = writer.append(config, bank, epoch)?;
             let append_time = append.elapsed();
@@ -571,6 +638,11 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
             writer.sync()?;
             let sync_time = sync.elapsed();
             sync_latency.observe(sync_time);
+            let reader_wait = Instant::now();
+            for (_, done) in &fixed_senders {
+                done.recv()?;
+            }
+            let reader_wait_time = reader_wait.elapsed();
             let handoff = Instant::now();
             if epoch + 1 == config.base_epochs() && config.readers > 0 {
                 if config.mode == "indexed" {
@@ -581,15 +653,22 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
                             reader: indexed_reader(config)?,
                             epoch,
                         };
-                        let (send, receive) = mpsc::sync_channel(1);
-                        let stop = &stop;
-                        workers.push(
-                            scope.spawn(move || {
+                        if config.checks_per_epoch > 0 {
+                            let (send, receive) = mpsc::sync_channel(1);
+                            let (done, completed) = mpsc::sync_channel(1);
+                            workers.push(scope.spawn(move || {
+                                fixed_indexed_worker(id, job, receive, done, config, bank)
+                            }));
+                            fixed_senders.push((send, completed));
+                        } else {
+                            let (send, receive) = mpsc::sync_channel(1);
+                            let stop = &stop;
+                            workers.push(scope.spawn(move || {
                                 indexed_worker(id, job, receive, stop, config, bank)
-                            }),
-                        );
-                        if id >= config.pinned_readers {
-                            senders.push(send);
+                            }));
+                            if id >= config.pinned_readers {
+                                senders.push(send);
+                            }
                         }
                     }
                 } else if config.mode == "stream" {
@@ -626,17 +705,20 @@ fn write(config: &Config, bank: &Payloads) -> Result<()> {
                 })
                 .sum::<u64>();
             println!(
-                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"sidecar_bytes\":{sidecar},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"write_calls\":{calls},\"deletes\":{deletes}}}",
+                "{{\"event\":\"epoch\",\"epoch\":{epoch},\"elapsed_seconds\":{},\"payload_bytes\":{},\"native_bytes\":{native},\"sidecar_bytes\":{sidecar},\"append_ns\":{},\"mutation_ns\":{},\"sync_ns\":{},\"handoff_ns\":{},\"reader_dispatch_ns\":{},\"reader_wait_ns\":{},\"write_calls\":{calls},\"deletes\":{deletes}}}",
                 started.elapsed().as_secs_f64(),
                 config.epoch_bytes,
                 append_time.as_nanos(),
                 mutation_time.as_nanos(),
                 sync_time.as_nanos(),
-                handoff.elapsed().as_nanos()
+                handoff.elapsed().as_nanos(),
+                dispatch_time.as_nanos(),
+                reader_wait_time.as_nanos()
             );
         }
         stop.store(true, Ordering::Release);
         drop(senders);
+        drop(fixed_senders);
         for worker in workers {
             worker.join().map_err(|_| "reader thread panicked")??;
         }
@@ -703,18 +785,21 @@ fn verify(config: &Config, bank: &Payloads) -> Result<()> {
         "stream" => {
             let reader =
                 VarlitStreamReader::open(config.spec(), config.path(), config.stream_options())?;
-            for value in reader.blocks::<StreamRecord>()? {
-                let r = value?;
+            let mut blocks = reader.blocks::<StreamRecord>()?;
+            let mut r = StreamRecord::empty();
+            while blocks.next_into(&mut r)? {
                 check(Record {
                     key: r.key,
                     generation: r.generation,
-                    payload: r.payload,
+                    payload: r.payload.clone(),
                 })?;
             }
         }
         _ => {
-            for value in indexed_reader(config)?.blocks::<Record>()? {
-                check(value?)?;
+            let mut blocks = indexed_reader(config)?.blocks::<Record>()?;
+            let mut value = Record::empty();
+            while blocks.next_into(&mut value)? {
+                check(value.clone())?;
             }
         }
     }
@@ -780,9 +865,10 @@ fn random_read(config: &Config, bank: &Payloads) -> Result<()> {
 fn probe(config: &Config) -> Result<()> {
     match indexed_reader(config) {
         Ok(reader) => {
-            let marker = reader
-                .get::<Record>(&u64::MAX)?
-                .ok_or("missing publication marker")?;
+            let mut marker = Record::empty();
+            if !reader.get::<Record>(&u64::MAX, &mut marker)? {
+                return Err("missing publication marker".into());
+            }
             println!(
                 "{{\"event\":\"process_probe\",\"status\":\"opened\",\"epoch\":{}}}",
                 marker.generation
@@ -822,10 +908,11 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
         config.plan(),
     )?;
     probe_child("writer")?;
-    let base_generation = indexed_reader(config)?
-        .get::<Record>(&u64::MAX)?
-        .ok_or("load file has no confirmed marker")?
-        .generation;
+    let mut marker = Record::empty();
+    if !indexed_reader(config)?.get::<Record>(&u64::MAX, &mut marker)? {
+        return Err("load file has no confirmed marker".into());
+    }
+    let base_generation = marker.generation;
     let final_generation = base_generation
         .checked_add(1000)
         .ok_or("marker generation overflow")?;
@@ -843,6 +930,7 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
                     let mut counts = BTreeMap::<String, u64>::new();
                     let mut retained = indexed_reader(config)?;
                     let mut previous = base_generation;
+                    let mut marker = Record::empty();
                     loop {
                         let done = stop.load(Ordering::Acquire);
                         let fresh = indexed_reader(config)?;
@@ -850,9 +938,11 @@ fn churn(config: &Config, bank: &Payloads) -> Result<()> {
                         check_point(&fresh, config, bank, 1, config.epochs() - 1)?;
                         retained.follow()?;
                         *counts.entry("followed".into()).or_default() += 1;
-                        let generation = retained
-                            .get::<Record>(&u64::MAX)?
-                            .map_or(0, |r| r.generation);
+                        let generation = if retained.get::<Record>(&u64::MAX, &mut marker)? {
+                            marker.generation
+                        } else {
+                            0
+                        };
                         if generation < previous || generation > final_generation {
                             return Err(
                                 "following reader observed invalid marker generation".into()
@@ -972,6 +1062,26 @@ fn run() -> Result<()> {
             println!(
                 "{{\"event\":\"rebuild_complete\",\"records\":{},\"seconds\":{}}}",
                 result.records,
+                started.elapsed().as_secs_f64()
+            );
+            Ok(())
+        }
+        "writer-open" => {
+            if config.open_count == 0 {
+                return Err("positive open count required".into());
+            }
+            let started = Instant::now();
+            for _ in 0..config.open_count {
+                drop(VarlitIndexedWriter::open(
+                    config.spec(),
+                    config.path(),
+                    config.options(),
+                    config.plan(),
+                )?);
+            }
+            println!(
+                "{{\"event\":\"writer_open_complete\",\"opens\":{},\"seconds\":{}}}",
+                config.open_count,
                 started.elapsed().as_secs_f64()
             );
             Ok(())

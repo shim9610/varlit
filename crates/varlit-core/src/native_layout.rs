@@ -110,6 +110,7 @@ pub(crate) struct DecodedRecordHeader {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedFileHeader {
+    pub(crate) anchors: crate::anchor::AnchorPolicy,
     pub(crate) schema_hash: u64,
     pub(crate) extensions: Vec<u8>,
     pub(crate) has_extension_len: bool,
@@ -274,6 +275,8 @@ const RECORD_FOOTER_FIELDS_LEN: u64 = native_record_fields_len(RECORD_FOOTER_FIE
 /// published 32-byte header or footer now fails the build instead of failing
 /// `FormatSpec::validate` at open.
 const _: () = {
+    assert!(RECORD_HEADER_FIELDS.len() == 7);
+    assert!(RECORD_FOOTER_FIELDS.len() == 7);
     assert!(RECORD_HEADER_FIELDS_LEN == crate::file::RECORD_HEADER_LEN);
     assert!(RECORD_FOOTER_FIELDS_LEN == crate::file::RECORD_FOOTER_LEN);
 };
@@ -334,23 +337,21 @@ pub(crate) fn read_native_file_header<R: Read>(
     reader: &mut R,
     spec: FormatSpec,
 ) -> Result<DecodedFileHeader> {
-    let magic = read_native_value(
+    let magic = with_native_bytes(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::Magic, 0),
+        |actual| Ok(actual == spec.magic),
     )?;
-    match magic {
-        LayoutValue::Bytes(actual) if actual == spec.magic => {}
-        _ => return Err(Error::InvalidMagic),
+    if magic != Some(true) {
+        return Err(Error::InvalidMagic);
     }
 
-    let marker_value = read_native_value(
+    let marker = with_native_bytes(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::ContainerMarker, 0),
-    )?;
-    let marker = match marker_value {
-        LayoutValue::Bytes(actual) => native_marker_from_bytes(&actual)?,
-        _ => return Err(Error::UnsupportedContainer),
-    };
+        native_marker_from_bytes,
+    )?
+    .ok_or(Error::UnsupportedContainer)?;
     if spec.spec_needs_record_footer() != (marker == *CONTAINER_MARKER_V3) {
         return Err(Error::UnsupportedContainer);
     }
@@ -384,11 +385,9 @@ pub(crate) fn read_native_file_header<R: Read>(
         reader,
         native_file_header_field(spec, NativeFileHeaderField::Flags, 0),
     )?;
-    if value_as_u8("flags", &flags)? != 0 {
-        return Err(Error::InvalidCanonicalEncoding(
-            "native file-header reserved flags must be zero",
-        ));
-    }
+    // Zero, or the anchor policy the file was written with: see
+    // `crate::anchor::AnchorPolicy`. A file is read as its header says.
+    let anchors = crate::anchor::AnchorPolicy::from_flags(value_as_u8("flags", &flags)?)?;
 
     let hash = read_native_value(
         reader,
@@ -431,6 +430,7 @@ pub(crate) fn read_native_file_header<R: Read>(
     let extension_len =
         u64::try_from(extensions.len()).map_err(|_| Error::InvalidCompressionHeader)?;
     Ok(DecodedFileHeader {
+        anchors,
         schema_hash,
         extensions,
         has_extension_len,
@@ -510,7 +510,94 @@ pub(crate) fn encode_native_record_header(
     Ok(bytes)
 }
 
+// The wire table remains the source of truth. Resolve each scalar's position
+// and type at compile time instead of building LayoutValue and dispatching on
+// its role for every frame. A missing/duplicate role or changed field type is
+// a build error, never an unchecked assumption about input bytes.
+const fn record_field_offset<const N: usize>(
+    fields: &[NativeRecordFieldDef],
+    role: NativeRecordField,
+) -> usize {
+    let mut at = 0;
+    let mut found = None;
+    let mut i = 0;
+    while i < fields.len() {
+        let def = fields[i];
+        if def.role as u8 == role as u8 {
+            assert!(found.is_none(), "duplicate native record role");
+            assert!(
+                matches!(
+                    (N, def.field.ty),
+                    (2, NativeFieldType::U16)
+                        | (4, NativeFieldType::U32)
+                        | (8, NativeFieldType::U64)
+                ),
+                "native scalar type changed"
+            );
+            found = Some(at);
+        }
+        at += def.field.ty.byte_len() as usize;
+        i += 1;
+    }
+    match found {
+        Some(at) => at,
+        None => panic!("missing native record role"),
+    }
+}
+
+#[inline]
+fn record_scalar<const N: usize, const AT: usize>(bytes: &[u8]) -> [u8; N] {
+    bytes[AT..AT + N].try_into().unwrap()
+}
+
 pub(crate) fn read_native_record_header<R: Read>(
+    reader: &mut R,
+    _offset: u64,
+) -> Result<DecodedRecordHeader> {
+    let mut bytes = [0; crate::file::RECORD_HEADER_LEN as usize];
+    reader.read_exact(&mut bytes)?;
+    Ok(DecodedRecordHeader {
+        fields: RecordHeaderFields {
+            block_id: u32::from_le_bytes(record_scalar::<
+                4,
+                { record_field_offset::<4>(RECORD_HEADER_FIELDS, NativeRecordField::BlockId) },
+            >(&bytes)),
+            block_version: u16::from_le_bytes(record_scalar::<
+                2,
+                { record_field_offset::<2>(RECORD_HEADER_FIELDS, NativeRecordField::BlockVersion) },
+            >(&bytes)),
+            flags: u16::from_le_bytes(record_scalar::<
+                2,
+                { record_field_offset::<2>(RECORD_HEADER_FIELDS, NativeRecordField::RecordFlags) },
+            >(&bytes)),
+            sequence: u64::from_le_bytes(record_scalar::<
+                8,
+                { record_field_offset::<8>(RECORD_HEADER_FIELDS, NativeRecordField::Sequence) },
+            >(&bytes)),
+            payload_len: u64::from_le_bytes(record_scalar::<
+                8,
+                { record_field_offset::<8>(RECORD_HEADER_FIELDS, NativeRecordField::PayloadLen) },
+            >(&bytes)),
+            checksum: u32::from_le_bytes(record_scalar::<
+                4,
+                { record_field_offset::<4>(RECORD_HEADER_FIELDS, NativeRecordField::Checksum) },
+            >(&bytes)),
+            uncompressed_len_hint: u32::from_le_bytes(record_scalar::<
+                4,
+                {
+                    record_field_offset::<4>(
+                        RECORD_HEADER_FIELDS,
+                        NativeRecordField::UncompressedLenHint,
+                    )
+                },
+            >(&bytes)),
+        },
+        lead_in_len: native_record_header_len(),
+    })
+}
+
+#[cfg(test)]
+fn read_native_record_header_reference<R: Read>(
     reader: &mut R,
     _offset: u64,
 ) -> Result<DecodedRecordHeader> {
@@ -558,16 +645,39 @@ pub(crate) fn read_native_record_header<R: Read>(
         ));
     }
 
+    // Keep the canonical field-table decoder, but construct missing-field
+    // errors only when a field is absent. Error carries drop glue.
+    let Some(block_id) = block_id else {
+        return Err(Error::LayoutFieldMissing("block_id"));
+    };
+    let Some(block_version) = block_version else {
+        return Err(Error::LayoutFieldMissing("block_version"));
+    };
+    let Some(flags) = flags else {
+        return Err(Error::LayoutFieldMissing("flags"));
+    };
+    let Some(sequence) = sequence else {
+        return Err(Error::LayoutFieldMissing("sequence"));
+    };
+    let Some(payload_len) = payload_len else {
+        return Err(Error::LayoutFieldMissing("payload_len"));
+    };
+    let Some(checksum) = checksum else {
+        return Err(Error::LayoutFieldMissing("checksum"));
+    };
+    let Some(uncompressed_len_hint) = uncompressed_len_hint else {
+        return Err(Error::LayoutFieldMissing("uncompressed_len_hint"));
+    };
+
     Ok(DecodedRecordHeader {
         fields: RecordHeaderFields {
-            block_id: block_id.ok_or(Error::LayoutFieldMissing("block_id"))?,
-            block_version: block_version.ok_or(Error::LayoutFieldMissing("block_version"))?,
-            flags: flags.ok_or(Error::LayoutFieldMissing("flags"))?,
-            sequence: sequence.ok_or(Error::LayoutFieldMissing("sequence"))?,
-            payload_len: payload_len.ok_or(Error::LayoutFieldMissing("payload_len"))?,
-            checksum: checksum.ok_or(Error::LayoutFieldMissing("checksum"))?,
-            uncompressed_len_hint: uncompressed_len_hint
-                .ok_or(Error::LayoutFieldMissing("uncompressed_len_hint"))?,
+            block_id,
+            block_version,
+            flags,
+            sequence,
+            payload_len,
+            checksum,
+            uncompressed_len_hint,
         },
         lead_in_len: native_record_header_len(),
     })
@@ -612,7 +722,120 @@ pub(crate) fn encode_native_record_footer(
     Ok(bytes)
 }
 
+const fn footer_literal(role: NativeRecordField) -> u64 {
+    let mut i = 0;
+    while i < RECORD_FOOTER_FIELDS.len() {
+        let def = RECORD_FOOTER_FIELDS[i];
+        if def.role as u8 == role as u8 {
+            return match def.field.source {
+                NativeFieldSource::LiteralU64(value) => value,
+                _ => panic!("native footer literal changed"),
+            };
+        }
+        i += 1;
+    }
+    panic!("missing native footer literal")
+}
+
+const FOOTER_MAGIC_FIELD: (usize, &[u8]) = {
+    let mut at = 0;
+    let mut i = 0;
+    let mut found = None;
+    while i < RECORD_FOOTER_FIELDS.len() {
+        let def = RECORD_FOOTER_FIELDS[i];
+        if matches!(def.role, NativeRecordField::FooterMagic) {
+            assert!(found.is_none(), "duplicate footer magic");
+            match (def.field.ty, def.field.source) {
+                (NativeFieldType::Bytes { len }, NativeFieldSource::LiteralBytes(bytes)) => {
+                    assert!(len as usize == bytes.len());
+                    found = Some((at, bytes));
+                }
+                _ => panic!("native footer magic changed"),
+            }
+        }
+        at += def.field.ty.byte_len() as usize;
+        i += 1;
+    }
+    match found {
+        Some(field) => field,
+        None => panic!("missing footer magic"),
+    }
+};
+
+#[inline]
 pub(crate) fn decode_native_record_footer(
+    bytes: &[u8],
+    footer_offset: u64,
+    record_offset: u64,
+) -> Result<RecordFooterFields> {
+    let invalid = || Error::InvalidRecordFooter {
+        offset: footer_offset,
+    };
+    if bytes.len() != native_record_footer_len() as usize {
+        return Err(invalid());
+    }
+    let (magic_at, magic) = FOOTER_MAGIC_FIELD;
+    if &bytes[magic_at..magic_at + magic.len()] != magic
+        || u64::from(u16::from_le_bytes(record_scalar::<
+            2,
+            { record_field_offset::<2>(RECORD_FOOTER_FIELDS, NativeRecordField::FooterVersion) },
+        >(bytes)))
+            != const { footer_literal(NativeRecordField::FooterVersion) }
+        || u64::from(u32::from_le_bytes(record_scalar::<
+            4,
+            { record_field_offset::<4>(RECORD_FOOTER_FIELDS, NativeRecordField::FooterCrc32) },
+        >(bytes)))
+            != const { footer_literal(NativeRecordField::FooterCrc32) }
+    {
+        return Err(invalid());
+    }
+    let flags = u16::from_le_bytes(record_scalar::<
+        2,
+        { record_field_offset::<2>(RECORD_FOOTER_FIELDS, NativeRecordField::FooterFlags) },
+    >(bytes));
+    if flags & !crate::file::RECORD_FOOTER_KNOWN_FLAGS != 0 {
+        return Err(invalid());
+    }
+    let prev_same_block_offset = validate_footer_offset(
+        flags,
+        crate::file::RECORD_FOOTER_FLAG_PREV_SAME_BLOCK,
+        u64::from_le_bytes(record_scalar::<
+            8,
+            {
+                record_field_offset::<8>(
+                    RECORD_FOOTER_FIELDS,
+                    NativeRecordField::PrevSameBlockOffset,
+                )
+            },
+        >(bytes)),
+        record_offset,
+        footer_offset,
+    )?;
+    let prev_same_key_offset = validate_footer_offset(
+        flags,
+        crate::file::RECORD_FOOTER_FLAG_PREV_SAME_KEY,
+        u64::from_le_bytes(record_scalar::<
+            8,
+            {
+                record_field_offset::<8>(RECORD_FOOTER_FIELDS, NativeRecordField::PrevSameKeyOffset)
+            },
+        >(bytes)),
+        record_offset,
+        footer_offset,
+    )?;
+    Ok(RecordFooterFields {
+        prev_same_block_offset,
+        prev_same_key_offset,
+        // The caller applies the format's liveness policy, as before.
+        mutable_flags: u32::from_le_bytes(record_scalar::<
+            4,
+            { record_field_offset::<4>(RECORD_FOOTER_FIELDS, NativeRecordField::FooterReserved) },
+        >(bytes)),
+    })
+}
+
+#[cfg(test)]
+fn decode_native_record_footer_reference(
     bytes: &[u8],
     footer_offset: u64,
     record_offset: u64,
@@ -701,9 +924,11 @@ pub(crate) fn decode_native_record_footer(
         });
     }
 
-    let flags = flags.ok_or(Error::InvalidRecordFooter {
-        offset: footer_offset,
-    })?;
+    let Some(flags) = flags else {
+        return Err(Error::InvalidRecordFooter {
+            offset: footer_offset,
+        });
+    };
     if flags & !crate::file::RECORD_FOOTER_KNOWN_FLAGS != 0 {
         return Err(Error::InvalidRecordFooter {
             offset: footer_offset,
@@ -1113,7 +1338,9 @@ fn native_file_header_field_to_plan(
             NativeFileHeaderField::ContainerMarker => {
                 LayoutPlanFieldSource::LiteralBytes(native_container_marker_for_plan(spec).to_vec())
             }
-            NativeFileHeaderField::Flags => LayoutPlanFieldSource::LiteralU64(0),
+            NativeFileHeaderField::Flags => {
+                LayoutPlanFieldSource::LiteralU64(u64::from(spec.effective_anchors().flags()))
+            }
             _ => native_field_source_to_plan(native_field.source),
         },
         endian: Some(Endian::Little),
@@ -1131,7 +1358,9 @@ fn native_file_header_write_value(
         NativeFileHeaderField::ContainerMarker => LayoutValue::Bytes(marker.to_vec()),
         NativeFileHeaderField::FormatVersion => LayoutValue::U16(spec.version),
         NativeFileHeaderField::Endian => LayoutValue::U8(spec.endian.to_byte()),
-        NativeFileHeaderField::Flags => LayoutValue::U8(0),
+        NativeFileHeaderField::Flags => {
+            LayoutValue::U8(spec.effective_anchors().validate()?.flags())
+        }
         NativeFileHeaderField::SchemaHash => LayoutValue::U64(spec.schema_hash),
         NativeFileHeaderField::ExtensionLen => {
             let len =
@@ -1287,6 +1516,32 @@ fn write_native_value<W: Write>(
         }
         _ => Err(Error::LayoutFieldTypeMismatch(field.name)),
     }
+}
+
+/// Reads a byte field and hands it to `visit` without keeping it: a header's
+/// byte fields are a few bytes long and are only compared, so they are read
+/// onto the stack. `None` for a field that is not bytes.
+fn with_native_bytes<R: Read, T>(
+    reader: &mut R,
+    field: NativeField,
+    visit: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<Option<T>> {
+    const INLINE: usize = 64;
+    let NativeFieldType::Bytes { len } = field.ty else {
+        // Consumed all the same, as the general read does.
+        read_native_value(reader, field)?;
+        return Ok(None);
+    };
+    let len = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
+    if len > INLINE {
+        return match read_native_value(reader, field)? {
+            LayoutValue::Bytes(bytes) => visit(&bytes).map(Some),
+            _ => Ok(None),
+        };
+    }
+    let mut bytes = [0u8; INLINE];
+    reader.read_exact(&mut bytes[..len])?;
+    visit(&bytes[..len]).map(Some)
 }
 
 fn read_native_value<R: Read>(reader: &mut R, field: NativeField) -> Result<LayoutValue> {
@@ -1456,6 +1711,115 @@ mod tests {
         assert_eq!(footer, PROBE_FOOTER);
     }
 
+    #[test]
+    fn scalar_header_decoder_matches_table_on_full_width_values_and_short_io() {
+        let mut state = 0x582a_637c_9ed4_f013u64;
+        for _ in 0..128 {
+            let mut bytes = [0; 32];
+            for byte in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = state as u8;
+            }
+            let actual = read_native_record_header(&mut bytes.as_slice(), u64::MAX).unwrap();
+            let expected =
+                read_native_record_header_reference(&mut bytes.as_slice(), u64::MAX).unwrap();
+            assert_eq!(actual, expected);
+        }
+        struct ShortRead<'a> {
+            bytes: &'a [u8],
+            at: usize,
+            chunk: usize,
+            fail: Option<usize>,
+            interrupted: bool,
+        }
+        impl Read for ShortRead<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.interrupted {
+                    self.interrupted = false;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                if self.fail == Some(self.at) {
+                    return Err(std::io::ErrorKind::Other.into());
+                }
+                let len = out
+                    .len()
+                    .min(self.chunk)
+                    .min(self.bytes.len() - self.at)
+                    .min(self.fail.unwrap_or(usize::MAX) - self.at);
+                out[..len].copy_from_slice(&self.bytes[self.at..self.at + len]);
+                self.at += len;
+                Ok(len)
+            }
+        }
+        for cut in 0..=32 {
+            for chunk in [1, 3, 32] {
+                for fail in [None, Some(cut)] {
+                    let bytes = if fail.is_some() {
+                        &PROBE_HEADER_BYTES[..]
+                    } else {
+                        &PROBE_HEADER_BYTES[..cut]
+                    };
+                    let new_reader = || ShortRead {
+                        bytes,
+                        at: 0,
+                        chunk,
+                        fail,
+                        interrupted: true,
+                    };
+                    let mut a = new_reader();
+                    let mut b = new_reader();
+                    let actual = read_native_record_header(&mut a, 123);
+                    let expected = read_native_record_header_reference(&mut b, 123);
+                    match (actual, expected) {
+                        (Ok(a), Ok(b)) => assert_eq!(a, b),
+                        (Err(Error::Io(a)), Err(Error::Io(b))) => assert_eq!(a.kind(), b.kind()),
+                        other => panic!("header result mismatch: {other:?}"),
+                    }
+                    assert_eq!(a.at, b.at);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_footer_decoder_matches_table_on_corruption_and_pointer_edges() {
+        fn compare(bytes: &[u8], record: u64) {
+            let actual = decode_native_record_footer(bytes, 777, record);
+            let expected = decode_native_record_footer_reference(bytes, 777, record);
+            match (actual, expected) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b),
+                (
+                    Err(Error::InvalidRecordFooter { offset: a }),
+                    Err(Error::InvalidRecordFooter { offset: b }),
+                ) => assert_eq!(a, b),
+                other => panic!("footer result mismatch: {other:?}"),
+            }
+        }
+        for len in 0..=33 {
+            compare(&[0; 33][..len], 100);
+        }
+        for at in 0..32 {
+            for value in 0..=u8::MAX {
+                let mut bytes = PROBE_FOOTER_BYTES;
+                bytes[at] = value;
+                compare(&bytes, u64::MAX);
+            }
+        }
+        for record in [0, 1, 2, u64::MAX - 1, u64::MAX] {
+            for previous in [0, 1, record.saturating_sub(1), record, u64::MAX] {
+                for flags in 0..8u16 {
+                    let mut bytes = PROBE_FOOTER_BYTES;
+                    bytes[6..8].copy_from_slice(&flags.to_le_bytes());
+                    bytes[8..16].copy_from_slice(&previous.to_le_bytes());
+                    bytes[16..24].copy_from_slice(&previous.to_le_bytes());
+                    compare(&bytes, record);
+                }
+            }
+        }
+    }
+
     /// The length contract is discharged at compile time; assert that the two
     /// published constants are what the tables actually sum to, so a reader of
     /// this module does not have to trust the `const _: ()` block alone.
@@ -1584,3 +1948,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(kani)]
+#[path = "verification/generated_file.rs"]
+mod generated_file_proofs;

@@ -1,0 +1,150 @@
+name: Verification
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 4
+  CARGO_LLVM_COV_VERSION: 0.9.1
+  CARGO_CYCLONEDX_VERSION: 0.5.9
+  KANI_VERSION: 0.68.0
+
+jobs:
+  coverage:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.95.0'
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: coverage
+      - run: cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Instrument unit and integration tests
+        env:
+          # Nested trybuild snapshots are already checked by ordinary CI.
+          VARLIT_SKIP_UI_SNAPSHOTS: '1'
+        run: cargo llvm-cov --workspace --all-features --lib --tests --locked --no-report
+      - name: Export coverage and uncovered line locations
+        run: |
+          mkdir -p target/coverage
+          exclude='/(vendor|tests|examples|tools)/|/src/verification/'
+          cargo llvm-cov report --ignore-filename-regex "$exclude" --json --output-path target/coverage/coverage.json
+          cargo llvm-cov report --ignore-filename-regex "$exclude" --html --output-dir target/coverage
+          cargo llvm-cov report --ignore-filename-regex "$exclude" --show-missing-lines > target/coverage/missing-lines.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+  kani:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default, all]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.95.0'
+      - run: cargo install kani-verifier --locked --version "$KANI_VERSION"
+      - run: cargo kani setup
+      - name: Build the pinned upstream memory-check crash fixes
+        run: |
+          bash scripts/build_memory_kani.sh "$RUNNER_TEMP/kani-ownership"
+          echo "$RUNNER_TEMP/kani-ownership/scripts" >> "$GITHUB_PATH"
+          echo "$HOME/.kani/kani-0.68.0/bin" >> "$GITHUB_PATH"
+      - name: Check compiler-resolved callers and guard failure paths
+        run: |
+          mkdir -p target/verification
+          features=()
+          if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
+          cargo test --locked -p varlit --test state_closure
+          cargo rustc --locked -p varlit-core --lib "${features[@]}" -- --emit=mir=target/verification/callers.mir
+          python3 scripts/check_proof_bindings.py --mir target/verification/callers.mir --features '${{ matrix.features }}' --output target/verification/caller-contracts.json
+          python3 scripts/check_state_transitions.py --mir target/verification/callers.mir --features '${{ matrix.features }}' --output target/verification/state-transitions.json
+      - name: Check every registered core proof, including unwinding assertions
+        run: |
+          set -o pipefail
+          mkdir -p target/verification
+          cargo metadata --locked --format-version 1 > /dev/null
+          python3 scripts/check_proof_contracts.py --capture target/verification/source-before.json
+          features=()
+          if [[ '${{ matrix.features }}' == all ]]; then features+=(--all-features); fi
+          cargo kani -p varlit-core "${features[@]}" --jobs 2 --output-format terse --default-unwind 5 -Z stubbing -Z unstable-options -Z function-contracts --harness-timeout 300 2>&1 | tee target/verification/kani.log
+          python3 scripts/check_proof_contracts.py --source-before target/verification/source-before.json --log target/verification/kani.log --features '${{ matrix.features }}' --output target/verification/contracts.json
+          git diff --exit-code -- Cargo.lock
+      - name: Qualify scoped scalar memory checks (not whole-owner initialization)
+        run: |
+          python3 scripts/check_memory_proofs.py \
+            --kani-checkout "$RUNNER_TEMP/kani-ownership" \
+            --features '${{ matrix.features }}' \
+            --output target/verification/memory-checks
+      - name: Verify production bindings and reject every broken publication protocol
+        if: matrix.features == 'default'
+        run: python3 scripts/check_publication_protocol.py --output target/verification/protocol-mutations
+      - name: Reject broken ownership allocation contracts
+        if: matrix.features == 'default'
+        run: python3 scripts/check_ownership_mutations.py --output target/verification/ownership-mutations
+      - name: Reject broken resource and traversal implementations
+        if: matrix.features == 'default'
+        run: python3 scripts/check_resource_mutations.py --output target/verification/resource-mutations
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kani-${{ matrix.features }}
+          path: target/verification/
+          retention-days: 14
+
+  loom:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.95.0'
+      - name: Explore production cancellation and progress interleavings
+        env:
+          RUSTFLAGS: --cfg varlit_loom -D warnings
+        run: cargo run --locked --manifest-path tools/verification/Cargo.toml
+      - name: Audit isolated model dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --file tools/verification/Cargo.lock
+
+  sbom:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.95.0'
+      - run: cargo install cargo-cyclonedx --locked --version "$CARGO_CYCLONEDX_VERSION"
+      - run: cargo fetch --locked
+      - run: python3 scripts/generate_sbom.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-sboms
+          path: target/sbom/
+          if-no-files-found: error
+          retention-days: 30

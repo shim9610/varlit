@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -16,21 +16,22 @@ use crate::file::{
     blank_mutable_header_bytes, fresh_stream_creation_nonce, prepare_stream_creation_nonce_record,
     prepare_stream_manifest_record, prepare_stream_tombstone_record,
     prepare_stream_user_record_into, publish_temp_path_atomically, read_file_header,
-    read_file_header_parts, read_stream_creation_nonce, write_file_header,
+    read_file_header_parts, read_primary_header, read_stream_creation_nonce, write_file_header,
 };
+use crate::primary_file::PrimaryFile;
 use crate::scan_control::{ScanCancelled, ScanProgressDriver};
 use crate::snapshot::WrittenThrough;
 use crate::traits::KeyedBlockContract;
 use crate::{
     AppendInfo, BlockEvent, BlockKind, CREATION_NONCE_BLOCK_ID, CommitPolicy, Error, FormatSpec,
-    IntegrityPolicy, LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result,
-    ScanOptions, ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
+    LayoutPreset, MANIFEST_BLOCK_ID, ManifestPolicy, ResourceLimits, Result, ScanOptions,
+    ScanProgress, ScanProgressOptions, SnapshotFile, TOMBSTONE_BLOCK_ID, VarlitBlock,
     VarlitKeyedBlock,
 };
 
 const STREAM_WRITER_POISON_CONTEXT: &str = "stream";
 
-// Mechanical enforcement of the writer poison check (round 12, F-05) lives in
+// Mechanical enforcement of the writer poison check (round 12, ) lives in
 // `crate::writer_permit`, which round 12's enforcement pass promoted out of
 // this file so that `file.rs` and `layout.rs` hold the same type rather than
 // three independent hand-written conventions. See that module's documentation
@@ -43,7 +44,7 @@ use crate::writer_permit::{GuardedWriter, PoisonFlag};
 /// re-verification showed, from a throwaway `PoisonFlag` — is not this type.
 pub(crate) type StreamMutationPermit<'a> = MutationPermit<'a, VarlitStreamWriter>;
 
-const INTERNAL_BLOCK_IDS: [u32; 3] = [
+pub(crate) const INTERNAL_BLOCK_IDS: [u32; 3] = [
     MANIFEST_BLOCK_ID,
     TOMBSTONE_BLOCK_ID,
     CREATION_NONCE_BLOCK_ID,
@@ -63,11 +64,11 @@ thread_local! {
     };
 }
 
-/// Consumes one armed write-plus-rollback append failure (round 12, F-05).
+/// Consumes one armed write-plus-rollback append failure (round 12, ).
 ///
 /// Returns `true` when the caller must behave as though the native chunk write
 /// failed *and* the truncate-or-seek rollback that follows it failed too. That
-/// is the pair F-05 names: it is the shortest route to
+/// is the pair  names: it is the shortest route to
 /// `Error::WriteRollbackFailed`, and it is not reachable from outside the
 /// crate on demand, because it needs two consecutive I/O failures on the same
 /// open handle. (The snapshot-rebind failure further down the same function
@@ -217,7 +218,7 @@ pub struct StreamBootstrapReport {
 
 /// Scans a native stream file and publishes a clean state sidecar for it.
 ///
-/// # Non-cooperating writers (F-09)
+/// # Non-cooperating writers
 ///
 /// Cooperating writers are serialized by the writer lock this call holds. A
 /// process that replaces the primary *pathname* without taking that lock is
@@ -249,6 +250,7 @@ pub fn bootstrap_stream_checkpoint_with_progress<F>(
 where
     F: FnMut(ScanProgress),
 {
+    refuse_matrix_stream(spec)?;
     let path = std::fs::canonicalize(path.as_ref())?;
     let _lock = WriterLock::acquire(&path)?;
     let sidecar = state_sidecar_path(&path);
@@ -314,8 +316,8 @@ where
     // The checkpoint is only valid for the exact file object the retained
     // snapshot scanned. Re-resolve the pathname immediately before publishing
     // and refuse to publish for a swapped-in generation.
-    let snapshot_identity = opened_file_identity(&reader.snapshot.try_clone_file()?)?;
-    // F-09: the verified handle is kept open across publication. Cooperating
+    let snapshot_identity = opened_file_identity(reader.snapshot.try_clone_file()?.raw())?;
+    // the verified handle is kept open across publication. Cooperating
     // writers are already excluded by the `WriterLock` held above; against a
     // pathname mutator that ignores that protocol, holding the object open is
     // what stops the operating system from recycling its identity behind an
@@ -336,7 +338,7 @@ where
     )?;
     #[cfg(test)]
     interpose_after_state_publication(&path);
-    // F-09: publication is not a single syscall with the check above, so
+    // publication is not a single syscall with the check above, so
     // re-resolve once more now that the sidecar is visible. If the primary was
     // replaced in that interval the sidecar just published describes a file
     // object that no longer holds the pathname, and leaving it there would
@@ -443,10 +445,15 @@ pub struct VarlitStreamReader {
 struct StreamReaderState {
     snapshot: DiskIndexSnapshot,
     store: DiskIndexStore,
+    /// The verified sync-marker prefix past the confirmed EOF.
+    tail: crate::sync_marker::MarkedTail,
+    /// Records in that prefix.
+    tail_records: u64,
 }
 
 impl VarlitStreamReader {
     pub fn open(spec: FormatSpec, path: impl AsRef<Path>, options: StreamOptions) -> Result<Self> {
+        refuse_matrix_stream(spec)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let mut reader = Self::open_native(spec, &path, options)?;
         let identity = primary_identity(reader.spec, &reader.snapshot)?;
@@ -455,8 +462,16 @@ impl VarlitStreamReader {
         let snapshot = store
             .begin_committed_snapshot(identity, DiskIndexMode::StateOnly)
             .map_err(state_error)?;
-        reader.snapshot = reader.committed_native_snapshot(&snapshot)?;
-        reader._state = Some(StreamReaderState { snapshot, store });
+        let committed = reader.committed_native_snapshot(&snapshot)?;
+        let mut tail = crate::sync_marker::MarkedTail::new(snapshot.committed_eof());
+        let tail_records = advance_reader_tail(reader.spec, &mut tail, &committed.physical()?)?;
+        reader.snapshot = committed.with_len(tail.committed())?;
+        reader._state = Some(StreamReaderState {
+            snapshot,
+            store,
+            tail,
+            tail_records,
+        });
         Ok(reader)
     }
 
@@ -466,9 +481,9 @@ impl VarlitStreamReader {
         options: StreamOptions,
     ) -> Result<Self> {
         let spec = stream_spec(spec, options, false)?;
-        let mut file = OpenOptions::new().read(true).open(path)?;
-        let captured_len = file.metadata()?.len();
-        let header_len = read_file_header(spec, &mut file)?;
+        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        let captured_len = file.len()?;
         if captured_len < header_len {
             return Err(Error::CorruptTail { offset: header_len });
         }
@@ -490,18 +505,33 @@ impl VarlitStreamReader {
             .store
             .followed_handle(&state.snapshot)
             .map_err(state_error)?;
-        let added = next.record_count() - state.snapshot.record_count();
-        if next.generation() == state.snapshot.generation()
+        let unchanged = next.generation() == state.snapshot.generation()
             && state.snapshot.is_pinned()
-            && state.store.same_file(&store)
-        {
+            && state.store.same_file(&store);
+        let index_added = next.record_count() - state.snapshot.record_count();
+        let mut tail = state.tail;
+        let mut tail_records = state.tail_records;
+        if next.committed_eof() != state.snapshot.committed_eof() {
+            if next.committed_eof() >= tail.committed() {
+                tail = crate::sync_marker::MarkedTail::new(next.committed_eof());
+                tail_records = 0;
+            } else {
+                tail_records = tail_records.saturating_sub(index_added);
+            }
+        }
+        let before = state.snapshot.record_count() + state.tail_records;
+        let native = self.committed_native_snapshot(&next)?;
+        tail_records += advance_reader_tail(self.spec, &mut tail, &native.physical()?)?;
+        if unchanged && tail.committed() == self.snapshot.len() {
             return Ok(0);
         }
-        let native = self.committed_native_snapshot(&next)?;
-        self.snapshot = native;
+        let added = (next.record_count() + tail_records).saturating_sub(before);
+        self.snapshot = native.with_len(tail.committed())?;
         let state = self._state.as_mut().expect("state checked");
         state.snapshot = next;
         state.store = store;
+        state.tail = tail;
+        state.tail_records = tail_records;
         Ok(added)
     }
 
@@ -570,7 +600,10 @@ impl VarlitStreamReader {
         let header_eof = read_file_header(self.spec, &mut header_file)?;
         let mut progress = ScanProgressDriver::new(scan, header_eof, self.snapshot.len());
         progress.start(&mut observer).map_err(scan_cancelled)?;
-        let mut scanner = NativeStreamScanner::from_snapshot(self.spec, self.snapshot.clone())?;
+        let mut scanner = NativeStreamScanner::from_snapshot(
+            self.spec.with_strict_read_validation(),
+            self.snapshot.clone(),
+        )?;
         let mut records = 0u64;
         while scanner.next_entry()?.is_some() {
             records = records
@@ -612,10 +645,13 @@ impl VarlitStreamReader {
         // checksum over the one payload read whose buffer feeds the typed
         // decode, and skipped foreign-block payloads are not read at all.
         // `verify_all` remains the whole-file integrity scan.
-        let scan_spec = self.spec.with_integrity_policy(IntegrityPolicy::None);
         Ok(StreamingBlocks {
             payload: Vec::new(),
-            scanner: NativeStreamScanner::from_snapshot(scan_spec, self.snapshot.clone())?,
+            record_cache: std::cell::RefCell::new(crate::file::ChunkCache::for_spec(self.spec)?),
+            scanner: NativeStreamScanner::from_snapshot_framing_only(
+                self.spec,
+                self.snapshot.clone(),
+            )?,
             spec: self.spec,
             finished: false,
             failed: false,
@@ -694,9 +730,8 @@ impl Iterator for StreamEvents {
 #[derive(Debug)]
 pub struct StreamingBlocks<T> {
     scanner: NativeStreamScanner,
-    /// The reader's real spec. The scanner carries an integrity-stripped copy
-    /// so the frame scan does not checksum payloads; typed decode validates
-    /// each decoded record's checksum against this spec instead.
+    /// The reader's format contract, also preserved by the frame-only scanner.
+    /// Typed decode verifies each consumed record's checksum against this spec.
     spec: FormatSpec,
     finished: bool,
     failed: bool,
@@ -704,6 +739,8 @@ pub struct StreamingBlocks<T> {
     /// rather than `N`. This is the scalable family's per-record read, so it is
     /// the one place on it where that difference is unbounded.
     payload: Vec<u8>,
+    /// The checked chunk a long record's fields are read through.
+    record_cache: std::cell::RefCell<crate::file::ChunkCache>,
     _marker: PhantomData<(T, std::rc::Rc<()>)>,
 }
 
@@ -730,31 +767,90 @@ impl<T> StreamingBlocks<T> {
     }
 }
 
-impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
-    type Item = Result<T>;
+impl<T: VarlitBlock> StreamingBlocks<T> {
+    /// Decodes the next record of `T` into `out`, reusing what it owns.
+    ///
+    /// Returns `false` at the end of the snapshot, leaving `out` untouched. A
+    /// returned error ends the walk (the cursor is then unusable for
+    /// following); `out` is valid but unspecified.
+    pub fn next_into(&mut self, out: &mut T) -> Result<bool> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        let Some(entry) = self.advance()? else {
+            return Ok(false);
+        };
+        // The single payload read: checked as it is decoded, large fields
+        // straight into `out`.
+        let decoded = crate::file::decode_record_into(
+            self.spec,
+            self.scanner.snapshot(),
+            &entry,
+            &mut self.payload,
+            &mut budget,
+            &self.record_cache,
+            out,
+        );
+        self.settle(decoded).map(|()| true)
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
+    /// The next record as a fresh value; crate tests only.
+    #[cfg(test)]
+    pub(crate) fn next_value(&mut self) -> Option<Result<T>> {
+        let mut budget = MaterializationBudget::new(self.spec);
+        match self.advance() {
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+            Ok(Some(entry)) => {
+                let decoded = entry
+                    .logical_payload_len_snapshot(self.spec, self.scanner.snapshot())
+                    .and_then(|logical_len| budget.consume(logical_len))
+                    .and_then(|()| {
+                        entry.read_logical_payload_snapshot_into(
+                            self.spec,
+                            self.scanner.snapshot(),
+                            &mut self.payload,
+                        )
+                    })
+                    .and_then(|()| {
+                        budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian))
+                    });
+                Some(self.settle(decoded))
+            }
         }
-        // The scanner must not checksum payloads: the typed decode below owns
-        // the single, checksum-verified payload read.
-        debug_assert_eq!(
-            self.scanner.spec().integrity_policy,
-            IntegrityPolicy::None,
-            "streaming typed scan requires an integrity-stripped scanner spec",
+    }
+
+    /// A decode error ends the walk like any other error.
+    fn settle<R>(&mut self, result: Result<R>) -> Result<R> {
+        if result.is_err() {
+            self.finished = true;
+            self.failed = true;
+        }
+        result
+    }
+
+    /// Finds the next record of `T`, charges its logical length to `budget`
+    /// and reads it once (checksummed) into `self.payload`. `false` at the end.
+    /// The next record of `T`, framed but not yet read.
+    fn advance(&mut self) -> Result<Option<crate::RecordIndexEntry>> {
+        if self.finished {
+            return Ok(None);
+        }
+        // The scanner must not checksum payloads: the typed decode owns the
+        // single, checksum-verified payload read.
+        debug_assert!(
+            !self.scanner.verifies_checksums(),
+            "streaming typed scan requires a frame-only scanner",
         );
         loop {
             let entry = match self.scanner.next_entry() {
                 Ok(Some(entry)) => entry,
                 Ok(None) => {
                     self.finished = true;
-                    return None;
+                    return Ok(None);
                 }
                 Err(error) => {
                     self.finished = true;
                     self.failed = true;
-                    return Some(Err(error));
+                    return Err(error);
                 }
             };
             if entry.block_id != T::ID {
@@ -763,38 +859,29 @@ impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
             if entry.block_version != T::VERSION {
                 self.finished = true;
                 self.failed = true;
-                return Some(Err(Error::BlockVersionMismatch {
+                return Err(Error::BlockVersionMismatch {
                     block_id: T::ID,
                     expected: T::VERSION,
                     actual: entry.block_version,
-                }));
+                });
             }
-            let result = (|| {
-                let logical_len =
-                    entry.logical_payload_len_snapshot(self.spec, self.scanner.snapshot())?;
-                let mut budget = MaterializationBudget::new(self.spec);
-                budget.consume(logical_len)?;
-                // The single payload read: verifies the record checksum over
-                // the in-memory buffer and hands that buffer to typed decode.
-                entry.read_logical_payload_snapshot_into(
-                    self.spec,
-                    self.scanner.snapshot(),
-                    &mut self.payload,
-                )?;
-                budget.decode(&self.payload, T::ENDIAN.unwrap_or(self.spec.endian))
-            })();
-            if result.is_err() {
-                self.finished = true;
-                self.failed = true;
-            }
-            return Some(result);
+            return Ok(Some(entry));
         }
+    }
+}
+
+/// Crate tests walk a cursor as an iterator of fresh values.
+#[cfg(test)]
+impl<T: VarlitBlock> Iterator for StreamingBlocks<T> {
+    type Item = Result<T>;
+    fn next(&mut self) -> Option<Result<T>> {
+        self.next_value()
     }
 }
 
 pub struct VarlitStreamWriter {
     spec: FormatSpec,
-    file: File,
+    file: PrimaryFile,
     snapshot: SnapshotFile,
     sequence: Option<u64>,
     record_count: u64,
@@ -810,6 +897,10 @@ pub struct VarlitStreamWriter {
     /// depends on what it last held; it is a buffer, not state.
     record_buffer: Vec<u8>,
     immediate_state: crate::immediate::ImmediateState,
+    /// The open link of this writer's sync-marker chain; `Some` exactly when
+    /// the writer is checkpointed (a state sidecar, or an indexed writer).
+    /// See [`crate::sync_marker`].
+    sync_chain: Option<crate::sync_marker::SyncChain>,
     _lock: WriterLock,
 }
 
@@ -819,6 +910,9 @@ struct StreamWriterState {
     batch_records: usize,
     batch_last_sequence: Option<u64>,
     dirty: bool,
+    /// Primary EOF and record count the last confirmed sidecar covers.
+    confirmed_eof: u64,
+    confirmed_records: u64,
 }
 
 impl StreamWriterState {
@@ -829,6 +923,8 @@ impl StreamWriterState {
             batch_records: 0,
             batch_last_sequence: None,
             dirty: false,
+            confirmed_eof: 0,
+            confirmed_records: 0,
         }
     }
 }
@@ -837,6 +933,19 @@ impl Drop for StreamWriterState {
     fn drop(&mut self) {
         // Discard uncommitted staging before releasing the writer file guard.
         self.store.batch.take();
+    }
+}
+
+impl Drop for VarlitStreamWriter {
+    fn drop(&mut self) {
+        // As `VarlitIndexedWriter`'s drop: confirm a state sidecar over every
+        // synced record, best effort.
+        if self.state.as_ref().is_some_and(|state| state.dirty)
+            && !self.sync_pending()
+            && self.check_mutation(STREAM_WRITER_POISON_CONTEXT).is_ok()
+        {
+            let _ = self.sync_with(true);
+        }
     }
 }
 
@@ -855,6 +964,7 @@ impl VarlitStreamWriter {
         path: impl AsRef<Path>,
         options: StreamOptions,
     ) -> Result<Self> {
+        refuse_matrix_stream(spec)?;
         let path = canonical_write_path(path.as_ref())?;
         let mut writer = Self::create_unmanaged(spec, &path, options)?;
         crate::scalable_fault_point("create.native_sync");
@@ -883,6 +993,7 @@ impl VarlitStreamWriter {
             store,
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
+        writer.install_state_chain();
         Ok(writer)
     }
 
@@ -891,8 +1002,9 @@ impl VarlitStreamWriter {
         path: impl AsRef<Path>,
         options: StreamOptions,
     ) -> Result<Self> {
+        refuse_matrix_stream(spec)?;
         let path = std::fs::canonicalize(path.as_ref())?;
-        let (mut writer, store) = Self::restore_checkpointed(
+        let (mut writer, store, base_eof) = Self::restore_checkpointed(
             spec,
             &path,
             options,
@@ -904,7 +1016,47 @@ impl VarlitStreamWriter {
             store,
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
+        writer.install_state_chain();
+        writer.replay_state_tail(base_eof)?;
         Ok(writer)
+    }
+
+    /// Covers the records in `[from, EOF)` — kept by recovery, not yet in the
+    /// state sidecar — and confirms the sidecar over them.
+    fn replay_state_tail(&mut self, from: u64) -> Result<()> {
+        let end = self.snapshot.len();
+        if from == end {
+            return Ok(());
+        }
+        let chunk = self
+            .state
+            .as_ref()
+            .map_or(1, |state| state.chunk_records.max(1));
+        let mut scanner =
+            NativeStreamScanner::from_offset_framing_only(self.spec, self.snapshot.clone(), from)?;
+        let mut records: Vec<(u32, AppendInfo)> = Vec::new();
+        loop {
+            let entry = scanner.next_entry()?;
+            if let Some(entry) = entry.as_ref() {
+                records
+                    .try_reserve(1)
+                    .map_err(|_| Error::AllocationFailed {
+                        resource: "recovered record descriptors",
+                        requested: std::mem::size_of::<(u32, AppendInfo)>() as u64,
+                    })?;
+                records.push((entry.block_id, AppendInfo::from(entry)));
+            }
+            if records.len() >= chunk || (entry.is_none() && !records.is_empty()) {
+                let chunk_end = scanner.logical_eof();
+                self.ensure_writable()?.reserve_state_chunk(records.len())?;
+                self.stage_state_records(&records, chunk_end)?;
+                records.clear();
+            }
+            if entry.is_none() {
+                break;
+            }
+        }
+        self.sync_with(true)
     }
 
     pub(crate) fn create_unmanaged(
@@ -915,24 +1067,27 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, true)?;
         let path = canonical_write_path(path.as_ref())?;
         let mut lock = WriterLock::acquire(&path)?;
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
+        let mut file = PrimaryFile::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)?,
+            None,
+        );
         // Bind the authoritative object lock onto the freshly created file. The
         // acquire-time probe cannot lock a file that did not exist yet, so
         // without this a hard-link alias opened after creation would win a
-        // second writer role (DUR-02). Mirrors VarlitFile::create_impl and
+        // second writer role. Mirrors VarlitFile::create_impl and
         // VarlitLayoutWriter::create_inner.
         //
-        // DUR2-05: the bind must happen before any destructive initialization.
+        // the bind must happen before any destructive initialization.
         // Opening with `.truncate(true)` would clear the object inside the
         // pre-bind window, so a losing concurrent creator could truncate the
         // winner's freshly initialized file before its own bind fails. Open
         // without truncate, bind, then truncate through the bound handle.
-        lock.bind_native(&file, &path)?;
+        lock.bind_native(file.raw(), &path)?;
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
         write_file_header(spec, &mut file)?;
@@ -948,9 +1103,10 @@ impl VarlitStreamWriter {
             poison: PoisonFlag::healthy(),
             record_buffer: Vec::new(),
             immediate_state: Default::default(),
+            sync_chain: None,
             _lock: lock,
         };
-        // STO-01: stamp the per-create nonce as the very first record of the
+        // stamp the per-create nonce as the very first record of the
         // log, before anything else can be appended. It has to live inside the
         // primary because an equal-length in-place rewrite preserves the OS
         // object, the schema hash and every header byte a witness looks at —
@@ -985,19 +1141,33 @@ impl VarlitStreamWriter {
         Ok(writer)
     }
 
+    /// Opens the writer, recovering first when the state sidecar trails the
+    /// primary (an unconfirmed tail, or an interrupted generation): the
+    /// verified sync-marker prefix is kept and replayed, anything after it is
+    /// cut. See [`Self::restore_checkpoint_and_open`].
     pub fn open(spec: FormatSpec, path: impl AsRef<Path>, options: StreamOptions) -> Result<Self> {
-        let path = std::fs::canonicalize(path.as_ref())?;
+        refuse_matrix_stream(spec)?;
+        match Self::open_clean(spec, path.as_ref(), options) {
+            Err(error) if crate::disk_index::requires_recovery(&error) => {
+                Self::restore_checkpoint_and_open(spec, path, options)
+            }
+            result => result,
+        }
+    }
+
+    fn open_clean(spec: FormatSpec, path: &Path, options: StreamOptions) -> Result<Self> {
+        let path = std::fs::canonicalize(path)?;
         let (mut writer, store) =
             Self::open_checkpointed(spec, &path, options, |identity, physical_len| {
-                let store =
+                let mut store =
                     DiskIndexStore::open_writer(state_sidecar_path(&path), state_options(options))
                         .map_err(state_error)?;
                 let state = store
-                    .validate_clean_writer(
+                    .validate_clean_writer_for_spec(
                         identity,
                         DiskIndexMode::StateOnly,
                         physical_len,
-                        tail_limit_for_spec(spec).map_err(state_error)?,
+                        spec,
                     )
                     .map_err(state_error)?;
                 Ok((
@@ -1010,6 +1180,7 @@ impl VarlitStreamWriter {
             store,
             state_chunk_records(writer.spec, state_options(options).batch),
         ));
+        writer.install_state_chain();
         Ok(writer)
     }
 
@@ -1026,13 +1197,15 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-        let physical_len = file.metadata()?.len();
-        let header_len = read_file_header(spec, &mut file)?;
+        let mut file =
+            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        // Logical: an anchored file's anchors are not part of the log.
+        let physical_len = file.len()?;
         let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
         let identity = primary_identity(spec, &physical_snapshot)?;
         let (checkpoint, generation, loaded) = load_checkpoint(identity, physical_len)?;
-        // STO-01: the sidecar must belong to this generation of the primary,
+        // the sidecar must belong to this generation of the primary,
         // not merely to the same file object with the same header bytes — of
         // which a declared `header_tails` region's payload is no longer one,
         // since a commit rewrites it in place and `primary_generation` blanks
@@ -1053,12 +1226,23 @@ impl VarlitStreamWriter {
                 poison: PoisonFlag::healthy(),
                 record_buffer: Vec::new(),
                 immediate_state: Default::default(),
+                sync_chain: None,
                 _lock: lock,
             },
             loaded,
         ))
     }
 
+    /// Recovers a checkpointed primary from its newest durable sidecar
+    /// checkpoint.
+    ///
+    /// The primary is cut back to the end of the verified sync-marker prefix
+    /// after the checkpoint's EOF — every acknowledged sync survives, and
+    /// nothing after the last one does — and the sidecar is reset to the
+    /// checkpoint. The returned writer is positioned at that end with its
+    /// sequence, count and tails advanced over the kept records; the returned
+    /// offset is the checkpoint's EOF, from which the caller replays those
+    /// records into its sidecar.
     pub(crate) fn restore_checkpointed(
         spec: FormatSpec,
         path: impl AsRef<Path>,
@@ -1066,57 +1250,98 @@ impl VarlitStreamWriter {
         index_options: DiskIndexOptions,
         sidecar: impl AsRef<Path>,
         mode: DiskIndexMode,
-    ) -> Result<(Self, DiskIndexStore)> {
+    ) -> Result<(Self, DiskIndexStore, u64)> {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-        let physical_len = file.metadata()?.len();
-        let header_len = read_file_header(spec, &mut file)?;
+        let mut file =
+            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let header_len = read_primary_header(spec, &mut file)?.0;
+        // Logical: an anchored file's anchors are not part of the log.
+        let physical_len = file.len()?;
         let physical_snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, physical_len)?;
         let identity = primary_identity(spec, &physical_snapshot)?;
         let mut store = DiskIndexStore::open_writer(sidecar, index_options).map_err(state_error)?;
         let guard = store
-            .stage_restore(
-                identity,
-                mode,
-                physical_len,
-                tail_limit_for_spec(spec).map_err(state_error)?,
-            )
+            .stage_restore_for_spec(identity, mode, physical_len, spec)
             .map_err(state_error)?;
         verify_primary_generation(spec, guard.primary_generation(), &physical_snapshot)?;
         let checkpoint = stream_checkpoint_from_frontier(guard.frontier(), guard.tails());
         let base_eof = guard.base_eof();
         checkpoint.validate(spec, header_len, base_eof)?;
-        crate::scalable_fault_point("restore.native_truncate");
-        let truncate = file.set_len(base_eof);
-        crate::scalable_fault_point("restore.native_truncate");
-        truncate?;
-        crate::scalable_fault_point("restore.native_sync");
-        let sync = file.sync_all();
-        crate::scalable_fault_point("restore.native_sync");
-        sync?;
-        let observed_len = file.metadata()?.len();
-        guard
-            .commit_after_native_sync(observed_len)
-            .map_err(state_error)?;
-        file.seek(SeekFrom::Start(base_eof))?;
-        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, base_eof)?;
+        let mut tail = crate::sync_marker::MarkedTail::new(base_eof);
+        tail.advance(spec, &physical_snapshot)?;
+        let kept_eof = tail.committed();
+        crate::publication_protocol::restore(
+            || -> Result<()> {
+                crate::scalable_fault_point("restore.native_truncate");
+                let truncate = file.set_len(kept_eof);
+                crate::scalable_fault_point("restore.native_truncate");
+                truncate?;
+                Ok(())
+            },
+            || -> Result<()> {
+                crate::scalable_fault_point("restore.native_sync");
+                let sync = file.sync_all();
+                crate::scalable_fault_point("restore.native_sync");
+                sync?;
+                Ok(())
+            },
+            || {
+                let observed_len = file.len()?;
+                guard
+                    .commit_after_native_sync_at(observed_len, kept_eof)
+                    .map_err(state_error)
+            },
+        )?;
+        file.seek(SeekFrom::Start(kept_eof))?;
+        let snapshot = SnapshotFile::from_file_with_len(file.try_clone()?, kept_eof)?;
+        let mut sequence = checkpoint.next_sequence;
+        let mut record_count = checkpoint.record_count;
+        let mut block_tails = block_tails_from_checkpoint(spec, &checkpoint.block_tails);
+        if kept_eof > base_eof {
+            let mut scanner =
+                NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), base_eof)?;
+            while let Some(entry) = scanner.next_entry()? {
+                if sequence.is_some_and(|next| entry.sequence < next) {
+                    return Err(Error::CorruptTail {
+                        offset: entry.record_offset,
+                    });
+                }
+                sequence = entry.sequence.checked_add(1);
+                record_count =
+                    record_count
+                        .checked_add(1)
+                        .ok_or(Error::ResourceArithmeticOverflow {
+                            resource: "record count",
+                        })?;
+                if entry.block_id != crate::sync_marker::SYNC_BLOCK_ID {
+                    set_tail(
+                        &mut block_tails,
+                        entry.block_id,
+                        entry.record_offset,
+                        entry.sequence,
+                    );
+                }
+            }
+        }
         Ok((
             Self {
                 spec,
                 file,
                 snapshot,
-                sequence: checkpoint.next_sequence,
-                record_count: checkpoint.record_count,
-                block_tails: block_tails_from_checkpoint(spec, &checkpoint.block_tails),
+                sequence,
+                record_count,
+                block_tails,
                 state: None,
                 poison: PoisonFlag::healthy(),
                 record_buffer: Vec::new(),
                 immediate_state: Default::default(),
+                sync_chain: None,
                 _lock: lock,
             },
             store,
+            base_eof,
         ))
     }
 
@@ -1219,7 +1444,7 @@ impl VarlitStreamWriter {
         key: &T::Key,
         previous: Option<u64>,
     ) -> Result<AppendInfo> {
-        // API2-03: every public keyed generic entry point evaluates the
+        // every public keyed generic entry point evaluates the
         // compile-time keyedness contract post-monomorphization; the
         // registration below stays as the runtime backstop.
         let () = KeyedBlockContract::<T>::OK;
@@ -1254,25 +1479,64 @@ impl VarlitStreamWriter {
         Ok(())
     }
 
+    /// Makes every preceding record durable and visible to readers.
+    ///
+    /// With a state sidecar this is one storage barrier: a sync marker closes
+    /// the records since the last sync and the primary is synced. The sidecar
+    /// is confirmed as well only once the primary has outgrown it by the
+    /// [`DiskIndexConfirmPolicy`](crate::DiskIndexConfirmPolicy) in
+    /// `StreamOptions::state`; readers and recovery take the rest from the
+    /// primary.
     pub fn sync(&mut self) -> Result<()> {
+        self.sync_with(false)
+    }
+
+    fn sync_with(&mut self, force_confirm: bool) -> Result<()> {
         self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        self.ensure_writable()?.commit_state_chunk()?;
+        if self.state.is_some() {
+            self.append_sync_marker()?;
+        }
         crate::scalable_fault_point("sync.native_sync");
         let sync = self.file.sync_all();
         crate::scalable_fault_point("sync.native_sync");
         sync?;
-        let frontier = checkpoint_frontier(&self.checkpoint());
-        if let Some(state) = self.state.as_mut()
-            && state.dirty
-        {
+        let eof = self.snapshot.len();
+        let records = self.record_count;
+        let due = self.state.as_ref().is_some_and(|state| {
+            state.dirty
+                && (force_confirm
+                    || state
+                        .store
+                        .options()
+                        .confirm
+                        .due(eof - state.confirmed_eof, records - state.confirmed_records))
+        });
+        if due {
+            self.ensure_writable()?.commit_state_chunk()?;
+            let frontier = checkpoint_frontier(&self.checkpoint());
+            let state = self.state.as_mut().expect("state checked");
             if let Err(error) = state.store.publish_clean(frontier) {
                 self.poison.poison();
                 return Err(state_error(error));
             }
             state.dirty = false;
+            state.confirmed_eof = eof;
+            state.confirmed_records = records;
         }
         self.immediate_state.reset();
         Ok(())
+    }
+
+    /// Records that the state sidecar covers exactly this EOF and opens the
+    /// sync-marker chain there.
+    fn install_state_chain(&mut self) {
+        let eof = self.snapshot.len();
+        let records = self.record_count;
+        if let Some(state) = self.state.as_mut() {
+            state.confirmed_eof = eof;
+            state.confirmed_records = records;
+        }
+        self.begin_sync_chain();
     }
 
     /// Persist all preceding records and publish their clean sidecar root.
@@ -1308,10 +1572,21 @@ impl VarlitStreamWriter {
     /// for readers or changing the native file.
     pub fn compact_index(&mut self) -> Result<crate::IndexCompaction> {
         let _permit = self.ensure_writable()?;
-        let state = self.state.as_mut().ok_or(Error::StreamingUnsupported)?;
-        if state.dirty {
-            return Err(state_error(DiskIndexError::CleanStateRequired));
+        let dirty = self
+            .state
+            .as_ref()
+            .ok_or(Error::StreamingUnsupported)?
+            .dirty;
+        if dirty {
+            // Compaction rewrites the confirmed sidecar, so confirm first:
+            // synced records not yet confirmed would otherwise be left out.
+            // Unsynced records still require a sync first.
+            if self.sync_pending() {
+                return Err(state_error(DiskIndexError::CleanStateRequired));
+            }
+            self.sync_with(true)?;
         }
+        let state = self.state.as_mut().ok_or(Error::StreamingUnsupported)?;
         let result = state.store.compact().map_err(state_error);
         if result.is_err() {
             self.poison.poison();
@@ -1449,6 +1724,9 @@ impl VarlitStreamWriter {
                     self.immediate().map_err(|source| {
                         crate::immediate::appended_immediate_error(sequence, source)
                     })?;
+                    // The sync appended a marker: continue after it.
+                    next_offset = self.snapshot.len();
+                    next_sequence = self.sequence;
                 }
             }
         }
@@ -1478,6 +1756,7 @@ impl VarlitStreamWriter {
             // the sidecar; intermediate tails would be superseded inside the
             // same transaction anyway.
             let tail = (chain
+                && *block_id != crate::sync_marker::SYNC_BLOCK_ID
                 && records[index + 1..]
                     .iter()
                     .all(|(candidate, _)| candidate != block_id))
@@ -1504,15 +1783,18 @@ impl VarlitStreamWriter {
         self.poison.poison();
         match error {
             already @ Error::PublishedButIndexStale { .. } => already,
-            source => Error::PublishedButIndexStale {
-                sequence,
-                source: Box::new(source),
-            },
+            source => crate::fallible::boxed_error(
+                source,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                },
+                |source| Error::PublishedButIndexStale { sequence, source },
+            ),
         }
     }
 
     fn commit_state_chunk_inner(&mut self) -> Result<()> {
-        // STO-01: re-stamp the generation witness while its window is still
+        // re-stamp the generation witness while its window is still
         // filling. Once the window is full it is frozen for the file's life,
         // so steady-state appends pay nothing here.
         let pending = match self
@@ -1522,10 +1804,12 @@ impl VarlitStreamWriter {
         {
             Some(batch) if batch.primary_generation().len < PRIMARY_GENERATION_WINDOW => {
                 take_injected_generation_restamp_failure()?;
+                // At the batch's own frontier: during recovery replay the
+                // primary already extends past what the batch covers.
                 Some(primary_generation(
                     self.spec,
                     &self.snapshot,
-                    self.snapshot.len(),
+                    batch.working_frontier().eof,
                 )?)
             }
             _ => None,
@@ -1547,10 +1831,13 @@ impl VarlitStreamWriter {
             self.poison.poison();
             return match sequence {
                 // The staged records were already published natively.
-                Some(sequence) => Err(Error::PublishedButIndexStale {
-                    sequence,
-                    source: Box::new(state_error(error)),
-                }),
+                Some(sequence) => Err(crate::fallible::boxed_error(
+                    state_error(error),
+                    Error::ErrorContextAllocationFailed {
+                        context: crate::AllocationFailureContext::PublishedIndex { sequence },
+                    },
+                    |source| Error::PublishedButIndexStale { sequence, source },
+                )),
                 None => Err(state_error(error)),
             };
         }
@@ -1575,13 +1862,13 @@ impl VarlitStreamWriter {
     }
 
     /// Arms `count` injected native-append failures whose rollback also fails
-    /// (round 12, F-05).
+    /// (round 12, ).
     ///
     /// Fault-testing hook only. Each armed failure makes the next prepared
     /// chunk append - on either the stream or the indexed writer - behave as
     /// though the native write failed *and* the truncate-or-seek that rolls it
     /// back failed too. That pair is the one path into
-    /// `Error::WriteRollbackFailed`, and it is what F-05 proved was not
+    /// `Error::WriteRollbackFailed`, and it is what  proved was not
     /// enforced: the stream poisoned itself, the indexed writer kept a second
     /// flag that stayed clear, and the next single-record put or delete was
     /// accepted.
@@ -1610,7 +1897,7 @@ impl VarlitStreamWriter {
     /// [`crate::VarlitIndexedWriter`] — reaches the stream's mutating entry
     /// points: it must observe the one authoritative poison flag to obtain a
     /// permit, but names itself in the error so the caller is told which
-    /// writer refused. F-05 was exactly the absence of this: the layered
+    /// writer refused.  was exactly the absence of this: the layered
     /// writer kept a *second* flag and the two could disagree.
     pub(crate) fn mutation_permit(
         &mut self,
@@ -1623,6 +1910,98 @@ impl VarlitStreamWriter {
     /// it. Not reversible.
     pub(crate) fn poison(&mut self) {
         self.poison.poison();
+    }
+
+    /// Opens the sync-marker chain at the current EOF. Called once the writer
+    /// is checkpointed and its sidecar covers exactly this EOF.
+    pub(crate) fn begin_sync_chain(&mut self) {
+        self.sync_chain = Some(crate::sync_marker::SyncChain::new(self.snapshot.len()));
+    }
+
+    /// Whether anything was appended since the last sync marker.
+    pub(crate) fn sync_pending(&self) -> bool {
+        self.sync_chain
+            .as_ref()
+            .is_some_and(|chain| chain.start() != self.snapshot.len())
+    }
+
+    /// Closes the open chain link with a sync marker, if the link is not
+    /// empty. The marker is an ordinary append, so a state sidecar stages its
+    /// coverage like any other record; an indexed caller covers it itself.
+    pub(crate) fn append_sync_marker(&mut self) -> Result<Option<AppendInfo>> {
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+        let Some(chain) = self.sync_chain.as_ref() else {
+            return Ok(None);
+        };
+        let offset = self.snapshot.len();
+        if chain.start() == offset {
+            return Ok(None);
+        }
+        let payload = chain.payload(offset)?;
+        let sequence = self.next_sequence()?;
+        let record =
+            crate::file::prepare_stream_sync_record(self.spec, &payload, sequence, offset)?;
+        let info = self
+            .ensure_writable()?
+            .append_prepared(crate::sync_marker::SYNC_BLOCK_ID, record)?;
+        self.sync_chain = Some(crate::sync_marker::SyncChain::new(self.snapshot.len()));
+        Ok(Some(info))
+    }
+
+    pub(crate) const fn record_count(&self) -> u64 {
+        self.record_count
+    }
+
+    /// Prepares a matrix storage record for the next append: internal, and
+    /// rewritten in place after it lands (its payload is outside the record
+    /// checksum and the sync-marker link).
+    pub(crate) fn prepare_matrix_record(
+        &self,
+        version: u16,
+        payload: &[u8],
+    ) -> Result<PreparedStreamRecord> {
+        crate::file::prepare_stream_matrix_record(
+            self.spec,
+            version,
+            payload,
+            self.next_sequence()?,
+            self.snapshot.len(),
+        )
+    }
+
+    /// Appends a record prepared by [`Self::prepare_matrix_record`].
+    pub(crate) fn append_matrix_record(
+        &mut self,
+        record: PreparedStreamRecord,
+    ) -> Result<AppendInfo> {
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+        self.ensure_writable()?
+            .append_prepared(crate::file::MATRIX_TILE_BLOCK_ID, record)
+    }
+
+    /// Overwrites bytes inside a matrix storage record, around anchors.
+    pub(crate) fn overwrite_matrix_bytes(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .filter(|end| *end <= self.snapshot.len())
+            .ok_or(Error::InvalidMatrixLayout)?;
+        let _ = end;
+        self.file.overwrite_at(offset, bytes)
+    }
+
+    /// Reads logical bytes of this primary as they are now.
+    pub(crate) fn read_logical(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        self.snapshot.read_exact_at(offset, buf)
+    }
+
+    /// One storage barrier on the primary (data and length).
+    pub(crate) fn sync_primary_data(&mut self) -> Result<()> {
+        crate::scalable_fault_point("sync.native_sync");
+        let sync = self.file.sync_data();
+        crate::scalable_fault_point("sync.native_sync");
+        sync?;
+        Ok(())
     }
 
     pub(crate) fn next_sequence(&self) -> Result<u64> {
@@ -1646,14 +2025,23 @@ impl VarlitStreamWriter {
     }
 }
 
+/// A plain stream has no matrix engine: only the indexed (high-cardinality)
+/// writer and reader carry one, so the public stream entry points refuse a
+/// format declaring matrix blocks.
+fn refuse_matrix_stream(spec: FormatSpec) -> Result<()> {
+    if spec.has_matrix_blocks() {
+        return Err(Error::StreamingUnsupported);
+    }
+    Ok(())
+}
+
 fn stream_spec(spec: FormatSpec, options: StreamOptions, create: bool) -> Result<FormatSpec> {
     let spec = spec
         .with_resource_limits(options.limits)
         .resolve_entrypoint();
     spec.validate()?;
     let _ = create;
-    if spec.has_matrix_blocks()
-        || spec.commit_policy.is_transaction_marker()
+    if spec.commit_policy.is_transaction_marker()
         || spec.index_policy.checkpoint_on_flush
         || spec.layout.preset != LayoutPreset::VarlitNative
     {
@@ -1784,11 +2172,11 @@ fn state_chunk_records(spec: FormatSpec, batch: DiskIndexBatchOptions) -> usize 
 }
 
 /// Test-only interposition point between sidecar publication and the
-/// post-publication identity re-check (F-09), where a non-cooperating pathname
+/// post-publication identity re-check , where a non-cooperating pathname
 /// mutator would have to land to make the published sidecar stale.
 ///
 /// Armed hooks are held in a path-keyed table, and consumption removes **only**
-/// the entry whose primary matches (F-04). An earlier single-slot cell let one
+/// the entry whose primary matches. An earlier single-slot cell let one
 /// test's registration silently replace another still-armed test's hook, which
 /// made the parallel library run nondeterministic.
 #[cfg(test)]
@@ -1834,7 +2222,7 @@ pub(crate) fn set_publication_interposition(primary: &Path, hook: Box<dyn FnOnce
 
 /// Retires a sidecar that was published for a primary the pathname stopped
 /// naming during publication, and reports which of the two outcomes happened
-/// (F-09).
+///
 ///
 /// The removal is identity-checked and directory-confined, exactly like the
 /// self-test's destructive cleanup, so this can never delete a sidecar some
@@ -1883,11 +2271,61 @@ pub(crate) fn retire_sidecar_for_replaced_primary(
     }
 }
 
-fn state_error(error: crate::disk_index::DiskIndexError) -> Error {
-    match error {
-        crate::disk_index::DiskIndexError::Busy => Error::IndexBusy,
-        error => Error::DiskIndex(Box::new(error)),
+/// Advances a reader's verified tail and returns how many records it added.
+fn advance_reader_tail(
+    spec: FormatSpec,
+    tail: &mut crate::sync_marker::MarkedTail,
+    physical: &SnapshotFile,
+) -> Result<u64> {
+    let from = tail.committed();
+    if !tail.advance(spec, physical)? {
+        return Ok(0);
     }
+    let mut scanner = NativeStreamScanner::from_offset_framing_only(
+        spec,
+        physical.with_len(tail.committed())?,
+        from,
+    )?;
+    let mut added = 0u64;
+    while scanner.next_entry()?.is_some() {
+        added += 1;
+    }
+    Ok(added)
+}
+
+/// The anchor a prepared chunk reaches: the record in it that spans the
+/// anchor's logical offset.
+struct ChunkAnchors<'a> {
+    records: &'a [(u32, AppendInfo)],
+    end: u64,
+}
+
+impl crate::primary_file::AnchorSource for ChunkAnchors<'_> {
+    fn anchor(&mut self, k: u64, logical: u64) -> Result<crate::anchor::Anchor> {
+        let index = self
+            .records
+            .partition_point(|(_, info)| info.record_offset <= logical)
+            .checked_sub(1)
+            .ok_or(Error::InvalidCanonicalEncoding(
+                "anchor precedes the chunk being written",
+            ))?;
+        let info = self.records[index].1;
+        let record_end = self
+            .records
+            .get(index + 1)
+            .map_or(self.end, |(_, next)| next.record_offset);
+        Ok(crate::anchor::Anchor {
+            k,
+            logical,
+            record_start: info.record_offset,
+            record_end,
+            sequence: info.sequence,
+        })
+    }
+}
+
+fn state_error(error: crate::disk_index::DiskIndexError) -> Error {
+    crate::disk_index::index_error(error)
 }
 
 pub(crate) const fn silent_scan_options() -> ScanOptions<'static> {
@@ -1974,7 +2412,7 @@ fn create_state_store(
     crate::scalable_fault_point("create.sidecar_complete");
     let store = store?;
     drop(store);
-    // DUR2-01: the temp guard is handed to publication so an indeterminate
+    // the temp guard is handed to publication so an indeterminate
     // outcome preserves the replacement for reconciliation.
     match publish_temp_path_atomically(temporary, &sidecar)? {
         ReplaceDurability::Durable => {}
@@ -1982,17 +2420,21 @@ fn create_state_store(
             // Publication already happened: keep the published state sidecar
             // and report the pending parent-directory durability instead of
             // silently promoting it to full success.
-            return Err(Error::PublishedButParentSyncPending {
-                path: sidecar.display().to_string(),
-                source: Box::new(sync_error),
-            });
+            return Err(crate::fallible::boxed_path_error(
+                sync_error,
+                &sidecar,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::ParentSyncPending,
+                },
+                |path, source| Error::PublishedButParentSyncPending { path, source },
+            ));
         }
     }
     DiskIndexStore::open_writer_validated(&sidecar, options, metadata.identity, metadata.mode)
         .map_err(state_error)
 }
 
-/// Computes the primary generation witness for `snapshot` (STO-01).
+/// Computes the primary generation witness for `snapshot` .
 ///
 /// The witness has two independent parts:
 ///
@@ -2045,6 +2487,9 @@ pub(crate) fn primary_generation(
     // what keeps this a *generation* witness rather than a commit counter.
     // Everything the window still covers is listed on the helper.
     blank_mutable_header_bytes(&mut prefix, header_len, &extensions)?;
+    // Matrix storage records are rewritten in place for the file's life; what
+    // the window holds of their payloads is blanked like the header region.
+    blank_in_place_payloads(spec, snapshot, header_len, &mut prefix)?;
     // A primary that carries no nonce folds in a zero value *and* a zero
     // presence flag, so "carries no nonce" can never collide with "carries an
     // all-zero nonce".
@@ -2068,6 +2513,41 @@ pub(crate) fn primary_generation(
         len,
         digest: DiskIndexDigest::from_bytes(digest),
     })
+}
+
+/// Zeroes the payload bytes of in-place records inside `prefix`, a window from
+/// the start of the file. Frames headers only, up to the window's end.
+fn blank_in_place_payloads(
+    spec: FormatSpec,
+    snapshot: &SnapshotFile,
+    header_len: u64,
+    prefix: &mut [u8],
+) -> Result<()> {
+    if !spec.has_matrix_blocks() {
+        return Ok(());
+    }
+    let window = prefix.len() as u64;
+    let mut scanner =
+        NativeStreamScanner::from_offset_framing_only(spec, snapshot.clone(), header_len)?;
+    loop {
+        let entry = match scanner.next_entry() {
+            Ok(Some(entry)) if entry.record_offset < window => entry,
+            Ok(_) => break,
+            Err(Error::Io(error)) => return Err(Error::Io(error)),
+            // A window ending in a record that does not frame (yet) has no
+            // in-place payload past what was framed.
+            Err(_) => break,
+        };
+        if crate::sync_marker::rewritten_in_place(entry.block_id) {
+            let start = entry.payload_offset.min(window) as usize;
+            let end = entry
+                .payload_offset
+                .saturating_add(entry.payload_len)
+                .min(window) as usize;
+            prefix[start..end].fill(0);
+        }
+    }
+    Ok(())
 }
 
 /// Rejects a sidecar that was published against a different generation of the
@@ -2101,7 +2581,7 @@ pub(crate) fn primary_identity(
     // without the blanking one commit would make every published sidecar for
     // the file permanently unopenable.
     blank_mutable_header_bytes(&mut header, header_len, &extensions)?;
-    let object_identity = opened_file_identity(&snapshot.try_clone_file()?)?;
+    let object_identity = opened_file_identity(snapshot.try_clone_file()?.raw())?;
     let schema_hash = if spec.schema_hash == 0 {
         spec.computed_schema_hash()
     } else {
@@ -2210,7 +2690,7 @@ impl StreamMutationPermit<'_> {
     ///
     /// `permit` is consumed rather than borrowed: this method is the mutating
     /// entry point `indexed.rs` reaches for single-record puts and deletes, and
-    /// F-05 was that it performed the mutation without consulting the stream's
+    ///  was that it performed the mutation without consulting the stream's
     /// poison flag at all. The witness cannot be produced without that check.
     /// See [`writer_permit`].
     pub(crate) fn append_prepared_chunk(
@@ -2251,8 +2731,7 @@ impl StreamMutationPermit<'_> {
         // exactly 16 bytes each time: this handle is not the only writer to the
         // native file, and the other one does not move this handle's offset.
         // The records landed 16 bytes early and the file came out short.
-        self.file.seek(SeekFrom::Start(eof))?;
-        // Round 12, F-05: an armed fault makes the write fail *and* its
+        // Round 12, : an armed fault makes the write fail *and* its
         // rollback fail, which is the pair that poisons the writer below.
         // Nothing is written and nothing is truncated, so the file is exactly
         // what a real rolled-back write leaves behind.
@@ -2263,7 +2742,19 @@ impl StreamMutationPermit<'_> {
             ))
         } else {
             crate::scalable_fault_point("append.native_chunk_write");
-            let write = self.file.write_all(bytes);
+            // Positional and logical: an anchor the chunk reaches is written
+            // around it, describing the record that spans it.
+            let write = self
+                .file
+                .write_all_at(
+                    eof,
+                    bytes,
+                    &mut ChunkAnchors {
+                        records,
+                        end: new_eof,
+                    },
+                )
+                .map_err(crate::Error::into_io);
             crate::scalable_fault_point("append.native_chunk_write");
             write
         };
@@ -2280,7 +2771,7 @@ impl StreamMutationPermit<'_> {
                     )),
                 )
             } else {
-                (self.file.set_len(eof), self.file.seek(SeekFrom::Start(eof)))
+                (self.file.set_len(eof), Ok(eof))
             };
             if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
                 self.poison.poison();
@@ -2300,8 +2791,7 @@ impl StreamMutationPermit<'_> {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 let truncate_result = self.file.set_len(eof);
-                let seek_result = self.file.seek(SeekFrom::Start(eof));
-                if let Some(source) = truncate_result.err().or_else(|| seek_result.err()) {
+                if let Some(source) = truncate_result.err() {
                     self.poison.poison();
                     return Err(Error::WriteRollbackFailed {
                         operation: "append stream record",
@@ -2311,6 +2801,9 @@ impl StreamMutationPermit<'_> {
                 return Err(error);
             }
         };
+        if let Some(chain) = self.sync_chain.as_mut() {
+            chain.extend_chunk(eof, bytes, records);
+        }
         let last_sequence = records.last().expect("non-empty prepared chunk").1.sequence;
         self.sequence = last_sequence.checked_add(1);
         self.record_count = next_count;
@@ -2328,10 +2821,18 @@ impl StreamMutationPermit<'_> {
         // from here on must poison the writer.
         if let Err(error) = self.stage_state_records(records, new_eof) {
             self.poison.poison();
-            return Err(Error::PublishedButIndexStale {
-                sequence: last_sequence,
-                source: Box::new(error),
-            });
+            return Err(crate::fallible::boxed_error(
+                error,
+                Error::ErrorContextAllocationFailed {
+                    context: crate::AllocationFailureContext::PublishedIndex {
+                        sequence: last_sequence,
+                    },
+                },
+                |source| Error::PublishedButIndexStale {
+                    sequence: last_sequence,
+                    source,
+                },
+            ));
         }
         if self
             .state
@@ -2575,6 +3076,29 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_partial_record_is_an_error_for_both_cursors() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("confirmed-partial.varlit");
+        let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
+        let mut writer = VarlitStreamWriter::create(spec, &path, StreamOptions::default())?;
+        let target = writer.push_info(&TestBlock(42))?.record_offset;
+        writer.sync()?;
+        drop(writer);
+        // Open before mutation: the selected EOF has already been confirmed.
+        let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
+        let mut raw = std::fs::OpenOptions::new().write(true).open(&path)?;
+        raw.seek(SeekFrom::Start(target + 16))?;
+        raw.write_all(&9u64.to_le_bytes())?;
+        drop(raw);
+        // The sync marker after the record keeps the selected EOF past it, so
+        // the shortened record frames against marker bytes instead of running
+        // into the EOF: an error either way, whichever check reaches it first.
+        assert!(reader.events()?.any(|event| event.is_err()));
+        assert!(matches!(reader.blocks::<TestBlock>()?.next(), Some(Err(_))));
+        Ok(())
+    }
+
+    #[test]
     fn stream_writer_matches_resident_native_bytes() -> Result<()> {
         #[allow(unused_mut)]
         let mut policies = vec![
@@ -2601,7 +3125,7 @@ mod tests {
             let stream_path = directory.path().join("stream.varlit");
             let spec = spec(index_policy, commit_policy).with_integrity_policy(integrity_policy);
             let mut resident = crate::VarlitFile::create(spec, &resident_path)?;
-            // STO-01: a stream primary opens with an internal creation-nonce
+            // a stream primary opens with an internal creation-nonce
             // record, so the resident file gets an equally shaped leading
             // record. Sequences and record offsets then line up exactly and the
             // user-record region must still match byte for byte.
@@ -2672,7 +3196,7 @@ mod tests {
         batch.sync()?;
 
         assert_eq!(info.records, 100);
-        // Sequence 0 belongs to the internal creation-nonce record (STO-01).
+        // Sequence 0 belongs to the internal creation-nonce record.
         assert_eq!(info.first_sequence, Some(1));
         assert_eq!(info.last_sequence, Some(100));
         assert_eq!(info.write_calls, 7);
@@ -2686,7 +3210,7 @@ mod tests {
         let left_bytes = fs::read(left)?;
         let right_bytes = fs::read(right)?;
         assert_eq!(left_bytes.len(), right_bytes.len());
-        let mut file = File::open(left)?;
+        let mut file = std::fs::File::open(left)?;
         let header_len = crate::file::read_file_header(spec, &mut file)?;
         let nonce_record_len = crate::file::RECORD_HEADER_LEN
             + 16
@@ -2740,7 +3264,7 @@ mod tests {
     }
 
     #[test]
-    fn dirty_checkpoint_restore_truncates_without_scanning() -> Result<()> {
+    fn open_recovers_the_synced_tail_and_cuts_the_unsynced_one() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("restore.varlit");
         let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
@@ -2753,16 +3277,11 @@ mod tests {
             writer.push_info(&TestBlock(2))?;
         }
         assert!(std::fs::metadata(&path)?.len() > base_len);
-        assert!(matches!(
-            VarlitStreamWriter::open(spec, &path, StreamOptions::default()),
-            Err(Error::DiskIndex(_))
-        ));
-
-        crate::file::reset_stream_io_counters();
-        let mut writer =
-            VarlitStreamWriter::restore_checkpoint_and_open(spec, &path, StreamOptions::default())?;
+        // Open recovers instead of refusing: the synced record and its marker
+        // are kept and replayed into the state sidecar, the unsynced record is
+        // cut.
+        let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
         assert_eq!(std::fs::metadata(&path)?.len(), base_len);
-        assert_eq!(crate::file::stream_io_counters(), (0, 0, 0));
         writer.push_info(&TestBlock(3))?;
         writer.sync()?;
         drop(writer);
@@ -2801,7 +3320,7 @@ mod tests {
         Ok(())
     }
 
-    /// F-09. A pathname mutator that ignores `WriterLock` can replace the
+    /// A pathname mutator that ignores `WriterLock` can replace the
     /// primary after the pre-publication identity check and before the state
     /// sidecar is visible. The published sidecar then describes a file object
     /// the pathname no longer names, and leaving it there would displace the
@@ -2813,7 +3332,7 @@ mod tests {
     /// standing.
     #[test]
     fn bootstrap_retires_a_sidecar_published_for_a_replaced_primary() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = crate::diagnostics::private_tempdir()?;
         let path = directory.path().join("replaced-bootstrap.varlit");
         let replacement = directory.path().join("replacement.varlit");
         let spec = spec(IndexPolicy::BlockOffsetChain, CommitPolicy::RecordFooter);
@@ -2923,7 +3442,7 @@ mod tests {
         let path = directory.path().join("keyed-bypass.varlit");
         let mut writer = VarlitStreamWriter::create(keyed_spec(), &path, StreamOptions::default())?;
         // Baseline rather than a literal: a fresh primary already holds its
-        // internal creation-nonce record (STO-01). The contract under test is
+        // internal creation-nonce record. The contract under test is
         // that the rejected calls append nothing on top of it.
         let baseline = writer.checkpoint().record_count;
         assert!(matches!(
@@ -3015,9 +3534,10 @@ mod tests {
         }
         {
             let mut writer = VarlitStreamWriter::open(spec, &path, StreamOptions::default())?;
-            // Sequence 0 belongs to the internal creation-nonce record, so the
-            // 129th user append carries sequence 129 (STO-01).
-            assert_eq!(writer.push_info(&TestBlock(128))?.sequence, 129);
+            // Sequence 0 belongs to the internal creation-nonce record and
+            // sequence 129 to the sync marker after the first 128 appends, so
+            // the 129th user append carries sequence 130.
+            assert_eq!(writer.push_info(&TestBlock(128))?.sequence, 130);
             writer.sync()?;
         }
         let reader = VarlitStreamReader::open(spec, &path, StreamOptions::default())?;
@@ -3029,12 +3549,117 @@ mod tests {
         Ok(())
     }
 
+    /// A variable payload large enough to exercise the bulk vector codec.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct SamplesBlock(Vec<u16>);
+
+    impl VarlitEncode for SamplesBlock {
+        const WIRE_TYPE: WireType = WireType::Seq;
+
+        fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
+            self.0.encode_varlit(encoder)
+        }
+    }
+
+    impl VarlitDecode for SamplesBlock {
+        const WIRE_TYPE: WireType = WireType::Seq;
+
+        fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
+            Ok(Self(Vec::<u16>::decode_varlit(decoder)?))
+        }
+    }
+
+    impl VarlitBlock for SamplesBlock {
+        const ID: u32 = 17;
+        const VERSION: u16 = 1;
+        const KIND: BlockKind = BlockKind::Variable;
+        const ENDIAN: Option<Endian> = None;
+        const IS_KEYED: bool = false;
+        const SCHEMA_FINGERPRINT: u64 = 0x5354_5245_414D_0117;
+    }
+
+    /// In-place staging must produce exactly the bytes of the owning form,
+    /// whatever already sits in the chunk buffer.
+    #[test]
+    fn in_place_record_staging_matches_the_owning_form() -> Result<()> {
+        for policy in [IndexPolicy::ScanOnOpen, IndexPolicy::BlockOffsetChain] {
+            let spec = spec(policy, CommitPolicy::None);
+            let value = SamplesBlock((0..5000u16).map(|v| v.wrapping_mul(31)).collect());
+            for prefix in [0usize, 1, 333] {
+                let mut out = vec![0xEE; prefix];
+                let parts = prepare_stream_user_record_into(
+                    spec,
+                    &value,
+                    9,
+                    4096,
+                    Some(64),
+                    None,
+                    &mut out,
+                )?;
+                let owned = prepare_stream_user_record(spec, &value, 9, 4096, Some(64), None)?;
+                assert_eq!(&out[..prefix], &vec![0xEE; prefix][..]);
+                assert_eq!(&out[prefix..], &owned.bytes[..]);
+                assert_eq!(parts.len, owned.bytes.len());
+                assert_eq!(parts.checksum, owned.checksum);
+                assert_eq!(parts.info, owned.info);
+            }
+            let small = TestBlock(7);
+            let mut out = vec![1, 2, 3];
+            prepare_stream_user_record_into(spec, &small, 1, 100, None, None, &mut out)?;
+            let owned = prepare_stream_user_record(spec, &small, 1, 100, None, None)?;
+            assert_eq!(&out[3..], &owned.bytes[..]);
+        }
+        Ok(())
+    }
+
+    /// An over-limit payload is refused like the owning form and leaves the
+    /// chunk buffer exactly as it was.
+    #[test]
+    fn in_place_record_staging_restores_the_buffer_on_a_limit_failure() -> Result<()> {
+        let value = SamplesBlock(vec![5; 100]);
+        let logical = 8 + 2 * 100;
+        for limit in [0u64, 7, 8, 100, logical - 1, logical] {
+            let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None)
+                .with_resource_limits(ReadLimits::MISSING.with_max_logical_payload_len(limit));
+            let mut out = vec![9u8; 40];
+            let staged = prepare_stream_user_record_into(spec, &value, 1, 0, None, None, &mut out);
+            let owned = prepare_stream_user_record(spec, &value, 1, 0, None, None);
+            match (staged, owned) {
+                (Ok(_), Ok(owned)) => {
+                    assert_eq!(limit, logical);
+                    assert_eq!(&out[40..], &owned.bytes[..]);
+                }
+                (
+                    Err(Error::LimitExceeded {
+                        actual: a,
+                        limit: la,
+                        resource: ra,
+                    }),
+                    Err(Error::LimitExceeded {
+                        actual: b,
+                        limit: lb,
+                        resource: rb,
+                    }),
+                ) => {
+                    assert_eq!((a, la, ra), (b, lb, rb), "limit {limit}");
+                    assert_eq!(out, vec![9u8; 40], "buffer must be restored");
+                }
+                (staged, owned) => panic!(
+                    "limit {limit}: staged {:?} vs owned {:?}",
+                    staged.err(),
+                    owned.err()
+                ),
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn non_increasing_sequences_are_streaming_unsupported() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("sequence.varlit");
         let spec = spec(IndexPolicy::ScanOnOpen, CommitPolicy::None);
-        let mut file = File::create(&path)?;
+        let mut file: crate::primary_file::PrimaryFile = std::fs::File::create(&path)?.into();
         write_file_header(spec, &mut file)?;
         let first_offset = file.stream_position()?;
         let first = prepare_stream_user_record(spec, &TestBlock(1), 4, first_offset, None, None)?;

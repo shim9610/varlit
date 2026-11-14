@@ -3,9 +3,10 @@
 ## Supported versions
 
 Reports are accepted for the current `main` branch and the latest repository
-release. Older releases are not actively maintained. Code on `main` can be
-unreleased; use the release notes and known limitations when evaluating it.
-Varlit has not yet been published to crates.io.
+release. Older releases are not actively maintained. Use the release notes and
+known limitations for the version or commit being evaluated.
+Varlit is published on [crates.io](https://crates.io/crates/varlit). Fixes on
+`main` reach registry users only after a new crate version is published.
 
 ## Reporting a vulnerability
 
@@ -30,6 +31,106 @@ records during recovery, memory safety errors, and incorrect file-object handlin
 Format declarations and user-provided codecs are trusted application code.
 Documented mmap mutation exclusions and experimental feature limitations still
 apply; see [known limitations](docs/known-limitations.md).
+
+## Explicit trusted read policy
+
+The read-policy and fallible-ownership APIs below are available in 0.13.0;
+see the [upgrade notes](docs/api-changes.md#0130).
+
+`ReadLimits::with_read_validation` independently selects optional data CRC and
+additional structural consistency checks. Ordinary opens retain their existing
+checks. `ReadValidation::TRUSTED` trusts captured file metadata and skips those
+optional checks; wrong but well-formed data may then be returned if that trust
+is violated. Retained checks return errors, but skipped damage is not guaranteed
+to be detected. Snapshot bounds, checked arithmetic, resource/decoder limits,
+finite traversal and committed-publication guards remain in force. This is not a
+process-wide OOM guarantee. Protocol/generation checksums and standalone container
+checks are distinct from optional record/cell CRCs. See the
+[read-policy contract](docs/design/read-validation-policy-review.md).
+
+## Mapped files and external modification
+
+Memory mapping (`mmap`) is not isolation from another handle or process that
+writes or truncates the same file object. Keep mapped backing bytes stable for
+the lifetime of the view and all borrowed references. An advisory writer lock
+only coordinates cooperating writers. CRC checks detect corruption when checked;
+they neither prevent later writes nor authenticate the file.
+
+A coordinated append-only writer may coexist with fixed-length
+`mmap_payload_window` views or `mmap_payloads` snapshots of already confirmed
+records. Every mapped record must remain unchanged and valid: exclude truncation,
+replacement, compaction and layout operations that rewrite those records. New
+appends do not enlarge an existing mapping. Having one writer alone does not
+establish these conditions.
+
+An external truncate can make a mapped page inaccessible and cause an operating
+system fault such as `SIGBUS`, rather than a recoverable Rust error. External
+writes can invalidate previously checked contents; mutation while a zero-copy
+reference is live violates the existing unsafe API's immutability requirements.
+The documented layout and immutability conditions on `raw_fixed` and `raw_cell`
+still apply. Supported Varlit publication/snapshot operations do not authorize
+uncoordinated in-place modification or truncation by other software. Use owned
+reads when the application cannot maintain the mapped-file lifetime contract;
+owned reads still need a coherent input and do not make concurrent external
+writes transactionally consistent.
+
+## Allocation refusal and ownership
+
+`TryClone` and `try_box` report refused allocations on their supported paths.
+Internal shared owners and copy-on-write page separation also return errors;
+`ScanCancellationToken::try_new` provides a fallible constructor. Existing public
+`Clone`, `new`/`default` and convenience builders retain their original contracts.
+This does not establish process-wide OOM freedom: `BTreeMap`, other unaudited
+allocations, application callbacks, allocator aborts and OS OOM kills remain
+outside this scope. See [allocation limitations](docs/known-limitations.md#72-some-allocations-abort-instead-of-returning-an-error).
+
+When detailed error allocation fails after publication, inspect
+`Error::ErrorContextAllocationFailed` and its `AllocationFailureContext` before
+retrying: an append may already be visible or publication may be uncertain.
+Durable matrix writes reserve their existing error/event boxes before mutation.
+
+## Private spill storage
+
+Disposable row directories, rewrite metadata, merge bytes and scratch indexes
+use `VARLIT_SPILL_DIR` when set, otherwise the platform temporary directory
+(including `TMPDIR` where supported). The selected directory must already exist
+and be writable. An invalid explicit selection returns an error; it does not
+silently fall back to another volume. Set process environment configuration
+before opening handles/starting worker threads. Each spill file captures its
+policy when created.
+
+`VARLIT_SPILL_MAX_BYTES` optionally limits the logical length of **each** private
+spill file, in unsigned decimal bytes. Unset means no additional capacity cap;
+`0` refuses nonempty spills. A write beyond the chosen limit returns a storage-full
+I/O error before that write, retaining existing authoritative state. This is not
+an aggregate process/directory quota or a promise of available free space. Use a
+filesystem/project quota or a dedicated volume for an aggregate capacity policy;
+concurrent files, allocation granularity and other users of the volume also
+consume space. Genuine filesystem-full and partial-write errors still propagate.
+
+This policy does not cap database size or require spills beside the database.
+`STANDARD` intentionally permits very large total files and scan workloads.
+A hostile but admissible file can therefore consume substantial CPU, I/O and
+temporary storage even while working buffers stay bounded. Applications accepting
+untrusted files should select work limits, concurrent-job budgets and aggregate
+storage quotas for their environment before opening or explicitly scanning them.
+Strict lazy open never substitutes a full scan after a metadata error; select
+`*_lazy_or_scan` only when automatic reconstruction is intended.
+Publication/replacement files that must be atomically renamed remain beside their
+destination and are outside this disposable-spill policy. Temporary storage on
+`tmpfs` consumes system memory that process resident-set size (RSS) does not fully
+reflect. Choose a disk-backed directory when that distinction matters.
+
+## Vendored advisory coverage
+
+Lockfile-based `cargo audit` and `cargo deny` do not match a local path package
+itself against registry advisories. The required supply-chain job also runs
+`scripts/check_vendored_advisories.py`, which derives the actual names/versions
+from `vendor/*/Cargo.toml` and audits temporary registry identities. Its synthetic
+advisory control verifies that an affected redb identity fails and a patched
+version passes. This neither replaces the lockfile audits nor certifies local
+patches: vendored redb 4.4.0 remains a development-only oracle, and its local
+snapshot extension still needs source review and tests.
 
 PR checks include native platform tests, dependency/license policy, Rust/Python/
 Actions CodeQL analysis, Miri, ASan and a bounded fuzz smoke run. CodeQL's

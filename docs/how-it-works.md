@@ -243,7 +243,8 @@ helpers.
 
 ```rust
 let users = reader.users()?;
-let user = users.get(&7)?;
+let mut user = User::empty();
+let found = users.get(&7, &mut user)?;
 ```
 
 For repeated keys, keyed lookup returns the newest record by sequence. For

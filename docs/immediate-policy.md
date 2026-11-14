@@ -90,16 +90,27 @@ transaction itself must become committed and durable.
 
 ## Scalable commit and recovery order
 
-1. Before the first mutation after a clean boundary, durably save the clean
-   rollback checkpoint and mark the generation Dirty. This recovery marker is
-   separate from confirmed heads; ordinary appends are not yet
-   acknowledged as durable by it.
+1. Before the first mutation after a clean boundary, save the clean rollback
+   checkpoint and mark the generation Dirty. This marker is not a barrier: a
+   crash that loses it leaves the newest durable state clean with the native
+   file longer than it covers, which is recovered by restore exactly as a
+   surviving Dirty checkpoint is.
 2. Write native chunks and append bounded sidecar working checkpoints without
    a durability barrier. A native chunk does not force an index commit; index
    record/byte bounds, API-end publication and explicit boundaries do.
 3. At `immediate()` / `sync()`, finish the pending index batch, sync the native
-   file, append and sync the clean checkpoint, then publish and individually sync
-   both confirmed heads. The previous rollback checkpoint is retired logically.
+   file, append the clean checkpoint and write one confirmed head, then sync the
+   sidecar once. The head (`VIXHEAD2`) names the checksum of every sidecar byte
+   appended since the previous confirmed checkpoint, so a head that reached
+   storage without its generation is skipped for the other confirmed slot, which
+   this publication never overwrites. After the barrier the head is copied into
+   the other slot without a barrier of its own; the next barrier persists it, so
+   a completed generation keeps two head copies. A generation whose two copies
+   both name it but whose bytes fail the checksum is damaged durable data and is
+   refused, never rolled back.
+
+One `sync()` therefore costs two storage barriers: the native file and the
+sidecar. A writer open adds one sidecar sync when the two confirmed heads differ.
 
 `flush()` does not request a new durable clean generation. Creating/rebuilding
 a sidecar and establishing a rollback checkpoint still perform required safety

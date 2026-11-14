@@ -114,7 +114,7 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
     });
     // Per-block schema identities folded into the computed schema hash:
     // endian override, keyedness, and the generated codec fingerprint
-    // (API2-01). `BlockDescriptor` alone does not carry these.
+    // `BlockDescriptor` alone does not carry these.
     let block_identities = blocks.iter().map(|block| {
         quote! {
             (
@@ -123,6 +123,17 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 <#block as ::varlit::__core::VarlitBlock>::IS_KEYED,
                 <#block as ::varlit::__core::VarlitBlock>::SCHEMA_FINGERPRINT,
             )
+        }
+    });
+    let record_validators = blocks.iter().map(|block| {
+        let requires_disk = inline_blocks.iter().any(|inline| {
+            matches!(inline.key_index, KeyIndexChoice::Disk)
+                && matches!(block, Type::Path(path) if path.qself.is_none() && path.path.get_ident() == Some(&inline.name))
+        });
+        if requires_disk {
+            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR.requiring_disk_index())
+        } else {
+            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR)
         }
     });
 
@@ -660,6 +671,66 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 Self::spec().open_readonly(path)
             }
 
+            /// Reads an entry's stored payload through the pathname, with
+            /// this format compiled in. Path-based and non-snapshot: prefer
+            /// an opened reader.
+            pub fn read_payload<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_payload(Self::spec(), path.as_ref())
+            }
+
+            /// [`Self::read_payload`] under an allocation ceiling.
+            pub fn read_payload_limited<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                limit: u64,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_payload_limited(Self::spec(), path.as_ref(), limit)
+            }
+
+            /// Reads and decodes an entry's logical payload through the
+            /// pathname, with this format compiled in. Path-based and
+            /// non-snapshot: prefer an opened reader.
+            pub fn read_logical_payload<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(Self::spec(), path.as_ref(), u64::MAX, u64::MAX)
+            }
+
+            /// [`Self::read_logical_payload`] under separate stored and
+            /// logical allocation ceilings.
+            pub fn read_logical_payload_limited<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                physical_limit: u64,
+                logical_limit: u64,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(
+                    Self::spec(),
+                    path.as_ref(),
+                    physical_limit,
+                    logical_limit,
+                )
+            }
+
+            /// [`Self::read_logical_payload`] with runtime resource limits
+            /// overlaid on this format's compiled ones.
+            pub fn read_logical_payload_with_resource_limits<P: AsRef<::std::path::Path>>(
+                entry: &::varlit::__core::RecordIndexEntry,
+                path: P,
+                limits: ::varlit::__core::ResourceLimits,
+            ) -> ::varlit::__core::Result<::std::vec::Vec<u8>> {
+                entry.__read_logical_payload_limited(
+                    Self::spec().with_resource_limits(limits),
+                    path.as_ref(),
+                    u64::MAX,
+                    u64::MAX,
+                )
+            }
+
             pub fn open_readonly_with_limits<P: AsRef<::std::path::Path>>(
                 path: P,
                 limits: ::varlit::__core::ReadLimits,
@@ -886,6 +957,24 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 path: P,
             ) -> ::varlit::__core::FormatDiagnostics {
                 Self::spec().diagnose_file(path)
+            }
+
+            /// Explicitly checks a quiescent file with every declared block type.
+            /// Missing coverage cannot pass. See `FileCheckReport` for scope
+            /// and external callback/file-stability preconditions.
+            pub fn check_file<P: AsRef<::std::path::Path>>(
+                path: P,
+            ) -> ::varlit::__core::Result<::varlit::__core::FileCheckReport> {
+                Self::check_file_with_resource_limits(path, Self::spec().read_limits)
+            }
+
+            /// Checks with explicit finite runtime limits. Stored CRC and
+            /// structural checks remain required regardless of read policy.
+            pub fn check_file_with_resource_limits<P: AsRef<::std::path::Path>>(
+                path: P,
+                limits: ::varlit::__core::ResourceLimits,
+            ) -> ::varlit::__core::Result<::varlit::__core::FileCheckReport> {
+                ::varlit::__core::check_file(Self::spec().with_resource_limits(limits), path, &[#(#record_validators,)*])
             }
 
             pub fn self_test<P: AsRef<::std::path::Path>>(
@@ -1171,6 +1260,16 @@ pub(super) fn commit_tokens(choice: CommitChoice) -> TokenStream2 {
                 ::varlit::__core::TransactionMarkerMode::Explicit
             )
         },
+        CommitChoice::TransactionMarkerOnFlushSingleBarrier => quote! {
+            ::varlit::__core::CommitPolicy::TransactionMarker(
+                ::varlit::__core::TransactionMarkerMode::OnFlushSingleBarrier
+            )
+        },
+        CommitChoice::TransactionMarkerExplicitSingleBarrier => quote! {
+            ::varlit::__core::CommitPolicy::TransactionMarker(
+                ::varlit::__core::TransactionMarkerMode::ExplicitSingleBarrier
+            )
+        },
     }
 }
 
@@ -1301,6 +1400,7 @@ pub(super) fn matrix_spec_tokens(
                 dimensions: [#first, #second],
                 category: #category,
                 slot_stride: <#ty as ::varlit::__core::VarlitMatrixBlock>::SLOT_STRIDE,
+                tile: <#ty as ::varlit::__core::VarlitMatrixBlock>::TILE,
             }
         }
     });
@@ -1497,11 +1597,16 @@ pub(super) fn inline_block_tokens(
             .map(|dim| matrix_storage_dimension_name(dim, dims).unwrap_or_else(|| dim.to_string()));
         let category = meta.category.to_string();
         let stride = matrix_slot_stride_tokens(&block.fields);
+        let tile = match meta.tile {
+            Some([rows, cols]) => quote!([#rows, #cols]),
+            None => quote!(::varlit::__core::matrix_default_tile(#stride)),
+        };
         quote! {
             impl ::varlit::__core::VarlitMatrixBlock for #name {
                 const DIMENSIONS: [&'static str; 2] = [#(#matrix_dims,)*];
                 const CATEGORY: &'static str = #category;
                 const SLOT_STRIDE: u64 = #stride;
+                const TILE: [u64; 2] = #tile;
             }
         }
     } else {
@@ -1796,7 +1901,7 @@ pub(super) fn layout_header_typed_tokens(
                 path: P,
                 header: #fields_name,
             ) -> ::varlit::__core::Result<#writer_name> {
-                let fields = header.__varlit_layout_values();
+                let fields = header.__varlit_layout_values()?;
                 ::core::result::Result::Ok(#writer_name::from_inner(
                     Self::spec().create_layout_writer_with_header(path, &fields)?
                 ))
@@ -1915,8 +2020,8 @@ pub(super) fn layout_writer_segment_method_tokens(
             &mut self,
             segment: #write_type<'_>,
         ) -> ::varlit::__core::Result<#info_type> {
-            let fields = segment.fields.__varlit_layout_values();
-            let footer_fields = segment.footer_fields.__varlit_layout_values();
+            let fields = segment.fields.__varlit_layout_values()?;
+            let footer_fields = segment.footer_fields.__varlit_layout_values()?;
             let info = self.inner.write_segment(::varlit::__core::SegmentWrite {
                 name: #segment_name,
                 fields: &fields,
@@ -1938,8 +2043,8 @@ pub(super) fn layout_writer_segment_method_tokens(
             M: FnOnce(&mut dyn ::std::io::Write) -> ::varlit::__core::Result<()>,
             R: FnOnce(&mut dyn ::std::io::Write) -> ::varlit::__core::Result<()>,
         {
-            let fields = fields.__varlit_layout_values();
-            let footer_fields = footer_fields.__varlit_layout_values();
+            let fields = fields.__varlit_layout_values()?;
+            let footer_fields = footer_fields.__varlit_layout_values()?;
             let info = self.inner.write_segment_streamed(::varlit::__core::SegmentWriteStream {
                 name: #segment_name,
                 fields: &fields,
@@ -2051,8 +2156,8 @@ pub(super) fn layout_field_struct_tokens(
             #vis struct #name;
 
             impl #name {
-                fn __varlit_layout_values(&self) -> ::std::vec::Vec<::varlit::__core::LayoutFieldValue> {
-                    ::std::vec::Vec::new()
+                fn __varlit_layout_values(&self) -> ::varlit::__core::Result<::std::vec::Vec<::varlit::__core::LayoutFieldValue>> {
+                    ::core::result::Result::Ok(::std::vec::Vec::new())
                 }
             }
         };
@@ -2063,6 +2168,7 @@ pub(super) fn layout_field_struct_tokens(
         let ty = layout_field_rust_type_tokens(&field.ty);
         quote!(pub #field_name: #ty,)
     });
+    let field_count = caller_fields.len();
     let value_entries = caller_fields.iter().map(|field| {
         let field_name = &field.name;
         let field_name_string = field.name.to_string();
@@ -2082,10 +2188,14 @@ pub(super) fn layout_field_struct_tokens(
         }
 
         impl #name {
-            fn __varlit_layout_values(&self) -> ::std::vec::Vec<::varlit::__core::LayoutFieldValue> {
-                vec![
-                    #(#value_entries,)*
-                ]
+            fn __varlit_layout_values(&self) -> ::varlit::__core::Result<::std::vec::Vec<::varlit::__core::LayoutFieldValue>> {
+                let mut values = ::std::vec::Vec::new();
+                values.try_reserve_exact(#field_count).map_err(|_| ::varlit::__core::Error::AllocationFailed {
+                    resource: "generated layout fields",
+                    requested: (#field_count * ::core::mem::size_of::<::varlit::__core::LayoutFieldValue>()) as u64,
+                })?;
+                #(values.push(#value_entries);)*
+                ::core::result::Result::Ok(values)
             }
         }
     }
@@ -2155,7 +2265,7 @@ pub(super) fn layout_field_to_value_tokens(
 ) -> TokenStream2 {
     match field.ty {
         LayoutFieldTypeChoice::Bytes(_) => {
-            quote!(::varlit::__core::LayoutValue::Bytes(#access.clone()))
+            quote!(::varlit::__core::LayoutValue::Bytes(::varlit::__core::TryClone::try_clone(&#access)?))
         }
         LayoutFieldTypeChoice::U8 => quote!(::varlit::__core::LayoutValue::U8(#access)),
         LayoutFieldTypeChoice::U16 => quote!(::varlit::__core::LayoutValue::U16(#access)),
@@ -2442,8 +2552,9 @@ pub(super) fn high_cardinality_api_tokens(
             pub fn #get(
                 &self,
                 key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
-            ) -> ::varlit::__core::Result<::core::option::Option<#ty>> {
-                self.inner.get::<#ty>(key)
+                out: &mut #ty,
+            ) -> ::varlit::__core::Result<bool> {
+                self.inner.get::<#ty>(key, out)
             }
         }
     });
@@ -2559,7 +2670,7 @@ pub(super) fn high_cardinality_api_tokens(
                 #(#indexed_block_descriptors),*
             ];
             ::varlit::__core::DiskIndexPlan::canonical(Self::spec(), BLOCKS)
-                .map_err(|error| ::varlit::__core::Error::DiskIndex(::std::boxed::Box::new(error)))
+                .map_err(::varlit::__core::Error::from)
         }
 
         pub fn open_indexed_reader<P: AsRef<::std::path::Path>>(
@@ -2711,6 +2822,57 @@ pub(super) fn high_cardinality_api_tokens(
                 self.inner.verify_all_with_progress(scan, observer)
             }
 
+            pub fn lookup_entry<T>(
+                &self,
+                key: &T::Key,
+            ) -> ::varlit::__core::Result<::core::option::Option<::varlit::__core::RecordIndexEntry>>
+            where
+                T: ::varlit::__core::VarlitKeyedBlock,
+                T::Key: ::varlit::__core::VarlitDiskKey,
+            {
+                self.inner.lookup_entry::<T>(key)
+            }
+
+            pub fn read_record_into(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_record_into(entry, out)
+            }
+
+            pub fn read_record_from(
+                &self,
+                cursor: ::varlit::__core::RecordCursor,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_record_from(cursor, out)
+            }
+
+            pub fn view_block<T: ::varlit::__core::VarlitView>(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+            ) -> ::varlit::__core::Result<T::View> {
+                self.inner.view_block::<T>(entry)
+            }
+
+            pub fn read_span_into(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                span: ::varlit::__core::FieldSpan,
+                out: &mut [u8],
+            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
+                self.inner.read_span_into(entry, span, out)
+            }
+
+            pub fn decode_field<F: ::varlit::__core::VarlitDecode>(
+                &self,
+                entry: &::varlit::__core::RecordIndexEntry,
+                span: ::varlit::__core::FieldSpan,
+            ) -> ::varlit::__core::Result<F> {
+                self.inner.decode_field::<F>(entry, span)
+            }
+
             #(#indexed_scan_methods)*
             #(#indexed_reader_methods)*
         }
@@ -2764,7 +2926,7 @@ pub(super) fn high_cardinality_api_tokens(
     )
 }
 
-/// Rustdoc for a generated typed writer (P-01).
+/// Rustdoc for a generated typed writer.
 ///
 /// The resident writer is the convenient default, and for a format whose
 /// distinct key count is large it is the wrong tool. The published pages are
@@ -2820,7 +2982,7 @@ pub(super) fn generated_writer_doc(format_name: &Ident, keyed_blocks: &[&InlineB
     )
 }
 
-/// Rustdoc for the generated writer's `from_inner` (P-01).
+/// Rustdoc for the generated writer's `from_inner` .
 pub(super) fn generated_writer_construction_doc(keyed_blocks: &[&InlineBlock]) -> String {
     if keyed_blocks.is_empty() {
         return "Wraps an open `VarlitWriter`. This format declares no keyed \
@@ -2868,7 +3030,7 @@ pub(super) fn typed_api_tokens(
         .filter(|block| !block.key_fields.is_empty())
         .copied()
         .collect();
-    // F-01: the writer owns no keyed tail state of its own. Every keyed
+    // the writer owns no keyed tail state of its own. Every keyed
     // mutation routes through the byte-keyed resident cache inside
     // `VarlitFile`, so the only step after an authoritative append is an
     // insert into a `HashMap<Vec<u8>, u64>` slot reserved before it - no
@@ -2889,7 +3051,7 @@ pub(super) fn typed_api_tokens(
     } else {
         quote!(mut inner)
     };
-    // P-01, documentation only. Construction primes one keyed-tail map per
+    // documentation only. Construction primes one keyed-tail map per
     // keyed block type and each priming pass walks the whole resident index,
     // so the cost is Theta(M*N) and the retained cache can reach roughly
     // M * `keyed_tail` because that ceiling is per block id, not per file.
@@ -3066,8 +3228,9 @@ pub(super) fn typed_api_tokens(
             /// Reads a block out of the editable header region.
             pub fn read_header_block<T: ::varlit::__core::VarlitBlock>(
                 &self,
-            ) -> ::varlit::__core::Result<::core::option::Option<T>> {
-                self.inner.read_header_block::<T>()
+                out: &mut T,
+            ) -> ::varlit::__core::Result<bool> {
+                self.inner.read_header_block::<T>(out)
             }
 
             /// Writes a block into the editable header region, replacing any
@@ -3306,8 +3469,8 @@ pub(super) fn matrix_reader_methods(
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)
                 }
 
-                pub fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty> {
-                    self.inner.read_matrix_cell::<#ty>(key.into())
+                pub fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()> {
+                    self.inner.read_matrix_cell::<#ty>(key.into(), out)
                 }
 
                 pub fn #status(
@@ -3324,7 +3487,7 @@ pub(super) fn matrix_reader_methods(
                 fn #column_bytes(&self, start: #key_ty, out: &mut [u8]) -> ::varlit::__core::Result<()>;
                 fn #row(&self, first_axis: u64, out: &mut [#ty]) -> ::varlit::__core::Result<()>;
 
-                fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty>;
+                fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()>;
 
                 fn #status(
                     &self,
@@ -3348,8 +3511,8 @@ pub(super) fn matrix_reader_methods(
                     self.inner.read_matrix_row_into::<#ty>(first_axis, out)
                 }
 
-                fn #method(&self, key: #key_ty) -> ::varlit::__core::Result<#ty> {
-                    self.inner.read_matrix_cell::<#ty>(key.into())
+                fn #method(&self, key: #key_ty, out: &mut #ty) -> ::varlit::__core::Result<()> {
+                    self.inner.read_matrix_cell::<#ty>(key.into(), out)
                 }
 
                 fn #status(
@@ -3656,11 +3819,27 @@ pub(super) fn reader_block_methods(
     let mut methods: Vec<(TokenStream2, TokenStream2)> = Vec::new();
 
     if block.key_fields.is_empty() {
+        let plural_from = quote::format_ident!("{}_from", plural);
         methods.push((
             quote! {
-                #vis fn #plural(&self) -> ::varlit::__core::Result<::varlit::__core::BlockVec<#ty>>
+                #vis fn #plural(
+                    &self,
+                    payload: &mut ::std::vec::Vec<u8>,
+                    out: &mut [#ty],
+                ) -> ::varlit::__core::Result<::varlit::__core::Page>
             },
-            quote! { { self.inner.blocks::<#ty>() } },
+            quote! { { self.inner.blocks::<#ty>(payload, out) } },
+        ));
+        methods.push((
+            quote! {
+                #vis fn #plural_from(
+                    &self,
+                    from: ::varlit::__core::PageCursor,
+                    payload: &mut ::std::vec::Vec<u8>,
+                    out: &mut [#ty],
+                ) -> ::varlit::__core::Result<::varlit::__core::Page>
+            },
+            quote! { { self.inner.blocks_from::<#ty>(from, payload, out) } },
         ));
         methods.push((
             quote! {
@@ -3760,7 +3939,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
             index: usize,
             value: &#ty,
         ) -> ::varlit::__core::Result<::varlit::__core::ReplacementInfo> {
-            // F-01: a successful replacement republishes the file generation
+            // a successful replacement republishes the file generation
             // and moves record offsets, and the file invalidates its own
             // keyed-tail cache when it rebinds. There is nothing left to
             // translate here, so no fallible step follows the publication.
@@ -3787,7 +3966,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
                     &mut self,
                     value: &#ty,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: the maintained keyed append. The predecessor comes
+                    // the maintained keyed append. The predecessor comes
                     // from - and the new tail goes into - the byte-keyed
                     // resident cache, whose slot is charged and reserved
                     // before the append and filled afterwards by an insert
@@ -3800,7 +3979,7 @@ pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {
                     &mut self,
                     key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: see the push path. The key is encoded once, before
+                    // see the push path. The key is encoded once, before
                     // the tombstone, and those same canonical bytes are both
                     // the record payload and the cache key, so nothing owned
                     // by the caller's key type is cloned, hashed or compared
@@ -3887,7 +4066,7 @@ pub(super) fn writer_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2
                     &mut self,
                     value: &#ty,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: the trait route carries its own copy of the body,
+                    // the trait route carries its own copy of the body,
                     // so it routes through the same single implementation as
                     // the inherent method.
                     self.inner.push_keyed_info(value)
@@ -3898,7 +4077,7 @@ pub(super) fn writer_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2
                     &mut self,
                     key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
                 ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    // F-01: see the inherent `delete_<block>` method.
+                    // see the inherent `delete_<block>` method.
                     self.inner.delete_info::<#ty>(key)
                 }
             },

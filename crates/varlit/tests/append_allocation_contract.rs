@@ -1,4 +1,4 @@
-// F-52/F-04 — the payload copy every append paid, on every default spec.
+// Allocation contract for borrowed append payloads.
 //
 // `prepare_user_record_payload` returned an owned `StoredPayload { bytes:
 // Vec<u8> }`, and `uncompressed_user_payload` filled it with
@@ -338,7 +338,20 @@ fn the_written_bytes_are_unchanged() -> varlit::Result<()> {
         }
         file.flush()?;
     }
-    let bytes = std::fs::read(&*path)?;
+    let mut bytes = std::fs::read(&*path)?;
+    // The one byte anchors changed: the header flags now record the default
+    // anchor policy (anchored, 4 KiB holes, 4 MiB spacing). A 9.7 KB file
+    // reaches no anchor, so with that byte reset everything else must still
+    // be the stream measured before.
+    let flags = bytes
+        .windows(5)
+        .position(|window| window == b"VARVE")
+        .expect("a native header")
+        + b"VARVE1".len()
+        + 2
+        + 1;
+    assert_eq!(bytes[flags], 0x80 | (22 - 10));
+    bytes[flags] = 0;
     assert_eq!(
         (bytes.len() as u64, fnv1a(&bytes)),
         (PLAIN_IDENTITY_LEN, PLAIN_IDENTITY_HASH),

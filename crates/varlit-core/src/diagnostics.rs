@@ -194,6 +194,7 @@ impl FormatSelfTestReport {
 type Probe = Box<dyn Fn(&mut VarlitFile) -> Result<()> + 'static>;
 
 struct SelfTestCase {
+    value_block: Option<u32>,
     name: String,
     write: Option<Probe>,
     read: Option<Probe>,
@@ -239,14 +240,34 @@ impl FormatSelfTest {
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("block {} ordinal {}", T::ID, ordinal),
             write: Some(Box::new(move |file| {
                 file.push(&write_value)?;
                 Ok(())
             })),
             read: Some(Box::new(move |file| {
-                let actual = file.blocks::<T>()?.get(ordinal)?;
-                if actual.as_ref() == Some(&expected) {
+                // One-slot pages, walked to the `ordinal`-th record of `T`.
+                let mut slot = [expected.clone()];
+                let mut payload = Vec::new();
+                let mut page = file.blocks::<T>(&mut payload, &mut slot)?;
+                let mut seen = 0usize;
+                let found = loop {
+                    if page.filled == 1 {
+                        if seen == ordinal {
+                            break true;
+                        }
+                        seen += 1;
+                    }
+                    match page.next {
+                        Some(next) => {
+                            page = file.blocks_from::<T>(next, &mut payload, &mut slot)?
+                        }
+                        None => break false,
+                    }
+                };
+                let [actual] = slot;
+                if found && actual == expected {
                     Ok(())
                 } else {
                     Err(Error::InvalidFormatSpec(
@@ -263,24 +284,26 @@ impl FormatSelfTest {
         T: VarlitKeyedBlock + Clone + PartialEq + Debug + 'static,
         T::Key: Debug,
     {
-        // API2-03: compile-time keyedness contract; the self-test write/read
+        // compile-time keyedness contract; the self-test write/read
         // closures below rely on `T` being genuinely keyed.
         let () = crate::traits::KeyedBlockContract::<T>::OK;
         let key = value.key();
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("keyed block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
-                // API2-05: keyed self-test writes go through the maintaining
+                // keyed self-test writes go through the maintaining
                 // keyed path, so a keyed-chaining format is exercised with a
                 // real predecessor chain rather than a truncated one.
                 file.push_keyed(&write_value)?;
                 Ok(())
             })),
             read: Some(Box::new(move |file| {
-                let actual = file.keyed_blocks::<T>()?.get(&key)?;
-                if actual.as_ref() == Some(&expected) {
+                let mut actual = expected.clone();
+                let found = file.keyed_blocks::<T>()?.get(&key, &mut actual)?;
+                if found && actual == expected {
                     Ok(())
                 } else {
                     Err(Error::InvalidFormatSpec(
@@ -299,6 +322,7 @@ impl FormatSelfTest {
         let write_value = value.clone();
         let expected = value;
         self.cases.push(SelfTestCase {
+            value_block: Some(T::ID),
             name: format!("matrix block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
                 file.write_matrix_cell(key, &write_value)?;
@@ -310,7 +334,8 @@ impl FormatSelfTest {
                 if status != MatrixCellStatus::Committed {
                     return Err(Error::MatrixNotCommitted);
                 }
-                let actual = file.read_matrix_cell::<T>(key)?;
+                let mut actual = expected.clone();
+                file.read_matrix_cell::<T>(key, &mut actual)?;
                 if actual == expected {
                     Ok(())
                 } else {
@@ -327,7 +352,9 @@ impl FormatSelfTest {
     where
         T: VarlitMatrixBlock + Clone + Debug + 'static,
     {
+        let read_value = value.clone();
         self.cases.push(SelfTestCase {
+            value_block: None,
             name: format!("uncommitted matrix block {} key {:?}", T::ID, key),
             write: Some(Box::new(move |file| {
                 file.write_matrix_cell(key, &value)?;
@@ -340,7 +367,8 @@ impl FormatSelfTest {
                         "self-test expected matrix cell to be uncommitted",
                     ));
                 }
-                match file.read_matrix_cell::<T>(key) {
+                let mut out = read_value.clone();
+                match file.read_matrix_cell::<T>(key, &mut out) {
                     Err(Error::MatrixNotCommitted) => Ok(()),
                     Ok(_) => Err(Error::InvalidFormatSpec(
                         "self-test uncommitted matrix read succeeded",
@@ -364,6 +392,7 @@ impl FormatSelfTest {
         let payload = payload.into();
         let expected = payload.clone();
         self.cases.push(SelfTestCase {
+            value_block: None,
             name: format!(
                 "matrix aux {name} range {offset}..{}",
                 offset + payload.len() as u64
@@ -384,10 +413,62 @@ impl FormatSelfTest {
     }
 
     pub fn run(self) -> FormatSelfTestReport {
+        self.run_inner(false)
+    }
+
+    /// Requires a value sample for every declared block, strict read checks,
+    /// no format warnings, and no skipped steps. This qualifies the supplied
+    /// samples; it does not prove the codecs for every possible input value.
+    pub fn run_strict(mut self) -> FormatSelfTestReport {
+        if self.spec.validate().is_ok() {
+            self.spec = self.spec.with_strict_read_validation();
+        }
+        let mut report = self.run_inner(true);
+        if report
+            .steps
+            .iter()
+            .any(|step| step.status == SelfTestStepStatus::Skipped)
+        {
+            report.steps.push(SelfTestStepReport::failed(
+                "coverage.skipped",
+                DiagnosticDomain::CallerUsage,
+                "required self-test steps were skipped",
+                None,
+            ));
+        }
+        report
+    }
+
+    fn run_inner(self, strict: bool) -> FormatSelfTestReport {
         let mut report = FormatSelfTestReport {
             diagnostics: diagnose_spec(self.spec),
             steps: Vec::new(),
         };
+        if strict {
+            for block in self.spec.blocks {
+                if !self
+                    .cases
+                    .iter()
+                    .any(|case| case.value_block == Some(block.id))
+                {
+                    report.steps.push(SelfTestStepReport::failed(
+                        format!("coverage.block.{}", block.id), DiagnosticDomain::CallerUsage,
+                        format!("no value roundtrip sample supplied for declared block {} ({})", block.id, block.name),
+                        Some("register with_block, with_keyed_block or with_matrix_cell for this type".to_string()),
+                    ));
+                }
+            }
+            if self.spec.blocks.is_empty() || report.diagnostics.warnings().next().is_some() {
+                report.steps.push(SelfTestStepReport::failed(
+                    "coverage.format", DiagnosticDomain::FormatDefinition,
+                    "strict qualification requires a nonempty registry and no unresolved format warnings",
+                    Some("inspect report.diagnostics before running the I/O probes".to_string()),
+                ));
+            }
+            if report.failures().next().is_some() {
+                return report;
+            }
+        }
         if !report.diagnostics.passed() {
             report.steps.push(SelfTestStepReport::skipped(
                 "create",
@@ -396,7 +477,7 @@ impl FormatSelfTest {
             return report;
         }
 
-        // API-01/API2-02: the self-test must never truncate or delete a
+        // The self-test must never truncate or delete a
         // pre-existing caller file. Both paths rely on atomic
         // exclusive-create constructors that keep the exclusively created
         // handle locked from the claim through complete initialization, so
@@ -443,7 +524,7 @@ impl FormatSelfTest {
             };
             writer
         };
-        // API2-02: remember which file object this run created so cleanup can
+        // remember which file object this run created so cleanup can
         // refuse to delete a file another process has since swapped in at the
         // same pathname. If the identity cannot be captured, cleanup skips
         // the native file rather than guessing.
@@ -697,8 +778,8 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
         "file opened with the supplied format spec",
     ));
 
-    let entries = match file.record_entries() {
-        Ok(entries) => entries,
+    let records = match file.record_entries() {
+        Ok(records) => records,
         Err(error) => {
             let (domain, hint) = classify_error_with_hint(&error);
             report.push(
@@ -709,7 +790,7 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
         }
     };
     let mut scanned = 0usize;
-    for entry in entries {
+    for entry in records.iter() {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -859,6 +940,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MatrixSizeMismatch { .. }
         | Error::MatrixNumericOutOfBounds { .. }
         | Error::MatrixNotCommitted
+        | Error::MatrixSnapshotExpired { .. }
         | Error::MatrixCellNotWritten
         | Error::MatrixChunkClosed { .. }
         | Error::MatrixChunkNotReopenable { .. }
@@ -882,7 +964,8 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::NoResidentDirectory { .. }
         // Caller usage rather than file data: the file is fine, and so is the
         // directory — they just belong to different generations of it.
-        | Error::DirectoryDoesNotDescribeThisFile { .. } => DiagnosticDomain::CallerUsage,
+        | Error::DirectoryDoesNotDescribeThisFile { .. }
+        | Error::LazyOpenVerificationRequiresScan => DiagnosticDomain::CallerUsage,
 
         Error::StreamingUnsupported => DiagnosticDomain::FeatureGate,
 
@@ -901,6 +984,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         Error::Io(_)
         | Error::AppendedButImmediateFailed { .. }
         | Error::AllocationFailed { .. }
+        | Error::ErrorContextAllocationFailed { .. }
         | Error::WriterLockHeld(_)
         | Error::WriterLockMalformed(_)
         | Error::WriterPoisoned(_)
@@ -911,7 +995,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         // operating system was asked for failed.
         | Error::CommittedButDurabilityUnproven { .. }
         // The commit bit is in the file; only the durability request the
-        // operating system was asked for failed (round 11).
+        // operating system was asked for failed.
         | Error::MatrixPublicationUncertain { .. }
         | Error::MatrixCommittedButDurabilityUnproven { .. }
         | Error::ReplacePublicationIndeterminate { .. } => DiagnosticDomain::Environment,
@@ -949,6 +1033,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::InvalidSchemaManifest
         | Error::MmapEntryNotInSnapshot
         | Error::MmapPayloadOutOfBounds { .. }
+        | Error::MmapRecordRangeOutOfBounds { .. }
         | Error::InvalidMatrixSidecar
         | Error::MatrixSidecarMismatch(_)
         | Error::MatrixSidecarChecksumMismatch { .. }
@@ -966,13 +1051,15 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::AdapterUnsupportedType { .. }
         | Error::AdapterInvalidLength { .. } => DiagnosticDomain::FileData,
 
-        Error::DiskIndex(_) => DiagnosticDomain::FileData,
+        Error::DiskIndex(_) | Error::LazyOpenMetadataUnavailable { .. } => DiagnosticDomain::FileData,
 
-        Error::WriterLockBreakRefused(_) => DiagnosticDomain::CallerUsage,
-        // F-04: the durable write itself succeeded; the caller's own hook is
+        Error::WriterLockBreakRefused(_)
+        | Error::BufferTooSmall { .. }
+        | Error::InvalidChunkedRange { .. } => DiagnosticDomain::CallerUsage,
+        // the durable write itself succeeded; the caller's own hook is
         // what failed, so the fault is in caller-supplied code.
         Error::MatrixCommittedButHookFailed { .. } => DiagnosticDomain::CallerUsage,
-        // F-07: the marker pathname is aliased or is not a regular file, which
+        // the marker pathname is aliased or is not a regular file, which
         // is a property of the environment the file lives in.
         Error::WriterLockMarkerNotDedicated { .. } => DiagnosticDomain::Environment,
         Error::MatrixLayoutMissing => DiagnosticDomain::LibraryInvariant,
@@ -980,8 +1067,14 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
 }
 
 pub fn error_hint(error: &Error) -> &'static str {
+    if matches!(
+        error,
+        Error::LazyOpenMetadataUnavailable { .. } | Error::LazyOpenVerificationRequiresScan
+    ) {
+        return "no full scan was attempted; explicitly choose a scanning open or lazy_or_scan if appropriate";
+    }
     // A stale or foreign sidecar has one documented recovery, so it earns a
-    // variant-specific hint instead of the generic file-data one (STO-01).
+    // variant-specific hint instead of the generic file-data one.
 
     if let Error::DiskIndex(disk_index) = error
         && matches!(
@@ -1114,7 +1207,7 @@ where
     }
 }
 
-/// Outcome of an identity-checked destructive removal (API2-02, F-05).
+/// Outcome of an identity-checked destructive removal.
 ///
 /// Cleanup is a destructive operation performed on behalf of a caller who
 /// asked for tidiness, never for correctness, so every way it can decline is a
@@ -1139,7 +1232,7 @@ pub(crate) enum ObjectRemoval {
 }
 
 /// Removes the artifacts this self-test run created, verifying identity
-/// before every deletion (API2-02, F-05).
+/// before every deletion.
 ///
 /// The native target is only removed while the pathname still resolves to the
 /// file object this run created; a file another process has since swapped in
@@ -1248,7 +1341,7 @@ pub(crate) fn remove_path_if_same_object(
 }
 
 /// Deletes `path` only while the file object bound to the pathname is still the
-/// one `pinned` holds open (F-05).
+/// one `pinned` holds open.
 ///
 /// POSIX has no unlink-by-handle: `unlink` names a *pathname*, so an identity
 /// check on an open handle followed by an unlink of the same name is two
@@ -1408,7 +1501,7 @@ fn directory_is_exclusively_owned(
 }
 
 /// Test-only interposition point between the identity check and the deletion
-/// (F-05). Set by [`set_interposition`] in unit tests that model a hostile
+/// Set by [`set_interposition`] in unit tests that model a hostile
 /// pathname swap landing in exactly that interval.
 #[cfg(all(test, not(windows)))]
 fn interpose_before_unlink() {
@@ -1431,7 +1524,7 @@ fn set_interposition(hook: Box<dyn FnOnce()>) {
 }
 
 /// Removes the pathname's writer-lock marker only when this process can
-/// re-acquire it through the standard writer-lock protocol (API2-02).
+/// re-acquire it through the standard writer-lock protocol.
 ///
 /// Acquisition with the default refuse policy fails while another writer
 /// holds the marker guard lock or has populated the marker with its own run
@@ -1440,13 +1533,13 @@ fn set_interposition(hook: Box<dyn FnOnce()>) {
 /// marker to this race can never admit a second writer.
 /// Removes the writer-lock marker this run may have left behind.
 ///
-/// API3-03: this used to unlink `<path>.lock` by pathname, guarded only by
-/// re-acquiring the writer lock. On Unix that is the *same* shape F-05 fixed
+/// this used to unlink `<path>.lock` by pathname, guarded only by
+/// re-acquiring the writer lock. On Unix that is the *same* shape  fixed
 /// for the artifact itself: Varlit's Unix writer locks are advisory, so holding
 /// one does not stop a non-cooperating principal that can bind names in the
 /// parent directory from substituting a different object at the marker's name
 /// before the unlink. Leaving one destructive path in this module outside the
-/// hardened protocol would have made the F-05 fix incomplete.
+/// hardened protocol would have made the  fix incomplete.
 ///
 /// The marker's identity is captured from an open handle and the deletion is
 /// then issued through [`remove_path_if_same_object`], which on Unix confines
@@ -1467,7 +1560,7 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
         // would create one just to delete it again.
         return;
     }
-    // F-08: a failure to re-acquire the marker used to `return` silently, so a
+    // a failure to re-acquire the marker used to `return` silently, so a
     // self-test could report `passed = true` with zero cleanup failures while a
     // live 20-byte marker survived and the *next* run was refused by it. The
     // marker is deliberately still preserved - re-acquisition failing is
@@ -1515,7 +1608,7 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
     drop(pinned);
     match outcome {
         Some(ObjectRemoval::Removed) | Some(ObjectRemoval::NotOwned) => {}
-        // F-08: the identity could not be captured, so the marker was left
+        // the identity could not be captured, so the marker was left
         // untouched. Same rule as the acquisition failure above - preserve it,
         // but do not report a clean run.
         None => {
@@ -1555,6 +1648,21 @@ fn remove_unowned_lock_marker(report: &mut FormatSelfTestReport, path: &Path) {
             ));
         }
     }
+}
+
+/// A temporary directory only this user can write, whatever the umask:
+/// cleanup refuses a group- or world-writable parent that is not sticky, and
+/// `super::private_tempdir()` leaves the mode to the umask.
+#[cfg(test)]
+pub(crate) fn private_tempdir() -> std::io::Result<tempfile::TempDir> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
 }
 
 #[cfg(test)]
@@ -1647,7 +1755,7 @@ mod tests {
         );
     }
 
-    /// F-05. Cleanup must never delete an object it did not verify. This
+    /// Cleanup must never delete an object it did not verify. This
     /// interposes a hostile pathname swap in the one interval the old code
     /// left open — after the identity check and before the deletion — and
     /// asserts that the substituted file survives.
@@ -1668,7 +1776,7 @@ mod tests {
     fn cleanup_does_not_delete_a_file_interposed_before_the_unlink() {
         const IMPOSTOR: &[u8] = b"not the self-test artifact";
 
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("interposed.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1695,7 +1803,7 @@ mod tests {
     /// test above is proving a refusal rather than a broken cleanup path.
     #[test]
     fn cleanup_removes_the_verified_object() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("owned.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1712,7 +1820,7 @@ mod tests {
     /// is reported as such rather than as a successful removal.
     #[test]
     fn cleanup_leaves_a_swapped_pathname_alone() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("swapped.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1735,7 +1843,7 @@ mod tests {
     /// ordinary Linux filesystems: the same `(dev, ino)` came back for both.
     #[test]
     fn a_pin_keeps_a_recreated_file_off_the_pinned_identity() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("recycled.vrv");
         std::fs::write(&path, b"created by this run").expect("create the artifact");
         let pinned = crate::file::PinnedObject::open(&path).expect("pin the created artifact");
@@ -1754,7 +1862,7 @@ mod tests {
         );
     }
 
-    /// API3-03. The writer-lock marker is the one destructive path in this
+    /// The writer-lock marker is the one destructive path in this
     /// module that used to unlink by pathname, guarded only by re-acquiring an
     /// advisory writer lock. It now goes through the same identity-checked,
     /// directory-confined removal as the artifact, so an object that is not
@@ -1768,7 +1876,7 @@ mod tests {
     /// and by the two `self_test_never_truncates_*` tests.
     #[test]
     fn lock_marker_removal_leaves_a_swapped_object_alone() {
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let path = directory.path().join("marker-swap.vrv");
         let marker = directory.path().join("marker-swap.vrv.lock");
         std::fs::write(&path, b"artifact").expect("create the artifact");
@@ -1794,7 +1902,7 @@ mod tests {
         );
     }
 
-    /// F-05. In a directory other unprivileged users can bind names in, the
+    /// In a directory other unprivileged users can bind names in, the
     /// deletion is refused with a typed reason instead of being performed
     /// through a pathname that cannot be verified.
     #[test]
@@ -1802,7 +1910,7 @@ mod tests {
     fn cleanup_refuses_a_shared_writable_directory() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = tempfile::tempdir().expect("private temp directory");
+        let directory = super::private_tempdir().expect("private temp directory");
         let shared = directory.path().join("shared");
         std::fs::create_dir(&shared).expect("create the shared directory");
         // World-writable *without* the sticky bit: any local user could

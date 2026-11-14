@@ -54,10 +54,12 @@
 //! `get_into` off-by-one by three checkpoint-recovery tests. Those four were
 //! caught by tests that are about something else entirely, which is coverage by
 //! luck; the assertions here name the property instead.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::collections::HashMap;
 
-use varlit::{VarlitBlock, VarlitMerge, VarlitMigration, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, VarlitMerge, VarlitMigration, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable", key = "id")]
@@ -173,7 +175,8 @@ fn a_reused_buffer_is_cut_to_each_record_and_never_carries_the_last_one() -> var
 
         // The decoded value must be the one that was written, which is the part
         // a leftover tail would corrupt even if the length happened to match.
-        let note: Note = file.decode_block_into(entry, &mut payload)?;
+        let mut note = Note::empty();
+        file.decode_block_into(entry, &mut payload, &mut note)?;
         assert_eq!(note.body.as_str(), BODIES[seen]);
         assert_eq!(note.id, seen as u64);
         seen += 1;
@@ -232,9 +235,10 @@ fn decode_block_into_refuses_an_entry_of_another_block() -> varlit::Result<()> {
     // The entry is the caller's, so decoding it as the wrong type must be
     // refused rather than reinterpreted.
     let mut scratch = Vec::new();
+    let mut wrong = Note::empty();
     assert!(
         matches!(
-            file.decode_block_into::<Note>(tick_entry, &mut scratch),
+            file.decode_block_into::<Note>(tick_entry, &mut scratch, &mut wrong),
             Err(varlit::Error::UnregisteredBlock(id)) if id == Tick::ID
         ),
         "decoding a Tick entry as a Note must be refused by block id"
@@ -263,13 +267,16 @@ fn every_into_form_clears_and_matches_the_allocating_one() -> varlit::Result<()>
     let baseline = entries.len();
     file.index_entries_into(&mut entries)?;
     assert_eq!(entries.len(), baseline);
-    assert_eq!(entries.as_slice(), &*file.index_entries());
+    assert_eq!(entries.as_slice(), &*crate::pages::all_entries!(file));
 
     // block_entries_into
     let mut block_entries = entries.clone();
     file.block_entries_into::<Tick>(&mut block_entries)?;
     assert_eq!(block_entries.len(), 3);
-    assert_eq!(block_entries.len(), file.blocks::<Tick>()?.len());
+    assert_eq!(
+        block_entries.len(),
+        crate::pages::all_blocks!(file, Tick)?.len()
+    );
 
     // decode_blocks_into
     let mut ticks = dirty(&Tick { at: 99 });
@@ -326,19 +333,33 @@ fn block_vec_get_into_matches_get_and_reuses_the_buffer() -> varlit::Result<()> 
     let path = directory.path().join("getinto.buffer");
     build(&path)?;
     let file = BufferFormat::open_readonly(&path)?;
-    let notes = file.blocks::<Note>()?;
+    let notes = crate::pages::all_blocks!(file, Note)?;
 
     let mut scratch = dirty(&0u8);
+    let mut via_into = Note::empty();
+    let mut via_get = Note::empty();
     for index in 0..notes.len() {
-        assert_eq!(notes.get_into(index, &mut scratch)?, notes.get(index)?);
+        assert!(notes.get_into(index, &mut scratch, &mut via_into)?);
+        assert!(notes.get(index, &mut via_get)?);
+        assert_eq!(via_into, via_get);
     }
-    assert_eq!(notes.get_into(notes.len(), &mut scratch)?, None);
+    // Past the end reports false and leaves the caller's value untouched.
+    let before = via_into.clone();
+    assert!(!notes.get_into(notes.len(), &mut scratch, &mut via_into)?);
+    assert_eq!(via_into, before);
 
-    // `iter()` is `get_into` over one buffer; it must agree with `get(i)`.
-    let iterated = notes.iter().collect::<varlit::Result<Vec<_>>>()?;
-    let indexed = (0..notes.len())
-        .map(|i| notes.get(i).map(|v| v.expect("in range")))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    // The cursor is `get_into` over one buffer; it must agree with `get(i)`.
+    let mut iterated = Vec::new();
+    let mut cursor = notes.cursor();
+    let mut item = Note::empty();
+    while cursor.next_into(&mut item)? {
+        iterated.push(item.clone());
+    }
+    let mut indexed = Vec::new();
+    for i in 0..notes.len() {
+        assert!(notes.get(i, &mut item)?, "in range");
+        indexed.push(item.clone());
+    }
     assert_eq!(iterated, indexed);
     Ok(())
 }
@@ -351,12 +372,12 @@ fn opening_a_writer_through_a_scratch_buffer_sees_the_same_file() -> varlit::Res
 
     let mut scratch = Vec::new();
     let plain = varlit::VarlitWriter::open(BufferFormat::spec(), &path)?;
-    let expected = plain.index_entries();
+    let expected = crate::pages::all_entries!(plain);
     drop(plain);
 
     let scratched =
         varlit::VarlitWriter::open_with_scratch(BufferFormat::spec(), &path, &mut scratch)?;
-    assert_eq!(&*scratched.index_entries(), &*expected);
+    assert_eq!(&*crate::pages::all_entries!(scratched), &*expected);
     // The scan buffer is the file's index when open returns, which is the
     // property `open_readonly_without_directory` depends on.
     assert_eq!(scratch.as_slice(), &*expected);

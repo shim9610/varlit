@@ -103,11 +103,20 @@ fn scanned_shape(
     path: &Path,
 ) -> Option<(Vec<(u32, u64, u64)>, Vec<Option<u64>>)> {
     let file = VarlitFile::open_readonly(spec, path).ok()?;
-    let entries = file
-        .index_entries()
-        .iter()
-        .map(|entry| (entry.block_id, entry.record_offset, entry.payload_len))
-        .collect();
+    let mut entries = Vec::new();
+    let mut buffer = vec![varlit::RecordIndexEntry::default(); 64];
+    let mut page = file.index_entries(&mut buffer).ok()?;
+    loop {
+        entries.extend(
+            buffer[..page.filled]
+                .iter()
+                .map(|entry| (entry.block_id, entry.record_offset, entry.payload_len)),
+        );
+        match page.next {
+            Some(next) => page = file.index_entries_from(next, &mut buffer).ok()?,
+            None => break,
+        }
+    }
     let tails = vec![
         file.block_tail_offset(TailLine::ID),
         file.block_tail_offset(TailNote::ID),
@@ -239,8 +248,8 @@ pub fn run_header_tails(data: &[u8]) {
 
 /// Opens the same bytes both ways.
 ///
-/// One property holds in every mode: **the lazy open may not fail where the
-/// scan succeeds.** The header route's contract is that any failure short of a
+/// In explicit automatic mode, lazy-or-scan may not fail where the
+/// scan succeeds. The header route's contract is that any failure short of a
 /// spec-level refusal falls back to exactly that scan, so on a file the scan
 /// can read, `Err` is not a permitted degradation — it is the fallback broken.
 ///
@@ -252,6 +261,11 @@ pub fn run_header_tails(data: &[u8]) {
 /// A crafted table can therefore pass every check and still disagree with the
 /// scan, which is why [`Oracle::Mutated`] owes soundness only.
 fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
+    compare_route(spec, path, oracle, true);
+    compare_route(spec, path, oracle, false);
+}
+
+fn compare_route(spec: FormatSpec, path: &Path, oracle: Oracle, strict: bool) {
     let scanned = scanned_shape(spec, path);
     if oracle == Oracle::Pristine {
         assert!(
@@ -264,16 +278,31 @@ fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
         // succeed — the region is checksummed independently of the mid-file
         // damage that stopped the scan — so nothing further is owed beyond not
         // misbehaving, which libFuzzer's sanitizers judge.
-        let _ = VarlitFile::open_readonly_lazy_with_report(spec, path);
+        if strict {
+            let _ = VarlitFile::open_readonly_lazy_with_report(spec, path);
+        } else {
+            let _ = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, path);
+        }
         return;
     };
 
-    let (file, source) = match VarlitFile::open_readonly_lazy_with_report(spec, path) {
-        Ok(opened) => opened,
-        Err(error) => panic!(
-            "the lazy open failed where the scan succeeds; its fallback is that scan: {error:?}"
-        ),
+    let opened = if strict {
+        VarlitFile::open_readonly_lazy_with_report(spec, path)
+    } else {
+        VarlitFile::open_readonly_lazy_or_scan_with_report(spec, path)
     };
+    let (file, source) = match opened {
+        Ok(opened) => opened,
+        // Strict metadata open can reject a damaged/stale summary even when
+        // reconstruction succeeds. The pristine fixture must still open.
+        Err(_) if strict && oracle != Oracle::Pristine => return,
+        Err(error) => {
+            panic!("open (strict={strict}) failed on a required successful path: {error:?}")
+        }
+    };
+    if strict {
+        assert_ne!(source, LazyOpenSource::FullScan);
+    }
 
     if oracle == Oracle::Pristine {
         assert_eq!(
@@ -317,10 +346,12 @@ fn compare_routes(spec: FormatSpec, path: &Path, oracle: Oracle) {
     // that let a corrupt table through surfaces here as an error rather than as
     // a wrong-typed read, and a nonsensical offset surfaces to the sanitizers.
     if let Some(offset) = line_tail {
-        let _ = file.read_block_at::<TailLine>(offset);
+        let mut out = <TailLine as varlit::VarlitEmpty>::empty();
+        let _ = file.read_block_at::<TailLine>(offset, &mut Vec::new(), &mut out);
     }
     if let Some(offset) = note_tail {
-        let _ = file.read_block_at::<TailNote>(offset);
+        let mut out = <TailNote as varlit::VarlitEmpty>::empty();
+        let _ = file.read_block_at::<TailNote>(offset, &mut Vec::new(), &mut out);
     }
 
     // The header route keeps no directory, so the map is the only way to ask it

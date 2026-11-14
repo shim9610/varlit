@@ -20,10 +20,12 @@ impl FileOffset {
     }
 
     fn checked_add_for(self, len: ByteLength, resource: &'static str) -> Result<Self> {
-        self.0
-            .checked_add(len.0)
-            .map(Self)
-            .ok_or(Error::ResourceArithmeticOverflow { resource })
+        // Error has drop glue. Construct it only on overflow, rather than
+        // creating and dropping an unused error on every successful read.
+        let Some(end) = self.0.checked_add(len.0) else {
+            return Err(Error::ResourceArithmeticOverflow { resource });
+        };
+        Ok(Self(end))
     }
 }
 
@@ -50,10 +52,10 @@ impl ByteLength {
     }
 
     fn checked_add_for(self, other: Self, resource: &'static str) -> Result<Self> {
-        self.0
-            .checked_add(other.0)
-            .map(Self)
-            .ok_or(Error::ResourceArithmeticOverflow { resource })
+        let Some(len) = self.0.checked_add(other.0) else {
+            return Err(Error::ResourceArithmeticOverflow { resource });
+        };
+        Ok(Self(len))
     }
 }
 

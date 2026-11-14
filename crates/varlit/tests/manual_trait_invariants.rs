@@ -1,11 +1,13 @@
 //! Runtime coverage for the manual `VarlitBlock` trait invariants driven by
-//! review findings API-02 (schema fingerprint), API-03 (keyedness), and the
-//! 2026-07-20 review's API-01 (authoritative block endian) and API-02
+//! review findings  (schema fingerprint),  (keyedness), and the
+//! 2026-07-20 review's  (authoritative block endian) and
 //! (contract-cache identity).
 //!
 //! Typed access always requires a declared immutable block identity. These
 //! tests exercise mismatches both before and after the legitimate type is
 //! used, plus missing identities and independent manual schema declarations.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::remove_file;
 use std::path::{Path, PathBuf};
@@ -85,6 +87,12 @@ impl VarlitDecode for PlainMirror {
     }
 }
 
+impl varlit::VarlitEmpty for PlainMirror {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for PlainMirror {
     const ID: u32 = 60;
     const VERSION: u16 = 1;
@@ -119,6 +127,12 @@ impl VarlitDecode for PlainImpostor {
     }
 }
 
+impl varlit::VarlitEmpty for PlainImpostor {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for PlainImpostor {
     const ID: u32 = 60;
     const VERSION: u16 = 1;
@@ -149,6 +163,15 @@ impl VarlitDecode for KeyedDenier {
 
     fn decode_varlit(_decoder: &mut Decoder<'_>) -> varlit::Result<Self> {
         unreachable!("registration must fail before any decode")
+    }
+}
+
+impl varlit::VarlitEmpty for KeyedDenier {
+    fn empty() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+        }
     }
 }
 
@@ -190,6 +213,15 @@ impl VarlitDecode for KeyedMirror {
             id: inner.id,
             name: inner.name,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for KeyedMirror {
+    fn empty() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+        }
     }
 }
 
@@ -249,7 +281,7 @@ varlit_format! {
     }
 }
 
-/// DEF-01 probe: same block id/version/kind, same dimensions, category, and
+///  probe: same block id/version/kind, same dimensions, category, and
 /// slot stride as the generated matrix cell — but different decode semantics
 /// (i32 vs u32) and therefore an honest different fingerprint. Without the
 /// common registration gate this type passed every shape check.
@@ -273,6 +305,12 @@ impl VarlitDecode for MatrixImpostorCell {
         Ok(Self {
             value: i32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for MatrixImpostorCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -329,8 +367,8 @@ fn cleanup(path: &Path) {
 /// Registers the generated types first so the process-local registry always
 /// holds the generated schema as the first-seen contract.
 fn register_generated(file: &varlit::VarlitFile) -> varlit::Result<()> {
-    file.blocks::<Plain>()?;
-    file.blocks::<KeyedGen>()?;
+    crate::pages::all_blocks!(file, Plain)?;
+    crate::pages::all_blocks!(file, KeyedGen)?;
     Ok(())
 }
 
@@ -348,9 +386,9 @@ fn correct_manual_mirror_still_registers() -> varlit::Result<()> {
     let file = InvariantFormat::open_readonly(&path)?;
     register_generated(&file)?;
 
-    let mirrored = file.blocks::<PlainMirror>()?;
+    let mirrored = crate::pages::all_blocks!(file, PlainMirror)?;
     assert_eq!(mirrored.len(), 1);
-    assert_eq!(mirrored.get(0)?, Some(PlainMirror { value: 7 }));
+    assert_eq!(opt(|o| mirrored.get(0, o))?, Some(PlainMirror { value: 7 }));
 
     cleanup(&path);
     Ok(())
@@ -371,7 +409,7 @@ fn impostor_with_different_schema_is_rejected() -> varlit::Result<()> {
     register_generated(&file)?;
 
     let expected = <Plain as VarlitBlock>::SCHEMA_FINGERPRINT;
-    match file.blocks::<PlainImpostor>() {
+    match crate::pages::all_blocks!(file, PlainImpostor) {
         Err(Error::BlockSchemaFingerprintMismatch {
             block_id,
             registered,
@@ -405,7 +443,7 @@ fn keyedness_denial_is_rejected_even_with_forged_fingerprint() -> varlit::Result
     let file = InvariantFormat::open_readonly(&path)?;
     register_generated(&file)?;
 
-    match file.blocks::<KeyedDenier>() {
+    match crate::pages::all_blocks!(file, KeyedDenier) {
         Err(Error::BlockKeyednessMismatch {
             block_id,
             registered,
@@ -442,7 +480,7 @@ fn keyed_mirror_with_agreeing_keyedness_registers_and_reads() -> varlit::Result<
     let keyed = file.keyed_blocks::<KeyedMirror>()?;
     assert_eq!(keyed.len(), 1);
     assert_eq!(
-        keyed.get(&5)?,
+        opt(|o| keyed.get(&5, o))?,
         Some(KeyedMirror {
             id: 5,
             name: "beta".to_string(),
@@ -482,7 +520,7 @@ fn assert_matrix_impostor_rejected(result: Result<(), Error>) {
     }
 }
 
-/// DEF-01: a same-stride manual matrix type with a different fingerprint is
+/// a same-stride manual matrix type with a different fingerprint is
 /// rejected by the common registration gate on the cell read path.
 #[test]
 fn matrix_impostor_same_stride_read_is_rejected() -> varlit::Result<()> {
@@ -492,20 +530,18 @@ fn matrix_impostor_same_stride_read_is_rejected() -> varlit::Result<()> {
 
     let reader = InvariantMatrixFormat::spec().open_reader(&path)?;
     assert_eq!(
-        reader.read_matrix_cell::<MatrixGenCell>(MatrixKey::new(0, 0))?,
+        val(|o| reader.read_matrix_cell::<MatrixGenCell>(MatrixKey::new(0, 0), o))?,
         MatrixGenCell { value: 41 }
     );
     assert_matrix_impostor_rejected(
-        reader
-            .read_matrix_cell::<MatrixImpostorCell>(MatrixKey::new(0, 0))
-            .map(|_| ()),
+        val(|o| reader.read_matrix_cell::<MatrixImpostorCell>(MatrixKey::new(0, 0), o)).map(|_| ()),
     );
 
     cleanup(&path);
     Ok(())
 }
 
-/// DEF-01: the same gate guards the cell write path.
+/// the same gate guards the cell write path.
 #[test]
 fn matrix_impostor_same_stride_write_is_rejected() -> varlit::Result<()> {
     let path = temp_path("matrix_impostor_write");
@@ -524,7 +560,7 @@ fn matrix_impostor_same_stride_write_is_rejected() -> varlit::Result<()> {
     Ok(())
 }
 
-/// DEF-01: the same gate guards the mmap cell window path.
+/// the same gate guards the mmap cell window path.
 #[cfg(feature = "mmap")]
 #[test]
 fn matrix_impostor_same_stride_mmap_is_rejected() -> varlit::Result<()> {
@@ -585,7 +621,7 @@ varlit_format! {
     }
 }
 
-/// API-01 impostor: same id/version/kind as `Ordered`, different schema, and
+///  impostor: same id/version/kind as `Ordered`, different schema, and
 /// used before the generated type ever registers block 63.
 #[derive(Clone, Debug, PartialEq)]
 struct OrderedImpostor {
@@ -612,6 +648,12 @@ impl VarlitDecode for OrderedImpostor {
     }
 }
 
+impl varlit::VarlitEmpty for OrderedImpostor {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for OrderedImpostor {
     const ID: u32 = 63;
     const VERSION: u16 = 1;
@@ -621,7 +663,7 @@ impl VarlitBlock for OrderedImpostor {
     const SCHEMA_FINGERPRINT: u64 = 0x0BAD_0001_0BAD_0001;
 }
 
-/// API-01: the format's immutable identity decides which type owns a block
+/// the format's immutable identity decides which type owns a block
 /// id, not whichever generic `T` happened to reach the registry first. Block
 /// 63 is touched by this test alone, so the impostor genuinely registers
 /// first — and is still rejected on both the write and the read path, after
@@ -648,13 +690,13 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     };
 
     assert_rejected(file.push(&OrderedImpostor { value: 1 }).map(|_| ()));
-    assert_rejected(file.blocks::<OrderedImpostor>().map(|_| ()));
+    assert_rejected(crate::pages::all_blocks!(file, OrderedImpostor).map(|_| ()));
 
     // The legitimate generated type is unaffected by the failed first use.
     file.push(&Ordered { value: 7 })?;
     file.flush()?;
     assert_eq!(
-        file.blocks::<Ordered>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(file, Ordered)?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
     drop(file);
@@ -662,17 +704,17 @@ fn impostor_registered_first_is_rejected_against_the_format_identity() -> varlit
     // Reopening keeps the same verdict in both directions.
     let reopened = OrderInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        reopened.blocks::<Ordered>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(reopened, Ordered)?.get(0, o))?,
         Some(Ordered { value: 7 })
     );
-    assert_rejected(reopened.blocks::<OrderedImpostor>().map(|_| ()));
+    assert_rejected(crate::pages::all_blocks!(reopened, OrderedImpostor).map(|_| ()));
 
     cleanup(&path);
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// API-01: the authoritative block endian is part of the registration contract
+// the authoritative block endian is part of the registration contract
 // ---------------------------------------------------------------------------
 
 /// Generated block that overrides the format endian. The format below is
@@ -717,7 +759,7 @@ varlit_format! {
 /// [`BigCell`]. It differs only in declaring no endian override, which
 /// resolves to the format's little endian.
 ///
-/// Before API-01 this registered successfully and decoded `BigCell` payloads
+/// Before  this registered successfully and decoded `BigCell` payloads
 /// with the wrong byte order.
 #[derive(Clone, Debug, PartialEq)]
 struct BigCellInheritedEndian {
@@ -739,6 +781,12 @@ impl VarlitDecode for BigCellInheritedEndian {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for BigCellInheritedEndian {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -776,6 +824,12 @@ impl VarlitDecode for BigCellExplicitLittle {
     }
 }
 
+impl varlit::VarlitEmpty for BigCellExplicitLittle {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for BigCellExplicitLittle {
     const ID: u32 = 64;
     const VERSION: u16 = 1;
@@ -786,7 +840,7 @@ impl VarlitBlock for BigCellExplicitLittle {
 }
 
 /// The legitimate mirror: agrees with the authoritative override, so it keeps
-/// working. This is the control that proves API-01 rejects byte-order
+/// working. This is the control that proves  rejects byte-order
 /// disagreement rather than manual mirrors in general.
 #[derive(Clone, Debug, PartialEq)]
 struct BigCellAgreeingMirror {
@@ -811,6 +865,12 @@ impl VarlitDecode for BigCellAgreeingMirror {
     }
 }
 
+impl varlit::VarlitEmpty for BigCellAgreeingMirror {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for BigCellAgreeingMirror {
     const ID: u32 = 64;
     const VERSION: u16 = 1;
@@ -830,7 +890,7 @@ fn assert_endian_rejected(result: varlit::Result<()>) {
     }
 }
 
-/// API-01: a manual type whose resolved byte order disagrees with the
+/// a manual type whose resolved byte order disagrees with the
 /// format's authoritative block identity is rejected at registration, on both
 /// the read and the write path, and never byte-swaps a value.
 #[test]
@@ -851,12 +911,12 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
             file.push(&BigCellInheritedEndian { value: VALUE })
                 .map(|_| ()),
         );
-        assert_endian_rejected(file.blocks::<BigCellInheritedEndian>().map(|_| ()));
+        assert_endian_rejected(crate::pages::all_blocks!(file, BigCellInheritedEndian).map(|_| ()));
         assert_endian_rejected(
             file.push(&BigCellExplicitLittle { value: VALUE })
                 .map(|_| ()),
         );
-        assert_endian_rejected(file.blocks::<BigCellExplicitLittle>().map(|_| ()));
+        assert_endian_rejected(crate::pages::all_blocks!(file, BigCellExplicitLittle).map(|_| ()));
 
         file.push(&BigCell { value: VALUE })?;
         file.flush()?;
@@ -864,24 +924,24 @@ fn manual_endian_disagreement_is_rejected_and_never_byte_swaps() -> varlit::Resu
 
     let file = EndianInvariantFormat::open_readonly(&path)?;
     assert_eq!(
-        file.blocks::<BigCell>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(file, BigCell)?.get(0, o))?,
         Some(BigCell { value: VALUE })
     );
 
     // The rejection holds after the generated type has registered, and the
     // swapped value is never produced.
-    assert_endian_rejected(file.blocks::<BigCellInheritedEndian>().map(|_| ()));
-    assert_endian_rejected(file.blocks::<BigCellExplicitLittle>().map(|_| ()));
+    assert_endian_rejected(crate::pages::all_blocks!(file, BigCellInheritedEndian).map(|_| ()));
+    assert_endian_rejected(crate::pages::all_blocks!(file, BigCellExplicitLittle).map(|_| ()));
 
     // Control: a mirror that agrees on the override reads the true value.
-    let mirrored = file.blocks::<BigCellAgreeingMirror>()?;
+    let mirrored = crate::pages::all_blocks!(file, BigCellAgreeingMirror)?;
     assert_eq!(mirrored.len(), 1);
     assert_eq!(
-        mirrored.get(0)?,
+        opt(|o| mirrored.get(0, o))?,
         Some(BigCellAgreeingMirror { value: VALUE })
     );
     assert_ne!(
-        mirrored.get(0)?,
+        opt(|o| mirrored.get(0, o))?,
         Some(BigCellAgreeingMirror { value: SWAPPED }),
         "a byte-swapped read must be impossible on this path"
     );
@@ -936,6 +996,12 @@ impl VarlitDecode for CacheProbe {
     }
 }
 
+impl varlit::VarlitEmpty for CacheProbe {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for CacheProbe {
     const ID: u32 = CACHE_BLOCK_ID;
     const VERSION: u16 = 1;
@@ -965,7 +1031,7 @@ fn hand_built_spec(
     .with_block_identities(identities)
 }
 
-/// API-02: an empty view and the full view of one static identity array are
+/// an empty view and the full view of one static identity array are
 /// different declarations; a missing identity is never inferred from a type.
 #[test]
 fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varlit::Result<()> {
@@ -986,7 +1052,7 @@ fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varl
     {
         let file = VarlitFile::create(without_identities, &first)?;
         assert!(matches!(
-            file.blocks::<CacheProbe>(),
+            crate::pages::all_blocks!(file, CacheProbe),
             Err(Error::InvalidFormatSpec(_))
         ));
     }
@@ -998,7 +1064,7 @@ fn missing_identity_is_rejected_and_explicit_identity_is_authoritative() -> varl
     cleanup(&second);
     {
         let file = VarlitFile::create(with_identities, &second)?;
-        match file.blocks::<CacheProbe>() {
+        match crate::pages::all_blocks!(file, CacheProbe) {
             Err(Error::BlockSchemaFingerprintMismatch {
                 block_id,
                 registered,
@@ -1062,6 +1128,12 @@ macro_rules! prefix_probe {
             }
         }
 
+        impl varlit::VarlitEmpty for $name {
+            fn empty() -> Self {
+                Self { value: 0 }
+            }
+        }
+
         impl VarlitBlock for $name {
             const ID: u32 = PREFIX_BLOCK_ID;
             const VERSION: u16 = 1;
@@ -1077,7 +1149,7 @@ prefix_probe!(PrefixProbeShort, 0x0011_0011_0011_0011);
 prefix_probe!(PrefixProbeLong, 0x0022_0022_0022_0022);
 prefix_probe!(PrefixProbeIntruder, 0x0033_0033_0033_0033);
 
-/// API-02, descriptor-table half: a one-block prefix view and the full
+/// descriptor-table half: a one-block prefix view and the full
 /// two-block view of one static descriptor array share a start address but are
 /// different formats. Each declares its own immutable contract and still
 /// enforces it against a third type.
@@ -1104,21 +1176,21 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
 
         // Even the first use must obey the declaration.
         assert!(matches!(
-            short_file.blocks::<PrefixProbeIntruder>(),
+            crate::pages::all_blocks!(short_file, PrefixProbeIntruder),
             Err(Error::BlockSchemaFingerprintMismatch { .. })
         ));
         assert!(matches!(
-            long_file.blocks::<PrefixProbeIntruder>(),
+            crate::pages::all_blocks!(long_file, PrefixProbeIntruder),
             Err(Error::BlockSchemaFingerprintMismatch { .. })
         ));
         // The two schemas declare different contracts for the same numeric id.
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
 
         // Repeated validation has the same result.
-        short_file.blocks::<PrefixProbeShort>()?;
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
 
         // Each format still refuses a type that disagrees with the contract it
         // declares.
@@ -1126,7 +1198,7 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
             (&short_file, 0x0011_0011_0011_0011_u64),
             (&long_file, 0x0022_0022_0022_0022_u64),
         ] {
-            match file.blocks::<PrefixProbeIntruder>() {
+            match crate::pages::all_blocks!(file, PrefixProbeIntruder) {
                 Err(Error::BlockSchemaFingerprintMismatch {
                     block_id,
                     registered: actual_registered,
@@ -1141,11 +1213,30 @@ fn manual_schemas_use_independent_explicit_type_contracts() -> varlit::Result<()
         }
 
         // Rejection never changes the schema contract.
-        short_file.blocks::<PrefixProbeShort>()?;
-        long_file.blocks::<PrefixProbeLong>()?;
+        crate::pages::all_blocks!(short_file, PrefixProbeShort)?;
+        crate::pages::all_blocks!(long_file, PrefixProbeLong)?;
     }
 
     cleanup(&short_path);
     cleanup(&long_path);
     Ok(())
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Decodes into a fresh caller-owned value.
+fn val<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<()>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
 }
