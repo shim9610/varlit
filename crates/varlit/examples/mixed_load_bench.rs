@@ -15,9 +15,14 @@
 //!   and every 32nd deletes one,
 //! - one `Blob` of 64 KiB..8 MiB, large enough to be stored in chunks.
 //!
-//! Every phase reports wall time, throughput, the process peak RSS during that
-//! phase (`VmHWM`, reset per phase through `/proc/self/clear_refs`) and the
-//! number of allocator calls the whole process made during it.
+//! Every phase reports wall time, throughput, the number of allocator calls
+//! the whole process made during it, and two memory figures:
+//!
+//! - **heap peak**: the most heap bytes live at once during the phase, counted
+//!   by the allocator itself. This is exact and is what the phase needed.
+//! - **RSS peak**: the process `VmHWM` over the phase. Freed memory the C
+//!   allocator keeps in a thread's arena still counts here, so before each
+//!   phase the allocator is asked to return free pages (`malloc_trim`).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
@@ -31,22 +36,41 @@ use varlit::{FormatSpec, VarlitBlock, VarlitEmpty, VarlitFile, varlit_format};
 struct CountingAllocator;
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static LIVE: AtomicU64 = AtomicU64::new(0);
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+fn grew(by: usize) {
+    let live = LIVE.fetch_add(by as u64, Ordering::Relaxed) + by as u64;
+    PEAK.fetch_max(live, Ordering::Relaxed);
+}
+
+fn shrank(by: usize) {
+    LIVE.fetch_sub(by as u64, Ordering::Relaxed);
+}
 
 // SAFETY: every call is forwarded unchanged to the system allocator.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        grew(layout.size());
         unsafe { System.alloc(layout) }
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        grew(layout.size());
         unsafe { System.alloc_zeroed(layout) }
     }
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        shrank(layout.size());
         unsafe { System.dealloc(pointer, layout) };
     }
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        if new_size >= layout.size() {
+            grew(new_size - layout.size());
+        } else {
+            shrank(layout.size() - new_size);
+        }
         unsafe { System.realloc(pointer, layout, new_size) }
     }
 }
@@ -177,9 +201,32 @@ fn status_kib(field: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Read system calls this process has made (`syscr` in `/proc/self/io`).
+fn read_calls() -> u64 {
+    std::fs::read_to_string("/proc/self/io")
+        .ok()
+        .and_then(|io| {
+            io.lines()
+                .find_map(|line| line.strip_prefix("syscr:"))
+                .and_then(|n| n.trim().parse().ok())
+        })
+        .unwrap_or(0)
+}
+
 fn reset_peak() {
+    // Free memory the C allocator kept from earlier phases would otherwise be
+    // counted as this phase's RSS.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // SAFETY: `malloc_trim` only returns free pages to the kernel.
+        unsafe { malloc_trim(0) };
+    }
     // `5` resets VmHWM to the current RSS (Linux 4.0+).
     let _ = std::fs::write("/proc/self/clear_refs", "5");
+    PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
 fn drop_page_cache() -> bool {
@@ -191,15 +238,26 @@ struct Phase {
     name: &'static str,
     started: Instant,
     allocations: u64,
+    live: u64,
+    reads: u64,
 }
 
 impl Phase {
+    /// A read phase: the page cache is dropped first, so every read phase
+    /// starts cold and none is helped or hurt by what an earlier one cached.
+    fn cold(name: &'static str) -> Self {
+        drop_page_cache();
+        Self::start(name)
+    }
+
     fn start(name: &'static str) -> Self {
         reset_peak();
         Self {
             name,
             started: Instant::now(),
             allocations: ALLOCATIONS.load(Ordering::Relaxed),
+            live: LIVE.load(Ordering::Relaxed),
+            reads: read_calls(),
         }
     }
 
@@ -207,13 +265,19 @@ impl Phase {
         let elapsed = self.started.elapsed();
         let allocations = ALLOCATIONS.load(Ordering::Relaxed) - self.allocations;
         let mib = bytes as f64 / (1 << 20) as f64;
+        let kib = |bytes: u64| bytes as f64 / 1024.0;
+        let live = LIVE.load(Ordering::Relaxed);
         println!(
-            "{:<28} {:>9.2} s | {:>9.1} MiB/s | peak RSS {:>8.1} MiB | allocs {:>9} | {}",
+            "{:<28} {:>9.3} s | {:>9.1} MiB/s | heap peak {:>9.1} KiB (+{:>8.1} over start, end {:>+9.1}) | RSS peak {:>7.1} MiB | allocs {:>7} | reads {:>8} | {}",
             self.name,
             elapsed.as_secs_f64(),
             mib / elapsed.as_secs_f64().max(1e-9),
+            kib(PEAK.load(Ordering::Relaxed)),
+            kib(PEAK.load(Ordering::Relaxed) - self.live),
+            kib(live) - kib(self.live),
             status_kib("VmHWM:") as f64 / 1024.0,
             allocations,
+            read_calls() - self.reads,
             detail,
         );
         elapsed
@@ -418,20 +482,20 @@ fn main() -> varlit::Result<()> {
     println!(
         "page cache {}",
         if cold {
-            "dropped before reopen (cold reads)"
+            "dropped before every read phase (cold reads)"
         } else {
             "could not be dropped (warm reads)"
         }
     );
 
     // Phase 2: reopen.
-    let phase = Phase::start("reopen");
+    let phase = Phase::cold("reopen");
     let reader = VarlitFile::open_readonly(spec(), &path)?;
     phase.finish(0, "open_readonly on the full file");
 
     let mut blob_entries = Vec::new();
     let mut event_entries = Vec::new();
-    let phase = Phase::start("directory walks");
+    let phase = Phase::cold("directory walks");
     reader.block_entries_into::<Blob>(&mut blob_entries)?;
     reader.block_entries_into::<Event>(&mut event_entries)?;
     phase.finish(
@@ -448,7 +512,7 @@ fn main() -> varlit::Result<()> {
     let mut blob = Blob::empty();
     let mut samples = Vec::with_capacity(512);
     let mut bytes = 0u64;
-    let phase = Phase::start("random blob decode x400");
+    let phase = Phase::cold("random blob decode x400");
     for k in 0..400u64 {
         let entry = &blob_entries[(mix(k) % blob_entries.len() as u64) as usize];
         let started = Instant::now();
@@ -463,7 +527,7 @@ fn main() -> varlit::Result<()> {
     let mut page_buffer = vec![0u8; 1 << 20];
     samples.clear();
     bytes = 0;
-    let phase = Phase::start("random blob stream x400");
+    let phase = Phase::cold("random blob stream x400");
     for k in 0..400u64 {
         let entry = &blob_entries[(mix(k ^ 0xabc) % blob_entries.len() as u64) as usize];
         let started = Instant::now();
@@ -484,7 +548,7 @@ fn main() -> varlit::Result<()> {
     let mut event = Event::empty();
     let mut event_samples = Vec::with_capacity(20_000);
     bytes = 0;
-    let phase = Phase::start("random event decode x20000");
+    let phase = Phase::cold("random event decode x20000");
     for k in 0..20_000u64 {
         let entry = &event_entries[(mix(k ^ 0x5eed) % event_entries.len() as u64) as usize];
         let started = Instant::now();
@@ -496,14 +560,14 @@ fn main() -> varlit::Result<()> {
 
     // Phase 6: latest value per key, then point lookups through it.
     let mut tails: HashMap<u64, u64> = HashMap::new();
-    let phase = Phase::start("key_tail_offsets_into");
+    let phase = Phase::cold("key_tail_offsets_into");
     reader.key_tail_offsets_into::<Event>(&mut tails)?;
     phase.finish(0, &format!("{} keys (tombstones included)", tails.len()));
     let keys: Vec<u64> = tails.keys().copied().take(20_000).collect();
     event_samples.clear();
     bytes = 0;
     let mut deleted = 0u64;
-    let phase = Phase::start("keyed point lookup x20000");
+    let phase = Phase::cold("keyed point lookup x20000");
     for key in &keys {
         let started = Instant::now();
         let entry = reader.record_entry_at(tails[key])?;
@@ -528,7 +592,7 @@ fn main() -> varlit::Result<()> {
     // Phase 7: every tick through a fixed page.
     let mut ticks = vec![Tick { at: 0, value: 0 }; 8192];
     let mut payload = Vec::new();
-    let phase = Phase::start("paged tick pass");
+    let phase = Phase::cold("paged tick pass");
     let mut page = reader.blocks::<Tick>(&mut payload, &mut ticks)?;
     let mut count = page.filled as u64;
     while let Some(next) = page.next {
@@ -542,7 +606,7 @@ fn main() -> varlit::Result<()> {
     phase.finish(count * 16, &format!("{count} ticks, 8192 per page"));
 
     // Phase 8: a full scan and a full checksum pass.
-    let phase = Phase::start("scan");
+    let phase = Phase::cold("scan");
     let mut events = 0u64;
     for event in reader.scan() {
         event?;
@@ -550,12 +614,16 @@ fn main() -> varlit::Result<()> {
     }
     phase.finish(file_bytes, &format!("{events} records"));
 
-    drop_page_cache();
-    let phase = Phase::start("verify_all");
+    let phase = Phase::cold("verify_all");
     let verified = reader.verify_all()?;
     phase.finish(file_bytes, &format!("{verified} records checksummed"));
 
     drop(reader);
+    // `MIXED_LOAD_KEEP=1` keeps the file for a follow-up measurement.
+    if std::env::var_os("MIXED_LOAD_KEEP").is_some() {
+        println!("kept {}", path.display());
+        return Ok(());
+    }
     std::fs::remove_file(&path)?;
     let _ = std::fs::remove_file(path.with_extension("varlit.lock"));
     Ok(())

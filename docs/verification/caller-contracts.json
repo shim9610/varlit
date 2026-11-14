@@ -1037,12 +1037,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:dc082ef44189a362]",
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:dc082ef44189a362]",
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1098,6 +1098,11 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_migrated_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<To>) -> std::result::Result<(), error::Error> [body:1fc6c49c339a046f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry, _4: Option<&[u8]>) -> std::result::Result<bool, error::Error> [body:9401c2b4ec3cb77f]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1239,12 +1244,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:dc082ef44189a362]",
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:dc082ef44189a362]",
+            "caller": "decode_record_into(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: &mut Vec<u8>, _5: &mut collections::MaterializationBudget, _6: &RefCell<ChunkCache>, _7: &mut T) -> std::result::Result<(), error::Error> [body:e6e89881412c40f9]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1300,6 +1305,11 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_migrated_into_in(_1: &file::VarlitFile, _2: &D, _3: &mut Vec<To>) -> std::result::Result<(), error::Error> [body:1fc6c49c339a046f]",
+            "target": "collections::MaterializationBudget::consume",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "file::<impl at crates/varlit-core/src/file/directory.rs>::blocks_page::{closure#0}(_1: &mut {closure@crates/varlit-core/src/file/directory.rs}, _2: usize, _3: &file::RecordIndexEntry, _4: Option<&[u8]>) -> std::result::Result<bool, error::Error> [body:9401c2b4ec3cb77f]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1527,12 +1537,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:e6721b64d6a07490]",
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:9c8e3203f548ffca]",
             "target": "Decoder::charge_materialization",
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:e6721b64d6a07490]",
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut Decoder<'_>) -> std::result::Result<(), error::Error> [body:9c8e3203f548ffca]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
@@ -1657,12 +1667,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:cd23e6280f6103e3]",
+            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:5136768c46ceb98c]",
             "target": "Decoder::charge_materialization",
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:cd23e6280f6103e3]",
+            "caller": "codec::fill_bytes(_1: &mut Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:5136768c46ceb98c]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
@@ -1759,12 +1769,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:ffc8885b4cb2ca38]",
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:0e98ac7021f21e32]",
             "target": "Decoder::charge_materialization",
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:ffc8885b4cb2ca38]",
+            "caller": "codec::<impl at crates/varlit-core/src/codec.rs>::decode_varlit_into(_1: &mut String, _2: &mut codec::Decoder<'_>) -> std::result::Result<(), error::Error> [body:0e98ac7021f21e32]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
@@ -1889,12 +1899,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:2be230b6bb392853]",
+            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:359e6670ef5bf73d]",
             "target": "Decoder::charge_materialization",
             "result": "model/caller-specific"
           },
           {
-            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:2be230b6bb392853]",
+            "caller": "codec::fill_bytes(_1: &mut codec::Decoder<'_>, _2: &mut Vec<u8>, _3: &str) -> std::result::Result<(), error::Error> [body:359e6670ef5bf73d]",
             "target": "Decoder::read_exact",
             "result": "model/caller-specific"
           },
@@ -2422,6 +2432,16 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks::{closure#0}(_1: {closure@crates/varlit-core/src/file/record_chunks.rs}, _2: TryFromIntError) -> error::Error [body:122555683dfd095b]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
@@ -2466,6 +2486,16 @@
           {
             "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
             "target": "ChunkHeader::chunk_len",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "target": "ChunkHeader::data_at",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "lay_plain_chunks::{closure#0}(_1: {closure@crates/varlit-core/src/file/record_chunks.rs}, _2: TryFromIntError) -> error::Error [body:122555683dfd095b]",
+            "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
           {

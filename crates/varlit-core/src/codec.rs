@@ -342,6 +342,11 @@ fn size_for_fill<T: ZeroInit>(out: &mut Vec<T>, len: usize, resource: &'static s
         requested: allocation_request::<T>(len),
     };
     let layout = std::alloc::Layout::array::<T>(len).map_err(|_| refused())?;
+    // The old contents are about to be overwritten, so its block is freed
+    // before the new one is taken: the two are never live together, and
+    // growing a value peaks at the new size instead of old + new. A refused
+    // allocation leaves `out` empty, as a failed fill does.
+    *out = Vec::new();
     // SAFETY: `len > capacity >= 0` and `T` is not zero-sized, so the layout
     // has a nonzero size. The block has `T`'s array layout for `len`
     // elements, every one a zero `T`, and comes from the global allocator
@@ -1851,6 +1856,11 @@ fn fill_bytes(decoder: &mut Decoder<'_>, out: &mut Vec<u8>, resource: &'static s
     decoder.charge_materialization(len as u64, resource)?;
     let bytes = decoder.read_exact(len)?;
     out.clear();
+    if out.capacity() < len {
+        // Growing would copy contents that are being replaced; free the old
+        // block first so the two are never live together.
+        *out = Vec::new();
+    }
     out.try_reserve_exact(len)
         .map_err(|_| Error::AllocationFailed {
             resource,
@@ -1912,6 +1922,10 @@ impl VarlitDecode for String {
         decoder.charge_materialization(len as u64, "string")?;
         let text = std::str::from_utf8(decoder.read_exact(len)?).map_err(|_| Error::InvalidUtf8)?;
         out.clear();
+        if out.capacity() < len {
+            // As for byte vectors: never hold the replaced block and the new one.
+            *out = String::new();
+        }
         out.try_reserve_exact(len)
             .map_err(|_| Error::AllocationFailed {
                 resource: "string",

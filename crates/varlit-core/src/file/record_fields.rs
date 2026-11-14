@@ -327,6 +327,9 @@ pub(crate) fn decode_record_into<T: VarlitBlock>(
         && entry.is_chunked()
     {
         entry.verify_snapshot_framing(spec, snapshot)?;
+        // Every chunk is about to be read, one at a time; let the kernel read
+        // the record ahead in large requests.
+        snapshot.will_need(entry.payload_offset, entry.payload_len);
         let frame_limit = budget.remaining();
         let mut walk = RecordFields {
             spec,

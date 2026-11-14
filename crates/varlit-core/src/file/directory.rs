@@ -460,10 +460,9 @@ impl VarlitFile {
     /// `self.index`, so a handle opened without a directory refuses by name
     /// instead of answering as though the file were empty.
     pub(super) fn resident_directory(&self, _operation: &'static str) -> Result<RecordList<'_>> {
-        if self.index.is_retained() {
-            Ok(RecordList::Kept(&self.index))
-        } else {
-            Ok(RecordList::Walked(WalkedRecords::new(self)?))
+        match self.index.kept() {
+            Some(kept) => Ok(RecordList::Kept(kept)),
+            None => Ok(RecordList::Walked(WalkedRecords::new(self)?)),
         }
     }
 
@@ -726,7 +725,7 @@ impl VarlitFile {
         // A non-resident block is not framed by the walk, and an empty page
         // would say "nothing was written" rather than "not through this door".
         crate::collections::ensure_resident_block::<T>(self.spec)?;
-        self.fill_page(from, out.len(), |filled, entry| {
+        self.fill_page(from, out.len(), |filled, entry, whole| {
             if entry.block_id != T::ID {
                 return Ok(false);
             }
@@ -740,6 +739,25 @@ impl VarlitFile {
             // A budget per record, owned by this call: each block is charged
             // on its own, and the budget never leaves the closure as a loan.
             let mut budget = MaterializationBudget::new(self.spec);
+            // A small plain record the walk's window already holds is checked
+            // and decoded from there, with the same checks and charge as the
+            // read below; this was one read per record.
+            if let Some(whole) = whole
+                && let Some(bytes) = entry.payload_from_whole(self.spec, &self.snapshot, whole)?
+            {
+                // `logical_payload_len_snapshot`'s last check, for a record
+                // whose logical length is its stored length.
+                self.spec
+                    .read_limits
+                    .check(ReadLimitKey::LogicalPayloadLen, entry.payload_len)?;
+                budget.consume(entry.payload_len)?;
+                budget.decode_into(
+                    bytes,
+                    T::ENDIAN.unwrap_or(self.spec.endian),
+                    &mut out[filled],
+                )?;
+                return Ok(true);
+            }
             decode_record_into(
                 self.spec,
                 &self.snapshot,
@@ -1325,7 +1343,40 @@ impl VarlitFile {
     /// Returns the number of records verified. A mismatch is
     /// [`Error::ChecksumMismatch`] naming the offending record's offset.
     pub fn verify_all(&self) -> Result<usize> {
-        self.verify_all_in(&self.resident_directory("verify_all")?)
+        if self.spec.integrity_policy == IntegrityPolicy::None {
+            return Ok(0);
+        }
+        if self.index.kept().is_some() {
+            return self.verify_all_in(&self.resident_directory("verify_all")?);
+        }
+        // No kept list: walk the file once with the read window, so a small
+        // record is checked from the bytes framing it already read instead of
+        // with a read of its own.
+        let mut verified = 0usize;
+        {
+            let mut payload = ScratchLoan::new(&self.record_cache);
+            let spec = self.spec.with_strict_read_validation();
+            let mut from = None;
+            loop {
+                let page = self.fill_page(from, 4096, |_, entry, whole| {
+                    if let Some(whole) = whole
+                        && entry
+                            .payload_from_whole(spec, &self.snapshot, whole)?
+                            .is_some()
+                    {
+                        return Ok(true);
+                    }
+                    self.verify_one(entry, &mut payload)?;
+                    Ok(true)
+                })?;
+                verified += page.filled;
+                match page.next {
+                    Some(next) => from = Some(next),
+                    None => break,
+                }
+            }
+        }
+        Ok(verified + self.verify_non_resident()?)
     }
 
     fn verify_all_in<D: RecordDirectory + ?Sized>(&self, dir: &D) -> Result<usize> {
@@ -1338,17 +1389,18 @@ impl VarlitFile {
         let mut payload = ScratchLoan::new(&self.record_cache);
         for entry in directory_records(dir) {
             let entry = entry?;
-            // `read_payload_snapshot` is the same check the read path performs,
-            // which is exactly the point: there is one verification in the
-            // crate, and this method chooses when it runs rather than adding a
-            // second copy of it.
-            entry.read_payload_snapshot_into(
-                self.spec.with_strict_read_validation(),
-                &self.snapshot,
-                &mut payload,
-            )?;
+            self.verify_one(&entry, &mut payload)?;
             verified += 1;
         }
+        drop(payload);
+        Ok(verified + self.verify_non_resident()?)
+    }
+
+    /// The non-resident blocks' records, which no walk of the resident
+    /// records lists.
+    fn verify_non_resident(&self) -> Result<usize> {
+        let mut verified = 0usize;
+        let mut payload = ScratchLoan::new(&self.record_cache);
         // A non-resident block's records are never in `self.index` (a
         // descriptor may only name a declared user block, and only ids below
         // `RESERVED_BLOCK_ID_START` can be declared), so this adds to the pass
@@ -1363,15 +1415,52 @@ impl VarlitFile {
             // than asserted away.
             for entry in self.block_chain(descriptor.block_id)? {
                 let entry = entry?;
-                entry.read_payload_snapshot_into(
-                    self.spec.with_strict_read_validation(),
-                    &self.snapshot,
-                    &mut payload,
-                )?;
+                self.verify_one(&entry, &mut payload)?;
                 verified += 1;
             }
         }
         Ok(verified)
+    }
+
+    /// One record of [`verify_all`](Self::verify_all).
+    ///
+    /// A record that fits the handle's scratch is read and checked there by
+    /// `read_payload_snapshot_into`, the same check the read path performs. A
+    /// longer one is checked by streaming it, so the scratch, which the handle
+    /// sized when it opened, never grows to the largest record in the file.
+    fn verify_one(&self, entry: &RecordIndexEntry, payload: &mut Vec<u8>) -> Result<()> {
+        // The same up-front checks `read_payload_snapshot_into` makes.
+        let spec = self.spec.with_strict_read_validation();
+        spec.read_limits
+            .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
+        entry.validate_payload_extent(self.snapshot.len())?;
+        // A record of at most a page is read whole onto the stack and checked
+        // there, as the read path does, without copying its payload anywhere.
+        const WHOLE: usize = 4096;
+        if let Some(whole) = entry.whole_record_len().filter(|len| *len <= WHOLE) {
+            let mut bytes = [0u8; WHOLE];
+            self.snapshot
+                .read_exact_at(entry.record_offset, &mut bytes[..whole])?;
+            let header_len = (entry.payload_offset - entry.record_offset) as usize;
+            let payload_end = header_len + entry.payload_len as usize;
+            let footer = match entry.footer_offset {
+                Some(at) => {
+                    let at = (at - entry.record_offset) as usize;
+                    &bytes[at..at + RECORD_FOOTER_LEN as usize]
+                }
+                None => &[][..],
+            };
+            return entry.verify_record_bytes(
+                spec,
+                &bytes[..header_len],
+                &bytes[header_len..payload_end],
+                footer,
+            );
+        }
+        if entry.payload_len as usize <= payload.capacity() {
+            return entry.read_payload_snapshot_into(spec, &self.snapshot, payload);
+        }
+        entry.verify_snapshot_streamed(spec, &self.snapshot)
     }
 
     /// How many records the resident directory holds — the positions
@@ -1419,7 +1508,7 @@ impl VarlitFile {
         from: Option<PageCursor>,
         out: &mut [RecordIndexEntry],
     ) -> Result<Page> {
-        self.fill_page(from, out.len(), |filled, entry| {
+        self.fill_page(from, out.len(), |filled, entry, _| {
             out[filled] = entry.clone();
             Ok(true)
         })
@@ -1432,7 +1521,7 @@ impl VarlitFile {
         &self,
         from: Option<PageCursor>,
         capacity: usize,
-        mut store: impl FnMut(usize, &RecordIndexEntry) -> Result<bool>,
+        mut store: impl FnMut(usize, &RecordIndexEntry, Option<&[u8]>) -> Result<bool>,
     ) -> Result<Page> {
         if capacity == 0 {
             return Err(Error::BufferTooSmall {
@@ -1450,7 +1539,7 @@ impl VarlitFile {
         let mut stored = Ok(());
         while filled < capacity {
             match walk.frame() {
-                Ok(Some(entry)) => match store(filled, &entry) {
+                Ok(Some(entry)) => match store(filled, &entry, walk.buffered_record(&entry)) {
                     Ok(true) => filled += 1,
                     Ok(false) => {}
                     Err(error) => {
@@ -1584,8 +1673,8 @@ impl VarlitFile {
         T: VarlitKeyedBlock,
         T::Key: Eq + Hash,
     {
-        if let Some(dir) = self.index.is_retained().then_some(&self.index) {
-            return self.key_tail_offsets_into_in::<T, _>(dir, out);
+        if let Some(dir) = self.index.kept() {
+            return self.key_tail_offsets_into_in::<T, _>(&dir, out);
         }
         // The chains reach exactly the records that move a keyed tail. A
         // format without them still answers, by walking the file.

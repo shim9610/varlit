@@ -132,10 +132,10 @@ impl VarlitFile {
                 }
                 Ok(())
             };
-            if self.index.is_retained() {
-                for ordinal in 0..self.index.len() {
-                    if !directory_skips(&self.index, ordinal, &[T::ID, TOMBSTONE_BLOCK_ID]) {
-                        consume(self.index.record_at(ordinal)?)?;
+            if let Some(kept) = self.index.kept() {
+                for ordinal in 0..kept.len() {
+                    if !directory_skips(&kept, ordinal, &[T::ID, TOMBSTONE_BLOCK_ID]) {
+                        consume(kept.entry_at(ordinal)?)?;
                     }
                 }
             } else {
@@ -267,17 +267,33 @@ impl VarlitFile {
         // buffer belongs to the writer, and a failed encode must not cost it.
         // Same shape as `StreamWriter::push_info`.
         let mut buffer = std::mem::take(&mut self.record_buffer);
-        let result =
-            match encode_logical_payload_limited_into(self.spec, block, endian, &mut buffer) {
-                Ok(()) => self.ensure_write()?.write_user_record(
-                    T::ID,
-                    T::VERSION,
-                    T::KIND,
-                    &buffer,
-                    prev_same_key_offset,
-                ),
-                Err(error) => Err(error),
-            };
+        // A variable record long enough to be stored in chunks gets its chunk
+        // header and table written in front of it, so room for them is kept
+        // ahead of every encoded payload and the payload is stored from where
+        // it was encoded. The room is zeroed once and kept between pushes.
+        let room = if T::KIND == BlockKind::Variable {
+            record_chunks::plain_prefix_room(
+                self.spec
+                    .read_limits
+                    .require(ReadLimitKey::LogicalPayloadLen)?
+                    .unwrap_or(u64::MAX),
+            )
+            .unwrap_or(0)
+        } else {
+            0
+        };
+        let result = (|| {
+            keep_room(&mut buffer, room)?;
+            encode_logical_payload_limited_after(self.spec, block, endian, &mut buffer)?;
+            self.ensure_write()?.write_user_record(
+                T::ID,
+                T::VERSION,
+                T::KIND,
+                &mut buffer,
+                room,
+                prev_same_key_offset,
+            )
+        })();
         self.record_buffer = buffer;
         let info = result?;
         self.apply_immediate::<T>(info, crate::ImmediateOperation::Append, mandatory)?;
@@ -379,8 +395,12 @@ impl VarlitFile {
         let _permit = self.ensure_write()?;
         self.ensure_user_block::<T>()?;
         crate::collections::ensure_registered_block::<T>(self.spec)?;
-        let payload = encode_internal_key_payload::<T>(self.spec, key)?;
-        self.write_tombstone_payload::<T>(&payload, prev_same_key_offset)
+        // The writer's own buffer holds the tombstone, as it holds a record.
+        let mut payload = std::mem::take(&mut self.record_buffer);
+        let result = encode_internal_key_payload_into::<T>(self.spec, key, &mut payload)
+            .and_then(|()| self.write_tombstone_payload::<T>(&payload, prev_same_key_offset));
+        self.record_buffer = payload;
+        result
     }
 
     /// Appends a tombstone whose canonical internal key payload is already

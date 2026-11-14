@@ -174,6 +174,14 @@ impl SnapshotFile {
     }
 
     #[inline]
+    /// [`PrimaryFile::will_need`] for a range inside this snapshot; a range
+    /// outside it is ignored, since the read that follows reports it.
+    pub(crate) fn will_need(&self, offset: u64, len: u64) {
+        if self.check_range(offset, len).is_ok() {
+            self.file.will_need(offset, len);
+        }
+    }
+
     pub(crate) fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> Result<()> {
         let len =
             u64::try_from(buffer.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;

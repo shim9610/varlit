@@ -1495,15 +1495,15 @@ impl VarlitFile {
         // What is validated is the handle's kept record list against the
         // file. A handle that keeps none has nothing that could have drifted:
         // every position it answers is read from the file itself.
-        if !self.index.is_retained() {
+        let Some(kept) = self.index.kept() else {
             return Ok(());
-        }
+        };
         let mut file = self.snapshot.try_clone_file()?;
         validate_generation_index(
             self.spec,
             &mut file,
             append_log_start_for_file(self)?,
-            &self.index,
+            kept,
         )
     }
 }

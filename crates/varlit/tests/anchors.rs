@@ -814,3 +814,38 @@ fn merge_and_compact_read_inputs_that_open_from_an_anchor() -> varlit::Result<()
     }
     Ok(())
 }
+
+/// A handle opened from an anchor keeps no record list, so `block_entries_into`
+/// answers by reading the file. It must list exactly what a paged walk of every
+/// record lists, in the same order.
+#[test]
+fn block_entries_without_a_record_list_match_a_paged_walk() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("chain.varlit");
+    write(&path, 3_000)?;
+    let file = spec().open_readonly(&path)?;
+    let mut page = vec![varlit::RecordIndexEntry::default(); 512];
+    for id in [20u32, 21] {
+        let mut walked = Vec::new();
+        let mut at = file.index_entries(&mut page)?;
+        loop {
+            walked.extend(
+                page[..at.filled]
+                    .iter()
+                    .filter(|e| e.block_id == id)
+                    .cloned(),
+            );
+            let Some(next) = at.next else { break };
+            at = file.index_entries_from(next, &mut page)?;
+        }
+        let mut listed = Vec::new();
+        if id == 20 {
+            file.block_entries_into::<Tick>(&mut listed)?;
+        } else {
+            file.block_entries_into::<Blob>(&mut listed)?;
+        }
+        assert_eq!(listed.len(), 3_000);
+        assert_eq!(listed, walked, "block {id}");
+    }
+    Ok(())
+}

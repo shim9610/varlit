@@ -3439,6 +3439,53 @@ impl RecordIndexEntry {
         self.verify_record_framing(spec, &header_bytes, footer)
     }
 
+    /// [`Self::verify_snapshot_record`] for a record whose payload is not in
+    /// memory: the framing is read and checked as there, and the payload is
+    /// streamed through the checksum with a fixed stack buffer instead of being
+    /// read whole. A pass over the file therefore holds the same memory
+    /// whatever its largest record is.
+    pub(super) fn verify_snapshot_streamed(
+        &self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+    ) -> Result<()> {
+        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let footer = if spec.read_validation().structure {
+            let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
+            snapshot.read_exact_at(self.record_offset, &mut header_bytes)?;
+            let footer = if let Some(footer_offset) = self.footer_offset {
+                snapshot.read_exact_at(footer_offset, &mut footer_bytes)?;
+                &footer_bytes[..]
+            } else {
+                &[]
+            };
+            self.verify_record_framing(spec, &header_bytes, footer)?;
+            footer
+        } else if self.footer_offset.is_some() {
+            footer_bytes = encode_record_footer(RecordFooterFields {
+                prev_same_block_offset: self.prev_same_block_offset,
+                prev_same_key_offset: self.prev_same_key_offset,
+                mutable_flags: self.mutable_flags,
+            })?;
+            &footer_bytes[..]
+        } else {
+            &[]
+        };
+        if !spec.read_validation().data_crc {
+            return Ok(());
+        }
+        // The payload is streamed a fixed buffer at a time; let the kernel
+        // read it ahead in large requests.
+        snapshot.will_need(self.payload_offset, self.payload_len);
+        let actual = checksum_record_file(spec, &mut snapshot.reader(), self, footer)?;
+        if actual != self.checksum {
+            return Err(Error::ChecksumMismatch {
+                offset: self.record_offset,
+            });
+        }
+        Ok(())
+    }
+
     /// Check bytes against captured framing without rereading file metadata.
     /// In CRC-only mode the captured header/footer supply the checksum input.
     pub(super) fn verify_captured_payload(&self, spec: FormatSpec, payload: &[u8]) -> Result<()> {

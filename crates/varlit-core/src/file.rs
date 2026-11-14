@@ -780,7 +780,7 @@ pub trait RecordDirectory {
 }
 
 /// Every entry of `dir` in order, fallible per item for the same reason
-/// [`ResidentIndex::iter`] is: producing one may read a file.
+/// [`Kept::iter`](resident_index::Kept::iter) is: producing one may read a file.
 ///
 /// A free function rather than a trait method with a default body, because a
 /// `-> impl Iterator` method forces `Self: Sized` and the most useful directory
@@ -811,7 +811,7 @@ fn directory_skips<D: RecordDirectory + ?Sized>(dir: &D, position: usize, wanted
     }
 }
 
-impl RecordDirectory for ResidentIndex {
+impl RecordDirectory for resident_index::Kept<'_> {
     fn record_count(&self) -> usize {
         self.len()
     }
@@ -821,7 +821,7 @@ impl RecordDirectory for ResidentIndex {
     }
 
     fn block_id_at(&self, position: usize) -> Option<u32> {
-        ResidentIndex::block_id_at(self, position)
+        resident_index::Kept::block_id_at(*self, position)
     }
 }
 
@@ -1019,6 +1019,14 @@ impl<'a> RecordMap<'a> {
     }
 
     /// Frames the next resident record and returns it without keeping it.
+    /// The whole of `entry`'s record — header, payload and footer — when the
+    /// walk's window still holds it from framing, so a reader of a small
+    /// record needs no read of its own.
+    pub(crate) fn buffered_record(&self, entry: &RecordIndexEntry) -> Option<&[u8]> {
+        self.window
+            .buffered(entry.record_offset, entry.whole_record_len()?)
+    }
+
     pub(crate) fn frame(&mut self) -> Result<Option<RecordIndexEntry>> {
         loop {
             if self.next >= self.end {
@@ -1172,6 +1180,13 @@ impl ReadAhead {
             start: 0,
             len: 0,
         })
+    }
+
+    /// The window's bytes for `offset..offset + len`, when it already holds
+    /// all of them.
+    pub(crate) fn buffered(&self, offset: u64, len: usize) -> Option<&[u8]> {
+        let at = usize::try_from(offset.checked_sub(self.start)?).ok()?;
+        self.bytes[..self.len].get(at..at.checked_add(len)?)
     }
 
     pub(crate) fn read(
@@ -1353,7 +1368,7 @@ impl RecordDirectory for WalkedRecords {
 // Short-lived and built once per read, so the walk is kept inline.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum RecordList<'a> {
-    Kept(&'a ResidentIndex),
+    Kept(resident_index::Kept<'a>),
     Walked(WalkedRecords),
 }
 
@@ -1717,6 +1732,46 @@ impl RecordIndexEntry {
             return None;
         }
         usize::try_from(end - self.record_offset).ok()
+    }
+
+    /// This record's payload out of `whole`, its bytes already read (header,
+    /// payload and footer), after exactly the checks
+    /// [`read_payload_snapshot_into`](Self::read_payload_snapshot_into) makes
+    /// when it reads a small record whole. `None` when that path would not
+    /// read this record whole: it is compressed or chunked, structure
+    /// validation is off, or `whole` is not exactly the record.
+    pub(crate) fn payload_from_whole<'b>(
+        &self,
+        spec: FormatSpec,
+        snapshot: &SnapshotFile,
+        whole: &'b [u8],
+    ) -> Result<Option<&'b [u8]>> {
+        if self.is_compressed()
+            || self.is_chunked()
+            || !spec.read_validation().structure
+            || self.whole_record_len() != Some(whole.len())
+        {
+            return Ok(None);
+        }
+        spec.read_limits
+            .check(ReadLimitKey::RecordPayloadLen, self.payload_len)?;
+        self.validate_payload_extent(snapshot.len())?;
+        let header_len = (self.payload_offset - self.record_offset) as usize;
+        let payload_end = header_len + self.payload_len as usize;
+        let footer = match self.footer_offset {
+            Some(at) => {
+                let at = (at - self.record_offset) as usize;
+                &whole[at..at + RECORD_FOOTER_LEN as usize]
+            }
+            None => &[][..],
+        };
+        self.verify_record_bytes(
+            spec,
+            &whole[..header_len],
+            &whole[header_len..payload_end],
+            footer,
+        )?;
+        Ok(Some(&whole[header_len..payload_end]))
     }
 
     pub(crate) fn read_payload_snapshot_into(
@@ -4900,9 +4955,9 @@ fn validate_generation_index(
     spec: FormatSpec,
     file: &mut PrimaryFile,
     append_start: u64,
-    index: &ResidentIndex,
+    index: resident_index::Kept<'_>,
 ) -> Result<()> {
-    validate_generation_file_inner(spec, file, append_start, index, false)
+    validate_generation_file_inner(spec, file, append_start, &index, false)
 }
 
 /// The same walk against entries the caller is still holding — the rewrite
@@ -6228,8 +6283,28 @@ fn encode_logical_payload_limited<T: VarlitEncode>(
     )
 }
 
-/// [`encode_logical_payload_limited`] into a caller-owned buffer.
-fn encode_logical_payload_limited_into<T: VarlitEncode>(
+/// Leaves exactly `room` bytes in `buffer`, zeroed the first time and kept
+/// from then on, for an encoder to append after.
+fn keep_room(buffer: &mut Vec<u8>, room: usize) -> Result<()> {
+    if buffer.len() >= room {
+        buffer.truncate(room);
+        return Ok(());
+    }
+    buffer.clear();
+    buffer
+        .try_reserve(room)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "record payload room",
+            requested: room as u64,
+        })?;
+    buffer.resize(room, 0);
+    Ok(())
+}
+
+/// Encodes a block's logical payload after what `buffer` already holds,
+/// limited by the format's logical payload limit, which counts only the
+/// appended bytes.
+fn encode_logical_payload_limited_after<T: VarlitEncode>(
     spec: FormatSpec,
     value: &T,
     endian: Endian,
@@ -6239,16 +6314,35 @@ fn encode_logical_payload_limited_into<T: VarlitEncode>(
         .read_limits
         .require(ReadLimitKey::LogicalPayloadLen)?
         .unwrap_or(u64::MAX);
-    crate::codec::encode_into_limited(
-        value,
+    let mut encoder = crate::codec::Encoder::new_limited_appending(
         endian,
         logical_limit,
         ReadLimitKey::LogicalPayloadLen.resource(),
-        buffer,
-    )
+        std::mem::take(buffer),
+    );
+    let encoded = value.encode_varlit(&mut encoder);
+    let (output, finished) = encoder.into_buffer_and_result();
+    *buffer = output;
+    encoded.and(finished)
 }
 
 fn encode_internal_key_payload<T>(spec: FormatSpec, key: &T::Key) -> Result<Vec<u8>>
+where
+    T: VarlitKeyedBlock,
+{
+    let mut payload = Vec::new();
+    encode_internal_key_payload_into::<T>(spec, key, &mut payload)?;
+    Ok(payload)
+}
+
+/// [`encode_internal_key_payload`] into a buffer the caller owns: the
+/// envelope and the key are written in place, so a writer that reuses its
+/// buffer encodes a tombstone without allocating.
+fn encode_internal_key_payload_into<T>(
+    spec: FormatSpec,
+    key: &T::Key,
+    payload: &mut Vec<u8>,
+) -> Result<()>
 where
     T: VarlitKeyedBlock,
 {
@@ -6264,32 +6358,34 @@ where
             actual: ENVELOPE_LEN,
             limit: logical_limit,
         })?;
-    let key_payload = encode_to_vec_limited(
-        key,
+    payload.clear();
+    payload
+        .try_reserve(ENVELOPE_LEN as usize)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "internal key payload",
+            requested: ENVELOPE_LEN,
+        })?;
+    payload.extend_from_slice(&T::ID.to_le_bytes());
+    payload.extend_from_slice(&[0; 8]);
+    let mut encoder = crate::codec::Encoder::new_limited_appending(
         spec.endian,
         key_limit,
         ReadLimitKey::LogicalPayloadLen.resource(),
-    )?;
-    let total_len = ENVELOPE_LEN.checked_add(key_payload.len() as u64).ok_or(
-        Error::ResourceArithmeticOverflow {
-            resource: "internal key payload length",
-        },
-    )?;
+        std::mem::take(payload),
+    );
+    let encoded = key.encode_varlit(&mut encoder);
+    let (output, finished) = encoder.into_buffer_and_result();
+    *payload = output;
+    if let Err(error) = encoded.and(finished) {
+        payload.clear();
+        return Err(error);
+    }
+    let key_len = (payload.len() - ENVELOPE_LEN as usize) as u64;
+    payload[4..12].copy_from_slice(&key_len.to_le_bytes());
+    let total_len = payload.len() as u64;
     spec.read_limits
         .check(ReadLimitKey::LogicalPayloadLen, total_len)?;
-    let total_len_usize =
-        usize::try_from(total_len).map_err(|_| Error::LengthOverflow { value: total_len })?;
-    let mut payload = Vec::new();
-    payload
-        .try_reserve_exact(total_len_usize)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "internal key payload",
-            requested: total_len,
-        })?;
-    payload.extend_from_slice(&T::ID.to_le_bytes());
-    payload.extend_from_slice(&(key_payload.len() as u64).to_le_bytes());
-    payload.extend_from_slice(&key_payload);
-    Ok(payload)
+    Ok(())
 }
 
 fn decode_internal_key_payload<T>(
@@ -7677,16 +7773,19 @@ impl FileMutationPermit<'_> {
             .file
             .overwrite_indexed_record(write, header_bytes, payload)
     }
+    /// Appends the user record encoded at `buffer[room..]`; see
+    /// [`prepare_user_record_payload_in_room`] for what the room is for.
     fn write_user_record(
         &mut self,
         block_id: u32,
         block_version: u16,
         kind: BlockKind,
-        payload: &[u8],
+        buffer: &mut [u8],
+        room: usize,
         prev_same_key_offset: Option<u64>,
     ) -> Result<AppendInfo> {
         self.check()?;
-        let payload = prepare_user_record_payload(self.spec, block_id, kind, payload)?;
+        let payload = prepare_user_record_payload_in_room(self.spec, block_id, kind, buffer, room)?;
         self.write_record_with_prev_key(
             block_id,
             block_version,

@@ -409,7 +409,17 @@ impl ResidentIndex {
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    pub(crate) fn entry_at(&self, position: usize) -> Result<RecordIndexEntry> {
+    /// The handle's record list, or `None` when it keeps none.
+    ///
+    /// Reading the list by position is only reachable through the returned
+    /// [`Kept`]. A handle opened from an anchor keeps no list, and a caller
+    /// that read one anyway got `UnexpectedEof` at run time (merge and compact
+    /// did, on any input past the first anchor); this makes that caller fail
+    /// to compile instead, so it must say what it does without a list.
+    pub(crate) fn kept(&self) -> Option<Kept<'_>> {
+        self.retained.then_some(Kept(self))
+    }
+    fn entry_at(&self, position: usize) -> Result<RecordIndexEntry> {
         let row = self.row(position)?.ok_or(Error::UnexpectedEof)?;
         fault_record_entry(
             &self.snapshot,
@@ -756,10 +766,28 @@ impl ResidentIndex {
         }
         self.rewritten.as_ref().unwrap().get(position)
     }
+}
+
+/// Proof that a handle keeps its record list, and the only way to read it by
+/// position. See [`ResidentIndex::kept`].
+#[derive(Clone, Copy)]
+pub(crate) struct Kept<'a>(&'a ResidentIndex);
+
+impl<'a> Kept<'a> {
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+    pub(crate) fn entry_at(self, position: usize) -> Result<RecordIndexEntry> {
+        self.0.entry_at(position)
+    }
+    pub(crate) fn block_id_at(self, position: usize) -> Option<u32> {
+        self.0.block_id_at(position)
+    }
     pub(crate) fn iter(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = Result<RecordIndexEntry>> + ExactSizeIterator + '_ {
-        (0..self.len()).map(|at| self.entry_at(at))
+        self,
+    ) -> impl DoubleEndedIterator<Item = Result<RecordIndexEntry>> + ExactSizeIterator + 'a {
+        let index = self.0;
+        (0..index.len()).map(move |at| index.entry_at(at))
     }
 }
 

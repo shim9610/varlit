@@ -117,6 +117,51 @@ impl ChunkHeader {
     }
 }
 
+/// The room [`lay_plain_chunks`] needs in front of a logical payload of up to
+/// `max_logical` bytes, when that is small enough (at most 1 MiB of header and
+/// table) for a writer to keep it in front of every payload it encodes.
+pub(crate) fn plain_prefix_room(max_logical: u64) -> Option<usize> {
+    let count = max_logical.div_ceil(CHUNK_LEN);
+    let room = CHUNK_HEADER_LEN.checked_add(CHUNK_ENTRY_LEN.checked_mul(count)?)?;
+    if room > 1 << 20 {
+        return None;
+    }
+    usize::try_from(room).ok()
+}
+
+/// Writes the header and table of a plain (uncompressed) chunked payload
+/// directly in front of the logical bytes at `buffer[room..]` and returns
+/// where the stored payload starts.
+///
+/// `buffer[start..]` is then byte for byte what [`encode_chunked`] returns for
+/// the same logical bytes without compression, and no logical byte has moved:
+/// the payload is stored from the buffer it was encoded into instead of being
+/// copied into a new one.
+pub(crate) fn lay_plain_chunks(buffer: &mut [u8], room: usize) -> Result<usize> {
+    let logical_len = buffer
+        .len()
+        .checked_sub(room)
+        .ok_or(malformed("chunk room past the encoded payload"))? as u64;
+    let header = ChunkHeader::new(None, logical_len);
+    let prefix = usize::try_from(header.data_at()).map_err(|_| Error::LengthOverflow {
+        value: header.data_at(),
+    })?;
+    let start = room.checked_sub(prefix).ok_or(malformed(
+        "chunk table larger than the room set aside for it",
+    ))?;
+    let (front, logical) = buffer.split_at_mut(room);
+    let front = &mut front[start..];
+    front[..CHUNK_HEADER_LEN as usize].copy_from_slice(&header.encode()?);
+    for (index, chunk) in logical.chunks(CHUNK_LEN as usize).enumerate() {
+        let end = index as u64 * CHUNK_LEN + chunk.len() as u64;
+        let at = CHUNK_HEADER_LEN as usize + index * CHUNK_ENTRY_LEN as usize;
+        front[at..at + 8].copy_from_slice(&end.to_le_bytes());
+        front[at + 8..at + 12].copy_from_slice(&crc32fast::hash(chunk).to_le_bytes());
+        front[at + 12..at + 16].fill(0);
+    }
+    Ok(start)
+}
+
 /// Encodes `logical` as a chunked payload, compressing each chunk on its own
 /// when `compression` is given.
 pub(crate) fn encode_chunked(
@@ -354,6 +399,36 @@ mod tests {
 
     fn sample(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i * 31 % 251) as u8).collect()
+    }
+
+    /// A payload laid out in place in front of its encoded bytes is byte for
+    /// byte the one `encode_chunked` builds, whatever room was set aside and
+    /// whatever was left in that room by an earlier record.
+    #[test]
+    fn plain_chunks_laid_in_place_match_the_copied_encoding() {
+        let room = plain_prefix_room(16 * CHUNK_LEN).unwrap();
+        for len in [
+            CHUNK_LEN as usize + 1,
+            2 * CHUNK_LEN as usize,
+            3 * CHUNK_LEN as usize + 77,
+            16 * CHUNK_LEN as usize,
+        ] {
+            let logical = sample(len);
+            let mut buffer = vec![0xA5; room];
+            buffer.extend_from_slice(&logical);
+            let start = lay_plain_chunks(&mut buffer, room).unwrap();
+            assert_eq!(
+                &buffer[start..],
+                &encode_chunked(&logical, None).unwrap()[..],
+                "len {len}"
+            );
+            assert_eq!(&buffer[room..], &logical[..], "the payload did not move");
+        }
+        // A table larger than the room is refused, never written over the data.
+        let mut buffer = vec![0; 8];
+        buffer.extend_from_slice(&sample(2 * CHUNK_LEN as usize));
+        assert!(lay_plain_chunks(&mut buffer, 8).is_err());
+        assert_eq!(plain_prefix_room(u64::MAX), None);
     }
 
     #[test]

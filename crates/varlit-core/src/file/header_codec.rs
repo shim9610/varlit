@@ -778,6 +778,41 @@ pub(super) fn prepare_user_record_payload<'a>(
     })
 }
 
+/// [`prepare_user_record_payload`] for a logical payload a writer encoded at
+/// `buffer[room..]`, with `room` bytes set aside in front of it.
+///
+/// A payload stored as plain chunks gets its header and table written into
+/// that room and is borrowed where it was encoded, instead of being copied
+/// into a new buffer of its own size. Every other payload is prepared exactly
+/// as [`prepare_user_record_payload`] prepares it.
+pub(super) fn prepare_user_record_payload_in_room<'a>(
+    spec: FormatSpec,
+    block_id: u32,
+    kind: BlockKind,
+    buffer: &'a mut [u8],
+    room: usize,
+) -> Result<StoredPayload<'a>> {
+    let logical_len = buffer
+        .len()
+        .checked_sub(room)
+        .ok_or(Error::InvalidCanonicalEncoding(
+            "payload room past its buffer",
+        ))? as u64;
+    if record_chunks::chunking_applies(spec, kind, logical_len)
+        && variable_compression_for_block(spec, block_id).is_none()
+    {
+        spec.read_limits
+            .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
+        let start = record_chunks::lay_plain_chunks(buffer, room)?;
+        return Ok(StoredPayload {
+            flags: RECORD_FLAG_CHUNKED,
+            uncompressed_len_hint: 0,
+            bytes: Cow::Borrowed(&buffer[start..]),
+        });
+    }
+    prepare_user_record_payload(spec, block_id, kind, &buffer[room..])
+}
+
 /// A variable payload longer than one chunk, stored chunked: compressed per
 /// chunk when the block's compression policy applies to it (and, with
 /// `only_if_smaller`, pays off), as plain chunks otherwise.

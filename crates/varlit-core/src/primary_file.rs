@@ -201,6 +201,42 @@ impl PrimaryFile {
         self.file.set_len(physical)
     }
 
+    /// Tells the kernel the logical range `offset..offset + len` is about to
+    /// be read whole, so it can fetch it with large requests ahead of a reader
+    /// that walks it a fixed buffer at a time. Only a hint: the pages go to the
+    /// kernel's cache, nothing is held by this process, and a refusal changes
+    /// nothing but speed.
+    pub(crate) fn will_need(&self, offset: u64, len: u64) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = self.file.as_raw_fd();
+            let advise = |physical: u64, len: u64| {
+                if let (Ok(at), Ok(len)) =
+                    (libc::off_t::try_from(physical), libc::off_t::try_from(len))
+                {
+                    // SAFETY: `fd` is this handle's open file for the whole
+                    // call, and `posix_fadvise` reads nothing but its integer
+                    // arguments.
+                    unsafe { libc::posix_fadvise(fd, at, len, libc::POSIX_FADV_WILLNEED) };
+                }
+            };
+            match self.layout {
+                None => advise(offset, len),
+                Some(layout) => {
+                    let _ = layout.split(offset, len, |segment| {
+                        if let Segment::Data { physical, len, .. } = segment {
+                            advise(physical, len);
+                        }
+                        Ok(())
+                    });
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "freebsd")))]
+        let _ = (offset, len);
+    }
+
     /// Reads as many bytes as one physical run holds, at logical `offset`.
     pub(crate) fn read_at(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
         let Some(layout) = self.layout else {
