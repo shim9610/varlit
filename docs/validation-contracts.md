@@ -81,8 +81,9 @@ This is an omission check and an executable regression contract, not a proof tha
 the assertions are sufficient. Review their expected results and hostile inputs.
 The inventory uses Rust syntax, not compiler type resolution; implementation-only
 changes behind an unchanged interface still need ordinary regression review.
-Unsupported `include!` expansion and conditional module paths are rejected until
-their source traversal is implemented.
+Item-level `include!` with a literal path inside the crate is inspected as part
+of the including file. Other `include!` uses and conditional module paths are
+rejected until their source traversal is implemented.
 Tests and build-time tooling add no library runtime work.
 
 ## Failure diagnostics

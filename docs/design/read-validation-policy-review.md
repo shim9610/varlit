@@ -126,7 +126,7 @@ The comparison harness uses identical logical work, grouping, key order,
 publication size and query locality across snapshots/modes. Pre-PR main and the
 pre-change PR are separate baselines. Identical pre-change binaries provide A/A
 controls. Timing samples are separate from sampled resource probes; CPU, memory,
-temporary storage and reader drain remain charged. The existing **4 CPU / 16 GiB /
-32 GiB** resource caps remain unchanged. No timing qualification or universal
+temporary storage and reader drain remain charged. The existing 4 CPU / 16 GiB /
+32 GiB resource caps remain unchanged. No timing qualification or universal
 speedup is implied by an option name. Whole-owner initialization proofs remain
-in the separately planned library, as agreed.
+in the separately planned library.

@@ -23,7 +23,7 @@ python3 scripts/check_miri.py --test fallible_ownership --output target/miri-rep
 The gate records its toolchain, exact selected tests and complete output in
 `target/miri-report/`. Exclusions and reasons are in
 `scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
-All 55 exclusions also have alternatives and remaining gaps in
+All 53 exclusions also have alternatives and remaining gaps in
 `scripts/miri-exclusion-audit.json`. Alternatives are not equivalent Miri proofs.
 Directory `fsync`, native pathname cleanup and the real-file redb oracle require
 native tests and ASan. Miri does not establish filesystem durability or cover

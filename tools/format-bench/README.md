@@ -6,10 +6,9 @@ transactional point updates (SQLite, `oltp`), column analytics (Parquet,
 `analytics`), high-rate heterogeneous streams followed by several readers
 (Varlit, `mixed`) and in-place updates of a bounded cell grid with followers
 (the Varlit matrix, `cells`). A scenario is defined by its data and the application's
-requirements; every engine then solves it with the best choice it offers,
-including the layout, sync policy and read path its own documentation
-recommends. Every result is verified against an in-memory oracle (a mismatch
-aborts the run).
+requirements; each engine is configured with the layout, sync policy and read
+path listed below for that scenario. Results are verified against an in-memory
+oracle; a mismatch makes that benchmark process fail.
 
 ```sh
 cargo build --release --manifest-path tools/format-bench/Cargo.toml
@@ -18,19 +17,25 @@ python3 tools/format-bench/report.py /abs/real-disk/dir      # results tables
 target/release/varlit-format-bench bench <scenario> <format> <fresh-dir>
 ```
 
+`run.py` covers `grid`, `oltp` and `analytics`. `mixed` and `cells` are run by
+`sweep_mixed.py` and `sweep_cells.py`.
+
 Use a real disk, not tmpfs: durable publication (fsync) is part of the work.
-`--gate` runs a SQLite transaction probe before and after every repeat and
-redoes a repeat if the disk slowed down during it (consumer SSDs degrade after
-tens of GB of writes; this happened twice while developing the harness).
+`--gate` runs a disk probe (1000 x 4 KiB write + `fdatasync`) before and after
+every repeat and redoes a repeat if the probe slowed down during it (consumer
+SSDs can slow down after tens of GB of writes; this happened twice while
+developing the harness).
 
 Engines: SQLite (rusqlite `bundled`), HDF5 1.14 (`hdf5-metno` `static`, with
-the Blosc-zstd filter), Parquet (arrow-rs 60), Varlit from this checkout. All
-single-threaded.
+the Blosc-zstd filter), Parquet (arrow-rs 60), Varlit from this checkout. Each
+engine has one writer thread; `mixed` adds producer threads, and `mixed`/`cells`
+followers are separate processes.
 
 ## How results are measured
 
-- **Write** includes durable completion (fsync / `sync()` / commit).
-- **Reads** are steady state: queries on an open handle with the OS cache warm.
+- Write time includes durable completion (fsync / `sync()` / commit).
+- Reads, except in `grid`, are steady state: queries on an open handle with the
+  OS cache warm. `grid` reads once from a cold cache.
   Open time is excluded because handles are meant to stay open. Cold-cache and
   open numbers are still recorded in `results.json` (`cold_*`, `*_open_ms`).
 - `MB` is allocated disk space for all files, sidecars included.
@@ -77,7 +82,7 @@ transactions, each applying the net balance deltas of 10 random transfers
 
 | format | layout |
 |---|---|
-| varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per indexed record (finite key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends **one** delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
+| varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per indexed record (finite key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends one delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
 | varlit-matrix-packed | update-in-place alternative: 256 accounts per 11 KiB matrix cell, read-modify-write of touched cells, `sync()` per transaction, `compact_matrix()` at the end; branch index packed 1024 ids per cell |
 | sqlite | INTEGER PRIMARY KEY, index on branch built after load, `UPDATE ... SET balance = balance + ?`, WAL + FULL |
 | hdf5 | one dataset per column, CSR branch index; point-selection read + write per transaction, flush + fsync (no transactional atomicity) |
@@ -159,21 +164,19 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
-commit and caller-buffer API). Disk-gated (SQLite control 0.50 to 0.51 s). All
+commit and caller-buffer API). Disk-gated (disk probe 0.50 to 0.51 s). All
 runs verified every record.
 
 Single scenarios: medians of 3 gated repeats.
 
 ### Summary
 
-Each engine is strong in its own scenario and each has clear weak spots.
-
 | scenario | best | Varlit position |
 |---|---|---|
 | grid (HDF5) | Varlit and HDF5 level (all reads 2.18 vs 2.23 s); HDF5 writes fastest (16.9 s) | fastest on time series (70 vs 103 ms); only the first axis can grow (HDF5 can extend any axis); no mmap path at this size |
-| oltp (SQLite) | SQLite for throughput (0.51 s / 1000 txn), point reads and aggregates | fastest load (0.06 s) and lowest p99 (1.18 ms), but 1.8x SQLite's transaction time |
+| oltp (SQLite) | SQLite for throughput (0.51 s / 1000 txn), point reads and aggregates | fastest load (0.06 s, tied with HDF5) and lowest p99 (1.18 ms), but 1.8x SQLite's transaction time |
 | analytics (Parquet) | Varlit for Q1 group-by (47.6 ms); SQLite with its index for Q2 ranges (24.6 ms) | slowest on Q2 (38.5 ms vs Parquet 30.0); SQLite pays 4.7 s writes and 2.4x size |
-| mixed (Varlit) | varlit-native for throughput in every cell, the only format with 0 % late windows | stream Varlit cannot use a loss bound and degrades with four followers |
+| mixed (Varlit) | varlit-native for throughput in every cell, the only format with 0 % late windows at both freshness bounds | stream Varlit cannot use a loss bound and degrades with four followers |
 | cells (Varlit matrix) | varlit-native (1522 / 6440 batches/s), then SQLite; no torn reads for either | the matrix is the slowest updater (483 batches/s at any loss bound) and grows 1.7 GB for 133 MB of updates; HDF5 readers saw torn and corrupt cells |
 
 Late % is the share of windows a follower saw after the freshness bound in
@@ -216,8 +219,8 @@ cache, medians of 3 gated repeats. Bold = best per row.
 | 4 ensemble means ms | 34.8 | **33.2** | 38.0 | 37.4 | 43.9 |
 
 - Varlit and HDF5 are level overall (2.18 vs 2.23 s); Varlit is faster on
-  time series (70 vs 103 ms) and ensemble means, HDF5 on writes and cubes by a
-  few percent. SQLite and Parquet take 1.5-1.7x as long.
+  time series (70 vs 103 ms) and ensemble means, HDF5 on writes (16.9 vs
+  18.8 s) and cubes (1092 vs 1110 ms). SQLite and Parquet take 1.5-1.7x as long.
 - Each engine reads one 32 KiB chunk (or one run of adjacent chunks) per
   positional read. Before VMAT v6 and the coalesced generation read, Varlit
   split every cell into three reads; the fixed-extent layout measured 3.44 s
@@ -294,7 +297,7 @@ Four all-types followers (plus a B-only follower):
 
 ### cells: in-place cell updates with four followers (`sweep_cells.py`, medians of 3 gated repeats)
 
-2026-11-12, same host, disk-gated (SQLite control 0.49 to 0.50 s, after
+2026-11-12, same host, disk-gated (disk probe 0.49 to 0.50 s, after
 `fstrim`). 2000 batches of 64 + 1 cells. Lag = cell 0 publication to a
 follower seeing it (worst follower). Torn and corrupt are summed over the
 three repeats. Growth = file growth during the 2000 batches (logical updates:

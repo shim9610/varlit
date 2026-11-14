@@ -53,9 +53,10 @@ python3 tools/storage-bench/run.py --suite smoke --repeats 1 --probe --output /a
 ```
 
 Smoke checks establish operation/oracle behavior, not performance qualification.
-The runner expects an existing cgroup capped at 4 CPU / 16 GiB and a 32 GiB storage
-budget. It does not raise those limits. It restricts affinity to at most four
-available CPUs, refuses profiles with less than 3 GiB free, and uses a free-space
+The runner requires an existing cgroup whose `memory.max` is at most 16 GiB and
+records `cpu.max` and a nominal 32 GiB storage budget; the intended setup is
+4 CPU / 16 GiB / 32 GiB. It does not raise those limits. It restricts affinity
+to at most four available CPUs, refuses profiles with less than 3 GiB free, and uses a free-space
 watchdog with a 1 GiB reserve. Allow for compaction copies and retained reader
 files. A refusal is a result; do not replace it silently with a larger budget.
 
@@ -78,7 +79,7 @@ The `full` grid includes individual-record controls; its standalone output is no
 an adequate grouped-item comparison. Keep grouped workloads and table-oriented
 adverse cases explicit. Compare write/read phases separately with equal query
 work, reader counts and publication sizes. Do not combine the fastest phase from
-several engine configurations into an imaginary configuration.
+several engine configurations into one result.
 
 The runner records source/binary hashes, commands, configuration, native versions,
 stdout/stderr and failures. A C exec/wait4 wrapper avoids inheriting Python's

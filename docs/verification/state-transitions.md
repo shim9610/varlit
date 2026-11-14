@@ -48,7 +48,7 @@ Built-in implementations carry type-bound, invariant evidence with a private
 constructor. Composite evidence propagates whether component codecs can invoke
 user code, allowing one outer frame to serve nested callbacks. They preserve the
 invariant through the same checked primitives and route extensible element callbacks through `decode_value`. Raw trait dispatch is
-confined to two private static adapters; the compiler checks all other compiled
+confined to three private static adapters; the compiler checks all other compiled
 functions for bypasses. Compile-fail tests reject evidence construction and reuse
 for a different output type. No runtime option disables the boundary.
 
