@@ -324,5 +324,54 @@
     "alternative": "not-required",
     "portable_tests": [],
     "remaining_gap": "Ignored native probe; no routine execution or Miri coverage claimed."
+  },
+  {
+    "test": "indexed::tests::sync_publishes_on_the_primary_alone_and_readers_take_the_tail",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::the_confirm_policy_bounds_the_unconfirmed_tail",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::a_torn_last_sync_is_cut_back_to_the_marker_before_it",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::damage_before_a_later_marker_is_refused_not_cut",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::repeated_updates_reuse_sidecar_pages_and_stale_readers_are_told",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "indexed::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
+  },
+  {
+    "test": "stream::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "category": "unsupported-os",
+    "alternative": "native-and-asan",
+    "portable_tests": [],
+    "remaining_gap": "Native/ASan retain this test. Miri does not establish its OS interaction or durability behavior."
   }
 ]

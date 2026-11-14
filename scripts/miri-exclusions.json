@@ -182,5 +182,33 @@
   {
     "test": "pib_probe::real_file_positional_io_at_one_tib_smoke",
     "reason": "Explicitly ignored native sparse-file probe requiring integrity and filesystem support; not an executed Miri contract."
+  },
+  {
+    "test": "indexed::tests::sync_publishes_on_the_primary_alone_and_readers_take_the_tail",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::the_confirm_policy_bounds_the_unconfirmed_tail",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::a_torn_last_sync_is_cut_back_to_the_marker_before_it",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::damage_before_a_later_marker_is_refused_not_cut",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::repeated_updates_reuse_sidecar_pages_and_stale_readers_are_told",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "indexed::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
+  },
+  {
+    "test": "stream::tests::open_recovers_the_synced_tail_and_cuts_the_unsynced_one",
+    "reason": "Reproduced with nightly-2026-10-12: writer creation syncs the parent directory, but `fsync` is only supported on file-backed file descriptors. Retained in native tests and ASan."
   }
 ]
