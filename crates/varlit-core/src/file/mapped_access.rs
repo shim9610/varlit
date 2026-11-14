@@ -517,7 +517,7 @@ impl VarlitFile {
             layout.logical_len(mmap.len() as u64)
         });
         let source = MmapSource {
-            crossing: MmapSource::crossing_places(layout, logical_len),
+            crossing: MmapSource::crossing_places(layout, logical_len)?,
             mmap,
             layout,
         };

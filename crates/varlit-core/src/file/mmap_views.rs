@@ -428,9 +428,22 @@ impl MmapSource {
     pub(super) fn crossing_places(
         layout: Option<crate::anchor::AnchorLayout>,
         logical_len: u64,
-    ) -> Box<[CrossingCopy]> {
+    ) -> Result<Box<[CrossingCopy]>> {
         let anchors = layout.map_or(0, |layout| layout.anchors_before(logical_len));
-        (0..=anchors).map(|_| std::sync::OnceLock::new()).collect()
+        let refused = || Error::AllocationFailed {
+            resource: "mapped matrix anchor places",
+            requested: anchors.saturating_add(1),
+        };
+        let count = usize::try_from(anchors)
+            .ok()
+            .and_then(|anchors| anchors.checked_add(1))
+            .ok_or_else(refused)?;
+        // Reserved exactly, so filling it and turning it into a box never
+        // reallocates: a refusal is reported, never an abort.
+        let mut places = Vec::new();
+        places.try_reserve_exact(count).map_err(|_| refused())?;
+        places.resize_with(count, std::sync::OnceLock::new);
+        Ok(places.into_boxed_slice())
     }
 
     /// `[offset, offset + len)` copied out of the mapping around the anchor

@@ -182,7 +182,12 @@ impl<V: RangeLen> Ranges<V> {
             return Ok(Some(std::mem::replace(old, value)));
         }
         let first = target / BUCKET;
-        let last = (target + len - 1) / BUCKET;
+        // A range that would end past the last byte offset is no range a file
+        // holds; offsets come from the file, so this is refused, not assumed.
+        let last = target
+            .checked_add(len - 1)
+            .ok_or(Error::InvalidMatrixLayout)?
+            / BUCKET;
         self.values
             .try_reserve(1)
             .map_err(|_| refused(self.resource, 32))?;
@@ -217,7 +222,9 @@ impl<V: RangeLen> Ranges<V> {
         if len == 0 || self.values.is_empty() {
             return Ok(());
         }
-        let end = offset + len;
+        // `offset` comes from the file; a query that would run past the last
+        // byte offset is refused rather than overflowing.
+        let end = offset.checked_add(len).ok_or(Error::InvalidMatrixLayout)?;
         for bucket in offset / BUCKET..=(end - 1) / BUCKET {
             let Some(list) = self.buckets.get(&bucket) else {
                 continue;
@@ -226,7 +233,7 @@ impl<V: RangeLen> Ranges<V> {
                 let Some(value) = self.values.get(target) else {
                     continue;
                 };
-                if *target < end && target + value.range_len() > offset {
+                if *target < end && target.saturating_add(value.range_len()) > offset {
                     visit(*target, value)?;
                 }
             }
@@ -257,6 +264,35 @@ impl<V: RangeLen> Ranges<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Offsets come from the file, so ranges and queries that would run past
+    /// the last byte offset are refused instead of overflowing (found by the
+    /// `matrix_arbitrary` fuzz target as an add-overflow panic).
+    #[test]
+    fn ranges_past_the_last_offset_are_refused_not_overflowed() {
+        let mut ranges: Ranges<Vec<u8>> = Ranges::new("test ranges");
+        assert!(matches!(
+            ranges.insert(u64::MAX - 3, vec![0; 10]),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert!(ranges.is_empty());
+        ranges.insert(u64::MAX - 20, vec![1; 10]).unwrap();
+        let mut seen = 0;
+        assert!(matches!(
+            ranges.for_each_overlapping(u64::MAX - 5, 10, &mut |_, _| {
+                seen += 1;
+                Ok(())
+            }),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        ranges
+            .for_each_overlapping(u64::MAX - 20, 10, &mut |_, _| {
+                seen += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(seen, 1);
+    }
 
     #[test]
     fn overlapping_ranges_are_found_across_buckets_and_after_retain() {
