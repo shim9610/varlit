@@ -4,8 +4,22 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScanIntent {
     ReadOnly,
+    /// A read-only handle catching up with a file another handle is still
+    /// writing. Exactly [`ScanIntent::ReadOnly`] except at the end: a frame
+    /// that runs past the current end of the file is the writer's next
+    /// record, half written, so the walk stops before it instead of
+    /// reporting the file damaged. Opening a file keeps `ReadOnly`, so a torn
+    /// tail found there is still reported.
+    Follow,
     Writer,
     Recover,
+}
+
+impl ScanIntent {
+    /// Whether the scan only reads, and so proves nothing a writer relies on.
+    fn reads_only(self) -> bool {
+        matches!(self, Self::ReadOnly | Self::Follow)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1533,7 +1547,7 @@ fn anchored_open<B: ScanBuffer>(
     out.reset();
     let mut progress = ScanProgress::new(spec, anchor.record_start, 0, None)?;
     progress.scanned.seed_from_anchor(&summary)?;
-    if intent != ScanIntent::ReadOnly && spec.block_residency.iter().any(|block| !block.resident) {
+    if !intent.reads_only() && spec.block_residency.iter().any(|block| !block.resident) {
         // As the full scan does for a writer: the boundaries this walk frames
         // are proved as it goes. One before the anchor is discovered on demand.
         progress.scanned.boundaries = Some(resident_index::BoundaryProof::new(
@@ -3024,6 +3038,7 @@ pub(super) fn resume_record_scan<B: ScanBuffer>(
             {
                 Some(offset)
             }
+            CommitPolicy::None if intent == ScanIntent::Follow => Some(offset),
             CommitPolicy::None => None,
             CommitPolicy::RecordFooter => Some(offset),
             CommitPolicy::TransactionMarker(_) => Some(latest_commit_end.unwrap_or(header_len)),
@@ -3064,7 +3079,7 @@ pub(super) fn resume_record_scan<B: ScanBuffer>(
                 // later retry must not charge its extent for a second time.
                 accounting = before_attempt;
                 match intent {
-                    ScanIntent::ReadOnly => break,
+                    ScanIntent::ReadOnly | ScanIntent::Follow => break,
                     ScanIntent::Recover if spec.recovery_policy == RecoveryPolicy::TruncateTail => {
                         file.inner().set_len(tail.truncate_to)?;
                         break;
@@ -3170,7 +3185,7 @@ pub(super) fn scan_records_range_at_len<B: ScanBuffer>(
 ) -> Result<ScannedIndex> {
     entries.reset();
     let mut progress = ScanProgress::new(spec, from, prefix_charge, resume_commit_end)?;
-    if intent != ScanIntent::ReadOnly && spec.block_residency.iter().any(|block| !block.resident) {
+    if !intent.reads_only() && spec.block_residency.iter().any(|block| !block.resident) {
         progress.scanned.boundaries = Some(resident_index::BoundaryProof::new(
             from,
             resident_index::boundary_budget(spec),

@@ -275,7 +275,7 @@ impl VarlitFile {
             self.spec,
             &mut file,
             progress,
-            ScanIntent::ReadOnly,
+            ScanIntent::Follow,
             &mut pending.rows,
             file_len,
         )?;
@@ -294,7 +294,7 @@ impl VarlitFile {
                 self.spec,
                 &mut file,
                 ScanProgress::new(self.spec, from, 0, Some(from))?,
-                ScanIntent::ReadOnly,
+                ScanIntent::Follow,
                 &mut pending.rows,
                 file_len,
             )?;

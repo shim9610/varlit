@@ -512,8 +512,13 @@ impl VarlitFile {
                 })?,
             }
         }
+        let mmap = mapping.make_read_only()?;
+        let logical_len = layout.map_or(mmap.len() as u64, |layout| {
+            layout.logical_len(mmap.len() as u64)
+        });
         let source = MmapSource {
-            mmap: mapping.make_read_only()?,
+            crossing: MmapSource::crossing_places(layout, logical_len),
+            mmap,
             layout,
         };
         let tiles = crate::matrix_tiles::api::TiledMatrix::open_reader(

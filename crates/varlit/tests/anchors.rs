@@ -849,3 +849,59 @@ fn block_entries_without_a_record_list_match_a_paged_walk() -> varlit::Result<()
     }
     Ok(())
 }
+
+#[cfg(feature = "mmap")]
+varlit::varlit_format! {
+    pub format AnchoredCells {
+        magic: b"VANCMTX1"; version: 1; integrity: crc32_with_header;
+        dims { row: u32, slot: u32, }
+        commit: cell_bitmap { keyspace = [row, slot]; categories = [data]; };
+        blocks { matrix Wide(id = 40, dims = [row, slot], category = data) { bytes: [u8; 1000] } }
+    }
+}
+
+/// A mapped matrix hands out each cell's bytes in place. A cell whose slot an
+/// anchor splits is not contiguous in the file, so it used to be refused with
+/// `MmapPayloadOutOfBounds`; it is now served from a copy made on first use.
+/// Every cell must read the same through the mapping as through the file.
+#[cfg(feature = "mmap")]
+#[test]
+fn mapped_matrix_cells_split_by_an_anchor_read_like_owned_ones() -> varlit::Result<()> {
+    use varlit::{MatrixDimensions, MatrixKey};
+    const ROWS: u64 = 400;
+    let spec = AnchoredCells::spec().with_anchors(AnchorPolicy::every(13, true));
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("cells.varlit");
+    let cell = |row: u64| Wide {
+        bytes: std::array::from_fn(|at| (at as u64 ^ row.wrapping_mul(31)) as u8),
+    };
+    {
+        let mut file = spec.create_with_dims(
+            &path,
+            MatrixDimensions::from_pairs([("row", ROWS), ("slot", 1)]),
+        )?;
+        for row in 0..ROWS {
+            file.write_matrix_cell(MatrixKey::new(row, 0), &cell(row))?;
+            file.commit_matrix_cell::<Wide>(MatrixKey::new(row, 0))?;
+        }
+        file.sync()?;
+    }
+    let file = spec.open_readonly(&path)?;
+    // SAFETY: nothing writes the file while the mapping lives.
+    let mapped = unsafe { file.mmap_matrix()? };
+    let mut owned = Wide::empty();
+    for row in 0..ROWS {
+        let key = MatrixKey::new(row, 0);
+        file.read_matrix_cell::<Wide>(key, &mut owned)?;
+        assert_eq!(owned.bytes, cell(row).bytes, "row {row} through the file");
+        // Twice: the second read of a split cell comes from its kept copy.
+        for _ in 0..2 {
+            assert_eq!(
+                mapped.cell_payload_window::<Wide>(key)?,
+                &owned.bytes[..],
+                "row {row} through the mapping"
+            );
+        }
+    }
+    Ok(())
+}

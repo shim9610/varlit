@@ -130,7 +130,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:51c46a42ce614f51]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -225,12 +225,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:b8f3b050a7cbc14f]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:b8f3b050a7cbc14f]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -332,7 +332,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:51c46a42ce614f51]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -442,12 +442,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:b8f3b050a7cbc14f]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:442efe386064858c]",
+            "caller": "scan::resume_record_scan(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: scan::ScanProgress, _4: scan::ScanIntent, _5: &mut B, _6: u64) -> std::result::Result<scan::ScanProgress, error::Error> [body:b8f3b050a7cbc14f]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -2045,7 +2045,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:51c46a42ce614f51]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2192,7 +2192,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:17be1072594ff475]",
+            "caller": "file::<impl at crates/varlit-core/src/file/follow.rs>::follow(_1: &mut file::VarlitFile) -> std::result::Result<u64, error::Error> [body:51c46a42ce614f51]",
             "target": "try_box",
             "result": "model/caller-specific"
           },

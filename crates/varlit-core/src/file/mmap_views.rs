@@ -370,6 +370,10 @@ impl MmapPayloads {
     }
 }
 
+/// A copy of one window an anchor splits, keyed by its logical start.
+#[cfg(feature = "mmap")]
+type CrossingCopy = std::sync::OnceLock<(u64, Box<[u8]>)>;
+
 #[cfg(feature = "mmap")]
 /// A private copy-on-write mapping of the primary file, with the logical
 /// offsets the tile engine uses translated around anchors.
@@ -377,6 +381,11 @@ impl MmapPayloads {
 pub(crate) struct MmapSource {
     pub(super) mmap: memmap2::Mmap,
     pub(super) layout: Option<crate::anchor::AnchorLayout>,
+    /// Owned copies of the windows an anchor splits, one place per anchor:
+    /// a window is a whole cell slot, slots do not overlap, so at most one
+    /// window of this snapshot crosses any one anchor. Each is copied on first
+    /// use, so only crossing cells that are read cost memory.
+    pub(super) crossing: Box<[CrossingCopy]>,
 }
 
 #[cfg(feature = "mmap")]
@@ -393,7 +402,7 @@ impl MmapSource {
                         .physical(offset + len - 1)
                         .ok_or(Error::InvalidMatrixLayout)?;
                     if last != start + len - 1 {
-                        return Err(Error::MmapPayloadOutOfBounds { offset, len });
+                        return self.crossing_window(&layout, offset, len);
                     }
                 }
                 start
@@ -409,6 +418,52 @@ impl MmapSource {
         self.mmap
             .get(start..end)
             .ok_or(Error::MmapPayloadOutOfBounds { offset, len })
+    }
+}
+
+#[cfg(feature = "mmap")]
+impl MmapSource {
+    /// The places for [`Self::crossing_window`] copies of a mapping whose
+    /// logical length is `logical_len`: one per anchor it holds.
+    pub(super) fn crossing_places(
+        layout: Option<crate::anchor::AnchorLayout>,
+        logical_len: u64,
+    ) -> Box<[CrossingCopy]> {
+        let anchors = layout.map_or(0, |layout| layout.anchors_before(logical_len));
+        (0..=anchors).map(|_| std::sync::OnceLock::new()).collect()
+    }
+
+    /// `[offset, offset + len)` copied out of the mapping around the anchor
+    /// that splits it, made once and kept.
+    #[cold]
+    fn crossing_window(
+        &self,
+        layout: &crate::anchor::AnchorLayout,
+        offset: u64,
+        len: u64,
+    ) -> Result<&[u8]> {
+        let out = || Error::MmapPayloadOutOfBounds { offset, len };
+        let end = offset.checked_add(len).ok_or_else(out)?;
+        let anchor = usize::try_from(layout.anchors_before(end)).map_err(|_| out())?;
+        let place = self.crossing.get(anchor).ok_or_else(out)?;
+        if place.get().is_none() {
+            let size = usize::try_from(len).map_err(|_| out())?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(size)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "mapped cell across an anchor",
+                    requested: len,
+                })?;
+            bytes.resize(size, 0);
+            crate::matrix_tiles::store::TileSource::read_at(self, offset, &mut bytes)?;
+            // Another thread may have filled it first with the same bytes.
+            let _ = place.set((offset, bytes.into_boxed_slice()));
+        }
+        match place.get() {
+            Some((start, bytes)) if *start == offset && bytes.len() as u64 == len => Ok(bytes),
+            _ => Err(out()),
+        }
     }
 }
 
