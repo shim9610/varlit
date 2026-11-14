@@ -40,11 +40,10 @@ cargo clippy --locked --all-targets --workspace --all-features -- -D warnings
 
 Run targeted tests while iterating. See the [self-check guide](docs/self-check-guide.md)
 for fuzzing, Miri, fault injection and native I/O qualification. Documentation-only
-changes need valid links, compilable API examples and agreement with the documented
-revision. Release PRs must include the target version in workspace metadata,
+changes need valid links, compilable API examples and agreement with the code at
+that revision. Release PRs must update the target version in workspace metadata,
 sibling dependencies, standalone lockfiles, installation examples, changelog
-and API changes before merge. Complete these updates and package verification
-in the release PR. Keep public documentation in English and preserve the source,
+and API changes, and pass package verification, before merge. Keep public documentation in English and preserve the source,
 workload and uncertainty attached to recorded measurements.
 
 The [verification guide](docs/verification.md) contains the current Kani/Loom,
@@ -53,7 +52,8 @@ preserve required bounds and publication guards across every optional mode.
 
 New APIs, policy variants and Cargo features must join the executable
 [validation contracts](docs/validation-contracts.md). The gate reports missing
-registrations; its legacy inventory is frozen rather than a snapshot to refresh.
+registrations; its legacy inventory is frozen, so add new contracts instead of
+refreshing it.
 Runtime fixes must also satisfy the documented performance qualification: paired
 release measurements across file sizes, key counts and concurrent workloads,
 with unchanged resource budgets and recorded memory/I/O costs.
@@ -79,9 +79,10 @@ Keep native file operations in the focused implementation files under
 `crates/varlit-core/src/file/`: lifecycle, append/publication, directory reads,
 follow, mutation/rewrite, matrix access, mapped access and header slots. Keep
 unit tests beside their owning module. The implementation files share the native
-file module through literal includes, preserving its private boundary and compiler
-partitioning. The source auditors resolve those includes recursively; dynamic,
-missing or out-of-crate paths cannot bypass validation. Preserve public signatures
+file module through literal `include!`s, preserving its private boundary. The
+source auditor (`crates/varlit/tests/support/source_audit.rs`) follows those
+includes recursively and reports dynamic, missing or out-of-crate include paths
+as errors. Preserve public signatures
 and the frozen API inventory when reorganizing implementations.
 
 Extend a shared fixture or parameter table when a regression adds a case to an
@@ -94,6 +95,7 @@ Keep the root README and quickstart focused on recommended application patterns.
 Maintain current contracts in the reference guides. Performance results are
 pending a controlled local rerun; keep the benchmark harness and its execution
 instructions without publishing cloud measurements. Historical release notes,
-audit narratives and superseded raw evidence belong in Git history. `scripts/check_docs.py --quickstart` rejects repeated
-report sections, checks local links and executes the example taken directly from
-the guide.
+audit narratives and superseded raw evidence belong in Git history.
+`scripts/check_docs.py` rejects duplicated sections and unclosed code fences and
+checks local links and anchors; with `--quickstart` it also compiles and runs the
+Rust example in `docs/quickstart.md`.

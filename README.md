@@ -86,7 +86,8 @@ and execution instructions; cloud measurements are not used for performance clai
 
 CI covers native Linux, Windows and Intel macOS, feature interactions, external
 API consumers, package archives, CodeQL, Kani and deliberate-defect controls.
-Sanitizers separately runs Miri, ASan/leaks and bounded fuzz smoke. Their scopes
+The Sanitizers workflow separately runs Miri, ASan/leak checks and a 90-second
+fuzz smoke run per target. Their scopes
 and exclusions are in the [verification guide](https://github.com/shim9610/varlit/blob/main/docs/verification.md).
 
 ## Contributing

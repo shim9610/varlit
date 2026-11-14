@@ -99,9 +99,10 @@ silently fall back to another volume. Set process environment configuration
 before opening handles/starting worker threads. Each spill file captures its
 policy when created.
 
-`VARLIT_SPILL_MAX_BYTES` optionally limits the logical length of **each** private
-spill file, in unsigned decimal bytes. Unset means no additional capacity cap;
-`0` refuses nonempty spills. A write beyond the chosen limit returns a storage-full
+`VARLIT_SPILL_MAX_BYTES` sets the maximum logical length of each private spill
+file, in unsigned decimal bytes. Unset means 4 GiB per file; `0` refuses nonempty
+spills. A value that is not an unsigned decimal integer returns an error when a
+spill file is created. A write beyond the chosen limit returns a storage-full
 I/O error before that write, retaining existing authoritative state. This is not
 an aggregate process/directory quota or a promise of available free space. Use a
 filesystem/project quota or a dedicated volume for an aggregate capacity policy;
@@ -109,7 +110,7 @@ concurrent files, allocation granularity and other users of the volume also
 consume space. Genuine filesystem-full and partial-write errors still propagate.
 
 This policy does not cap database size or require spills beside the database.
-`STANDARD` intentionally permits very large total files and scan workloads.
+`ReadLimits::STANDARD` sets total file length and scan bytes to `u64::MAX`.
 A hostile but admissible file can therefore consume substantial CPU, I/O and
 temporary storage even while working buffers stay bounded. Applications accepting
 untrusted files should select work limits, concurrent-job budgets and aggregate
