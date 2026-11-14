@@ -108,9 +108,10 @@ on an old object cannot discover a different object at the path. Matrix-only
 follow can return zero appended bytes; compare `matrix_generation()` when needed.
 `follow()` stops before a record the writer has only half written and reads it
 on a later call. Opening a file is different: under a format without a commit
-marker, `open_readonly` that races a writer mid-record reports `CorruptTail`,
-because a torn tail found at open is indistinguishable from a crash. Open readers
-before heavy writing, retry the open, or use a commit-marker policy.
+marker, `open_readonly` that races a writer mid-record reports `CorruptTail`:
+the open scan treats an incomplete last record as damage and does not check
+whether a writer is still active. Open readers before heavy writing, retry the
+open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
@@ -136,7 +137,7 @@ Header slots have fixed reserved capacity; overflow needs a different file layou
 or a generation rewrite, not an automatic header extension.
 
 A native handle holds fixed read buffers from open (about 144 KiB for a format
-with variable blocks). `MmapMatrix` copies a cell whose slot an anchor splits on
+with variable blocks and no compression). `MmapMatrix` copies a cell whose slot an anchor splits on
 its first read and keeps the copy for the mapping's lifetime: at most one slot
 per anchor, and only for split cells that are read.
 

@@ -43,10 +43,10 @@ no dependency-specific owner type is exposed in place of a public std `Arc`.
 **Breaking.** A read
 that returned a decoded block now takes `out: &mut T` and decodes into it,
 reusing the vectors and strings `out` already owns. A steady read loop keeps one
-`out` alive and allocates nothing per record once `out` has grown to the
-largest record it holds: the handle stages short and chunked records in buffers
-it sized when it opened, and the `scratch` argument is kept for API stability.
-Growing `out` frees its old buffer before taking the new one. File bytes, schema fingerprints and
+`out` and one `scratch` alive and allocates nothing per record once both have
+grown to the largest record they hold. `scratch` holds unchunked records and the
+small fields of chunked ones; large byte and numeric fields of a chunked record
+are read straight into `out`. File bytes, schema fingerprints and
 materialization limits are unchanged; an in-place decode is charged exactly what
 a fresh decode is charged and is refused at the same limit.
 

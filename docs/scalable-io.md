@@ -267,9 +267,7 @@ does read a bounded prefix of it: the primary-generation witness digests the
 leading window of the file — at most 4 KiB from offset 0 — and takes one point
 read of the leading record for the creation nonce. No scanner is created at
 open. Calling `runs`, `frames`, `events`, or `verify_all` explicitly creates a
-native scanner; their cost is linear in the selected snapshot. `verify_all`
-holds fixed memory whatever the largest record: records longer than the
-handle's read buffer are checksummed by streaming them.
+native scanner; their cost is linear in the selected snapshot.
 
 ## Stream Write And Read
 
