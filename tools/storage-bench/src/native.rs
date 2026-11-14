@@ -3,6 +3,32 @@
 use crate::{Result, model::*};
 use std::path::Path;
 use varlit::*;
+
+/// `get` on an indexed reader, following once more whenever the snapshot it
+/// reads has fallen far enough behind that the writer reused one of its index
+/// pages. That is the documented contract of `DiskIndexError::PageReclaimed`:
+/// follow to a newer generation and retry. Records are immutable and keys are
+/// unique, so the retried lookup answers the same question.
+fn get_following<T>(
+    reader: &mut VarlitIndexedReader,
+    key: &T::Key,
+    out: &mut T,
+) -> varlit::Result<bool>
+where
+    T: VarlitKeyedBlock,
+    T::Key: VarlitDiskKey,
+{
+    loop {
+        match reader.get::<T>(key, out) {
+            Err(varlit::Error::DiskIndex(error))
+                if matches!(*error, DiskIndexError::PageReclaimed) =>
+            {
+                reader.follow()?;
+            }
+            other => return other,
+        }
+    }
+}
 pub enum Writer {
     Indexed(VarlitIndexedWriter),
     Stream(VarlitStreamWriter),
@@ -170,7 +196,7 @@ impl Reader {
         match &mut self.f {
             File::Indexed(f) => {
                 f.follow()?;
-                if !f.get::<Head>(&0, &mut self.head)? {
+                if !get_following::<Head>(f, &0, &mut self.head)? {
                     return Err("missing head".into());
                 }
             }
@@ -207,9 +233,9 @@ impl Reader {
             let v = &self.frame;
             o.frame(v);
             if c.lookups {
-                if let File::Indexed(r) = &self.f {
+                if let File::Indexed(r) = &mut self.f {
                     let k = (v.scan, v.frame);
-                    if !r.get::<Frame>(&k, &mut self.found_frame)? {
+                    if !get_following::<Frame>(r, &k, &mut self.found_frame)? {
                         return Err("missing key".into());
                     }
                     let found = &self.found_frame;
@@ -230,8 +256,8 @@ impl Reader {
             let v = &self.row;
             o.row(v);
             if c.lookups {
-                if let File::Indexed(r) = &self.f {
-                    if !r.get::<Row>(&v.id, &mut self.found_row)? {
+                if let File::Indexed(r) = &mut self.f {
+                    if !get_following::<Row>(r, &v.id, &mut self.found_row)? {
                         return Err("missing row".into());
                     }
                     assert_eq!(&self.found_row, v);
