@@ -4,6 +4,43 @@ All notable repository releases are documented here. Varlit (formerly Varve) fol
 versioning; while the crates remain below 1.0, incompatible Rust API changes
 increment the minor version.
 
+## Unreleased
+
+File formats and public method signatures are unchanged.
+
+- Read buffers are sized when a handle opens and reused: once a handle and the
+  caller's values have been used once, typed reads, paged reads, record
+  streaming, indexed lookups and `verify_all` make no allocator calls (keyed
+  passes such as `key_tail_offsets_into` still build their result). A handle
+  for a format with variable blocks now holds about 144 KiB from open (two
+  64 KiB chunk buffers and a 16 KiB read window).
+- Growing a caller's value to a larger record frees the old buffer before taking
+  the new one, so decoding an 8 MiB value peaks at 8 MiB rather than 16 MiB.
+- `verify_all` keeps fixed memory: records longer than the handle's buffer are
+  checked by streaming them, instead of leaving the buffer at the largest record
+  size. On a handle without a record list it checks small records from the walk's
+  read window; paged `blocks`/`blocks_from` decode them from it too. On a 5.5 GiB
+  mixed file this cut read system calls by 95-99%.
+- Settled writes make no allocator calls: a chunked record is laid out in the
+  writer's encode buffer instead of being copied into one of its own size, and
+  unlinked deletes encode their tombstone into the same buffer.
+- Fix `merge_keyed_files`, `compact_keyed_file(s)` and the merge estimate failing
+  with `UnexpectedEof` on inputs large enough to open from an anchor. Positional
+  reads of a handle's record list now require a proof that it keeps one, so such
+  a caller no longer compiles.
+- Fix `follow()` failing with `CorruptTail` when it met the writer's next record
+  half written under a format without a commit marker (matrix cell-bitmap
+  formats included); it now stops before that record and reads it on a later
+  call. Opening a file still reports a torn tail.
+- Fix `MmapMatrix::cell_payload_window` refusing cells whose slot an anchor
+  splits (`MmapPayloadOutOfBounds`); such a cell is copied once on first use.
+- Refuse matrix overlay ranges whose offset would overflow with
+  `InvalidMatrixLayout` instead of panicking (found by `matrix_arbitrary`).
+- Add the `mixed_load_bench` example: a multi-gigabyte concurrent writer and
+  follower workload reporting per-phase heap peak, allocator calls and read
+  system calls. The storage benchmark harness now follows and retries indexed
+  lookups that meet `DiskIndexError::PageReclaimed`, as that error documents.
+
 ## 0.13.0 - 2026-11-05
 
 Existing public method signatures, schema fingerprints and file formats are

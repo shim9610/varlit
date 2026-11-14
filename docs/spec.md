@@ -875,6 +875,8 @@ CRC integrity is a corruption-detection aid, not an authenticity or tamper-proof
   and alignment.
 - `MmapMatrix::cell_payload_window::<T>(key)` returns a committed matrix slot
   payload window and verifies the per-cell CRC when matrix integrity is enabled.
+  A slot that an anchor splits is not contiguous in the file; its window is a
+  copy made on first use and kept with the mapping (at most one per anchor).
 - Initial zero-copy scope is limited to explicit raw fixed blocks whose implementor promises endian, alignment, and layout compatibility.
 - Raw fixed access is exposed only as `unsafe MmapPayloads::raw_fixed::<T>(index)` where `T: VarlitRawFixedBlock`.
 - `VarlitRawFixedBlock` is an unsafe opt-in trait over `VarlitBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout`.

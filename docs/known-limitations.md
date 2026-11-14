@@ -106,6 +106,11 @@ A primary replaced at its pathname leaves existing readers on the old file
 object. Poll `is_current()` and reopen when that replacement matters; `follow()`
 on an old object cannot discover a different object at the path. Matrix-only
 follow can return zero appended bytes; compare `matrix_generation()` when needed.
+`follow()` stops before a record the writer has only half written and reads it
+on a later call. Opening a file is different: under a format without a commit
+marker, `open_readonly` that races a writer mid-record reports `CorruptTail`,
+because a torn tail found at open is indistinguishable from a crash. Open readers
+before heavy writing, retry the open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
@@ -129,6 +134,11 @@ results or arbitrary user codecs/callbacks. Directory/page bookkeeping and one
 encoded record/key can add workspace beyond a nominal cache payload allowance.
 Header slots have fixed reserved capacity; overflow needs a different file layout
 or a generation rewrite, not an automatic header extension.
+
+A native handle holds fixed read buffers from open (about 144 KiB for a format
+with variable blocks). `MmapMatrix` copies a cell whose slot an anchor splits on
+its first read and keeps the copy for the mapping's lifetime: at most one slot
+per anchor, and only for split cells that are read.
 
 Fallible buffer/owner APIs report supported allocation refusals and clean partial
 output. Existing public `Clone`, infallible constructors and convenience builders
