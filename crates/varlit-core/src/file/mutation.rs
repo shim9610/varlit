@@ -1499,11 +1499,6 @@ impl VarlitFile {
             return Ok(());
         };
         let mut file = self.snapshot.try_clone_file()?;
-        validate_generation_index(
-            self.spec,
-            &mut file,
-            append_log_start_for_file(self)?,
-            kept,
-        )
+        validate_generation_index(self.spec, &mut file, append_log_start_for_file(self)?, kept)
     }
 }
