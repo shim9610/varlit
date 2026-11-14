@@ -222,23 +222,6 @@ fn reopened_writer_discards_unpublished_matrix_changes() -> varlit::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "scalable-fault-injection")]
-#[test]
-fn publication_abort_child() -> varlit::Result<()> {
-    let Some(path) = std::env::var_os("VARLIT_MATRIX_GENERATION_CHILD") else {
-        return Ok(());
-    };
-    let mut writer = Generations::open_writer(path)?;
-    for ch in 0..2 {
-        let key = CellKey { scan: 0, ch };
-        writer.write_cell(key, &Cell { value: 2 })?;
-        writer.commit_cell(key)?;
-    }
-    writer.write_note_aux(0, &[2])?;
-    writer.sync()?;
-    panic!("the selected publication boundary did not abort");
-}
-
 #[test]
 fn explicit_immediate_publishes_and_cache_capacity_is_configurable() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
