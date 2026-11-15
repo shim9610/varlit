@@ -963,3 +963,45 @@ fn a_killed_writer_leaves_whole_publications() -> varlit::Result<()> {
     assert_eq!(advanced, 32, "every run published at least one round");
     Ok(())
 }
+
+/// A directory entry rewritten to an offset no file has is refused when the
+/// tile is looked up; it is not added to. (Found by the `matrix_arbitrary`
+/// fuzz target as an overflow in the read path.)
+#[test]
+fn a_tile_offset_that_is_not_a_file_offset_is_refused() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("hostile-directory");
+    let key = MatrixKey::new(1, 2);
+    {
+        let mut writer = spec().create_writer_with_dims(&path, dims(16, 16))?;
+        put(&mut writer, key, 7)?;
+        writer.sync()?;
+    }
+    assert_eq!(value(&spec().open_reader(&path)?, key)?, 7);
+
+    // The one tile's payload starts at its magic, and its directory entry is
+    // the only place in the file holding that offset.
+    let mut bytes = std::fs::read(&path)?;
+    let tile = bytes
+        .windows(4)
+        .position(|window| window == b"VTIL")
+        .expect("the tile record") as u64;
+    let entries: Vec<usize> = (0..bytes.len() - 8)
+        .filter(|at| bytes[*at..*at + 8] == tile.to_le_bytes())
+        .collect();
+    assert_eq!(entries.len(), 1, "the tile's directory entry: {entries:?}");
+    bytes[entries[0]..entries[0] + 8].copy_from_slice(&(u64::MAX - 8).to_le_bytes());
+    std::fs::write(&path, &bytes)?;
+
+    let reader = spec().open_reader(&path)?;
+    let mut out = Cell::empty();
+    assert!(matches!(
+        reader.read_matrix_cell::<Cell>(key, &mut out),
+        Err(Error::InvalidMatrixLayout)
+    ));
+    assert!(matches!(
+        reader.matrix_cell_status::<Cell>(key),
+        Err(Error::InvalidMatrixLayout)
+    ));
+    Ok(())
+}
