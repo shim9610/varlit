@@ -130,6 +130,29 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit --file tools/verification/Cargo.lock
 
+  verus:
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERUS_VERSION: 0.2026.11.02.8bf68ee
+      VERUS_SHA256: f3a0119292df8855e4435da8130bee1873b0e6a60c306accf81a08ea687bba3c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.99.1'
+      - name: Install the pinned Verus release
+        run: |
+          curl --proto '=https' --tlsv1.2 --retry 5 --location --silent --show-error --fail \
+            --output verus.zip \
+            "https://github.com/verus-lang/verus/releases/download/release/${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
+          echo "${VERUS_SHA256}  verus.zip" | sha256sum --check
+          mkdir -p "$HOME/.verus/${VERUS_VERSION}"
+          unzip -q verus.zip -d "$HOME/.verus/${VERUS_VERSION}"
+      - name: Verify the production matrix tile arithmetic
+        run: tools/verus/run.sh
+
   sbom:
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
     runs-on: ubuntu-latest

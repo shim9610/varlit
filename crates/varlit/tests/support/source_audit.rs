@@ -542,13 +542,16 @@ impl Audit {
 impl<'ast> Visit<'ast> for Audit {
     fn visit_item(&mut self, item: &'ast Item) {
         // Kani modules intentionally mutate private state in adversarial
-        // harnesses. Keep them in proof inventories, but not runtime policy
-        // rules. Only the exact cfg(kani) exclusion is recognized here.
-        let kani_only = attrs(item).iter().any(|attr| {
+        // harnesses, and Verus ghost items (specifications and lemmas) are
+        // compiled only by the verifier. Keep both in proof inventories, but
+        // not in runtime policy rules. Only the exact cfg(kani) and
+        // cfg(verus_keep_ghost) exclusions are recognized here.
+        let proof_only = attrs(item).iter().any(|attr| {
             attr.path().is_ident("cfg")
-                && matches!(attr.parse_args::<Meta>(), Ok(Meta::Path(path)) if path.is_ident("kani"))
+                && matches!(attr.parse_args::<Meta>(), Ok(Meta::Path(path))
+                    if path.is_ident("kani") || path.is_ident("verus_keep_ghost"))
         });
-        if !test_only(attrs(item)) && (self.inventory_only || !kani_only) {
+        if !test_only(attrs(item)) && (self.inventory_only || !proof_only) {
             visit::visit_item(self, item);
         }
     }
@@ -844,6 +847,17 @@ impl<'ast> Visit<'ast> for Audit {
             let previous = self.include_owner.replace(owner);
             self.inspect_file(&path);
             self.include_owner = previous;
+            return;
+        }
+        // A Verus ghost block holds specifications and lemmas that only the
+        // verifier compiles: it is not a runtime interface and has no
+        // executable contract. Its file stays in the proof inventory.
+        let ghost_only = item.attrs.iter().any(|attr| {
+            attr.path().is_ident("cfg")
+                && matches!(attr.parse_args::<Meta>(), Ok(Meta::Path(path))
+                    if path.is_ident("verus_keep_ghost"))
+        });
+        if ghost_only {
             return;
         }
         let name = item

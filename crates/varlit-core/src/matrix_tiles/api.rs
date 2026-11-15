@@ -657,7 +657,7 @@ impl TiledMatrix {
             while done < count {
                 let at = MatrixKey::new(key.scan, key.ch + done);
                 let (coord, slot) = geom.locate(at);
-                let in_tile = (geom.tile[1] - at.ch % geom.tile[1]).min(count - done);
+                let in_tile = geom.row_run(at).min(count - done);
                 let tile = access.tile(coord)?.ok_or(Error::MatrixNotCommitted)?;
                 access.read(tile + geom.bitmap_at(), bitmap)?;
                 checked_bitmap(bitmap)?;
@@ -882,7 +882,8 @@ impl TiledMatrix {
         let mut bitmap_of: Option<u64> = None;
         while filled < capacity {
             let (coord, slot) = geom.locate(key);
-            let run = (geom.tile[1] - key.ch % geom.tile[1])
+            let run = geom
+                .row_run(key)
                 .min(region.col_end - key.ch)
                 .min((capacity - filled) as u64);
             let tile = access.tile(coord)?.ok_or(Error::MatrixNotCommitted)?;

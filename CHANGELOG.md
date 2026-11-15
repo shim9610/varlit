@@ -160,6 +160,9 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   offsets, frame stepping, frame placement, frame entry bounds, slot ranges,
   Morton keys, metadata region ends), two Loom models of the tile reader lock,
   and a test that kills a writer process mid-publication and reopens the file.
+- Verus verifies the matrix tile slot arithmetic in the production source for
+  every admitted block shape (`tools/verus`, run in CI). The specifications
+  are behind a cfg only Verus sets; ordinary builds are unchanged.
 - The matrix writer's frame placement and its checkpoint's room estimate now
   share one rule; they differed by one byte when the oldest kept frame started
   at ring offset 0, which could cost one extra checkpoint. Matrix metadata

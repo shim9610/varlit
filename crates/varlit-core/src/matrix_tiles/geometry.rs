@@ -2,6 +2,8 @@
 //! metadata record, and Morton keys. Pure arithmetic over a validated spec.
 
 use crate::{Error, MatrixKey, Result};
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 pub(crate) const TILE_MAGIC: &[u8; 4] = b"VTIL";
 pub(crate) const META_MAGIC: &[u8; 4] = b"VMTA";
@@ -10,6 +12,7 @@ pub(crate) const LAYOUT_VERSION: u16 = 1;
 /// Tile record: fixed header, then the commit bitmap and its checksum (one
 /// unit, rewritten whole), then the slots (each the cell bytes and their
 /// CRC32).
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) const TILE_HEADER_LEN: u64 = 40;
 /// Bytes of the metadata record before the per-block directory roots:
 /// fields (48), the creation nonce (16), their CRC32 (4), padding.
@@ -19,6 +22,7 @@ pub(crate) const META_ROOT_LEN: u64 = 16;
 
 /// Tile coordinates: the cell row and column divided by the tile shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) struct TileCoord {
     pub row: u64,
     pub col: u64,
@@ -57,41 +61,136 @@ pub(crate) const fn after_pages(at: u64, bytes: u64, page: u64) -> Option<u64> {
 
 /// One matrix block's storage shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) struct BlockGeom {
     pub block_id: u32,
     pub stride: u64,
     pub tile: [u64; 2],
 }
 
+// The functions below carry Verus specifications behind `verus_keep_ghost`,
+// a cfg only the Verus driver in `tools/verus` sets: ordinary builds see
+// plain functions. Verus checks each body against its `ensures`, checks that
+// no arithmetic in it overflows under its `requires`, and checks every call
+// between them against the callee's `requires`.
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl BlockGeom {
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures r == self.spec_cells(),
+    ))]
     pub(crate) const fn cells(&self) -> u64 {
         self.tile[0] * self.tile[1]
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures r == self.spec_slot_len(),
+    ))]
     pub(crate) const fn slot_len(&self) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            self.lemma_bounds();
+        }
         self.stride + 4
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures r == spec_div_ceil(self.spec_cells(), 8),
+    ))]
     pub(crate) const fn bitmap_len(&self) -> u64 {
         self.cells().div_ceil(8)
     }
     /// Offset of the bitmap unit (bitmap then its CRC32) in a tile.
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures r == TILE_HEADER_LEN,
+    ))]
     pub(crate) const fn bitmap_at(&self) -> u64 {
         TILE_HEADER_LEN
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures r == spec_div_ceil(self.spec_cells(), 8) + 4,
+    ))]
     pub(crate) const fn bitmap_unit_len(&self) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            self.lemma_bounds();
+        }
         self.bitmap_len() + 4
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures
+            r == self.spec_slots_at(),
+            r >= TILE_HEADER_LEN + spec_div_ceil(self.spec_cells(), 8) + 4,
+            r % 8 == 0,
+    ))]
     pub(crate) const fn slots_at(&self) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            self.lemma_bounds();
+        }
         (TILE_HEADER_LEN + self.bitmap_unit_len()).next_multiple_of(8)
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures r == self.spec_tile_bytes(),
+    ))]
     pub(crate) const fn tile_bytes(&self) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            self.lemma_bounds();
+        }
         self.slots_at() + self.cells() * self.slot_len()
     }
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires
+            self.admitted(),
+            slot < self.spec_cells(),
+        ensures
+            r == self.spec_slot_at(slot as int),
+            r >= self.spec_slots_at(),
+            r + self.spec_slot_len() <= self.spec_tile_bytes(),
+            self.spec_tile_bytes() <= u64::MAX,
+    ))]
     pub(crate) const fn slot_at(&self, slot: u64) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            self.lemma_bounds();
+            self.lemma_slot_within_tile(slot as int);
+        }
         self.slots_at() + slot * self.slot_len()
     }
     /// The tile holding `key` and the cell's slot index inside it.
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures
+            r.1 < self.spec_cells(),
+            r.1 / 8 < spec_div_ceil(self.spec_cells(), 8),
+            r.1 == (key.scan % self.tile[0]) * self.tile[1] + key.ch % self.tile[1],
+            r.0.row == key.scan / self.tile[0],
+            r.0.col == key.ch / self.tile[1],
+    ))]
     pub(crate) const fn locate(&self, key: MatrixKey) -> (TileCoord, u64) {
         let [rows, cols] = self.tile;
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            lemma_slot_index_in_range(
+                (key.scan % rows) as int,
+                (key.ch % cols) as int,
+                rows as int,
+                cols as int,
+            );
+        }
         (
             TileCoord {
                 row: key.scan / rows,
@@ -101,14 +200,43 @@ impl BlockGeom {
         )
     }
 
+    /// How many cells, starting with `key`'s, lie in its row of its tile: a
+    /// run of that many slots starting at `key`'s slot stays inside the tile.
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires self.admitted(),
+        ensures
+            1 <= r <= self.tile[1],
+            r == self.tile[1] - key.ch % self.tile[1],
+            (key.scan % self.tile[0]) * self.tile[1] + key.ch % self.tile[1] + r
+                <= self.spec_cells(),
+    ))]
+    pub(crate) const fn row_run(&self, key: MatrixKey) -> u64 {
+        #[cfg(verus_keep_ghost)]
+        proof! {
+            lemma_row_ends_inside_tile(
+                (key.scan % self.tile[0]) as int,
+                self.tile[0] as int,
+                self.tile[1] as int,
+            );
+        }
+        self.tile[1] - key.ch % self.tile[1]
+    }
+
     /// The slot of the cell at `row`, `col` inside a tile `cols` wide: cells
     /// are laid out row by row.
+    #[cfg_attr(verus_keep_ghost, verus_verify)]
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        requires row * cols + col <= u64::MAX,
+        ensures r == row * cols + col,
+    ))]
     pub(crate) const fn slot_index(row: u64, col: u64, cols: u64) -> u64 {
         row * cols + col
     }
 
     /// A tile record's initial payload: header, an empty bitmap with its
     /// checksum, zeroed slots.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub(crate) fn encode_empty_tile(&self, at: TileCoord, out: &mut [u8]) {
         debug_assert_eq!(out.len() as u64, self.tile_bytes());
         out.fill(0);
@@ -126,6 +254,7 @@ impl BlockGeom {
     }
 
     /// Checks a tile header read back from `offset` is this block's tile `at`.
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
     pub(crate) fn check_tile_header(&self, at: TileCoord, header: &[u8]) -> Result<()> {
         let stored = u32::from_le_bytes(header[32..36].try_into().expect("four"));
         if &header[0..4] != TILE_MAGIC
@@ -322,6 +451,194 @@ impl Geometry {
         ]
     }
 }
+
+// The mathematical model the specifications above refer to, and the lemmas
+// their proofs use. Compiled only by Verus.
+#[cfg(verus_keep_ghost)]
+verus! {
+
+/// `u64::div_ceil` as its documentation defines it.
+pub open spec fn spec_div_ceil(a: int, b: int) -> int {
+    if a % b == 0 {
+        a / b
+    } else {
+        a / b + 1
+    }
+}
+
+/// `u64::next_multiple_of` as its documentation defines it.
+pub open spec fn spec_next_multiple_of(a: int, b: int) -> int {
+    if a % b == 0 {
+        a
+    } else {
+        a + (b - a % b)
+    }
+}
+
+impl BlockGeom {
+    pub(crate) open spec fn spec_cells(&self) -> int {
+        self.tile[0] * self.tile[1]
+    }
+
+    pub(crate) open spec fn spec_slot_len(&self) -> int {
+        self.stride + 4
+    }
+
+    pub(crate) open spec fn spec_slots_at(&self) -> int {
+        spec_next_multiple_of(TILE_HEADER_LEN + spec_div_ceil(self.spec_cells(), 8) + 4, 8)
+    }
+
+    pub(crate) open spec fn spec_slot_at(&self, slot: int) -> int {
+        self.spec_slots_at() + slot * self.spec_slot_len()
+    }
+
+    pub(crate) open spec fn spec_tile_bytes(&self) -> int {
+        self.spec_slots_at() + self.spec_cells() * self.spec_slot_len()
+    }
+
+    /// What `FormatSpec::validate` admits for a matrix block: a non-empty
+    /// tile of at most 2^20 cells and 64 MiB of slots.
+    pub(crate) open spec fn admitted(&self) -> bool {
+        &&& self.stride >= 1
+        &&& self.tile[0] >= 1
+        &&& self.tile[1] >= 1
+        &&& self.tile[0] * self.tile[1] <= 0x10_0000
+        &&& self.tile[0] * self.tile[1] * (self.stride + 4) <= 0x400_0000
+    }
+
+    pub(crate) proof fn lemma_bounds(&self)
+        requires
+            self.admitted(),
+        ensures
+            1 <= self.spec_cells() <= 0x10_0000,
+            self.spec_cells() * self.spec_slot_len() <= 0x400_0000,
+            self.spec_slot_len() <= 0x400_0000,
+            48 <= self.spec_slots_at() <= 40 + 131072 + 4 + 8,
+            self.spec_tile_bytes() <= 40 + 131072 + 4 + 8 + 0x400_0000,
+    {
+        let cells = self.spec_cells();
+        let len = self.spec_slot_len();
+        assert(cells >= 1) by (nonlinear_arith)
+            requires
+                cells == self.tile[0] * self.tile[1],
+                self.tile[0] >= 1,
+                self.tile[1] >= 1,
+        ;
+        assert(len <= cells * len) by (nonlinear_arith)
+            requires
+                cells >= 1,
+                len >= 0,
+        ;
+    }
+
+    /// A slot below the cell count ends inside the tile record.
+    pub(crate) proof fn lemma_slot_within_tile(&self, slot: int)
+        requires
+            self.admitted(),
+            0 <= slot < self.spec_cells(),
+        ensures
+            self.spec_slot_at(slot) + self.spec_slot_len() <= self.spec_tile_bytes(),
+            self.spec_slot_at(slot) >= self.spec_slots_at(),
+    {
+        let cells = self.spec_cells();
+        let len = self.spec_slot_len();
+        assert(slot * len + len <= cells * len && slot * len >= 0) by (nonlinear_arith)
+            requires
+                0 <= slot < cells,
+                len >= 0,
+        ;
+    }
+}
+
+/// A cell inside a tile gets a slot below the tile's cell count.
+pub(crate) proof fn lemma_slot_index_in_range(row: int, col: int, rows: int, cols: int)
+    requires
+        0 <= row < rows,
+        0 <= col < cols,
+    ensures
+        0 <= row * cols + col < rows * cols,
+        rows * cols >= 1,
+{
+    assert(row * cols + col < rows * cols && row * cols >= 0) by (nonlinear_arith)
+        requires
+            0 <= row < rows,
+            0 <= col < cols,
+    ;
+}
+
+/// The last cell of a tile row is still inside the tile.
+pub(crate) proof fn lemma_row_ends_inside_tile(row: int, rows: int, cols: int)
+    requires
+        0 <= row < rows,
+        0 <= cols,
+    ensures
+        row * cols + cols <= rows * cols,
+{
+    assert(row * cols + cols <= rows * cols) by (nonlinear_arith)
+        requires
+            0 <= row < rows,
+            0 <= cols,
+    ;
+}
+
+/// A run of slots that ends inside the tile ends inside the tile record.
+pub(crate) proof fn lemma_run_within_tile(geom: BlockGeom, slot: int, run: int)
+    requires
+        geom.admitted(),
+        0 <= slot,
+        0 <= run,
+        slot + run <= geom.spec_cells(),
+    ensures
+        geom.spec_slot_at(slot) + run * geom.spec_slot_len() <= geom.spec_tile_bytes(),
+{
+    let cells = geom.spec_cells();
+    let len = geom.spec_slot_len();
+    assert(slot * len + run * len <= cells * len) by (nonlinear_arith)
+        requires
+            0 <= slot,
+            0 <= run,
+            slot + run <= cells,
+            len >= 0,
+    ;
+}
+
+/// Two cells of one tile share a slot only when they are the same cell.
+pub(crate) proof fn lemma_slot_index_injective(
+    row_a: int,
+    col_a: int,
+    row_b: int,
+    col_b: int,
+    rows: int,
+    cols: int,
+)
+    requires
+        0 <= row_a < rows,
+        0 <= row_b < rows,
+        0 <= col_a < cols,
+        0 <= col_b < cols,
+        row_a * cols + col_a == row_b * cols + col_b,
+    ensures
+        row_a == row_b,
+        col_a == col_b,
+{
+    if row_a < row_b {
+        assert(row_a * cols + col_a < row_b * cols + col_b) by (nonlinear_arith)
+            requires
+                0 <= row_a < row_b,
+                0 <= col_a < cols,
+                0 <= col_b,
+        ;
+    } else if row_b < row_a {
+        assert(row_b * cols + col_b < row_a * cols + col_a) by (nonlinear_arith)
+            requires
+                0 <= row_b < row_a,
+                0 <= col_b < cols,
+                0 <= col_a,
+        ;
+    }
+}
+
+} // verus!
 
 #[cfg(kani)]
 #[path = "../verification/matrix_geometry.rs"]

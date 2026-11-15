@@ -381,19 +381,30 @@ holder is covered by a native test, not by these models.
 The runner refuses a build without `varlit_loom`. Its dependencies have their own
 lockfile and advisory audit and are not library runtime dependencies.
 
-## Verus pilot
+## Verus
 
-`tools/verus` holds a Verus proof of the tile slot arithmetic for the whole
-admitted range, which the Kani harnesses above bound: a cell inside a tile
-gets a slot below the tile's cell count, distinct cells get distinct slots,
-and every slot ends inside its tile record, without overflow. It proves a
-transcription of the production expressions, not the production function
-bodies; `run.sh` checks only that each transcribed expression still appears
-verbatim in the source. Two standard-library functions Verus has no
-specification for (`div_ceil`, `next_multiple_of`) are assumed to behave as
-documented. It is not run in CI. See the [pilot's README](../tools/verus/README.md)
-for the pinned Verus version, the install steps and what verifying the
-production bodies in place would require.
+```sh
+tools/verus/run.sh
+```
+
+Verus verifies the matrix tile arithmetic in the production file
+`matrix_tiles/geometry.rs` itself, for every admitted block shape and every
+key, where the Kani harnesses above are bounded: `locate` returns a slot
+below the tile's cell count, a slot's bytes lie inside the tile record, a run
+of `row_run` cells stays inside the tile, distinct cells get distinct slots,
+and none of this arithmetic overflows. Verus also checks the calls between
+these functions against each callee's precondition.
+
+The specifications are attributes behind `cfg(verus_keep_ghost)`, which only
+Verus sets, so ordinary builds are unchanged and gain no dependency. The
+driver in `tools/verus` includes the production file rather than copying it,
+and fails unless exactly the expected number of items verifies.
+
+Not covered: callers in `api.rs`, `writer.rs` and `view.rs` are not verified,
+so that they pass slots obtained from `locate` is by inspection and native
+tests; the admitted-shape predicate restates `FormatSpec::validate` without a
+checked link to it; and `u64::div_ceil` and `u64::next_multiple_of` are
+assumed to behave as documented. See the [driver's README](../tools/verus/README.md).
 
 ## Miri, ASan and fuzzing
 

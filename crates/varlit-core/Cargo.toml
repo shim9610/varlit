@@ -55,7 +55,7 @@ libc.workspace = true
 redb = { version = "4.4.0", path = "../../vendor/redb" }
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(varlit_loom)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(varlit_loom)', 'cfg(verus_keep_ghost)'] }
 
 [[example]]
 name = "decompression_load"

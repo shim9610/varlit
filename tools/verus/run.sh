@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Verifies src/geometry_proofs.rs with Verus. Exits non-zero if the pinned
-# Verus is missing, if the transcribed arithmetic has drifted from the
-# production source, or if any proof fails. See README.md.
+# Verifies the production matrix tile arithmetic with Verus. Exits non-zero
+# if the pinned Verus is missing or any proof fails. See README.md.
 set -euo pipefail
 
 VERUS_VERSION="0.2026.11.02.8bf68ee"
+VERUS_TOOLCHAIN="1.99.1"
+# The number of items Verus must report verified. A run that verifies fewer
+# (an annotation dropped, a function made external) fails instead of passing
+# with less proved.
+EXPECTED_VERIFIED=29
+
 here="$(cd "$(dirname "$0")" && pwd)"
-repo="$here/../.."
 verus="${VERUS:-$HOME/.verus/$VERUS_VERSION/verus-x86-linux/verus}"
 
 if [[ ! -x "$verus" ]]; then
@@ -15,47 +19,26 @@ if [[ ! -x "$verus" ]]; then
 fi
 if ! "$verus" --version | grep -qF "Version: $VERUS_VERSION"; then
     echo "run.sh: $verus is not Verus $VERUS_VERSION" >&2
-    "$verus" --version >&2 || true
     exit 2
 fi
 
-# Text check, not a proof: every transcribed expression must still appear
-# verbatim both in the production source and in the proof file.
-geometry="$repo/crates/varlit-core/src/matrix_tiles/geometry.rs"
-format="$repo/crates/varlit-core/src/format.rs"
-proofs="$here/src/geometry_proofs.rs"
-drift=0
-need() { # need <file> <fixed string>
-    if ! grep -qF -- "$2" "$1"; then
-        echo "run.sh: drift: '$2' not found in ${1#"$repo"/}" >&2
-        drift=1
-    fi
-}
-for body in \
-    'self.tile[0] * self.tile[1]' \
-    'self.stride + 4' \
-    'self.cells().div_ceil(8)' \
-    'self.bitmap_len() + 4' \
-    '(TILE_HEADER_LEN + self.bitmap_unit_len()).next_multiple_of(8)' \
-    'self.slots_at() + self.cells() * self.slot_len()' \
-    'self.slots_at() + slot * self.slot_len()' \
-    'row * cols + col' \
-    'let [rows, cols] = self.tile;'; do
-    need "$geometry" "$body"
-    need "$proofs" "$body"
-done
-need "$geometry" 'pub(crate) const TILE_HEADER_LEN: u64 = 40;'
-need "$format" 'pub const MATRIX_MAX_TILE_CELLS: u64 = 1 << 20;'
-need "$format" 'pub const MATRIX_MAX_TILE_BYTES: u64 = 64 << 20;'
-need "$proofs" 'pub const TILE_HEADER_LEN: u64 = 40;'
-need "$proofs" 'pub const MATRIX_MAX_TILE_CELLS: u64 = 0x10_0000;'
-need "$proofs" 'pub const MATRIX_MAX_TILE_BYTES: u64 = 0x400_0000;'
-if [[ $drift -ne 0 ]]; then
-    echo "run.sh: production arithmetic and its transcription differ; update src/geometry_proofs.rs" >&2
-    exit 1
-fi
+out="$(mktemp -d)"
+trap 'rm -rf "$out"' EXIT
+# geometry.rs calls crc32fast in functions Verus does not verify; an empty
+# stand-in with the same signature lets the file compile under Verus.
+rustc "+$VERUS_TOOLCHAIN" --edition 2024 --crate-type rlib --crate-name crc32fast \
+    "$here/stubs/crc32fast.rs" --out-dir "$out"
 
 cd "$here"
-# --no-cheating would also reject the two assume_specification items for
-# u64::div_ceil and u64::next_multiple_of, so it is not passed.
-exec "$verus" --edition 2024 "$@" src/geometry_proofs.rs
+log="$out/verus.log"
+set +e
+"$verus" --edition 2024 --extern "crc32fast=$out/libcrc32fast.rlib" "$@" src/production.rs 2>&1 | tee "$log"
+status=${PIPESTATUS[0]}
+set -e
+if [[ $status -ne 0 ]]; then
+    exit "$status"
+fi
+if ! grep -qxF "verification results:: $EXPECTED_VERIFIED verified, 0 errors" "$log"; then
+    echo "run.sh: expected exactly $EXPECTED_VERIFIED verified items and no errors" >&2
+    exit 1
+fi
