@@ -148,7 +148,7 @@ A zero-harness run fails.
 | Untrusted sequence candidate | 1 | Full-width sequence subtraction and candidate conversion |
 | Record chunk table | 2 | Chunk geometry for chunked lengths up to 2^40 and table-entry extents on a fixed three-chunk header |
 | Matrix write-ahead ring | 3 | Which stored ring headers are believed, and that offsets of a believed header and every frame a scan steps over stay inside the ring record; checksums, frame entries, checkpoints and crash atomicity are native tests |
-| Matrix tile geometry | 3 | Slot indexes and slot byte ranges for tiles with sides up to 255 and up to 65535 cells of up to 255 bytes; Morton directory keys for all coordinates. Larger shapes and key-to-tile reduction are native tests |
+| Matrix tile geometry | 3 | Slot indexes for tiles with sides up to 63; slot byte ranges for every admitted cell count at four fixed strides; Morton directory keys for all coordinates. Other strides, the largest shapes and key-to-tile reduction are native tests |
 
 Full-width arithmetic proofs and bounded container/I/O models have different
 scopes. Bounds, allocator/callback assumptions and exclusions are recorded per

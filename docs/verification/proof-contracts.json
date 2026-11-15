@@ -413,10 +413,10 @@
         "crates/varlit-core/src/matrix_tiles/geometry.rs",
         "crates/varlit-core/src/format.rs"
       ],
-      "scope": "slot indexing and slot byte ranges for tiles with sides up to 255 and for up to 65535 cells of up to 255 bytes, and Morton directory keys for arbitrary tile coordinates",
-      "limits": "Bounded: products of two unknowns beyond these sizes do not decide in the proof budget. The largest admitted shapes (2^20 cells, 64 MiB), that distinct cells get distinct slots, and the reduction of a cell key to a tile coordinate and an in-tile row and column are checked by native tests (matrix_tiles::tests::every_key_has_one_slot_in_one_tile_at_every_admitted_shape). Directory pages, tile allocation and bitmap contents are covered by native tests.",
+      "scope": "slot indexing for tiles with sides up to 63, slot byte ranges for every admitted cell count at four fixed strides, and Morton directory keys for arbitrary tile coordinates",
+      "limits": "Bounded: a product of two unknowns does not decide in the proof budget, so slot indexing is proved for small tiles and slot byte ranges for strides 1, 8, 61 and 65532 only. Other strides, the largest tile shapes, that distinct cells get distinct slots, and the reduction of a cell key to a tile coordinate and an in-tile row and column are checked by native tests (matrix_tiles::tests::every_key_has_one_slot_in_one_tile_at_every_admitted_shape). Directory pages, tile allocation and bitmap contents are covered by native tests.",
       "specification": {
-        "requires": "A non-empty tile with sides up to 255, or up to 65535 cells with a stride of 1 to 255 bytes; a row and column inside the tile; arbitrary 64-bit tile coordinates.",
+        "requires": "A non-empty tile with sides up to 63 and a row and column inside it; or up to 2^20 cells at a stride of 1, 8, 61 or 65532 bytes with at most 64 MiB of slots; arbitrary 64-bit tile coordinates.",
         "ensures": "A cell's slot index is below the tile's cell count and its commit bit is inside the bitmap; every slot lies after the header and bitmap unit and ends inside the tile record without overflow; a Morton key holds the row's bits at even positions and the column's at odd positions.",
         "on_error": "Tile coordinates that do not fit 32 bits are refused with InvalidMatrixLayout.",
         "frame": "Pure functions of their arguments; nothing is read or written.",
