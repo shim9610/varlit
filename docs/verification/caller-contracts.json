@@ -2520,7 +2520,10 @@
         "RingHeader::from_fields",
         "RingHeader::fits",
         "Ring::within",
-        "Ring::after_frame"
+        "Ring::after_frame",
+        "Ring::room",
+        "Ring::plan_frame",
+        "frame_entry"
       ],
       "result_policy": {},
       "callers": {
@@ -2536,18 +2539,43 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::plan_frame(_1: &Ring, _2: u64, _3: u64, _4: u64) -> FramePlan [CTFE] [body:a984984bf3249f24]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::plan_frame(_1: &Ring, _2: u64, _3: u64, _4: u64) -> FramePlan [body:fe3904b43e2becf2]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::read_header::{closure#0}::{closure#0}(_1: {closure@crates/varlit-core/src/matrix_tiles/wal.rs}, _2: &RingHeader) -> bool [body:e02c44b7ed326961]",
             "target": "RingHeader::fits",
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:419121d5831b5514]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
             "target": "Ring::after_frame",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "target": "frame_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#1}(_1: &{closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: u64) -> u64 [body:7af059b16ef5a318]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
             "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:0ad01d54fe6ea6f7]",
             "target": "Ring::within",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::place(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:1d47f230562b2867]",
+            "target": "Ring::plan_frame",
             "result": "model/caller-specific"
           }
         ],
@@ -2563,18 +2591,43 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::plan_frame(_1: &Ring, _2: u64, _3: u64, _4: u64) -> FramePlan [CTFE] [body:a984984bf3249f24]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::plan_frame(_1: &Ring, _2: u64, _3: u64, _4: u64) -> FramePlan [body:fe3904b43e2becf2]",
+            "target": "Ring::room",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "wal::<impl at crates/varlit-core/src/matrix_tiles/wal.rs>::read_header::{closure#0}::{closure#0}(_1: {closure@crates/varlit-core/src/matrix_tiles/wal.rs}, _2: &RingHeader) -> bool [body:e02c44b7ed326961]",
             "target": "RingHeader::fits",
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:419121d5831b5514]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
             "target": "Ring::after_frame",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "target": "frame_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#1}(_1: &{closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: u64) -> u64 [body:7af059b16ef5a318]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
             "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:c262d39680c2c736]",
             "target": "Ring::within",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::place(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<u64, error::Error> [body:1d47f230562b2867]",
+            "target": "Ring::plan_frame",
             "result": "model/caller-specific"
           }
         ]
@@ -2582,13 +2635,17 @@
       "required_harnesses": [
         "matrix_tiles::wal::ring_proofs::believed_ring_headers_have_ordered_generations_and_room_for_the_next",
         "matrix_tiles::wal::ring_proofs::offsets_of_a_fitting_header_stay_inside_the_ring_record",
-        "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid"
+        "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
+        "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
+        "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
+        "matrix_tiles::wal::ring_proofs::a_frame_entry_lies_inside_the_frame_body"
       ]
     },
     "matrix-tile-geometry": {
       "symbols": [
         "BlockGeom::slot_index",
-        "TileCoord::morton"
+        "TileCoord::morton",
+        "after_pages"
       ],
       "result_policy": {},
       "callers": {
@@ -2606,6 +2663,16 @@
           {
             "caller": "geometry::<impl at crates/varlit-core/src/matrix_tiles/geometry.rs>::locate(_1: &BlockGeom, _2: matrix::MatrixKey) -> (TileCoord, u64) [body:0048bd78f53ffeca]",
             "target": "BlockGeom::slot_index",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "plan(_1: format::FormatSpec, _2: [u64; 2], _3: &[u64]) -> std::result::Result<(Geometry, Names), error::Error> [body:a321a892ea72c475]",
+            "target": "after_pages",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "plan(_1: format::FormatSpec, _2: [u64; 2], _3: &[u64]) -> std::result::Result<(Geometry, Names), error::Error> [body:a321a892ea72c475]",
+            "target": "after_pages",
             "result": "model/caller-specific"
           },
           {
@@ -2646,6 +2713,16 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "plan(_1: format::FormatSpec, _2: [u64; 2], _3: &[u64]) -> std::result::Result<(geometry::Geometry, Names), error::Error> [body:496ceea5c7f5886b]",
+            "target": "after_pages",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "plan(_1: format::FormatSpec, _2: [u64; 2], _3: &[u64]) -> std::result::Result<(geometry::Geometry, Names), error::Error> [body:496ceea5c7f5886b]",
+            "target": "after_pages",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::cached_tile(_1: &TileReader, _2: usize, _3: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:65bc692b22444b53]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
@@ -2670,7 +2747,8 @@
       "required_harnesses": [
         "matrix_tiles::geometry::geometry_proofs::a_cell_inside_a_tile_gets_one_of_its_slots",
         "matrix_tiles::geometry::geometry_proofs::every_slot_lies_inside_its_tile_record",
-        "matrix_tiles::geometry::geometry_proofs::morton_keys_interleave_row_and_column_bits"
+        "matrix_tiles::geometry::geometry_proofs::morton_keys_interleave_row_and_column_bits",
+        "matrix_tiles::geometry::geometry_proofs::a_metadata_region_ends_after_whole_pages_or_is_refused"
       ]
     }
   },

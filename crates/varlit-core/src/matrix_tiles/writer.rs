@@ -7,8 +7,8 @@ use super::geometry::{Geometry, META_FIXED_LEN, TileCache, TileCoord};
 use super::store::{TileSource, TileStore};
 use super::view::{Overlay, OverlayEntry, find_tile, for_each_tile, lay_over};
 use super::wal::{
-    self, ENTRY_HEADER, FRAME_COMMIT, FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, MIN_RING,
-    Ring, RingHeader, ScanEvent, frame_header,
+    self, ENTRY_HEADER, FRAME_COMMIT, FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan,
+    MIN_RING, Ring, RingHeader, ScanEvent, frame_header,
 };
 use super::{DIR_FANOUT, DIR_LEVEL_BITS, DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
@@ -514,43 +514,22 @@ impl TileWriter {
     /// wrap marker or checkpointing as needed. Returns its ring offset.
     fn place(&mut self, store: &mut dyn TileStore, len: u64) -> Result<u64> {
         for _ in 0..4 {
-            let area = self.ring.area();
-            let tail = self.header.tail;
-            let used = self.ring.used(tail, self.cursor);
-            // One byte always stays free, so tail == cursor means empty.
-            let free_after = if tail > self.cursor {
-                tail - self.cursor - 1
-            } else if tail == 0 {
-                area - self.cursor - 1
-            } else {
-                area - self.cursor
-            };
-            if len <= free_after {
-                return Ok(self.cursor);
-            }
-            let empty = used == 0;
-            let free_at_start = if tail <= self.cursor && tail > 0 {
-                tail - 1
-            } else {
-                0
-            };
-            if tail <= self.cursor && !empty && len <= free_at_start {
-                self.wrap(store)?;
-                return Ok(0);
-            }
-            if empty {
-                // Nothing kept: start over at the beginning of the ring.
-                if len > area - 1 {
-                    break;
+            match self.ring.plan_frame(self.header.tail, self.cursor, len) {
+                FramePlan::AtCursor => return Ok(self.cursor),
+                FramePlan::AtStart => {
+                    self.wrap(store)?;
+                    return Ok(0);
                 }
-                let mut header = self.header;
-                header.tail = 0;
-                header.head = 0;
-                self.write_header(store, header)?;
-                self.cursor = 0;
-                continue;
+                FramePlan::Restart => {
+                    let mut header = self.header;
+                    header.tail = 0;
+                    header.head = 0;
+                    self.write_header(store, header)?;
+                    self.cursor = 0;
+                }
+                FramePlan::Checkpoint => self.checkpoint(store, len)?,
+                FramePlan::TooLarge => break,
             }
-            self.checkpoint(store, len)?;
         }
         Err(Error::LimitExceeded {
             resource: "matrix ring",
@@ -614,14 +593,11 @@ impl TileWriter {
         let target = if need == u64::MAX {
             header.published
         } else {
+            // The largest frame that fits once frames before `tail` are gone,
+            // by the same rule `place` then applies.
             let after_cursor = |tail: u64| -> u64 {
-                // Free bytes reachable for a frame once frames before `tail`
-                // are gone.
-                if tail > self.cursor {
-                    tail - self.cursor - 1
-                } else {
-                    (area - self.cursor).max(tail.saturating_sub(1))
-                }
+                let (at_cursor, at_start) = self.ring.room(tail, self.cursor);
+                at_cursor.max(at_start)
             };
             // Free half the ring at least, not just this frame's room: a
             // ring kept just full would checkpoint (two more syncs) on

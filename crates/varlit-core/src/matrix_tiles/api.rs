@@ -13,7 +13,7 @@
 
 use super::reader_lock::ReaderLock;
 
-use super::geometry::{BlockGeom, Geometry, TileCoord, checked_bitmap, seal_bitmap};
+use super::geometry::{BlockGeom, Geometry, TileCoord, after_pages, checked_bitmap, seal_bitmap};
 use super::store::{TileSource, TileStore};
 use super::view::TileReader;
 use super::writer::TileWriter;
@@ -197,10 +197,12 @@ pub(crate) fn plan(
     for commit in spec.matrix_commits {
         if commit.kind == MatrixCommitKind::Single {
             push_fallible(&mut names.singles, (commit.name, at), "matrix plan")?;
-            at += 8;
+            at = at.checked_add(8).ok_or(Error::InvalidMatrixLayout)?;
         }
     }
-    at = at.next_multiple_of(EXTRA_PAGE);
+    at = at
+        .checked_next_multiple_of(EXTRA_PAGE)
+        .ok_or(Error::InvalidMatrixLayout)?;
     let channels = all_dims
         .get(channel_dimension(spec))
         .copied()
@@ -212,12 +214,13 @@ pub(crate) fn plan(
                 (commit.name, at, channels),
                 "matrix plan",
             )?;
-            at += channels.div_ceil(8).next_multiple_of(EXTRA_PAGE);
+            at = after_pages(at, channels.div_ceil(8), EXTRA_PAGE)
+                .ok_or(Error::InvalidMatrixLayout)?;
         }
     }
     for aux in spec.matrix_aux {
         push_fallible(&mut names.aux, (aux.name, at, aux.byte_len), "matrix plan")?;
-        at += aux.byte_len.next_multiple_of(EXTRA_PAGE);
+        at = after_pages(at, aux.byte_len, EXTRA_PAGE).ok_or(Error::InvalidMatrixLayout)?;
     }
     geom.extra_len = at - geom.extra_at();
     Ok((geom, names))

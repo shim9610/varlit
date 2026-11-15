@@ -46,6 +46,15 @@ fn spread(x: u32) -> u64 {
     x
 }
 
+/// The offset after a region of `bytes` starting at `at`, rounded up to
+/// whole pages of `page` bytes, or `None` when it is not an offset.
+pub(crate) const fn after_pages(at: u64, bytes: u64, page: u64) -> Option<u64> {
+    match bytes.checked_next_multiple_of(page) {
+        Some(len) => at.checked_add(len),
+        None => None,
+    }
+}
+
 /// One matrix block's storage shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BlockGeom {

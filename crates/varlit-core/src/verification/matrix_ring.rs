@@ -2,7 +2,10 @@
 //! believed, and that every offset computed from a believed header and every
 //! frame a scan steps over stays inside the ring record. Checksums and I/O
 //! are outside these harnesses.
-use super::{FRAME_HEADER, FRAMES_AT, HEADER_SLOT, MAX_RING_BYTES, MIN_RING, Ring, RingHeader};
+use super::{
+    ENTRY_HEADER, FRAME_HEADER, FRAMES_AT, FramePlan, HEADER_SLOT, MAX_RING_BYTES, MIN_RING, Ring,
+    RingHeader, frame_entry,
+};
 
 fn any_ring() -> Ring {
     let base: u64 = kani::any();
@@ -113,5 +116,121 @@ fn a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid() {
             assert!(next == 0 || u128::from(next) == u128::from(at) + u128::from(len));
         }
         None => assert!(!fits),
+    }
+}
+
+/// Whether ring offset `at` is inside the frames kept from `tail` up to
+/// `cursor`.
+fn kept(tail: u64, cursor: u64, at: u64) -> bool {
+    if tail <= cursor {
+        tail <= at && at < cursor
+    } else {
+        at >= tail || at < cursor
+    }
+}
+
+/// Wherever a writer decides to put its next frame, the frame lies inside
+/// the frame area, covers no byte of a kept frame, and leaves the cursor
+/// different from the tail, so a full ring is never mistaken for an empty
+/// one. A frame is refused as too large only when an empty ring could not
+/// hold it, and a checkpoint is asked for only when frames are kept.
+#[kani::proof]
+fn a_placed_frame_never_overwrites_a_kept_frame() {
+    let ring = any_ring();
+    let area = ring.area();
+    let tail: u64 = kani::any();
+    let cursor: u64 = kani::any();
+    let len: u64 = kani::any();
+    kani::assume(tail < area && cursor < area && len != 0);
+    // Any byte of the placed frame.
+    let offset: u64 = kani::any();
+    kani::assume(offset < len);
+    let placed_at = match ring.plan_frame(tail, cursor, len) {
+        FramePlan::AtCursor => Some(cursor),
+        FramePlan::AtStart => {
+            // Only when frames are kept between a tail past the start and
+            // the cursor: the start of the ring is then free.
+            assert!(0 < tail && tail < cursor);
+            Some(0)
+        }
+        FramePlan::Restart => {
+            assert_eq!(tail, cursor);
+            // From an empty ring at offset 0 the frame fits at once.
+            assert!(matches!(ring.plan_frame(0, 0, len), FramePlan::AtCursor));
+            None
+        }
+        FramePlan::Checkpoint => {
+            assert!(tail != cursor);
+            None
+        }
+        FramePlan::TooLarge => {
+            assert_eq!(tail, cursor);
+            assert!(len >= area);
+            None
+        }
+    };
+    if let Some(at) = placed_at {
+        let end = u128::from(at) + u128::from(len);
+        assert!(end <= u128::from(area));
+        assert!(!kept(tail, cursor, at + offset));
+        let next = if at + len == area { 0 } else { at + len };
+        assert!(next < area);
+        assert!(next != tail);
+    }
+}
+
+/// The room a checkpoint plans for is the room placement then finds: once
+/// the frames before `tail` are gone, a frame no longer than the larger of
+/// the two rooms is placed without another checkpoint.
+#[kani::proof]
+fn room_promised_by_a_checkpoint_is_room_placement_finds() {
+    let ring = any_ring();
+    let area = ring.area();
+    let tail: u64 = kani::any();
+    let cursor: u64 = kani::any();
+    let len: u64 = kani::any();
+    kani::assume(tail < area && cursor < area && len != 0);
+    let (at_cursor, at_start) = ring.room(tail, cursor);
+    assert!(at_cursor < area && at_start < area);
+    if len <= at_cursor.max(at_start) {
+        assert!(matches!(
+            ring.plan_frame(tail, cursor, len),
+            FramePlan::AtCursor | FramePlan::AtStart | FramePlan::Restart
+        ));
+    }
+}
+
+/// An entry is taken from a frame body only when its header and all its
+/// bytes lie inside the body, and the next entry starts after it: parsing
+/// any bytes reads nothing outside the body and always advances.
+#[kani::proof]
+fn a_frame_entry_lies_inside_the_frame_body() {
+    let body: [u8; 40] = kani::any();
+    let len: usize = kani::any();
+    let cursor: usize = kani::any();
+    kani::assume(len <= body.len());
+    let body = &body[..len];
+    match frame_entry(body, cursor) {
+        Some(entry) => {
+            assert!(cursor <= body.len());
+            assert_eq!(entry.bytes_at, cursor + ENTRY_HEADER as usize);
+            assert!(entry.bytes_at <= entry.next);
+            assert_eq!(entry.next, entry.bytes_at + entry.len as usize);
+            assert!(entry.next <= body.len());
+            assert!(entry.next > cursor);
+        }
+        None => {
+            // Refused exactly when the header or the bytes would not fit.
+            let fits = cursor <= body.len() && body.len() - cursor >= ENTRY_HEADER as usize && {
+                let n = u32::from_le_bytes([
+                    body[cursor + 8],
+                    body[cursor + 9],
+                    body[cursor + 10],
+                    body[cursor + 11],
+                ]);
+                (n as usize) <= body.len() - cursor - ENTRY_HEADER as usize
+            };
+            assert!(!fits);
+        }
     }
 }

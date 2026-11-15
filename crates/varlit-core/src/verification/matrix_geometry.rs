@@ -1,7 +1,7 @@
 //! Tile arithmetic for a matrix block whose shape passed spec validation:
 //! every cell has exactly one slot, the slot lies inside its tile record,
 //! and tile coordinates interleave into distinct directory keys.
-use super::{BlockGeom, TILE_HEADER_LEN, TileCoord};
+use super::{BlockGeom, TILE_HEADER_LEN, TileCoord, after_pages};
 use crate::format::{MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS};
 
 /// A tile with sides up to 63: bounded so the product of two unknowns
@@ -92,5 +92,25 @@ fn morton_keys_interleave_row_and_column_bits() {
             // causes whose destruction is not what this harness is about.
             std::mem::forget(error);
         }
+    }
+}
+
+/// Laying a metadata region after another one either yields the offset just
+/// past its whole pages or is refused: it never wraps into an offset that
+/// would put two regions on the same bytes.
+#[kani::proof]
+fn a_metadata_region_ends_after_whole_pages_or_is_refused() {
+    const PAGE: u64 = 256;
+    let at: u64 = kani::any();
+    let bytes: u64 = kani::any();
+    let exact = u128::from(at) + (u128::from(bytes) + 255) / 256 * 256;
+    match after_pages(at, bytes, PAGE) {
+        Some(end) => {
+            assert_eq!(u128::from(end), exact);
+            assert!(end >= at);
+            assert!(u128::from(end) >= u128::from(at) + u128::from(bytes));
+            assert!((end - at).is_multiple_of(PAGE));
+        }
+        None => assert!(exact > u128::from(u64::MAX)),
     }
 }

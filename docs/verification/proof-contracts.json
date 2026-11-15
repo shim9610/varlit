@@ -385,18 +385,21 @@
       "harnesses": [
         "matrix_tiles::wal::ring_proofs::believed_ring_headers_have_ordered_generations_and_room_for_the_next",
         "matrix_tiles::wal::ring_proofs::offsets_of_a_fitting_header_stay_inside_the_ring_record",
-        "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid"
+        "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
+        "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
+        "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
+        "matrix_tiles::wal::ring_proofs::a_frame_entry_lies_inside_the_frame_body"
       ],
       "sources": [
         "crates/varlit-core/src/verification/matrix_ring.rs",
         "crates/varlit-core/src/matrix_tiles/wal.rs"
       ],
-      "scope": "which stored write-ahead ring headers a tiled matrix believes, and the offset arithmetic of a believed header and of each frame a scan steps over, for arbitrary field values, ring placements admitted by Ring::within and frame lengths",
-      "limits": "Checksums, I/O, frame entry parsing, the writer's free-space planning, checkpoint ordering and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. The step lemma is one scan iteration; the induction over a whole scan is argued in the harness comment, not mechanised.",
+      "scope": "which stored write-ahead ring headers a tiled matrix believes; the offset arithmetic of a believed header and of each frame a scan steps over; where a writer places its next frame relative to the frames it keeps; and the bounds of each entry parsed from a frame body, for arbitrary field values, ring placements admitted by Ring::within, ring offsets and frame lengths",
+      "limits": "Checksums, I/O, checkpoint ordering, which generations a checkpoint applies and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. Frame stepping and frame placement are single steps; the induction over a whole scan or a sequence of publications is argued in the harness comments, not mechanised. Entry parsing is proved on bodies of up to 40 bytes.",
       "specification": {
         "requires": "Eight arbitrary u64 header fields; a ring whose length is within the format bounds and whose end offset fits u64; arbitrary ring offsets and frame lengths.",
-        "ensures": "A header is believed exactly when reclaimed <= checkpointed <= mark <= published and published and seq are below u64::MAX, so the next generation and sequence are representable. Offsets of a header that fits the frame area are word-aligned, map to logical offsets inside the ring record, and are less than the area apart. A stepped frame lies wholly inside the frame area and the next offset is inside it and word-aligned.",
-        "on_error": "A header with unordered or saturated generations is not believed; a frame that is short, unaligned or past the frame area is not stepped over.",
+        "ensures": "A header is believed exactly when reclaimed <= checkpointed <= mark <= published and published and seq are below u64::MAX, so the next generation and sequence are representable. Offsets of a header that fits the frame area are word-aligned, map to logical offsets inside the ring record, and are less than the area apart. A stepped frame lies wholly inside the frame area and the next offset is inside it and word-aligned. A placed frame lies inside the frame area, covers no byte of a kept frame and leaves the cursor different from the tail; a frame is refused as too large only when an empty ring could not hold it; room a checkpoint plans for is room placement then finds. A parsed entry's header and bytes lie inside the frame body and the next entry starts after it.",
+        "on_error": "A header with unordered or saturated generations is not believed; a frame that is short, unaligned or past the frame area is not stepped over. An entry whose header or bytes would pass the end of the body is not parsed.",
         "frame": "Pure functions of their arguments; nothing is read or written.",
         "progress": "No loops; each check is constant work. A stepped frame advances by at least a frame header and checksum."
       }
@@ -406,19 +409,20 @@
       "harnesses": [
         "matrix_tiles::geometry::geometry_proofs::a_cell_inside_a_tile_gets_one_of_its_slots",
         "matrix_tiles::geometry::geometry_proofs::every_slot_lies_inside_its_tile_record",
-        "matrix_tiles::geometry::geometry_proofs::morton_keys_interleave_row_and_column_bits"
+        "matrix_tiles::geometry::geometry_proofs::morton_keys_interleave_row_and_column_bits",
+        "matrix_tiles::geometry::geometry_proofs::a_metadata_region_ends_after_whole_pages_or_is_refused"
       ],
       "sources": [
         "crates/varlit-core/src/verification/matrix_geometry.rs",
         "crates/varlit-core/src/matrix_tiles/geometry.rs",
         "crates/varlit-core/src/format.rs"
       ],
-      "scope": "slot indexing for tiles with sides up to 63, slot byte ranges for every admitted cell count at four fixed strides, and Morton directory keys for arbitrary tile coordinates",
+      "scope": "slot indexing for tiles with sides up to 63, slot byte ranges for every admitted cell count at four fixed strides, and Morton directory keys for arbitrary tile coordinates; and the end offset of a page-aligned metadata region for arbitrary offsets and lengths",
       "limits": "Bounded: a product of two unknowns does not decide in the proof budget, so slot indexing is proved for small tiles and slot byte ranges for strides 1, 8, 61 and 65532 only. Other strides, the largest tile shapes, that distinct cells get distinct slots, and the reduction of a cell key to a tile coordinate and an in-tile row and column are checked by native tests (matrix_tiles::tests::every_key_has_one_slot_in_one_tile_at_every_admitted_shape). Directory pages, tile allocation and bitmap contents are covered by native tests.",
       "specification": {
         "requires": "A non-empty tile with sides up to 63 and a row and column inside it; or up to 2^20 cells at a stride of 1, 8, 61 or 65532 bytes with at most 64 MiB of slots; arbitrary 64-bit tile coordinates.",
-        "ensures": "A cell's slot index is below the tile's cell count and its commit bit is inside the bitmap; every slot lies after the header and bitmap unit and ends inside the tile record without overflow; a Morton key holds the row's bits at even positions and the column's at odd positions.",
-        "on_error": "Tile coordinates that do not fit 32 bits are refused with InvalidMatrixLayout.",
+        "ensures": "A cell's slot index is below the tile's cell count and its commit bit is inside the bitmap; every slot lies after the header and bitmap unit and ends inside the tile record without overflow; a Morton key holds the row's bits at even positions and the column's at odd positions. A metadata region's end is the offset just past its whole 256-byte pages.",
+        "on_error": "Tile coordinates that do not fit 32 bits are refused with InvalidMatrixLayout. A region whose end is not a u64 offset is refused instead of wrapping.",
         "frame": "Pure functions of their arguments; nothing is read or written.",
         "progress": "No loops; each computation is constant work."
       }

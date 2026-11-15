@@ -215,10 +215,60 @@ impl Ring {
         Some(if next == area { 0 } else { next })
     }
 
+    /// Contiguous room for one frame while the frames from `tail` up to
+    /// `cursor` are kept: at the cursor, and at the start of the ring after
+    /// wrapping. One byte always stays free, so `tail == cursor` only ever
+    /// means an empty ring.
+    pub(crate) const fn room(&self, tail: u64, cursor: u64) -> (u64, u64) {
+        let area = self.area();
+        if tail > cursor {
+            (tail - cursor - 1, 0)
+        } else if tail == 0 {
+            (area - cursor - 1, 0)
+        } else {
+            (area - cursor, tail - 1)
+        }
+    }
+
+    /// Where a frame of `len` bytes goes, given the frames kept.
+    pub(crate) const fn plan_frame(&self, tail: u64, cursor: u64, len: u64) -> FramePlan {
+        let (at_cursor, at_start) = self.room(tail, cursor);
+        if len <= at_cursor {
+            FramePlan::AtCursor
+        } else if tail == cursor {
+            // Nothing is kept: the whole ring is available from its start.
+            if len > self.area() - 1 {
+                FramePlan::TooLarge
+            } else {
+                FramePlan::Restart
+            }
+        } else if len <= at_start {
+            FramePlan::AtStart
+        } else {
+            FramePlan::Checkpoint
+        }
+    }
+
     /// The logical offset of the slot a header of sequence `seq` goes to.
     pub(crate) const fn slot_for(&self, seq: u64) -> u64 {
         self.base + (seq % 2) * HEADER_SLOT
     }
+}
+
+/// What a writer does to find room for its next frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FramePlan {
+    /// The frame fits at the cursor.
+    AtCursor,
+    /// The frame fits at the start of the ring, before the oldest kept
+    /// frame: wrap, then write it at offset 0.
+    AtStart,
+    /// The ring is empty: move tail and cursor to offset 0 and plan again.
+    Restart,
+    /// Kept frames are in the way: checkpoint the oldest and plan again.
+    Checkpoint,
+    /// The frame is larger than the ring can ever hold.
+    TooLarge,
 }
 
 /// What [`scan`] reports, in ring order.
@@ -336,27 +386,20 @@ pub(crate) fn scan(
         let mut cursor = FRAME_HEADER as usize;
         let mut ok = true;
         for _ in 0..count {
-            if cursor + ENTRY_HEADER as usize > body_end {
+            let Some(entry) = frame_entry(&frame[..body_end], cursor) else {
                 ok = false;
                 break;
-            }
-            let target = u64::from_le_bytes(frame[cursor..cursor + 8].try_into().expect("eight"));
-            let n = u32::from_le_bytes(frame[cursor + 8..cursor + 12].try_into().expect("four"));
-            let bytes_at = cursor + ENTRY_HEADER as usize;
-            if bytes_at + n as usize > body_end {
-                ok = false;
-                break;
-            }
+            };
             held.try_reserve(1).map_err(|_| Error::AllocationFailed {
                 resource: "matrix ring scan",
                 requested: (held.len() as u64 + 1) * 24,
             })?;
             held.push(ScannedEntry {
-                target,
-                at: ring.at(at) + bytes_at as u64,
-                len: n,
+                target: entry.target,
+                at: ring.at(at) + entry.bytes_at as u64,
+                len: entry.len,
             });
-            cursor = bytes_at + n as usize;
+            cursor = entry.next;
         }
         if !ok {
             break;
@@ -379,6 +422,35 @@ pub(crate) fn scan(
         }
     }
     Ok(ScanEnd { published, head })
+}
+
+/// One entry of a frame body: where it goes, where its bytes are in the body
+/// and where the next entry starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FrameEntry {
+    pub target: u64,
+    pub len: u32,
+    pub bytes_at: usize,
+    pub next: usize,
+}
+
+/// The entry at `cursor` of a frame `body` (a frame without its trailing
+/// checksum), if its header and all its bytes lie inside the body.
+pub(crate) fn frame_entry(body: &[u8], cursor: usize) -> Option<FrameEntry> {
+    let bytes_at = cursor.checked_add(ENTRY_HEADER as usize)?;
+    let header = body.get(cursor..bytes_at)?;
+    let target = u64::from_le_bytes(header[..8].try_into().expect("eight"));
+    let len = u32::from_le_bytes(header[8..12].try_into().expect("four"));
+    let next = bytes_at.checked_add(usize::try_from(len).ok()?)?;
+    if next > body.len() {
+        return None;
+    }
+    Some(FrameEntry {
+        target,
+        len,
+        bytes_at,
+        next,
+    })
 }
 
 /// Encodes a frame header in place; the caller appends entries and the CRC.

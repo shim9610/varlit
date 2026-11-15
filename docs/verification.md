@@ -122,7 +122,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-88 harnesses in 18 contract groups. Both default and all-feature builds must
+92 harnesses in 18 contract groups. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -147,8 +147,8 @@ A zero-harness run fails.
 | Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
 | Untrusted sequence candidate | 1 | Full-width sequence subtraction and candidate conversion |
 | Record chunk table | 2 | Chunk geometry for chunked lengths up to 2^40 and table-entry extents on a fixed three-chunk header |
-| Matrix write-ahead ring | 3 | Which stored ring headers are believed, and that offsets of a believed header and every frame a scan steps over stay inside the ring record; checksums, frame entries, checkpoints and crash atomicity are native tests |
-| Matrix tile geometry | 3 | Slot indexes for tiles with sides up to 63; slot byte ranges for every admitted cell count at four fixed strides; Morton directory keys for all coordinates. Other strides, the largest shapes and key-to-tile reduction are native tests |
+| Matrix write-ahead ring | 6 | Which stored ring headers are believed; that offsets of a believed header and every frame a scan steps over stay inside the ring record; that a placed frame never covers a kept frame and never makes a full ring look empty; that a parsed frame entry lies inside its frame body. Checksums, checkpoint contents and crash atomicity are native tests |
+| Matrix tile geometry | 4 | Slot indexes for tiles with sides up to 63; slot byte ranges for every admitted cell count at four fixed strides; Morton directory keys for all coordinates; page-aligned metadata region ends. Other strides, the largest shapes and key-to-tile reduction are native tests |
 
 Full-width arithmetic proofs and bounded container/I/O models have different
 scopes. Bounds, allocator/callback assumptions and exclusions are recorded per
@@ -380,6 +380,20 @@ holder is covered by a native test, not by these models.
 
 The runner refuses a build without `varlit_loom`. Its dependencies have their own
 lockfile and advisory audit and are not library runtime dependencies.
+
+## Verus pilot
+
+`tools/verus` holds a Verus proof of the tile slot arithmetic for the whole
+admitted range, which the Kani harnesses above bound: a cell inside a tile
+gets a slot below the tile's cell count, distinct cells get distinct slots,
+and every slot ends inside its tile record, without overflow. It proves a
+transcription of the production expressions, not the production function
+bodies; `run.sh` checks only that each transcribed expression still appears
+verbatim in the source. Two standard-library functions Verus has no
+specification for (`div_ceil`, `next_multiple_of`) are assumed to behave as
+documented. It is not run in CI. See the [pilot's README](../tools/verus/README.md)
+for the pinned Verus version, the install steps and what verifying the
+production bodies in place would require.
 
 ## Miri, ASan and fuzzing
 
