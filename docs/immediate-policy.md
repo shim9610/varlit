@@ -1,8 +1,9 @@
 # Immediate policy for append writers
 
 An Immediate boundary makes all preceding writes, including its triggering
-record, durable before returning success. On scalable writers it also publishes
-the corresponding clean sidecar root. There are three ways to request one.
+record, durable before returning success. On scalable writers it also confirms
+the clean sidecar root when the writer's `DiskIndexConfirmPolicy` is due. There
+are three ways to request one.
 
 ## Block declarations
 
@@ -90,16 +91,33 @@ transaction itself must become committed and durable.
 
 ## Scalable commit and recovery order
 
-1. Before the first mutation after a clean boundary, durably save the clean
-   rollback checkpoint and mark the generation Dirty. This recovery marker is
-   separate from confirmed heads; ordinary appends are not yet
-   acknowledged as durable by it.
+1. Before the first mutation after a clean boundary, save the clean rollback
+   checkpoint and mark the generation Dirty. This marker is not a barrier: a
+   crash that loses it leaves the newest durable state clean with the native
+   file longer than it covers, which is recovered by restore exactly as a
+   surviving Dirty checkpoint is.
 2. Write native chunks and append bounded sidecar working checkpoints without
    a durability barrier. A native chunk does not force an index commit; index
    record/byte bounds, API-end publication and explicit boundaries do.
-3. At `immediate()` / `sync()`, finish the pending index batch, sync the native
-   file, append and sync the clean checkpoint, then publish and individually sync
-   both confirmed heads. The previous rollback checkpoint is retired logically.
+3. At `immediate()` / `sync()`, append a sync marker to the native file and
+   sync it. The sidecar is confirmed in the same call only when the native file
+   has grown past the last confirmed EOF by the writer's
+   `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records; `EVERY_SYNC`
+   confirms on every sync). Until then readers and recovery take the unconfirmed
+   tail from the native file. A confirmation finishes the pending index batch,
+   writes the clean checkpoint and syncs it, writes one confirmed head into the
+   slot that does not hold the newest durable head, and syncs again. The head is
+   then copied into the other slot without a barrier of its own; the next
+   barrier persists it, so a completed generation keeps two head copies.
+   A version 5 sidecar (`VIXHEAD2` heads) confirms with one sync instead: its
+   head names the checksum of every sidecar byte appended since the previous
+   confirmed checkpoint, a head whose generation fails that checksum is skipped
+   for the other confirmed slot, and a generation whose two head copies both
+   name it but fail the checksum is refused as damaged durable data.
+
+A `sync()` therefore costs one storage barrier on the native file, plus two on
+the sidecar when it confirms (one for a version 5 sidecar). A writer open adds
+one sidecar sync when the two confirmed heads differ.
 
 `flush()` does not request a new durable clean generation. Creating/rebuilding
 a sidecar and establishing a rollback checkpoint still perform required safety

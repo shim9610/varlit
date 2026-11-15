@@ -33,7 +33,7 @@ The runtime handles storage mechanics:
 - checkpoint/index scan
 - compression/decompression
 - integrity checks
-- matrix layout, commit maps, and direct cell offsets
+- matrix tiles, tile directories, commit bitmaps, and the write-ahead ring
 - writer locks and explicit durability calls
 
 ## File Header
@@ -243,7 +243,8 @@ helpers.
 
 ```rust
 let users = reader.users()?;
-let user = users.get(&7)?;
+let mut user = User::empty();
+let found = users.get(&7, &mut user)?;
 ```
 
 For repeated keys, keyed lookup returns the newest record by sequence. For
@@ -281,35 +282,35 @@ This is deliberate: applications choose their own durability/performance trade.
 
 ## Matrix Storage
 
-Matrix blocks are separate from append-log records, and they are for grids whose
-dimensions are fixed at create — with one exception. A format may declare one
-growing dimension with `with_growing_matrix_dimension(name, rows_per_chunk)`.
-The dimension's value at create must then equal `rows_per_chunk` — refused
-otherwise with `MatrixSizeMismatch` — so the matrix region *is* chunk 0 and
-every later chunk is an append-log internal record carrying the region's
-byte-for-byte layout. One chunk is buffered at a time, which is what bounds
-memory; addressing a row in an already-written chunk writes the open one out and
-reads that one back, and the rewrite lands where the record already sits, so the
-file does not grow. Off by default and byte-identical when not declared.
+A matrix lives in internal records of the append log, the first records after
+the file header: a metadata record, a fixed-size write-ahead ring, directory
+pages and tiles. The byte layout is in the
+[matrix wire contract](spec.md#preallocated-matrix-wire-contract).
 
 ```mermaid
 flowchart TD
     A["create_writer_with_dims"] --> B["write normal Varlit header"]
-    B --> B2["write VMNC creation nonce"]
-    B2 --> C["write VMAT matrix layout"]
-    C --> D["reserve commit maps as a sparse zero extent"]
-    D --> E["preallocate slot regions"]
-    E --> F["optional aux regions"]
-    F --> G["optional matrix CRC header"]
-    G --> H["append-log region starts"]
+    B --> C["append VMTA metadata record: extents, creation nonce, directory roots, commit flags, aux"]
+    C --> D["append write-ahead ring record"]
+    D --> E["sync"]
+    E --> F["first write into a tile appends the tile and its directory pages"]
 ```
 
-For a dense `(scan, ch)` matrix, Varlit computes direct offsets:
+Each matrix block stores its cells in tiles of `[rows, cols]` cells: the
+declared shape, or by default the largest power of two of cells whose slots
+fit 64 KiB. A cell maps to a tile and a slot:
 
 ```text
-ordinal = scan * ch_count + ch
-slot_offset = slot_region_start + ordinal * slot_stride
+tile = (scan / rows, ch / cols)
+slot = (scan % rows) * cols + ch % cols
+slot_offset = tile_offset + slots_start + slot * (slot_stride + 4)
 ```
+
+A block finds its tiles through a radix directory keyed by the Morton code of
+the tile coordinates. A tile that was never written does not exist, so a
+growing dimension (`with_growing_matrix_dimension`) can be written far past its
+create-time extent and the file holds only the tiles written
+(`a_growing_matrix_writes_far_past_its_extent`).
 
 Writing a matrix cell:
 
@@ -317,19 +318,29 @@ Writing a matrix cell:
 flowchart TD
     A["write_matrix_cell"] --> B["encode payload"]
     B --> C["verify encoded length == slot_stride"]
-    C --> D["clear commit bit"]
-    D --> E["write payload at direct slot offset"]
-    E --> F["update slot CRC if enabled"]
-    F --> G["commit_matrix_cell sets commit bit"]
+    C --> D["find or append the tile"]
+    D --> E["stage payload + CRC32 for the slot"]
+    E --> F["stage the tile bitmap with the cell's commit bit cleared"]
+    F --> G["commit_matrix_cell checks the slot CRC32 and sets the bit"]
+    G --> H["sync() writes the staged ranges to the ring as one generation"]
 ```
 
-Readers trust commit maps. If the commit bit is clear, Varlit returns
+Cells are overwritten in place, but not directly: a publication writes its
+byte ranges to the ring and syncs, and a checkpoint copies them into place only
+when the ring needs room. A reader keeps an overlay of the ranges published
+after the last checkpoint it saw, so it reads one generation until it calls
+`follow()`. A reader that falls further behind than the ring holds gets
+`MatrixSnapshotExpired` instead of a mix of generations. Overwrites do not grow
+the file (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`).
+
+Readers trust commit bits. If the commit bit is clear, Varlit returns
 `MatrixNotCommitted` even if slot bytes exist.
 
 ## Aux Regions
 
-`aux { thumbnail: 1024 }` creates a preallocated byte region near matrix data.
-Aux bytes are not commit-controlled and do not append records. They are useful
+`aux { thumbnail: 1024 }` reserves a byte region in the matrix metadata record.
+Aux bytes are not commit-controlled and do not append records. Writes to them
+are published through the write-ahead ring like cell writes. They are useful
 for caller-owned caches, previews, or side data that should live in the file but
 not participate in cell validity.
 
@@ -345,20 +356,23 @@ Modes:
 - `file_explicit`: one file-header extension describes compression.
 - `format_contract`: the static schema is the compression contract.
 
-`ChunkedBytes` is a value-level helper for caller-managed blobs. It is not the
-same as VMAT-native chunked matrix storage.
+`ChunkedBytes` is a value-level helper for caller-managed blobs. It is not
+part of matrix storage. Matrix tiles are rewritten in place and cannot be
+compressed; a format declaring chunk compression is refused with
+`InvalidFormatSpec`.
 
 ## Integrity And Recovery
 
 With `integrity: crc32`, Varlit validates record payload CRCs. In `VARVE3`, the
 CRC covers payload plus footer. With `integrity: crc32_with_header`, the native
 record header is included too, with the checksum field normalized to zero.
-Matrix CRC additionally covers metadata tables, commit maps, and committed
-slots. Commit maps are covered per 4 KiB page rather than per category, so
-mutating one commit bit rehashes one page, and a page marked uninitialized must
-still read as all zeros. Creation writes no per-cell integrity metadata at all:
-those regions start as a sparse zero extent and are filled in as cells are
-actually used.
+Matrix storage records are rewritten in place, so their record checksum
+covers the record header and footer only. Their payloads carry their own
+CRC32s: each slot stores the CRC32 of its payload, each tile's commit bitmap
+and each tile header carry a CRC32, as do the matrix metadata record's fixed
+fields, each ring header and each ring frame. Slot CRC32s are checked on read
+when the read-validation policy's `data_crc` is on; bitmap CRC32s are checked
+on every read.
 
 CRC is corruption detection, not authentication. It does not protect against a
 malicious writer that can recompute checksums.

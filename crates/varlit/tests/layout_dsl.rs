@@ -8,6 +8,10 @@ use varlit::{
     VarlitBlock, varlit_format,
 };
 
+/// The header flags byte of a file created with the default anchor policy:
+/// anchored (bit 7), 4 KiB holes (bit 6 clear), spacing 2^(10 + 12) = 4 MiB.
+const DEFAULT_ANCHOR_FLAGS: u8 = 0x80 | (22 - 10);
+
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 50, version = 1, kind = "fixed")]
 struct NativePoint {
@@ -511,7 +515,7 @@ fn explicit_varlit_native_preset_preserves_native_bytes() -> varlit::Result<()> 
     assert_eq!(&default_bytes[4..10], b"VARVE1");
     assert_eq!(u16_at(&default_bytes, 10), 1);
     assert_eq!(default_bytes[12], 1);
-    assert_eq!(default_bytes[13], 0);
+    assert_eq!(default_bytes[13], DEFAULT_ANCHOR_FLAGS);
     assert_eq!(
         u64_at(&default_bytes, 14),
         NativeDefaultFormat::spec().schema_hash
@@ -625,7 +629,7 @@ fn native_file_header_layout_codec_preserves_varlit3_extension_len_zero() -> var
     assert_eq!(&bytes[5..11], b"VARVE3");
     assert_eq!(u16_at(&bytes, 11), 1);
     assert_eq!(bytes[13], 1);
-    assert_eq!(bytes[14], 0);
+    assert_eq!(bytes[14], DEFAULT_ANCHOR_FLAGS);
     assert_eq!(u64_at(&bytes, 15), NativeFooterFormat::spec().schema_hash);
     assert_eq!(u32_at(&bytes, 23), 0);
 

@@ -1,6 +1,5 @@
 use crate::db::StorageBackend;
 use crate::sync::{Mutex, MutexGuard, RwLock};
-#[cfg(feature = "experimental-multiprocess")]
 use crate::transaction_tracker::TransactionId;
 use crate::tree_store::page_store::base::PageHint;
 use crate::tree_store::page_store::lru_cache::LRUCache;
@@ -162,7 +161,6 @@ impl CheckedBackend {
             .map_err(StorageError::from)
     }
 
-    #[cfg(feature = "experimental-multiprocess")]
     fn lock_range(&self, range: impl RangeBounds<u64>) -> Result {
         self.check_failure()?;
         self.file
@@ -170,7 +168,6 @@ impl CheckedBackend {
             .map_err(StorageError::from)
     }
 
-    #[cfg(feature = "experimental-multiprocess")]
     fn lock_shared_range(&self, range: impl RangeBounds<u64>) -> Result {
         self.check_failure()?;
         self.file
@@ -306,7 +303,6 @@ pub(super) struct PagedCachedFile {
     // A third "total" counter would add contention on every insert/remove for
     // negligible accuracy gain.
     read_cache_bytes: AtomicUsize,
-    #[cfg(feature = "experimental-multiprocess")]
     read_cache_transaction_id: Mutex<Option<TransactionId>>,
     write_buffer_bytes: AtomicUsize,
     // True when the write buffer holds committed, reader-visible pages, left there by a
@@ -356,7 +352,6 @@ impl PagedCachedFile {
             file: CheckedBackend::new(file),
             page_size,
             read_cache_bytes: AtomicUsize::new(0),
-            #[cfg(feature = "experimental-multiprocess")]
             read_cache_transaction_id: Mutex::new(None),
             write_buffer_bytes: AtomicUsize::new(0),
             committed_pages_buffered: AtomicBool::new(false),
@@ -385,12 +380,10 @@ impl PagedCachedFile {
         self.file.try_lock_shared_range(range)
     }
 
-    #[cfg(feature = "experimental-multiprocess")]
     pub(crate) fn lock_range(&self, range: impl RangeBounds<u64>) -> Result {
         self.file.lock_range(range)
     }
 
-    #[cfg(feature = "experimental-multiprocess")]
     pub(crate) fn lock_shared_range(&self, range: impl RangeBounds<u64>) -> Result {
         self.file.lock_shared_range(range)
     }
@@ -546,25 +539,48 @@ impl PagedCachedFile {
         }
     }
 
-    // Caller should invalidate all cached pages that are no longer valid
+    // When shrinking, the caller must drop all writable pages and ensure no live page
+    // overlaps the removed region. Writes must be serialized with resizing; reads may continue
+    // within the retained region, including flushing buffered pages under cache pressure.
     pub(super) fn resize(&self, len: u64) -> Result {
-        // Growing leaves all existing cached pages valid. Shrinking only
-        // invalidates pages whose offset falls past the new end-of-file.
+        // Growth can occur with writable pages outstanding and leaves every cached page valid.
         let old_len = self.file.len()?;
         if len < old_len {
-            self.invalidate_read_cache_above(len);
+            self.invalidate_cache_above(len);
         }
 
         self.file.set_len(len)
     }
 
-    // Drop cached read pages whose offset is at or beyond `threshold`.
-    fn invalidate_read_cache_above(&self, threshold: u64) {
+    // Cancel writes before truncating so a concurrent reader's writeback cannot re-extend the
+    // file. Take write-buffer locks before read-cache locks, as in read() and flush_write_buffer().
+    fn invalidate_cache_above(&self, threshold: u64) {
         for cache_slot in 0..self.read_cache.len() {
+            let mut write_buffer = self.write_buffer[cache_slot].lock().unwrap();
+            let stale: Vec<u64> = write_buffer
+                .cache
+                .iter()
+                .filter_map(|(offset, buffer)| {
+                    let buffer = buffer
+                        .as_ref()
+                        .expect("Cannot shrink with writable pages outstanding");
+                    (*offset >= threshold || buffer.len() as u64 > threshold - *offset)
+                        .then_some(*offset)
+                })
+                .collect();
+            for offset in stale {
+                let removed = write_buffer.remove(offset).unwrap();
+                self.write_buffer_bytes
+                    .fetch_sub(removed.len(), Ordering::AcqRel);
+            }
+            // Retained writes may belong to non-durable commits, so keep their visibility flag.
             let mut lock = self.read_cache[cache_slot].write().unwrap();
             let stale: Vec<u64> = lock
                 .iter()
-                .filter_map(|(k, _)| (*k >= threshold).then_some(*k))
+                .filter_map(|(offset, buffer)| {
+                    (*offset >= threshold || buffer.len() as u64 > threshold - *offset)
+                        .then_some(*offset)
+                })
                 .collect();
             for k in stale {
                 if let Some(removed) = lock.remove(k) {
@@ -600,14 +616,12 @@ impl PagedCachedFile {
     // Whether a commit has left pages in the write buffer instead of writing them to the file.
     // Only a non-durable commit does that, so this is always false in the multi-process modes,
     // which refuse `Durability::None`.
-    #[cfg(feature = "experimental-multiprocess")]
     pub(super) fn has_committed_pages_buffered(&self) -> bool {
         self.committed_pages_buffered.load(Ordering::Acquire)
     }
 
     // Write directly to the file, bypassing the write buffer, so the bytes are on the file when
     // this returns rather than whenever the buffer is next flushed
-    #[cfg(feature = "experimental-multiprocess")]
     pub(super) fn write_direct(&self, offset: u64, data: &[u8]) -> Result<()> {
         self.invalidate_cache(offset, data.len());
         self.cancel_pending_write(offset, data.len());
@@ -776,7 +790,6 @@ impl PagedCachedFile {
     }
 
     // The caller holds the header lock across observing this id and updating the cache.
-    #[cfg(feature = "experimental-multiprocess")]
     pub(super) fn update_transaction_id(&self, transaction_id: TransactionId) {
         let mut current = self.read_cache_transaction_id.lock().unwrap();
         if *current != Some(transaction_id) {
@@ -786,7 +799,6 @@ impl PagedCachedFile {
     }
 
     // The caller holds the header lock across publishing this local commit and updating the tag.
-    #[cfg(feature = "experimental-multiprocess")]
     pub(super) fn record_local_transaction_id(&self, transaction_id: TransactionId) {
         *self.read_cache_transaction_id.lock().unwrap() = Some(transaction_id);
     }
@@ -975,6 +987,7 @@ mod test {
     struct CountingBackend {
         inner: InMemoryBackend,
         writes: Arc<AtomicU64>,
+        fail_truncate: bool,
     }
 
     impl CountingBackend {
@@ -986,6 +999,7 @@ mod test {
                 Self {
                     inner,
                     writes: writes.clone(),
+                    fail_truncate: false,
                 },
                 writes,
             )
@@ -1002,6 +1016,9 @@ mod test {
         }
 
         fn set_len(&self, len: u64) -> Result<(), std::io::Error> {
+            if self.fail_truncate && len < self.inner.len()? {
+                return Err(std::io::Error::other("truncate failed"));
+            }
             self.inner.set_len(len)
         }
 
@@ -1095,10 +1112,115 @@ mod test {
         assert_eq!(cached_file.read_cache_bytes.load(Ordering::Acquire), 256);
         assert_eq!(cached_file.raw_file_len().unwrap(), 2048);
 
-        // Shrinking only drops pages whose offset is at or beyond the new end.
+        // Shrinking preserves pages that fit within the retained region.
         cached_file.resize(256).unwrap();
         assert_eq!(cached_file.read_cache_bytes.load(Ordering::Acquire), 128);
         assert_eq!(cached_file.raw_file_len().unwrap(), 256);
+    }
+
+    #[test]
+    fn resize_discards_buffered_pages_past_eof() {
+        let (backend, writes) = CountingBackend::new(1024);
+        let cached_file = PagedCachedFile::new(Box::new(backend), 128, 4096);
+        for offset in [128, 256, 512] {
+            cached_file
+                .write(offset, 128, true)
+                .unwrap()
+                .mem_mut()
+                .fill(0xAB);
+        }
+        cached_file.write_barrier();
+        // Cache a retained read page and copies of the two buffered tail pages.
+        for offset in [0, 256, 512] {
+            cached_file.read(offset, 128, PageHint::Clean).unwrap();
+        }
+
+        cached_file.resize(256).unwrap();
+        assert_eq!(cached_file.write_buffer_bytes.load(Ordering::Acquire), 128);
+        assert_eq!(cached_file.read_cache_bytes.load(Ordering::Acquire), 128);
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        // The surviving non-durable page must still be visible to clean reads.
+        assert_eq!(
+            &*cached_file.read(128, 128, PageHint::Clean).unwrap(),
+            &[0xAB; 128]
+        );
+        cached_file.flush().unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(cached_file.raw_file_len().unwrap(), 256);
+        assert_eq!(cached_file.write_buffer_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(cached_file.read_direct(128, 128).unwrap(), vec![0xAB; 128]);
+
+        cached_file.resize(1024).unwrap();
+        for offset in [256, 512] {
+            assert_eq!(
+                &*cached_file.read(offset, 128, PageHint::Clean).unwrap(),
+                &[0; 128]
+            );
+        }
+    }
+
+    #[test]
+    fn resize_discards_pages_straddling_eof() {
+        for buffered in [false, true] {
+            let (backend, _) = CountingBackend::new(1024);
+            let cached_file = PagedCachedFile::new(Box::new(backend), 128, 4096);
+            cached_file
+                .write(256, 512, true)
+                .unwrap()
+                .mem_mut()
+                .fill(0xCD);
+            if buffered {
+                cached_file.write_barrier();
+                cached_file.read(256, 512, PageHint::Clean).unwrap();
+            } else {
+                cached_file.flush().unwrap();
+            }
+
+            cached_file.resize(512).unwrap();
+            assert_eq!(cached_file.write_buffer_bytes.load(Ordering::Acquire), 0);
+            assert_eq!(cached_file.read_cache_bytes.load(Ordering::Acquire), 0);
+            cached_file.flush().unwrap();
+            cached_file.resize(1024).unwrap();
+            let expected = cached_file.read_direct(256, 512).unwrap();
+            assert_eq!(&expected[256..], &[0; 256]);
+            assert_eq!(
+                &*cached_file.read(256, 512, PageHint::Clean).unwrap(),
+                expected.as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn resize_growth_preserves_writable_pages() {
+        let (backend, _) = CountingBackend::new(1024);
+        let cached_file = PagedCachedFile::new(Box::new(backend), 128, 4096);
+        let mut page = cached_file.write(0, 128, true).unwrap();
+        page.mem_mut().fill(0xAB);
+        cached_file.resize(2048).unwrap();
+        drop(page);
+        cached_file.flush().unwrap();
+        assert_eq!(cached_file.raw_file_len().unwrap(), 2048);
+        assert_eq!(cached_file.read_direct(0, 128).unwrap(), vec![0xAB; 128]);
+    }
+
+    #[test]
+    fn resize_failure_prevents_buffered_writes() {
+        let (mut backend, writes) = CountingBackend::new(1024);
+        backend.fail_truncate = true;
+        let cached_file = PagedCachedFile::new(Box::new(backend), 128, 4096);
+        for offset in [0, 512] {
+            cached_file.write(offset, 128, true).unwrap();
+        }
+        assert!(matches!(
+            cached_file.resize(256),
+            Err(crate::StorageError::Io(_))
+        ));
+        assert_eq!(cached_file.write_buffer_bytes.load(Ordering::Acquire), 128);
+        assert!(matches!(
+            cached_file.flush(),
+            Err(crate::StorageError::PreviousIo)
+        ));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
     }
 
     // write_barrier() must not write to the file: the pages stay in the buffer, still visible to
@@ -1158,7 +1280,6 @@ mod test {
     // A direct write is the file's content from the moment it returns, so a buffered write of the
     // same range must not reach the file after it.
     #[test]
-    #[cfg(feature = "experimental-multiprocess")]
     fn write_direct_supersedes_a_buffered_write() {
         let (backend, _writes) = CountingBackend::new(1024);
         let cached_file = PagedCachedFile::new(Box::new(backend), 128, 1024);

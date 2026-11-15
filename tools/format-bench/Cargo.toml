@@ -1,0 +1,25 @@
+[package]
+name = "varlit-format-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+varlit = { path = "../../crates/varlit", features = ["integrity", "mmap", "compression-zstd"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+hdf5 = { package = "hdf5-metno", version = "0.15", features = ["static", "zlib", "blosc-zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd", "snap"] }
+arrow-array = "60"
+arrow-schema = "60"
+rand = "0.9"
+crc32fast = "1"
+rand_chacha = "0.9"
+ndarray = "0.17"
+serde_json = "1"
+bytes = "1"
+
+[profile.release]
+opt-level = 3
+debug = false

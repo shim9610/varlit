@@ -1,11 +1,11 @@
 //! Index-only comparison: identical keys, 52-byte descriptors and sync cadence.
 //! Unlike the end-to-end oracle, neither side writes a native payload log here.
 use super::{LATEST_LEN, tree};
+use crate::fallible::Arc;
 use redb::{Database, Durability, ReadableDatabase, TableDefinition};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
-    sync::Arc,
     time::{Duration, Instant},
 };
 const TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("offsets");

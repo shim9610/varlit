@@ -1,9 +1,10 @@
+use crate::fallible::Arc;
 use std::{
     fs::File,
     io::{BufReader, Read, Seek, SeekFrom, Write},
-    sync::Arc,
 };
 
+use crate::primary_file::PrimaryFile;
 use crate::scalable_extent::{UntrustedRecordPointer, ValidatedRecordPointer};
 use crate::{
     Error, Result,
@@ -12,7 +13,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct SnapshotFile {
-    file: Arc<File>,
+    file: Arc<PrimaryFile>,
     bounds: SnapshotBounds,
 }
 
@@ -40,20 +41,31 @@ impl WrittenThrough {
     }
 }
 
+#[cfg(all(test, feature = "integrity"))]
+std::thread_local! {
+    static READ_REQUESTS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(all(test, feature = "integrity"))]
+pub(crate) fn take_read_requests() -> (u64, u64) {
+    READ_REQUESTS.with(|s| s.replace((0, 0)))
+}
+
 impl SnapshotFile {
-    pub(crate) fn new(file: File) -> Result<Self> {
+    pub(crate) fn new(file: impl Into<PrimaryFile>) -> Result<Self> {
         Self::from_file(file)
     }
 
-    pub(crate) fn from_file(file: File) -> Result<Self> {
-        let len = file.metadata()?.len();
+    pub(crate) fn from_file(file: impl Into<PrimaryFile>) -> Result<Self> {
+        let file = file.into();
+        let len = file.len()?;
         Self::from_file_with_len(file, len)
     }
 
-    pub(crate) fn from_file_with_len(file: File, len: u64) -> Result<Self> {
+    pub(crate) fn from_file_with_len(file: impl Into<PrimaryFile>, len: u64) -> Result<Self> {
+        let file = file.into();
         let bounds = checked_snapshot_bounds(&file, len)?;
         Ok(Self {
-            file: Arc::new(file),
+            file: crate::fallible::try_arc(file)?,
             bounds,
         })
     }
@@ -87,6 +99,12 @@ impl SnapshotFile {
             file: Arc::clone(&self.file),
             bounds,
         })
+    }
+
+    /// Rebinds to the file's current physical length.
+    pub(crate) fn physical(&self) -> Result<Self> {
+        let len = self.file.len()?;
+        self.with_len(len)
     }
 
     /// Rebinds to the end of a write that has already completed.
@@ -135,6 +153,7 @@ impl SnapshotFile {
     pub(crate) fn cursor_at(&self, offset: u64) -> Result<SnapshotCursor> {
         self.check_range(offset, 0)?;
         let mut reader = BufReader::with_capacity(64 * 1024, self.file.try_clone()?);
+        // A cloned handle's cursor starts at zero; position it explicitly.
         reader.seek(SeekFrom::Start(offset))?;
         Ok(SnapshotCursor {
             reader,
@@ -150,8 +169,17 @@ impl SnapshotFile {
         }
     }
 
-    pub(crate) fn try_clone_file(&self) -> Result<File> {
+    pub(crate) fn try_clone_file(&self) -> Result<PrimaryFile> {
         Ok(self.file.try_clone()?)
+    }
+
+    #[inline]
+    /// [`PrimaryFile::will_need`] for a range inside this snapshot; a range
+    /// outside it is ignored, since the read that follows reports it.
+    pub(crate) fn will_need(&self, offset: u64, len: u64) {
+        if self.check_range(offset, len).is_ok() {
+            self.file.will_need(offset, len);
+        }
     }
 
     pub(crate) fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> Result<()> {
@@ -159,17 +187,22 @@ impl SnapshotFile {
             u64::try_from(buffer.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
         self.check_range(offset, len)?;
 
+        #[cfg(all(test, feature = "integrity"))]
+        READ_REQUESTS.with(|s| {
+            let (calls, bytes) = s.get();
+            s.set((calls + 1, bytes + len));
+        });
+
         let mut consumed = 0usize;
         while consumed < buffer.len() {
-            let current_offset = offset
-                .checked_add(
-                    u64::try_from(consumed)
-                        .map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
-                )
-                .ok_or(Error::ResourceArithmeticOverflow {
+            let Some(current_offset) = offset.checked_add(
+                u64::try_from(consumed).map_err(|_| Error::LengthOverflow { value: u64::MAX })?,
+            ) else {
+                return Err(Error::ResourceArithmeticOverflow {
                     resource: "snapshot read offset",
-                })?;
-            match read_at(&self.file, &mut buffer[consumed..], current_offset) {
+                });
+            };
+            match self.file.read_at(&mut buffer[consumed..], current_offset) {
                 Ok(0) => return Err(Error::UnexpectedEof),
                 Ok(read) => consumed += read,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -240,7 +273,62 @@ impl SnapshotFile {
         output: &mut W,
     ) -> Result<()> {
         self.check_range(offset, len)?;
-        let mut buffer = [0u8; 64 * 1024];
+        if len <= 1024 {
+            self.copy_range_buffered::<1024, W>(offset, len, output)
+        } else {
+            self.copy_range_buffered::<{ 64 * 1024 }, W>(offset, len, output)
+        }
+    }
+
+    /// Anchor `k` of the backing file, if intact.
+    pub(crate) fn anchor(&self, k: u64) -> Result<Option<crate::anchor::Anchor>> {
+        self.file.anchor(k)
+    }
+
+    /// Copies the snapshot's bytes as stored, anchors included, to `output`:
+    /// a replacement with the same header has the same layout.
+    pub(crate) fn copy_physical_to(&self, output: &mut File) -> Result<()> {
+        let end = match self.file.layout() {
+            None => self.len(),
+            Some(layout) => {
+                layout
+                    .physical_end(self.len())
+                    .ok_or(Error::ResourceArithmeticOverflow {
+                        resource: "snapshot physical length",
+                    })?
+            }
+        };
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut at = 0u64;
+        while at < end {
+            let take = usize::try_from((end - at).min(buffer.len() as u64))
+                .expect("bounded by the buffer");
+            let mut done = 0;
+            while done < take {
+                match read_at(self.file.raw(), &mut buffer[done..take], at + done as u64) {
+                    Ok(0) => return Err(Error::UnexpectedEof),
+                    Ok(n) => done += n,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            output.write_all(&buffer[..take])?;
+            at += take as u64;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn copy_range_buffered<const BUFFER: usize, W: Write>(
+        &self,
+        offset: u64,
+        len: u64,
+        output: &mut W,
+    ) -> Result<()> {
+        const {
+            assert!(BUFFER > 0);
+        }
+        let mut buffer = [0u8; BUFFER];
         let mut copied = 0u64;
         while copied < len {
             let remaining = len - copied;
@@ -291,7 +379,10 @@ impl Read for SnapshotReader {
         if len == 0 {
             return Ok(0);
         }
-        let read = read_at(&self.snapshot.file, &mut buffer[..len], self.position)?;
+        let read = self
+            .snapshot
+            .file
+            .read_at(&mut buffer[..len], self.position)?;
         self.position += read as u64;
         Ok(read)
     }
@@ -323,7 +414,7 @@ impl Seek for SnapshotReader {
 }
 
 pub(crate) struct SnapshotCursor {
-    reader: BufReader<File>,
+    reader: BufReader<PrimaryFile>,
     bounds: SnapshotBounds,
     position: u64,
 }
@@ -430,9 +521,9 @@ pub(crate) fn take_snapshot_bounds_fstats() -> u64 {
     SNAPSHOT_BOUNDS_FSTATS.with(|count| count.replace(0))
 }
 
-fn checked_snapshot_bounds(file: &File, len: u64) -> Result<SnapshotBounds> {
+fn checked_snapshot_bounds(file: &PrimaryFile, len: u64) -> Result<SnapshotBounds> {
     count_snapshot_bounds_fstat();
-    let physical_len = file.metadata()?.len();
+    let physical_len = file.len()?;
     SnapshotBounds::new(ByteLength::new(physical_len))
         .validate_range(FileOffset::ZERO, ByteLength::new(len))?;
     Ok(SnapshotBounds::new(ByteLength::new(len)))
@@ -646,5 +737,67 @@ mod tests {
     fn snapshot_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SnapshotFile>();
+    }
+    #[test]
+    fn range_copy_preserves_prefixes_and_retries_short_or_failed_writes() {
+        struct Sink {
+            bytes: Vec<u8>,
+            fail_at: Option<usize>,
+            zero: bool,
+        }
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_at == Some(self.bytes.len()) {
+                    return if self.zero {
+                        Ok(0)
+                    } else {
+                        Err(std::io::Error::other("copy cut"))
+                    };
+                }
+                let available = self.fail_at.unwrap_or(usize::MAX) - self.bytes.len();
+                let count = bytes.len().min(17).min(available);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let path = temp_path();
+        let bytes: Vec<u8> = (0..65544).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let snapshot = SnapshotFile::new(File::open(&path).unwrap()).unwrap();
+        for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+            let expected = &bytes[3..3 + len];
+            let mut sink = Sink {
+                bytes: Vec::new(),
+                fail_at: None,
+                zero: false,
+            };
+            snapshot.copy_range_to(3, len as u64, &mut sink).unwrap();
+            assert_eq!(sink.bytes, expected);
+            if len != 0 {
+                for zero in [false, true] {
+                    let cut = len / 2;
+                    let mut sink = Sink {
+                        bytes: Vec::new(),
+                        fail_at: Some(cut),
+                        zero,
+                    };
+                    assert!(snapshot.copy_range_to(3, len as u64, &mut sink).is_err());
+                    assert_eq!(sink.bytes, expected[..cut]);
+                    sink.fail_at = None;
+                    snapshot
+                        .copy_range_to(3 + cut as u64, (len - cut) as u64, &mut sink)
+                        .unwrap();
+                    assert_eq!(sink.bytes, expected);
+                }
+            }
+        }
+        let mut untouched = Vec::new();
+        assert!(snapshot.copy_range_to(u64::MAX, 1, &mut untouched).is_err());
+        assert!(untouched.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        remove_file(path).unwrap();
     }
 }

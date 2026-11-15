@@ -1,3 +1,7 @@
+#[path = "support/pages.rs"]
+mod pages;
+
+// These keys are synthetic fixture identifiers, never real user identities.
 use std::fs::{OpenOptions, metadata, remove_file};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -8,8 +12,9 @@ use varlit::{
     ChunkLayout, Endian, FormatSpec, IndexPolicy, LayoutSegmentInfo, MatrixAuxDescriptor,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
     MatrixDimensions, MatrixKey, ReadLimits, RecoveryPolicy, SegmentReducer, SegmentWrite,
-    VarlitBlock, VarlitDecode, VarlitEncode, VarlitMatrixBlock, VarlitMerge, compact_keyed_file,
-    compact_keyed_files, merge_keyed_files, reduce_segments_by_ref, varlit_format,
+    VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitMatrixBlock, VarlitMerge,
+    compact_keyed_file, compact_keyed_files, merge_keyed_files, reduce_segments_by_ref,
+    varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -62,6 +67,12 @@ impl VarlitDecode for PerfMatrixCell {
     }
 }
 
+impl VarlitEmpty for PerfMatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for PerfMatrixCell {
     const ID: u32 = 104;
     const VERSION: u16 = 1;
@@ -78,10 +89,10 @@ impl VarlitMatrixBlock for PerfMatrixCell {
 }
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
-#[varlit(id = 101, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 101, version = 1, kind = "variable", key = "fixture_key")]
 struct PerfUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     region: u16,
     #[varlit(field_id = 3)]
@@ -153,6 +164,7 @@ fn perf_matrix_spec_with_integrity(integrity: varlit::IntegrityPolicy) -> Format
         dimensions: PerfMatrixCell::DIMENSIONS,
         category: PerfMatrixCell::CATEGORY,
         slot_stride: PerfMatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"PERFMTX",
@@ -224,8 +236,8 @@ varlit_format! {
         index: [scan_on_open, block_offset_chain, keyed_offset_chain];
         commit: transaction_marker(on_flush);
         blocks {
-            variable PerfV3User(id = 201, key = [user_id]) {
-                user_id: u64,
+            variable PerfV3User(id = 201, key = [fixture_key]) {
+                fixture_key: u64,
                 name: String,
                 payload: Vec<u8>,
             }
@@ -515,14 +527,16 @@ fn append_open_and_scan(case: PerfCase) -> varlit::Result<()> {
             file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
             case.records
         );
-        let points = file.blocks::<PerfPoint>()?;
+        let points = crate::pages::all_blocks!(file, PerfPoint)?;
         assert_eq!(points.len(), case.records);
+        let mut last = PerfPoint::empty();
+        assert!(points.get(case.records - 1, &mut last)?);
         assert_eq!(
-            points.get(case.records - 1)?,
-            Some(PerfPoint {
+            last,
+            PerfPoint {
                 x: (case.records - 1) as u64,
                 y: ((case.records - 1) as u64).wrapping_mul(3),
-            })
+            }
         );
         Ok(())
     })?;
@@ -546,7 +560,7 @@ fn resized_replacement(case: PerfCase) -> varlit::Result<()> {
 
     let target = case.records / 2;
     let replacement = PerfUser {
-        user_id: target as u64,
+        fixture_key: target as u64,
         region: 9,
         name: "resized replacement".to_string(),
         payload: vec![0xA5; 256 * 1024],
@@ -560,7 +574,9 @@ fn resized_replacement(case: PerfCase) -> varlit::Result<()> {
     report("replace resized COW", case.records, &path, elapsed);
 
     let file = PerfFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<PerfUser>()?.get(target)?, Some(replacement));
+    let mut replaced = PerfUser::empty();
+    assert!(crate::pages::all_blocks!(file, PerfUser)?.get(target, &mut replaced)?);
+    assert_eq!(replaced, replacement);
     cleanup(&path);
     Ok(())
 }
@@ -649,8 +665,7 @@ fn compressed_variable_blocks(case: PerfCase) -> varlit::Result<()> {
         for index in 0..case.records {
             file.push(&perf_compressible_user(index))?;
         }
-        let compressed_records = file
-            .index_entries()
+        let compressed_records = crate::pages::all_entries!(file)
             .iter()
             .filter(|entry| entry.block_id == PerfUser::ID && entry.is_compressed())
             .count();
@@ -666,16 +681,11 @@ fn compressed_variable_blocks(case: PerfCase) -> varlit::Result<()> {
             file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
             case.records
         );
-        let users = file.blocks::<PerfUser>()?;
+        let users = crate::pages::all_blocks!(file, PerfUser)?;
         assert_eq!(users.len(), case.records);
-        assert_eq!(
-            users
-                .get(case.records - 1)?
-                .expect("last user")
-                .payload
-                .len(),
-            512
-        );
+        let mut last = PerfUser::empty();
+        assert!(users.get(case.records - 1, &mut last)?, "last user");
+        assert_eq!(last.payload.len(), 512);
         Ok(())
     })?;
     report("open compressed", case.records, &path, elapsed);
@@ -701,8 +711,11 @@ fn checkpoint_open(case: PerfCase) -> varlit::Result<()> {
 
     let elapsed = timed(|| {
         let file = PerfCheckpointFormat::open_readonly(&path)?;
-        assert!(file.index_entries().len() >= case.records);
-        assert_eq!(file.blocks::<PerfPoint>()?.len(), case.records);
+        assert!(crate::pages::all_entries!(file).len() >= case.records);
+        assert_eq!(
+            crate::pages::all_blocks!(file, PerfPoint)?.len(),
+            case.records
+        );
         Ok(())
     })?;
     report("checkpoint open", case.records, &path, elapsed);
@@ -730,14 +743,12 @@ fn varlit3_footer_and_chain(case: PerfCase) -> varlit::Result<()> {
         let reader = PerfVarlit3Format::open_reader(&path)?;
         let users = reader.perf_v3_users()?;
         assert_eq!(users.len(), key_space);
-        assert_eq!(
-            users
-                .get(&((key_space - 1) as u64))?
-                .expect("last keyed user")
-                .payload
-                .len(),
-            64
+        let mut last = PerfV3User::empty();
+        assert!(
+            users.get(&((key_space - 1) as u64), &mut last)?,
+            "last keyed user"
         );
+        assert_eq!(last.payload.len(), 64);
         Ok(())
     })?;
     report("open varlit3 chain", case.records, &path, elapsed);
@@ -904,7 +915,7 @@ fn recovery_tail_truncation(records: usize) -> varlit::Result<()> {
         assert!(report.original_len > report.recovered_len);
         assert_eq!(report.recovered_len, clean_len);
         assert_eq!(report.records_preserved, records);
-        assert_eq!(file.blocks::<PerfPoint>()?.len(), records);
+        assert_eq!(crate::pages::all_blocks!(file, PerfPoint)?.len(), records);
         Ok(())
     })?;
     report("recover partial tail", records, &path, elapsed);
@@ -997,9 +1008,10 @@ fn matrix_direct_access_with_spec(
 
     let elapsed = timed(|| {
         let reader = spec.open_reader(&path)?;
+        let mut cell = PerfMatrixCell::empty();
         for index in 0..case.records {
             let key = MatrixKey::new((index / channels) as u64, (index % channels) as u64);
-            let cell = reader.read_matrix_cell::<PerfMatrixCell>(key)?;
+            reader.read_matrix_cell::<PerfMatrixCell>(key, &mut cell)?;
             assert_eq!(cell.value, index as u32);
         }
         Ok(())
@@ -1101,7 +1113,7 @@ fn matrix_direct_access_with_spec(
 
 fn perf_user(index: usize) -> PerfUser {
     PerfUser {
-        user_id: index as u64,
+        fixture_key: index as u64,
         region: (index % 16) as u16,
         name: format!("user-{index}"),
         payload: vec![(index % 251) as u8; 32],
@@ -1110,7 +1122,7 @@ fn perf_user(index: usize) -> PerfUser {
 
 fn perf_v3_user(key: usize, index: usize) -> PerfV3User {
     PerfV3User {
-        user_id: key as u64,
+        fixture_key: key as u64,
         name: format!("v3-user-{index}"),
         payload: vec![(index % 251) as u8; 64],
     }
@@ -1119,7 +1131,7 @@ fn perf_v3_user(key: usize, index: usize) -> PerfV3User {
 #[cfg(feature = "compression-zstd")]
 fn perf_compressible_user(index: usize) -> PerfUser {
     PerfUser {
-        user_id: index as u64,
+        fixture_key: index as u64,
         region: (index % 16) as u16,
         name: format!("compressible-{index}"),
         payload: vec![b'Z'; 512],

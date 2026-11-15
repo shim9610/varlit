@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use varlit::{MatrixCellStatus, varlit_format};
+use varlit::{MatrixCellStatus, VarlitEmpty, varlit_format};
 
 varlit_format! {
     pub format SharedMatrixFormat {
@@ -64,7 +64,9 @@ fn read_via_generated(
     reader: &SharedMatrixFormatReader,
     key: SharedCellKey,
 ) -> varlit::Result<SharedCell> {
-    reader.shared_cell(key)
+    let mut out = SharedCell::empty();
+    reader.shared_cell(key, &mut out)?;
+    Ok(out)
 }
 
 /// (a) The inherent aux read, reached through a shared reference.
@@ -79,7 +81,9 @@ fn read_via_trait<R: SharedMatrixFormatRead>(
     reader: &R,
     key: SharedCellKey,
 ) -> varlit::Result<SharedCell> {
-    reader.shared_cell(key)
+    let mut out = SharedCell::empty();
+    reader.shared_cell(key, &mut out)?;
+    Ok(out)
 }
 
 fn read_aux_via_trait<R: SharedMatrixFormatRead>(reader: &R) -> varlit::Result<Vec<u8>> {

@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use varlit::{
-    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, WriterLockBreakPolicy,
+    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, VarlitEmpty, WriterLockBreakPolicy,
     clear_stale_writer_lock, varlit_format,
 };
 
@@ -75,10 +75,14 @@ fn item(number: u64, value: u64) -> Item {
 }
 
 fn check(reader: &QualificationIndexedReader, model: &Model) -> varlit::Result<()> {
+    let mut found = Item::empty();
     for number in 0..=KEYS {
         let key = key(number);
+        let payload = reader
+            .get_item(&key, &mut found)?
+            .then(|| found.payload.clone());
         assert_eq!(
-            reader.get_item(&key)?.map(|item| item.payload),
+            payload,
             model.get(&key).cloned(),
             "lookup mismatch at {key:?}"
         );
@@ -201,13 +205,13 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
         }
         let reader = Qualification::open_indexed_reader(&path, options())?;
         check(&reader, &committed)?;
-        assert_eq!(
-            reader
-                .markers()?
-                .map(|m| m.map(|m| m.value))
-                .collect::<varlit::Result<Vec<_>>>()?,
-            markers
-        );
+        let mut seen_markers = Vec::new();
+        let mut walk = reader.markers()?;
+        let mut marker = Marker::empty();
+        while walk.next_into(&mut marker)? {
+            seen_markers.push(marker.value);
+        }
+        assert_eq!(seen_markers, markers);
         reader.verify_all()?;
         drop(reader);
         if epoch % 4 == 3 {
@@ -449,13 +453,13 @@ fn opening_readers_does_not_interrupt_the_single_writer() -> varlit::Result<()> 
                     while !stop.load(Ordering::Acquire) {
                         match Qualification::open_indexed_reader(path, options()) {
                             Ok(reader) => {
-                                assert_eq!(
+                                let mut found = Item::empty();
+                                assert!(
                                     reader
-                                        .get_item(&key(0))
-                                        .expect("opened snapshot must remain readable")
-                                        .map(|value| value.payload),
-                                    Some(item(0, 0).payload),
+                                        .get_item(&key(0), &mut found)
+                                        .expect("opened snapshot must remain readable"),
                                 );
+                                assert_eq!(found.payload, item(0, 0).payload);
                                 opens += 1;
                             }
                             Err(error) => panic!("unexpected reader-open failure: {error:?}"),

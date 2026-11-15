@@ -19,7 +19,7 @@
 //!   what stops a hostile header naming a region and having open allocate it
 //!   before a single block is parsed.
 
-use varlit::{Error, VarlitBlock, varlit_format};
+use varlit::{Error, VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 1, version = 1, kind = "variable")]
@@ -206,10 +206,9 @@ fn the_undeclared_ceiling_is_still_64_kib() {
     drop(writer);
 
     let reader = Undeclared::open_readonly(&path).expect("open");
-    assert_eq!(
-        reader.read_header_block::<Wide>().expect("read"),
-        Some(wide("under")),
-    );
+    let mut got = Wide::empty();
+    assert!(reader.read_header_block::<Wide>(&mut got).expect("read"));
+    assert_eq!(got, wide("under"));
 }
 
 #[test]
@@ -236,9 +235,11 @@ fn a_declared_ceiling_admits_a_larger_region() {
     drop(writer);
 
     let reader = Declared::open_readonly(&path).expect("reopen");
+    let mut got = Wide::empty();
+    assert!(reader.read_header_block::<Wide>(&mut got).expect("read"));
     assert_eq!(
-        reader.read_header_block::<Wide>().expect("read"),
-        Some(wide("over")),
+        got,
+        wide("over"),
         "a region above the old constant round-trips",
     );
 }

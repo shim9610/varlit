@@ -3,3 +3,26 @@ error[E0080]: evaluation panicked: varlit field `packed` uses a custom codec tha
    |
 25 | #[derive(Clone, Debug, PartialEq, VarlitBlock)]
    |                                   ^^^^^^^^^^^ evaluation of `_` failed here
+
+error[E0277]: the trait bound `Packed: VarlitEmpty` is not satisfied
+  --> tests/ui/fail_container_codec_missing_schema_id.rs:28:13
+   |
+28 |     packed: [Packed; 2],
+   |             ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `VarlitEmpty` is not implemented for `Packed`
+  --> tests/ui/fail_container_codec_missing_schema_id.rs:7:1
+   |
+ 7 | struct Packed(u64);
+   | ^^^^^^^^^^^^^
+   = help: the following other types implement trait `VarlitEmpty`:
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             BTreeMap<K, V>
+             ChunkedBytes
+             HashMap<K, V, S>
+             Option<T>
+           and $N others
+   = note: required for `[Packed; 2]` to implement `VarlitEmpty`

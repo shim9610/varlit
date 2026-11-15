@@ -37,7 +37,7 @@ def main():
     marker = data / ".matrix-soak-owner"
     marker.write_text(str(output))
     report = {"source": identity, "binary_sha256": digest, "config": vars(args).copy(),
-              "status": "running", "scope": "single writer; independent pinned/following/fresh readers; CRC; sync; flush; reopen; explicit compaction"}
+              "status": "running", "scope": "single writer; independent pinned/following/fresh readers; CRC; sync; flush; reopen"}
     report["config"] = {k: str(v) if isinstance(v, Path) else v for k, v in report["config"].items()}
     atomic_json(output / "report.json", report)
     try:

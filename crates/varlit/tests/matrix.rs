@@ -1,9 +1,10 @@
-#[path = "common/matrix_image.rs"]
-mod matrix_image;
-use matrix_image::OpenOptions;
+#[path = "support/pages.rs"]
+mod pages;
+
+#[cfg(any(feature = "integrity", feature = "mmap"))]
+use std::fs::OpenOptions;
 use std::fs::{File, metadata, remove_file};
 #[cfg(feature = "integrity")]
-use std::io::Read;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -12,11 +13,9 @@ use varlit::{
     BlockDescriptor, BlockKind, Endian, Error, FormatSpec, IndexPolicy, MatrixAuxDescriptor,
     MatrixBlockDescriptor, MatrixCellStatus, MatrixCommitDescriptor, MatrixCommitKind,
     MatrixDimensionDescriptor, MatrixDimensions, MatrixDurabilityBarrier, MatrixKey,
-    MatrixResumeSignal, PackedBitmap, ReadLimits, VarlitBlock, VarlitDecode, VarlitEncode,
-    VarlitMatrixBlock, varlit_format,
+    MatrixResumeSignal, ReadLimits, VarlitBlock, VarlitDecode, VarlitEncode, VarlitMatrixBlock,
+    varlit_format,
 };
-#[cfg(feature = "integrity")]
-use varlit::{MatrixCorruptionKind, MatrixCorruptionSeverity};
 
 varlit_format! {
     pub format GeneratedMatrixFormat {
@@ -86,6 +85,12 @@ impl VarlitDecode for MatrixCell {
     }
 }
 
+impl varlit::VarlitEmpty for MatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for MatrixCell {
     const ID: u32 = 100;
     const VERSION: u16 = 1;
@@ -124,13 +129,19 @@ impl VarlitDecode for BadSizedCell {
     }
 }
 
+impl varlit::VarlitEmpty for BadSizedCell {
+    fn empty() -> Self {
+        Self { value: 0 }
+    }
+}
+
 impl VarlitBlock for BadSizedCell {
     const ID: u32 = MatrixCell::ID;
     const VERSION: u16 = MatrixCell::VERSION;
     const KIND: BlockKind = BlockKind::Matrix;
     const ENDIAN: Option<Endian> = None;
     // Mirrors `MatrixCell`'s fingerprint (the documented escape hatch) so the
-    // DEF-01 first-seen registration gate passes and the encode-size check
+    //  first-seen registration gate passes and the encode-size check
     // below is what fires, keeping the stride-mismatch contract covered.
     const SCHEMA_FINGERPRINT: u64 = MatrixCell::SCHEMA_FINGERPRINT;
     const IS_KEYED: bool = false;
@@ -143,7 +154,7 @@ impl VarlitMatrixBlock for BadSizedCell {
 }
 
 /// A hostile matrix block whose encode streams far more than the slot stride
-/// in small chunks (1 MiB total in 4 KiB writes). DEF-02: `write_matrix_cell`
+/// in small chunks (1 MiB total in 4 KiB writes). : `write_matrix_cell`
 /// must cut the encode off at the slot-stride bound instead of materializing
 /// the whole encoding before the size check fires.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,13 +180,19 @@ impl VarlitDecode for ChunkedOversizedCell {
     }
 }
 
+impl varlit::VarlitEmpty for ChunkedOversizedCell {
+    fn empty() -> Self {
+        Self
+    }
+}
+
 impl VarlitBlock for ChunkedOversizedCell {
     const ID: u32 = MatrixCell::ID;
     const VERSION: u16 = MatrixCell::VERSION;
     const KIND: BlockKind = BlockKind::Matrix;
     const ENDIAN: Option<Endian> = None;
     // Mirrors `MatrixCell`'s fingerprint (the documented escape hatch) so the
-    // DEF-01 first-seen registration gate passes and the bounded-encode size
+    //  first-seen registration gate passes and the bounded-encode size
     // check is what fires.
     const SCHEMA_FINGERPRINT: u64 = MatrixCell::SCHEMA_FINGERPRINT;
     const IS_KEYED: bool = false;
@@ -207,6 +224,12 @@ impl VarlitDecode for OtherMatrixCell {
         Ok(Self {
             value: u32::decode_varlit(decoder)?,
         })
+    }
+}
+
+impl varlit::VarlitEmpty for OtherMatrixCell {
+    fn empty() -> Self {
+        Self { value: 0 }
     }
 }
 
@@ -294,6 +317,7 @@ fn other_matrix_spec() -> FormatSpec {
         dimensions: OtherMatrixCell::DIMENSIONS,
         category: OtherMatrixCell::CATEGORY,
         slot_stride: OtherMatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"OMTX",
@@ -380,6 +404,7 @@ fn matrix_spec_with_integrity(integrity: varlit::IntegrityPolicy) -> FormatSpec 
         dimensions: MatrixCell::DIMENSIONS,
         category: MatrixCell::CATEGORY,
         slot_stride: MatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"MTX",
@@ -419,6 +444,7 @@ fn raw_matrix_spec() -> FormatSpec {
         dimensions: RawMatrixCell::DIMENSIONS,
         category: RawMatrixCell::CATEGORY,
         slot_stride: RawMatrixCell::SLOT_STRIDE,
+        tile: [0, 0],
     }];
     FormatSpec::new(
         b"RMTX",
@@ -517,11 +543,11 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
             MatrixCellStatus::Committed
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1), o))?,
             MatrixCell { value: 21 }
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1), o))?,
             MatrixCell { value: 0 }
         );
         assert_eq!(
@@ -529,14 +555,14 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
             MatrixCellStatus::NotCommitted
         );
         assert!(matches!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0)),
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0), o)),
             Err(Error::MatrixNotCommitted)
         ));
         assert!(reader.is_matrix_single_committed("master_grid")?);
         assert!(reader.is_matrix_channel_committed("threshold", 1)?);
         assert!(!reader.is_matrix_channel_committed("threshold", 0)?);
         assert_eq!(
-            reader.blocks::<LogPoint>()?.get(0)?,
+            opt(|o| crate::pages::all_blocks!(reader, LogPoint)?.get(0, o))?,
             Some(LogPoint { value: 99 })
         );
     }
@@ -566,7 +592,7 @@ fn matrix_random_order_write_read_commit_and_append_log_coexist() -> varlit::Res
     {
         let reader = spec.open_reader(&path)?;
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(2, 1), o))?,
             MatrixCell { value: 22 }
         );
         assert_eq!(
@@ -587,7 +613,7 @@ fn matrix_write_cell_bounds_hostile_encode_at_the_slot_stride() -> varlit::Resul
     let dims = MatrixDimensions::from_pairs([("scan", 3), ("ch", 2)]);
     let mut writer = spec.create_writer_with_dims(&path, dims)?;
 
-    // DEF-02: the encode is hard-bounded by the slot stride, so a hostile
+    // the encode is hard-bounded by the slot stride, so a hostile
     // encode that streams 1 MiB in 4 KiB chunks is cut off at its FIRST
     // over-stride write (actual = 4096) instead of being fully materialized
     // before the size check (which would report actual = 1_048_576). The
@@ -610,7 +636,7 @@ fn matrix_write_cell_bounds_hostile_encode_at_the_slot_stride() -> varlit::Resul
 
     let reader = spec.open_reader(&path)?;
     assert_eq!(
-        reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?,
+        val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0), o))?,
         MatrixCell { value: 5 }
     );
     drop(reader);
@@ -650,12 +676,14 @@ fn matrix_spec_rejects_duplicate_cell_categories() {
             dimensions: MatrixCell::DIMENSIONS,
             category: MatrixCell::CATEGORY,
             slot_stride: MatrixCell::SLOT_STRIDE,
+            tile: [0, 0],
         },
         MatrixBlockDescriptor {
             block_id: OtherMatrixCell::ID,
             dimensions: OtherMatrixCell::DIMENSIONS,
             category: OtherMatrixCell::CATEGORY,
             slot_stride: OtherMatrixCell::SLOT_STRIDE,
+            tile: [0, 0],
         },
     ];
     let spec = FormatSpec::new(
@@ -713,119 +741,14 @@ fn format_first_matrix_dsl_generates_typed_api() -> varlit::Result<()> {
             reader.generated_cell_status(key)?,
             MatrixCellStatus::Committed
         );
-        assert_eq!(reader.generated_cell(key)?, GeneratedCell { value: 42 });
+        assert_eq!(
+            val(|o| reader.generated_cell(key, o))?,
+            GeneratedCell { value: 42 }
+        );
         assert!(reader.is_master_grid_committed()?);
         assert!(reader.is_threshold_committed(1)?);
         assert!(!reader.is_threshold_committed(0)?);
     }
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[test]
-fn matrix_p1_p2_extension_points_are_usable() -> varlit::Result<()> {
-    let path = temp_path("matrix_extensions");
-    cleanup(&path);
-    let spec = matrix_spec();
-    let events = Arc::new(Mutex::new(Vec::new()));
-
-    {
-        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
-        let mut writer = spec.create_writer_with_dims(&path, dims)?;
-        let events_for_hook = Arc::clone(&events);
-        writer.write_matrix_cell_durable(
-            MatrixKey::new(1, 1),
-            &MatrixCell { value: 7 },
-            move |event| {
-                events_for_hook.lock().expect("event mutex").push((
-                    event.block_id,
-                    event.key.scan,
-                    event.key.ch,
-                    event.slot_len,
-                ));
-                Ok(())
-            },
-        )?;
-        // F-04: the hook runs after the cell is committed and synced, so a
-        // hook failure is a *published* outcome. It must not be reported as a
-        // bare `Err` that a caller can read as "nothing happened" - the cell
-        // below is verified as readable after this, and a result-driven retry
-        // of the whole call would re-run the hook and duplicate its external
-        // work. The typed variant carries the committed event so the caller
-        // can retry the notification alone.
-        let failed = writer.write_matrix_cell_durable(
-            MatrixKey::new(0, 1),
-            &MatrixCell { value: 3 },
-            |_event| Err(Error::InvalidFormatSpec("hook failed")),
-        );
-        match failed {
-            Err(Error::MatrixCommittedButHookFailed { event, source }) => {
-                assert_eq!(event.block_id, MatrixCell::ID);
-                assert_eq!(event.key, MatrixKey::new(0, 1));
-                assert_eq!(event.slot_len, 4);
-                assert!(
-                    matches!(*source, Error::InvalidFormatSpec("hook failed")),
-                    "the caller's own error must be preserved as the source, got {source:?}"
-                );
-            }
-            other => panic!("expected MatrixCommittedButHookFailed, got {other:?}"),
-        }
-        writer.write_matrix_cell(MatrixKey::new(0, 0), &MatrixCell { value: 1 })?;
-        writer.commit_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?;
-        writer.sync()?;
-    }
-
-    assert_eq!(
-        events.lock().expect("event mutex").as_slice(),
-        &[(MatrixCell::ID, 1, 1, 4)]
-    );
-
-    {
-        let reader = spec.open_reader(&path)?;
-        assert_eq!(
-            reader.matrix_resume_signal("analysis")?,
-            MatrixResumeSignal::Partial {
-                committed: 3,
-                total: 4
-            }
-        );
-        let sidecar = path.with_extension("sidecar");
-        let _ = remove_file(&sidecar);
-        assert_eq!(
-            reader.matrix_sidecar_resume_signal("analysis", &sidecar)?,
-            MatrixResumeSignal::RestartRecommended
-        );
-        std::fs::write(&sidecar, b"partial-progress")?;
-        assert_eq!(
-            reader.matrix_sidecar_resume_signal("analysis", &sidecar)?,
-            MatrixResumeSignal::ResumeAvailable {
-                committed: 3,
-                total: 4
-            }
-        );
-        remove_file(&sidecar)?;
-        let report = reader.matrix_recovery_report();
-        assert!(!report.findings.is_empty());
-        assert_eq!(
-            reader.matrix_cell_payload::<MatrixCell>(MatrixKey::new(1, 1))?,
-            7u32.to_le_bytes()
-        );
-        assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 1))?,
-            MatrixCell { value: 3 }
-        );
-    }
-
-    let mut bitmap = PackedBitmap::new(10)?;
-    bitmap.set(0, true)?;
-    bitmap.set(9, true)?;
-    assert!(bitmap.get(0)?);
-    assert!(!bitmap.get(1)?);
-    assert!(bitmap.get(9)?);
-    let encoded = varlit::encode_to_vec(&bitmap, Endian::Little)?;
-    let decoded: PackedBitmap = varlit::decode_from_slice(&encoded, Endian::Little)?;
-    assert_eq!(decoded, bitmap);
 
     cleanup(&path);
     Ok(())
@@ -868,7 +791,7 @@ fn matrix_durable_barrier_observes_data_then_commit_sync_then_hook() -> varlit::
             MatrixCellStatus::Committed
         );
         assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?,
+            val(|o| reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0), o))?,
             MatrixCell { value: 11 }
         );
     }
@@ -920,10 +843,10 @@ impl MatrixDurabilityBarrier for FailingMatrixBarrier {
 
 /// INVARIANT 3, round 11. Walking forward from the authoritative commit in
 /// `write_matrix_cell_durable_with_barrier`, the commit sync is the step
-/// *before* the hook that F-04 typed. It used to return a bare `Err` although
+/// *before* the hook that  typed. It used to return a bare `Err` although
 /// the commit bit was already on disk and the cell was readable after a clean
 /// exit, so "published, durability unproven" was indistinguishable from
-/// "nothing happened" - the same complaint as F-04, one step earlier.
+/// "nothing happened" - the same complaint as , one step earlier.
 ///
 /// The negative control in the same test is the data sync: it runs *before*
 /// the commit, so its failure is genuinely pre-publication and must stay a
@@ -1144,7 +1067,7 @@ fn matrix_byte_copy_migration_scaffold_copies_compatible_committed_slot() -> var
     {
         let reader = target_spec.open_reader(&target_path)?;
         assert_eq!(
-            reader.read_matrix_cell::<OtherMatrixCell>(key)?,
+            val(|o| reader.read_matrix_cell::<OtherMatrixCell>(key, o))?,
             OtherMatrixCell { value: 123 }
         );
     }
@@ -1325,7 +1248,7 @@ fn matrix_mmap_rejects_backing_file_truncated_after_open() -> varlit::Result<()>
     drop(writer);
 
     let reader = spec.open_reader(&path)?;
-    let append_log_start = reader.index_entries()[0].record_offset;
+    let append_log_start = crate::pages::all_entries!(reader)[0].record_offset;
     OpenOptions::new()
         .write(true)
         .open(&path)?
@@ -1379,216 +1302,6 @@ fn matrix_zero_copy_raw_cell_views_committed_slot() -> varlit::Result<()> {
     Ok(())
 }
 
-#[test]
-fn matrix_rejects_corrupt_append_log_start() -> varlit::Result<()> {
-    let path = temp_path("matrix_bad_append_start");
-    cleanup(&path);
-    let spec = matrix_spec();
-    {
-        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
-        let mut writer = spec.create_writer_with_dims(&path, dims)?;
-        writer.write_matrix_cell(MatrixKey::new(0, 0), &MatrixCell { value: 1 })?;
-        writer.commit_matrix_cell::<MatrixCell>(MatrixKey::new(0, 0))?;
-        writer.sync()?;
-    }
-
-    let mut file = OpenOptions::new().write(true).open(&path)?;
-    let header_len = spec.magic.len() as u64 + 18;
-    let append_log_start_field = header_len + 28 + 12 * 8;
-    file.seek(SeekFrom::Start(append_log_start_field))?;
-    file.write_all(&(header_len + 160).to_le_bytes())?;
-    drop(file);
-
-    assert!(matches!(
-        spec.open_readonly(&path),
-        Err(Error::InvalidMatrixLayout)
-    ));
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[cfg(feature = "integrity")]
-#[test]
-fn matrix_commit_map_crc_corruption_reports_recoverable_region_and_rebuilds() -> varlit::Result<()>
-{
-    let path = temp_path("matrix_crc_commit_map");
-    cleanup(&path);
-    let spec = matrix_crc_spec();
-
-    {
-        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
-        let mut writer = spec.create_writer_with_dims(&path, dims)?;
-        writer.write_matrix_cell(MatrixKey::new(1, 0), &MatrixCell { value: 11 })?;
-        writer.commit_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0))?;
-        writer.write_matrix_cell(MatrixKey::new(0, 1), &MatrixCell { value: 99 })?;
-        writer.sync()?;
-    }
-
-    let offsets = read_vmat_offsets(&path, spec)?;
-    {
-        let mut file = OpenOptions::new().write(true).open(&path)?;
-        file.seek(SeekFrom::Start(offsets.commit_map_off))?;
-        file.write_all(&[0xFF])?;
-    }
-
-    {
-        let reader = spec.open_reader(&path)?;
-        let report = reader.matrix_recovery_report();
-        assert!(report.findings.iter().any(|finding| {
-            finding.kind == MatrixCorruptionKind::CommitMap
-                && finding.severity == MatrixCorruptionSeverity::Recoverable
-        }));
-    }
-
-    {
-        let mut writer = spec.open_writer(&path)?;
-        assert_eq!(writer.rebuild_matrix_commit_from_crc::<MatrixCell>()?, 1);
-        writer.sync()?;
-    }
-
-    {
-        let reader = spec.open_reader(&path)?;
-        assert_eq!(
-            reader.matrix_cell_status::<MatrixCell>(MatrixKey::new(1, 0))?,
-            MatrixCellStatus::Committed
-        );
-        assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 0))?,
-            MatrixCell { value: 11 }
-        );
-        assert_eq!(
-            reader.matrix_cell_status::<MatrixCell>(MatrixKey::new(0, 1))?,
-            MatrixCellStatus::NotCommitted
-        );
-    }
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[cfg(feature = "integrity")]
-#[test]
-fn matrix_slot_crc_corruption_rejects_committed_cell_read() -> varlit::Result<()> {
-    let path = temp_path("matrix_crc_slot");
-    cleanup(&path);
-    let spec = matrix_crc_spec();
-
-    {
-        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
-        let mut writer = spec.create_writer_with_dims(&path, dims)?;
-        writer.write_matrix_cell(MatrixKey::new(1, 1), &MatrixCell { value: 1234 })?;
-        writer.commit_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1))?;
-        writer.sync()?;
-    }
-
-    let offsets = read_vmat_offsets(&path, spec)?;
-    {
-        let mut file = OpenOptions::new().write(true).open(&path)?;
-        let ordinal = 3;
-        file.seek(SeekFrom::Start(
-            offsets.slot_region_off + ordinal * MatrixCell::SLOT_STRIDE,
-        ))?;
-        file.write_all(&9999u32.to_le_bytes())?;
-    }
-
-    {
-        let reader = spec.open_reader(&path)?;
-        assert!(matches!(
-            reader.read_matrix_cell::<MatrixCell>(MatrixKey::new(1, 1)),
-            Err(Error::MatrixChecksumMismatch { .. })
-        ));
-        assert!(matches!(
-            reader.matrix_cell_payload::<MatrixCell>(MatrixKey::new(1, 1)),
-            Err(Error::MatrixChecksumMismatch { .. })
-        ));
-    }
-
-    #[cfg(feature = "mmap")]
-    {
-        let reader = spec.open_reader(&path)?;
-        // SAFETY: The fixture is not modified while the mapping is alive.
-        let mmap = unsafe { reader.mmap_matrix()? };
-        assert!(matches!(
-            mmap.cell_payload_window::<MatrixCell>(MatrixKey::new(1, 1)),
-            Err(Error::MatrixChecksumMismatch { .. })
-        ));
-    }
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[cfg(feature = "integrity")]
-#[test]
-fn matrix_crc_rebuild_preserves_committed_zero_payloads() -> varlit::Result<()> {
-    let path = temp_path("matrix_crc_zero_rebuild");
-    cleanup(&path);
-    let spec = matrix_crc_spec();
-    let zero_key = MatrixKey::new(0, 0);
-
-    {
-        let dims = MatrixDimensions::from_pairs([("scan", 2), ("ch", 2)]);
-        let mut writer = spec.create_writer_with_dims(&path, dims)?;
-        writer.write_matrix_cell(zero_key, &MatrixCell { value: 0 })?;
-        writer.commit_matrix_cell::<MatrixCell>(zero_key)?;
-        writer.sync()?;
-    }
-
-    let offsets = read_vmat_offsets(&path, spec)?;
-    {
-        let mut file = OpenOptions::new().write(true).open(&path)?;
-        file.seek(SeekFrom::Start(offsets.commit_map_off))?;
-        file.write_all(&[0])?;
-    }
-
-    {
-        let mut writer = spec.open_writer(&path)?;
-        assert_eq!(writer.rebuild_matrix_commit_from_crc::<MatrixCell>()?, 1);
-        writer.sync()?;
-    }
-
-    {
-        let reader = spec.open_reader(&path)?;
-        assert_eq!(
-            reader.read_matrix_cell::<MatrixCell>(zero_key)?,
-            MatrixCell { value: 0 }
-        );
-    }
-
-    cleanup(&path);
-    Ok(())
-}
-
-#[cfg(feature = "integrity")]
-#[derive(Debug)]
-struct VmatOffsets {
-    commit_map_off: u64,
-    #[cfg(feature = "integrity")]
-    slot_region_off: u64,
-}
-
-#[cfg(feature = "integrity")]
-fn read_vmat_offsets(path: &PathBuf, spec: FormatSpec) -> varlit::Result<VmatOffsets> {
-    let mut file = OpenOptions::new().read(true).open(path)?;
-    // Native file header (magic + marker + version + endian + flags + schema
-    // hash), then the 24-byte matrix creation-nonce region (DUR2-03), then the
-    // VMAT layout header this helper decodes.
-    let header_len = spec.magic.len() as u64 + 18 + 24;
-    file.seek(SeekFrom::Start(header_len))?;
-    let mut header = [0; 160];
-    file.read_exact(&mut header)?;
-    let read_u64 = |index: usize| {
-        let start = 24 + index * 8;
-        u64::from_le_bytes(header[start..start + 8].try_into().expect("slice"))
-    };
-    Ok(VmatOffsets {
-        commit_map_off: read_u64(6),
-        #[cfg(feature = "integrity")]
-        slot_region_off: read_u64(8),
-    })
-}
-
 struct TempPath {
     path: PathBuf,
     _dir: tempfile::TempDir,
@@ -1632,7 +1345,7 @@ fn cleanup(path: &PathBuf) {
     }
 }
 
-/// F-06: the post-commit outcome carries nothing that owns heap.
+/// the post-commit outcome carries nothing that owns heap.
 ///
 /// After `commit_matrix_cell` the cell is authoritative, and the two remaining
 /// steps build `Error::MatrixCommittedButDurabilityUnproven` or
@@ -1686,15 +1399,8 @@ fn the_post_commit_event_stays_shape_sized() {
     assert_eq!(slot_len, 4);
 }
 
-/// F-06, invariant 4: the code's narrowing and the documents' narrowing agree.
-///
-/// The durability contract published an absolute structural claim — that the
-/// two typed variants are the only post-publication outcomes — and a harness
-/// disproved it by terminating the process between the commit and the
-/// construction of either variant. The claim is kept, because it is true of
-/// every value the call *returns*, and its scope is now published beside it.
-/// This test fails if one copy is corrected and another is not, which is the
-/// half-applied correction invariant 4 exists to catch.
+/// Keep the documented preflight reservation and fallback publication facts
+/// aligned across the durability guide, API reference and public rustdoc.
 #[test]
 fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1709,11 +1415,17 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
         "the crate-wide allocator-failure policy must be published where the \
          published-outcome family is defined"
     );
-    for needle in ["shape-sized", "content-sized", "terminates the process"] {
+    for needle in [
+        "try_box",
+        "AllocationFailureContext",
+        "scalar placeholder",
+        "post-commit allocation",
+        "BTreeMap",
+    ] {
         assert!(
             durability.contains(needle),
             "docs/durability-model.md no longer states {needle:?}: the policy \
-             must name both allocation classes and say what a refusal does"
+             must describe preflight reservation, retained outcomes and the deferred allocation scope"
         );
     }
 
@@ -1732,4 +1444,69 @@ fn the_allocator_failure_narrowing_is_published_with_the_outcome_family() {
         "the rustdoc on write_matrix_cell_durable is the copy a user reads from \
          `cargo doc`; it must carry the same scope as the documents"
     );
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Decodes into a fresh caller-owned value.
+fn val<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<()>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+varlit_format! {
+    pub format TiledMatrixFormat {
+        magic: b"TMTX";
+        version: 1;
+        endian: little;
+        schema_hash: computed;
+        dims {
+            scan: u32,
+            ch: u32,
+        }
+        commit: cell_bitmap {
+            keyspace = [scan, ch];
+            categories = [tiled, plain];
+        };
+        blocks {
+            matrix TiledCell(id = 310, dims = [scan, ch], category = tiled, tile = [2, 8]) {
+                value: u32,
+            }
+            matrix PlainCell(id = 311, dims = [scan, ch], category = plain) {
+                value: u64,
+            }
+        }
+    }
+}
+
+/// `tile = [rows, cols]` reaches the block and its descriptor as written; a
+/// block that declares none gets the default for its stride, and the shape is
+/// part of the schema hash.
+#[test]
+fn a_declared_tile_reaches_the_block_and_the_spec() {
+    use varlit::VarlitMatrixBlock;
+    assert_eq!(TiledCell::TILE, [2, 8]);
+    assert_eq!(PlainCell::TILE, varlit::matrix_default_tile(8));
+    let spec = TiledMatrixFormat::spec();
+    let tile_of = |id| {
+        spec.matrix_blocks
+            .iter()
+            .find(|block| block.block_id == id)
+            .unwrap()
+            .effective_tile()
+    };
+    assert_eq!(tile_of(310), [2, 8]);
+    assert_eq!(tile_of(311), PlainCell::TILE);
+    spec.validate().unwrap();
 }

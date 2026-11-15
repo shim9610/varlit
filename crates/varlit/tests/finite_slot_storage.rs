@@ -23,19 +23,32 @@ fn options() -> DiskIndexOptions {
         ..DiskIndexOptions::default()
     }
 }
+/// Confirms the sidecar on every sync, for tests that examine or interrupt
+/// the confirmation itself.
+fn confirming_options() -> DiskIndexOptions {
+    DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..options()
+    }
+}
 fn key(code: u16) -> SlotKey {
     SlotKey::from_code(code).unwrap()
 }
+/// The newest confirmed checkpoint record of a page-reusing (version 6)
+/// sidecar: the confirmed head with the highest publication sequence names it.
+/// Its tree root is at 16 and its slot root at 336, as in version 5.
 fn checkpoint(path: &Path) -> Vec<u8> {
     let bytes = fs::read(path.with_extension("varlit.vki")).unwrap();
     assert_eq!(&bytes[..8], b"VARVEIX5");
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 6);
     let offset = [4096usize, 8192]
         .into_iter()
-        .filter(|s| &bytes[*s..*s + 8] == b"VIXHEAD1")
-        .map(|s| u64::from_le_bytes(bytes[s + 8..s + 16].try_into().unwrap()) as usize)
-        .max()
+        .filter(|s| &bytes[*s..*s + 8] == b"VIXHEAD3")
+        .max_by_key(|s| u64_at(&bytes, s + 24))
+        .map(|s| u64_at(&bytes, s + 8) as usize)
         .unwrap();
-    bytes[offset..offset + 352].to_vec()
+    assert_eq!(&bytes[offset..offset + 8], b"VIXROOT5");
+    bytes[offset..offset + 416].to_vec()
 }
 fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
@@ -44,7 +57,9 @@ fn u64_at(bytes: &[u8], offset: usize) -> u64 {
 fn finite_only_has_no_tree_and_flush_does_not_publish_slot_extents() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("data.varlit");
-    let options = options();
+    // What is published is examined at each confirmation, so confirm on every
+    // sync rather than once the primary outgrows the sidecar.
+    let options = confirming_options();
     let mut writer = Direct::create_indexed_writer(&path, options)?;
     writer.push_slot(&Slot {
         key: key(0),
@@ -62,22 +77,22 @@ fn finite_only_has_no_tree_and_flush_does_not_publish_slot_extents() -> varlit::
         })?;
         writer.flush()?;
         assert_eq!(u64_at(&checkpoint(&path), 336), u64_at(&initial, 336));
-        assert_eq!(reader.get_slot(&key(0))?.unwrap().value, 1);
+        assert_eq!(opt(|o| reader.get_slot(&key(0), o))?.unwrap().value, 1);
     }
     writer.sync()?;
     reader.follow()?;
     let next = checkpoint(&path);
     assert_eq!(u64_at(&next, 16), 0);
     assert_ne!(u64_at(&next, 336), u64_at(&initial, 336));
-    assert_eq!(reader.get_slot(&key(0))?.unwrap().value, 96);
+    assert_eq!(opt(|o| reader.get_slot(&key(0), o))?.unwrap().value, 96);
     writer.delete_slot(&key(0))?;
     writer.immediate()?;
     reader.follow()?;
-    assert!(reader.get_slot(&key(0))?.is_none());
+    assert!(opt(|o| reader.get_slot(&key(0), o))?.is_none());
     writer.compact_index()?;
     reader.follow()?;
     assert_eq!(u64_at(&checkpoint(&path), 16), 0);
-    assert!(reader.get_slot(&key(0))?.is_none());
+    assert!(opt(|o| reader.get_slot(&key(0), o))?.is_none());
     Ok(())
 }
 #[test]
@@ -104,8 +119,8 @@ fn mixed_tables_restore_rebuild_and_continue_after_compaction() -> varlit::Resul
     writer.flush()?;
     drop(writer);
     let reader = Direct::open_indexed_reader(&path, options)?;
-    assert_eq!(reader.get_slot(&key(4095))?.unwrap().value, 10);
-    assert_eq!(reader.get_legacy(&99)?.unwrap().value, 10);
+    assert_eq!(opt(|o| reader.get_slot(&key(4095), o))?.unwrap().value, 10);
+    assert_eq!(opt(|o| reader.get_legacy(&99, o))?.unwrap().value, 10);
     let mut writer = Direct::restore_indexed_writer(&path, options)?;
     writer.compact_index()?;
     let info = writer.push_slot(&Slot {
@@ -117,8 +132,8 @@ fn mixed_tables_restore_rebuild_and_continue_after_compaction() -> varlit::Resul
     drop(writer);
     Direct::rebuild_disk_index(&path, options)?;
     let reader = Direct::open_indexed_reader(&path, options)?;
-    assert_eq!(reader.get_slot(&key(4095))?.unwrap().value, 30);
-    assert_eq!(reader.get_legacy(&99)?.unwrap().value, 10);
+    assert_eq!(opt(|o| reader.get_slot(&key(4095), o))?.unwrap().value, 30);
+    assert_eq!(opt(|o| reader.get_legacy(&99, o))?.unwrap().value, 10);
     let root = checkpoint(&path);
     assert_ne!(u64_at(&root, 16), 0);
     assert_ne!(u64_at(&root, 336), 0);
@@ -140,12 +155,18 @@ fn corrupt_slot_chunk_is_rejected_before_returning_a_record() -> varlit::Result<
     let sidecar = path.with_extension("varlit.vki");
     let mut bytes = fs::read(&sidecar)?;
     let directory = u64_at(&cp, 336) as usize;
-    assert_eq!(&bytes[directory..directory + 8], b"VIXSLOT1");
-    let chunk = u64_at(&bytes, directory + 40) as usize;
+    assert_eq!(&bytes[directory..directory + 8], b"VIXSLOT2");
+    // 32-byte directory header, 16-byte block header, then (offset, birth)
+    // per chunk.
+    let chunk = u64_at(&bytes, directory + 48) as usize;
     bytes[chunk + 6] ^= 1;
     fs::write(&sidecar, bytes)?;
-    let reader = Direct::open_indexed_reader(&path, options)?;
-    assert!(reader.get_slot(&key(0)).is_err());
+    // The chunk's own checksum and identity trailer refuse the damaged rows:
+    // at open, or at the first read through a handle that did open.
+    match Direct::open_indexed_reader(&path, options) {
+        Err(_) => {}
+        Ok(reader) => assert!(opt(|o| reader.get_slot(&key(0), o)).is_err()),
+    }
     Ok(())
 }
 
@@ -196,7 +217,7 @@ fn randomized_full_domain_matches_redb_through_reopen_and_compaction() -> varlit
         // Both unchanged chunks and replaced chunks must keep the old snapshot.
         for (code, expected) in old.into_iter().enumerate() {
             assert_eq!(
-                reader.get_slot(&key(code as u16))?.map(|row| row.value),
+                opt(|o| reader.get_slot(&key(code as u16), o))?.map(|row| row.value),
                 expected
             );
         }
@@ -204,7 +225,7 @@ fn randomized_full_domain_matches_redb_through_reopen_and_compaction() -> varlit
         let transaction = oracle.begin_read().unwrap();
         let table = transaction.open_table(TABLE).unwrap();
         for (code, expected) in model.into_iter().enumerate() {
-            let actual = reader.get_slot(&key(code as u16))?.map(|row| row.value);
+            let actual = opt(|o| reader.get_slot(&key(code as u16), o))?.map(|row| row.value);
             assert_eq!(actual, expected);
             assert_eq!(
                 actual,
@@ -245,10 +266,14 @@ fn independent_readers_follow_atomic_slot_generations() -> varlit::Result<()> {
                     let mut reads = 0;
                     loop {
                         reader.follow().unwrap();
-                        let generation = reader.get_slot(&key(0)).unwrap().unwrap().value;
+                        let generation =
+                            opt(|o| reader.get_slot(&key(0), o)).unwrap().unwrap().value;
                         for code in 1..32 {
                             assert_eq!(
-                                reader.get_slot(&key(code)).unwrap().unwrap().value,
+                                opt(|o| reader.get_slot(&key(code), o))
+                                    .unwrap()
+                                    .unwrap()
+                                    .value,
                                 generation
                             );
                             reads += 1;
@@ -290,7 +315,7 @@ fn slots_crash_child() {
     let Some(path) = std::env::var_os("VARLIT_SLOT_CHILD") else {
         return;
     };
-    let mut writer = Direct::open_indexed_writer(path, options()).unwrap();
+    let mut writer = Direct::open_indexed_writer(path, confirming_options()).unwrap();
     let _armed = varlit::scalable_fault::arm_from_env().unwrap();
     writer
         .push_slot(&Slot {
@@ -314,7 +339,7 @@ fn interrupted_slot_and_directory_writes_preserve_confirmed_generation() -> varl
     fn prepare(root: &Path) -> varlit::Result<std::path::PathBuf> {
         fs::create_dir(root)?;
         let path = root.join("data.varlit");
-        let mut writer = Direct::create_indexed_writer(&path, options())?;
+        let mut writer = Direct::create_indexed_writer(&path, confirming_options())?;
         for code in [0, 4095] {
             writer.push_slot(&Slot {
                 key: key(code),
@@ -351,22 +376,35 @@ fn interrupted_slot_and_directory_writes_preserve_confirmed_generation() -> varl
             &path,
             varlit::WriterLockBreakPolicy::BreakIfProcessAbsent,
         )?;
-        let reader = Direct::open_indexed_reader(&path, options())?;
-        let value = reader.get_slot(&key(0))?.unwrap().value;
+        let reader = Direct::open_indexed_reader(&path, confirming_options())?;
+        let value = opt(|o| reader.get_slot(&key(0), o))?.unwrap().value;
         assert!(value == 1 || value == 2);
-        assert_eq!(reader.get_slot(&key(4095))?.unwrap().value, value);
-        let mut writer = Direct::open_indexed_writer(&path, options())
-            .or_else(|_| Direct::restore_indexed_writer(&path, options()))?;
+        assert_eq!(
+            opt(|o| reader.get_slot(&key(4095), o))?.unwrap().value,
+            value
+        );
+        let mut writer = Direct::open_indexed_writer(&path, confirming_options())
+            .or_else(|_| Direct::restore_indexed_writer(&path, confirming_options()))?;
         writer.push_slot(&Slot {
             key: key(0),
             value: 3,
         })?;
         writer.sync()?;
-        let reader = Direct::open_indexed_reader(&path, options())?;
-        assert_eq!(reader.get_slot(&key(0))?.unwrap().value, 3);
+        let reader = Direct::open_indexed_reader(&path, confirming_options())?;
+        assert_eq!(opt(|o| reader.get_slot(&key(0), o))?.unwrap().value, 3);
         aborts += 1;
     }
     assert!(aborts > 30);
     eprintln!("FINITE_SLOT_CRASH aborts={aborts}");
     Ok(())
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

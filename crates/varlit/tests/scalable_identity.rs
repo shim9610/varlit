@@ -1,4 +1,4 @@
-//! Scalable primary/sidecar identity contracts (STO-01, API-03).
+//! Scalable primary/sidecar identity contracts.
 //!
 //! A stream or indexed sidecar must belong to the exact logical generation of
 //! the primary it was published against. Schema hash, OS object identity and
@@ -42,6 +42,15 @@ impl VarlitDecode for Item {
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         let (key, value) = <(u64, String)>::decode_varlit(decoder)?;
         Ok(Self { key, value })
+    }
+}
+
+impl varlit::VarlitEmpty for Item {
+    fn empty() -> Self {
+        Self {
+            key: 0,
+            value: String::new(),
+        }
     }
 }
 
@@ -225,7 +234,7 @@ fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<
     {
         let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
         assert_eq!(
-            reader.get::<Item>(&10)?,
+            filled(|o| reader.get::<Item>(&10, o))?,
             Some(item(10, "fixed-width-value"))
         );
         assert_eq!(reader.historical_distinct_keys()?, 2);
@@ -270,14 +279,15 @@ fn same_object_equal_length_rewrite_is_refused_and_rebuild_recovers() -> Result<
     // Rebuild is the documented recovery: it republishes a sidecar for the
     // generation actually on disk.
     let report = rebuild_disk_index(spec(), &first, options, plan())?;
-    // Two user records plus the leading internal creation-nonce record.
-    assert_eq!(report.records, 3);
+    // Two user records, the leading internal creation-nonce record and the
+    // sync marker that closed them.
+    assert_eq!(report.records, 4);
     let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
     assert_eq!(
-        reader.get::<Item>(&20)?,
+        filled(|o| reader.get::<Item>(&20, o))?,
         Some(item(20, "fixed-width-value"))
     );
-    assert_eq!(reader.get::<Item>(&10)?, None);
+    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
     assert_eq!(reader.historical_distinct_keys()?, 2);
     Ok(())
 }
@@ -316,7 +326,7 @@ fn stream_state_sidecar_refuses_a_rewritten_primary() -> Result<()> {
     Ok(())
 }
 
-/// F-09, consumer half. Sidecar publication cannot be made atomic against a
+/// consumer half. Sidecar publication cannot be made atomic against a
 /// process that replaces the primary *pathname* without taking the writer lock,
 /// so the library narrows the interval and retires a sidecar it published for a
 /// replaced primary. What keeps that a rebuild-cost problem rather than a
@@ -360,7 +370,7 @@ fn stream_state_sidecar_refuses_a_wholesale_primary_replacement() -> Result<()> 
     Ok(())
 }
 
-/// The residual half of STO-01 an adversarial re-verification found: a
+/// The residual half of  an adversarial re-verification found: a
 /// generation witness computed over a bounded leading window only separates two
 /// primaries that diverge *inside* that window.
 ///
@@ -411,7 +421,7 @@ fn rewrite_that_shares_the_generation_window_is_still_refused() -> Result<()> {
     {
         let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
         assert_eq!(
-            reader.get::<Item>(&10)?,
+            filled(|o| reader.get::<Item>(&10, o))?,
             Some(item(10, "fixed-width-value"))
         );
     }
@@ -443,10 +453,10 @@ fn rewrite_that_shares_the_generation_window_is_still_refused() -> Result<()> {
     rebuild_disk_index(spec(), &first, options, plan())?;
     let reader = VarlitIndexedReader::open(spec(), &first, options, plan())?;
     assert_eq!(
-        reader.get::<Item>(&20)?,
+        filled(|o| reader.get::<Item>(&20, o))?,
         Some(item(20, "fixed-width-value"))
     );
-    assert_eq!(reader.get::<Item>(&10)?, None);
+    assert_eq!(filled(|o| reader.get::<Item>(&10, o))?, None);
     assert_eq!(reader.historical_distinct_keys()?, historical_before);
     Ok(())
 }
@@ -605,7 +615,10 @@ fn matching_descriptor_plan_still_builds_and_indexes() -> Result<()> {
     let path = directory.path().join("valid-plan.varlit");
     build_primary(&path, [5, 6])?;
     let reader = VarlitIndexedReader::open(spec(), &path, DiskIndexOptions::default(), plan())?;
-    assert_eq!(reader.get::<Item>(&5)?, Some(item(5, "fixed-width-value")));
+    assert_eq!(
+        filled(|o| reader.get::<Item>(&5, o))?,
+        Some(item(5, "fixed-width-value"))
+    );
     Ok(())
 }
 
@@ -636,7 +649,8 @@ fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary
         fs::write(&sidecar, &damaged)?;
         assert_eq!(
             varlit::VarlitStreamReader::open(stream_spec(), &path, options)?.verify_all()?,
-            3
+            // The creation nonce, two records and their sync marker.
+            4
         );
         damaged[8192 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
@@ -655,7 +669,7 @@ fn stream_restore_refuses_missing_confirmed_heads_without_truncating_the_primary
             damaged,
             "recovery republished a stale checkpoint"
         );
-        assert_eq!(pinned.verify_all()?, 3);
+        assert_eq!(pinned.verify_all()?, 4);
     }
     Ok(())
 }
@@ -685,8 +699,14 @@ fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primar
         damaged[4096 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
         let reader = VarlitIndexedReader::open(spec(), &path, options, plan())?;
-        assert_eq!(reader.get::<Item>(&10)?, Some(item(10, "confirmed")));
-        assert_eq!(reader.get::<Item>(&11)?, Some(item(11, "confirmed")));
+        assert_eq!(
+            filled(|o| reader.get::<Item>(&10, o))?,
+            Some(item(10, "confirmed"))
+        );
+        assert_eq!(
+            filled(|o| reader.get::<Item>(&11, o))?,
+            Some(item(11, "confirmed"))
+        );
         drop(reader);
         damaged[8192 + 8] ^= 1;
         fs::write(&sidecar, &damaged)?;
@@ -706,8 +726,33 @@ fn indexed_restore_refuses_missing_confirmed_heads_without_truncating_the_primar
             damaged,
             "recovery republished a stale checkpoint"
         );
-        assert_eq!(pinned.get::<Item>(&10)?, Some(item(10, "confirmed")));
-        assert_eq!(pinned.get::<Item>(&11)?, Some(item(11, "confirmed")));
+        assert_eq!(
+            filled(|o| pinned.get::<Item>(&10, o))?,
+            Some(item(10, "confirmed"))
+        );
+        assert_eq!(
+            filled(|o| pinned.get::<Item>(&11, o))?,
+            Some(item(11, "confirmed"))
+        );
     }
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

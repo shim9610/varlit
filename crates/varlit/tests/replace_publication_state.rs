@@ -1,21 +1,18 @@
-//! DUR-01 regression: when the atomic pathname publication has already
+//!  regression: when the atomic pathname publication has already
 //! succeeded but the post-publication parent-directory sync fails, the writer
 //! must be rebound to the published generation (or poisoned) and the caller
 //! must receive the typed publication state instead of a plain failure.
 //!
-//! DUR2-01 regression: `ReplaceFileW` failures must be classified per the
+//!  regression: `ReplaceFileW` failures must be classified per the
 //! Microsoft contract — 1175 is a documented no-mutation failure, while
 //! 1176/1177 leave the pathnames in a possibly partially moved state, after
 //! which the replacement temp file must be preserved and the writer poisoned.
 
 #![allow(unexpected_cfgs)]
+#[path = "support/pages.rs"]
+mod pages;
 
-#[cfg(not(feature = "scalable-fault-injection"))]
-#[test]
-#[ignore = "requires the scalable-fault-injection feature"]
-fn replace_publication_state_requires_feature_wiring() {}
-
-/// DUR2-01: the pure `ReplaceFileW` error classification, testable on every
+/// the pure `ReplaceFileW` error classification, testable on every
 /// host because a real 1176/1177 cannot be reproduced on demand.
 mod classification {
     use varlit::{ReplacePublicationFailure, classify_replace_publication_error};
@@ -64,6 +61,8 @@ mod classification {
 mod enabled {
     use std::sync::Mutex;
 
+    use super::opt;
+
     use varlit::scalable_fault::{FAULT_ENV, TRACE_ENV, arm_from_env};
     use varlit::{
         BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
@@ -91,6 +90,12 @@ mod enabled {
 
         fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
             Ok(Self(u64::decode_varlit(decoder)?))
+        }
+    }
+
+    impl varlit::VarlitEmpty for PubRecord {
+        fn empty() -> Self {
+            Self(0)
         }
     }
 
@@ -154,9 +159,11 @@ mod enabled {
         // Publication already happened: the pathname resolves to the new
         // generation even though the caller saw an error.
         assert_eq!(
-            VarlitFile::open_readonly(spec(), &path)?
-                .blocks::<PubRecord>()?
-                .get(0)?,
+            opt(|o| crate::pages::all_blocks!(
+                VarlitFile::open_readonly(spec(), &path)?,
+                PubRecord
+            )?
+            .get(0, o))?,
             Some(PubRecord(2))
         );
 
@@ -168,9 +175,9 @@ mod enabled {
         drop(writer);
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        let blocks = reopened.blocks::<PubRecord>()?;
-        assert_eq!(blocks.get(0)?, Some(PubRecord(2)));
-        assert_eq!(blocks.get(1)?, Some(PubRecord(3)));
+        let blocks = crate::pages::all_blocks!(reopened, PubRecord)?;
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(2)));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(3)));
         Ok(())
     }
 
@@ -183,7 +190,7 @@ mod enabled {
         writer.push(&PubRecord(1))?;
         writer.sync()?;
 
-        // Models an unreconciled ReplaceFileW 1176/1177 outcome (DUR2-01):
+        // Models an unreconciled ReplaceFileW 1176/1177 outcome :
         // the pathname state is unknown to the caller.
         VarlitFile::inject_replace_indeterminate_failures(1);
         match writer.replace(0, &PubRecord(2)) {
@@ -218,7 +225,10 @@ mod enabled {
         // The injected fault fired before the publication was attempted, so
         // the target pathname still resolves to the previous generation.
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        assert_eq!(reopened.blocks::<PubRecord>()?.get(0)?, Some(PubRecord(1)),);
+        assert_eq!(
+            opt(|o| crate::pages::all_blocks!(reopened, PubRecord)?.get(0, o))?,
+            Some(PubRecord(1)),
+        );
         Ok(())
     }
 
@@ -238,9 +248,9 @@ mod enabled {
         drop(writer);
 
         let reopened = VarlitFile::open_readonly(spec(), &path)?;
-        let blocks = reopened.blocks::<PubRecord>()?;
-        assert_eq!(blocks.get(0)?, Some(PubRecord(5)));
-        assert_eq!(blocks.get(1)?, Some(PubRecord(6)));
+        let blocks = crate::pages::all_blocks!(reopened, PubRecord)?;
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(PubRecord(5)));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(PubRecord(6)));
         Ok(())
     }
 
@@ -270,7 +280,7 @@ mod enabled {
         run?;
 
         // The resident replace path must cross the registered publication
-        // boundaries, proving the DUR-01 hooks are wired for resident files.
+        // boundaries, proving the  hooks are wired for resident files.
         let contents = std::fs::read_to_string(&trace)?;
         assert!(
             contents.lines().any(|line| line.contains("replace.atomic")),
@@ -286,7 +296,7 @@ mod enabled {
     }
 }
 
-/// F-01 and F-02 regressions: every replacement entry point that resolves its
+///  and  regressions: every replacement entry point that resolves its
 /// target by block id alone must refuse a stored record whose version differs
 /// from the type being written, and the one entry point that mutates record
 /// bytes in place must refuse keyed blocks outright.
@@ -298,6 +308,7 @@ mod enabled {
 /// a *supported* opt-out from header-level schema locking, which is exactly
 /// what the specs below use.
 mod cross_version_and_keyed_refusals {
+    use super::opt;
     use varlit::{
         BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
         IntegrityPolicy, ManifestPolicy, ReadLimits, RecoveryPolicy, Result, VarlitBlock,
@@ -325,6 +336,12 @@ mod cross_version_and_keyed_refusals {
 
                 fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
                     Ok(Self(u64::decode_varlit(decoder)?))
+                }
+            }
+
+            impl varlit::VarlitEmpty for $name {
+                fn empty() -> Self {
+                    Self(0)
                 }
             }
 
@@ -414,7 +431,10 @@ mod cross_version_and_keyed_refusals {
     /// can decode: a refused replacement leaves nothing behind.
     fn assert_still_v1(path: &std::path::Path) -> Result<()> {
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), path)?;
-        assert_eq!(reader.blocks::<RecordV1>()?.get(0)?, Some(RecordV1(1)));
+        assert_eq!(
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(0, o))?,
+            Some(RecordV1(1))
+        );
         Ok(())
     }
 
@@ -482,7 +502,7 @@ mod cross_version_and_keyed_refusals {
         assert_still_v1(&path)
     }
 
-    /// F-01, the re-verification harness, kept as a regression.
+    /// the re-verification harness, kept as a regression.
     ///
     /// Round 12 added one test per entry point at ordinal 0. Re-verification
     /// went wider — every entry point including both `replace` strategy
@@ -551,8 +571,14 @@ mod cross_version_and_keyed_refusals {
         }
 
         let reader = VarlitFile::open_readonly(spec(BLOCKS_V1), &path)?;
-        assert_eq!(reader.blocks::<RecordV1>()?.get(0)?, Some(RecordV1(1)));
-        assert_eq!(reader.blocks::<RecordV1>()?.get(1)?, Some(RecordV1(2)));
+        assert_eq!(
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(0, o))?,
+            Some(RecordV1(1))
+        );
+        assert_eq!(
+            opt(|o| crate::pages::all_blocks!(reader, RecordV1)?.get(1, o))?,
+            Some(RecordV1(2))
+        );
         Ok(())
     }
 
@@ -576,6 +602,12 @@ mod cross_version_and_keyed_refusals {
             Ok(Self {
                 key: u64::decode_varlit(decoder)?,
             })
+        }
+    }
+
+    impl varlit::VarlitEmpty for KeyedRecord {
+        fn empty() -> Self {
+            Self { key: 0 }
         }
     }
 
@@ -620,7 +652,7 @@ mod cross_version_and_keyed_refusals {
         .with_read_limits(ReadLimits::STANDARD)
     }
 
-    /// F-02: a resident keyed-tail cache must never outlive an in-place
+    /// a resident keyed-tail cache must never outlive an in-place
     /// record mutation.
     ///
     /// The cache maps canonical key bytes to tail offsets and maintained
@@ -686,10 +718,20 @@ mod cross_version_and_keyed_refusals {
         drop(writer);
 
         let reader = VarlitFile::open_readonly(keyed_spec(), &path)?;
-        let blocks = reader.blocks::<KeyedRecord>()?;
+        let blocks = crate::pages::all_blocks!(reader, KeyedRecord)?;
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks.get(0)?, Some(KeyedRecord { key: 5 }));
-        assert_eq!(blocks.get(1)?, Some(KeyedRecord { key: 5 }));
+        assert_eq!(opt(|o| blocks.get(0, o))?, Some(KeyedRecord { key: 5 }));
+        assert_eq!(opt(|o| blocks.get(1, o))?, Some(KeyedRecord { key: 5 }));
         Ok(())
     }
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

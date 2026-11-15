@@ -201,20 +201,20 @@ fn the_2026_07_20_oom_reproducer_stays_refused() {
     );
 
     // Verbatim: refused by the standard 1 GiB materialization budget, because
-    // the table this count would reserve is 1,073,741,888 bytes -- 64 over.
+    // the two-table rehash charge is 2,147,483,776 bytes.
     assert!(matches!(
         decode_from_slice::<HashMap<(), ()>>(payload, Endian::Little),
         Err(Error::LimitExceeded {
             resource: "HashMap entries",
-            actual: 1_073_741_888,
+            actual: 2_147_483_776,
             limit: 1_073_741_824,
         })
     ));
 
-    // The largest count the same budget admits reaches the decoder proper and
+    // A large count the same budget admits reaches the decoder proper and
     // is refused on content, not on size. This is the assertion that would fail
     // if the budget stopped being the thing that refuses the reproducer.
-    let mut admitted = 293_601_534u64.to_le_bytes().to_vec();
+    let mut admitted = 146_800_766u64.to_le_bytes().to_vec();
     admitted.extend_from_slice(&payload[8..]);
     assert_invalid_canonical(decode_from_slice::<HashMap<(), ()>>(
         &admitted,
@@ -438,14 +438,16 @@ fn field_headers_decode_checked_lengths_while_writers_emit_zero_flags() -> varli
     Ok(())
 }
 
-/// RES-01: distinct variable field ids above the small-id mask are the one
+/// distinct variable field ids above the small-id mask are the one
 /// decoder-owned set an attacker sizes directly from the header stream, so
 /// each one must be charged to the materialization budget before the set
 /// reserves for it — like every other decoder-owned container.
 #[test]
 fn large_field_id_bookkeeping_is_charged_to_the_materialization_budget() {
     const HIGH_FIELD_IDS: u32 = 8;
-    const CHARGE_PER_ID: u64 = 8;
+    // Conservative 32-bucket table, 4-byte IDs + control bytes, padding,
+    // and simultaneous old/new storage during rehash.
+    const SET_CHARGE: u64 = 2 * (32 * 5 + 32 + 32);
 
     let mut encoded = Vec::new();
     append_field(&mut encoded, 1, WireType::U8, 0, 1, &[7]);
@@ -458,14 +460,14 @@ fn large_field_id_bookkeeping_is_charged_to_the_materialization_budget() {
         Decoder::decode_from_slice_limited::<HardenedVariable>(&encoded, Endian::Little, 0),
         Err(Error::LimitExceeded {
             resource: "variable field ids",
-            actual: CHARGE_PER_ID,
+            actual: SET_CHARGE,
             limit: 0,
         })
     ));
 
-    // One byte short of the full set still fails, and it fails on the last
-    // id rather than silently over-allocating.
-    let exact = CHARGE_PER_ID * u64::from(HIGH_FIELD_IDS);
+    // The small set shares one capacity class. A byte below its complete
+    // allocation bound must fail before reserving the table.
+    let exact = SET_CHARGE;
     assert!(matches!(
         Decoder::decode_from_slice_limited::<HardenedVariable>(
             &encoded,
@@ -509,11 +511,11 @@ fn duplicate_large_field_ids_are_rejected_without_extra_charge() {
     assert_invalid_canonical(Decoder::decode_from_slice_limited::<HardenedVariable>(
         &encoded,
         Endian::Little,
-        8,
+        2 * (32 * 5 + 32 + 32),
     ));
 }
 
-/// SAFE-01. `HashMap::try_reserve(len)` allocates a real open-addressed table:
+/// `HashMap::try_reserve(len)` allocates a real open-addressed table:
 /// buckets are rounded up to a power of two at a 7/8 load factor and *every*
 /// bucket owns a control byte, so a zero-sized entry costs far more than the
 /// one byte the old preflight floor charged it. With that floor the standard
@@ -599,7 +601,7 @@ fn hash_map_budget_still_admits_honest_maps() {
 }
 
 /// The exact charge the decoder must apply to a `HashMap<(), ()>` at any
-/// declared count in the small-table classes (SAFE2-01/F-02).
+/// declared count in the small-table classes.
 ///
 /// 32 buckets (the modelled control-group floor) times one control byte per
 /// zero-sized entry, plus one trailing control group, plus the control-array
@@ -615,7 +617,7 @@ const ONE_BYTE_SMALL_TABLE_BYTES: u64 = 128;
 /// reports capacity 14, i.e. a 16-bucket table.
 const SMALL_TABLE_CAPACITIES: std::ops::RangeInclusive<u64> = 1..=14;
 
-/// SAFE2-01/F-02. The old model charged one entry as two buckets, so
+/// The old model charged one entry as two buckets, so
 /// `HashMap<(), ()>` cost 19 bytes at every count in `1..=14` while
 /// `HashMap::<(), ()>::try_reserve(1)` really allocates a 16-bucket table whose
 /// control storage alone is 32 bytes. The charge is now pinned exactly at every
@@ -736,7 +738,7 @@ fn hash_map_charges_never_fall_as_the_declared_count_rises() {
     }
 }
 
-/// API-03. `ChunkedBytes` is a documented variable-field codec, so it must
+/// `ChunkedBytes` is a documented variable-field codec, so it must
 /// declare a stable non-zero identity (the derive rejects zero) that is
 /// distinct from the `Vec<u8>` codec whose bytes it rides on. The literals are
 /// pinned so an accidental retag or format-version bump is a visible test
@@ -775,7 +777,7 @@ fn chunked_bytes_roundtrips_through_the_codec() -> varlit::Result<()> {
     Ok(())
 }
 
-/// API-03, the actual regression: a variable block with a documented
+/// the actual regression: a variable block with a documented
 /// `ChunkedBytes` field (docs/spec.md:52) must compile. `#[derive(VarlitBlock)]`
 /// rejects at compile time every field whose codec identity is zero, so before
 /// the identity above existed this declaration did not build at all.
@@ -806,7 +808,7 @@ fn chunked_bytes_is_usable_as_a_derived_variable_field() -> varlit::Result<()> {
     Ok(())
 }
 
-/// API3-04. `BTreeMap` was charged `len * size_of::<(K, V)>()`, as if entries
+/// `BTreeMap` was charged `len * size_of::<(K, V)>()`, as if entries
 /// were stored packed end to end. A std B-tree node instead allocates a
 /// fixed-capacity array of eleven entry slots whatever its fill, is only
 /// guaranteed to hold five of them, and carries a header (and, for internal

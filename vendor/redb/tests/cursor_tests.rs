@@ -1,8 +1,6 @@
-#![cfg(feature = "experimental_cursor")]
-
 use redb::{
-    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageError,
-    TableDefinition, TransactionError,
+    CursorError, Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
+    TransactionError,
 };
 use std::ops::Bound;
 
@@ -239,7 +237,7 @@ fn unordered_keys_rejected() {
         for bad in [10u64, 15, 20, 30, 35] {
             assert!(matches!(
                 cursor.insert_before(bad, &bad),
-                Err(StorageError::UnorderedKey)
+                Err(CursorError::UnorderedKey)
             ));
         }
         // The cursor remains usable after rejections
@@ -247,11 +245,11 @@ fn unordered_keys_rejected() {
         // Later inserts must also stay above the pending insert
         assert!(matches!(
             cursor.insert_before(25, &25),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         assert!(matches!(
             cursor.insert_before(24, &24),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         cursor.insert_before(26, &26).unwrap();
         cursor.close().unwrap();
@@ -387,7 +385,7 @@ fn empty_and_rejected_only_cursors() {
         let mut cursor = table.upper_bound_mut(Bound::<u64>::Unbounded).unwrap();
         assert!(matches!(
             cursor.insert_before(10, &10),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         cursor.close().unwrap();
         assert_eq!(table.len().unwrap(), 1);
@@ -636,11 +634,9 @@ fn read_cursor_keeps_transaction_alive() {
     let mut cursor = table.lower_bound(Bound::Included(&5)).unwrap();
     assert_eq!(peeked_key(cursor.next().unwrap()), Some(5));
 
-    // The cursor has no Drop impl, so its borrow of the table ends at the last
-    // use above, and the table can be dropped while the cursor still holds
-    // pages. Only the cursor's own transaction guard keeps the read
-    // transaction registered from here on.
-    drop(table);
+    // The cursor holds pages, so it keeps the table borrowed until it is
+    // dropped (dropping the table under a live cursor does not compile), and
+    // the table keeps the read transaction registered.
     assert!(matches!(
         txn.close(),
         Err(TransactionError::ReadTransactionStillInUse(_))
@@ -657,7 +653,10 @@ fn read_cursor_keeps_transaction_alive() {
         }
         txn.commit().unwrap();
     }
-    // `cursor` is dropped here, without being used again
+    // The cursor still reads its own snapshot
+    let (key, value) = cursor.next().unwrap().unwrap();
+    assert_eq!((key.value(), value.value()), (6, 6));
+    assert_eq!(peeked_key(cursor.peek_next().unwrap()), Some(7));
 }
 
 #[test]
@@ -818,25 +817,25 @@ fn insert_after_unordered_keys_rejected() {
         // The gap is between 10 and 30.
         assert!(matches!(
             cursor.insert_after(10, &10),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         assert!(matches!(
             cursor.insert_after(30, &30),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         cursor.insert_after(25, &25).unwrap();
         // Later inserts must stay strictly below the pending one.
         assert!(matches!(
             cursor.insert_after(25, &25),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         assert!(matches!(
             cursor.insert_after(27, &27),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         assert!(matches!(
             cursor.insert_before(26, &26),
-            Err(StorageError::UnorderedKey)
+            Err(CursorError::UnorderedKey)
         ));
         cursor.insert_after(20, &20).unwrap();
         cursor.close().unwrap();

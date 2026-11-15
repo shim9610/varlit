@@ -23,6 +23,11 @@ pub trait VarlitBlock: VarlitEncode + VarlitDecode {
     /// it explicitly so keyedness cannot silently
     /// default to the chain-unsafe value.
     const IS_KEYED: bool;
+    /// How a derived variable block decodes itself field by field from
+    /// storage. Set by the derive; a manual implementation leaves it unset
+    /// and is decoded from its whole payload.
+    #[doc(hidden)]
+    const __VARLIT_FIELDS: Option<crate::FieldsCodec<Self>> = None;
     /// Process-local identity of this block's declared schema.
     ///
     /// `#[derive(VarlitBlock)]` computes this deterministically (FNV-1a 64 over
@@ -44,6 +49,10 @@ pub trait VarlitBlock: VarlitEncode + VarlitDecode {
         Self::SCHEMA_FINGERPRINT,
     );
     const FIELDS: &'static [FieldDescriptor] = &[];
+
+    /// Typed dispatch used only by the explicit file-check utility.
+    #[doc(hidden)]
+    const __VARLIT_RECORD_VALIDATOR: crate::RecordValidator = crate::RecordValidator::of::<Self>();
 }
 
 /// Compile-time proof that a keyed implementation agrees with its declared
@@ -105,6 +114,9 @@ pub trait VarlitMatrixBlock: VarlitBlock {
     const DIMENSIONS: [&'static str; 2];
     const CATEGORY: &'static str;
     const SLOT_STRIDE: u64;
+    /// `[rows, cols]` of the tiles this block is stored in. Must equal the
+    /// spec descriptor's effective tile.
+    const TILE: [u64; 2] = crate::format::matrix_default_tile(Self::SLOT_STRIDE);
 }
 
 pub trait VarlitMigration<From, To>
@@ -124,6 +136,7 @@ where
 /// a valid immutable instance of `Self` in Rust's raw memory layout, using
 /// `RAW_ENDIAN`, `size_of::<Self>()`, and `align_of::<Self>()`. This is not the
 /// same contract as Varlit's canonical fixed encoding.
+#[allow(unsafe_code, reason = "an `unsafe trait` an implementer vouches for")]
 pub unsafe trait VarlitRawFixedBlock:
     VarlitBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout
 {
@@ -140,6 +153,7 @@ pub unsafe trait VarlitRawFixedBlock:
 /// memory layout, using `RAW_ENDIAN`, `size_of::<Self>()`, and
 /// `align_of::<Self>()`. This is an explicit opt-in contract and is separate
 /// from Varlit's normal canonical matrix decoding.
+#[allow(unsafe_code, reason = "an `unsafe trait` an implementer vouches for")]
 pub unsafe trait VarlitRawMatrixBlock:
     VarlitMatrixBlock + zerocopy::FromBytes + zerocopy::Immutable + zerocopy::KnownLayout
 {

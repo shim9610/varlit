@@ -1,4 +1,3 @@
-#[cfg(feature = "experimental-multiprocess")]
 mod active_transactions;
 mod backends;
 mod base;
@@ -20,18 +19,17 @@ mod xxh3;
 pub use backends::InMemoryBackend;
 #[cfg(not(redb_no_std))]
 pub(crate) use backends::ReadOnlyBackend;
-pub(crate) use base::{MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageHint, PageNumber, PageTracker};
+pub(crate) use base::{
+    MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageHint, PageNumber, PageTracker, ScopedBorrow,
+};
 pub(crate) use fast_hash::{PageNumberHashMap, PageNumberHashSet};
 pub(crate) use header::PAGE_SIZE;
+pub(crate) use layout::DatabaseLayout;
 #[cfg(all(test, feature = "experimental-multiprocess"))]
 pub(crate) use page_manager::HEADER_LOCK;
-#[cfg(feature = "experimental-multiprocess")]
-pub(crate) use page_manager::HeaderGuard;
-#[cfg(feature = "experimental-multiprocess")]
-pub(crate) use page_manager::WriterLock;
 pub(crate) use page_manager::{
-    AllocationPolicy, FILE_FORMAT_VERSION3, PageAllocator, PageResolver, ShrinkPolicy,
-    TransactionalMemory, xxh3_checksum,
+    AllocationPolicy, FILE_FORMAT_VERSION3, HeaderGuard, PageAllocator, PageResolver, ShrinkPolicy,
+    TransactionalMemory, WriterLock, xxh3_checksum,
 };
 pub use savepoint::Savepoint;
 pub(crate) use savepoint::SerializedSavepoint;

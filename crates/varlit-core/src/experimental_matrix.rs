@@ -4,6 +4,8 @@
 //! With reuse enabled, each read retries against the latest confirmed generation;
 //! it does not retain a historical snapshot. Only owned reads are exposed.
 //! The experimental file format is separate from the native format and may change.
+use crate::TryClone;
+use crate::fallible::Arc;
 use crate::format::ReadLimitKey;
 use crate::{
     BlockKind, Decoder, FormatSpec, MatrixDimensions, MatrixKey, VarlitMatrixBlock, VarlitReader,
@@ -14,10 +16,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PAGE: u64 = 4096;
 const HEADER: u64 = 3 * PAGE;
@@ -434,22 +433,22 @@ struct Head {
     rows: u64,
     end: u64,
 }
-fn head_bytes(h: Head, nonce: [u8; 16]) -> [u8; PAGE as usize] {
-    let mut b = [0; PAGE as usize];
+fn head_bytes(h: Head, creation_id: [u8; 16]) -> [u8; crate::width::small(PAGE)] {
+    let mut b = [0; crate::width::small(PAGE)];
     b[..8].copy_from_slice(HEAD_MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     put(&mut b, 24, h.generation);
     put(&mut b, 32, h.rows);
     put(&mut b, 40, h.end);
     seal(&mut b);
     b
 }
-fn read_head(file: &File, nonce: [u8; 16]) -> Result<Head> {
+fn read_head(file: &File, creation_id: [u8; 16]) -> Result<Head> {
     let mut found = None;
     for slot in 0..2 {
-        let mut b = [0; PAGE as usize];
+        let mut b = [0; crate::width::small(PAGE)];
         read_at(file, PAGE * (slot + 1), &mut b)?;
-        if &b[..8] == HEAD_MAGIC && b[8..24] == nonce && valid(&b) {
+        if &b[..8] == HEAD_MAGIC && b[8..24] == creation_id && valid(&b) {
             let h = Head {
                 generation: u64_at(&b, 24),
                 rows: u64_at(&b, 32),
@@ -467,7 +466,7 @@ fn read_head(file: &File, nonce: [u8; 16]) -> Result<Head> {
     Ok(h)
 }
 fn read_slot(file: &File, at: u64, id: u64) -> Result<Option<(u64, u32, u64)>> {
-    let mut b = [0; SLOT_HEADER as usize];
+    let mut b = [0; crate::width::small(SLOT_HEADER)];
     match read_at(file, at, &mut b) {
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         r => r?,
@@ -493,14 +492,17 @@ fn parse_slot(b: &[u8], id: u64) -> Result<Option<(u64, u32, u64)>> {
 #[allow(clippy::type_complexity)]
 fn original_slot(
     journal: &File,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     h: Head,
     id: u64,
     slot: u64,
 ) -> Result<Option<Option<(u64, u32, u64)>>> {
-    let mut b = [0; PAGE as usize];
+    let mut b = [0; crate::width::small(PAGE)];
     read_at(journal, 0, &mut b)?;
-    if &b[..8] != INTENT_MAGIC || b[8..24] != nonce || !valid(&b) || u64_at(&b, 24) != h.generation
+    if &b[..8] != INTENT_MAGIC
+        || b[8..24] != creation_id
+        || !valid(&b)
+        || u64_at(&b, 24) != h.generation
     {
         return Ok(None);
     }
@@ -509,7 +511,7 @@ fn original_slot(
         return Ok(None);
     }
     for i in 0..count {
-        let mut entry = [0; JOURNAL_ENTRY as usize];
+        let mut entry = [0; crate::width::small(JOURNAL_ENTRY)];
         read_at(journal, add(PAGE, mul(i, JOURNAL_ENTRY)?)?, &mut entry)?;
         if !valid(&entry) {
             return Ok(None);
@@ -517,7 +519,7 @@ fn original_slot(
         if u64_at(&entry, 0) != id {
             continue;
         }
-        let mut again = [0; PAGE as usize];
+        let mut again = [0; crate::width::small(PAGE)];
         read_at(journal, 0, &mut again)?;
         if b != again {
             return Ok(None);
@@ -540,8 +542,8 @@ fn original_slot(
     }
     Ok(None)
 }
-fn slot_header(id: u64, generation: u64, payload: &[u8]) -> [u8; SLOT_HEADER as usize] {
-    let mut b = [0; SLOT_HEADER as usize];
+fn slot_header(id: u64, generation: u64, payload: &[u8]) -> [u8; crate::width::small(SLOT_HEADER)] {
+    let mut b = [0; crate::width::small(SLOT_HEADER)];
     b[..8].copy_from_slice(SLOT_MAGIC);
     put(&mut b, 8, generation);
     put(&mut b, 16, id);
@@ -567,8 +569,8 @@ fn selected_with_undo(
         let entry = match read {
             Ok(Some(v)) => Some(v),
             other => {
-                if let Some((journal, nonce)) = undo {
-                    match original_slot(journal, nonce, h, id, slot)? {
+                if let Some((journal, creation_id)) = undo {
+                    match original_slot(journal, creation_id, h, id, slot)? {
                         Some(v) => v,
                         None => other?,
                     }
@@ -593,10 +595,10 @@ fn selected_with_undo(
     }
     Ok(result.map(|(slot, crc, _)| (slot, crc)))
 }
-type PageTarget = (u64, [u8; SLOT_HEADER as usize]);
+type PageTarget = (u64, [u8; crate::width::small(SLOT_HEADER)]);
 fn payload(file: &File, g: &Geometry, h: Head, id: u64) -> Result<(Vec<u8>, PageTarget)> {
     let mut bytes = alloc(g.bytes)?;
-    let mut original = [0; SLOT_HEADER as usize];
+    let mut original = [0; crate::width::small(SLOT_HEADER)];
     let target = if let Some((slot, crc)) = selected(file, g, h, id)? {
         let at = g.at(id, slot)?;
         read_at(file, at, &mut original)?;
@@ -610,10 +612,10 @@ fn payload(file: &File, g: &Geometry, h: Head, id: u64) -> Result<(Vec<u8>, Page
     };
     Ok((bytes, (target, original)))
 }
-fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
-    let mut b = [0; PAGE as usize];
+fn metadata(g: &Geometry, creation_id: [u8; 16], path: &Path) -> [u8; crate::width::small(PAGE)] {
+    let mut b = [0; crate::width::small(PAGE)];
     b[..8].copy_from_slice(MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     put(&mut b, 24, g.hash);
     put(&mut b, 32, g.bytes);
     put(&mut b, 40, g.options.rows_per_chunk);
@@ -623,28 +625,28 @@ fn metadata(g: &Geometry, nonce: [u8; 16], path: &Path) -> [u8; PAGE as usize] {
     b
 }
 fn inspect(file: &File, g: &Geometry, path: &Path) -> Result<[u8; 16]> {
-    let mut b = [0; PAGE as usize];
+    let mut b = [0; crate::width::small(PAGE)];
     read_at(file, 0, &mut b)?;
-    let nonce = b[8..24].try_into().unwrap();
-    if b != metadata(g, nonce, path) {
+    let creation_id = b[8..24].try_into().unwrap();
+    if b != metadata(g, creation_id, path) {
         return Err(invalid(
             "reuse mode, schema, geometry, pathname or metadata checksum mismatch",
         ));
     }
-    Ok(nonce)
+    Ok(creation_id)
 }
-fn sidecar(file: &File, nonce: [u8; 16]) -> Result<()> {
-    let mut b = [0; PAGE as usize];
+fn sidecar(file: &File, creation_id: [u8; 16]) -> Result<()> {
+    let mut b = [0; crate::width::small(PAGE)];
     read_at(file, 0, &mut b)?;
-    if b != sidecar_header(nonce) {
+    if b != sidecar_header(creation_id) {
         return Err(invalid("sidecar identity"));
     }
     Ok(())
 }
-fn sidecar_header(nonce: [u8; 16]) -> [u8; PAGE as usize] {
-    let mut b = [0; PAGE as usize];
+fn sidecar_header(creation_id: [u8; 16]) -> [u8; crate::width::small(PAGE)] {
+    let mut b = [0; crate::width::small(PAGE)];
     b[..8].copy_from_slice(MAGIC);
-    b[8..24].copy_from_slice(&nonce);
+    b[8..24].copy_from_slice(&creation_id);
     seal(&mut b);
     b
 }
@@ -708,7 +710,7 @@ struct ReuseWriter {
     stage: File,
     journal: File,
     geometry: Geometry,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     head: Head,
     rows: u64,
     count: u64,
@@ -731,12 +733,14 @@ impl MatrixWriter {
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let inner = if !options.reuse {
-            WriterInner::Native(Box::new(spec.create_writer_with_dims(&path, dims.clone())?))
+            WriterInner::Native(crate::fallible::try_box(
+                spec.create_writer_with_dims(&path, dims.try_clone()?)?,
+            )?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let file = LockedFile::new(File::create_new(&path)?)?;
             let path = path.canonicalize()?;
-            let nonce = crate::file::fresh_stream_creation_nonce();
+            let creation_id = crate::file::fresh_stream_creation_nonce();
             let stage = File::create_new(companion(&path, ".reuse-work"))?;
             let journal = File::create_new(companion(&path, ".reuse-journal"))?;
             let head = Head {
@@ -744,21 +748,21 @@ impl MatrixWriter {
                 rows: 0,
                 end: HEADER,
             };
-            write_at(&file, 0, &metadata(&geometry, nonce, &path))?;
-            write_at(&file, PAGE, &head_bytes(head, nonce))?;
-            write_at(&file, 2 * PAGE, &head_bytes(head, nonce))?;
+            write_at(&file, 0, &metadata(&geometry, creation_id, &path))?;
+            write_at(&file, PAGE, &head_bytes(head, creation_id))?;
+            write_at(&file, 2 * PAGE, &head_bytes(head, creation_id))?;
             for f in [&stage, &journal] {
-                write_at(f, 0, &sidecar_header(nonce))?;
+                write_at(f, 0, &sidecar_header(creation_id))?;
                 f.sync_all()?;
             }
             file.sync_all()?;
             crate::file::sync_parent_directory(&path)?;
-            WriterInner::Reuse(Box::new(ReuseWriter {
+            WriterInner::Reuse(crate::fallible::try_box(ReuseWriter {
                 file,
                 stage,
                 journal,
                 geometry,
-                nonce,
+                creation_id,
                 head,
                 rows: 0,
                 count: 0,
@@ -769,8 +773,8 @@ impl MatrixWriter {
                 bitmap_window: None,
                 poisoned: false,
                 publishing: None,
-                notify: Arc::new(AtomicU64::new(0)),
-            }))
+                notify: crate::fallible::try_arc(AtomicU64::new(0))?,
+            })?)
         };
         Ok(Self {
             inner,
@@ -789,22 +793,22 @@ impl MatrixWriter {
     ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let inner = if !options.reuse {
-            WriterInner::Native(Box::new(spec.open_writer(&path)?))
+            WriterInner::Native(crate::fallible::try_box(spec.open_writer(&path)?)?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.canonicalize()?;
             let file = LockedFile::new(OpenOptions::new().read(true).write(true).open(&path)?)?;
-            let nonce = inspect(&file, &geometry, &path)?;
-            let head = read_head(&file, nonce)?;
+            let creation_id = inspect(&file, &geometry, &path)?;
+            let head = read_head(&file, creation_id)?;
             let stage = open_sidecar(&companion(&path, ".reuse-work"))?;
             let journal = open_sidecar(&companion(&path, ".reuse-journal"))?;
-            sidecar(&stage, nonce)?;
+            sidecar(&stage, creation_id)?;
             let mut w = ReuseWriter {
                 file,
                 stage,
                 journal,
                 geometry,
-                nonce,
+                creation_id,
                 head,
                 rows: head.rows,
                 count: 0,
@@ -815,10 +819,10 @@ impl MatrixWriter {
                 bitmap_window: None,
                 poisoned: false,
                 publishing: None,
-                notify: Arc::new(AtomicU64::new(head.generation)),
+                notify: crate::fallible::try_arc(AtomicU64::new(head.generation))?,
             };
             w.recover()?;
-            WriterInner::Reuse(Box::new(w))
+            WriterInner::Reuse(crate::fallible::try_box(w)?)
         };
         Ok(Self {
             inner,
@@ -832,9 +836,10 @@ impl MatrixWriter {
     /// with this writer, never their caches. Separately opened/process readers use the
     /// authoritative disk heads and have the same retry correctness contract.
     pub fn reader(&self) -> Result<MatrixReader> {
-        let mut r = MatrixReader::open(self.spec, &self.path, self.dims.clone(), self.options)?;
+        let mut r =
+            MatrixReader::open(self.spec, &self.path, self.dims.try_clone()?, self.options)?;
         if let (WriterInner::Reuse(w), ReaderInner::Reuse(v)) = (&self.inner, &mut r.inner) {
-            if v.nonce != w.nonce {
+            if v.creation_id != w.creation_id {
                 return Err(invalid("writer pathname was replaced"));
             }
             v.notify = Some(w.notify.clone());
@@ -885,14 +890,29 @@ impl MatrixWriter {
                     }
                     Err(source) => match w.publishing {
                         Some(generation) if w.head.generation == generation => {
-                            Err(MatrixReuseError::Published {
-                                generation,
-                                source: Box::new(source),
+                            Err(match crate::fallible::try_box(source) {
+                                Ok(source) => MatrixReuseError::Published { generation, source },
+                                Err(_) => MatrixReuseError::Native(
+                                    crate::Error::ErrorContextAllocationFailed {
+                                        context: crate::AllocationFailureContext::ReusePublished {
+                                            generation,
+                                        },
+                                    },
+                                ),
                             })
                         }
-                        Some(generation) => Err(MatrixReuseError::PublicationIndeterminate {
-                            generation,
-                            source: Box::new(source),
+                        Some(generation) => Err(match crate::fallible::try_box(source) {
+                            Ok(source) => {
+                                MatrixReuseError::PublicationIndeterminate { generation, source }
+                            }
+                            Err(_) => MatrixReuseError::Native(
+                                crate::Error::ErrorContextAllocationFailed {
+                                    context:
+                                        crate::AllocationFailureContext::ReusePublicationUncertain {
+                                            generation,
+                                        },
+                                },
+                            ),
                         }),
                         None => Err(source),
                     },
@@ -927,7 +947,7 @@ impl ReuseWriter {
             let (target, original) = c
                 .target
                 .ok_or_else(|| invalid("unlogged page lacks original header"))?;
-            let mut entry = [0; JOURNAL_ENTRY as usize];
+            let mut entry = [0; crate::width::small(JOURNAL_ENTRY)];
             put(&mut entry, 0, id);
             put(&mut entry, 8, target);
             entry[16..80].copy_from_slice(&original);
@@ -968,7 +988,7 @@ impl ReuseWriter {
                     write_at(
                         &self.stage,
                         self.geometry.stage_at(first)?,
-                        &buffer[..(count * self.geometry.stride) as usize],
+                        &buffer[..crate::width::index(count * self.geometry.stride)?],
                     )?;
                     count = 0;
                 }
@@ -978,13 +998,11 @@ impl ReuseWriter {
                 // Logging is independent from stage layout and remains one entry
                 // per dirty page even if a page was evicted/reloaded repeatedly.
                 self.log_page(id, c)?;
-                let offset = (count * self.geometry.stride) as usize;
-                buffer[offset..offset + SLOT_HEADER as usize].copy_from_slice(&slot_header(
-                    id,
-                    self.next()?,
-                    &c.bytes,
-                ));
-                buffer[offset + SLOT_HEADER as usize..offset + self.geometry.stride as usize]
+                let offset = crate::width::index(count * self.geometry.stride)?;
+                buffer[offset..offset + crate::width::small(SLOT_HEADER)]
+                    .copy_from_slice(&slot_header(id, self.next()?, &c.bytes));
+                buffer[offset + crate::width::small(SLOT_HEADER)
+                    ..offset + crate::width::index(self.geometry.stride)?]
                     .copy_from_slice(&c.bytes);
                 count += 1;
                 c.dirty = false;
@@ -993,7 +1011,7 @@ impl ReuseWriter {
                 write_at(
                     &self.stage,
                     self.geometry.stage_at(first)?,
-                    &buffer[..(count * self.geometry.stride) as usize],
+                    &buffer[..crate::width::index(count * self.geometry.stride)?],
                 )?;
             }
             Ok(())
@@ -1162,8 +1180,8 @@ impl ReuseWriter {
         let mut rest = encoded.as_slice();
         while !rest.is_empty() {
             let page_bytes = self.geometry.bytes;
-            let local = (offset % page_bytes) as usize;
-            let take = rest.len().min(page_bytes as usize - local);
+            let local = crate::width::index(offset % page_bytes)?;
+            let take = rest.len().min(crate::width::index(page_bytes)? - local);
             let page = self.load(offset / page_bytes)?;
             if page.bytes[local..local + take] != rest[..take] {
                 page.bytes[local..local + take].copy_from_slice(&rest[..take]);
@@ -1173,7 +1191,7 @@ impl ReuseWriter {
             rest = &rest[take..];
         }
         let bitmap = add(base, add(b.bitmap, cell / 8)?)?;
-        let local = (bitmap % self.geometry.bytes) as usize;
+        let local = crate::width::index(bitmap % self.geometry.bytes)?;
         self.update_bitmap(bitmap / self.geometry.bytes, local, 1 << (cell % 8), true)?;
         self.rows = self.rows.max(row_end);
         Ok(())
@@ -1191,12 +1209,12 @@ impl ReuseWriter {
             mul(chunk, self.geometry.chunk_bytes)?,
             add(b.bitmap, cell / 8)?,
         )?;
-        let local = (at % self.geometry.bytes) as usize;
+        let local = crate::width::index(at % self.geometry.bytes)?;
         self.update_bitmap(at / self.geometry.bytes, local, 1 << (cell % 8), false)?;
         Ok(())
     }
     fn entry(&self, i: u64) -> Result<(u64, u64, [u8; 64])> {
-        let mut b = [0; JOURNAL_ENTRY as usize];
+        let mut b = [0; crate::width::small(JOURNAL_ENTRY)];
         read_at(&self.journal, add(PAGE, mul(i, JOURNAL_ENTRY)?)?, &mut b)?;
         if !valid(&b) || u64_at(&b, 8) > 1 {
             return Err(invalid("recovery entry checksum or slot"));
@@ -1212,7 +1230,7 @@ impl ReuseWriter {
     fn reset(&mut self) -> Result<()> {
         // The complete old intent stays durable until every rollback write (or
         // the new publication) is durable. A reset never precedes that barrier.
-        write_at(&self.journal, 0, &sidecar_header(self.nonce))?;
+        write_at(&self.journal, 0, &sidecar_header(self.creation_id))?;
         self.journal.sync_all()?;
         self.journal.set_len(PAGE)?;
         self.stage.set_len(PAGE)?;
@@ -1225,14 +1243,14 @@ impl ReuseWriter {
         Ok(())
     }
     fn recover(&mut self) -> Result<()> {
-        let mut b = [0; PAGE as usize];
+        let mut b = [0; crate::width::small(PAGE)];
         read_at(&self.journal, 0, &mut b)?;
         if b[..8] == *MAGIC {
-            sidecar(&self.journal, self.nonce)?;
+            sidecar(&self.journal, self.creation_id)?;
             self.reset()?;
             return Ok(());
         }
-        if &b[..8] != INTENT_MAGIC || b[8..24] != self.nonce || !valid(&b) {
+        if &b[..8] != INTENT_MAGIC || b[8..24] != self.creation_id || !valid(&b) {
             return Err(invalid("recovery intent is corrupt; file left untouched"));
         }
         let base = u64_at(&b, 24);
@@ -1258,7 +1276,7 @@ impl ReuseWriter {
                 let at = self.geometry.at(id, slot)?;
                 // The journal names only the slot that was inactive at `base`.
                 if at < self.file.metadata()?.len() {
-                    let mut discarded = [0; SLOT_HEADER as usize];
+                    let mut discarded = [0; crate::width::small(SLOT_HEADER)];
                     if old.iter().any(|b| *b != 0) {
                         discarded = slot_header(id, 0, &[]);
                         put(&mut discarded, 32, base);
@@ -1281,9 +1299,9 @@ impl ReuseWriter {
             return Ok(());
         }
         let next = self.next()?;
-        let mut intent = [0; PAGE as usize];
+        let mut intent = [0; crate::width::small(PAGE)];
         intent[..8].copy_from_slice(INTENT_MAGIC);
-        intent[8..24].copy_from_slice(&self.nonce);
+        intent[8..24].copy_from_slice(&self.creation_id);
         put(&mut intent, 24, self.head.generation);
         put(&mut intent, 32, next);
         put(&mut intent, 40, self.count);
@@ -1343,7 +1361,7 @@ impl ReuseWriter {
             end: self.file.metadata()?.len(),
         };
         self.publishing = Some(next);
-        let head_bytes = head_bytes(head, self.nonce);
+        let head_bytes = head_bytes(head, self.creation_id);
         let head_at = PAGE * (1 + next % 2);
         write_at(&self.file, head_at, &head_bytes[..64])?;
         fault("matrix_reuse.head_prefix")?;
@@ -1379,7 +1397,7 @@ struct ReuseReader {
     file: File,
     journal: File,
     geometry: Geometry,
-    nonce: [u8; 16],
+    creation_id: [u8; 16],
     notify: Option<Arc<AtomicU64>>,
     cache: RefCell<Option<CachedPages>>,
 }
@@ -1398,25 +1416,25 @@ impl MatrixReader {
         options: MatrixOptions,
     ) -> Result<Self> {
         let inner = if !options.reuse {
-            ReaderInner::Native(Box::new(spec.open_reader(path)?))
+            ReaderInner::Native(crate::fallible::try_box(spec.open_reader(path)?)?)
         } else {
             let geometry = Geometry::new(spec, &dims, options)?;
             let path = path.as_ref().canonicalize()?;
             let file = File::open(&path)?;
-            let nonce = inspect(&file, &geometry, &path)?;
+            let creation_id = inspect(&file, &geometry, &path)?;
             geometry
                 .spec
                 .read_limits
                 .check(ReadLimitKey::FileLen, file.metadata()?.len())?;
-            read_head(&file, nonce)?;
-            ReaderInner::Reuse(Box::new(ReuseReader {
+            read_head(&file, creation_id)?;
+            ReaderInner::Reuse(crate::fallible::try_box(ReuseReader {
                 journal: File::open(companion(&path, ".reuse-journal"))?,
                 file,
                 geometry,
-                nonce,
+                creation_id,
                 notify: None,
                 cache: RefCell::new(None),
-            }))
+            })?)
         };
         Ok(Self {
             inner,
@@ -1424,16 +1442,18 @@ impl MatrixReader {
         })
     }
     /// Reads one cell; reuse readers retry automatically when its generation changes.
-    pub fn get<T: VarlitMatrixBlock>(&self, key: MatrixKey) -> Result<T> {
+    /// Decodes into `out`, reusing what it owns.
+    pub fn get<T: VarlitMatrixBlock>(&self, key: MatrixKey, out: &mut T) -> Result<()> {
         match &self.inner {
-            ReaderInner::Native(r) => Ok(r.read_matrix_cell(key)?),
+            ReaderInner::Native(r) => Ok(r.read_matrix_cell(key, out)?),
             ReaderInner::Reuse(r) => {
                 let b = r.geometry.block::<T>()?;
                 let bytes = r.read(b, key, 1)?;
-                Ok(Decoder::decode_from_slice_limited(
+                Ok(Decoder::decode_from_slice_limited_into(
                     &bytes,
                     T::ENDIAN.unwrap_or(r.geometry.spec.endian),
                     r.decode_budget(bytes.len() as u64)?,
+                    out,
                 )?)
             }
         }
@@ -1452,7 +1472,10 @@ impl MatrixReader {
                 let bytes = r.read(b, start, out.len() as u64)?;
                 let output = mul(out.len() as u64, std::mem::size_of::<T>() as u64)?;
                 let mut budget = r.decode_budget(add(bytes.len() as u64, output)?)?;
-                for (dest, part) in out.iter_mut().zip(bytes.chunks(b.stride as usize)) {
+                for (dest, part) in out
+                    .iter_mut()
+                    .zip(bytes.chunks(crate::width::index(b.stride)?))
+                {
                     *dest = Decoder::decode_from_slice_accounted(
                         part,
                         T::ENDIAN.unwrap_or(r.geometry.spec.endian),
@@ -1468,7 +1491,7 @@ impl MatrixReader {
     pub fn follow(&mut self) -> Result<u64> {
         match &mut self.inner {
             ReaderInner::Native(r) => Ok(r.follow()?),
-            ReaderInner::Reuse(r) => Ok(read_head(&r.file, r.nonce)?.generation),
+            ReaderInner::Reuse(r) => Ok(read_head(&r.file, r.creation_id)?.generation),
         }
     }
 }
@@ -1488,8 +1511,8 @@ impl ReuseReader {
         let g = &self.geometry;
         while !out.is_empty() {
             let id = at / g.bytes;
-            let local = (at % g.bytes) as usize;
-            let take = out.len().min(g.bytes as usize - local);
+            let local = crate::width::index(at % g.bytes)?;
+            let take = out.len().min(crate::width::index(g.bytes)? - local);
             let mut cache = self.cache.borrow_mut();
             if !cache.as_ref().is_some_and(|c| {
                 c.generation == h.generation && c.first <= id && id - c.first < c.count
@@ -1501,7 +1524,8 @@ impl ReuseReader {
                 // The last inactive payload may not exist yet. Read up to the
                 // captured confirmed extent, leaving never-allocated slots zero.
                 let start = g.at(id, 0)?;
-                let read = h.end.saturating_sub(start).min(bytes.len() as u64) as usize;
+                let read =
+                    crate::width::index(h.end.saturating_sub(start).min(bytes.len() as u64))?;
                 if read > 0 {
                     read_at(&self.file, start, &mut bytes[..read])?;
                 }
@@ -1513,16 +1537,16 @@ impl ReuseReader {
                 });
             }
             let c = cache.as_ref().unwrap();
-            let base = ((id - c.first) * 2 * g.stride) as usize;
+            let base = crate::width::index((id - c.first) * 2 * g.stride)?;
             let mut result = None;
             let mut retired = false;
             for slot in 0..2 {
-                let offset = base + slot as usize * g.stride as usize;
-                let header = &c.bytes[offset..offset + SLOT_HEADER as usize];
+                let offset = base + crate::width::index(slot)? * crate::width::index(g.stride)?;
+                let header = &c.bytes[offset..offset + crate::width::small(SLOT_HEADER)];
                 let parsed = parse_slot(header, id);
                 let entry = match parsed {
                     Ok(Some(v)) => Some(v),
-                    other => match original_slot(&self.journal, self.nonce, h, id, slot)? {
+                    other => match original_slot(&self.journal, self.creation_id, h, id, slot)? {
                         Some(v) => v,
                         None => other?,
                     },
@@ -1534,12 +1558,12 @@ impl ReuseReader {
                         && h.generation < until
                         && result.is_none_or(|(_, _, old)| generation > old)
                     {
-                        result = Some((offset + SLOT_HEADER as usize, crc, generation));
+                        result = Some((offset + crate::width::small(SLOT_HEADER), crc, generation));
                     }
                 }
             }
             if let Some((offset, crc, _)) = result {
-                let bytes = &c.bytes[offset..offset + g.bytes as usize];
+                let bytes = &c.bytes[offset..offset + crate::width::index(g.bytes)?];
                 if crc32fast::hash(bytes) != crc {
                     return Err(invalid("page payload checksum"));
                 }
@@ -1594,7 +1618,7 @@ impl ReuseReader {
         let mut last_error = None;
         for _ in 0..attempts {
             let signal = self.notify.as_ref().map(|s| s.load(Ordering::Acquire));
-            let before = read_head(&self.file, self.nonce)?;
+            let before = read_head(&self.file, self.creation_id)?;
             let result = (|| {
                 if end > mul(before.rows, b.cols)? {
                     return Err(MatrixReuseError::Missing);
@@ -1632,7 +1656,7 @@ impl ReuseReader {
                         cell = stop;
                     }
                     let at = add(base, add(b.slots, mul(local, b.stride)?)?)?;
-                    let len = mul(take, b.stride)? as usize;
+                    let len = crate::width::index(mul(take, b.stride)?)?;
                     self.copy_bytes(before, at, &mut out[written..written + len])?;
                     written += len;
                     ordinal += take;
@@ -1640,7 +1664,7 @@ impl ReuseReader {
                 Ok(())
             })();
             fault("matrix_reuse.read_copied")?;
-            let after = read_head(&self.file, self.nonce)?;
+            let after = read_head(&self.file, self.creation_id)?;
             let signal_after = self.notify.as_ref().map(|s| s.load(Ordering::Acquire));
             if before == after && signal == signal_after {
                 match result {

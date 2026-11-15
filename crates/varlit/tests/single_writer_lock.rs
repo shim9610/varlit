@@ -1,14 +1,16 @@
-//! DUR-02 regression: the authoritative single-writer lock is held on the
+//!  regression: the authoritative single-writer lock is held on the
 //! native file object itself, so hard-link aliases cannot bypass it the way
 //! they bypass the path-derived ".lock" marker.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs;
 
 use varlit::{
     BlockDescriptor, BlockKind, Decoder, Encoder, Endian, Error, FormatSpec, IndexPolicy,
     IntegrityPolicy, LayoutFieldValue, LayoutValue, ManifestPolicy, ReadLimits, RecoveryPolicy,
-    Result, SegmentWrite, VarlitBlock, VarlitDecode, VarlitEncode, VarlitFile, WireType,
-    varlit_format,
+    Result, SegmentWrite, VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitFile,
+    WireType, varlit_format,
 };
 
 use varlit::{CommitPolicy, StreamOptions, VarlitStreamReader, VarlitStreamWriter};
@@ -29,6 +31,12 @@ impl VarlitDecode for LockRecord {
 
     fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self(u64::decode_varlit(decoder)?))
+    }
+}
+
+impl VarlitEmpty for LockRecord {
+    fn empty() -> Self {
+        Self(0)
     }
 }
 
@@ -89,10 +97,13 @@ fn hard_link_alias_cannot_acquire_second_writer() -> Result<()> {
     // Readers never take the single-writer lock and stay unaffected while the
     // writer holds it, through either pathname.
     let reader = VarlitFile::open_readonly(spec(), &original)?;
-    assert_eq!(reader.blocks::<LockRecord>()?.get(0)?, Some(LockRecord(1)));
+    assert_eq!(
+        filled(|o| crate::pages::all_blocks!(reader, LockRecord)?.get(0, o))?,
+        Some(LockRecord(1))
+    );
     let alias_reader = VarlitFile::open_readonly(spec(), &alias)?;
     assert_eq!(
-        alias_reader.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(alias_reader, LockRecord)?.get(0, o))?,
         Some(LockRecord(1))
     );
     drop(reader);
@@ -109,9 +120,9 @@ fn hard_link_alias_cannot_acquire_second_writer() -> Result<()> {
     drop(alias_writer);
 
     let reopened = VarlitFile::open_readonly(spec(), &original)?;
-    let blocks = reopened.blocks::<LockRecord>()?;
-    assert_eq!(blocks.get(0)?, Some(LockRecord(1)));
-    assert_eq!(blocks.get(1)?, Some(LockRecord(2)));
+    let blocks = crate::pages::all_blocks!(reopened, LockRecord)?;
+    assert_eq!(filled(|o| blocks.get(0, o))?, Some(LockRecord(1)));
+    assert_eq!(filled(|o| blocks.get(1, o))?, Some(LockRecord(2)));
     Ok(())
 }
 
@@ -139,7 +150,7 @@ fn hard_link_alias_create_is_refused_before_truncation() -> Result<()> {
 
     let reopened = VarlitFile::open_readonly(spec(), &original)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(7))
     );
     Ok(())
@@ -181,7 +192,7 @@ fn create_new_refuses_existing_path() -> Result<()> {
     // The refused exclusive create must leave the existing file untouched.
     let reopened = VarlitFile::open_readonly(spec(), &path)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(9))
     );
 
@@ -219,7 +230,7 @@ fn stream_sidecar(path: &std::path::Path) -> std::path::PathBuf {
     std::path::PathBuf::from(value)
 }
 
-/// DUR-02 on the scalable path the review specifically called out: a freshly
+///  on the scalable path the review specifically called out: a freshly
 /// created stream writer must bind the object lock onto the file it just
 /// created, or a hard-link alias opened afterwards wins a second writer role.
 #[test]
@@ -257,12 +268,12 @@ fn stream_create_binds_object_lock_against_hard_link_alias() -> Result<()> {
     drop(alias_writer);
 
     let reader = VarlitStreamReader::open(stream_spec(), &original, StreamOptions::default())?;
-    let values = reader.blocks::<LockRecord>()?.collect::<Result<Vec<_>>>()?;
+    let values = collect_all(reader.blocks::<LockRecord>()?)?;
     assert_eq!(values, vec![LockRecord(1), LockRecord(2)]);
     Ok(())
 }
 
-/// DUR2-05 on the scalable stream create path: creating over a hard-link
+///  on the scalable stream create path: creating over a hard-link
 /// alias of a live writer's file must be refused by the object lock without
 /// ever truncating the live file object. Before the fix,
 /// `VarlitStreamWriter::create_unmanaged` opened with `.truncate(true)` ahead
@@ -295,12 +306,12 @@ fn stream_create_over_live_alias_is_refused_before_truncation() -> Result<()> {
     drop(writer);
 
     let reader = VarlitStreamReader::open(stream_spec(), &original, StreamOptions::default())?;
-    let values = reader.blocks::<LockRecord>()?.collect::<Result<Vec<_>>>()?;
+    let values = collect_all(reader.blocks::<LockRecord>()?)?;
     assert_eq!(values, vec![LockRecord(41), LockRecord(42)]);
     Ok(())
 }
 
-/// DUR2-05 companion for the stream create path: with the truncating open
+///  companion for the stream create path: with the truncating open
 /// replaced by an explicit `set_len(0)` after the lock bind, creating over a
 /// stale unlocked file must still clear every stale byte. The recreated file
 /// must be byte-length identical to a control file created fresh.
@@ -323,7 +334,7 @@ fn stream_create_over_stale_file_truncates_through_bound_handle() -> Result<()> 
         "stale bytes survived the create-path truncation"
     );
     let reader = VarlitStreamReader::open(stream_spec(), &stale, StreamOptions::default())?;
-    let values = reader.blocks::<LockRecord>()?.collect::<Result<Vec<_>>>()?;
+    let values = collect_all(reader.blocks::<LockRecord>()?)?;
     assert_eq!(values, vec![LockRecord(5)]);
     Ok(())
 }
@@ -390,7 +401,7 @@ fn write_lock_layout_segment(writer: &mut LockLayoutFormatLayoutWriter, kind: u3
     writer.flush()
 }
 
-/// DUR2-05 on the layout create path: creating over a hard-link alias of a
+///  on the layout create path: creating over a hard-link alias of a
 /// live layout writer's file must be refused by the object lock without ever
 /// truncating the live file object. Before the fix,
 /// `VarlitLayoutWriter::create_inner` opened with `.truncate(true)` ahead of
@@ -432,7 +443,7 @@ fn layout_create_over_live_alias_is_refused_before_truncation() -> Result<()> {
     Ok(())
 }
 
-/// DUR2-05 companion for the layout create path: with the truncating open
+///  companion for the layout create path: with the truncating open
 /// replaced by an explicit `set_len(0)` after the lock bind, creating over a
 /// stale unlocked file must still clear every stale byte. The recreated file
 /// must be byte-identical to a control file created fresh.
@@ -573,7 +584,7 @@ fn a_failed_open_on_a_corrupt_tail_releases_the_writer_lock() -> Result<()> {
     let recovering = spec().with_recovery_policy(RecoveryPolicy::TruncateTail);
     let (recovered, report) = VarlitFile::open_recover_with_report(recovering, &path)?;
     assert_eq!(report.recovered_len, intact_len);
-    assert_eq!(recovered.blocks::<LockRecord>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(recovered, LockRecord)?.len(), 2);
     Ok(())
 }
 
@@ -607,7 +618,7 @@ fn a_failed_open_on_an_invalid_header_releases_the_writer_lock() -> Result<()> {
     fs::write(&path, &original)?;
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(3))
     );
     Ok(())
@@ -650,7 +661,7 @@ fn a_failed_open_on_a_version_mismatch_releases_the_writer_lock() -> Result<()> 
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(4))
     );
     Ok(())
@@ -678,7 +689,7 @@ fn a_failed_open_on_a_refused_limit_releases_the_writer_lock() -> Result<()> {
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(5))
     );
     Ok(())
@@ -721,7 +732,7 @@ fn a_failed_open_on_a_schema_hash_mismatch_releases_the_writer_lock() -> Result<
 
     let reopened = VarlitFile::open(spec(), &path)?;
     assert_eq!(
-        reopened.blocks::<LockRecord>()?.get(0)?,
+        filled(|o| crate::pages::all_blocks!(reopened, LockRecord)?.get(0, o))?,
         Some(LockRecord(9))
     );
     Ok(())
@@ -817,7 +828,10 @@ fn a_release_beside_a_forked_child_does_not_strand_the_writer_claim() -> Result<
     let reopened = VarlitFile::open(spec(), &path);
     let refusal = match reopened {
         Ok(file) => {
-            assert_eq!(file.blocks::<LockRecord>()?.get(0)?, Some(LockRecord(10)));
+            assert_eq!(
+                filled(|o| crate::pages::all_blocks!(file, LockRecord)?.get(0, o))?,
+                Some(LockRecord(10))
+            );
             None
         }
         Err(error) => Some(error),
@@ -874,4 +888,32 @@ fn append_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let mut file = fs::OpenOptions::new().append(true).open(path)?;
     file.write_all(bytes)?;
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+fn collect_all(mut blocks: varlit::StreamingBlocks<LockRecord>) -> Result<Vec<LockRecord>> {
+    let mut out = LockRecord::empty();
+    let mut all = Vec::new();
+    while blocks.next_into(&mut out)? {
+        all.push(out);
+    }
+    Ok(all)
 }

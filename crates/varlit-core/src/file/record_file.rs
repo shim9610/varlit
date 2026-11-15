@@ -1,7 +1,8 @@
 use super::{Error, RecordOverwrite, ReservedIndexSlot, Result, opened_file_identity};
+use crate::primary_file::{PrimaryFile, RecordsAnchor};
 use crate::snapshot::WrittenThrough;
-use std::fs::{File, Metadata};
-use std::io::{Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{Seek, SeekFrom};
 
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 std::thread_local! {
@@ -13,6 +14,21 @@ std::thread_local! {
     /// keeps that value honest.
     static RECORD_FILE_METADATA_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static RECORD_FILE_SEEKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static HEADER_REGION_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one [`RecordFile::overwrite_header_region`] write on this thread.
+/// Inert outside tests and without the `scalable-fault-injection` feature.
+#[inline]
+fn count_header_region_write() {
+    #[cfg(any(test, feature = "scalable-fault-injection"))]
+    HEADER_REGION_WRITES.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+/// Reads and clears this thread's header-region write count.
+#[cfg(any(test, feature = "scalable-fault-injection"))]
+pub(super) fn take_header_region_writes() -> u64 {
+    HEADER_REGION_WRITES.with(|count| count.replace(0))
 }
 
 /// Counts one `lseek` this type issued on its own handle.
@@ -78,60 +94,38 @@ pub(super) fn take_record_file_metadata_calls() -> u64 {
 /// it truncates back to — a number it already holds.
 #[derive(Debug)]
 pub struct RecordFile {
-    file: File,
-    /// This reader's private Windows read handle, initialized without a
-    /// mutex. Its local cache makes the owner Send + !Sync.
-    matrix_read_pool: crate::matrix::MatrixReadPool,
-    matrix_pages: Option<crate::matrix_generation::MatrixFile>,
+    file: PrimaryFile,
 }
 
 impl RecordFile {
-    pub(super) fn new(file: File) -> Self {
-        Self {
-            file,
-            matrix_read_pool: crate::matrix::MatrixReadPool::new(),
-            matrix_pages: None,
-        }
+    pub(super) fn new(file: PrimaryFile) -> Self {
+        Self { file }
     }
 
-    pub(super) fn with_matrix(
-        mut self,
-        pages: Option<crate::matrix_generation::MatrixFile>,
-    ) -> Self {
-        self.matrix_pages = pages;
-        self
+    #[cfg(test)]
+    pub(super) fn metadata(&self) -> std::io::Result<std::fs::Metadata> {
+        self.file.raw().metadata()
     }
-    pub(super) fn adopt_matrix(&mut self, mut pages: crate::matrix_generation::MatrixFile) {
-        if let Some(old) = &mut self.matrix_pages {
-            pages.inherit_cache(old);
-        }
-        self.matrix_pages = Some(pages);
-    }
-    pub(super) fn matrix_pages(&self) -> Option<&crate::matrix_generation::MatrixFile> {
-        self.matrix_pages.as_ref()
-    }
-    pub(super) fn compact_matrix(&mut self) -> Result<()> {
-        self.matrix_pages
-            .as_mut()
-            .ok_or(Error::MatrixLayoutMissing)?
-            .compact()
-    }
-    pub(super) fn publish_matrix(&mut self, len: u64) -> Result<()> {
-        if let Some(pages) = &mut self.matrix_pages {
-            pages.publish(len)?;
-        }
-        Ok(())
-    }
-    pub(super) fn matrix_barrier_file(&mut self) -> Result<&mut File> {
-        Ok(self
-            .matrix_pages
-            .as_mut()
-            .ok_or(Error::MatrixLayoutMissing)?
-            .barrier_file()?)
-    }
-    pub(super) fn metadata(&self) -> std::io::Result<Metadata> {
+
+    /// The logical length of the file: the append log without anchors.
+    pub(super) fn len(&self) -> std::io::Result<u64> {
         count_metadata_call();
-        self.file.metadata()
+        self.file.len()
+    }
+
+    /// The file's size on disk, anchors included: what a rewrite reports as
+    /// bytes before and after. Lends no handle.
+    pub(super) fn physical_len(&self) -> std::io::Result<u64> {
+        Ok(self.file.raw().metadata()?.len())
+    }
+
+    /// The file's permissions, which a rewrite's replacement inherits.
+    pub(super) fn permissions(&self) -> std::io::Result<std::fs::Permissions> {
+        Ok(self.file.raw().metadata()?.permissions())
+    }
+
+    pub(super) fn anchor_layout(&self) -> Option<crate::anchor::AnchorLayout> {
+        self.file.layout()
     }
 
     /// Asks the kernel where this handle's offset is.
@@ -157,7 +151,7 @@ impl RecordFile {
     }
 
     pub(super) fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
+        std::io::Write::flush(&mut self.file)
     }
 
     pub(super) fn sync_all(&self) -> std::io::Result<()> {
@@ -174,31 +168,7 @@ impl RecordFile {
     /// implements `Write`, so lending one out would reopen exactly the hole
     /// this module closes.
     pub(super) fn object_identity(&self) -> Result<Vec<u8>> {
-        opened_file_identity(&self.file)
-    }
-
-    /// The named exception: the handle `crate::matrix`'s functions take.
-    ///
-    /// The matrix region is disjoint from the record region; its own
-    /// shape-A enforcement is `matrix.rs`'s `mod page_index`. Every call
-    /// site of this accessor must be an argument to a `crate::matrix::`
-    /// call, which `enforcement_gates.rs` asserts.
-    pub(super) fn matrix_region(&mut self) -> &mut crate::matrix_generation::MatrixFile {
-        self.matrix_pages
-            .as_mut()
-            .expect("matrix generation attached")
-    }
-
-    /// Positional matrix reads through `&self`, without exposing `&File`
-    /// or its `Write` implementation. The owner is Send + !Sync; each
-    /// thread opens its own reader and owns its Windows handle cache.
-    pub(super) fn matrix_region_reader(&self) -> crate::matrix::MatrixRegionReader<'_> {
-        crate::matrix::MatrixRegionReader::with_io(
-            self.matrix_pages
-                .as_ref()
-                .expect("matrix generation attached"),
-            &self.matrix_read_pool,
-        )
+        opened_file_identity(self.file.raw())
     }
 
     /// Appends one record at the current end of file.
@@ -233,6 +203,7 @@ impl RecordFile {
     /// from `offset`, the value `SEEK_END` returned, not from
     /// `expected_offset`: it describes where the bytes went, not where
     /// they were meant to go.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn append_record_at_end(
         &mut self,
         _reserved: &ReservedIndexSlot,
@@ -240,21 +211,65 @@ impl RecordFile {
         header_bytes: &[u8],
         payload: &[u8],
         footer: Option<&[u8]>,
+        summary: Option<&dyn crate::anchor::SummarySource>,
         after_header: impl FnOnce() -> Result<()>,
     ) -> Result<WrittenThrough> {
-        count_record_file_seek();
-        let offset = self.file.seek(SeekFrom::End(0))?;
-        if offset != expected_offset {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "append offset is not the end of the file",
-            )));
-        }
-        self.file.write_all(header_bytes)?;
-        after_header()?;
-        self.file.write_all(payload)?;
-        if let Some(footer) = footer {
-            self.file.write_all(footer)?;
+        // The writer's own end of file is the append offset. The handle holds
+        // the object lock and every byte is written positionally, so asking
+        // the kernel for the length on every record (an `fstat` each) checked
+        // nothing the lock does not already guarantee.
+        let offset = expected_offset;
+        let end = [
+            header_bytes.len(),
+            payload.len(),
+            footer.map_or(0, <[u8]>::len),
+        ]
+        .into_iter()
+        .try_fold(offset, |end, part| {
+            u64::try_from(part)
+                .ok()
+                .and_then(|part| end.checked_add(part))
+        })
+        .ok_or(Error::ResourceArithmeticOverflow {
+            resource: "appended record extent",
+        })?;
+        // The record header carries its sequence at bytes 8..16, little-endian.
+        let sequence = header_bytes.get(8..16).map_or(0, |bytes| {
+            u64::from_le_bytes(bytes.try_into().expect("eight bytes"))
+        });
+        let records = [(offset, sequence)];
+        let mut anchors = RecordsAnchor {
+            records: &records,
+            end,
+            summary,
+        };
+        let header_end = offset + header_bytes.len() as u64;
+        let footer_bytes = footer.unwrap_or(&[]);
+        let total = header_bytes.len() + payload.len() + footer_bytes.len();
+        // A record that fits one page goes down in one write: header, payload
+        // and footer staged on the stack, no allocation. A larger one is
+        // written in its three parts, where the copy would cost more than the
+        // two system calls it saves.
+        const STAGED: usize = 4096;
+        if total <= STAGED {
+            let mut staged = [0u8; STAGED];
+            staged[..header_bytes.len()].copy_from_slice(header_bytes);
+            staged[header_bytes.len()..header_bytes.len() + payload.len()].copy_from_slice(payload);
+            staged[header_bytes.len() + payload.len()..total].copy_from_slice(footer_bytes);
+            self.file
+                .write_all_at(offset, &staged[..total], &mut anchors)?;
+            after_header()?;
+        } else {
+            self.file.write_all_at(offset, header_bytes, &mut anchors)?;
+            after_header()?;
+            self.file.write_all_at(header_end, payload, &mut anchors)?;
+            if !footer_bytes.is_empty() {
+                self.file.write_all_at(
+                    header_end + payload.len() as u64,
+                    footer_bytes,
+                    &mut anchors,
+                )?;
+            }
         }
         let written = [
             header_bytes.len(),
@@ -276,7 +291,7 @@ impl RecordFile {
     /// Rewrites an already-indexed record's header and payload in place.
     ///
     /// Takes the [`RecordOverwrite`] by value; producing one performs the
-    /// version refusal (F-01) and drops the block's keyed-tail map (F-02),
+    /// version refusal  and drops the block's keyed-tail map ,
     /// both strictly before the first byte reaches disk.
     /// Overwrites a fixed-length region *inside the file header*.
     ///
@@ -293,9 +308,9 @@ impl RecordFile {
     /// or not at all. Windows offers no equivalent, which is why every slot
     /// carries its own checksum.
     pub(super) fn overwrite_header_region(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
-        count_record_file_seek();
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(bytes)?;
+        count_header_region_write();
+        // The header precedes every anchor.
+        self.file.overwrite_at(offset, bytes)?;
         Ok(())
     }
 
@@ -307,21 +322,44 @@ impl RecordFile {
     /// of record bytes by mistake, and the offset it is given is checked
     /// by the caller against a footer it has just framed.
     ///
-    /// Safe against the append cursor for the reason the others are:
-    /// `append_record_at_end` re-seeks `SeekFrom::End(0)` every call and
-    /// every read is positional. A single `write_all` of four bytes, which
-    /// Linux takes under the inode lock; Windows offers no equivalent, and
-    /// unlike the header-tail slot there is no checksum here to catch a
-    /// torn one — a four-byte write is not torn by any storage stack this
-    /// targets, and the flags are advisory even if it were.
+    /// Positional writes leave shared read cursors untouched. Append still
+    /// rechecks EOF independently. Partial writes and interruptions are handled
+    /// before success is returned; the four-byte word remains advisory and
+    /// is not a transactional durability boundary.
+    /// Overwrites bytes inside a matrix storage record. Those records keep
+    /// their payload out of the record checksum and their framing never
+    /// changes, so anchors and their summaries stay valid.
+    pub(super) fn overwrite_matrix_bytes(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        self.file.overwrite_at(offset, bytes)
+    }
+
+    /// Fills `buf` from logical `offset`, past any snapshot this handle holds:
+    /// matrix storage is read where it is, its ring says what is published.
+    pub(super) fn read_logical_exact(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let mut done = 0;
+        while done < buf.len() {
+            match self.file.read_at(&mut buf[done..], offset + done as u64) {
+                Ok(0) => return Err(Error::UnexpectedEof),
+                Ok(n) => done += n,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// The primary handle, for a caller's durability barrier.
+    pub(super) fn barrier_file(&mut self) -> &mut File {
+        self.file.raw_mut()
+    }
+
     pub(super) fn overwrite_record_mutable_flags(
         &mut self,
         offset: u64,
         bytes: [u8; 4],
     ) -> Result<()> {
-        count_record_file_seek();
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(&bytes)?;
+        // An anchor the word happens to span stays as it is.
+        self.file.overwrite_at(offset, &bytes)?;
         Ok(())
     }
 
@@ -331,13 +369,15 @@ impl RecordFile {
         header_bytes: &[u8],
         payload: &[u8],
     ) -> Result<()> {
-        count_record_file_seek();
-        count_record_file_seek();
-        self.file.seek(SeekFrom::Start(write.record_offset()))?;
-        self.file.write_all(header_bytes)?;
-        self.file.seek(SeekFrom::Start(write.payload_offset()))?;
-        self.file.write_all(payload)?;
-        self.file.flush()?;
+        // In place: anchors inside the record were written with it and stay.
+        // Their open summaries, and every later one, described the record as
+        // it was (its sequence among them), so they are withdrawn first: a
+        // crash between the two leaves an open that scans, never one that
+        // trusts a stale summary.
+        self.file.clear_summaries_from(write.record_offset())?;
+        self.file
+            .overwrite_at(write.record_offset(), header_bytes)?;
+        self.file.overwrite_at(write.payload_offset(), payload)?;
         Ok(())
     }
 }

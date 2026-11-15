@@ -21,10 +21,11 @@ pub const TRACE_ENV: &str = "VARLIT_SCALABLE_FAULT_TRACE";
 pub const REQUIRED_POINTS: &[&str] = &[
     "checkpoint.record_prefix",
     "checkpoint.record_write",
-    "checkpoint.data_sync",
+    "checkpoint.head_copy",
     "checkpoint.head_prefix",
     "checkpoint.head_write",
     "checkpoint.head_sync",
+    "checkpoint.body_sync",
     "generation.commit",
     "append.native_chunk_write",
     "append.sidecar_batch_commit",

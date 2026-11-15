@@ -3,19 +3,15 @@ use crate::KeyRange;
 use crate::db::TransactionGuard;
 use crate::sealed::Sealed;
 use crate::sync::Mutex;
-#[cfg(feature = "experimental-api-5")]
-use crate::tree_store::BtreeCursor;
-#[cfg(feature = "experimental_cursor")]
-use crate::tree_store::BtreeCursorMut;
 #[cfg(not(feature = "experimental-api-5"))]
 use crate::tree_store::encode_bounds;
 use crate::tree_store::{
-    AccessGuardMutInPlace, Btree, BtreeCursorRange, BtreeExtractIf, BtreeHeader, BtreeMut,
-    MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, PageAllocator, PageHint, PageNumber, PageResolver,
-    PageTracker, RawBtree,
+    AccessGuardMutInPlace, Btree, BtreeCursor, BtreeCursorMut, BtreeCursorRange, BtreeExtractIf,
+    BtreeHeader, BtreeMut, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, PageAllocator, PageHint, PageNumber,
+    PageResolver, PageTracker, RawBtree, ScopedBorrow,
 };
 use crate::types::{Key, MutInPlaceValue, Value};
-use crate::{AccessGuard, AccessGuardMut, StorageError, WriteTransaction};
+use crate::{AccessGuard, AccessGuardMut, CursorError, StorageError, WriteTransaction};
 use crate::{Result, TableHandle};
 use alloc::string::String;
 use alloc::string::ToString;
@@ -23,6 +19,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::fmt::{Debug, Formatter};
+#[cfg(not(feature = "experimental-api-5"))]
 use core::marker::PhantomData;
 use core::ops::Bound;
 #[cfg(not(feature = "experimental-api-5"))]
@@ -191,9 +188,9 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
     /// poisoned and [`crate::WriteTransaction::commit`] will return
     /// [`crate::CommitError::TransactionPoisoned`].
     #[cfg(feature = "experimental-api-5")]
-    pub fn extract_from_if<'a, F: for<'f> FnMut(K::SelfType<'f>, V::SelfType<'f>) -> bool>(
+    pub fn extract_from_if<F: for<'f> FnMut(K::SelfType<'f>, V::SelfType<'f>) -> bool>(
         &mut self,
-        range: impl KeyRange<'a, K>,
+        range: impl KeyRange<K>,
         predicate: F,
     ) -> Result<ExtractIf<'_, K, V, F>> {
         let (lower, upper) = range.key_bounds();
@@ -268,9 +265,9 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
     /// [`crate::CommitError::TransactionPoisoned`].
     ///
     #[cfg(feature = "experimental-api-5")]
-    pub fn retain_in<'a, F: for<'f> FnMut(K::SelfType<'f>, V::SelfType<'f>) -> bool>(
+    pub fn retain_in<F: for<'f> FnMut(K::SelfType<'f>, V::SelfType<'f>) -> bool>(
         &mut self,
-        range: impl KeyRange<'a, K>,
+        range: impl KeyRange<K>,
         predicate: F,
     ) -> Result {
         let (lower, upper) = range.key_bounds();
@@ -362,7 +359,6 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
     /// before the smallest key in the table.
     ///
     /// This is analogous to [`std::collections::BTreeMap::lower_bound_mut`].
-    #[cfg(feature = "experimental_cursor")]
     pub fn lower_bound_mut<'a>(
         &mut self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -419,7 +415,6 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "experimental_cursor")]
     pub fn upper_bound_mut<'a>(
         &mut self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -503,7 +498,7 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for Table<'_, K, 
     }
 
     #[cfg(feature = "experimental-api-5")]
-    fn range<'a>(&self, range: impl KeyRange<'a, K>) -> Result<Range<'_, K, V>> {
+    fn range(&self, range: impl KeyRange<K>) -> Result<Range<'_, K, V>> {
         let (lower, upper) = range.key_bounds();
         self.range_in_bounds(lower, upper)
     }
@@ -525,7 +520,6 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for Table<'_, K, 
         self.tree.last()
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn lower_bound<'a>(
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -536,7 +530,6 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for Table<'_, K, 
         Ok(Cursor::new(inner, self.transaction.transaction_guard()))
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn upper_bound<'a>(
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -662,7 +655,7 @@ pub trait ReadableTable<K: Key + 'static, V: Value + 'static>: ReadableTableMeta
     /// # }
     /// ```
     #[cfg(feature = "experimental-api-5")]
-    fn range<'a>(&self, range: impl KeyRange<'a, K>) -> Result<Range<'_, K, V>>;
+    fn range(&self, range: impl KeyRange<K>) -> Result<Range<'_, K, V>>;
 
     /// Returns a double-ended iterator over a range of elements in the table
     ///
@@ -723,56 +716,33 @@ pub trait ReadableTable<K: Key + 'static, V: Value + 'static>: ReadableTableMeta
     /// before the smallest key in the table.
     ///
     /// This is analogous to [`std::collections::BTreeMap::lower_bound`].
-    ///
-    /// # Examples
-    ///
-    /// Probing around a key in any table, read-only or not. The cursor's
-    /// methods additionally require the `experimental_cursor` feature flag:
-    ///
-    #[cfg_attr(feature = "experimental_cursor", doc = "```rust")]
-    #[cfg_attr(not(feature = "experimental_cursor"), doc = "```rust,ignore")]
-    /// use std::ops::Bound;
-    /// use redb::{Database, Error, ReadableDatabase, ReadableTable, TableDefinition};
-    /// # use tempfile::NamedTempFile;
-    /// const TABLE: TableDefinition<u64, u64> = TableDefinition::new("my_data");
-    ///
-    /// fn entry_at_or_after(
-    ///     table: &impl ReadableTable<u64, u64>,
-    ///     key: u64,
-    /// ) -> Result<Option<u64>, Error> {
-    ///     let mut cursor = table.lower_bound(Bound::Included(&key))?;
-    ///     Ok(cursor.peek_next()?.map(|(key, _)| key.value()))
-    /// }
-    ///
-    /// # fn main() -> Result<(), Error> {
-    /// # #[cfg(not(target_os = "wasi"))]
-    /// # let tmpfile = NamedTempFile::new().unwrap();
-    /// # #[cfg(target_os = "wasi")]
-    /// # let tmpfile = NamedTempFile::new_in("/tmp").unwrap();
-    /// # let filename = tmpfile.path();
-    /// let db = Database::create(filename)?;
-    /// let write_txn = db.begin_write()?;
-    /// {
-    ///     let mut table = write_txn.open_table(TABLE)?;
-    ///     for key in 0..10 {
-    ///         table.insert(key, &(key * 2))?;
-    ///     }
-    ///     assert_eq!(entry_at_or_after(&table, 5)?, Some(5));
-    /// }
-    /// write_txn.commit()?;
-    ///
-    /// let read_txn = db.begin_read()?;
-    /// let table = read_txn.open_table(TABLE)?;
-    /// assert_eq!(entry_at_or_after(&table, 5)?, Some(5));
-    /// assert_eq!(entry_at_or_after(&table, 100)?, None);
-    /// # Ok(())
-    /// # }
-    /// ```
     #[cfg(feature = "experimental-api-5")]
     fn lower_bound<'a>(
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
     ) -> Result<Cursor<'_, K, V>>;
+
+    /// Returns a read-only [`Cursor`] pointing at the gap before the smallest
+    /// key greater than the given bound.
+    ///
+    /// Passing `Bound::Included(x)` will return a cursor pointing to the gap
+    /// before the smallest key greater than or equal to `x`.
+    ///
+    /// Passing `Bound::Excluded(x)` will return a cursor pointing to the gap
+    /// before the smallest key greater than `x`.
+    ///
+    /// Passing `Bound::Unbounded` will return a cursor pointing to the gap
+    /// before the smallest key in the table.
+    ///
+    /// This is analogous to [`std::collections::BTreeMap::lower_bound`].
+    #[cfg(not(feature = "experimental-api-5"))]
+    #[allow(unused_variables)]
+    fn lower_bound<'a>(
+        &self,
+        bound: Bound<impl Borrow<K::SelfType<'a>>>,
+    ) -> Result<Cursor<'_, K, V>> {
+        unimplemented!("ReadableTable::lower_bound()")
+    }
 
     /// Returns a read-only [`Cursor`] pointing at the gap after the greatest
     /// key smaller than the given bound.
@@ -792,6 +762,28 @@ pub trait ReadableTable<K: Key + 'static, V: Value + 'static>: ReadableTableMeta
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
     ) -> Result<Cursor<'_, K, V>>;
+
+    /// Returns a read-only [`Cursor`] pointing at the gap after the greatest
+    /// key smaller than the given bound.
+    ///
+    /// Passing `Bound::Included(x)` will return a cursor pointing to the gap
+    /// after the greatest key smaller than or equal to `x`.
+    ///
+    /// Passing `Bound::Excluded(x)` will return a cursor pointing to the gap
+    /// after the greatest key smaller than `x`.
+    ///
+    /// Passing `Bound::Unbounded` will return a cursor pointing to the gap
+    /// after the greatest key in the table.
+    ///
+    /// This is analogous to [`std::collections::BTreeMap::upper_bound`].
+    #[cfg(not(feature = "experimental-api-5"))]
+    #[allow(unused_variables)]
+    fn upper_bound<'a>(
+        &self,
+        bound: Bound<impl Borrow<K::SelfType<'a>>>,
+    ) -> Result<Cursor<'_, K, V>> {
+        unimplemented!("ReadableTable::upper_bound()")
+    }
 
     /// Returns a double-ended iterator over all elements in the table
     fn iter(&self) -> Result<Range<'_, K, V>> {
@@ -938,7 +930,7 @@ impl<K: Key + 'static, V: Value + 'static> ReadOnlyTable<K, V> {
     /// counted and keeps the transaction alive until it is dropped, as do the
     /// [`OwnedAccessGuard`]s it yields.
     #[cfg(feature = "experimental-api-5")]
-    pub fn range_owned<'a>(&self, range: impl KeyRange<'a, K>) -> Result<OwnedRange<K, V>> {
+    pub fn range_owned(&self, range: impl KeyRange<K>) -> Result<OwnedRange<K, V>> {
         let (lower, upper) = range.key_bounds();
         Ok(OwnedRange::new(
             self.range_in_bounds(lower, upper)?,
@@ -987,7 +979,7 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for ReadOnlyTable
     }
 
     #[cfg(feature = "experimental-api-5")]
-    fn range<'a>(&self, range: impl KeyRange<'a, K>) -> Result<Range<'_, K, V>> {
+    fn range(&self, range: impl KeyRange<K>) -> Result<Range<'_, K, V>> {
         let (lower, upper) = range.key_bounds();
         self.range_in_bounds(lower, upper)
     }
@@ -1009,7 +1001,6 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for ReadOnlyTable
         self.tree.last()
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn lower_bound<'a>(
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -1020,7 +1011,6 @@ impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for ReadOnlyTable
         Ok(Cursor::new(inner, self.transaction_guard.clone()))
     }
 
-    #[cfg(feature = "experimental-api-5")]
     fn upper_bound<'a>(
         &self,
         bound: Bound<impl Borrow<K::SelfType<'a>>>,
@@ -1125,12 +1115,24 @@ impl<
     }
 }
 
+/// The borrow of a table that a stable iterator type holds: a [`ScopedBorrow`] under the redb 5
+/// API preview, and until then the borrow that ends at the iterator's last use, as in earlier
+/// versions, since extending it rejects code that compiles today.
+#[cfg(feature = "experimental-api-5")]
+pub(crate) type CompatBorrow<'a> = ScopedBorrow<'a>;
+#[cfg(not(feature = "experimental-api-5"))]
+pub(crate) type CompatBorrow<'a> = PhantomData<&'a ()>;
+
+/// An iterator over the entries of a table in a range of keys, in key order
+///
+/// Returned by [`ReadableTable::range`] and [`ReadableTable::iter`]. It holds the pages it reads,
+/// so the table may not be mutated while it is alive.
 #[derive(Clone)]
 pub struct Range<'a, K: Key + 'static, V: Value + 'static> {
     inner: BtreeCursorRange<K, V>,
     _transaction_guard: Arc<TransactionGuard>,
-    // This lifetime is here so that `&` can be held on `Table` preventing concurrent mutation
-    _lifetime: PhantomData<&'a ()>,
+    // Keeps the table borrowed for as long as the range is alive; see `ScopedBorrow`
+    _lifetime: CompatBorrow<'a>,
 }
 
 impl<K: Key + 'static, V: Value + 'static> Range<'_, K, V> {
@@ -1138,10 +1140,36 @@ impl<K: Key + 'static, V: Value + 'static> Range<'_, K, V> {
         Self {
             inner,
             _transaction_guard: guard,
-            _lifetime: PhantomData,
+            _lifetime: CompatBorrow::default(),
         }
     }
 }
+
+/// Under the redb 5 API preview a [`Table`] cannot be mutated while a [`Range`] over it is alive,
+/// even after the range's last use, since the range still holds the table's pages:
+///
+/// ```compile_fail,E0502
+/// use redb::{Database, ReadableTable, TableDefinition};
+///
+/// const TABLE: TableDefinition<u64, u64> = TableDefinition::new("my_data");
+///
+/// fn main() -> Result<(), redb::Error> {
+///     # #[cfg(not(target_os = "wasi"))]
+///     let file = tempfile::NamedTempFile::new().unwrap();
+///     # #[cfg(target_os = "wasi")]
+///     # let file = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+///     let db = Database::create(file.path())?;
+///     let txn = db.begin_write()?;
+///     let mut table = txn.open_table(TABLE)?;
+///     table.insert(1, 1)?;
+///     let mut range = table.iter()?;
+///     let key: u64 = range.next().unwrap()?.0.value();
+///     table.remove(key)?;
+///     Ok(())
+/// }
+/// ```
+#[cfg(all(doctest, feature = "experimental-api-5"))]
+mod range_keeps_the_table_borrowed {}
 
 impl<'a, K: Key + 'static, V: Value + 'static> Iterator for Range<'a, K, V> {
     type Item = Result<(AccessGuard<'a, K>, AccessGuard<'a, V>)>;
@@ -1452,7 +1480,6 @@ impl<'a, K: Key + 'static, V: Value + 'static> VacantEntry<'a, K, V> {
     }
 }
 
-#[cfg(feature = "experimental-api-5")]
 pub(crate) fn bound_to_bytes<'a, K: Key + 'a, KR: Borrow<K::SelfType<'a>>>(
     bound: &Bound<KR>,
 ) -> Bound<Vec<u8>> {
@@ -1466,45 +1493,57 @@ pub(crate) fn bound_to_bytes<'a, K: Key + 'a, KR: Borrow<K::SelfType<'a>>>(
 /// A read-only cursor over a table, pointing at a gap between two entries.
 ///
 /// Cursors are constructed with [`ReadableTable::lower_bound`] and
-/// [`ReadableTable::upper_bound`], and mirror the nightly
-/// [`std::collections::btree_map::Cursor`] as closely as the redb data model
-/// allows: values are stored serialized, so the entries around the gap are
-/// returned as [`AccessGuard`]s instead of references, and every operation
-/// can report a storage error.
-///
-/// The cursor's methods are behind the `experimental_cursor` feature flag,
-/// separately from its constructors, so that the constructors' signatures
-/// can stabilize first.
-#[cfg(feature = "experimental-api-5")]
+/// [`ReadableTable::upper_bound`], and are similar to the nightly
+/// [`std::collections::btree_map::Cursor`].
 pub struct Cursor<'a, K: Key + 'static, V: Value + 'static> {
-    // Only the cursor's own methods read the position; without them the
-    // constructors still store it, ready for the methods' flag to be enabled.
-    #[cfg_attr(not(feature = "experimental_cursor"), allow(dead_code))]
     inner: BtreeCursor<K, V>,
-    // The cursor owns page handles, so it must keep the transaction registered for as long as it
-    // is alive. The lifetime below cannot do that job: the cursor has no `Drop` impl, so the
-    // borrow it represents ends at the cursor's last use, leaving the table free to be dropped
-    // and the transaction free to be closed while the cursor still holds its pages
+    // The cursor owns page handles, so it keeps the transaction registered for as long as it is
+    // alive
     _transaction_guard: Arc<TransactionGuard>,
-    // This lifetime is here so that `&` can be held on `Table` preventing concurrent mutation.
-    // It also bounds the guards the cursor yields, which is why there is no `'static` cursor:
-    // such a guard could outlive both the cursor and the transaction, letting a writer reclaim
-    // the pages it points at
-    _lifetime: PhantomData<&'a ()>,
+    // Keeps the table borrowed for as long as the cursor is alive, so that it cannot be mutated
+    // while the cursor holds its pages; see `ScopedBorrow`. The lifetime also bounds the guards
+    // the cursor yields, which is why there is no `'static` cursor: such a guard could outlive
+    // both the cursor and the transaction, letting a writer reclaim the pages it points at
+    _lifetime: ScopedBorrow<'a>,
 }
 
-#[cfg(feature = "experimental-api-5")]
 impl<K: Key + 'static, V: Value + 'static> Cursor<'_, K, V> {
     pub(crate) fn new(inner: BtreeCursor<K, V>, guard: Arc<TransactionGuard>) -> Self {
         Self {
             inner,
             _transaction_guard: guard,
-            _lifetime: PhantomData,
+            _lifetime: ScopedBorrow::default(),
         }
     }
 }
 
-#[cfg(feature = "experimental_cursor")]
+/// A [`Table`] cannot be mutated while a [`Cursor`] over it is alive, even after the cursor's
+/// last use, since the cursor still holds the table's pages:
+///
+/// ```compile_fail,E0502
+/// use std::ops::Bound;
+/// use redb::{Database, ReadableTable, TableDefinition};
+///
+/// const TABLE: TableDefinition<u64, u64> = TableDefinition::new("my_data");
+///
+/// fn main() -> Result<(), redb::Error> {
+///     # #[cfg(not(target_os = "wasi"))]
+///     let file = tempfile::NamedTempFile::new().unwrap();
+///     # #[cfg(target_os = "wasi")]
+///     # let file = tempfile::NamedTempFile::new_in("/tmp").unwrap();
+///     let db = Database::create(file.path())?;
+///     let txn = db.begin_write()?;
+///     let mut table = txn.open_table(TABLE)?;
+///     table.insert(1, 1)?;
+///     let mut cursor = table.lower_bound(Bound::<u64>::Unbounded)?;
+///     let key: u64 = cursor.next()?.unwrap().0.value();
+///     table.remove(key)?;
+///     Ok(())
+/// }
+/// ```
+#[cfg(doctest)]
+mod cursor_keeps_the_table_borrowed {}
+
 impl<'a, K: Key + 'static, V: Value + 'static> Cursor<'a, K, V> {
     /// Returns the entry after the cursor's gap without moving the cursor.
     ///
@@ -1566,7 +1605,6 @@ impl<'a, K: Key + 'static, V: Value + 'static> Cursor<'a, K, V> {
 ///
 /// The cursor mutably borrows the [`Table`]: the table cannot be used while
 /// a cursor into it exists.
-#[cfg(feature = "experimental_cursor")]
 pub struct CursorMut<'a, K: Key + 'static, V: Value + 'static> {
     inner: BtreeCursorMut<'a, K, V>,
     transaction: &'a WriteTransaction,
@@ -1578,7 +1616,6 @@ pub struct CursorMut<'a, K: Key + 'static, V: Value + 'static> {
     closed: bool,
 }
 
-#[cfg(feature = "experimental_cursor")]
 impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
     pub(crate) fn new(inner: BtreeCursorMut<'a, K, V>, transaction: &'a WriteTransaction) -> Self {
         Self {
@@ -1683,7 +1720,7 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
     ///
     /// If the key does not sort strictly greater than the entry before the
     /// gap and strictly smaller than the entry after it,
-    /// [`StorageError::UnorderedKey`] is returned and nothing is changed.
+    /// [`CursorError::UnorderedKey`] is returned and nothing is changed.
     /// Unlike [`Table::insert`], an existing key is never overwritten:
     /// inserting a key equal to either neighbor is unordered.
     ///
@@ -1697,7 +1734,7 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
         &mut self,
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
-    ) -> Result<()> {
+    ) -> Result<(), CursorError> {
         self.check_usable()?;
         let key_bytes = K::as_bytes(key.borrow());
         let value_bytes = V::as_bytes(value.borrow());
@@ -1707,8 +1744,8 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
             .insert_before(key_bytes.as_ref(), value_bytes.as_ref())
         {
             Ok(true) => Ok(()),
-            Ok(false) => Err(StorageError::UnorderedKey),
-            Err(err) => Err(self.latch_error(err)),
+            Ok(false) => Err(CursorError::UnorderedKey),
+            Err(err) => Err(self.latch_error(err).into()),
         }
     }
 
@@ -1718,7 +1755,7 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
     ///
     /// If the key does not sort strictly greater than the entry before the
     /// gap and strictly smaller than the entry after it,
-    /// [`StorageError::UnorderedKey`] is returned and nothing is changed.
+    /// [`CursorError::UnorderedKey`] is returned and nothing is changed.
     /// Unlike [`Table::insert`], an existing key is never overwritten:
     /// inserting a key equal to either neighbor is unordered.
     ///
@@ -1732,7 +1769,7 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
         &mut self,
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
-    ) -> Result<()> {
+    ) -> Result<(), CursorError> {
         self.check_usable()?;
         let key_bytes = K::as_bytes(key.borrow());
         let value_bytes = V::as_bytes(value.borrow());
@@ -1742,8 +1779,8 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
             .insert_after(key_bytes.as_ref(), value_bytes.as_ref())
         {
             Ok(true) => Ok(()),
-            Ok(false) => Err(StorageError::UnorderedKey),
-            Err(err) => Err(self.latch_error(err)),
+            Ok(false) => Err(CursorError::UnorderedKey),
+            Err(err) => Err(self.latch_error(err).into()),
         }
     }
 
@@ -1856,7 +1893,6 @@ impl<'a, K: Key + 'static, V: Value + 'static> CursorMut<'a, K, V> {
     }
 }
 
-#[cfg(feature = "experimental_cursor")]
 impl<K: Key + 'static, V: Value + 'static> Drop for CursorMut<'_, K, V> {
     fn drop(&mut self) {
         if self.closed {

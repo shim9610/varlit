@@ -9,6 +9,31 @@ if (( $# != 1 )) || [[ -z "$COMMAND" ]]; then
     exit 2
 fi
 
+# Local packaging support: execute the same checks offline in an already
+# prepared Docker image when rootless Podman is unavailable. No host fallback.
+if [[ "${REDB_SANDBOX_ENGINE:-podman}" == docker ]]; then
+    : "${REDB_DOCKER_IMAGE:?set a prepared Rust image}"
+    : "${REDB_DOCKER_REGISTRY:?set the fetched Cargo registry directory}"
+    : "${REDB_DOCKER_TARGET:?set a dedicated writable build directory}"
+    : "${REDB_DOCKER_TOOLS:?set a directory containing bin/just for the image}"
+    : "${REDB_DOCKER_TOOLCHAIN:?set the installed Rust toolchain}"
+    exec docker run --rm --network=none --read-only --cap-drop=all \
+        --security-opt=no-new-privileges --pids-limit=2048 --memory=8g \
+        --user="$(id -u):$(id -g)" --tmpfs=/tmp:rw,nodev,nosuid,size=2g \
+        --mount="type=bind,src=$PWD,dst=/workspace,readonly" \
+        --mount="type=bind,src=$REDB_DOCKER_REGISTRY,dst=/cache-registry,readonly" \
+        --mount="type=bind,src=$REDB_DOCKER_TARGET,dst=/target" \
+        --mount="type=bind,src=$REDB_DOCKER_TOOLS,dst=/tools,readonly" \
+        --workdir=/workspace --env=CARGO_BUILD_JOBS=4 --env=CARGO_HOME=/tmp/cargo \
+        --env=CARGO_NET_OFFLINE=true --env=CARGO_TARGET_DIR=/target \
+        --env=TMPDIR=/target/tmp --env=CARGO_INCREMENTAL=0 --env=CARGO_PROFILE_DEV_DEBUG=0 \
+        --env=CARGO_PROFILE_TEST_DEBUG=0 --env=RUSTFLAGS="-D warnings" \
+        --env=RUSTUP_TOOLCHAIN="$REDB_DOCKER_TOOLCHAIN" \
+        --entrypoint=/bin/bash "$REDB_DOCKER_IMAGE" -c \
+        'mkdir -p /tmp/cargo /target/tmp; ln -s /cache-registry /tmp/cargo/registry; export PATH="/tools/bin:$PATH"; exec bash -c "$1"' \
+        -- "$COMMAND"
+fi
+
 readonly IMAGE="localhost/redb-sandbox:latest"
 readonly RUST_VERSION="$(<rust-toolchain)"
 readonly TARGET_VOLUME="redb-sandbox-target"

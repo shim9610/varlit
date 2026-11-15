@@ -36,7 +36,20 @@ fn generate_native(corpus: &Path, scratch: &Path) -> varlit::Result<()> {
     writer.flush()?;
     writer.sync()?;
     drop(writer);
-    fs::copy(path, output.join("valid-native.varlit"))?;
+    fs::copy(&path, output.join("valid-native.varlit"))?;
+    // A valid container with damaged payload CRC reaches the on-demand read
+    // paths immediately. Random bytes almost always stop at the file header.
+    let reader = FuzzNativeFormat::open_reader(&path)?.into_inner();
+    let mut entries = vec![varlit::RecordIndexEntry::default(); 64];
+    let page = reader.index_entries(&mut entries)?;
+    let payload_offset = entries[..page.filled]
+        .iter()
+        .find(|entry| entry.block_id == 1)
+        .expect("the native seed contains FuzzPoint")
+        .payload_offset;
+    let mut damaged = fs::read(&path)?;
+    damaged[payload_offset as usize] ^= 0x40;
+    fs::write(output.join("invalid-payload-crc.varlit"), damaged)?;
     Ok(())
 }
 
@@ -53,6 +66,21 @@ fn generate_codec(corpus: &Path) -> varlit::Result<()> {
         },
         Endian::Little,
     )?;
+    let chunks = varlit::ChunkedBytes::from_zstd_chunks(
+        &vec![7; 1048576],
+        65536,
+        varlit::CompressionLevel::Fast,
+    )?;
+    fs::write(output.join("zstd-chunks"), prefixed(12, chunks.encoded()))?;
+    let mut inflated = vec![0; 48];
+    inflated[..8].copy_from_slice(b"VCHK\x01\x00\x01\x00");
+    inflated[8..16].copy_from_slice(&4194304u64.to_le_bytes());
+    inflated[16..24].copy_from_slice(&4194304u64.to_le_bytes());
+    inflated[24..28].copy_from_slice(&1u32.to_le_bytes());
+    inflated[32..36].copy_from_slice(&4194304u32.to_le_bytes());
+    inflated[36..40].copy_from_slice(&13u32.to_le_bytes());
+    inflated.extend_from_slice(&[0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0, 0, 0x40, 0, 9, 0, 0, 7]);
+    fs::write(output.join("inflated-zstd-size"), prefixed(12, &inflated))?;
     fs::write(output.join("point"), prefixed(0, &point))?;
     fs::write(output.join("record"), prefixed(1, &record))?;
     fs::write(

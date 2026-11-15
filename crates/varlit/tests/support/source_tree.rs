@@ -11,6 +11,15 @@ pub(crate) fn expanded_source(path: &Path) -> String {
     let mut out = String::new();
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
+        if let Ok(mac) = syn::parse_str::<syn::ItemMacro>(trimmed)
+            && mac.mac.path.is_ident("include")
+        {
+            let literal = syn::parse2::<syn::LitStr>(mac.mac.tokens)
+                .expect("source inclusion needs one literal path");
+            let child = expanded_source(&path.parent().unwrap().join(literal.value()));
+            out.push_str(&child);
+            continue;
+        }
         if let Some(relative) = trimmed
             .strip_prefix("#[path = \"")
             .and_then(|v| v.strip_suffix("\"]"))

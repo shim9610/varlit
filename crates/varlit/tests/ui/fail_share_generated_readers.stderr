@@ -215,6 +215,72 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
   --> $RUST/std/src/thread/functions.rs
 
+error[E0277]: `RefCell<varlit_core::file::record_read::ChunkCache>` cannot be shared between threads safely
+  --> tests/ui/fail_share_generated_readers.rs:21:24
+   |
+21 |       std::thread::spawn(move || {
+   |  _____------------------_^
+   | |     |
+   | |     required by a bound introduced by this call
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
+   | |_____^ `RefCell<varlit_core::file::record_read::ChunkCache>` cannot be shared between threads safely
+   |
+   = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::file::record_read::ChunkCache>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `VarlitIndexedReader`
+  --> $WORKSPACE/crates/varlit-core/src/indexed.rs
+   |
+   | pub struct VarlitIndexedReader {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `ThreadOwnedIndexedReader`
+  --> tests/ui/fail_share_generated_readers.rs:5:16
+   |
+ 5 |     pub format ThreadOwned {
+   |                ^^^^^^^^^^^
+   = note: required for `Arc<ThreadOwnedIndexedReader>` to implement `Send`
+note: required because it's used within this closure
+  --> tests/ui/fail_share_generated_readers.rs:21:24
+   |
+21 |     std::thread::spawn(move || {
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+
+error[E0277]: `RefCell<Vec<u8>>` cannot be shared between threads safely
+  --> tests/ui/fail_share_generated_readers.rs:21:24
+   |
+21 |       std::thread::spawn(move || {
+   |  _____------------------_^
+   | |     |
+   | |     required by a bound introduced by this call
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
+   | |_____^ `RefCell<Vec<u8>>` cannot be shared between threads safely
+   |
+   = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `RefCell<Vec<u8>>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `VarlitIndexedReader`
+  --> $WORKSPACE/crates/varlit-core/src/indexed.rs
+   |
+   | pub struct VarlitIndexedReader {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `ThreadOwnedIndexedReader`
+  --> tests/ui/fail_share_generated_readers.rs:5:16
+   |
+ 5 |     pub format ThreadOwned {
+   |                ^^^^^^^^^^^
+   = note: required for `Arc<ThreadOwnedIndexedReader>` to implement `Send`
+note: required because it's used within this closure
+  --> tests/ui/fail_share_generated_readers.rs:21:24
+   |
+21 |     std::thread::spawn(move || {
+   |                        ^^^^^^^
+note: required by a bound in `spawn`
+  --> $RUST/std/src/thread/functions.rs
+
 error[E0277]: `std::cell::Cell<()>` cannot be shared between threads safely
   --> tests/ui/fail_share_generated_readers.rs:21:24
    |
@@ -222,8 +288,9 @@ error[E0277]: `std::cell::Cell<()>` cannot be shared between threads safely
    |  _____------------------_^
    | |     |
    | |     required by a bound introduced by this call
-22 | |         let _ = reader.get_item(&0);
-23 | |     });
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
    | |_____^ `std::cell::Cell<()>` cannot be shared between threads safely
    |
    = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `std::cell::Cell<()>`
@@ -261,8 +328,9 @@ error[E0277]: `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared b
    |  _____------------------_^
    | |     |
    | |     required by a bound introduced by this call
-22 | |         let _ = reader.get_item(&0);
-23 | |     });
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
    | |_____^ `RefCell<varlit_core::disk_index::tree::Cache>` cannot be shared between threads safely
    |
    = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::disk_index::tree::Cache>`
@@ -315,8 +383,9 @@ error[E0277]: `RefCell<Option<varlit_core::disk_index::slots::Directory>>` canno
    |  _____------------------_^
    | |     |
    | |     required by a bound introduced by this call
-22 | |         let _ = reader.get_item(&0);
-23 | |     });
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
    | |_____^ `RefCell<Option<varlit_core::disk_index::slots::Directory>>` cannot be shared between threads safely
    |
    = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `RefCell<Option<varlit_core::disk_index::slots::Directory>>`
@@ -369,8 +438,9 @@ error[E0277]: `RefCell<varlit_core::disk_index::slots::Cache>` cannot be shared 
    |  _____------------------_^
    | |     |
    | |     required by a bound introduced by this call
-22 | |         let _ = reader.get_item(&0);
-23 | |     });
+22 | |         let mut out = Item { key: 0 };
+23 | |         let _ = reader.get_item(&0, &mut out);
+24 | |     });
    | |_____^ `RefCell<varlit_core::disk_index::slots::Cache>` cannot be shared between threads safely
    |
    = help: within `ThreadOwnedIndexedReader`, the trait `Sync` is not implemented for `RefCell<varlit_core::disk_index::slots::Cache>`

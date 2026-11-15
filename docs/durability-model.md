@@ -228,77 +228,176 @@ part-way, not through a poisoned writer that is later inspected, and not after
 a contract violation. The invalidation is infallible and allocation-free, so it
 adds no fallible step in either direction of the commit.
 
-Even under the default policy, readers trust only commit maps. A clear commit
-bit means `NotCommitted` regardless of slot bytes.
+## Matrix Storage And Publication
 
-Matrix readers capture a confirmed generation at open. Slot payloads, commit
-maps, per-cell CRCs, CRC-valid bits, aux ranges and the append-log EOF belong to
-that same generation. A cache miss reads that generation's page, including while
-the single writer overwrites the same cell. Each reader is `Send + !Sync`, owns
-its caches, and advances only through `follow(&mut self)`.
+A matrix lives inside the primary file. Its metadata record and a fixed-size
+write-ahead ring are the first records of the append log. Each tile (the
+`tile = [rows, cols]` shape a matrix block declares) is an internal record
+appended the first time one of its cells is written, together with the radix
+directory pages that locate it. After that, cell slots, tile commit bitmaps,
+directory entries, single and per-channel commit flags and aux bytes are
+rewritten in place. Overwrites do not grow the file
+(`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`,
+`the_ring_holds_the_disk_space_constant`). There is no companion file:
+`matrix_generation_path()` returns the primary path, and copying the primary
+copies the whole matrix. Primary-file replacement, rewrite and defragmentation
+are refused for matrix files with `InvalidFormatSpec`. An indexed
+(high-cardinality) primary can carry a matrix the same way; its sync markers
+leave the in-place matrix payloads out of their checksums
+(`keyed_records_and_a_matrix_share_an_indexed_primary`,
+`recovery_keeps_links_whose_tiles_were_rewritten_since`).
 
-The writer copies each changed 4096-byte logical page to the generation file on
-its first change in a batch. Further changes to that unpublished page reuse the
-same physical page. Published pages are never overwritten or recycled. Clearing
-or rebuilding maps changes unpublished pages too; failure or process death
-before publication preserves the previous confirmed generation.
+Readers trust only commit bits. A clear commit bit means `NotCommitted`
+regardless of slot bytes. A slot holds the payload followed by its CRC32;
+`write_matrix_cell()` stores the slot and clears the cell's commit bit, and
+`commit_matrix_cell()` sets it.
 
-`commit_matrix_cell()` marks the cell in the writer's working generation.
-`flush()` writes buffered chunks but does not publish a matrix generation.
-`sync()`, `immediate()` and the durable cell API publish. Dropping a writer is
-not a substitute for syncing; reopening discards unconfirmed native-log bytes.
-With transaction-marker formats, `sync()` still does not manufacture a marker:
-use `commit_durable()` or `flush()` followed by `sync()` for `OnFlush` markers.
-A matrix-only sync can advance matrix pages while leaving uncommitted native
-records invisible; the published EOF excludes that tail so recovery cannot
-truncate bytes promised to a reader.
+### What a publication is
 
-Publication orders native-log persistence, new matrix pages and directory pages,
-a generation-store sync, then a checksummed head in alternating slots and a final
-sync. The head names the root and native-log EOF. Readers never take writer
-admission or wait for cache ownership. An unstable head read may return
-`Error::Io` with `WouldBlock`; retry open/follow. A failed follow leaves the
-existing reader's generation usable. Stable invalid heads or pages fail closed.
-The checksums detect accidental corruption, not malicious rewriting.
+Matrix changes are staged in the writer. A change inside a tile appended since
+the last publication is written in place at once, because nothing published
+points at that tile yet; any other change is held in memory, and a staged set
+larger than an eighth of the ring (at most 4 MiB) is written to the ring early
+as frames that are not yet committed. A writer handle reads its own staged
+changes; no other handle sees them.
 
-Matrix storage now has **two required files**: the primary file and
-`<primary>.<creation-nonce>.vmg`, discoverable through
-`matrix_generation_path()`. The companion is durable data, not a disposable
-cache. Stop the writer while copying/renaming the pair; copying the primary
-alone is not a backup. Old files without the companion need recreation.
+`flush()` does not publish matrix changes. `sync()`, `immediate()`,
+`commit_durable()` and the durable cell API publish them as the next
+generation. A publication:
 
-`compact_matrix()` requires a synced writer and copies the current page tree
-into a temporary companion, syncs it, then replaces the companion pathname.
-Existing readers retain the old file object without blocking the writer. Their
-`follow()` can adopt the replacement. Old physical storage is released once all
-old file handles/maps close. Compaction covers the matrix generation store;
-obsolete growing-chunk records in the primary append log are not reclaimed.
-Primary-file replacement APIs remain refused for matrix files.
+1. syncs the file first if it appended tiles or directory pages, so they are
+   durable before a frame points at them;
+2. writes the staged byte ranges to the ring as one or more frames, each with a
+   CRC32, the last one marked as the commit frame;
+3. syncs the file (`sync_data`);
+4. writes a ring header naming the new generation into one of two alternating
+   checksummed header slots.
 
-Each head persists a `compaction_epoch` (u64, initially zero). Only explicit
-`compact_matrix()` increments it; every ordinary publication carries it forward.
-Thus a reader detects replacement even after skipping the compaction generation
-and several subsequent commits. Equal epochs permit comparing COW roots: equal
-subtree pointers are skipped, changed original directory windows are validated, and only
-changed metadata pages are reverified under the default verification policy.
-Unchanged bitmap and physical-page caches survive. Different epochs trigger the
-full layout load against the replacement file. Follow never initiates compaction.
-All fallible work precedes adoption; a refused delta leaves the old root, bitmap
-state and log EOF visible. A damaged or quarantined old directory requires
-reopening for recovery. VMAT v5 stores both forward and directly addressed reverse
-metadata inside the same generation; readers do not reconstruct a private mirror.
-A failure while updating either direction poisons the writer, so a partially
-updated working root cannot become a confirmed generation.
+Readers see the generation after step 4. That is one sync per publication, two
+when the publication appended records
+(`the_ring_holds_the_disk_space_constant` counts one barrier per publication
+plus two per checkpoint). When the matrix has staged changes, `sync()` uses the
+publication's sync as the file's barrier, so records appended before it become
+durable through the same sync. The header write in step 4 is not synced on its
+own: on reopen the frames, not the header, decide which generations were
+published.
 
+Under a transaction-marker commit policy, a publication that appended matrix
+records first writes a commit marker when the log has records after the last
+marker, so the matrix records are inside the committed prefix; that marker also
+commits any user records appended since the previous marker. A publication
+that appended nothing leaves uncommitted user records uncommitted, and a writer
+reopen still discards them
+(`matrix_only_sync_never_publishes_a_native_tail_that_recovery_will_truncate`).
+With transaction-marker formats, `sync()` does not otherwise write a marker:
+use `commit_durable()`, or `flush()` followed by `sync()` for `OnFlush` markers.
 
-The generation page cache defaults to **2 MiB per handle**, independent of the
-existing per-bitmap cache. Configure it at open with
-`ReadLimits::with_matrix_generation_cache_bytes(bytes)`; zero disables it.
-The bound counts retained 4096-byte data/directory buffers, excluding map
-bookkeeping and temporary page buffers. Internal bitmap backings retain no
-second generation-page cache. `matrix_generation()` reports the captured
-confirmed generation; `follow()` still returns newly adopted record bytes, so
-matrix-only advancement can return zero.
+### The ring and checkpoints
+
+The ring size is fixed when the matrix is created.
+`FormatSpec::with_matrix_ring_bytes(bytes)` declares it; otherwise it is twice
+the slot bytes of the declared extents, kept between 256 KiB and 16 MiB and no
+larger than the `RecordPayloadLen` limit. A ring larger than 64 MiB is refused
+with `LimitExceeded`. A frame holds at most a quarter of the ring, and one
+staged unit (a slot, a tile bitmap, a 256-byte page of flags or aux bytes)
+that does not fit in a frame is refused with `LimitExceeded`.
+
+When a frame does not fit, the writer runs a checkpoint inside that call. It
+chooses the oldest published generations whose removal leaves room for the
+frame and at least half the ring free, records in the ring header that the
+file is about to hold values of those generations, writes the newest bytes of
+each of their ranges in place, syncs, writes a header that moves the ring's
+tail past them, and syncs again. A publication that needs a checkpoint
+therefore costs two more syncs. Nothing runs in the background.
+
+### What readers see
+
+A read-only handle opens its matrix when the handle opens. Its snapshot is the
+newest confirmed generation at that moment, one whose frames all verified and
+whose commit frame is present: the file as of the last checkpoint, with an
+overlay of the ranges published since, read from the ring.
+Queries take `&self` and read that snapshot. Readers take no lock and do not
+hold back the writer. Each reader is `Send + !Sync` and owns its caches.
+
+`follow(&mut self)` adopts the newest published generation. Its return value
+counts record bytes, so a matrix-only publication returns zero; compare
+`matrix_generation()`, the number of the published generation the handle
+shows, to observe it. A read-write handle's `follow()` returns zero and changes
+nothing.
+
+A checkpoint writes in place only generations up to its target, and it records
+that target in the ring header before it writes. A reader whose snapshot is
+older than that target can no longer read its snapshot from the file and the
+ring, so its next read returns `MatrixSnapshotExpired { snapshot, checkpointed }`
+instead of a mix of generations. `follow()` (or a reopen) moves it to the
+newest generation. A reader expires only after the writer has published enough
+after its snapshot to need the ring space
+(`a_reader_that_falls_behind_the_ring_is_told_to_follow`,
+`a_reader_keeps_its_snapshot_across_publications_and_checkpoints`). An open or
+`follow()` whose scan of the ring is overtaken by checkpoints 32 times in a row
+also returns `MatrixSnapshotExpired`.
+
+A read re-checks the ring header after it has read, and reads again (up to
+eight times) if a checkpoint moved under it. A region page or a key batch does
+this once for the whole call. A read returns values of the reader's snapshot
+or `MatrixSnapshotExpired`, never a mix
+(`a_page_never_mixes_generations`, `a_key_batch_never_mixes_generations`).
+
+### Crash and reopen
+
+Changes that were staged but not published are lost when the writer is dropped
+or the process stops; dropping a writer does not publish
+(`reopened_writer_discards_unpublished_matrix_changes`,
+`unpublished_and_torn_publications_never_reach_a_reopen`).
+
+Opening a writer reads the ring from the last checkpoint. A generation is
+adopted only when all of its frames verify and its commit frame is present;
+the scan stops at the first frame that is torn, out of sequence or fails its
+CRC, so neither that generation nor any later one is adopted, and the next
+publication overwrites its frames. Adopted generations become the writer's
+overlay; nothing is moved in place at open, so a reader's snapshot stays
+readable across a writer reopen. Each frame records the file length it depends
+on; if recovery of the primary cut the file back to its last acknowledged sync
+and below that length, the generation is not adopted, and the next publication
+takes its number (`a_generation_needing_records_a_recovery_cut_off_is_not_adopted`).
+
+A crash inside a publication leaves either the previous generation or the
+whole new one (`a_crash_inside_a_publication_recovers_all_or_nothing`,
+`a_crash_while_allocating_tiles_recovers_all_or_nothing`), and a crash inside a
+checkpoint loses no published value
+(`a_crash_inside_a_checkpoint_keeps_every_published_value`). These tests run
+the engine on an in-memory store whose crash keeps the synced bytes plus an
+in-order prefix of the later writes, with the next write torn. They do not
+model reordered writes or a storage device's power loss.
+
+`a_killed_writer_leaves_whole_publications` kills a real writer process 32
+times at varying points and reopens the real file each time. Every cell must
+show one round, the round must be the last acknowledged one or the one after
+it, and it must never go back. A reader may show one round less than the next
+writer adopts: a publication whose frames are complete in the ring but whose
+header update did not happen is finished by that writer's recovery, after
+which readers see it. A killed process loses nothing the kernel accepted, so
+this checks partial sequences of system calls, not power loss.
+
+The checksums detect accidental corruption, not deliberate rewriting. A ring
+header or metadata record whose checksum holds but whose fields are impossible
+(offsets outside the ring, unordered or saturated generations, a ring outside
+the file) is refused with `InvalidMatrixLayout`
+(`a_ring_header_with_impossible_fields_is_refused_not_followed`,
+`a_ring_placed_outside_the_file_is_refused`). Tile directory pages carry no
+checksum; a root, entry or height in one that cannot be a place in a file is
+refused the same way
+(`directory_offsets_that_are_not_file_offsets_are_refused`), but a directory
+entry rewritten to another valid offset is not detected by the directory
+itself: only `verify_matrix_metadata`, which checks each tile's header, sees it.
+
+### Compaction
+
+There is no matrix compaction; `compact_matrix()` was removed in 0.13.0.
+Overwrites happen in place and the ring has a fixed size, so there is nothing
+to reclaim. Tiles, once appended, are never removed.
+
+## Append-Log Transaction Markers
 
 Append-log transaction markers follow the same explicit durability principle.
 `commit()` writes a logical visibility marker for
@@ -314,8 +413,32 @@ The durable append-log order is:
 3. write the commit marker
 4. flush and `sync_all` the marker
 
-Matrix `commit_*` updates working visibility without a hidden fsync. A reader
-sees those changes only after explicit generation publication.
+### Single-barrier commit
+
+`transaction_marker(on_flush, single_barrier)` /
+`transaction_marker(explicit, single_barrier)` drop step 2: records and marker
+are written and made durable by one `sync_all`. Storage may then persist the
+marker without some bytes before it, so the marker (v2 payload `VCM2`) names
+what it commits: the newest marker known durable when it was written (its
+*anchor*, the last marker a completed `commit_durable` barrier covered), and
+the count and order-sensitive checksum chain of every record after the
+anchor's commit point. Every open route (scan, segment chain, header tails,
+open digest) verifies the newest marker's run of records with full checksums
+before treating it as a commit point; `crates/varlit/tests/single_barrier_commit.rs`
+covers the scan, lazy-or-scan, header-tails and anchored routes. A run that does not verify is not
+committed: the file ends at the anchor's commit point, a read-only open shows
+exactly that prefix without changing the file, and a writer open truncates the
+rest. Non-durable `commit()` markers after the anchor roll back with it.
+
+The mode requires `integrity: crc32_with_header` (so every byte of every record
+is under a checksum open can check) and refuses `recovery: mark_tail`. A writer
+handle pays one extra `sync_all` before its first record, so that what an
+earlier handle left unsynced is durable before it becomes the anchor. Strict
+`open_*_lazy` routes return an error for an unverified newest transaction;
+`*_lazy_or_scan` falls back to the scan.
+
+Matrix `commit_*` calls stage commit bits without a sync. A reader sees them
+only after a publication (see "What a publication is" above).
 
 ## Ordered Barrier Policy
 
@@ -331,17 +454,27 @@ declared option.
 
 The durable cell API runs:
 
-1. withdraw old evidence in the working generation and write new slot bytes;
+1. stage the new slot (payload and CRC32) and clear the cell's commit bit,
+   as `write_matrix_cell()` does;
 2. call the data barrier;
-3. write CRC metadata and working commit bits;
+3. stage the commit bit, as `commit_matrix_cell()` does;
 4. call the commit barrier;
-5. sync the native log and new matrix pages, publish and sync the generation head;
+5. `sync()`: publish every staged matrix change as the next generation (see
+   "What a publication is" above);
 6. invoke the post-commit hook.
 
-The barrier callbacks receive the physical companion file for synchronization,
-not a logical matrix image. They must not inspect logical offsets or modify the
-file. Both callbacks precede publication; a callback failure poisons the writer
-and leaves readers on the previous generation.
+The barrier callbacks receive the primary file, which holds the matrix and its
+ring. They must only synchronize it, not seek or write. Both callbacks precede
+publication, so a fresh reader still sees the previous generation while they
+run (`matrix_durable_barrier_observes_data_then_commit_sync_then_hook`). A
+callback failure is returned as is, poisons the writer, and leaves readers on
+the previous generation
+(`barrier_failures_before_generation_publication_leave_readers_unchanged`).
+Before step 5 the staged slot and commit bit are usually only in the writer's
+memory (or in a tile appended since the last publication, or in uncommitted
+ring frames), so the barriers alone do not make the new value durable; the
+publication's sync does. Other staged matrix changes are published with the
+cell.
 
 ## Hook Contract
 
@@ -370,75 +503,57 @@ the same shape as `PublishedButParentSyncPending` and
 `ReplacePublicationIndeterminate`. Retrying the whole call after this variant
 repeats the durable write and re-runs the hook, which is how a result-driven
 retry used to duplicate external work. The carried event is the one the hook
-was given; it is derived from layout geometry before the commit, so producing
-it can no longer fail for a cell that is already durable.
+was given; it is built from the cell's tile position before the commit, so
+producing it cannot fail for a cell that is already durable.
 
-A failed generation publication returns `MatrixPublicationUncertain` if head
-completion was not confirmed. Reopen and inspect the confirmed generation before
-retrying the write. If the complete head was written but its final sync failed,
-the result is `MatrixCommittedButDurabilityUnproven`. Both poison the writer and
-skip the hook. A successful publication followed by a hook error returns
-`MatrixCommittedButHookFailed`; retry the notification rather than the write.
-
-`matrix_generations.rs` aborts child writers at six publication boundaries and
-checks that reopened cells and aux bytes all belong to one generation. These are
-process-crash tests, not a substitute for power-loss testing of a storage device.
+If step 5 fails, the writer is poisoned and the hook does not run. When the
+handle's matrix generation had not advanced at the failure, the result is
+`MatrixPublicationUncertain`: the frames may or may not be on disk, and the
+next writer open decides whether the generation counts. Reopen and inspect the
+confirmed generation before retrying the write. When the generation had
+advanced (the ring header was written and a later step of `sync()` failed,
+such as the created pathname's parent-directory sync), the result is
+`MatrixCommittedButDurabilityUnproven`. A successful publication followed by a
+hook error returns `MatrixCommittedButHookFailed`; retry the notification
+rather than the write.
 
 ## Allocator Failure And Published Outcomes
 
-The sentence above is a statement about the value a call **returns**, and F-06
-is the reason it now says so. Both post-commit variants box their event and
-their source to keep `Error` small, so constructing either one allocates twice
-*after* the cell is authoritative. A review harness failed the very next
-allocation at each branch: both children terminated on a 56-byte allocation
-while the reopened file contained the committed values.
+Published-outcome errors must preserve the distinction between a failed operation
+and an operation that completed but needs recovery or notification. Allocation
+refusal must not turn the latter into an apparently retryable append.
 
-Varlit has one policy on allocator failure, and it applies to every contract in
-this document, not only to the matrix ones:
+`write_matrix_cell_durable` reserves both boxes with `try_box`: the error box
+before the working cell is written, the event box after that write and before
+the cell is committed. The error box initially holds a scalar placeholder;
+a later failure moves its actual source into that already allocated slot, so
+both boxes keep their existing public types without a post-commit allocation.
+The hook receives a clone of the event. A refusal of either reservation returns
+before the cell is committed; a post-commit hook failure still returns
+`MatrixCommittedButHookFailed` (both checked in
+`crates/varlit/tests/fallible_publication.rs`). The successful durable-write
+path pays these two allocations.
 
-- **Content-sized allocations** — anything whose size is chosen by file bytes,
-  a caller-supplied count, or any other quantity a producer of the input can
-  influence — are charged against a `ReadLimits` ceiling *before* the memory is
-  taken and are then reserved fallibly. A refusal is the typed
-  `Error::AllocationFailed` or `Error::LimitExceeded { resource, .. }`, and the
-  operation reports it without mutating anything. This is the class that
-  hostile input can reach, and it is the class the limits exist for.
-- **Shape-sized allocations** — fixed-size allocations bounded by the program's
-  own compile-time shape, such as the two boxes a published-outcome variant
-  holds — use ordinary infallible allocation. `Box::new` has no fallible form,
-  and the Rust default is to abort the process when the allocator refuses.
-  Varlit does not pretend otherwise.
+Record append, index publication and replacement errors use fallible boxing.
+If detailed source/path storage cannot be allocated, they return
+`Error::ErrorContextAllocationFailed` with an inline `AllocationFailureContext`:
+append/commit sequence, published index, replacement rebind (including pending
+parent sync), published replacement, or experimental reuse generation and its
+uncertainty. Details can be lost; the completed/uncertain outcome is retained.
+A caller must inspect that outcome before retrying. Disk-index wrapping preserves
+a primary publication error even when an additional wrapper cannot be allocated.
 
-The division matters because only a content-sized allocation is one a producer
-of the input can steer, which is why that class carries the ceilings and the
-typed refusals and the other does not.
+This replaces the earlier abort-on-error-box policy. Preallocation of a scalar
+placeholder makes it possible to reserve space before the eventual source error
+exists; recursion in `Error` does not prevent allocating that box in advance.
 
-The consequence for every published-outcome variant in this document is
-precise: a shape-sized allocation failure after publication
-**terminates the process** rather than substituting a different error. No caller ever observes a
-*wrong* outcome; a caller can observe *no* outcome, which is the same thing a
-`SIGKILL` or a power loss delivers at that instant. The on-disk state is the
-published state, so the correct recovery is the one this document already
-prescribes for a crash: reopen the file and read what is there. In the F-06
-harness the reopened file held the committed cell, which is exactly the claim
-the variant would have made.
-
-Three alternatives were considered and rejected for the post-commit path:
-
-- pre-staging the outcome boxes before the commit removes the event
-  allocation but not `Box::new(source)` — the source only exists once the step
-  has failed, and `Error` is recursive, so it cannot be carried inline. It also
-  puts two allocations on the success path of every durable cell write to serve
-  a path that ends in `abort`;
-- a non-recursive post-commit outcome type cannot carry the caller's own hook
-  error, which is an arbitrary `Error` and may itself own heap;
-- a fallible-allocation form of the whole error family would make every
-  `Result` in the crate depend on an allocator that has already failed.
-
-The same policy is why round 12's `SparseBitmap::clone` in the CRC rebuild was
-*removed* rather than made fallible: deleting a shape-sized allocation is worth
-doing where it is free, and dressing one up in a `Result` it cannot honour is
-not.
+These paths do not prove global allocation safety. Existing public `Clone` and
+infallible convenience APIs remain compatible, `BTreeMap` allocation is deferred,
+and formatting, application codecs/callbacks and other dependency internals need
+separate coverage. An allocator that aborts internally, reference-count overflow,
+an OS OOM kill or a power loss cannot be converted to an ordinary Rust error by
+these helpers. Other allocation errors also retain their existing writer
+poison/recovery rules; there is no blanket promise that retrying is safe.
 
 ## Sync Granularity
 
@@ -446,14 +561,14 @@ The first implementation may use file-handle `sync_data`/`sync_all` primitives
 for portability. Later implementations can add platform-specific range syncs
 without changing the logical barrier.
 
-The current `write_matrix_cell_durable` helper uses that portable file-handle
-ordering: write slot bytes, `sync_data`, then commit the cell — which writes any
-enabled CRC and CRC-valid metadata and publishes the commit bit last — then
-`sync_all`, then invoke the hook.
-`write_matrix_cell_durable_with_barrier` exposes the same sequence through an
-injectable `MatrixDurabilityBarrier`, which lets tests and policy adapters
-record or replace the sync phases. Sidecar-aware barriers remain future
-hardening work.
+With the default `FileMatrixDurabilityBarrier`, `write_matrix_cell_durable`
+calls `sync_data` on the primary file as the data barrier and `sync_all` as the
+commit barrier, then publishes with the publication's own sync (two if the
+write appended a tile), then invokes the hook.
+`write_matrix_cell_durable_with_barrier` takes a caller-supplied
+`MatrixDurabilityBarrier` for the two barrier phases, which lets tests and
+policy adapters record or replace them; the publication's sync is not part of
+the barrier. Sidecar-aware barriers remain future hardening work.
 
 Per-record or per-cell fsync is not the default. Ordered barrier is chosen only
 when callers need the stronger completion semantics.
@@ -482,17 +597,17 @@ three additions:
 
 - a native object fingerprint that folds the OS file identity (Windows
   volume + file id, Unix device + inode) with the schema hash,
-- a matrix layout generation, and
+- the offset of the matrix metadata record (still reported as
+  `"matrix layout generation"` on a mismatch), and
 - the 16-byte matrix creation nonce.
 
 The creation nonce closes the same-object recreation gap: OS file identity and
-layout offsets are stable when a matrix is recreated into the same
-pathname/file object with the same dimensions, so identity and generation
-alone could accept the previous creation's sidecar. Every matrix create stamps
-a fresh nonce region (`VMNC` magic, version, 128-bit nonce) between the native
-file header and the matrix layout header; the nonce is read once at open and
-cached in the handle, adding no per-operation cost. A caller-supplied
-application generation cannot substitute for the native creation identity.
+the metadata record offset are stable when a matrix is recreated into the
+same pathname/file object, so identity and offset alone could accept the
+previous creation's sidecar. Every matrix create stores a fresh 128-bit nonce
+in the matrix metadata record; the handle reads it when it opens its matrix and
+keeps it. A caller-supplied application generation cannot substitute for the
+native creation identity.
 
 A reader recomputes the identity from its own native file and rejects a
 mismatch as `MatrixSidecarMismatch("native identity")`,
@@ -510,8 +625,9 @@ is rejected without configured-limit-sized work.
 Publication is atomic and ordered. `write_matrix_sidecar` writes the new
 manifest to a same-directory RAII temp file, `sync`s it, atomically replaces the
 existing sidecar, and syncs the parent directory. The native file is the
-authority and is written and synced before the sidecar is published
-(native then sidecar ordering). A parent-sync failure after the replace returns
+authority: the caller publishes the matrix data the sidecar summarizes
+(`sync()`) before writing the sidecar, since `write_matrix_sidecar` does not
+sync the native file. A parent-sync failure after the replace returns
 `PublishedButParentSyncPending` without deleting the now-published sidecar; the
 temp is removed only when the replace itself failed. This replaces the former
 in-place `File::create` truncate-and-`sync_all` publication, which exposed a

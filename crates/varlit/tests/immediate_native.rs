@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use varlit::{ImmediatePolicy, VarlitBlock, varlit_format};
 
 varlit_format! {
@@ -53,6 +56,9 @@ fn declarations_and_native_writer_api_work_without_scalable_features() -> varlit
     writer.immediate()?;
     drop(writer);
     let reader = NativeImmediate::open_reader(&path)?;
-    assert_eq!(reader.native_samples()?.len(), 2);
+    assert_eq!(
+        crate::pages::all_generated!(reader, native_samples, native_samples_from)?.len(),
+        2
+    );
     Ok(())
 }

@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::fs::{OpenOptions, metadata, remove_file};
 #[cfg(feature = "integrity")]
 use std::io::Write;
@@ -279,14 +282,14 @@ fn format_first_dsl_generates_typed_api_and_offset_chains() -> varlit::Result<()
     );
 
     let reader = DslFormat::open_reader(&path)?;
-    let points = reader.points()?;
+    let points = crate::pages::all_generated!(reader, points, points_from)?;
     assert_eq!(points.len(), 2);
-    assert_eq!(points.get(1)?.unwrap(), Point { x: 3, y: 4 });
+    assert_eq!(filled(|o| points.get(1, o))?.unwrap(), Point { x: 3, y: 4 });
 
     let users = reader.users()?;
     assert_eq!(users.len(), 1);
     assert_eq!(
-        users.get(&7)?.unwrap(),
+        filled(|o| users.get(&7, o))?.unwrap(),
         User {
             id: 7,
             name: "Grace".to_string(),
@@ -296,17 +299,17 @@ fn format_first_dsl_generates_typed_api_and_offset_chains() -> varlit::Result<()
 
     let raw = DslFormat::open_readonly(&path)?;
     assert!(
-        raw.index_entries()
+        crate::pages::all_entries!(raw)
             .iter()
             .any(|entry| entry.block_id == COMMIT_BLOCK_ID)
     );
     assert!(
-        raw.index_entries()
+        crate::pages::all_entries!(raw)
             .iter()
             .filter(|entry| entry.block_id == Point::ID)
             .all(|entry| entry.footer_offset.is_some())
     );
-    let raw_entries = raw.index_entries();
+    let raw_entries = crate::pages::all_entries!(raw);
     let user_entries = raw_entries
         .iter()
         .filter(|entry| entry.block_id == User::ID)
@@ -335,16 +338,21 @@ fn explicit_transaction_marker_controls_reader_visibility() -> varlit::Result<()
     writer.flush()?;
 
     let reader = ExplicitCommitFormat::open_reader(&path)?;
-    assert!(reader.explicit_points()?.is_empty());
+    assert!(
+        crate::pages::all_generated!(reader, explicit_points, explicit_points_from)?.is_empty()
+    );
 
     writer.commit()?;
     writer.flush()?;
     drop(writer);
 
     let reader = ExplicitCommitFormat::open_reader(&path)?;
-    let points = reader.explicit_points()?;
+    let points = crate::pages::all_generated!(reader, explicit_points, explicit_points_from)?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?.unwrap(), ExplicitPoint { value: 10 });
+    assert_eq!(
+        filled(|o| points.get(0, o))?.unwrap(),
+        ExplicitPoint { value: 10 }
+    );
 
     cleanup(&path);
     Ok(())
@@ -362,9 +370,12 @@ fn durable_commit_marks_visible_records() -> varlit::Result<()> {
     drop(writer);
 
     let reader = ExplicitCommitFormat::open_reader(&path)?;
-    let points = reader.explicit_points()?;
+    let points = crate::pages::all_generated!(reader, explicit_points, explicit_points_from)?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?.unwrap(), ExplicitPoint { value: 42 });
+    assert_eq!(
+        filled(|o| points.get(0, o))?.unwrap(),
+        ExplicitPoint { value: 42 }
+    );
 
     cleanup(&path);
     Ok(())
@@ -427,11 +438,16 @@ fn typed_replacement_translates_keyed_tails_after_resize() -> varlit::Result<()>
 
     let reader = ReplacementDslFormat::open_reader(&path)?;
     assert_eq!(
-        reader.replacement_points()?.get(0)?,
+        filled(|o| crate::pages::all_generated!(
+            reader,
+            replacement_points,
+            replacement_points_from
+        )?
+        .get(0, o))?,
         Some(ReplacementPoint { value: 2 }),
     );
     assert_eq!(
-        reader.replacement_users()?.get(&1)?,
+        filled(|o| reader.replacement_users()?.get(&1, o))?,
         Some(ReplacementUser {
             id: 1,
             name: "a much longer replacement value".to_string(),
@@ -463,9 +479,12 @@ fn transaction_writer_open_truncates_uncommitted_tail() -> varlit::Result<()> {
     }
 
     let reader = ExplicitCommitFormat::open_reader(&path)?;
-    let points = reader.explicit_points()?;
+    let points = crate::pages::all_generated!(reader, explicit_points, explicit_points_from)?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?.unwrap(), ExplicitPoint { value: 20 });
+    assert_eq!(
+        filled(|o| points.get(0, o))?.unwrap(),
+        ExplicitPoint { value: 20 }
+    );
 
     cleanup(&path);
     Ok(())
@@ -492,7 +511,7 @@ fn crc32_covers_varlit3_record_footer() -> varlit::Result<()> {
     // And under the default the damage is still caught -- on the read.
     let reader = CrcFooterFormat::open_reader(&path)?;
     assert!(matches!(
-        reader.crc_points()?.get(1),
+        filled(|o| crate::pages::all_generated!(reader, crc_points, crc_points_from)?.get(1, o)),
         Err(Error::ChecksumMismatch { .. })
     ));
     drop(reader);
@@ -515,9 +534,12 @@ fn transaction_marker_crc_tail_after_latest_marker_is_ignored() -> varlit::Resul
 
     tamper_byte(&path, tail.payload_offset)?;
     let reader = CrcTxnFormat::open_reader(&path)?;
-    let points = reader.crc_txn_points()?;
+    let points = crate::pages::all_generated!(reader, crc_txn_points, crc_txn_points_from)?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?.unwrap(), CrcTxnPoint { value: 1 });
+    assert_eq!(
+        filled(|o| points.get(0, o))?.unwrap(),
+        CrcTxnPoint { value: 1 }
+    );
 
     cleanup(&path);
     Ok(())
@@ -542,11 +564,19 @@ fn crc_transaction_fixed_cow_preserves_old_snapshot_and_footer_chain() -> varlit
     }
 
     assert_eq!(
-        old_reader.crc_txn_points()?.get(0)?,
+        filled(
+            |o| crate::pages::all_generated!(old_reader, crc_txn_points, crc_txn_points_from)?
+                .get(0, o)
+        )?,
         Some(CrcTxnPoint { value: 1 })
     );
     assert_eq!(
-        CrcTxnFormat::open_reader(&path)?.crc_txn_points()?.get(0)?,
+        filled(|o| crate::pages::all_generated!(
+            CrcTxnFormat::open_reader(&path)?,
+            crc_txn_points,
+            crc_txn_points_from
+        )?
+        .get(0, o))?,
         Some(CrcTxnPoint { value: 2 })
     );
 
@@ -573,7 +603,10 @@ fn transaction_marker_crc_corruption_before_marker_is_fatal() -> varlit::Result<
     ));
     let reader = CrcTxnFormat::open_reader(&path)?;
     assert!(matches!(
-        reader.crc_txn_points()?.get(0),
+        filled(
+            |o| crate::pages::all_generated!(reader, crc_txn_points, crc_txn_points_from)?
+                .get(0, o)
+        ),
         Err(Error::ChecksumMismatch { .. })
     ));
     drop(reader);
@@ -606,7 +639,9 @@ fn crc32_with_header_detects_header_tampering() -> varlit::Result<()> {
     // what this asserts, is that no tampered record is ever handed back as
     // valid.
     let reader = CrcHeaderFormat::open_reader(&path)?;
-    let observed = reader.crc_header_points()?.get(0);
+    let observed = filled(|o| {
+        crate::pages::all_generated!(reader, crc_header_points, crc_header_points_from)?.get(0, o)
+    });
     assert!(
         !matches!(observed, Ok(Some(_))),
         "a tampered header must never decode as a valid record, got {observed:?}"
@@ -670,4 +705,23 @@ fn cleanup(path: &Path) {
     let mut lock = path.to_path_buf();
     lock.push(".lock");
     let _ = remove_file(lock);
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

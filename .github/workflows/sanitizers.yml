@@ -6,18 +6,23 @@ name: Sanitizers
 # memory-safety defect nobody has noticed yet" — a property of the whole tree,
 # not of a diff, and one that costs hours rather than minutes. Run on PRs into
 # main and by explicit dispatch; neither branch pushes nor a schedule duplicate
-# the checked PR. A failure is investigated with its retained evidence.
+# the checked PR. A failure is investigated with its retained evidence. The one
+# scheduled workflow, `fuzz-corpus.yml`, repeats none of these jobs: it only
+# grows and saves the corpus the fuzz smoke run below starts from.
 #
 # What each tool can actually see — measured on 2026-08-08, not assumed:
 #
 #   * ASan runs the real suite with the real syscalls under `--all-features`,
 #     so the mmap / zero-copy surface is exercised. It is the primary tool for
 #     this codebase.
-#   * Miri interprets the portable core only. Of the 28 `unsafe` sites in
-#     `file.rs`, 10 are `mmap`-gated — memmap2 issues the `mmap` syscall, a
-#     foreign function Miri refuses — and 11 are Windows-only, so Miri sees at
-#     most the remaining 7, plus everything in `matrix`, `codec`, `snapshot`.
-#     In exchange it is the one tool here that reports UB that does not crash.
+#   * Miri interprets the unit tests of the modules that contain `unsafe`
+#     code it can execute: raw vector fills, raw allocation and the tile
+#     reader lock. The crates deny `unsafe_code`; `scripts/miri-scope.json`
+#     names every file that allows it and, for the mmap, foreign-call and
+#     Windows-only ones Miri refuses, what covers them instead. Tests of
+#     modules without `unsafe` are not interpreted: safe Rust cannot cause
+#     undefined behaviour by itself, and interpreting all of them took over
+#     five hours. It is the one tool here that reports UB that does not crash.
 #   * The fuzz smoke run exists so a target that stops building, or crashes
 #     within its first minutes, is caught on a PR instead of on the next manual
 #     campaign. It is not a campaign itself: 90 seconds per target finds smoke,
@@ -62,6 +67,17 @@ jobs:
           workspaces: fuzz
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      # Start from the corpus `fuzz-corpus.yml` saves on the default branch,
+      # when there is one: the 90 seconds below then continue from what
+      # earlier runs reached. This job only reads it. Without a saved corpus
+      # the run starts from the generated seeds, as before.
+      - name: restore the saved corpus
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
       # The target list comes from `cargo fuzz list`, not from a list written
       # here, so a target added to `fuzz/Cargo.toml` is in this job the same
       # week — a hardcoded list is how a new target silently never runs.
@@ -71,6 +87,7 @@ jobs:
       - name: build and run every target briefly
         working-directory: fuzz
         run: |
+          cargo run --locked --example generate_corpus
           cargo run --locked --example generate_matrix_reuse_corpus
           cargo fuzz build
           for target in $(cargo fuzz list); do
@@ -176,9 +193,9 @@ jobs:
   miri:
     # Same public-repository guard as above.
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
-    name: miri (varlit-core portable unit tests)
+    name: miri (unsafe modules)
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -190,13 +207,34 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: miri
-      # Exclusions name exact tests and measured reasons in the public manifest.
-      # The runner rejects stale/ambiguous filters and verifies the final test
-      # count. Unknown unsupported calls, UB and all other failures stay fatal.
-      # Directory fsync is native/ASan coverage: never stub production durability
-      # just to make Miri green. Default alias/validity checks remain enabled.
-      - name: unit tests under Miri
+      # The runner checks that the files allowing `unsafe` are exactly those
+      # in scripts/miri-scope.json, selects the unit tests of the interpreted
+      # ones and verifies the final test count. Unknown unsupported calls, UB
+      # and all other failures stay fatal. Default alias/validity checks
+      # remain enabled.
+      - name: unit tests of the unsafe modules under Miri
         run: python3 scripts/check_miri.py
+      # The same unsafe code interpreted for a 32-bit and a big-endian
+      # target: layouts and allocation sizes differ on the first, and the
+      # bulk numeric decode swaps bytes only on the second.
+      - name: unit tests of the unsafe modules under Miri, 32-bit
+        run: python3 scripts/check_miri.py --target i686-unknown-linux-gnu --output target/miri-report/i686
+      - name: unit tests of the unsafe modules under Miri, big-endian
+        run: python3 scripts/check_miri.py --target s390x-unknown-linux-gnu --output target/miri-report/s390x
+      # Nothing executes big-endian code natively in CI, so Miri is also the
+      # only place the byte-order-sensitive safe code runs on such a target:
+      # the wire layouts, the row packers and the snapshot codecs. The matrix
+      # tile tests are left out for their cost under an interpreter; their
+      # encoding uses explicit little-endian conversions throughout.
+      - name: byte-order-sensitive unit tests under Miri, big-endian
+        run: |
+          python3 scripts/check_miri.py --target s390x-unknown-linux-gnu \
+            --prefix native_layout:: --prefix format:: --prefix anchor:: \
+            --prefix packed_rows:: --prefix spill_rows:: --prefix snapshot:: \
+            --prefix scalable_extent:: --prefix sync_marker:: \
+            --output target/miri-report/s390x-logic
+      - name: ownership refusal, callback errors and real cleanup under Miri
+        run: python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
       - name: array decoding and partial-drop contracts under Miri
         env:
           MIRIFLAGS: -Zmiri-disable-isolation

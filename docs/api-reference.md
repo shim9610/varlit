@@ -3,6 +3,102 @@
 This is a practical public API map for application authors. It is not a
 rustdoc replacement; it explains which API to reach for and what it means.
 
+This page describes Varlit 0.13.0, including read validation selection, range
+streaming and fallible ownership. See [API changes](api-changes.md#0130).
+
+## Read validation
+
+`ReadLimits::with_read_validation` selects optional read-side checks independently
+of the checksum policy stored in the format. Data checksums use cyclic redundancy
+checks (CRCs).
+
+| Selection | Data CRC | Additional structure checks |
+| --- | --- | --- |
+| Unset (`None`) | Existing format behavior | Existing backend behavior |
+| `ReadValidation::FULL` | On | On |
+| `ReadValidation::CRC_ONLY` | On | Off |
+| `ReadValidation::STRUCTURE_ONLY` | Off | On |
+| `ReadValidation::TRUSTED` | Off | Off |
+
+For a runtime override that preserves the format's other resource settings:
+
+```rust,no_run
+# fn open(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<varlit::VarlitReader> {
+use varlit::{ReadLimits, ReadValidation};
+let limits = ReadLimits::MISSING.with_read_validation(ReadValidation::TRUSTED);
+spec.open_reader_with_resource_limits(path, limits)
+# }
+```
+
+For indexed handles, set `DiskIndexOptions::limits` to that same `limits` value.
+`overlay` replaces an existing selection only when the new one is explicit;
+`tighten` keeps an existing declaration. `effective_read_validation(integrity)`
+resolves record-payload checks; backend admission also distinguishes the unset
+compatibility case. An explicit CRC-on selection rejects a checksum-free format
+with `InvalidFormatSpec`; reading stored CRCs requires the `integrity` feature.
+
+Every mode retains extent/overflow checks, resource and decoder limits, finite
+traversal and committed-publication guards. Protocol/generation checksums remain.
+`TRUSTED` neither authorizes `TrustedUnbounded` nor expands a resource budget.
+Skipped checks may allow wrong but well-formed data to be returned. Explicit
+`verify_all`, recovery and index reconstruction retain their strict admission
+contracts; standalone `ChunkedBytes` checks remain independent. See the
+[read-policy contract](design/read-validation-policy-review.md) for framing I/O
+and the [mmap contract](#mmap-and-zero-copy) for backing-file requirements.
+
+## Fallible ownership
+
+`TryClone::try_clone(&self) -> Result<Self>` creates an owned copy using fallible
+allocations. Refusal releases partial output and leaves the source unchanged.
+There is no blanket implementation for `T: Clone`: user implementations and any
+hash/equality callbacks must uphold the same contract. Existing public `Clone`
+implementations keep their original behavior.
+
+Supported values include `Vec`, `String`, `PathBuf`, `HashMap`, `VecDeque`, `Box`,
+`Option`, scalar/copy arrays, and Varlit's `BlockVec`, `KeyedBlockVec`,
+`ChunkedBytes`, `PackedBitmap`, `MatrixDimensions` and
+`LayoutValue`. Shared owners clone their reference count without allocating.
+`BTreeMap` has no `TryClone` implementation in this change.
+
+`ScanCancellationToken::try_new() -> Result<ScanCancellationToken>` reports
+shared-owner allocation refusal. Token `TryClone` shares the existing flag;
+it does not reset cancellation. `new` and `default` remain infallible APIs.
+
+`try_box(value) -> Result<Box<T>>` reports storage refusal. It consumes the input
+and drops it normally on failure; clone the source fallibly first if the source
+must remain available. `try_box_with(|| -> Result<T> { ... })` reserves the Box
+before invoking the initializer. If reservation fails, the initializer is not
+called; if initialization returns an error, the storage is released and that
+error is returned. `Box<T>::try_clone` follows this reservation-first order.
+The initializer is consumed even when it is not called, so its owned captures
+are dropped normally; borrow the source if it must remain available for retry.
+
+`try_box_uninit::<T>() -> Result<Box<MaybeUninit<T>>>` reserves storage without
+constructing `T`. Use `Box::write` to initialize it safely, or write in place and
+uphold `assume_init`'s safety requirements. This is useful for large values that
+should not first be constructed on the stack. The `with` callback still returns
+its value by value and does not remove arbitrary stack temporaries. Dropping an
+uninitialized Box releases its storage without dropping a `T`.
+If caller-controlled initialization writes owned fields in stages, the caller
+must also clean up those initialized fields when abandoning that initialization.
+
+The caller can release other storage and retry after refusal; the helpers impose
+no retry policy. Initializers, user `TryClone` implementations and destructors
+must themselves return normally. A `Result` signature cannot convert their
+panics, aborts or nontermination into an allocation error.
+
+Internal shared file/page owners use fallible allocation without changing public
+`std::sync::Arc` types or persisted file formats.
+
+Direct buffer/box refusal uses `Error::AllocationFailed`; internal shared-owner
+refusal can surface as `Error::Io` with `std::io::ErrorKind::OutOfMemory`.
+After publication, also inspect `Error::ErrorContextAllocationFailed` before
+retrying, because its inline context can indicate an already completed or
+uncertain operation.
+
+These are scoped allocation-refusal contracts, not a global OOM guarantee. See
+[allocation limitations](known-limitations.md#72-some-allocations-abort-instead-of-returning-an-error).
+
 ## Generated Format API
 
 For a format declared as:
@@ -43,6 +139,8 @@ the macro generates:
 | `AppFormat::diagnostics()` | static format diagnostics |
 | `AppFormat::diagnose_file(path)` | read-only file diagnostics |
 | `AppFormat::self_test(path)` | build an end-to-end self-test |
+| `AppFormat::check_file(path)` | explicit typed inspection with automatic block registration |
+| `AppFormat::check_file_with_resource_limits(path, limits)` | inspect with finite caller-selected resource limits |
 
 `AppFormat::create` and `create_writer` create-or-truncate the path. For callers
 that must prove they created and own the file (diagnostic scaffolding, self-test
@@ -142,10 +240,12 @@ is where the next offset lives.
 
 ```rust
 let newest = file.key_tail_offsets::<Reading>()?[&sensor];
+let (mut scratch, mut reading) = (Vec::new(), Reading::empty());
 for step in file.keyed_chain(newest)? {
     let entry = step?;
     if entry.block_id == Reading::ID {
-        history.push(file.read_block_at::<Reading>(entry.record_offset)?);
+        file.read_block_at::<Reading>(entry.record_offset, &mut scratch, &mut reading)?;
+        history.push(reading.clone());
     }
 }
 ```
@@ -180,111 +280,32 @@ decrease, so a crafted or damaged file cannot make a walk loop.
 CPU, I/O, or memory; large trusted files should use the scalable APIs or explicit
 wider limits instead.
 
-### MatrixMetadataResidency
+### Matrix metadata
 
-`ReadLimits::matrix_metadata_residency` declares how much of a matrix's
-persisted commit metadata a reader keeps resident. It is set with
-`ReadLimits::with_matrix_metadata_residency`, and it is a reader-side policy
-only: no on-disk byte depends on it, so two processes may open the same file with
-different bounds.
+`MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits`
+fields, setters and accessors for them
+(`matrix_metadata_residency`, `matrix_metadata_verification`,
+`matrix_generation_cache_bytes`, `matrix_directory_cache_bytes`, their `with_*`
+setters, `effective_matrix_metadata_residency()`,
+`effective_matrix_metadata_verification()` and
+`default_matrix_metadata_cache_bytes()`) were removed in 0.13.0. Tiled matrix
+storage never read them. The `max_matrix_*` limits remain and are enforced at
+open.
 
-Residency is **always demand-filled and bounded**; the only thing left to declare
-is the bound. `MatrixMetadataResidency::Lazy { cache_bytes }` reads the persisted
-page index at open and nothing else — no page payload and no page digest. A
-commit-map page is read, authenticated against its stored digest, and cached the
-first time a bit inside it is addressed, and the least recently used cached page
-is dropped when admitting another would exceed `cache_bytes` (rounded up to a
-whole 4096-byte page, with a one-page floor).
+A tiled reader keeps no commit-bitmap cache. It reads a tile's commit bitmap
+with the cells it is reading and checks the bitmap's CRC32 on every read. What
+it does keep is a fixed-size table of resolved tile positions and, for its
+snapshot, an overlay of the ranges published since the last checkpoint (see
+[durability](durability-model.md#what-readers-see)).
 
-The field's **unset** state is `MatrixMetadataResidency::Missing`, which is what
-every `ReadLimits` constructor carries until someone declares a policy. It resolves
-to `MatrixMetadataResidency::DEFAULT` via
-`ReadLimits::effective_matrix_metadata_residency()` — read that rather than the
-field, because it never yields `Missing`. `DEFAULT` is `Lazy` with
-`DEFAULT_CACHE_BYTES` (2 MiB = 512 commit-map pages, derived as
-`ReadLimits::STANDARD.max_matrix_bitmap_bytes / 32`), clamped down to whatever
-`max_matrix_bitmap_bytes` is in force.
-
-A **declared** `cache_bytes` is admitted against `max_matrix_bitmap_bytes` at
-open, so the option cannot be used to raise a declared ceiling; the **derived**
-default is clamped to that ceiling instead, so a default can never be the reason
-an open fails. A live set larger than the ceiling is therefore *openable* rather
-than refused — the ceiling bounds a cache, not an admission.
-
-`cache_bytes` bounds **each bitmap, not each reader**: every commit category and
-every block validity map owns a cache of its own, so a format with `n`
-demand-loaded maps bounds itself at `n * cache_bytes`. The bound is still
-independent of the file's size.
-
-**0.5.0 removed `MatrixMetadataResidency::EagerVerified`.** It materialised every
-published page for the whole session and made `max_matrix_bitmap_bytes` an
-availability limit. What callers actually wanted from it — authenticating the
-whole commit map, and the complete `MatrixRecoveryReport` that follows — was a
-*side effect* of that load and is now its own policy,
-[`MatrixMetadataVerification`](#matrixmetadataverification), which retains one
-4096-byte buffer and is on by default. Nothing was left behind as an alias,
-because a name promising eager residency for a demand-filled cache would be worse
-than a compile error.
-
-Three consequences are part of the residency declaration:
-
-* A page is authenticated when it is faulted in: a page whose bytes disagree with
-  its digest is reported as `Error::MatrixFatalCorruption` by the read that
-  touches it, so no read ever answers from unverified bytes. Whether the *map as a
-  whole* is checked, and when, is `MatrixMetadataVerification`.
-* A page the persisted index does not name still reads as clear, and that is a
-  fact read from the original directory rather than inferred from the cache.
-  "Not cached" and "not published" stay distinct. AtOpen detects invalid directory
-  entries at open; OnDemand checks accessed metadata and leaves the full scan to
-  `verify_matrix_metadata()` or a destructive CRC rebuild.
-* Cache misses and evictions preserve the captured confirmed generation.
-  Only `follow(&mut self)` adopts later published pages.
-
-### MatrixMetadataVerification
-
-`ReadLimits::matrix_metadata_verification` declares **when** a matrix's commit
-metadata is authenticated as a whole. It is set with
-`ReadLimits::with_matrix_metadata_verification`, composes through
-`overlay`/`tighten` exactly as the residency policy does, and resolves through
-`ReadLimits::effective_matrix_metadata_verification()`.
-
-The pass reads every page of every commit map named by the persisted page index
-**unioned with** the platform's allocation map, authenticates each against its
-stored digest, and folds the outcome into `MatrixRecoveryReport`. The union's
-second term is what detects stray bytes in a page the matrix never published; the
-first keeps the pass bounded where no allocation map is available. Cost:
-`O(live pages + allocated pages)` bytes read, and one reusable 4096-byte page
-buffer retained — nothing it reads becomes resident, at any matrix size.
-
-What only verification produces:
-
-* the `Recoverable` `MatrixCorruptionKind::CommitMap` finding for a category whose
-  map disagrees with its digests;
-* the whole-category quarantine behind `Error::MatrixCommitQuarantined`, which
-  fails every access to that category closed — including a
-  `RecoveryPolicy::Strict` writer — instead of refusing only the pages a reader
-  happens to touch;
-* the `RebuildCommitMap` / `ClearCategory` recommendations that make the
-  documented recovery path reachable;
-* **any examination at all of a page the persisted index does not name.** Nothing
-  else ever reads such a page: a demand fault-in only reads pages the index names.
-  With verification off, stray bytes written out of band into a page the matrix
-  never published are not detected later — they are not looked at.
-
-| Variant | Meaning |
-| --- | --- |
-| `Missing` | Unset. Resolves to `DEFAULT`. |
-| `AtOpen` | Verify while opening. **`DEFAULT`.** A damaged matrix announces itself at open and a writer is refused before it can mutate a damaged category. |
-| `OnDemand` | Do not verify while opening; verify when asked, with `verify_matrix_metadata()`. Open reads the persisted page index only and does not query the allocation map. |
-
-`verify_matrix_metadata()` on a reader, writer, or `VarlitFile` runs the same pass
-on demand and returns the same report. It **reports; it does not quarantine**: the
-fail-closed gate is derived once, at open, from the findings the layout is
-assembled with, so a caller who needs a damaged category failed closed reopens
-with `AtOpen`. Under `OnDemand` and without such a call, per-page authentication
-at fault-in is the only verification that happens — which is why there is no
-`Never` variant: turning verification off removes the verdict, never the check on
-bytes a read actually answers from.
+No open runs a matrix verification pass.
+`verify_matrix_metadata()` on a reader, writer or `VarlitFile` is the
+verification pass. It visits every tile that exists in the handle's view,
+checks each tile's header and commit bitmap against their CRC32s, and returns
+a `MatrixRecoveryReport` with a `Recoverable` `CommitMap` finding per damaged
+tile and a `ClearCategory` recommendation per affected category. It reports and
+changes nothing. `matrix_recovery_report()` was removed in 0.13.0. See
+[recovery](recovery-model.md).
 
 `max_keyed_tail_bytes` (`limits { keyed_tail: ... }`) now bounds the nominal
 in-memory batch of each writer's keyed-tail cache. At the boundary the writer
@@ -315,8 +336,10 @@ without the resident input directory or the per-block priming scans.
 Native handles may scan records at open, but directory and scan buffers are
 bounded by an explicit finite `max_index_bytes`; the unbounded default uses
 2 MiB per buffer. Excess rows use private
-temporary files. A directory row is 16 bytes on scratch storage; full entries
-are reconstructed from record headers/footers on demand. Fixed row/page workspace
+temporary files. An ordinary private directory row is 13 bytes: an offset,
+block ID and committed-state byte. Eligible rewritten directories use compressed
+private rows within the existing allowance; full entries are reconstructed from
+record headers/footers on demand. Fixed row/page workspace
 is additional. Open I/O still scales with records when no usable fast metadata
 route applies. Reordered sequences use a temporary uniqueness index.
 
@@ -331,17 +354,11 @@ do not.**
   internal *segment* record covering the records that commit point added, chained
   to the previous one through the record footer's `prev_same_block_offset`. Open
   confirms a record footer at the end of the file and walks that chain backwards,
-  reading one record per commit point and **no data record at all**. Measured on
-  one Linux host with a commit point every 256 records: an 852 MB, 200,000-record
-  file opens in 370 ms chained against 5,867 ms scanning, framing 782 records
-  instead of 200,782. What it removes is the open-time walk, not the directory:
-  the directory it produces has the same bounded-buffer/spill policy as a scan.
+  reading one record per commit point instead of scanning data-record headers.
+  The resulting directory uses the same bounded-buffer/spill policy as a scan.
   A chain whose decoded staging exceeds the current buffer falls back to bounded
-  record framing; the historical timings above do not cover that fallback. Its cost is on disk — a segment
-  carries an index entry per record it covers, so the file grows with the
-  record count (measured: +3.67 MB on a 31 MB, 50,000-record file). **A writing
-  session must end
-  with `flush` or `commit`** — a data record at the end of the file leaves open
+  record framing. Segment payloads add disk storage proportional to their covered
+  record count. **A writing session must end with `flush` or `commit`** — a data record at the end of the file leaves open
   no chain to start from, and it silently scans instead. See [Known Limitations
   §2.1](known-limitations.md#21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index)
   for the full table, the other costs, and every fallback.
@@ -380,7 +397,7 @@ resident index size; use `ReadLimits::UNTRUSTED` for input you did not produce.
 `max_file_len` is accepted and inert — nothing enforces a file-length ceiling;
 see [Known Limitations](known-limitations.md).
 
-The petabyte-scale path is [Scalable Stream And Indexed
+For bounded-directory workloads, use [Scalable Stream And Indexed
 Handles](#scalable-stream-and-indexed-handles) below, available by default. `VarlitReader` is a snapshot as of its own open: records
 another handle appends afterwards are not visible until it advances with
 `follow()` or is reopened. See
@@ -388,17 +405,38 @@ another handle appends afterwards are not visible until it advances with
 
 ### Reads that fill a buffer you own
 
-Every read that returns a collection has an `_into` twin taking the buffer
-instead. `out` is cleared and then filled, so a caller that reuses one buffer
-across calls or across files allocates once and never again. The allocating form
-stays as a thin wrapper — nothing breaks.
+Every typed read decodes into a value you own. `get`, `cursor().next_into`,
+`StreamingBlocks::next_into`, `read_block_at`, `decode_block_into`,
+`read_header_block`, `read_matrix_cell`, indexed `get` and their generated
+wrappers take `out: &mut T` and decode into it, reusing the `Vec`s and `String`s
+it already owns. Start from `T::empty()` (`VarlitEmpty`) or any existing value
+and keep it across a loop:
+
+```rust
+let mut cursor = reader.frames()?;
+let mut frame = Frame::empty();
+while cursor.next_into(&mut frame)? {
+    consume(&frame); // borrow it; the next step decodes over it
+}
+```
+
+A `bool` result means present (`true`) or absent / end of walk (`false`, `out`
+untouched). After an error `out` is valid but its contents are unspecified. The
+in-place decode is charged the same materialization budget as a fresh decode and
+refused at the same limit.
+
+The collection reads listed below accept reusable caller-owned buffers.
+`out` is cleared and then filled. Reusing sufficient capacity can avoid growing
+the outer buffer, but larger results may reserve more space, and decoded values,
+metadata entries and internal scratch may allocate separately. These `Vec` and
+`HashMap` APIs do not impose a fixed-capacity, no-growth contract.
 
 | allocating | caller-supplied |
 | --- | --- |
 | `index_entries()` | `index_entries_into(&mut Vec<RecordIndexEntry>)` |
 | `all_metadata()` | `all_metadata_into(&mut Vec<(String, Vec<u8>)>)` |
 | `blocks::<T>()` | `block_entries_into::<T>(&mut Vec<RecordIndexEntry>)` |
-| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record; bounded by your buffer, not by the file |
+| — | `decode_blocks_into::<T>(&mut Vec<T>)` — decodes **every** matching record into a growable output, decoding into the elements it already holds; not a bounded-memory iterator |
 | `blocks_migrated::<F, T, M>()` | `blocks_migrated_into::<F, T, M>(&mut Vec<T>)` |
 | `keyed_blocks::<T>()` | `keyed_blocks_into::<T>(&mut Vec<RecordIndexEntry>, &mut HashMap<..>)` |
 | `materialized_keyed_blocks::<T>()` | `materialized_keyed_blocks_into::<T>(&mut HashMap<..>)` |
@@ -418,13 +456,13 @@ Reading one record you already hold an entry for, into a buffer you own:
 
 | API | Meaning |
 | --- | --- |
-| `read_payload_into(&entry, &mut Vec<u8>)` | stored bytes, checksum-verified |
+| `read_payload_into(&entry, &mut Vec<u8>)` | stored bytes, checked under the selected read policy |
 | `read_logical_payload_into(&entry, &mut Vec<u8>)` | decompressed if the record is compressed |
-| `decode_block_into::<T>(&entry, &mut scratch)` | decode, reading the bytes through `scratch` |
+| `decode_block_into::<T>(&entry, &mut scratch, &mut out)` | decode into `out` (reusing what it owns), reading the bytes through `scratch` |
 
 All three are bound to this open handle's snapshot, not to a path. The entry is
-yours and is therefore not trusted: an extent past the snapshot is refused, and
-bytes that do not match the entry's checksum are refused.
+yours and is therefore not trusted: an extent past the snapshot is refused.
+Checksum mismatches are refused when the selected read policy verifies data CRCs.
 
 ### Reads resolved through a directory you supply
 
@@ -471,7 +509,8 @@ let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;          // no read yet
 let hit = map.find(|entry| entry.block_id == Note::ID)?;
 if let Some(entry) = hit {
-    let note: Note = file.decode_block_into(&entry, &mut payload)?;
+    let mut note = Note::empty();
+    file.decode_block_into(&entry, &mut payload, &mut note)?;
 }
 let points = file.with_directory(&map)?.blocks::<Point>()?;  // the prefix walked
 map.clear();
@@ -484,19 +523,11 @@ the map is alive.
 
 A second question resumes where the first stopped, and `find` searches what is
 already framed before it reads anything, so asking twice costs the records
-between the two answers. `release()` is the bounded-memory pass: `fill_to(k)`,
-use them, `release()`, repeat — memory is your `k` entries however long the
-file is, and no record is read twice.
-
-Measured on a 50,000-record, 31 MB file, wanting ten records at position 25,000:
-
-| route | read syscalls |
-| --- | --- |
-| `index_entries_into` (all `N`) then read | 100,238 |
-| `blocks::<T>()` then `get(i)` ×10 | 100,238 |
-| `scan()`, break at 25,010 | 50,028 |
-| `record_map` `fill_to(25_010)` then read | 50,058 |
-| `record_map` `find` the first record | **13** |
+between the two answers. For an incremental directory pass, use `fill_to(k)`,
+process the entries, then `release()` and repeat. This bounds retained directory
+entries by the chosen batch; buffer capacity and fixed scratch add to that
+storage. The framing cursor advances without rescanning the released prefix.
+Payload reads are separate work.
 
 **What a partial index does not check.** A full open validates sequence
 uniqueness across every record in the file; a map validates nothing beyond the
@@ -536,7 +567,9 @@ Refused (`InvalidFormatSpec`) without `liveness: footer_flags`, for custom
 physical layouts and for matrix storage; refused (`NoResidentDirectory`) on a
 handle that keeps no directory.
 
-### An open that reads no record
+<a id="an-open-that-reads-no-record"></a>
+
+### Metadata-only open and explicit scans
 
 `open_readonly_lazy(spec, path)` opens from the **open digest** at the end of
 the file: the three facts an open needs that live in no single record — where
@@ -544,32 +577,51 @@ the committed file ends, what sequence the next append takes, and where each
 block's newest record sits. `IndexPolicy::with_open_digest_on_flush(true)`
 writes them at each commit point.
 
-Measured, 50,000 records / 31 MB:
-
-| open | read syscalls | bytes read | file overhead |
-| --- | --- | --- | --- |
-| `open_readonly` (scan) | 100,316 | 3,207,102 | — |
-| `open_readonly` (segment chain) | 516 | 7,332,522 | +3.67 MB |
-| `open_readonly_lazy` (digest) | **20** | **516** | **+12.8 KB** |
-
-The last column is how a format chooses between the two tail records. A segment
-writes an entry per record it covers, so its overhead grows with the file; a
-digest writes twelve bytes per distinct block id, so the 12.8 KB above is a
-hundred flushes' worth and would be the same at a billion records. What a
-segment buys for its size is an open that *builds the index*; a digest
-deliberately does not, and pairs with `record_map` instead.
-
 The handle keeps no directory. `blocks`, `scan` and `keyed_blocks` return
 `Error::NoResidentDirectory` and are answered through `with_directory(&map)`;
 `block_chain`, `block_tail_offset`, `read_block_at` and every entry-taking
 `_into` read need no directory and work directly — which is what the block tails
 are in the digest for.
 
-**It falls back to the full scan** for a file with no usable digest: one written
-before the option was enabled, one whose writer appended past its last commit,
-one truncated or rotted. That is not an error and the answer is identical, but
-it is four orders of magnitude, so `open_readonly_lazy_with_report` returns
-`LazyOpenSource::{Digest, FullScan}` rather than leaving it to a stopwatch.
+Lazy open never starts a full scan after a metadata error. It uses the header
+tail table when declared, otherwise the trailing digest. The selected source
+must be usable; it does not silently switch sources after failure.
+
+| API | On unusable summary metadata |
+| --- | --- |
+| `VarlitFile::open_readonly_lazy[_with_report]` | Return an error; no scan |
+| `VarlitFile::open_lazy[_with_report]`, `VarlitWriter::open_lazy[_with_report]` | Return an error and release the writer lock; no scan or native-tail truncation |
+| `VarlitFile::open_readonly_scan` | Explicitly reconstruct read-only state without retaining a directory |
+| `VarlitFile::open_scan`, `VarlitWriter::open_scan` | Explicitly use normal scanning-writer recovery, including uncommitted-tail truncation |
+| `*_lazy_or_scan[_with_report]` | Preserve the former automatic summary-to-scan behavior |
+
+`Error::LazyOpenMetadataUnavailable { metadata }` identifies a missing, stale or
+structurally invalid selected summary. This intentionally does not claim to
+distinguish missing metadata from all possible corruption without scanning.
+Specific I/O, allocation, checksum, schema and resource errors are propagated.
+`LazyOpenVerificationRequiresScan` means the configured AtOpen payload
+verification requires a scanning API. A strict successful report is
+`LazyOpenSource::HeaderTails` or `Digest`; only the explicit automatic mode can
+report `FullScan`. Scanning can also fail and returns its own error.
+
+The `*_lazy_or_scan` APIs preserve legacy recovery: they try header tails, then
+the trailing digest, then a scanning open. Except for the existing missing-limit
+and trusted-unbounded authorization refusals, metadata errors can be replaced by
+the scan result. Select strict lazy open when the original error must be retained.
+
+```rust,no_run
+# fn open(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<varlit::VarlitFile> {
+use varlit::{Error, VarlitFile};
+match VarlitFile::open_readonly_lazy(spec, path) {
+    Ok(reader) => Ok(reader),
+    Err(Error::LazyOpenMetadataUnavailable { .. }) => {
+        // Application policy explicitly permits reconstruction here.
+        VarlitFile::open_readonly_scan(spec, path)
+    }
+    Err(error) => Err(error),
+}
+# }
+```
 
 The option requires `block_offset_chain` and composes with both
 `segment_on_flush` and `checkpoint_on_flush` — the three answer different
@@ -709,12 +761,14 @@ varlit_format! {
 
 let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
-assert_eq!(file.read_header_block::<Watermark>()?, Some(watermark));
+let mut mark = Watermark::empty();
+assert!(file.read_header_block::<Watermark>(&mut mark)?);
+assert_eq!(mark, watermark);
 ```
 
 | method | takes | does |
 | --- | --- | --- |
-| `read_header_block::<T>()` | `&self` | decodes `T` from the cached header; no I/O, `None` if never written |
+| `read_header_block::<T>(&mut out)` | `&self` | decodes `T` from the cached header into `out`; no I/O, `false` if never written |
 | `write_header_block(&block)` | `&mut self` | writes it in place, replacing any earlier value for the same id |
 | `remove_header_block::<T>()` | `&mut self` | removes it, freeing its bytes |
 | `seal_header_slots()` | `&mut self` | fixes the checksum and refuses every later write |
@@ -787,9 +841,8 @@ would have made `rolling` and `sealed` silently do nothing in a default build.
 
 Undeclared, the region costs nothing: the header bytes and
 `computed_schema_hash()` are the ones the format produced before it existed. It
-is refused on a format declaring matrix blocks — the matrix creation nonce and
-layout header sit at fixed offsets after the file header, which a reserved
-region would move.
+combines with matrix blocks: a matrix's records start after the file header,
+wherever it ends (`header_tails_and_header_slots_combine_with_a_matrix`).
 
 ## Scalable Stream And Indexed Handles
 
@@ -911,7 +964,7 @@ Manual `VarlitBlock` implementations must state
 generated blocks already provide the exact value.
 
 See [Scalable Stream And Disk-Index I/O](scalable-io.md) for declarations,
-mode selection, durability ordering, checked extent types, and measured costs.
+mode selection, durability ordering and checked extent types.
 
 `scan()` yields entries whose physical payload can be read through
 `RecordIndexEntry`. Use `read_payload_limited(path, physical_limit)` for a
@@ -1039,106 +1092,39 @@ Matrix API exists on `VarlitFile`, `VarlitReader`, `VarlitWriter`, and generated
 typed wrappers.
 
 **Matrix reads take `&self`.** `read_matrix_cell`, `matrix_cell_payload`,
-`read_matrix_aux`, `matrix_aux_len` and `matrix_cell_status` all borrow the
-handle shared, on all three handle types. They read through positional I/O
-(`pread` / `seek_read`) over immutable state, so no cursor moves: several
-threads may read through **one** handle concurrently, and
-`VarlitReader`, `VarlitFile` and `VarlitWriter` are `Sync` and `Send` by derivation
-— there is no `unsafe impl` for any of them. Existing callers holding a
-`let mut reader` keep compiling. Writes are unaffected and still take
-`&mut self`. `copy_matrix_cell_bytes_from` also takes its *source* handle by
-shared reference.
+`read_matrix_aux`, `matrix_aux_len` and `matrix_cell_status` borrow their handle
+by shared reference. Writes and `follow()` still require `&mut self`.
+`copy_matrix_cell_bytes_from` also borrows its source handle by shared reference.
+A shared borrow does not make the handle safe to share between threads.
 
-Sharing a handle is also **faster** than not sharing it was, which is a separate
-claim from the type signature and is measured rather than argued. On Windows,
-`ReadFile` against a synchronous handle serialises on the kernel file object, so
-`&self` alone would give the *right* to share a handle and none of the
-throughput: four threads through one handle measured 0.27x of a single thread
-(91,137 vs 343,285 cell reads/s, `IntegrityPolicy::Crc32`). Varlit therefore
-hands each reading thread its own file object, derived from the open handle with
-`ReOpenFile` — no path, so no re-resolution — the first time that thread reads
-that file. After it, the same measurement is 568,397 reads/s on four threads
-against 256,559 on one (2.2x), matching what four separately-opened readers
-achieve. The handles are read-only (`FILE_GENERIC_READ`), never escape the
-module that owns them, and are closed when the file handle is dropped. On Unix
-`pread` does not serialise, so no extra descriptor is opened at all.
+Reader handles are `Send + !Sync`: each reading thread owns a reader and its
+private caches, and creates its cursors there. Each query reads the reader's
+snapshot; `follow(&mut self)` adopts later publications explicitly. A reader
+does not hold back the writer: one that falls further behind than the
+write-ahead ring holds gets `MatrixSnapshotExpired` instead of a mixed answer.
 
-**Those throughput figures are a recorded historical measurement, not a gate.**
-They were taken on this project's Windows development host, no test re-checks
-them, and nothing fails if they move. The rustdoc on `MatrixReadPool` records
-its own run of the same comparison — 327,037 reads/s on one thread against
-593,337 on four (1.81x) — and the two differ because wall-clock throughput on a
-shared desktop differs between runs.
+`crates/varlit/tests/matrix_concurrent_reads.rs` checks the shared-borrow entry
+points, `Send` handle bounds and correct cell values through independent readers.
+`report_the_scaling_of_independent_handles` reports a timing comparison without
+asserting a speedup. The ignored
+`independent_reader_scaling_beats_one_thread_on_an_idle_host` is a manual
+benchmark, not a CI performance guarantee. Historical shared-handle throughput
+figures do not describe the current ownership model.
 
-**What the suite gates is a counted invariant, not a wall-clock ratio.**
-`crates/varlit/tests/matrix_concurrent_reads.rs` does not assert scaling in wall
-clock. It measures the 1-vs-N ratio and prints it on every run, decides nothing
-by it, and keeps the strict form of it `#[ignore]`d. Split by what a green run
-establishes:
-
-| Contract | Status | Where |
-| --- | --- | --- |
-| Matrix reads issued while a commit-map page-store lock was held is **zero**, and reads issued at all is nonzero. Single-threaded, decided by control flow rather than by the clock, so platform- and load-independent. A fifth test issues a read under the lock deliberately and requires the counter to reach 1, so the zeros are not vacuous; two more require the demand fault-in and the whole-map aggregate to read through the private-handle pool their backing already holds | gate, every run, **every feature configuration** (these counters are `cfg(test)`) | `varlit-core`'s `matrix::page_store_lock_audit_tests`, five tests |
-| The same lock invariant through the public read path: N threads on one handle, a one-page demand cache against four live commit-map pages, preceded by a single-threaded warm-up that establishes that fault-in reads happened at all | gate, on runs with `scalable-fault-injection` (the public counters are behind it) | `no_read_is_issued_while_a_bitmap_page_store_lock_is_held` |
-| The five matrix read entry points compile against `&self` on `VarlitReader`, `VarlitFile` and `VarlitWriter`, and all three are `Send + Sync` | gate, every run | `every_matrix_read_entry_point_takes_a_shared_borrow`, `the_reader_handle_is_sync_and_send` |
-| Four threads sharing one handle each read the right cell value, under `IntegrityPolicy::None` and, where the feature is on, `Crc32` | gate, every run | `threads_sharing_one_handle_read_every_cell_correctly` |
-| 1 thread against N threads through one handle, total reads held fixed at 24,000 | **measured, printed, not a gate** — the line it prints is labelled `MEASUREMENT ONLY` | `report_the_scaling_of_one_shared_handle` |
-| The same comparison asserted at `ratio <= 1.0` | **`#[ignore]`d manual benchmark**, run deliberately on an idle host: `cargo test -p varlit --test matrix_concurrent_reads -- --ignored --nocapture` | `shared_handle_scaling_beats_one_thread_on_an_idle_host` |
-
-One wall-clock ratio is still asserted on every run, and it is in another file:
-`matrix_lazy_residency.rs`'s
-`concurrent_lazy_readers_are_not_serialised_behind_the_page_store` holds
-`ratio <= 1.0` for the lazy fault-in path.
-
-The eager ratio stopped being a gate because it could not fail for the reason it
-was written. It measures between 0.31x and 0.34x on the Windows development
-host, and the round that added the private per-thread handles recorded 1.55x
-with them disabled — but two consecutive `ubuntu-latest` runs of identical,
-healthy code reported 2.14x and 1.43x, and no threshold loose enough to survive
-that spread would still catch the 1.55x convoy it exists to find. The counted
-invariant replaced it because a read issued inside the critical section is a
-property of one thread's control flow: decidable with no second thread, no
-contention, and no quiet machine.
-
-**Every throughput number above is a Windows number, and the private-handle pool
-is `#[cfg(windows)]`.** The Unix path — a shared handle plus `pread` — is
-executed but not measured: CI runs the suite on `ubuntu-latest` as well as
-`windows-latest`, so the path runs there and the counted lock invariant is
-enforced there. The only Unix figures on record are the two ratios above, 2.14x
-and 1.43x; no Unix throughput has ever been published, and the `#[ignore]`d
-threshold has never been run on Unix. See
-[Known Limitations §6.1](known-limitations.md#61-the-unix-code-paths-and-what-the-first-linux-run-found).
-
-Matrix readers are `Send + !Sync`, with one reader and private caches per
-thread. Bitmap caches use owner-local `RefCell`; there is no bitmap mutex or
-shared Windows handle registry. Queries take `&self`. Each query reads the
-captured confirmed generation, including cache misses. `follow(&mut self)` adopts
-a later generation explicitly. Old readers never delay publication or compaction.
-
-The generation page cache defaults to 2 MiB and is configured at open with
-`ReadLimits::with_matrix_generation_cache_bytes(bytes)` (zero disables it).
-
-The original forward/reverse directory has a separate owner-local cache:
-`ReadLimits::with_matrix_directory_cache_bytes(bytes)`, default 1 MiB per bitmap,
-clamped to `max_matrix_bitmap_bytes`. Cache admission charges 4096 bytes plus a
-128-byte entry allowance. Zero or an undersized budget reads without retaining
-windows. Fixed read buffers are additional. Misses read the original generation;
-no temporary mirror is built at open or follow. The legacy
-`matrix_resident_page_index_bytes` diagnostic excludes this optional cache.
-VMAT v5 adds the directly addressed reverse array; older layouts are rejected.
-OnDemand validates headers at open and entries as accessed. AtOpen also streams
-all entries; explicit verification and CRC rebuild validate the directory too.
-It is separate from the per-bitmap residency budget. `matrix_generation()` exposes
-the captured generation and `matrix_generation_path()` names the required `.vmg`
-companion. `compact_matrix()` on a synced writer reclaims obsolete matrix pages
-without invalidating existing readers. See [durability](durability-model.md).
+Matrix files written with the removed `VMAT` layout are refused. `matrix_generation()` returns the number of the published generation
+the handle shows; `follow()` returns record bytes, so a matrix-only
+publication returns zero from it. A tiled matrix keeps its write-ahead ring in
+the primary file, so `matrix_generation_path()` returns the primary path; there
+is no companion file. `FormatSpec::with_matrix_ring_bytes(bytes)` sets the ring
+size of new matrix files. `compact_matrix()` was removed in 0.13.0: overwrites
+do not grow the file, so there is nothing to reclaim. See [durability](durability-model.md#matrix-storage-and-publication).
 
 | API | Meaning |
 | --- | --- |
 | `create_writer_with_dims(path, dims)` | create matrix file with runtime dimensions |
 | `write_matrix_cell::<T>(key, &value)` | encode and write a slot, clearing commit first |
 | `commit_matrix_cell::<T>(key)` | mark a written cell visible |
-| `read_matrix_cell::<T>(key)` | read committed cell or return `MatrixNotCommitted` |
+| `read_matrix_cell::<T>(key, &mut out)` | decode committed cell into `out` or return `MatrixNotCommitted` |
 | `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
 | `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
 | `read_matrix_row_into::<T>(first_axis, out)` | read one complete storage row; slice length equals dimension 1 |
@@ -1150,11 +1136,13 @@ without invalidating existing readers. See [durability](durability-model.md).
 | `matrix_cell_payload::<T>(key)` | checked raw payload bytes for a committed cell |
 | `write_matrix_aux(name, offset, bytes)` | write preallocated noncommit aux bytes |
 | `read_matrix_aux(name, offset, len)` | read aux bytes |
-| `matrix_resume_signal(category)` | classify partial matrix progress; refuses a quarantined category with `MatrixCommitQuarantined` |
-| `matrix_recovery_report()` | report matrix findings/actions |
-| `verify_matrix_metadata()` | run the commit-metadata verification pass now; returns the same report |
-| `rebuild_matrix_commit_from_crc::<T>()` | rebuild commit map from slot CRC evidence; refuses when the CRC-validity evidence is incomplete |
-| `write_matrix_cell_durable` | write/commit with ordered durability barrier, then a post-commit hook |
+| `read_matrix_region_into::<T>(region, out)` / `read_matrix_region_from::<T>(cursor, out)` | read a rectangle row-major into `out`; returns how many cells were filled and a cursor to continue from |
+| `read_matrix_cells_into::<T>(keys, out)` | read the cells `keys` names, in any order and with repeats, into `out` in key order |
+| `matrix_resume_signal(category)` | `Clean` when none or all cells of the category are committed, `Partial` otherwise |
+| `verify_matrix_metadata()` | check every existing tile's header and commit bitmap now and report damaged tiles |
+| `rebuild_matrix_commit_from_crc::<T>()` | rewrite the block's commit bits: committed exactly where a written slot's CRC32 matches |
+| `follow()` | adopt the newest published generation (read-only handles) |
+| `write_matrix_cell_durable` | write/commit with ordered durability barrier, publish, then a post-commit hook |
 
 Matrix run and column reads take `&self` on `VarlitFile`, `VarlitReader` and
 `VarlitWriter`. Format-first readers also expose `cell_run_into`,
@@ -1187,19 +1175,12 @@ let mut column = vec![Cell { value: 0 }; 256];
 reader.read_matrix_column_into::<Cell>(MatrixKey::new(42, 16), &mut column)?;
 ```
 
-Column segments cross growing-chunk boundaries and split into bounded batches.
-Only selected cells must be committed; missing cells in the gaps do not cause
-`MatrixNotCommitted`. Bitmap pages are checked in groups, and chunk descriptors
-are resolved per batch. Close payload/CRC entries share at most 4 KiB read windows,
-with gap coalescing limited to four times useful bytes; distant entries are read
-at their exact offsets. A compressed sub-block is decoded once for its selected
-cells within a batch. No scalar cell API is called.
-
-Physical generation pages and compression can still amplify reads. A strided
-working set larger than the generation cache can repeatedly fault 4 KiB pages;
-`with_matrix_generation_cache_bytes` lets the caller tune that private cache.
-Choose schema order for the primary access direction. A column call does not
-implicitly enlarge caches or retain a transposed copy of the matrix.
+A column read reads each selected cell the way `read_matrix_cell` does: its
+tile's commit bitmap, then its slot. Only selected cells must be committed;
+missing cells in the gaps do not cause `MatrixNotCommitted`. Typed column reads
+decode in bounded batches. A column crosses tiles, so it reads one bitmap and
+one slot per cell; choose schema order for the primary access direction. A
+column call does not retain a transposed copy of the matrix.
 
 Typed column reads budget the caller's output, at most 64 KiB of payload scratch
 (or one larger cell), cumulative decode allocations, and compression workspace.
@@ -1208,15 +1189,14 @@ is fixed-size. On an error discard the output, which may already contain a prefi
 Like run reads, column reads take `&self` and stay on the captured generation;
 only explicit `follow` advances a reader.
 
-A run crosses row and growing-chunk boundaries internally. Plain runs read
-contiguous payload batches, bitmap spans and checksum spans, rather than calling
-`read_matrix_cell` once per cell. One batch is at most 1,024 cells and 64 KiB of
-payload, except that a wider cell requires one slot-sized buffer. Compressed
-chunks decode their bounded sub-blocks; they do not decode the entire chunk.
+A run crosses row boundaries internally. Within a row it reads each tile's
+row segment with one bitmap read and one slot read, rather than calling
+`read_matrix_cell` once per cell. A typed batch is at most 1,024 cells and
+64 KiB of payload, except that a wider cell requires one slot-sized buffer.
 The supplied output is charged to `MaterializedBytes`; typed reads also charge
-one payload buffer and cumulative decoder allocations. Compressed reads reserve
-sub-block workspace too. Fixed metadata scratch is additional. To process a
-large matrix under a small budget, reuse a small output slice across runs.
+one payload buffer and cumulative decoder allocations. Fixed metadata scratch
+is additional. To process a large matrix under a small budget, reuse a small
+output slice across runs. Matrix blocks cannot declare compression.
 
 Every requested cell must be committed. Holes return `MatrixNotCommitted`,
 checksum damage is refused, and readers use their existing captured generation.
@@ -1226,42 +1206,42 @@ file/type endianness, not a cast to native structs. These APIs add no implicit
 sync, reader sharing or locks, and do not alter the file format. They read one
 matrix block at a time; cross-block joins remain application work over batches.
 
-`rebuild_matrix_commit_from_crc::<T>()` now refuses, with
-`Error::MatrixFatalCorruption`, when the block's CRC-validity page index could
-not be enumerated in full (F-04). A rebuild sets a commit bit only where
-slot-valid evidence says the CRC is meaningful; pages missing from a damaged
-validity index read as absent, so rebuilding from them would publish those
-cells as *uncommitted* and erase the previous commit view using evidence that
-was never read. The refusal is unconditional: `with_matrix_fatal_forensics`
-relaxes *reading* fatal state, not a destructive republication, which is the
-same rule the interrupted-rebuild poison already followed. Repair or regenerate
-the validity evidence first. Varlit deliberately offers no implicit way to
-discard unverifiable visibility.
+`rebuild_matrix_commit_from_crc::<T>()` visits every tile of `T`'s block that
+exists and rewrites its commit bitmap whole: a cell is committed exactly when
+its slot was written and the stored CRC32 matches the payload. A cell written
+but never committed, or cleared with `clear_matrix_cell`, keeps its bytes and is
+committed by the rebuild. It does not read the old bitmap, so it works on a
+damaged one, as `clear_matrix_category` does. `MatrixCommitQuarantined`,
+`MatrixFatalCorruption` and `FormatSpec::with_matrix_fatal_forensics()` were
+removed in 0.13.0. See
+[recovery](recovery-model.md).
 
 The hook of `write_matrix_cell_durable` runs **after** the cell is committed
-and synced, so it cannot un-commit anything. A hook failure is reported as the
+and its generation published, so it cannot un-commit anything. A hook failure is reported as the
 typed published outcome `Error::MatrixCommittedButHookFailed { event, source }`
 (the event is boxed so `Error` stays small) rather than a bare error, so a caller can tell "not committed, retry the write"
 from "committed, retry only the notification"; the carried `MatrixCommitEvent`
 is the one the hook was given. Retrying the whole call after that error repeats
 the durable write and re-runs the hook.
 
-The commit sync is the only other step after the commit, and it is typed the
-same way: `Error::MatrixCommittedButDurabilityUnproven { event, source }` means
-the commit bit is in the file, the cell is readable after a clean exit, the
-hook did not run, and only power-loss durability is unproven. Those two are the
-call's only published outcomes; every other error means the cell was not
-committed.
+A failed publication is typed too. `Error::MatrixPublicationUncertain { event,
+source }` means the handle's generation had not advanced when the error came:
+the frames may or may not be on disk, and the next writer open decides whether
+the cell is committed. `Error::MatrixCommittedButDurabilityUnproven { event,
+source }` means the generation had advanced and a later step of `sync()`
+failed. Both poison the writer and skip the hook. A barrier callback's own
+error is returned unchanged, poisons the writer, and means nothing was
+published. See [durability](durability-model.md#ordered-barrier-policy).
 
-That family statement describes the value the call *returns* (F-06). Both
-variants box their event and their source, so building either one allocates
-after the cell is authoritative. Those are shape-sized allocations — fixed by
-the type, never by a file length or caller count — and Varlit allocates
-shape-sized memory infallibly, so an allocator refusal terminates the process
-instead of returning a different outcome. No caller observes a wrong outcome;
-the cell is committed on disk, and reopening the file shows it. The crate-wide
-rule, and the alternatives that were rejected, are in
-`docs/durability-model.md` under "Allocator Failure And Published Outcomes".
+The helper reserves its event and error boxes before mutation with `try_box`.
+The error box is reserved before the cell is written and the event box before it
+is committed; refusal of either returns before the commit bit is set. A later source
+error moves into the reserved box, so the existing post-commit variants require
+no additional allocation. Successful durable cell writes therefore include two
+small allocations. Record/index/replacement paths instead retain inline
+`AllocationFailureContext` facts if detailed error storage is refused; do not
+repeat an already completed append. See `docs/durability-model.md` under
+"Allocator Failure And Published Outcomes" for recovery semantics and scope.
 
 Matrix slot types must have a width fixed by the type itself, because a slot
 needs a stride the compiler knows. Scalars and fixed arrays of them qualify.
@@ -1299,29 +1279,21 @@ different `SCHEMA_FINGERPRINT` or keyedness is rejected with
 `BlockSchemaFingerprintMismatch` / `BlockKeyednessMismatch` instead of
 decoding foreign cells.
 
-When the verification pass finds a damaged commit map, the whole category is
-failed closed: the `Recoverable` `CommitMap` finding is the quarantine flag, and
-no map bytes are retained (0.5.0 removed the retained "recovery evidence" copy and
-the empty replacement map that stood in for it). Cell categories can be rebuilt
-from per-slot CRC evidence; single/per-channel categories must be explicitly
-cleared. Status and value reads return `MatrixCommitQuarantined(category)` instead
-of conflating unavailable evidence with `NotCommitted`; writes reject the category
-until recovery; and `matrix_resume_signal` / `matrix_sidecar_resume_signal` refuse
-it as well, where before 0.5.0 they answered `Clean` from the replacement map.
+A damaged tile commit bitmap is not quarantined. Reads, writes, commits and
+clears of that tile's cells, and the category's `matrix_resume_signal`, fail
+with `InvalidMatrixLayout`; cells of other tiles stay readable.
+`clear_matrix_category` resets the damaged bitmaps, and
+`rebuild_matrix_commit_from_crc::<T>()` can follow in the same writer session
+(`damage_in_place_is_reported_and_a_category_clear_recovers`). See
+[recovery](recovery-model.md).
 
-An overwrite withdraws evidence only in the writer's working pages. Published
-payloads and metadata remain immutable. Partial writes poison the writer;
-readers retain their confirmed generation. `sync()` and explicit Immediate
-publish the new pages; `flush()` or dropping the writer does not. Readers may
-safely overlap writes to the same cells, using a separate reader per thread.
-
-When recovery finds a `Fatal` matrix finding (for example a metadata CRC
-mismatch), default matrix access is fail-closed: every default read, write, aux,
-resume, and rebuild accessor returns `Error::MatrixFatalCorruption` through an
-`O(1)` flag precomputed once at open. `matrix_recovery_report()` stays readable
-so the fatal state can be inspected. Forensic read-through of a fatal-state file
-is an explicit opt-in via `FormatSpec::with_matrix_fatal_forensics()`, which
-sets `FormatSpec::matrix_fatal_forensics`; it does not repair or mutate the file.
+An overwrite stages the new slot in the writer; published bytes change only
+through the write-ahead ring and its checkpoints, so readers keep their
+snapshot until they follow or the ring passes them (`MatrixSnapshotExpired`).
+An I/O error during a matrix mutation poisons the writer. `sync()` and explicit
+Immediate publish the staged changes; `flush()` or dropping the writer does
+not. Readers may overlap writes to the same cells, using a separate reader per
+thread. See [durability](durability-model.md#matrix-storage-and-publication).
 
 ## Physical Layout API
 
@@ -1539,6 +1511,7 @@ Feature-gated APIs:
 | Feature | API | Meaning |
 | --- | --- | --- |
 | `mmap` | `unsafe mmap_payloads()` | mmap append-log payload windows |
+| `mmap` | `unsafe mmap_payload_range(records)` | mmap only the records at resident positions `records` (positions relative to the range) |
 | `mmap` | `unsafe VarlitFile::mmap_payload_window(entry)` | independently map one stored record payload |
 | `mmap` | `unsafe mmap_matrix()` | mmap matrix slot windows |
 | `mmap` | `unsafe mmap_matrix_cell::<T>(key)` | independently map one committed cell, patching only its COW pages |
@@ -1546,11 +1519,36 @@ Feature-gated APIs:
 | `zero-copy` | `unsafe MmapPayloads::raw_fixed::<T>()` | raw fixed block view |
 | `zero-copy` | `unsafe MmapMatrix::raw_cell::<T>(key)` | raw matrix cell view |
 
+`mmap_payload_range(a..b)` maps from record `a`'s header to record `b - 1`'s
+end and copies only those entries; read a large file in successive ranges, or
+map `seen..record_count()?` after each `follow()`:
+
+```rust
+let mut seen = 0;
+loop {
+    reader.follow()?;
+    let now = reader.record_count()?;
+    // SAFETY: the caller guarantees no process rewrites these records while mapped.
+    let fresh = unsafe { reader.mmap_payload_range(seen..now)? };
+    for entry in fresh.index_entries() {
+        fresh.decode_block_into(entry, &mut scratch, &mut out)?;
+    }
+    seen = now;
+}
+```
+
 For bounded mapping workloads, choose an individual window. `MmapPayloadWindow`
 owns that mapping; `as_bytes()` borrows its bytes and `offset()` reports the
 payload's logical file offset. The record route validates the supplied entry
 against its captured snapshot and exposes stored bytes, including compression.
 The matrix route checks cell visibility and optional CRC from the held generation.
+Record windows apply the selected read checks before exposing bytes, including
+with `IntegrityVerification::OnDemand`. Unset policy preserves the declared CRC
+checks. Whole-file mappings verify a record on first access and retain a one-byte
+success flag per record when optional checks are selected; `TRUSTED` omits those
+flags. Repeated checked reads reuse successful verification for
+the immutable mapping's lifetime. Individual windows perform selected checks once
+at construction. CRC detects corruption; it does not authenticate a sender.
 `MmapLen` bounds that cell's bytes; `MaterializedBytes` bounds intersecting COW
 pages, charged at 4096 bytes each. COW patches are copied before the window is
 returned, so modified matrix cells do not promise zero-copy construction.
@@ -1572,17 +1570,17 @@ safe window APIs stay memory-safe through these enforced invariants:
    validated against the actual mapped length before exposure.
 3. `MmapPayloads` owns a copied snapshot index and rejects any
    `RecordIndexEntry` that is not exactly in that snapshot.
-4. Safe accessors perform checked slicing; configured matrix CRCs are verified
+4. Safe accessors perform checked slicing; selected matrix CRCs are verified
    before committed slot bytes are returned.
 5. The mmap owner holds the mapping for its full RAII lifetime, and returned
    slices borrow that owner, so Rust prevents them from outliving the mapping.
 6. Raw zero-copy access additionally validates registration, block kind,
    version, endian, exact size, and alignment before creating a typed reference.
 
-This is a conditional safety proof, not a claim that Varlit can police arbitrary
-external processes. If a caller cannot control every writer, it must use owned
-reads such as `blocks::<T>()`, `read_payload`, or matrix typed reads instead of
-mmap.
+These invariants describe the intended safety argument under the unsafe API's
+preconditions; they are not a machine-checked proof of the mmap implementation.
+If a caller cannot control every writer, it must use owned reads such as
+`blocks::<T>()`, `read_payload`, or matrix typed reads instead of mmap.
 
 ## Compression API
 
@@ -1597,10 +1595,19 @@ mmap.
 | `ChunkedBytes::from_zstd_chunks` | caller-managed chunked blob helper |
 | `ChunkedBytes::decode_to_vec()` | decode with the finite standard logical-payload ceiling |
 | `ChunkedBytes::decode_to_vec_limited(limit)` | decode with an explicit caller ceiling |
+| `ChunkedBytes::decoded_len()` | declared decoded length, without decoding or content authentication |
+| `ChunkedBytes::stream_range(range, buffer, max_window_bytes, visit)` | stream selected decoded bytes through caller scratch; see [range streaming](chunk-streaming.md) |
 
 Compression requires the `compression-zstd` feature when records are actually
 compressed or decompressed. `ChunkedBytes` additionally requires `integrity` for
 per-chunk CRC creation/verification.
+
+Whole-output decoding checks frame/chunk hints against complete encoded-block
+output bounds before reserving output. The decoded-output limit is separate from
+encoded input, native decoder workspace and caller-retained data. Range streaming
+never grows its caller scratch, but zstd still owns its context/history workspace;
+it is not an API for supplying all decoder storage externally. See
+[range selection and retry](chunk-streaming.md).
 
 ## Update, Merge, Compact
 
@@ -1659,6 +1666,10 @@ Normal typed reads reject block-version mismatch. Migration is explicit.
 | `diagnostics()` | static spec report |
 | `diagnose_file(path)` | actual file report |
 | `self_test(path)` | disposable roundtrip builder |
+| `check_file(path)` | generated typed inspection of a quiescent file; missing coverage cannot pass |
+| `check_file_with_resource_limits(path, limits)` | same inspection with finite runtime limits |
+| `FileCheckReport::{checks, preconditions, passed}` | condition results, external preconditions and strict aggregate result |
+| `FormatSelfTest::run_strict()` | all block samples required; warnings and skips fail |
 | `FormatSelfTest::with_block(value)` | append/read sample block |
 | `with_keyed_block(value)` | append/read keyed sample |
 | `with_dims(dims)` | matrix runtime dimensions |
@@ -1666,6 +1677,10 @@ Normal typed reads reject block-version mismatch. Migration is explicit.
 | `with_uncommitted_matrix_cell(key, value)` | verify uncommitted read rejection |
 | `with_matrix_aux(name, offset, bytes)` | write/read aux sample |
 | `cleanup(true)` | after the run, remove only files the run itself created (its native file and `.lock`), verified by object identity |
+
+See the [application qualification template](self-check-guide.md#application-qualification-template)
+for setup, status meanings and unsupported inspection routes. This is an opt-in
+inspection API, separate from ordinary I/O and formal verification.
 
 Report domains:
 
@@ -1717,19 +1732,22 @@ minor-version policy as the rest of the library.
 | `IntegrityFeatureDisabled` | enable `integrity` or disable CRC policy |
 | `MatrixDimensionsRequired` | matrix file creation needs runtime dimensions |
 | `MatrixNotCommitted` | slot bytes exist but commit bit is clear |
-| `MatrixFatalCorruption` | recovery found a fatal matrix finding; default access is fail-closed. Use `FormatSpec::with_matrix_fatal_forensics()` for forensic read-through. Also returned by `rebuild_matrix_commit_from_crc` when the CRC-validity page index is incomplete — that refusal is **not** relaxed by forensic mode, because a rebuild publishes state rather than reading it |
-| `MatrixSidecarMismatch(reason)` | matrix sidecar rejected: wrong native identity, layout generation, creation nonce, or sidecar version; regenerate the sidecar |
-| `InvalidMatrixLayout` | matrix layout bytes are not valid for this build — including a matrix file created before the creation-nonce region existed; recreate the matrix file |
+| `MatrixSnapshotExpired { snapshot, checkpointed }` | a matrix reader's snapshot fell further behind than the write-ahead ring keeps; a checkpoint has written newer values in place. `follow()` or reopen, then read again |
+| `MatrixChecksumMismatch { offset, expected, actual }` | a cell's slot bytes do not match their stored CRC32 |
+| `MatrixCellNotWritten` | `commit_matrix_cell` on a cell whose slot was never written |
+| `MatrixSidecarMismatch(reason)` | matrix sidecar rejected: wrong native identity, matrix metadata offset (reported as `"matrix layout generation"`), creation nonce, or sidecar version; regenerate the sidecar |
+| `InvalidMatrixLayout` | matrix metadata, ring header or a tile commit bitmap failed its check, or the geometry does not fit this spec. A damaged commit bitmap is cleared with `clear_matrix_category`; see [recovery](recovery-model.md) |
 | `MatrixSizeMismatch` | encoded matrix payload does not match slot stride |
-| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes — including a `VMAT` layout version 1, 2, 3, or 4 matrix file (v5 is current; the `MCRC` integrity table is at v2); the artifact is stale and regenerable |
+| `FormatVersionMismatch { expected, actual }` | container/layout version is not the one this build writes; the artifact is stale and regenerable. A matrix file written with the removed `VMAT` layout is instead refused with `SchemaHashMismatch` when the format declares a schema hash |
 | `KeyedChainRequiresKeyedApi { block_id }` | generic `push`/`push_info` cannot maintain the keyed offset chain; use `push_keyed`/`push_keyed_info` or the generated keyed writer |
 | `LimitExceeded { resource: "variable field ids" }` | decoding charged the materialization budget for distinct variable field ids above 63 and the budget ran out |
 | `LimitExceeded { resource: "merge distinct keys" }` | a `*_with_key_limit` merge/compact hit the caller's `K-ever` ceiling; nothing was published |
 | `BlockSchemaFingerprintMismatch` | a block impl disagrees with the format's declared identity for that block id, or two impls share an id with different `SCHEMA_FINGERPRINT` |
 | `BlockKeyednessMismatch` | two block impls share an id but disagree on keyedness |
-| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by redb sidecar create/bootstrap/rebuild |
-| `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed and synced the cell, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
-| `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` put the commit bit in the file and the durability request after it failed. Not a rollback: the cell is committed and readable after a clean exit, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |
+| `PublishedButParentSyncPending` | atomic replacement published, but parent-directory durability is unconfirmed; not a rollback. Also surfaced by sidecar create/bootstrap/rebuild |
+| `MatrixCommittedButHookFailed { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` committed the cell and published its generation, then the caller's post-commit hook failed. Not a rollback: retry the notification with the carried `MatrixCommitEvent`, not the whole call |
+| `MatrixPublicationUncertain { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` failed while publishing, before the handle's generation advanced. The writer is poisoned and the hook did not run; reopen and read the cell before retrying |
+| `MatrixCommittedButDurabilityUnproven { event: Box<MatrixCommitEvent>, source }` | `write_matrix_cell_durable` published the cell's generation and a later step of `sync()` failed. Not a rollback, and the hook did **not** run. The writer is poisoned; reopen and `sync`, then issue the notification with the carried event |
 | `CommittedButDurabilityUnproven { sequence, source }` | `commit_durable` appended the transaction's commit marker and the `flush`/`sync_all` after it failed. Not a rollback: the transaction is committed and `sequence` names the marker. Retry `sync`, not the transaction — re-running it appends a second marker |
 | `WriterLockMarkerNotDedicated { path, reason }` | the `<target>.lock` marker path is a symlink/reparse point, a multi-link object, or not a regular file, so Varlit refused to truncate and rewrite it. Remove or un-alias the marker path |
 | `PublishedButRebindFailed { sequence, source, parent_sync }` | replacement published but the writer could not rebind and was poisoned. `parent_sync: Some(_)` additionally means the parent-directory sync for the published pathname failed in the same publication, so the rename is not yet proved durable against power loss |
@@ -1737,11 +1755,20 @@ minor-version policy as the rest of the library.
 | `WriterLockHeld` | another writer or stale lock exists |
 | `WriterLockBreakRefused` | the explicit lock policy did not prove removal was allowed |
 | `ScanCancelled { progress }` | an explicit scalable scan stopped cooperatively at the reported boundary |
+| `BufferTooSmall { resource, required, provided }` | caller scratch is insufficient; provide a suitable buffer and retry. A nonempty chunk range requires at least one byte |
+| `InvalidChunkedRange { start, end, len }` | decoded range is reversed or exceeds the declared decoded length |
+| `ErrorContextAllocationFailed { context }` | detailed error storage was refused; inspect `AllocationFailureContext` for completed or uncertain publication before retrying |
 
-## Matrix storage environment
+## Matrix file diagnostics
 
-`matrix_storage_diagnostics()` on native file, reader and writer handles returns
-cached observations for sparse allocation and range-removal support. See
-[storage diagnostics](storage-diagnostics.md) for field semantics and actual
-fallback-write counters. `diagnose_file` surfaces unavailable capabilities as
-environment warnings without rejecting the file.
+`diagnose_file` on a file whose format has matrix blocks runs
+`verify_matrix_metadata()`, which checks every tile header and commit bitmap.
+Each finding is reported as the warning `file.matrix.recovery_finding`, and
+the counts of findings and recommended actions as the info diagnostic
+`file.matrix.recovery_report`. If verification itself fails, the report ends
+with the error `file.matrix.verification_failed`.
+
+A tiled matrix allocates what it writes and does not use sparse files or range
+removal, so `diagnose_file` reports no storage warnings for a matrix file.
+`matrix_storage_diagnostics()`, `MatrixStorageDiagnostics` and the zero-range
+and sparse-zeroing accessors on `MatrixRecoveryReport` were removed in 0.13.0.

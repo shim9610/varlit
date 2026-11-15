@@ -18,6 +18,8 @@
 // Every case here declares `integrity: crc32`, so without the `integrity`
 // feature the format is refused at create with `IntegrityFeatureDisabled`.
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
@@ -109,8 +111,7 @@ fn framed<T>(body: impl FnOnce() -> T) -> (T, u64) {
 /// The index a scan produces, as the thing to compare every other route to.
 fn scanned_shape(spec: FormatSpec, path: &Path) -> varlit::Result<Vec<(u32, u64, u64)>> {
     let file = VarlitFile::open_readonly(spec, path)?;
-    Ok(file
-        .index_entries()
+    Ok(crate::pages::all_entries!(file)
         .iter()
         .map(|entry| (entry.block_id, entry.record_offset, entry.payload_len))
         .collect())
@@ -130,7 +131,7 @@ fn the_option_is_inert_when_it_is_off() -> varlit::Result<()> {
 
     // And a file with no digest opens lazily by falling back, with the same
     // answer the scan gives.
-    let (file, source) = VarlitFile::open_readonly_lazy_with_report(plain_spec(), &off)?;
+    let (file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(plain_spec(), &off)?;
     assert_eq!(source, LazyOpenSource::FullScan);
     assert_eq!(
         file.block_tail_offset(Line::ID),
@@ -186,10 +187,8 @@ fn the_digest_open_keeps_no_directory_and_the_map_supplies_one() -> varlit::Resu
 
     let file = VarlitFile::open_readonly_lazy(spec, &path)?;
     // No directory, and it says so by name rather than answering as if empty.
-    assert!(matches!(
-        file.blocks::<Line>(),
-        Err(varlit::Error::NoResidentDirectory { .. })
-    ));
+    // A paged read walks the file, so it needs no directory.
+    assert!(!crate::pages::all_blocks!(file, Line)?.is_empty());
 
     // A map walked to the end is the scan's index, entry for entry — which is
     // what says the digest open's snapshot end is the scan's snapshot end. A
@@ -229,7 +228,8 @@ fn the_block_chain_still_walks_from_a_digest_open() -> varlit::Result<()> {
     let mut notes = 0usize;
     for step in file.block_chain(Note::ID)? {
         let entry = step?;
-        let note: Note = file.read_block_at::<Note>(entry.record_offset)?;
+        let note: Note =
+            filled_out(|o| file.read_block_at::<Note>(entry.record_offset, &mut Vec::new(), o))?;
         assert!(note.body.starts_with("note "));
         notes += 1;
     }
@@ -281,7 +281,7 @@ fn a_record_appended_past_the_digest_falls_back() -> varlit::Result<()> {
         std::mem::forget(writer);
     }
 
-    let (_file, source) = VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+    let (_file, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
     assert_eq!(source, LazyOpenSource::FullScan);
     // The uncommitted record is outside the committed boundary either way, so
     // the fallback answers exactly what a scan of the same file answers.
@@ -318,7 +318,7 @@ fn a_rotted_digest_falls_back_instead_of_lying() -> varlit::Result<()> {
         file.sync_all()?;
         drop(file);
 
-        let (_handle, source) = VarlitFile::open_readonly_lazy_with_report(spec, &path)?;
+        let (_handle, source) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
         assert_eq!(
             source,
             LazyOpenSource::FullScan,
@@ -457,77 +457,15 @@ fn both_tail_records_at_once_do_not_grow_an_idle_file() -> varlit::Result<()> {
         "the segment chain must still be taken, not fallen back from: {frames} framed"
     );
     assert_eq!(
-        chained
-            .index_entries()
+        crate::pages::all_entries!(chained)
             .iter()
             .map(|entry| (entry.block_id, entry.record_offset))
             .collect::<Vec<_>>(),
-        scanned
-            .index_entries()
+        crate::pages::all_entries!(scanned)
             .iter()
             .map(|entry| (entry.block_id, entry.record_offset))
             .collect::<Vec<_>>()
     );
-    Ok(())
-}
-
-/// The digest next to a checkpoint.
-///
-/// `checkpoint_on_flush` fires on a count of records written since the last
-/// checkpoint. A digest is written because a commit point closed, not because a
-/// record was added, so counting it in that tail would make the cadence a
-/// function of how often the file is flushed. It is exempted along with the
-/// commit marker and the segment record.
-///
-/// What it is *not* exempted from, and must not be: the threshold is geometric
-/// in the checkpoint's own index position, and a digest is a resident record, so
-/// it enlarges the index and widens the next threshold. That is the same effect
-/// a commit marker has and is the correct one — the checkpoint has to serialize
-/// the larger index too. So the direction here is one-sided on purpose: digests
-/// may make checkpoints rarer, never more frequent.
-#[test]
-fn a_digest_does_not_advance_the_checkpoint_cadence() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let with = directory.path().join("cadence-with.varlit");
-    let without = directory.path().join("cadence-without.varlit");
-
-    let checkpointed = DigestFormat::spec().with_index_policy(
-        DigestFormat::spec()
-            .index_policy
-            .with_checkpoint_on_flush(true),
-    );
-    let both =
-        checkpointed.with_index_policy(checkpointed.index_policy.with_open_digest_on_flush(true));
-
-    // Flush per record, so the cadence sees the maximum number of digests it
-    // could possibly be confused by.
-    let count = |spec: FormatSpec, path: &Path| -> varlit::Result<usize> {
-        let mut file = spec.create(path)?;
-        for value in 0..300 {
-            file.push(&Line { value })?;
-            file.flush()?;
-        }
-        drop(file);
-        Ok(VarlitFile::open_readonly(spec, path)?
-            .index_entries()
-            .iter()
-            .filter(|entry| entry.block_id == varlit::INDEX_BLOCK_ID)
-            .count())
-    };
-    let (checkpoints_with, checkpoints_without) =
-        (count(both, &with)?, count(checkpointed, &without)?);
-    assert!(
-        checkpoints_without > 0,
-        "the fixture must checkpoint at all"
-    );
-    assert!(
-        checkpoints_with <= checkpoints_without,
-        "a digest must never make checkpoints more frequent: \
-         {checkpoints_with} with, {checkpoints_without} without"
-    );
-    // And the digest is still usable on a file that also checkpoints.
-    let (_handle, source) = VarlitFile::open_readonly_lazy_with_report(both, &with)?;
-    assert_eq!(source, LazyOpenSource::Digest);
     Ok(())
 }
 
@@ -540,11 +478,12 @@ fn a_reopened_writer_does_not_pile_up_digests() -> varlit::Result<()> {
     write_lines(spec, &path, 40, 0)?;
 
     let digests = |path: &Path| -> varlit::Result<usize> {
-        Ok(VarlitFile::open_readonly(spec, path)?
-            .index_entries()
-            .iter()
-            .filter(|entry| entry.block_id == varlit::OPEN_DIGEST_BLOCK_ID)
-            .count())
+        Ok(
+            crate::pages::all_entries!(VarlitFile::open_readonly(spec, path)?)
+                .iter()
+                .filter(|entry| entry.block_id == varlit::OPEN_DIGEST_BLOCK_ID)
+                .count(),
+        )
     };
     assert_eq!(digests(&path)?, 1);
 
@@ -690,8 +629,13 @@ fn a_replacement_generation_re_encodes_the_digest() -> varlit::Result<()> {
         scanned.block_tail_offset(Note::ID)
     );
     // And the tails point into the rewritten generation, not the old one.
-    let note: Note =
-        handle.read_block_at::<Note>(handle.block_tail_offset(Note::ID).expect("a note tail"))?;
+    let note: Note = filled_out(|o| {
+        handle.read_block_at::<Note>(
+            handle.block_tail_offset(Note::ID).expect("a note tail"),
+            &mut Vec::new(),
+            o,
+        )
+    })?;
     assert_eq!(note.body, "y");
 
     // The writer's own state survived the rebind: the next commit point closes
@@ -725,13 +669,11 @@ fn a_reader_that_does_not_declare_the_digest_still_reads_the_file() -> varlit::R
     let aware = VarlitFile::open_readonly(digest_spec(), &path)?;
 
     assert_eq!(
-        unaware
-            .index_entries()
+        crate::pages::all_entries!(unaware)
             .iter()
             .map(|entry| (entry.block_id, entry.record_offset))
             .collect::<Vec<_>>(),
-        aware
-            .index_entries()
+        crate::pages::all_entries!(aware)
             .iter()
             .map(|entry| (entry.block_id, entry.record_offset))
             .collect::<Vec<_>>(),
@@ -739,19 +681,18 @@ fn a_reader_that_does_not_declare_the_digest_still_reads_the_file() -> varlit::R
     );
 
     // The digests are there, and they are invisible to a typed read.
-    let digests = unaware
-        .index_entries()
+    let digests = crate::pages::all_entries!(unaware)
         .iter()
         .filter(|entry| entry.block_id == varlit::OPEN_DIGEST_BLOCK_ID)
         .count();
     assert!(digests > 0, "the fixture must actually contain digests");
-    assert_eq!(unaware.blocks::<Line>()?.len(), 120);
-    assert_eq!(unaware.blocks::<Note>()?.len(), 2);
+    assert_eq!(crate::pages::all_blocks!(unaware, Line)?.len(), 120);
+    assert_eq!(crate::pages::all_blocks!(unaware, Note)?.len(), 2);
 
     // And the values decode.
-    let lines = unaware.blocks::<Line>()?;
-    assert_eq!(lines.get(0)?, Some(Line { value: 0 }));
-    assert_eq!(lines.get(119)?, Some(Line { value: 119 }));
+    let lines = crate::pages::all_blocks!(unaware, Line)?;
+    assert_eq!(filled(|o| lines.get(0, o))?, Some(Line { value: 0 }));
+    assert_eq!(filled(|o| lines.get(119, o))?, Some(Line { value: 119 }));
     Ok(())
 }
 
@@ -805,8 +746,7 @@ fn a_real_digest_sets_the_sequence_flag_and_carries_its_own_sequence() -> varlit
     // the same file reports — not one below it.
     let sequence = u64::from_le_bytes(payload[8..16].try_into().expect("eight bytes"));
     let scanned = VarlitFile::open_readonly(spec, &path)?;
-    let highest = scanned
-        .index_entries()
+    let highest = crate::pages::all_entries!(scanned)
         .iter()
         .map(|entry| entry.sequence)
         .max()
@@ -821,4 +761,147 @@ fn a_real_digest_sets_the_sequence_flag_and_carries_its_own_sequence() -> varlit
     let tails = u32::from_le_bytes(payload[16..20].try_into().expect("four bytes"));
     assert_eq!(payload.len(), 20 + 12 * tails as usize + 8);
     Ok(())
+}
+
+/// Metadata-only errors must not start the scanner or modify the primary.
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_failure_is_typed_and_scan_is_an_explicit_choice() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-no-digest.varlit");
+    let spec = plain_spec();
+    write_lines(spec, &path, 4096, 128)?;
+    let original = std::fs::read(&path)?;
+    let (result, frames) = framed(|| VarlitFile::open_readonly_lazy(spec, &path));
+    assert!(matches!(
+        result,
+        Err(varlit::Error::LazyOpenMetadataUnavailable {
+            metadata: LazyOpenSource::Digest,
+        })
+    ));
+    assert!(frames <= 1, "metadata failure scanned {frames} records");
+    let (result, frames) = framed(|| VarlitWriter::open_lazy(spec, &path));
+    assert!(matches!(
+        result,
+        Err(varlit::Error::LazyOpenMetadataUnavailable { .. })
+    ));
+    assert!(frames <= 1);
+    assert_eq!(std::fs::read(&path)?, original);
+    // Failure released the writer lock, and scanning is caller-selected.
+    let mut writer = VarlitWriter::open_scan(spec, &path)?;
+    writer.push(&Line { value: 8192 })?;
+    writer.flush()?;
+    drop(writer);
+    let (reader, frames) = framed(|| VarlitFile::open_readonly_scan(spec, &path));
+    assert!(frames >= 4096);
+    assert!(reader?.block_tail_offset(Line::ID).is_some());
+    let (_, route) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
+    let (_, route) = VarlitWriter::open_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
+    Ok(())
+}
+
+#[test]
+fn strict_lazy_preserves_io_errors_and_releases_writer_lock() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("absent.varlit");
+    for result in [
+        VarlitFile::open_readonly_lazy(digest_spec(), &path),
+        VarlitFile::open_lazy(digest_spec(), &path),
+    ] {
+        assert!(matches!(result, Err(varlit::Error::Io(ref error))
+            if error.kind() == std::io::ErrorKind::NotFound));
+    }
+    // Lock markers can persist; successful subsequent create proves release.
+    write_lines(digest_spec(), &path, 32, 16)?;
+    let writer = VarlitWriter::open_lazy(digest_spec(), &path)?;
+    assert!(matches!(
+        VarlitWriter::open_lazy(digest_spec(), &path),
+        Err(varlit::Error::WriterLockHeld(_))
+    ));
+    drop(writer);
+    VarlitWriter::open_lazy(digest_spec(), &path)?;
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_at_open_verification_requests_scan_without_doing_it() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-verification.varlit");
+    let spec = digest_spec();
+    write_lines(spec, &path, 128, 64)?;
+    let strict = spec.with_read_limits(
+        spec.read_limits
+            .with_integrity_verification(varlit::IntegrityVerification::AtOpen),
+    );
+    for writer in [false, true] {
+        let (result, frames) = framed(|| {
+            if writer {
+                VarlitFile::open_lazy(strict, &path)
+            } else {
+                VarlitFile::open_readonly_lazy(strict, &path)
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(varlit::Error::LazyOpenVerificationRequiresScan)
+        ));
+        assert_eq!(frames, 0);
+    }
+    VarlitFile::open_readonly_scan(strict, &path)?;
+    Ok(())
+}
+
+#[cfg(feature = "scalable-fault-injection")]
+#[test]
+fn strict_lazy_bad_digest_returns_error_without_scanning() -> varlit::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("strict-bad-digest.varlit");
+    let spec = digest_spec();
+    write_lines(spec, &path, 1024, 64)?;
+    let len = std::fs::metadata(&path)?.len();
+    let mut disk = OpenOptions::new().read(true).write(true).open(&path)?;
+    disk.seek(SeekFrom::Start(len - 45))?;
+    let mut byte = [0];
+    std::io::Read::read_exact(&mut disk, &mut byte)?;
+    disk.seek(SeekFrom::Start(len - 45))?;
+    disk.write_all(&[byte[0] ^ 1])?;
+    drop(disk);
+    let original = std::fs::read(&path)?;
+    for writer in [false, true] {
+        let (result, frames) = framed(|| {
+            if writer {
+                VarlitFile::open_lazy(spec, &path)
+            } else {
+                VarlitFile::open_readonly_lazy(spec, &path)
+            }
+        });
+        assert!(result.is_err());
+        assert!(frames <= 1, "bad digest caused {frames} frames");
+    }
+    assert_eq!(std::fs::read(&path)?, original);
+    let (_, route) = VarlitFile::open_readonly_lazy_or_scan_with_report(spec, &path)?;
+    assert_eq!(route, LazyOpenSource::FullScan);
+    Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

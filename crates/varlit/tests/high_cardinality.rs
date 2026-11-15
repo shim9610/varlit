@@ -1,3 +1,7 @@
+#[path = "support/pages.rs"]
+mod pages;
+
+// These keys are synthetic fixture identifiers, never real user identities.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -132,10 +136,10 @@ fn generated_indexed_api_stays_key_map_free_and_preserves_latest_values() -> var
     drop(stream_writer);
     let stream_reader =
         CardinalityFormat::open_stream_reader(&stream_path, varlit::StreamOptions::default())?;
-    let runs = stream_reader
-        .metadatas()?
-        .map(|value| value.map(|metadata| metadata.run))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    let runs = collect_stream(stream_reader.metadatas()?)?
+        .into_iter()
+        .map(|metadata| metadata.run)
+        .collect::<Vec<_>>();
     assert_eq!(runs, [1, 2]);
 
     let path = directory.path().join("cardinality.varlit");
@@ -188,18 +192,18 @@ fn generated_indexed_api_stays_key_map_free_and_preserves_latest_values() -> var
         },
     )?;
     for key in [0, 1, 4_999, 9_999] {
-        let value = reader.get_frame(&(key / 100, key))?.expect("indexed value");
+        let value = filled(|o| reader.get_frame(&(key / 100, key), o))?.expect("indexed value");
         if key == 4_999 {
             assert_eq!(value.payload, b"latest");
         } else {
             assert_eq!(value.payload, key.to_le_bytes());
         }
     }
-    assert!(reader.get_frame(&(50, 5_000))?.is_none());
-    let metadata_runs = reader
-        .metadatas()?
-        .map(|value| value.map(|metadata| metadata.run))
-        .collect::<varlit::Result<Vec<_>>>()?;
+    assert!(filled(|o| reader.get_frame(&(50, 5_000), o))?.is_none());
+    let metadata_runs = collect_stream(reader.metadatas()?)?
+        .into_iter()
+        .map(|metadata| metadata.run)
+        .collect::<Vec<_>>();
     assert_eq!(metadata_runs, [42, 43, 44]);
     assert_eq!(reader.resident_state().retained_key_entries, 0);
     Ok(())
@@ -295,8 +299,9 @@ fn explicit_scan_progress_and_cancellation_are_exact() -> varlit::Result<()> {
         reader.verify_all_with_progress(every_record_scan(None), |progress| {
             phases.push(progress.phase);
         })?,
-        // Three user records plus the internal creation-nonce record (STO-01).
-        5
+        // Four user records, the internal creation-nonce record and the sync
+        // marker that closed them.
+        6
     );
     assert_eq!(phases.first(), Some(&ScanProgressPhase::Started));
     assert_eq!(phases.last(), Some(&ScanProgressPhase::Complete));
@@ -435,12 +440,10 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
     let open_elapsed = open_started.elapsed();
     let lookup_started = Instant::now();
     for key in (0..records).step_by((records / 10_000).max(1) as usize) {
-        let value = reader
-            .get_frame(&(key / 1000, key))?
-            .expect("persisted key");
+        let value = filled(|o| reader.get_frame(&(key / 1000, key), o))?.expect("persisted key");
         assert_eq!(value.payload, key.to_le_bytes());
     }
-    assert!(reader.get_frame(&(records / 1000, records))?.is_none());
+    assert!(filled(|o| reader.get_frame(&(records / 1000, records), o))?.is_none());
     assert_eq!(reader.resident_state().retained_key_entries, 0);
     let lookup_elapsed = lookup_started.elapsed();
     let peak = peak_delta(baseline);
@@ -459,7 +462,7 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
     Ok(peak)
 }
 
-// PERF2-03 (report finding PERF-03): the resident keyed merge/compact family
+// the resident keyed merge/compact family
 // retains one map entry per distinct key ever seen, including tombstoned keys,
 // so its memory is O(K-ever) and it is deliberately not a PB-scale operation.
 // These tests pin the published contract: the cost is predictable up front via
@@ -467,10 +470,10 @@ fn cardinality_profile(records: u32) -> varlit::Result<usize> {
 // the cardinality boundary instead of exhausting memory.
 
 #[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
-#[varlit(id = 40, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 40, version = 1, kind = "variable", key = "fixture_key")]
 struct MergeUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     name: String,
 }
@@ -506,7 +509,7 @@ fn write_merge_input(path: &Path, keys: u64, deleted: u64) -> varlit::Result<()>
     let mut file = ResidentMergeFormat::create(path)?;
     for key in 0..keys {
         file.push(&MergeUser {
-            user_id: key,
+            fixture_key: key,
             name: format!("user-{key}"),
         })?;
     }
@@ -706,7 +709,7 @@ fn resident_single_input_compact_fails_typed_at_the_key_ceiling() -> varlit::Res
     Ok(())
 }
 
-// F-01 (round 9): the generated keyed writers used to hold their own
+// the generated keyed writers used to hold their own
 // `HashMap<T::Key, u64>` tail map. Two consequences of that design are asserted
 // here, both of which the byte-keyed resident cache changes.
 //
@@ -779,7 +782,7 @@ fn a_generated_keyed_writer_spills_long_keys_and_keeps_tombstone_predecessors() 
     writer.flush()?;
     drop(writer);
     let file = LongKeyBudgetFormat::open(&path)?;
-    let records = file.index_entries();
+    let records = crate::pages::all_entries!(file);
     let entries: Vec<_> = records
         .iter()
         .filter(|r| {
@@ -909,4 +912,36 @@ fn steady_state_generated_keyed_appends_do_not_grow_resident_memory() -> varlit:
         "every key must still resolve after the steady-state run",
     );
     Ok(())
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Drains a streaming walk into an owned `Vec`, reusing one decode target.
+#[allow(dead_code)]
+fn collect_stream<T: varlit::VarlitBlock + varlit::VarlitEmpty + Clone>(
+    mut stream: varlit::StreamingBlocks<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut out = T::empty();
+    let mut all = Vec::new();
+    while stream.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
 }

@@ -1,6 +1,4 @@
-#[cfg(feature = "experimental-multiprocess")]
-use crate::db::ConcurrencyMode;
-use crate::db::TransactionGuard;
+use crate::db::{ConcurrencyMode, TransactionGuard};
 use crate::error::CommitError;
 use crate::multimap_table::ReadOnlyUntypedMultimapTable;
 use crate::sealed::Sealed;
@@ -9,15 +7,13 @@ use crate::table::ReadOnlyUntypedTable;
 use crate::transaction_tracker::{
     LocalSavepointId, SavepointId, TransactionId, TransactionTracker,
 };
-#[cfg(feature = "experimental-multiprocess")]
-use crate::tree_store::HeaderGuard;
 #[cfg(all(debug_assertions, not(redb_no_std)))]
 use crate::tree_store::PageNumberHashSet;
 use crate::tree_store::{
-    AllocationPolicy, Btree, BtreeHeader, BtreeMut, InternalTableDefinition, MAX_PAIR_LENGTH,
-    MAX_VALUE_LENGTH, Page, PageAllocator, PageHint, PageListMut, PageNumber, PageNumberHashMap,
-    PageResolver, PageTracker, SerializedSavepoint, ShrinkPolicy, TableTree, TableTreeMut,
-    TableType, TransactionalMemory,
+    AllocationPolicy, Btree, BtreeHeader, BtreeMut, DatabaseLayout, HeaderGuard,
+    InternalTableDefinition, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageAllocator, PageHint,
+    PageListMut, PageNumber, PageNumberHashMap, PageResolver, PageTracker, SerializedSavepoint,
+    ShrinkPolicy, TableTree, TableTreeMut, TableType, TransactionalMemory,
 };
 use crate::types::{Key, Value};
 use crate::{
@@ -932,6 +928,7 @@ impl Drop for AllocatorStateLatch {
 pub struct WriteTransaction {
     transaction_tracker: Arc<TransactionTracker>,
     mem: Arc<TransactionalMemory>,
+    initial_layout: DatabaseLayout,
     transaction_guard: Arc<TransactionGuard>,
     transaction_id: TransactionId,
     tables: Mutex<TableNamespace>,
@@ -965,6 +962,7 @@ impl WriteTransaction {
         let root_page = mem.get_data_root();
         let system_page = mem.get_system_root();
 
+        let initial_layout = mem.get_layout();
         let page_allocator = PageAllocator::new(mem.clone(), allocation_policy);
         let tables = TableNamespace::new(root_page, guard.clone(), page_allocator.clone());
         let system_tables = SystemNamespace::new(system_page, guard.clone(), page_allocator);
@@ -972,6 +970,7 @@ impl WriteTransaction {
         Ok(Self {
             transaction_tracker,
             mem: mem.clone(),
+            initial_layout,
             transaction_guard: guard.clone(),
             transaction_id,
             tables: Mutex::new(tables),
@@ -983,10 +982,7 @@ impl WriteTransaction {
             two_phase_commit: false,
             // A multi-writer commit records the allocator state, which `set_quick_repair()`
             // keeps on there
-            #[cfg(feature = "experimental-multiprocess")]
             quick_repair: mem.concurrency_mode() == ConcurrencyMode::MultiWriter,
-            #[cfg(not(feature = "experimental-multiprocess"))]
-            quick_repair: false,
             post_commit_free: PostCommitFree::Enabled,
             restored_transaction: None,
             shrink_policy: ShrinkPolicy::Default,
@@ -1201,7 +1197,6 @@ impl WriteTransaction {
         self.transaction_guard.clone()
     }
 
-    #[cfg(feature = "experimental-multiprocess")]
     pub(crate) fn next_persistent_savepoint_id(&self) -> Result<Option<SavepointId>> {
         let Some(value) = self.read_existing_system_table(NEXT_SAVEPOINT_TABLE, |next_table| {
             let value = next_table.get(&())?;
@@ -1214,7 +1209,6 @@ impl WriteTransaction {
     }
 
     // Read registrations without creating handles: the tracker may not have synced them yet.
-    #[cfg(feature = "experimental-multiprocess")]
     pub(crate) fn persistent_savepoint_transactions(
         &self,
     ) -> Result<BTreeMap<SavepointId, TransactionId>> {
@@ -1607,7 +1601,6 @@ impl WriteTransaction {
     pub fn set_quick_repair(&mut self, enabled: bool) {
         // A multi-writer commit records the allocator state, for the next writer, in any
         // process, to load rather than rebuild from the trees
-        #[cfg(feature = "experimental-multiprocess")]
         if !enabled && self.mem.concurrency_mode() == ConcurrencyMode::MultiWriter {
             return;
         }
@@ -1768,16 +1761,13 @@ impl WriteTransaction {
     /// must not be assumed rolled back. The database refuses further write transactions; closing
     /// and reopening it repairs any internal state left by the failed commit.
     pub fn commit(self) -> Result<(), CommitError> {
-        self.commit_with(
-            #[cfg(feature = "experimental-multiprocess")]
-            None,
-        )
+        self.commit_with(None)
     }
 
     /// `commit()`, under `header_lock` where the caller already holds the header lock
     pub(crate) fn commit_with(
         mut self,
-        #[cfg(feature = "experimental-multiprocess")] header_lock: Option<&HeaderGuard<'_>>,
+        header_lock: Option<&HeaderGuard<'_>>,
     ) -> Result<(), CommitError> {
         // Set completed flag first, so that we don't go through the abort() path on drop, if this fails
         self.completed = true;
@@ -1785,23 +1775,14 @@ impl WriteTransaction {
             self.abort_inner()?;
             return Err(CommitError::TransactionPoisoned);
         }
-        self.commit_inner(
-            #[cfg(feature = "experimental-multiprocess")]
-            header_lock,
-        )
+        self.commit_inner(header_lock)
     }
 
-    fn commit_inner(
-        &mut self,
-        #[cfg(feature = "experimental-multiprocess")] header_lock: Option<&HeaderGuard<'_>>,
-    ) -> Result<(), CommitError> {
+    fn commit_inner(&mut self, header_lock: Option<&HeaderGuard<'_>>) -> Result<(), CommitError> {
         // Covers both the error and the panic-unwind path. Without an allocator state,
         // begin_write() refuses new write transactions and the next open repairs.
         let latch = AllocatorStateLatch::arm(self.mem.clone());
-        let result = self.commit_inner_helper(
-            #[cfg(feature = "experimental-multiprocess")]
-            header_lock,
-        );
+        let result = self.commit_inner_helper(header_lock);
         if result.is_ok() {
             latch.disarm();
         }
@@ -1810,7 +1791,7 @@ impl WriteTransaction {
 
     fn commit_inner_helper(
         &mut self,
-        #[cfg(feature = "experimental-multiprocess")] header_lock: Option<&HeaderGuard<'_>>,
+        header_lock: Option<&HeaderGuard<'_>>,
     ) -> Result<(), CommitError> {
         // Quick-repair requires 2-phase commit
         if self.quick_repair {
@@ -1819,7 +1800,6 @@ impl WriteTransaction {
         // Multi-process modes with a writer require 2-phase commit: a 1-phase commit publishes the
         // secondary slot before flushing the pages it names, which a reader in another process
         // would then follow
-        #[cfg(feature = "experimental-multiprocess")]
         if self.mem.concurrency_mode().is_multi_process_writable() {
             self.two_phase_commit = true;
         }
@@ -1865,12 +1845,9 @@ impl WriteTransaction {
                 self.non_durable_commit(user_root, allocated_pages, stored_data_freed_pages)?;
                 self.apply_savepoint_state_on_commit();
             }
-            InternalDurability::Immediate => self.durable_commit(
-                user_root,
-                allocated_pages,
-                #[cfg(feature = "experimental-multiprocess")]
-                header_lock,
-            )?,
+            InternalDurability::Immediate => {
+                self.durable_commit(user_root, allocated_pages, header_lock)?;
+            }
         }
 
         assert!(
@@ -2086,6 +2063,7 @@ impl WriteTransaction {
             .apply_on_abort(&self.transaction_tracker);
         self.mem.check_io_errors()?;
         self.page_allocator().rollback_all();
+        self.mem.rollback_growth(self.initial_layout)?;
         #[cfg(feature = "logging")]
         debug!("Finished abort of transaction id={:?}", self.transaction_id);
         Ok(())
@@ -2095,7 +2073,7 @@ impl WriteTransaction {
         &mut self,
         user_root: Option<BtreeHeader>,
         allocated_pages: Vec<PageNumber>,
-        #[cfg(feature = "experimental-multiprocess")] header_lock: Option<&HeaderGuard<'_>>,
+        header_lock: Option<&HeaderGuard<'_>>,
     ) -> Result {
         // Write out the freed-page records that earlier non-durable commits kept in memory, so
         // that they survive from here on like any other durable record.
@@ -2104,12 +2082,10 @@ impl WriteTransaction {
         }
 
         let free_until_transaction = {
-            #[cfg(feature = "experimental-multiprocess")]
             let hold = self.mem.header_hold(header_lock)?;
             self.mem.oldest_active_transaction(
                 self.transaction_tracker
                     .oldest_local_referenced_transaction(),
-                #[cfg(feature = "experimental-multiprocess")]
                 &hold,
             )?
         }
@@ -2177,7 +2153,6 @@ impl WriteTransaction {
             self.transaction_id,
             self.two_phase_commit,
             self.shrink_policy,
-            #[cfg(feature = "experimental-multiprocess")]
             header_lock,
         )?;
         // All of this transaction's allocations are durable; discard the per-txn tracker.
@@ -2200,11 +2175,9 @@ impl WriteTransaction {
         // The post-commit pass runs after publication, where a peer's pin on the transaction just
         // superseded lands below any floor the scan above produced, so a multi-process writer's
         // pages wait for the next durable commit
-        #[cfg(feature = "experimental-multiprocess")]
-        let multiprocess_writer = self.mem.concurrency_mode().is_multi_process_writable();
-        #[cfg(not(feature = "experimental-multiprocess"))]
-        let multiprocess_writer = false;
-        if self.post_commit_free == PostCommitFree::Enabled && !multiprocess_writer {
+        if self.post_commit_free == PostCommitFree::Enabled
+            && !self.mem.concurrency_mode().is_multi_process_writable()
+        {
             self.process_data_freed_pages_after_commit(
                 user_root,
                 &page_allocator,
@@ -3361,6 +3334,36 @@ mod test {
             reopened_pages < baseline_pages + 100,
             "{reopened_pages} pages allocated after reopen, {baseline_pages} at baseline"
         );
+        assert!(db.check_integrity().unwrap());
+    }
+
+    // The close makes pending non-durable commits durable even after a caught panic leaked
+    // pages: it records no allocator snapshot then, and the next open rebuilds the state
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn non_durable_commits_survive_the_close_after_a_caught_panic() {
+        let tmpfile = crate::create_tempfile();
+        let db = Database::create(tmpfile.path()).unwrap();
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let txn = db.begin_write().unwrap();
+            txn.open_table(X).unwrap().insert("leak", "leak").unwrap();
+            panic!("simulated panic with a live write transaction");
+        }));
+        assert!(panic_result.is_err());
+
+        let mut txn = db.begin_write().unwrap();
+        txn.set_durability(crate::Durability::None).unwrap();
+        txn.open_table(X).unwrap().insert("kept", "value").unwrap();
+        txn.commit().unwrap();
+        drop(db);
+
+        let mut db = Database::open(tmpfile.path()).unwrap();
+        {
+            let txn = db.begin_read().unwrap();
+            let table = txn.open_table(X).unwrap();
+            assert_eq!(table.get("kept").unwrap().unwrap().value(), "value");
+            assert!(table.get("leak").unwrap().is_none());
+        }
         assert!(db.check_integrity().unwrap());
     }
 

@@ -18,11 +18,11 @@ while pending:
         continue
     seen.add(package)
     name = packages[package]["name"]
-    if name == "redb" or name == "crossbeam" or name.startswith("crossbeam-"):
+    if name in {"redb", "crossbeam", "loom", "kani-verifier", "cargo-llvm-cov", "cargo-cyclonedx"} or name.startswith("crossbeam-"):
         raise SystemExit(f"{name} entered the production dependency graph")
     for dep in nodes[package]["deps"]:
         if any(kind["kind"] != "dev" for kind in dep["dep_kinds"]):
             pending.append(dep["pkg"])
 if (ROOT / "crates/varlit-core/src/redb").exists():
     raise SystemExit("embedded redb runtime sources remain")
-print("Runtime dependency graph excludes redb and Crossbeam; dev-dependencies are permitted.")
+print("Runtime dependency graph excludes redb, Crossbeam and verification tools; dev-dependencies are permitted.")

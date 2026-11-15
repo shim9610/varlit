@@ -240,6 +240,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strict_and_automatic_lazy_routes_retain_their_separate_oracles() {
+        for input in [
+            &[][..],
+            &[0][..],
+            &[1][..],
+            &[2][..],
+            &[3][..],
+            &[10, 10, 8, 8][..],
+            &[255, 255, 0, 7, 17][..],
+        ] {
+            digest::run_digest(input);
+            header_tails::run_header_tails(input);
+        }
+    }
+
+    #[test]
     fn fuzz_file_removes_input_and_lock_marker_on_drop() {
         let file = write_fuzz_file("scratch-cleanup", b"input").expect("scratch file");
         let path = file.path.clone();

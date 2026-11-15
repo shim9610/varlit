@@ -1,4 +1,4 @@
-// SHAPE B, the level above F-05 (round 12 re-verification).
+// SHAPE B, the level above  (round 12 re-verification).
 //
 // Round 12's permit was a bare zero-sized token: it proved that *a* poison flag
 // had been checked, not that *the writer being mutated* had been. A permit taken

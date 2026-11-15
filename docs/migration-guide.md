@@ -4,6 +4,90 @@ Varlit migrations are explicit. Normal typed reads reject block version
 mismatches; migration code names both the source and target block types and
 performs semantic conversion in Rust.
 
+## Upgrading from 0.12.1 to 0.13.0
+
+Set the Cargo dependency requirement to `varlit = "0.13.0"`. Cargo treats
+pre-1.0 minor versions as separate compatibility ranges, so `"0.12.1"` does not
+select this release. Damaged metadata accepted by older readers may now return
+an error.
+
+Files: native files need no conversion. In a format with data checksums,
+0.13.0 writes a variable record longer than 64 KiB with per-chunk CRCs under a
+new record flag, which 0.12.x refuses. Matrix storage is now tiled and a
+matrix spec's schema hash includes its tile shape, so matrix files written by
+0.12.x (layout `VMAT` v5) are refused (with `SchemaHashMismatch` when the
+format declares a schema hash); recreate them from their source. Stream/indexed sidecars written by 0.13.0 cannot be read by
+0.12.x.
+
+Matrix APIs that tiled storage never used were removed. Delete these from
+0.12.x code; unless noted, there is no replacement:
+
+- `ReadLimits::with_matrix_metadata_residency`,
+  `with_matrix_metadata_verification`, `with_matrix_generation_cache_bytes` and
+  `with_matrix_directory_cache_bytes`; the fields of the same names;
+  `effective_matrix_metadata_residency()`,
+  `effective_matrix_metadata_verification()` and
+  `default_matrix_metadata_cache_bytes()`; and the `MatrixMetadataResidency`
+  and `MatrixMetadataVerification` enums.
+- `FormatSpec::with_matrix_fatal_forensics()` and the `matrix_fatal_forensics`
+  field.
+- `compact_matrix()` on `VarlitFile`, `VarlitWriter` and generated writers:
+  delete the call. Overwrites do not grow the file.
+- `matrix_recovery_report()`: call `verify_matrix_metadata()`, which returns a
+  `MatrixRecoveryReport` and can fail.
+- `matrix_storage_diagnostics()` and `MatrixStorageDiagnostics`.
+- `MatrixRecoveryReport::matrix_last_zero_range_streamed_bytes`,
+  `matrix_total_zero_range_streamed_bytes` and
+  `matrix_sparse_zeroing_supported`.
+- Match arms for `Error::MatrixCommitQuarantined`, `MatrixFatalCorruption`,
+  `MatrixChunkNotReopenable`, `MatrixChunkClosed`, `InvalidMatrixChunk` and
+  `MatrixDimensionMismatch`.
+
+Matrix behavior changes: open runs no matrix verification; call
+`verify_matrix_metadata()`. A damaged tile commit bitmap is
+`InvalidMatrixLayout` until `clear_matrix_category` resets it. A matrix reader
+that falls behind the write-ahead ring gets `MatrixSnapshotExpired` and must
+`follow()`. `matrix_generation_path()` returns the primary path. `diagnose_file`
+on a matrix file runs `verify_matrix_metadata()` and reports each finding as
+`file.matrix.recovery_finding`, or the error `file.matrix.verification_failed`
+if verification fails. See
+[durability](durability-model.md#matrix-storage-and-publication).
+
+Typed reads now decode into a value you own instead of returning one; see
+[caller-owned decoding](api-changes.md#caller-owned-decoding) for the full
+table. The mechanical rewrite:
+
+```rust
+// before
+let frame = reader.get_frame(&key)?.ok_or(Missing)?;
+for record in reader.frames()? { let record = record?; use_it(&record); }
+
+// after
+use varlit::VarlitEmpty;
+let mut frame = Frame::empty();
+if !reader.get_frame(&key, &mut frame)? { return Err(Missing); }
+let mut cursor = reader.frames()?;
+let mut record = Frame::empty();
+while cursor.next_into(&mut record)? { use_it(&record); }
+```
+
+Keep `out` outside the loop so each read can reuse its existing allocations.
+To collect a whole block type into a `Vec`, `VarlitFile::decode_blocks_into`
+reuses the vector's existing elements. A hand-written `VarlitBlock` that you
+read through these APIs needs an `impl VarlitEmpty`; overriding
+`decode_varlit_into` is optional and only adds capacity reuse.
+
+New read-policy, range-streaming and fallible ownership APIs are optional.
+Ordinary opens retain their existing validation policy. Review the
+[0.13.0 API changes](api-changes.md#0130) before selecting read checks or adding
+allocation-failure retries, particularly after a write may have been published.
+
+Native lazy opens now return metadata errors without automatically scanning.
+Use `*_lazy_or_scan[_with_report]` to retain the former behavior, or match the
+error and explicitly call `VarlitFile::open_readonly_scan` / `open_scan`.
+Strict lazy open selects header tails when declared, otherwise the trailing
+digest. See [lazy-open changes](api-changes.md#lazy-open-and-explicit-scan-selection).
+
 <a id="060-pre-10-wire-changes"></a>
 
 ## Pre-1.0 Wire Changes Since 0.6.0
@@ -29,45 +113,15 @@ there is no automatic migration path for these surfaces:
   whenever its emitted bytes change. Wrapping such a codec in
   `Option`/`Vec`/array/map/tuple does not satisfy the requirement: the
   container fold propagates the missing identity outward.
-- Matrix native files gained a creation-nonce region after the native file
-  header. Matrix files created before this change are refused with
-  `InvalidMatrixLayout`; recreate them. Non-matrix native files are unchanged.
 - The matrix sidecar envelope is version 3. Version-1/2 sidecars are refused
   as `MatrixSidecarMismatch("sidecar version")` and simply regenerate —
   sidecars are regenerable resume state, not data.
-- The current matrix layout is `VMAT` version 5 with `MCRC` version 2.
-  Version 5 adds directly addressed page-to-slot metadata after the counted
-  forward array. The directory occupies `(1 + 2 * page_count) * 8` virtual bytes;
-  untouched windows remain zero extents. OnDemand readers retain offsets and
-  bounded caches instead of reconstructing the complete live-page directory.
-  Layout versions 1 through 4 are refused with
-  `Error::FormatVersionMismatch { expected: 5, actual: <1, 2, 3, or 4> }`; recreate those files.
-  There is no automatic matrix migration tool. Non-matrix formats are unchanged.
-
-- Matrix open no longer walks every logical bitmap page: the pages it visits come
-  from the page index unioned with the filesystem allocated-range map, merged in
-  one linear pass with no sort. Recorded trade-off — where no allocation map is
-  available, a stray byte written out of band into a page the matrix never
-  published is no longer detected at open.
-- A damaged page-index entry is no longer silent. In layout version 3 a zeroed
-  entry terminated enumeration and hid every later committed page; in version 4
-  it is a `Fatal` `MatrixCorruptionKind::CommitMap` finding and enumeration
-  continues past it. Files that previously opened "clean" with a damaged index
-  will now report a fatal finding, which is the correct outcome.
-- An interrupted whole-map commit rebuild is now a fail-closed state instead of
-  a silent one. `rebuild_matrix_commit_from_crc` publishes `u64::MAX` into the
-  page-index occupancy header and syncs it before clearing the entry region,
-  and replaces it with the real count only once every entry, digest and page is
-  durable. A matrix left holding the marker opens with a `Fatal`
-  `MatrixCorruptionKind::CommitMap` finding recommending `RebuildCommitMap`,
-  never as a short index that silently hides committed pages. This needs no
-  layout-version bump — the marker is never a resting state, and a reader that
-  predates it rejects it as a damaged header, which is also fail-closed. Acting
-  on the recommendation requires `FormatSpec::with_matrix_fatal_forensics()`,
-  since fatal findings are fail-closed by default.
-- A matrix whose bitmap page count would exceed `2^48 - 1` (about 1 EiB of
-  bitmap) is refused at layout time with `Error::InvalidMatrixLayout`. No
-  realistic configuration reaches this.
+- In 0.13.0 the `VMAT` matrix layout (version 5 with `MCRC` version 2 in
+  0.12.x) is replaced by tiled matrix storage. The schema hash of a matrix spec
+  includes its tile shape, so files written with any `VMAT` layout version are
+  refused (with `SchemaHashMismatch` when the format declares a schema hash);
+  recreate those files.
+  There is no automatic matrix migration tool.
 - `PackedBitmap::new`/`get`/`set` and its decode now report
   `Error::InvalidCanonicalEncoding` / `Error::LengthOverflow` and a
   non-matrix allocation resource instead of `Error::InvalidMatrixLayout`, since
@@ -276,8 +330,8 @@ For keyed data, first decide the migration boundary:
 
 ## Matrix Byte Copy Scaffold
 
-For preallocated matrix data, unchanged fixed-stride cell payloads can be copied
-without decoding and re-encoding:
+Unchanged fixed-stride matrix cell payloads can be copied without decoding and
+re-encoding:
 
 ```rust
 let mut old = OldMatrixFormat::open_reader("old.varlit")?;
@@ -289,7 +343,8 @@ out.copy_matrix_cell_bytes_from::<OldCell, NewCell>(&mut old, key)?;
 `OldCell::DIMENSIONS` and `NewCell::DIMENSIONS` must match exactly, and
 `SLOT_STRIDE` must be equal. The source cell must be committed; the read path
 still verifies enabled source CRC evidence. The target writer writes the bytes
-into the target slot and commits the target cell. Semantic conversions,
+into the target slot and commits the target cell; like any matrix change, the
+copy reaches readers at the target's next `sync()`. Semantic conversions,
 keyspace iteration, and output publication policy remain caller-owned.
 
 ## Field Evolution

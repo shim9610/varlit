@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.90"
 name = "redb"
-version = "4.3.0"
+version = "4.4.0"
 authors = ["Christopher Berner <me@cberner.com>"]
 build = "build.rs"
 exclude = ["fuzz/"]
@@ -36,7 +36,7 @@ experimental-multiprocess = [
     "std",
     "experimental-api-5",
 ]
-experimental_cursor = ["experimental-api-5"]
+experimental-niches = ["experimental-api-5"]
 logging = ["dep:log"]
 std = []
 
@@ -61,12 +61,20 @@ name = "special_values"
 path = "examples/special_values.rs"
 
 [[test]]
+name = "abort_tests"
+path = "tests/abort_tests.rs"
+
+[[test]]
 name = "backward_compatibility"
 path = "tests/backward_compatibility.rs"
 
 [[test]]
 name = "basic_tests"
 path = "tests/basic_tests.rs"
+
+[[test]]
+name = "borrow_markers"
+path = "tests/borrow_markers.rs"
 
 [[test]]
 name = "check_integrity_failure"
@@ -103,6 +111,10 @@ path = "tests/multiprocess_tests.rs"
 [[test]]
 name = "multithreading_tests"
 path = "tests/multithreading_tests.rs"
+
+[[test]]
+name = "niche_tests"
+path = "tests/niche_tests.rs"
 
 [dependencies.chrono_v0_4]
 version = "0.4.41"

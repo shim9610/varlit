@@ -174,28 +174,27 @@ mod indexed {
             last_offset = info.record_offset;
             writer.push_log_record(&LogRecord { sequence: value })?;
         }
-        assert_eq!(reader.get_entry(&key)?.unwrap().value, 0);
+        assert_eq!(filled(|o| reader.get_entry(&key, o))?.unwrap().value, 0);
         writer.sync()?;
         reader.follow()?;
         assert_eq!(EntryKey::COUNT, 32);
-        assert_eq!(reader.get_entry(&key)?.unwrap().value, 2048);
-        let records: Vec<_> = reader.entries()?.collect::<varlit::Result<_>>()?;
+        assert_eq!(filled(|o| reader.get_entry(&key, o))?.unwrap().value, 2048);
+        let records: Vec<_> = collect_stream(reader.entries()?)?;
         assert_eq!(records.len(), 2049);
-        let events: Vec<_> = reader.log_records()?.collect::<varlit::Result<_>>()?;
+        let events: Vec<_> = collect_stream(reader.log_records()?)?;
         assert_eq!(events.len(), 2048);
         writer.delete_entry(&key)?;
         writer.sync()?;
-        assert_eq!(reader.get_entry(&key)?.unwrap().value, 2048);
+        assert_eq!(filled(|o| reader.get_entry(&key, o))?.unwrap().value, 2048);
         reader.follow()?;
-        assert!(reader.get_entry(&key)?.is_none());
+        assert!(filled(|o| reader.get_entry(&key, o))?.is_none());
         writer.compact_index()?;
         reader.follow()?;
         let reopened = Disk::open_indexed_reader(&path, opts)?;
-        assert!(reopened.get_entry(&key)?.is_none());
+        assert!(filled(|o| reopened.get_entry(&key, o))?.is_none());
         for code in 1..32 {
             assert_eq!(
-                reopened
-                    .get_entry(&EntryKey::from_code(code)?)?
+                filled(|o| reopened.get_entry(&EntryKey::from_code(code)?, o))?
                     .unwrap()
                     .value,
                 2016 + u64::from(code)
@@ -244,14 +243,14 @@ mod indexed {
                 transaction.commit().unwrap();
                 writer.sync().unwrap();
                 for (code, expected) in old.into_iter().enumerate() {
-                    assert_eq!(reader.get_entry(&EntryKey::from_code(code as u16).unwrap()).unwrap().map(|v| v.value), expected);
+                    assert_eq!(filled(|o| reader.get_entry(&EntryKey::from_code(code as u16).unwrap(), o)).unwrap().map(|v| v.value), expected);
                 }
                 if generation % 3 == 2 { writer.compact_index().unwrap(); }
                 reader.follow().unwrap();
                 let transaction = oracle.begin_read().unwrap();
                 let table = transaction.open_table(TABLE).unwrap();
                 for (code, expected) in model.into_iter().enumerate() {
-                    let actual = reader.get_entry(&EntryKey::from_code(code as u16).unwrap()).unwrap().map(|v| v.value);
+                    let actual = filled(|o| reader.get_entry(&EntryKey::from_code(code as u16).unwrap(), o)).unwrap().map(|v| v.value);
                     assert_eq!(actual, expected);
                     assert_eq!(actual, table.get(code as u16).unwrap().map(|v| v.value()));
                 }
@@ -259,7 +258,7 @@ mod indexed {
             assert!(reader.into_inner().historical_distinct_keys().unwrap() <= 32);
             let reader = Disk::open_indexed_reader(&path, opts).unwrap();
             for (code, expected) in model.into_iter().enumerate() {
-                assert_eq!(reader.get_entry(&EntryKey::from_code(code as u16).unwrap()).unwrap().map(|v| v.value), expected);
+                assert_eq!(filled(|o| reader.get_entry(&EntryKey::from_code(code as u16).unwrap(), o)).unwrap().map(|v| v.value), expected);
             }
         }
     }
@@ -295,4 +294,36 @@ mod indexed {
         assert!(changed_mapping::Disk::open_indexed_reader(&path, opts).is_err());
         Ok(())
     }
+}
+
+/// Runs a caller-owned-output read that always fills `out`, returning the value.
+#[allow(dead_code)]
+fn filled_out<T: varlit::VarlitEmpty, R>(
+    read: impl FnOnce(&mut T) -> varlit::Result<R>,
+) -> varlit::Result<T> {
+    let mut out = T::empty();
+    read(&mut out)?;
+    Ok(out)
+}
+
+/// Runs a caller-owned-output read that reports presence; `None` when absent.
+#[allow(dead_code)]
+fn filled<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Drains a streaming walk into an owned `Vec`, reusing one decode target.
+#[allow(dead_code)]
+fn collect_stream<T: varlit::VarlitBlock + varlit::VarlitEmpty + Clone>(
+    mut stream: varlit::StreamingBlocks<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut out = T::empty();
+    let mut all = Vec::new();
+    while stream.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
 }

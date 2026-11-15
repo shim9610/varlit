@@ -1,6 +1,6 @@
 # redb - Changelog
 
-## Varve local patch (unreleased)
+## Varlit local patch (unreleased)
 * Add an atomic read-only capture of the current and oldest persistent savepoint
   user roots. Independent transaction references protect both roots through
   savepoint deletion and non-durable page reclamation.
@@ -33,10 +33,12 @@
   and iterators likewise do not keep the transaction alive, are also removed under the
   `experimental-api-5` flag; use the `ReadableTable` and `ReadableMultimapTable` methods, or the
   `get_owned()` variants when the guard must outlive the table.
-* Add `ReadableMultimapTable::lower_bound()` and `ReadableMultimapTable::upper_bound()`, behind
-  the `experimental-api-5` feature flag, returning a `MultimapCursor` pointing at a gap between
-  entries. The type reserves the constructors' signatures in the trait; navigation methods will
-  be added behind the `experimental_cursor` feature flag, like the table cursors' were.
+* Behind the `experimental-api-5` feature flag, `ReadableTable::lower_bound()` and
+  `ReadableTable::upper_bound()` have no default implementation, so implementations of
+  `ReadableTable` must provide them.
+* Behind the `experimental-api-5` feature flag, `Range` and `MultimapRange` keep the table
+  borrowed until they are dropped, rather than until their last use. Mutating the table while a
+  range over it is still in scope, which could panic, no longer compiles.
 * Under the `experimental-api-5` feature flag, a database file is locked with byte-range locks
   alone, rather than also with the whole-file lock earlier versions take.
 * Add the `experimental-multiprocess` feature flag, under which `Builder::set_concurrency_mode()`
@@ -53,6 +55,26 @@
   to end.
 * In `MultiWriter`, existing handles recover automatically after another process exits
   during compaction or repair. They can resume writing without reopening the database.
+* Add the `experimental-niches` feature flag, which requires `experimental-api-5`, and under it
+  `Legacy<T>`, which is `T` without the niche it declares: a table of `Option<T>` written before
+  the niche opens as `Option<Legacy<T>>`, however deeply nested.
+* Under `experimental-niches`, `&str` declares a `NICHE`, so `Option<&str>` is stored without a
+  tag byte, and is no longer equivalent to `Option<&str>` without the flag. A table of
+  `Option<&str>` written without the flag keeps its type name and its tag byte encoding, so it no
+  longer opens as `Option<&str>`: it opens as `Option<Legacy<&str>>`, and is migrated by copying
+  it into a new table. The file format is unchanged.
+* Under `experimental-niches`, `String` declares the same `NICHE` as `&str`, so `Option<String>`
+  is stored without a tag byte, and is no longer equivalent to `Option<String>` without the flag.
+  A table of `Option<String>` written without the flag opens as `Option<Legacy<String>>`, and is
+  migrated by copying it into a new table. The file format is unchanged.
+* Under `experimental-niches`, `bool` declares a `NICHE`, so `Option<bool>` is stored in one byte
+  rather than two, and is no longer equivalent to `Option<bool>` without the flag. A table of
+  `Option<bool>` written without the flag opens as `Option<Legacy<bool>>`, and is migrated by
+  copying it into a new table. The file format is unchanged.
+* Under `experimental-niches`, `char` declares a `NICHE`, so `Option<char>` is stored in three
+  bytes rather than four, and is no longer equivalent to `Option<char>` without the flag. A table
+  of `Option<char>` written without the flag opens as `Option<Legacy<char>>`, and is migrated by
+  copying it into a new table. The file format is unchanged.
 
 ### redb-derive (unreleased)
 * Fix `#[derive(Value)]` and `#[derive(Key)]` failing to compile on structs whose lifetimes are
@@ -69,6 +91,44 @@
   tagged in the derived `TypeName`, so structs containing them change type identity: their
   existing tables report `TableTypeMismatch` and must be migrated. Structs whose fields are
   all built-in types are unaffected.
+* `#[derive(Value)]` on a struct with exactly one field now forwards the field's `Value::NICHE`,
+  so `Option` of such a struct is encoded as `Option` of the field is. The generated code refers
+  to `Value::NICHE`, so such a struct can only be derived against a redb that has it; other
+  structs are unaffected.
+
+## 4.4.0 - 2026-10-13
+### New features
+* Implement `Value` and `Key` for the `NonZero` integer types, `NonZeroU8` to `NonZeroU128` and
+  `NonZeroI8` to `NonZeroI128`.
+* Add `Value::NICHE`, an optional byte string that a type never encodes to. When a type declares
+  one, `Option` of that type encodes `None` as it, in place of a tag byte. Adding a niche to a type
+  changes the encoding of `Option` of it, and its type name with it, so the two are not equivalent
+  types: a table that stores `Option` of the type from before it declared the niche fails to open
+  with `TableTypeMismatch` instead of being misread, and can be read through a copy of the type
+  that declares no niche.
+* Stabilize `ReadableTable::lower_bound()` and `ReadableTable::upper_bound()`, which return a read-only
+  `Cursor`, modeled on the standard library's `BTreeMap` cursors.
+* Stabilize `Table::lower_bound_mut()` and `Table::upper_bound_mut()`, which return a `CursorMut`
+  modeled on the standard library's `BTreeMap` cursors. Inserting sorted data through
+  `insert_before()` can be around 3x faster than `insert()`.
+
+### Bug fixes
+* Fix a bug where `check_integrity()` could report that it repaired corruption, after a transaction
+  that grew the file size was aborted.
+* Fix `Database::create()` repairing the database it had just created, which failed with
+  `RepairAborted` under a repair callback that aborts.
+* Fix unbounded memory growth in the page cache under write workloads, when the cache never
+  reached its configured size limit.
+* Fix `Durability::None` commits being lost on a clean close, after a panic was caught inside
+  an earlier write transaction.
+* Fix `compact()` leaving free regions at the end of the file, when the compaction emptied more
+  of them than it made commits.
+* Fix `compact()` waiting forever when the caller holds a write transaction. It fails with
+  `CompactionError::TransactionInProgress`, as it does for a read transaction.
+
+## 2.6.4 - 2026-10-02
+* Fix unbounded memory growth in the page cache under write workloads, when the cache never
+  reached its configured size limit.
 
 ## 4.3.0 - 2026-09-14
 ### New features

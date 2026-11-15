@@ -79,7 +79,7 @@ fn a_length_only_policy_answers_below_the_fingerprint_ceiling() -> varlit::Resul
         len_only.verify_with_scan_limit(&main, Some(&expected), 3)?,
         AdapterCheckStatus::Passed
     );
-    // ... and it is a real comparison, not an unconditional `Passed`.
+    // .. and it is a real comparison, not an unconditional `Passed`.
     let wrong_len = SidecarIdentity {
         main_len: expected.main_len + 1,
         ..expected

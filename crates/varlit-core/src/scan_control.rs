@@ -1,8 +1,14 @@
 use std::num::NonZeroU64;
-use std::sync::{
+// The isolated Loom runner models the flag ordering; normal builds use triomphe.
+#[cfg(not(varlit_loom))]
+use crate::fallible::Arc;
+#[cfg(varlit_loom)]
+use loom::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+#[cfg(not(varlit_loom))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const DEFAULT_PROGRESS_RECORDS: u64 = 16_384;
 const DEFAULT_PROGRESS_BYTES: u64 = 16 * 1024 * 1024;
@@ -38,6 +44,12 @@ impl ScanCancellationToken {
         Self::default()
     }
 
+    /// Creates a clear token, returning an error if shared storage is refused.
+    #[cfg(not(varlit_loom))]
+    pub fn try_new() -> crate::Result<Self> {
+        Ok(Self(crate::fallible::try_arc(AtomicBool::new(false))?))
+    }
+
     /// Requests cancellation of scans using this token.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
@@ -46,6 +58,13 @@ impl ScanCancellationToken {
     /// Returns whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(not(varlit_loom))]
+impl crate::TryClone for ScanCancellationToken {
+    fn try_clone(&self) -> crate::Result<Self> {
+        Ok(self.clone())
     }
 }
 

@@ -1,6 +1,27 @@
 #![cfg(feature = "experimental-matrix-reuse")]
 use varlit::experimental_matrix::{MatrixOptions, MatrixReader, MatrixReuseError, MatrixWriter};
-use varlit::{FormatSpec, MatrixDimensions, MatrixKey, varlit_format};
+use varlit::{
+    FormatSpec, MatrixDimensions, MatrixKey, VarlitEmpty, VarlitMatrixBlock, varlit_format,
+};
+
+/// Owned-result shim over the caller-owned-output `MatrixReader::get`.
+trait GetOwned {
+    fn get_owned<T: VarlitMatrixBlock + VarlitEmpty>(
+        &self,
+        key: MatrixKey,
+    ) -> Result<T, MatrixReuseError>;
+}
+
+impl GetOwned for MatrixReader {
+    fn get_owned<T: VarlitMatrixBlock + VarlitEmpty>(
+        &self,
+        key: MatrixKey,
+    ) -> Result<T, MatrixReuseError> {
+        let mut out = T::empty();
+        self.get::<T>(key, &mut out)?;
+        Ok(out)
+    }
+}
 varlit_format! {
     pub format ReuseFormat {
         magic: b"REUSETS1"; version:1; endian:little;
@@ -100,7 +121,7 @@ fn repeated_updates_reuse_slots_and_dirty_readers_see_confirmed_data() {
         verify(&dirty, 36, epoch);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), limit);
         // The unrelated second block survives reuse of the same chunk.
-        assert_eq!(r.get::<Meta>(key(20)).unwrap().epoch, 2);
+        assert_eq!(r.get_owned::<Meta>(key(20)).unwrap().epoch, 2);
     }
     w.sync().unwrap();
     assert_eq!(std::fs::metadata(&path).unwrap().len(), limit);
@@ -130,19 +151,19 @@ fn unsynced_drop_is_discarded_and_deleted_cells_stay_missing() {
     let r = w.reader().unwrap();
     verify(&r, 36, 1);
     w.delete::<Value>(key(13)).unwrap();
-    assert_eq!(r.get::<Value>(key(13)).unwrap().epoch, 1);
+    assert_eq!(r.get_owned::<Value>(key(13)).unwrap().epoch, 1);
     w.sync().unwrap();
     assert!(matches!(
-        r.get::<Value>(key(13)),
+        r.get_owned::<Value>(key(13)),
         Err(MatrixReuseError::Missing)
     ));
     w.put(key(35), &value(35, 7)).unwrap();
     w.sync().unwrap();
     assert!(matches!(
-        r.get::<Value>(key(13)),
+        r.get_owned::<Value>(key(13)),
         Err(MatrixReuseError::Missing)
     ));
-    assert_eq!(r.get::<Value>(key(0)).unwrap().epoch, 1);
+    assert_eq!(r.get_owned::<Value>(key(0)).unwrap().epoch, 1);
 }
 #[test]
 fn bounds_geometry_and_single_writer_are_checked() {
@@ -179,7 +200,7 @@ fn bounds_geometry_and_single_writer_are_checked() {
     let mut out = vec![value(0, 0); 13];
     assert!(r.read_run_into(key(0), &mut out).is_err());
     assert_eq!(out[0].epoch, 0);
-    assert!(r.get::<Value>(MatrixKey::new(u64::MAX, 0)).is_err());
+    assert!(r.get_owned::<Value>(MatrixKey::new(u64::MAX, 0)).is_err());
     assert!(
         MatrixWriter::create(
             fixed,
@@ -218,7 +239,7 @@ fn payload_corruption_is_not_hidden_by_an_older_slot() {
     file.write_all(&byte).unwrap();
     file.sync_all().unwrap();
     let r = MatrixReader::open(spec(), &path, dims(), opts()).unwrap();
-    assert!(r.get::<Value>(key(0)).is_err());
+    assert!(r.get_owned::<Value>(key(0)).is_err());
 }
 #[test]
 fn model_histories_match_across_evictions_deletes_and_reopens() {
@@ -243,9 +264,9 @@ fn model_histories_match_across_evictions_deletes_and_reopens() {
         let r = w.reader().unwrap();
         for (i, expected) in state.iter().enumerate() {
             match expected {
-                Some(e) => assert_eq!(r.get::<Value>(key(i as u64)).unwrap().epoch, *e),
+                Some(e) => assert_eq!(r.get_owned::<Value>(key(i as u64)).unwrap().epoch, *e),
                 None => assert!(matches!(
-                    r.get::<Value>(key(i as u64)),
+                    r.get_owned::<Value>(key(i as u64)),
                     Err(MatrixReuseError::Missing)
                 )),
             }
@@ -375,12 +396,12 @@ mod fault_tests {
             drop(w);
             let mut w = MatrixWriter::open(spec(), &path, dims(), opts()).unwrap();
             let r = w.reader().unwrap();
-            let epoch = r.get::<Value>(key(0)).unwrap().epoch;
+            let epoch = r.get_owned::<Value>(key(0)).unwrap().epoch;
             assert!(epoch == 2 || epoch == 3);
             verify(&r, 36, epoch);
             w.put(key(35), &value(35, 4)).unwrap();
             w.sync().unwrap();
-            assert_eq!(r.get::<Value>(key(0)).unwrap().epoch, epoch);
+            assert_eq!(r.get_owned::<Value>(key(0)).unwrap().epoch, epoch);
         }
     }
     #[test]
@@ -447,7 +468,7 @@ mod fault_tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             let before = MatrixReader::open(spec(), &path, dims(), opts()).unwrap();
-            let epoch = before.get::<Value>(key(0)).unwrap().epoch;
+            let epoch = before.get_owned::<Value>(key(0)).unwrap().epoch;
             assert!(epoch == 2 || epoch == 3);
             verify(&before, 36, epoch);
             let mut w = MatrixWriter::open(spec(), &path, dims(), opts()).unwrap();
@@ -457,7 +478,7 @@ mod fault_tests {
             w.put(key(35), &value(35, 4)).unwrap();
             w.sync().unwrap();
             let r = w.reader().unwrap();
-            assert_eq!(r.get::<Value>(key(0)).unwrap().epoch, epoch);
+            assert_eq!(r.get_owned::<Value>(key(0)).unwrap().epoch, epoch);
         }
     }
 }
@@ -482,7 +503,7 @@ fn erased_latest_header_and_truncation_do_not_return_old_values() {
         }
         drop(f);
         match MatrixReader::open(spec(), &path, dims(), opts()) {
-            Ok(r) => assert!(r.get::<Value>(key(0)).is_err()),
+            Ok(r) => assert!(r.get_owned::<Value>(key(0)).is_err()),
             Err(_) => assert!(truncate),
         }
     }
@@ -623,11 +644,11 @@ fn retry_budget_is_bounded_and_writer_keeps_publishing() {
         Ok(())
     })));
     assert!(matches!(
-        r.get::<Value>(key(0)),
+        r.get_owned::<Value>(key(0)),
         Err(MatrixReuseError::Retry { attempts: 2 })
     ));
     set_test_hook(None);
-    assert_eq!(r.get::<Value>(key(0)).unwrap().epoch, 3);
+    assert_eq!(r.get_owned::<Value>(key(0)).unwrap().epoch, 3);
 }
 
 proptest::proptest! {
@@ -641,9 +662,9 @@ proptest::proptest! {
             1 if pending[i].is_some()=>{w.delete::<Value>(key(i as u64)).unwrap();pending[i]=None;},
             2=>{w.sync().unwrap();confirmed=pending;},
             3=>{drop(w);w=MatrixWriter::open(spec(),&path,dims(),opts()).unwrap();pending=confirmed;},
-            _=>{let r=w.reader().unwrap();match confirmed[i]{Some(v)=>proptest::prop_assert_eq!(r.get::<Value>(key(i as u64)).unwrap().epoch,v),None=>proptest::prop_assert!(matches!(r.get::<Value>(key(i as u64)),Err(MatrixReuseError::Missing)))}}
+            _=>{let r=w.reader().unwrap();match confirmed[i]{Some(v)=>proptest::prop_assert_eq!(r.get_owned::<Value>(key(i as u64)).unwrap().epoch,v),None=>proptest::prop_assert!(matches!(r.get_owned::<Value>(key(i as u64)),Err(MatrixReuseError::Missing)))}}
         }}
-        w.sync().unwrap();let r=w.reader().unwrap();for(i,expected)in pending.iter().enumerate(){match expected{Some(v)=>proptest::prop_assert_eq!(r.get::<Value>(key(i as u64)).unwrap().epoch,*v),None=>proptest::prop_assert!(matches!(r.get::<Value>(key(i as u64)),Err(MatrixReuseError::Missing)))}}
+        w.sync().unwrap();let r=w.reader().unwrap();for(i,expected)in pending.iter().enumerate(){match expected{Some(v)=>proptest::prop_assert_eq!(r.get_owned::<Value>(key(i as u64)).unwrap().epoch,*v),None=>proptest::prop_assert!(matches!(r.get_owned::<Value>(key(i as u64)),Err(MatrixReuseError::Missing)))}}
     }
 }
 
@@ -741,7 +762,9 @@ fn reuse_load_campaign() {
     drop(w);
     let r = MatrixReader::open(spec, &path, dims, options).unwrap();
     assert_eq!(
-        r.get::<Value>(MatrixKey::new(rows - 1, 0)).unwrap().epoch,
+        r.get_owned::<Value>(MatrixKey::new(rows - 1, 0))
+            .unwrap()
+            .epoch,
         publications + 2
     );
     println!(
@@ -843,7 +866,7 @@ fn pages_span_cells_and_tiny_writer_cache_survives_eviction() {
             let r = w.reader().unwrap();
             for row in [0, 1, 2, 4, 4095, 4096] {
                 assert_eq!(
-                    r.get::<Blob>(MatrixKey::new(row, 0)).unwrap().bytes,
+                    r.get_owned::<Blob>(MatrixKey::new(row, 0)).unwrap().bytes,
                     [epoch; 5000]
                 );
             }
@@ -871,12 +894,18 @@ fn logical_chunk_larger_than_working_budget_opens_and_updates_locally() {
     for epoch in 1..5 {
         w.put(k, &value(0, epoch)).unwrap();
         w.sync().unwrap();
-        assert_eq!(w.reader().unwrap().get::<Value>(k).unwrap().epoch, epoch);
+        assert_eq!(
+            w.reader().unwrap().get_owned::<Value>(k).unwrap().epoch,
+            epoch
+        );
     }
     drop(w);
     let r = MatrixReader::open(spec, &path, dims, options).unwrap();
-    assert_eq!(r.get::<Value>(k).unwrap().epoch, 4);
-    assert!(matches!(r.get::<Meta>(k), Err(MatrixReuseError::Missing)));
+    assert_eq!(r.get_owned::<Value>(k).unwrap().epoch, 4);
+    assert!(matches!(
+        r.get_owned::<Meta>(k),
+        Err(MatrixReuseError::Missing)
+    ));
 }
 
 #[test]
@@ -948,7 +977,7 @@ fn sparse_updates_write_one_page_and_bulk_reads_coalesce_pages() {
     let io = take_test_io();
     assert!(io.write_bytes < 24 * 1024, "bitmap-only delete: {io:?}");
     assert!(matches!(
-        r.get::<Value>(MatrixKey::new(73, 0)),
+        r.get_owned::<Value>(MatrixKey::new(73, 0)),
         Err(MatrixReuseError::Missing)
     ));
     take_test_io();
@@ -1041,14 +1070,14 @@ fn one_page_writer_does_not_stage_a_full_data_page_for_each_bitmap_lookup() {
             );
             let reader = w.reader().unwrap();
             assert!(matches!(
-                reader.get::<Value>(key(0)),
+                reader.get_owned::<Value>(key(0)),
                 Err(MatrixReuseError::Missing)
             ));
             for i in 0..count {
                 w.put(key(i), &cell(i, 4)).unwrap();
             }
             assert!(matches!(
-                reader.get::<Value>(key(0)),
+                reader.get_owned::<Value>(key(0)),
                 Err(MatrixReuseError::Missing)
             ));
             w.sync().unwrap();
@@ -1125,7 +1154,7 @@ fn one_page_cache_io_benchmark() {
             let reader = writer.reader().unwrap();
             assert_eq!(
                 reader
-                    .get::<Value>(MatrixKey::new(count - 1, 0))
+                    .get_owned::<Value>(MatrixKey::new(count - 1, 0))
                     .unwrap()
                     .epoch,
                 epoch

@@ -1,4 +1,4 @@
-//! DUR3-01 regression: a pathname with no directory component.
+//!  regression: a pathname with no directory component.
 //!
 //! `Path::new("app.varlit").parent()` is `Some("")`, not `None`, so the
 //! `unwrap_or_else(|| Path::new("."))` fallback in the parent-directory sync
@@ -17,11 +17,13 @@
 //! re-executed child of this test binary, spawned with `current_dir` set to a
 //! temporary directory — the subprocess pattern `scalable_crash_faults` and
 //! `policies` already use for process-scoped state.
+#[path = "support/pages.rs"]
+mod pages;
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 /// Set only for the child, so the ignored test below stays inert if some
 /// invocation runs ignored tests in the parent's working directory.
@@ -96,7 +98,7 @@ fn bare_filename_child() {
         text: "first".to_string(),
     })
     .expect("append a variable record");
-    // DUR3-01: the created pathname's parent directory is synced here, once.
+    // the created pathname's parent directory is synced here, once.
     file.sync()
         .expect("sync a file created under a bare filename");
     // The request is cleared on success, so a second call must stay clean.
@@ -115,23 +117,26 @@ fn bare_filename_child() {
     drop(file);
 
     let reopened = BareFormat::open_readonly(BARE_NAME).expect("reopen under a bare filename");
-    assert_eq!(
-        reopened
-            .blocks::<Reading>()
+    let mut reading = Reading::empty();
+    assert!(
+        crate::pages::all_blocks!(reopened, Reading)
             .expect("readings")
-            .get(0)
-            .expect("first reading"),
-        Some(Reading { at: 1, value: 7 })
+            .get(0, &mut reading)
+            .expect("first reading")
+    );
+    assert_eq!(reading, Reading { at: 1, value: 7 });
+    let mut note = Note::empty();
+    assert!(
+        crate::pages::all_blocks!(reopened, Note)
+            .expect("notes")
+            .get(0, &mut note)
+            .expect("first note")
     );
     assert_eq!(
-        reopened
-            .blocks::<Note>()
-            .expect("notes")
-            .get(0)
-            .expect("first note"),
-        Some(Note {
+        note,
+        Note {
             text: "second".to_string()
-        })
+        }
     );
     drop(reopened);
 
@@ -163,10 +168,14 @@ fn bare_filename_stream() {
         StreamOptions::default(),
     )
     .expect("open a stream reader under a bare filename");
-    let readings = reader
-        .blocks::<Reading>()
-        .expect("stream readings")
-        .collect::<varlit::Result<Vec<_>>>()
-        .expect("collect stream readings");
+    let mut cursor = reader.blocks::<Reading>().expect("stream readings");
+    let mut readings = Vec::new();
+    let mut reading = Reading::empty();
+    while cursor
+        .next_into(&mut reading)
+        .expect("collect stream readings")
+    {
+        readings.push(reading.clone());
+    }
     assert_eq!(readings, [Reading { at: 2, value: 9 }]);
 }

@@ -1,3 +1,6 @@
+#[path = "support/pages.rs"]
+mod pages;
+
 use std::collections::HashMap;
 use std::fs::{OpenOptions, remove_file};
 use std::io::Write;
@@ -6,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use proptest::prelude::*;
 use varlit::{
-    Endian, Error, RecoveryPolicy, VarlitBlock, VarlitMerge, WireType, decode_from_slice,
-    encode_to_vec, varlit_format,
+    Endian, Error, RecoveryPolicy, VarlitBlock, VarlitEmpty, VarlitMerge, WireType,
+    decode_from_slice, encode_to_vec, varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -130,10 +133,12 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropPoint>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropPoint).unwrap();
         prop_assert_eq!(read.len(), points.len());
+        let mut got = PropPoint::empty();
         for (index, (x, y)) in points.iter().enumerate() {
-            prop_assert_eq!(read.get(index).unwrap(), Some(PropPoint { x: *x, y: *y }));
+            prop_assert!(read.get(index, &mut got).unwrap());
+            prop_assert_eq!(&got, &PropPoint { x: *x, y: *y });
         }
 
         cleanup(&path);
@@ -155,10 +160,12 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropVariable>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropVariable).unwrap();
         prop_assert_eq!(read.len(), values.len());
+        let mut got = PropVariable::empty();
         for (index, expected) in values.iter().enumerate() {
-            prop_assert_eq!(read.get(index).unwrap(), Some(expected.clone()));
+            prop_assert!(read.get(index, &mut got).unwrap());
+            prop_assert_eq!(&got, expected);
         }
 
         cleanup(&path);
@@ -235,8 +242,10 @@ proptest! {
 
         let file = PropFormat::open_readonly(&path).unwrap();
         let keyed = file.keyed_blocks::<PropUser>().unwrap();
+        let mut got = PropUser::empty();
         for key in 0..4u32 {
-            prop_assert_eq!(keyed.get(&key).unwrap(), last_put.get(&key).cloned());
+            let found = keyed.get(&key, &mut got).unwrap().then(|| got.clone());
+            prop_assert_eq!(found, last_put.get(&key).cloned());
         }
         prop_assert_eq!(file.materialized_keyed_blocks::<PropUser>().unwrap(), materialized);
 
@@ -267,12 +276,14 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let read = file.blocks::<PropRewrite>().unwrap();
+        let read = crate::pages::all_blocks!(file, PropRewrite).unwrap();
         prop_assert_eq!(read.len(), expected.len());
+        let mut got = PropRewrite::empty();
         for (index, expected_record) in expected.into_iter().enumerate() {
-            prop_assert_eq!(read.get(index).unwrap(), Some(expected_record));
+            prop_assert!(read.get(index, &mut got).unwrap());
+            prop_assert_eq!(&got, &expected_record);
         }
-        prop_assert_eq!(file.blocks::<PropPoint>().unwrap().len(), 2);
+        prop_assert_eq!(crate::pages::all_blocks!(file, PropPoint).unwrap().len(), 2);
 
         cleanup(&path);
     }
@@ -309,7 +320,7 @@ proptest! {
             prop_assert!(strict_rejected);
         } else {
             let readonly = PropFormat::open_readonly(&path).unwrap();
-            prop_assert_eq!(readonly.blocks::<PropPoint>().unwrap().len(), values.len());
+            prop_assert_eq!(crate::pages::all_blocks!(readonly, PropPoint).unwrap().len(), values.len());
             prop_assert_eq!(std::fs::metadata(&path).unwrap().len(), corrupt_len);
         }
 
@@ -319,7 +330,7 @@ proptest! {
         prop_assert_eq!(report.recovered_len, original_len);
         prop_assert_eq!(report.records_preserved, values.len());
         prop_assert_eq!(std::fs::metadata(&path).unwrap().len(), original_len);
-        prop_assert_eq!(file.blocks::<PropPoint>().unwrap().len(), values.len());
+        prop_assert_eq!(crate::pages::all_blocks!(file, PropPoint).unwrap().len(), values.len());
 
         cleanup(&path);
     }
@@ -338,7 +349,8 @@ proptest! {
         }
 
         let file = PropFormat::open_readonly(&path).unwrap();
-        let decoded = file.blocks::<PropScalarEdges>().unwrap().get(0).unwrap().unwrap();
+        let mut decoded = PropScalarEdges::empty();
+        prop_assert!(crate::pages::all_blocks!(file, PropScalarEdges).unwrap().get(0, &mut decoded).unwrap());
         prop_assert_eq!(decoded.unsigned, value.unsigned);
         prop_assert_eq!(decoded.signed, value.signed);
         prop_assert_eq!(decoded.wide, value.wide);

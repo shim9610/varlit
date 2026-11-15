@@ -1,5 +1,5 @@
-//! Rebuild cost contracts (PERF-04/PERF-05, PERF2-03, DUR-03, DUR2-04,
-//! DUR2-01).
+//! Rebuild cost contracts (/, , , ,
+//! ).
 //!
 //! Rebuild resolves each record's descriptor once by block id and decodes each
 //! tombstone key exactly once, so rebuild cost must not scale with the plan's
@@ -8,11 +8,11 @@
 //! rebuilds a tombstone-heavy file in roughly the time of a single-descriptor
 //! plan, the published `historical_distinct_keys` metric follows K-ever,
 //! rebuild refuses to publish a sidecar when the pathname identity changes
-//! after the scan (DUR-03), a CRC rebuild traverses each indexed payload once
-//! (PERF2-03), sidecar publication surfaces the pending parent-directory
-//! durability state instead of discarding it (DUR2-04), and an indeterminate
+//! after the scan , a CRC rebuild traverses each indexed payload once
+//! sidecar publication surfaces the pending parent-directory
+//! durability state instead of discarding it , and an indeterminate
 //! sidecar publication preserves the replacement temp for reconciliation
-//! instead of blind-deleting it (DUR2-01).
+//! instead of blind-deleting it.
 
 use std::fs;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -22,7 +22,7 @@ use varlit::{
     BlockDescriptor, BlockKind, Decoder, DiskIndexError, DiskIndexOptions, DiskIndexPlan,
     DiskIndexedBlock, Encoder, Endian, Error, FormatSpec, IndexPolicy, IntegrityPolicy,
     ManifestPolicy, ReadLimits, RecoveryPolicy, Result, ScanOptions, ScanProgressPhase,
-    VarlitBlock, VarlitDecode, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
+    VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitIndexedReader, VarlitIndexedWriter,
     VarlitKeyedBlock, WireType, disk_index_sidecar_path, rebuild_disk_index,
     rebuild_disk_index_with_progress,
 };
@@ -72,6 +72,18 @@ impl VarlitBlock for Target {
     const ENDIAN: Option<Endian> = None;
     const SCHEMA_FINGERPRINT: u64 = 0x5245_4255_494C_4401;
     const IS_KEYED: bool = true;
+}
+
+impl VarlitEmpty for Target {
+    fn empty() -> Self {
+        Self(String::new())
+    }
+}
+
+/// Owned-result shim over the caller-owned-output indexed read.
+fn get_target(reader: &VarlitIndexedReader, key: &String) -> Result<Option<Target>> {
+    let mut out = Target::empty();
+    Ok(reader.get::<Target>(key, &mut out)?.then_some(out))
 }
 
 impl VarlitKeyedBlock for Target {
@@ -279,8 +291,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     }
     let records = u64::from(PUTS + TOMBSTONES);
     // A rebuild also scans the internal creation-nonce record every
-    // stream/indexed primary carries as its first record (STO-01).
-    let scanned_records = records + 1;
+    // stream/indexed primary carries as its first record, and the sync marker
+    // that closed the records.
+    let scanned_records = records + 2;
 
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let small_started = Instant::now();
@@ -289,9 +302,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     assert_eq!(small_report.records, scanned_records);
     {
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
-        assert_eq!(reader.get::<Target>(&big_key(0))?, None);
+        assert_eq!(get_target(&reader, &big_key(0))?, None);
         assert_eq!(
-            reader.get::<Target>(&big_key(1_000_000))?,
+            get_target(&reader, &big_key(1_000_000))?,
             Some(Target(big_key(1_000_000)))
         );
         assert_eq!(reader.historical_distinct_keys()?, records);
@@ -305,9 +318,9 @@ fn rebuild_cost_is_independent_of_plan_descriptor_count() -> Result<()> {
     assert_eq!(full_report.scanned_bytes, small_report.scanned_bytes);
     {
         let reader = VarlitIndexedReader::open(spec(), &path, options, full_plan())?;
-        assert_eq!(reader.get::<Target>(&big_key(TOMBSTONES - 1))?, None);
+        assert_eq!(get_target(&reader, &big_key(TOMBSTONES - 1))?, None);
         assert_eq!(
-            reader.get::<Target>(&big_key(1_000_000 + PUTS - 1))?,
+            get_target(&reader, &big_key(1_000_000 + PUTS - 1))?,
             Some(Target(big_key(1_000_000 + PUTS - 1)))
         );
         assert_eq!(reader.historical_distinct_keys()?, records);
@@ -337,7 +350,12 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
     let _isolation = shared_fault_gate();
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("k-ever.varlit");
-    let options = DiskIndexOptions::default();
+    // The writer's count is that of its last committed root, so confirm on
+    // every sync for it to cover what was just synced.
+    let options = DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..DiskIndexOptions::default()
+    };
 
     let mut writer = VarlitIndexedWriter::create(spec(), &path, options, small_plan())?;
     for ordinal in 0..32u32 {
@@ -354,21 +372,21 @@ fn historical_distinct_keys_follows_k_ever_across_rebuild() -> Result<()> {
 
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
-    assert_eq!(reader.get::<Target>(&"key-0".to_string())?, None);
+    assert_eq!(get_target(&reader, &"key-0".to_string())?, None);
     drop(reader);
 
     // Rebuild re-creates tombstone rows from the native log, so the metric
     // does not shrink without a native compaction.
     fs::remove_file(disk_index_sidecar_path(&path))?;
     let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
-    // 64 user records plus the internal creation-nonce record (STO-01).
-    assert_eq!(report.records, 65);
+    // 64 user records, the internal creation-nonce record and one sync marker.
+    assert_eq!(report.records, 66);
     let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
     assert_eq!(reader.historical_distinct_keys()?, 32);
     Ok(())
 }
 
-/// PERF2-03: under CRC policies the rebuild traverses each payload once. The
+/// under CRC policies the rebuild traverses each payload once. The
 /// scanner reads frames only, extraction owns the single checksum-verified
 /// payload read for indexed records, and payloads outside the plan are never
 /// read — a corrupt unindexed payload no longer fails the rebuild (the old
@@ -477,8 +495,9 @@ mod crc_single_traversal {
         // Baseline: the clean CRC file rebuilds.
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
-        assert_eq!(report.records, 4);
+        // Three user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 5);
 
         // Corrupt the payload of the record outside the plan. A rebuild that
         // still ran the scanner's whole-payload checksum pre-pass would fail
@@ -486,11 +505,12 @@ mod crc_single_traversal {
         let corrupted = flip_marker_byte(&path, blob_marker)?;
         fs::remove_file(disk_index_sidecar_path(&path))?;
         let report = rebuild_disk_index(crc_spec(), &path, options, crc_plan())?;
-        // Three user records plus the internal creation-nonce record (STO-01).
-        assert_eq!(report.records, 4);
+        // Three user records, the internal creation-nonce record and one sync
+        // marker.
+        assert_eq!(report.records, 5);
         let reader = VarlitIndexedReader::open(crc_spec(), &path, options, crc_plan())?;
         assert_eq!(
-            reader.get::<Target>(&indexed_marker.to_string())?,
+            get_target(&reader, &indexed_marker.to_string())?,
             Some(Target(indexed_marker.into()))
         );
         // The whole-file integrity scan still owns full corruption coverage.
@@ -520,13 +540,13 @@ mod crc_single_traversal {
     }
 }
 
-/// DUR2-04: sidecar publication must not discard the replacement durability
+/// sidecar publication must not discard the replacement durability
 /// state. When the pathname publication succeeded but the parent-directory
 /// sync failed, the caller receives the typed
 /// `PublishedButParentSyncPending` state and the already-published sidecar is
 /// preserved.
 ///
-/// DUR2-01: when publication fails in the indeterminate state (an
+/// when publication fails in the indeterminate state (an
 /// unreconciled `ReplaceFileW` 1176/1177), the replacement temp file may be
 /// the only surviving copy of the new sidecar and must be preserved for
 /// out-of-band reconciliation — no caller may blind-delete it, including via
@@ -571,7 +591,7 @@ mod publication_state {
         assert!(disk_index_sidecar_path(&path).exists());
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"pending-key".to_string())?,
+            get_target(&reader, &"pending-key".to_string())?,
             Some(Target("pending-key".into()))
         );
         Ok(())
@@ -601,7 +621,7 @@ mod publication_state {
         drop(writer);
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"after-pending".to_string())?,
+            get_target(&reader, &"after-pending".to_string())?,
             Some(Target("after-pending".into()))
         );
         Ok(())
@@ -632,7 +652,7 @@ mod publication_state {
 
     /// Destructures an indeterminate publication error, asserting it names
     /// `expected_target` and that the replacement temp it reports survives on
-    /// disk for out-of-band reconciliation (DUR2-01). Returns the preserved
+    /// disk for out-of-band reconciliation. Returns the preserved
     /// temp path.
     fn assert_preserved_replacement(
         error: Error,
@@ -703,7 +723,7 @@ mod publication_state {
         assert!(disk_index_sidecar_path(&path).exists());
         let reader = VarlitIndexedReader::open(spec(), &path, options, small_plan())?;
         assert_eq!(
-            reader.get::<Target>(&"indeterminate-key".to_string())?,
+            get_target(&reader, &"indeterminate-key".to_string())?,
             Some(Target("indeterminate-key".into()))
         );
         Ok(())
@@ -730,7 +750,7 @@ mod publication_state {
         // The injected failure fires before the target pathname is touched,
         // so no sidecar was published under its target name...
         assert!(!disk_index_sidecar_path(&path).exists());
-        // ...and the native file remains recoverable: an unarmed rebuild
+        // ..and the native file remains recoverable: an unarmed rebuild
         // publishes a fresh sidecar generation alongside the preserved temp.
         let report = rebuild_disk_index(spec(), &path, options, small_plan())?;
         // No user records, but the internal creation-nonce record is there.

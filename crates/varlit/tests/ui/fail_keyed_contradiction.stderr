@@ -14,7 +14,7 @@ error[E0080]: evaluation panicked: this type implements VarlitKeyedBlock but dec
   | |_____- in this macro invocation
 
 note: erroneous constant encountered
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/directory.rs
   |
   |         let () = crate::traits::KeyedBlockContract::<T>::OK;
   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -26,7 +26,7 @@ note: the above error was encountered while instantiating `fn VarlitFile::keyed_
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 note: erroneous constant encountered
- --> $WORKSPACE/crates/varlit-core/src/file.rs
+ --> $WORKSPACE/crates/varlit-core/src/file/directory.rs
   |
   |         let () = crate::traits::KeyedBlockContract::<T>::OK;
   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

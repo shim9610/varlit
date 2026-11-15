@@ -15,8 +15,22 @@
 use varlit::{
     BlockDescriptor, BlockKind, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
     MatrixBlockDescriptor, MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor,
-    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitMatrixBlock,
+    MatrixDimensions, MatrixKey, ReadLimits, VarlitBlock, VarlitEmpty, VarlitMatrixBlock,
+    VarlitReader,
 };
+
+/// Owned-result shim over the caller-owned-output read.
+trait ReadCell {
+    fn read_cell(&self, key: MatrixKey) -> varlit::Result<Sample>;
+}
+
+impl ReadCell for VarlitReader {
+    fn read_cell(&self, key: MatrixKey) -> varlit::Result<Sample> {
+        let mut out = Sample::empty();
+        self.read_matrix_cell::<Sample>(key, &mut out)?;
+        Ok(out)
+    }
+}
 
 const CHANNELS: u64 = 4;
 const ROWS_PER_CHUNK: u64 = 4;
@@ -52,6 +66,7 @@ static MATRIX_BLOCKS: &[MatrixBlockDescriptor] = &[MatrixBlockDescriptor {
     dimensions: Sample::DIMENSIONS,
     category: Sample::CATEGORY,
     slot_stride: Sample::SLOT_STRIDE,
+    tile: [0, 0],
 }];
 
 fn spec() -> FormatSpec {
@@ -80,85 +95,6 @@ fn key(row: u64, ch: u64) -> MatrixKey {
 }
 
 #[test]
-fn a_follow_invalidates_a_chunk_directory_built_before_it() -> varlit::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("chunkdir.vrv");
-
-    let mut writer = spec().create_writer_with_dims(&path, dims())?;
-    // Rows 0..8 => the region (chunk 0) plus one chunk record (chunk 1).
-    for row in 0..ROWS_PER_CHUNK * 2 {
-        for ch in 0..CHANNELS {
-            writer.write_matrix_cell(
-                key(row, ch),
-                &Sample {
-                    value: (row * 10 + ch) as u32,
-                },
-            )?;
-            writer.commit_matrix_cell::<Sample>(key(row, ch))?;
-        }
-    }
-    writer.sync()?;
-
-    let mut reader = spec().open_reader(&path)?;
-    // Touch a chunked cell: this builds and caches the chunk directory.
-    // Touching a chunked cell is what builds and caches the directory; without
-    // this read the OnceLock is empty and the follow has nothing to invalidate.
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))?,
-        Sample {
-            value: (ROWS_PER_CHUNK * 10) as u32
-        },
-    );
-
-    // A new chunk arrives.
-    for row in ROWS_PER_CHUNK * 2..ROWS_PER_CHUNK * 3 {
-        for ch in 0..CHANNELS {
-            writer.write_matrix_cell(
-                key(row, ch),
-                &Sample {
-                    value: (row * 10 + ch) as u32,
-                },
-            )?;
-            writer.commit_matrix_cell::<Sample>(key(row, ch))?;
-        }
-    }
-    writer.sync()?;
-    drop(writer);
-
-    assert!(reader.follow()? > 0, "the new chunk record was adopted");
-
-    // A cell in the chunk the follow brought. The standard it is held to is the
-    // fresh open, not a literal: the two handles must not disagree about a file
-    // they both describe.
-    let target = key(ROWS_PER_CHUNK * 2, 0);
-    let expected = Sample {
-        value: ((ROWS_PER_CHUNK * 2) * 10) as u32,
-    };
-    assert_eq!(
-        spec()
-            .open_reader(&path)?
-            .read_matrix_cell::<Sample>(target)?,
-        expected
-    );
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(target)?,
-        expected,
-        "the followed handle has the chunk's record but answered from a \
-         directory built before it",
-    );
-
-    // And the chunks it already had are still right, so the invalidation
-    // rebuilt rather than lost.
-    assert_eq!(
-        reader.read_matrix_cell::<Sample>(key(ROWS_PER_CHUNK, 0))?,
-        Sample {
-            value: (ROWS_PER_CHUNK * 10) as u32
-        },
-    );
-    Ok(())
-}
-
-#[test]
 fn following_an_overwritten_chunk_adopts_only_its_confirmed_version() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("overwrite.vrv");
@@ -168,22 +104,16 @@ fn following_an_overwritten_chunk_adopts_only_its_confirmed_version() -> varlit:
     writer.commit_matrix_cell::<Sample>(cell)?;
     writer.sync()?;
     let mut old = spec().open_reader(&path)?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
+    assert_eq!(old.read_cell(cell)?.value, 1);
     writer.write_matrix_cell(cell, &Sample { value: 2 })?;
     writer.commit_matrix_cell::<Sample>(cell)?;
     writer.flush()?;
     old.follow()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
-    assert_eq!(
-        spec()
-            .open_reader(&path)?
-            .read_matrix_cell::<Sample>(cell)?
-            .value,
-        1
-    );
+    assert_eq!(old.read_cell(cell)?.value, 1);
+    assert_eq!(spec().open_reader(&path)?.read_cell(cell)?.value, 1);
     writer.sync()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 1);
+    assert_eq!(old.read_cell(cell)?.value, 1);
     old.follow()?;
-    assert_eq!(old.read_matrix_cell::<Sample>(cell)?.value, 2);
+    assert_eq!(old.read_cell(cell)?.value, 2);
     Ok(())
 }

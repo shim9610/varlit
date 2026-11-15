@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use varlit::{Error, VarlitBlock, VarlitFile, VarlitMerge, varlit_format};
+use varlit::{Error, VarlitBlock, VarlitEmpty, VarlitFile, VarlitMerge, varlit_format};
 
 varlit_format! {
     pub format Keyed {
@@ -109,6 +109,14 @@ fn build(path: &std::path::Path, noise: u64) -> Vec<u64> {
     written
 }
 
+/// Decodes the `Reading` at `at` and returns its value.
+fn reading_value_at(file: &VarlitFile, at: u64) -> u64 {
+    let mut reading = Reading::empty();
+    file.read_block_at::<Reading>(at, &mut Vec::new(), &mut reading)
+        .expect("decode");
+    reading.value
+}
+
 fn newest_offset(file: &VarlitFile, sensor: u32) -> u64 {
     let tails: HashMap<u32, u64> = file.key_tail_offsets::<Reading>().expect("key tails");
     *tails.get(&sensor).expect("the sensor has records")
@@ -155,7 +163,7 @@ fn a_hand_written_walk_reaches_every_generation() {
     let mut seen = Vec::new();
     while let Some(at) = offset {
         let entry = file.record_entry_at(at).expect("frame");
-        seen.push(file.read_block_at::<Reading>(at).expect("decode").value);
+        seen.push(reading_value_at(&file, at));
         offset = entry.prev_same_key_offset;
     }
 
@@ -181,11 +189,7 @@ fn keyed_chain_walks_the_same_54_hops() {
     {
         let entry = step.expect("step");
         assert_eq!(entry.block_id, Reading::ID);
-        seen.push(
-            file.read_block_at::<Reading>(entry.record_offset)
-                .expect("decode")
-                .value,
-        );
+        seen.push(reading_value_at(&file, entry.record_offset));
     }
 
     seen.reverse();
@@ -198,9 +202,7 @@ fn keyed_chain_walks_the_same_54_hops() {
         .expect("chain")
         .map(|step| {
             let entry = step.expect("step");
-            file.read_block_at::<Reading>(entry.record_offset)
-                .expect("decode")
-                .value
+            reading_value_at(&file, entry.record_offset)
         })
         .collect();
     assert_eq!(other.len() as u64, HOPS);
@@ -267,9 +269,7 @@ fn the_walk_costs_the_hops_and_not_the_file() {
         .expect("chain")
         .map(|step| {
             let entry = step.expect("step");
-            file.read_block_at::<Reading>(entry.record_offset)
-                .expect("decode")
-                .value
+            reading_value_at(&file, entry.record_offset)
         })
         .collect();
 

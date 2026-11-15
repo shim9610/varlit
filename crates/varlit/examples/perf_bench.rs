@@ -134,11 +134,25 @@ fn append_open_scan_bench(records: usize) -> varlit::Result<()> {
 
     let elapsed = timed(|| {
         let file = BenchFormat::open_readonly(&path)?;
-        assert_eq!(
-            file.scan().collect::<varlit::Result<Vec<_>>>()?.len(),
-            records + 2
-        );
-        assert_eq!(file.blocks::<BenchPoint>()?.len(), records);
+        // The scan also yields the file's internal records, so count only the
+        // benchmark points rather than assuming a fixed number of extras.
+        let mut scanned = 0;
+        for event in file.scan() {
+            if event?.block_id == 200 {
+                scanned += 1;
+            }
+        }
+        assert_eq!(scanned, records);
+        // Paged through a caller-owned buffer; nothing is held across pages.
+        let mut page_buf = vec![BenchPoint { x: 0, y: 0 }; 4096];
+        let mut payload = Vec::new();
+        let mut page = file.blocks::<BenchPoint>(&mut payload, &mut page_buf)?;
+        let mut counted = page.filled;
+        while let Some(next) = page.next {
+            page = file.blocks_from::<BenchPoint>(next, &mut payload, &mut page_buf)?;
+            counted += page.filled;
+        }
+        assert_eq!(counted, records);
         Ok(())
     })?;
     report(
@@ -160,7 +174,7 @@ fn merge_compact_bench(records: usize) -> varlit::Result<()> {
     let direct = temp_path("direct_compacted");
     cleanup_many([&base, &delta, &merged, &compacted, &direct]);
 
-    // BENCH-01: the exact shape of the workload, so each report below can name
+    // the exact shape of the workload, so each report below can name
     // its own denominator instead of borrowing the base record count.
     let updates = records / 4;
     let deletes = records / 3 - records / 4;
@@ -250,7 +264,7 @@ fn merge_compact_bench(records: usize) -> varlit::Result<()> {
         elapsed,
     );
 
-    // BENCH-01: every line that prints a live-value denominator is checked
+    // every line that prints a live-value denominator is checked
     // against the file that line actually produced, not just the last one. The
     // contract this loop upholds: for each of the three merge and compact lines,
     // the run reopens the file that line produced and asserts the live-value
@@ -287,7 +301,7 @@ fn timed(operation: impl FnOnce() -> varlit::Result<()>) -> varlit::Result<Durat
     Ok(start.elapsed())
 }
 
-/// What a throughput number is actually per (BENCH-01).
+/// Unit and denominator for each reported throughput rate.
 ///
 /// The merge and compact operations do not process `records` items: their input
 /// is the base file *plus* every delta record (updates, deletes, and inserts),

@@ -1,6 +1,10 @@
+#[path = "support/pages.rs"]
+mod pages;
+
+// These keys are synthetic fixture identifiers, never real user identities.
 // Resident-facade contract regressions for the 2026-07-19 adversarial review.
 //
-// API2-05 (report finding API-02): `VarlitFile::push_info` and
+// `VarlitFile::push_info` and
 // `VarlitWriter::push_info` used to write `prev_same_key_offset = None` for a
 // second record with an equal key while the generated keyed writer linked it
 // correctly, leaving a silently truncated physical keyed chain. `T: VarlitBlock`
@@ -8,7 +12,7 @@
 // keyed-chaining formats and the maintaining `push_keyed`/`delete` paths carry
 // the chain.
 //
-// PERF2-05 (report finding PERF-05): resident block-offset chaining resolved
+// resident block-offset chaining resolved
 // the predecessor with `index.iter().rev().find(...)`, costing Theta(g) per
 // append and O(N*B) overall. The predecessor now comes from a maintained tail
 // table that never reads the resident index on the append path.
@@ -39,7 +43,7 @@ varlit_format! {
     }
 }
 
-// API3-02, updated round 9 (F-01): the generated keyed writer no longer owns a
+// updated round 9 : the generated keyed writer no longer owns a
 // `HashMap<T::Key, u64>` of its own. It routes through the same byte-keyed
 // resident tail cache the generic keyed API uses, so its per-entry charge is
 // identical to `ResidentTailBudgetFormat`'s below - inline `(Vec<u8>, u64)`
@@ -63,7 +67,7 @@ varlit_format! {
     }
 }
 
-// API3-02: a keyed-chaining format with a deliberately tiny keyed-tail budget,
+// a keyed-chaining format with a deliberately tiny keyed-tail budget,
 // so the resident and generated keyed writers must both refuse growth of the
 // resident tail cache at a typed boundary.
 varlit_format! {
@@ -105,8 +109,7 @@ type ChainLink = (u64, Option<u64>, Option<u64>);
 /// the assertions are against the persisted footers rather than writer state.
 fn chain(path: &Path, block_id: u32) -> varlit::Result<Vec<ChainLink>> {
     let file = ResidentChainFormat::open(path)?;
-    Ok(file
-        .index_entries()
+    Ok(crate::pages::all_entries!(file)
         .iter()
         .filter(|entry| entry.block_id == block_id)
         .map(|entry| {
@@ -182,8 +185,8 @@ fn generic_push_accepts_keyed_blocks_without_keyed_chaining() -> varlit::Result<
     drop(file);
 
     let file = ResidentPlainFormat::open(&path)?;
-    assert_eq!(file.index_entries().len(), 2);
-    for entry in file.index_entries() {
+    assert_eq!(crate::pages::all_entries!(file).len(), 2);
+    for entry in crate::pages::all_entries!(file) {
         assert_eq!(entry.prev_same_key_offset, None);
     }
     Ok(())
@@ -255,7 +258,7 @@ fn keyed_delete_links_the_predecessor_chain() -> varlit::Result<()> {
     drop(file);
 
     let opened = ResidentChainFormat::open(&path)?;
-    let entries = opened.index_entries();
+    let entries = crate::pages::all_entries!(opened);
     let tombstone = entries
         .iter()
         .find(|entry| entry.block_id == varlit::TOMBSTONE_BLOCK_ID)
@@ -388,7 +391,7 @@ fn interleaved_block_ids_chain_correctly_across_reopen() -> varlit::Result<()> {
     Ok(())
 }
 
-/// PERF2-05: the append-time predecessor lookup must not scale with the
+/// the append-time predecessor lookup must not scale with the
 /// resident index. The counter records resident index entries examined by the
 /// block-tail machinery; wholesale index loads pay one pass, appends must pay
 /// nothing at all, so the delta over an append window is zero for any record
@@ -442,14 +445,14 @@ fn append_time_predecessor_lookup_never_reads_the_resident_index() -> varlit::Re
     Ok(())
 }
 
-// PERF3-03 (report finding PERF-03): `BlockTails::from_index` claimed
+// `BlockTails::from_index` claimed
 // `O(N log B)` but inserted every first-seen block id into a sorted vector, so
 // an index whose first appearances descend by id moved `0 + 1 + ... + (B - 1)`
 // tuples - a real `O(N log B + B^2)`. The previous test could not see this
 // because it counted resident *index visits*, which the insertion cost does
 // not touch. Construction now orders the distinct ids once.
 //
-// PERF3-05 (report finding PERF-05): every resident input open could copy all
+// every resident input open could copy all
 // `N` sequences into an `8N` temporary and sort it, and `KeyedMergeEstimate`
 // charged neither the temporary nor the sort. The estimate is the published
 // way to size this resident-only family, so an estimate that omits a live
@@ -513,7 +516,7 @@ varlit_format! {
     }
 }
 
-/// PERF3-03: wholesale block-tail construction must move no tuples at all, in
+/// wholesale block-tail construction must move no tuples at all, in
 /// the exact worst case that used to be quadratic. This counter observes
 /// vector movement, which is the cost the index-visit counter cannot see.
 #[cfg(feature = "scalable-fault-injection")]
@@ -585,10 +588,10 @@ fn block_tail_construction_has_no_quadratic_term() -> varlit::Result<()> {
 }
 
 #[derive(Clone, Debug, PartialEq, varlit::VarlitBlock)]
-#[varlit(id = 60, version = 1, kind = "variable", key = "user_id")]
+#[varlit(id = 60, version = 1, kind = "variable", key = "fixture_key")]
 struct ResidentMergeUser {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     name: String,
 }
@@ -618,7 +621,7 @@ varlit_format! {
     }
 }
 
-/// PERF3-05: the pre-flight estimate must charge the transient an input open
+/// the pre-flight estimate must charge the transient an input open
 /// allocates alongside its resident index, so
 /// `peak_resident_structural_bytes` does not ignore a live allocation it can
 /// actually see.
@@ -631,7 +634,7 @@ fn resident_merge_estimate_includes_the_open_time_transient() -> varlit::Result<
         let mut file = ResidentEstimateFormat::create(path)?;
         for key in 0..keys {
             file.push(&ResidentMergeUser {
-                user_id: key,
+                fixture_key: key,
                 name: format!("user-{key}"),
             })?;
         }
@@ -696,7 +699,7 @@ fn resident_merge_estimate_includes_the_open_time_transient() -> varlit::Result<
     Ok(())
 }
 
-// API3-01 (report finding F-01): the generic keyed mutation paths appended the
+// the generic keyed mutation paths appended the
 // record first and only then grew the resident keyed-tail cache. A failing
 // cache reservation therefore returned `Err` *after* the record was written,
 // indexed and published in writer state, and the superseded predecessor stayed
@@ -857,7 +860,7 @@ fn keyed_tail_commit_loss_never_links_around_the_committed_record() -> varlit::R
     Ok(())
 }
 
-// PERF4-04 (report finding F-04): `KeyedMergeEstimate::peak_resident_bytes()`
+// `KeyedMergeEstimate::peak_resident_bytes()`
 // was published as an *upper bound* while its state term counted only
 // `count * size_of::<(Key, (MergeOrder, Option<T>))>()`. That omits HashMap
 // bucket slack and control bytes, the output vector reserved while the map is
@@ -942,7 +945,7 @@ mod peak_allocations {
 #[global_allocator]
 static PEAK_TRACKING_ALLOCATOR: peak_allocations::PeakTracking = peak_allocations::PeakTracking;
 
-/// PERF4-04: the estimate is a structural count model. Its documented identity
+/// the estimate is a structural count model. Its documented identity
 /// must hold exactly, and - for heap-owning `Key`/`T` - the real allocated
 /// peak must exceed it, which is precisely why the old "upper bound" wording
 /// was a defect rather than a rounding error.
@@ -957,7 +960,7 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> varlit:
         let mut file = ResidentEstimateFormat::create(path)?;
         for key in 0..keys {
             file.push(&ResidentMergeUser {
-                user_id: key,
+                fixture_key: key,
                 name: "n".repeat(NAME_BYTES),
             })?;
         }
@@ -1040,7 +1043,7 @@ fn resident_merge_estimate_is_structural_and_not_an_allocated_bound() -> varlit:
 
     // The merge itself is unaffected by the accounting change.
     let reopened = ResidentEstimateFormat::open(&merged)?;
-    assert_eq!(reopened.index_entries().len() as u64, KEYS);
+    assert_eq!(crate::pages::all_entries!(reopened).len() as u64, KEYS);
     Ok(())
 }
 
@@ -1058,8 +1061,7 @@ fn resident_keyed_tail_growth_spills_and_preserves_predecessors() -> varlit::Res
     file.flush()?;
     drop(file);
     let file = ResidentTailBudgetFormat::open(&path)?;
-    let records: Vec<_> = file
-        .index_entries()
+    let records: Vec<_> = crate::pages::all_entries!(file)
         .iter()
         .filter(|r| r.block_id == <Budgeted as varlit::VarlitBlock>::ID)
         .map(|r| {
@@ -1095,16 +1097,14 @@ fn generated_keyed_writer_spills_tails_for_puts_and_tombstones() -> varlit::Resu
     writer.flush()?;
     drop(writer);
     let file = GeneratedTailBudgetFormat::open(&path)?;
-    let values: Vec<Tracked> = file
-        .blocks::<Tracked>()?
-        .iter()
-        .collect::<varlit::Result<_>>()?;
+    let mut values: Vec<Tracked> = Vec::new();
+    file.decode_blocks_into(&mut values)?;
     assert_eq!(values.len(), 34);
     assert_eq!(values.last(), Some(&Tracked { id: 4, value: 3 }));
     Ok(())
 }
 
-// API3-05: twins of the two budgeted formats above. They share their magic,
+// twins of the two budgeted formats above. They share their magic,
 // version, index policy and block layout but declare no keyed-tail ceiling, so
 // they can author a file holding more distinct keys than the budgeted format's
 // ceiling admits. Neither side declares `schema_hash: computed`, so the
@@ -1175,7 +1175,7 @@ fn generated_keyed_writer_opens_above_the_tail_cache_budget() -> varlit::Result<
     drop(writer);
     let file = unlimited::GeneratedTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        file.blocks::<unlimited::Tracked>()?.iter().count() as u64,
+        crate::pages::all_blocks!(file, unlimited::Tracked)?.len() as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1212,7 +1212,7 @@ fn owned_tail_map_is_limited_but_writer_tail_cache_can_spill() -> varlit::Result
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
     assert_eq!(
-        file.blocks::<unlimited::Budgeted>()?.iter().count() as u64,
+        crate::pages::all_blocks!(file, unlimited::Budgeted)?.len() as u64,
         OVER_BUDGET_KEYS + 1
     );
     Ok(())
@@ -1235,7 +1235,10 @@ fn a_small_reopened_tail_cache_can_grow_beyond_its_budget() -> varlit::Result<()
     file.flush()?;
     drop(file);
     let file = unlimited::ResidentTailUnlimitedFormat::open(&path)?;
-    assert_eq!(file.blocks::<unlimited::Budgeted>()?.iter().count(), 65);
+    assert_eq!(
+        crate::pages::all_blocks!(file, unlimited::Budgeted)?.len(),
+        65
+    );
     Ok(())
 }
 
@@ -1262,7 +1265,7 @@ fn the_generated_into_twins_exist_on_both_routes() -> varlit::Result<()> {
         let mut writer = ResidentChainFormat::create(&path)?;
         writer.push(&Marker { tag: 7 })?;
         // Keyed blocks on a keyed-chaining format must go through the
-        // maintaining path; `push` refuses them (API2-05, asserted above).
+        // maintaining path; `push` refuses them (, asserted above).
         writer.push_keyed(&Item { id: 1, value: 10 })?;
         writer.push_keyed(&Item { id: 2, value: 20 })?;
         writer.flush()?;

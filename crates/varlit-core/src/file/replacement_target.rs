@@ -1,8 +1,13 @@
 use super::{Error, KeyedTails, Result, VarlitBlock};
 
-#[derive(Clone, Copy, Debug)]
+/// A version-checked replacement target: its record-list position and its
+/// own entry, read once when it was selected. Everything after selection —
+/// the old payload, the overwrite's offsets — comes from the entry, so nothing
+/// goes back to a record list for it.
+#[derive(Clone, Debug)]
 pub struct ReplacementTarget {
     position: usize,
+    entry: super::RecordIndexEntry,
 }
 
 impl ReplacementTarget {
@@ -17,7 +22,7 @@ impl ReplacementTarget {
     /// serve. Asking for `&[RecordIndexEntry]` asked for every entry at
     /// once, which is the shape that keeps the index resident.
     pub(super) fn resolve<T: VarlitBlock>(
-        index: &super::ResidentIndex,
+        index: &super::RecordList<'_>,
         ordinal: usize,
     ) -> Result<Self> {
         Self::resolve_internal(index, T::ID, T::VERSION, ordinal)
@@ -41,7 +46,7 @@ impl ReplacementTarget {
     /// caller for anything else has to argue for itself, exactly as this
     /// one did.
     pub(super) fn resolve_internal(
-        index: &super::ResidentIndex,
+        index: &super::RecordList<'_>,
         block_id: u32,
         block_version: u16,
         ordinal: usize,
@@ -49,17 +54,18 @@ impl ReplacementTarget {
         let mut found = None;
         let mut matches_seen = 0usize;
         for (candidate, entry) in index.iter().enumerate() {
-            if entry?.block_id != block_id {
+            let entry = entry?;
+            if entry.block_id != block_id {
                 continue;
             }
             if matches_seen == ordinal {
-                found = Some(candidate);
+                found = Some((candidate, entry));
                 break;
             }
             matches_seen += 1;
         }
-        let position = found.ok_or(Error::UnexpectedEof)?;
-        let actual = index.entry_at(position)?.block_version;
+        let (position, entry) = found.ok_or(Error::UnexpectedEof)?;
+        let actual = entry.block_version;
         if actual != block_version {
             return Err(Error::BlockVersionMismatch {
                 block_id,
@@ -67,16 +73,21 @@ impl ReplacementTarget {
                 actual,
             });
         }
-        Ok(Self { position })
+        Ok(Self { position, entry })
     }
 
-    /// The resident-index position of the version-checked target.
-    pub(super) fn position(self) -> usize {
+    /// The record-list position of the version-checked target.
+    pub(super) fn position(&self) -> usize {
         self.position
+    }
+
+    /// The version-checked target's entry, as it was when selected.
+    pub(super) fn entry(&self) -> &super::RecordIndexEntry {
+        &self.entry
     }
 }
 
-/// Mechanical enforcement for F-02: the permission to rewrite the bytes of
+/// Mechanical enforcement for : the permission to rewrite the bytes of
 /// an already-indexed record, which cannot be obtained without dropping the
 /// block's resident keyed-tail map first.
 ///
@@ -107,12 +118,8 @@ impl RecordOverwrite {
     /// This is the only way to build a [`RecordOverwrite`], and a
     /// [`ReplacementTarget`] is the only way to call it.
     /// One positional read, so it takes the index rather than a slice.
-    pub(super) fn prepare(
-        target: ReplacementTarget,
-        index: &super::ResidentIndex,
-        keyed_tails: &mut KeyedTails,
-    ) -> Result<Self> {
-        let entry = index.entry_at(target.position())?;
+    pub(super) fn prepare(target: ReplacementTarget, keyed_tails: &mut KeyedTails) -> Result<Self> {
+        let entry = target.entry;
         let record_offset = entry.record_offset;
         let payload_offset = entry.payload_offset;
         keyed_tails.invalidate(entry.block_id);

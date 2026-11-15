@@ -1,7 +1,7 @@
-# Varve's read-only savepoint extension
+# Varlit's read-only savepoint extension
 
-Base: crates.io `redb` 4.3.0, upstream commit
-`2de02fa48d1b8e265f388ea90151bf86f452e562`. The MIT and Apache-2.0 license files
+Base: crates.io `redb` 4.4.0, upstream commit
+`7061f7e60d4573311c0636e161d417b93e9fd2b1`. The MIT and Apache-2.0 license files
 are retained. This is a local patch, not an upstream redb release.
 
 `ReadTransaction::persistent_savepoint_prefix()` returns at most two ascending
@@ -15,7 +15,7 @@ mutex. Ordinary readers never access live system-tree pages. Open and successful
 integrity repair initialize the prefix from the file. The exclusive-writer open
 loads existing savepoint registrations without constructing a write transaction.
 The experimental multiprocess path reads the prefix under its existing shared
-header hold; Varve does not enable that feature.
+header hold; Varlit does not enable that feature.
 
 `ReadableDatabase::begin_read_with_savepoint()` returns the current user root
 and oldest persistent savepoint's user root from one publication. The cached
@@ -40,9 +40,28 @@ Rust 1.95 Clippy checks. The multiprocess cache test accounts for the new
 system-catalog read; failed-repair tests also reject unavailable summaries
 without disabling unaffected read-only table access.
 
-Varve now uses its own index and checkpoint implementation at runtime. This
+Varlit now uses its own index and checkpoint implementation at runtime. This
 patched standalone crate is retained only as a development/test oracle and for
-fuzz comparisons. It is not embedded in the published `varve-core` source.
+fuzz comparisons. It is not embedded in the published `varlit-core` source.
 `scripts/check_runtime_dependencies.py` verifies that redb is absent from the
 production dependency graph. The standalone crate remains the reference for
 upstream all-feature, integration, and documentation tests.
+
+The 4.4.0 port retains the two independent read references, bounded prefix cache
+and read-only exclusive-open registration. Upstream now uses the header/lock
+scaffolding unconditionally; the local helper signatures follow that change.
+Exclusive-writer savepoint registration still takes the read-only path, while
+other concurrency modes retain upstream synchronization. Public experimental
+API feature gates are preserved.
+
+For environments with Docker but no rootless Podman, `scripts/podman-sandbox.sh`
+accepts `REDB_SANDBOX_ENGINE=docker` plus `REDB_DOCKER_IMAGE`,
+`REDB_DOCKER_TOOLCHAIN`, `REDB_DOCKER_REGISTRY`, `REDB_DOCKER_TARGET` and
+`REDB_DOCKER_TOOLS`. These select a prepared Rust image, its installed toolchain,
+a fetched Cargo registry, a writable build directory and a directory containing
+`bin/just` built for that image (and matching Clippy binaries if the image
+does not include the component). `just test` still runs the same license/advisory,
+format, Clippy and test recipes. Container checks have no network, a read-only
+source/registry, dropped capabilities and unchanged 8 GiB/2,048-process limits.
+Temporary test files and rustdoc executables use `/target/tmp`, since Docker
+mounts `/tmp` with `noexec`. The existing Podman default is unchanged.

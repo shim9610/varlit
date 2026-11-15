@@ -1,3 +1,7 @@
+#[path = "support/pages.rs"]
+mod pages;
+
+// These keys are synthetic fixture identifiers, never real user identities.
 use std::fs::{read_dir, remove_file};
 use std::path::PathBuf;
 
@@ -14,10 +18,10 @@ struct Point {
 }
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
-#[varlit(id = 2, version = 1, kind = "variable", key = "user_id, region")]
+#[varlit(id = 2, version = 1, kind = "variable", key = "fixture_key, region")]
 struct User {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     region: u16,
     #[varlit(field_id = 3)]
@@ -25,10 +29,10 @@ struct User {
 }
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
-#[varlit(id = 2, version = 2, kind = "variable", key = "user_id, region")]
+#[varlit(id = 2, version = 2, kind = "variable", key = "fixture_key, region")]
 struct UserV2 {
     #[varlit(field_id = 1)]
-    user_id: u64,
+    fixture_key: u64,
     #[varlit(field_id = 2)]
     region: u16,
     #[varlit(field_id = 3)]
@@ -85,7 +89,7 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
         let mut file = TestFormat::create(&path)?;
         file.push(&Point { x: 10, y: 20 })?;
         file.push(&User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "first".to_string(),
         })?;
@@ -97,23 +101,23 @@ fn fixed_variable_nested_roundtrip_and_lazy_collections() -> varlit::Result<()> 
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    let points = file.blocks::<Point>()?;
+    let points = crate::pages::all_blocks!(file, Point)?;
     assert_eq!(points.len(), 1);
-    assert_eq!(points.get(0)?, Some(Point { x: 10, y: 20 }));
+    assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 10, y: 20 }));
 
     let users = file.keyed_blocks::<User>()?;
     assert_eq!(
-        users.get(&(7, 82))?,
+        opt(|o| users.get(&(7, 82), o))?,
         Some(User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "first".to_string(),
         })
     );
 
-    let nested = file.blocks::<Nested>()?;
+    let nested = crate::pages::all_blocks!(file, Nested)?;
     assert_eq!(
-        nested.get(0)?,
+        opt(|o| nested.get(0, o))?,
         Some(Nested {
             point: Point { x: 1, y: 2 },
             score: -5,
@@ -139,7 +143,10 @@ fn low_level_native_entrypoints_resolve_missing_runtime_policy() -> varlit::Resu
         file.spec().read_limits.max_records,
         varlit::ReadLimit::Finite(u64::MAX)
     );
-    assert_eq!(file.blocks::<Point>()?.get(0)?, Some(Point { x: 1, y: 2 }));
+    assert_eq!(
+        opt(|o| crate::pages::all_blocks!(file, Point)?.get(0, o))?,
+        Some(Point { x: 1, y: 2 })
+    );
 
     cleanup(&path);
     Ok(())
@@ -155,7 +162,7 @@ fn reader_writer_handles_cover_common_workflow() -> varlit::Result<()> {
         assert_eq!(writer.mode(), varlit::OpenMode::ReadWrite);
         writer.push(&Point { x: 44, y: 55 })?;
         writer.push(&User {
-            user_id: 8,
+            fixture_key: 8,
             region: 1,
             name: "handle".to_string(),
         })?;
@@ -165,13 +172,13 @@ fn reader_writer_handles_cover_common_workflow() -> varlit::Result<()> {
     let reader = TestFormat::open_reader(&path)?;
     assert_eq!(reader.mode(), varlit::OpenMode::ReadOnly);
     assert_eq!(
-        reader.blocks::<Point>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(reader, Point)?.get(0, o))?,
         Some(Point { x: 44, y: 55 })
     );
     assert_eq!(
-        reader.keyed_blocks::<User>()?.get(&(8, 1))?,
+        opt(|o| reader.keyed_blocks::<User>()?.get(&(8, 1), o))?,
         Some(User {
-            user_id: 8,
+            fixture_key: 8,
             region: 1,
             name: "handle".to_string(),
         })
@@ -194,8 +201,8 @@ fn fixed_replace_publishes_copy_on_write_generation() -> varlit::Result<()> {
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    let points = file.blocks::<Point>()?;
-    assert_eq!(points.get(0)?, Some(Point { x: 3, y: 4 }));
+    let points = crate::pages::all_blocks!(file, Point)?;
+    assert_eq!(opt(|o| points.get(0, o))?, Some(Point { x: 3, y: 4 }));
 
     cleanup(&path);
     Ok(())
@@ -210,7 +217,7 @@ fn variable_replace_rewrite_preserves_records_and_cleans_temp() -> varlit::Resul
         let mut file = TestFormat::create(&path)?;
         file.push(&Point { x: 1, y: 2 })?;
         file.push(&User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "old".to_string(),
         })?;
@@ -221,7 +228,7 @@ fn variable_replace_rewrite_preserves_records_and_cleans_temp() -> varlit::Resul
         file.replace(
             0,
             &User {
-                user_id: 7,
+                fixture_key: 7,
                 region: 82,
                 name: "replacement with a different payload size".to_string(),
             },
@@ -230,18 +237,21 @@ fn variable_replace_rewrite_preserves_records_and_cleans_temp() -> varlit::Resul
     }
 
     let file = TestFormat::open_readonly(&path)?;
-    assert_eq!(file.blocks::<Point>()?.get(0)?, Some(Point { x: 1, y: 2 }));
     assert_eq!(
-        file.blocks::<Nested>()?.get(0)?,
+        opt(|o| crate::pages::all_blocks!(file, Point)?.get(0, o))?,
+        Some(Point { x: 1, y: 2 })
+    );
+    assert_eq!(
+        opt(|o| crate::pages::all_blocks!(file, Nested)?.get(0, o))?,
         Some(Nested {
             point: Point { x: 3, y: 4 },
             score: 5,
         })
     );
     assert_eq!(
-        file.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| file.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "replacement with a different payload size".to_string(),
         })
@@ -268,7 +278,7 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
 
     let mut file = TestFormat::create(&path)?;
     file.push(&User {
-        user_id: 7,
+        fixture_key: 7,
         region: 82,
         name: "old".to_string(),
     })?;
@@ -278,18 +288,18 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
     let grown = file.replace_block(
         0,
         &User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "a substantially longer replacement value".to_string(),
         },
     )?;
     assert_eq!(grown.sequence, 0);
     assert!(grown.new_physical_len > grown.old_physical_len);
-    assert_eq!(file.index_entries()[1].sequence, 1);
+    assert_eq!(crate::pages::all_entries!(file)[1].sequence, 1);
     assert_eq!(
-        old_reader.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| old_reader.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "old".to_string(),
         })
@@ -298,7 +308,7 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
     let shrunk = file.replace_block(
         0,
         &User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "x".to_string(),
         },
@@ -309,7 +319,7 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
         file.replace_block(
             0,
             &User {
-                user_id: 8,
+                fixture_key: 8,
                 region: 82,
                 name: "different key".to_string(),
             },
@@ -319,14 +329,17 @@ fn native_replace_block_resizes_preserves_sequence_and_rejects_key_changes() -> 
 
     let reopened = TestFormat::open_readonly(&path)?;
     assert_eq!(
-        reopened.keyed_blocks::<User>()?.get(&(7, 82))?,
+        opt(|o| reopened.keyed_blocks::<User>()?.get(&(7, 82), o))?,
         Some(User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "x".to_string(),
         })
     );
-    assert_eq!(reopened.keyed_blocks::<User>()?.get(&(8, 82))?, None);
+    assert_eq!(
+        opt(|o| reopened.keyed_blocks::<User>()?.get(&(8, 82), o))?,
+        None
+    );
 
     cleanup(&path);
     Ok(())
@@ -340,7 +353,7 @@ fn native_replace_block_honors_materialization_budget_before_decode() -> varlit:
     {
         let mut file = TestFormat::create(&path)?;
         file.push(&User {
-            user_id: 7,
+            fixture_key: 7,
             region: 82,
             name: "payload larger than one byte".to_string(),
         })?;
@@ -353,7 +366,7 @@ fn native_replace_block_honors_materialization_budget_before_decode() -> varlit:
         file.replace_block(
             0,
             &User {
-                user_id: 7,
+                fixture_key: 7,
                 region: 82,
                 name: "replacement".to_string(),
             },
@@ -373,7 +386,7 @@ fn typed_decode_charges_nested_allocations_to_handle_budget() -> varlit::Result<
     let path = temp_path("nested_decode_materialization_budget");
     cleanup(&path);
     let value = User {
-        user_id: 7,
+        fixture_key: 7,
         region: 82,
         name: "nested allocation amplification".repeat(8),
     };
@@ -382,13 +395,13 @@ fn typed_decode_charges_nested_allocations_to_handle_budget() -> varlit::Result<
         let mut file = TestFormat::create(&path)?;
         file.push(&value)?;
         file.flush()?;
-        file.index_entries()[0].payload_len
+        crate::pages::all_entries!(file)[0].payload_len
     };
     let limits = ReadLimits::missing()
         .with_max_materialized_bytes(payload_len + value.name.len() as u64 - 1);
     let file = TestFormat::open_readonly_with_resource_limits(&path, limits)?;
     assert!(matches!(
-        file.blocks::<User>()?.get(0),
+        opt(|o| crate::pages::all_blocks!(file, User)?.get(0, o)),
         Err(varlit::Error::LimitExceeded {
             resource: "string",
             actual,
@@ -408,17 +421,17 @@ fn replacement_keeps_older_put_behind_later_keyed_events() -> varlit::Result<()>
 
     let mut file = TestFormat::create(&path)?;
     file.push(&User {
-        user_id: 1,
+        fixture_key: 1,
         region: 82,
         name: "old-put".into(),
     })?;
     file.push(&User {
-        user_id: 1,
+        fixture_key: 1,
         region: 82,
         name: "later-put".into(),
     })?;
     file.push(&User {
-        user_id: 2,
+        fixture_key: 2,
         region: 82,
         name: "before-op".into(),
     })?;
@@ -429,7 +442,7 @@ fn replacement_keeps_older_put_behind_later_keyed_events() -> varlit::Result<()>
         },
     )?;
     file.push(&User {
-        user_id: 3,
+        fixture_key: 3,
         region: 82,
         name: "before-delete".into(),
     })?;
@@ -438,7 +451,7 @@ fn replacement_keeps_older_put_behind_later_keyed_events() -> varlit::Result<()>
     file.replace_block(
         0,
         &User {
-            user_id: 1,
+            fixture_key: 1,
             region: 82,
             name: "replacement-must-stay-old".into(),
         },
@@ -446,7 +459,7 @@ fn replacement_keeps_older_put_behind_later_keyed_events() -> varlit::Result<()>
     file.replace_block(
         2,
         &User {
-            user_id: 2,
+            fixture_key: 2,
             region: 82,
             name: "replacement-before-op".into(),
         },
@@ -454,7 +467,7 @@ fn replacement_keeps_older_put_behind_later_keyed_events() -> varlit::Result<()>
     file.replace_block(
         3,
         &User {
-            user_id: 3,
+            fixture_key: 3,
             region: 82,
             name: "replacement-before-delete".into(),
         },
@@ -487,12 +500,12 @@ fn keyed_merge_applies_put_op_and_tombstone_by_sequence() -> varlit::Result<()> 
     {
         let mut file = TestFormat::create(&base)?;
         file.push(&User {
-            user_id: 1,
+            fixture_key: 1,
             region: 82,
             name: "base".to_string(),
         })?;
         file.push(&User {
-            user_id: 2,
+            fixture_key: 2,
             region: 82,
             name: "delete-me".to_string(),
         })?;
@@ -509,7 +522,7 @@ fn keyed_merge_applies_put_op_and_tombstone_by_sequence() -> varlit::Result<()> 
         )?;
         file.delete::<User>(&(2, 82))?;
         file.push(&User {
-            user_id: 3,
+            fixture_key: 3,
             region: 82,
             name: "new".to_string(),
         })?;
@@ -521,18 +534,18 @@ fn keyed_merge_applies_put_op_and_tombstone_by_sequence() -> varlit::Result<()> 
     let users = merged.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(1, 82))?,
+        opt(|o| users.get(&(1, 82), o))?,
         Some(User {
-            user_id: 1,
+            fixture_key: 1,
             region: 82,
             name: "renamed".to_string(),
         })
     );
-    assert_eq!(users.get(&(2, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(2, 82), o))?, None);
     assert_eq!(
-        users.get(&(3, 82))?,
+        opt(|o| users.get(&(3, 82), o))?,
         Some(User {
-            user_id: 3,
+            fixture_key: 3,
             region: 82,
             name: "new".to_string(),
         })
@@ -557,7 +570,7 @@ fn merge_uses_shard_order_before_local_sequence() -> varlit::Result<()> {
         let mut file = TestFormat::create(&base)?;
         for index in 0..5 {
             file.push(&User {
-                user_id: 9,
+                fixture_key: 9,
                 region: 82,
                 name: format!("base-{index}"),
             })?;
@@ -573,7 +586,10 @@ fn merge_uses_shard_order_before_local_sequence() -> varlit::Result<()> {
 
     merge_keyed_files::<User, _>(TestFormat::spec(), &base, &[&delta], &output)?;
     let merged = TestFormat::open_readonly(&output)?;
-    assert_eq!(merged.keyed_blocks::<User>()?.get(&(9, 82))?, None);
+    assert_eq!(
+        opt(|o| merged.keyed_blocks::<User>()?.get(&(9, 82), o))?,
+        None
+    );
 
     cleanup(&base);
     cleanup(&delta);
@@ -589,7 +605,7 @@ fn materialized_keyed_blocks_apply_same_file_ops_and_tombstones() -> varlit::Res
     {
         let mut file = TestFormat::create(&path)?;
         file.push(&User {
-            user_id: 10,
+            fixture_key: 10,
             region: 82,
             name: "start".to_string(),
         })?;
@@ -600,7 +616,7 @@ fn materialized_keyed_blocks_apply_same_file_ops_and_tombstones() -> varlit::Res
             },
         )?;
         file.push(&User {
-            user_id: 11,
+            fixture_key: 11,
             region: 82,
             name: "remove".to_string(),
         })?;
@@ -629,7 +645,7 @@ fn keyed_blocks_hide_same_file_tombstoned_keys() -> varlit::Result<()> {
     {
         let mut file = TestFormat::create(&path)?;
         file.push(&User {
-            user_id: 12,
+            fixture_key: 12,
             region: 82,
             name: "remove".to_string(),
         })?;
@@ -640,7 +656,7 @@ fn keyed_blocks_hide_same_file_tombstoned_keys() -> varlit::Result<()> {
     let file = TestFormat::open_readonly(&path)?;
     let users = file.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 0);
-    assert_eq!(users.get(&(12, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(12, 82), o))?, None);
     assert_eq!(users.as_blocks().len(), 1);
 
     cleanup(&path);
@@ -658,7 +674,7 @@ fn compact_keyed_file_writes_only_final_keyed_state() -> varlit::Result<()> {
         let mut file = TestFormat::create(&input)?;
         file.push(&Point { x: 99, y: 100 })?;
         file.push(&User {
-            user_id: 20,
+            fixture_key: 20,
             region: 82,
             name: "start".to_string(),
         })?;
@@ -669,13 +685,13 @@ fn compact_keyed_file_writes_only_final_keyed_state() -> varlit::Result<()> {
             },
         )?;
         file.push(&User {
-            user_id: 21,
+            fixture_key: 21,
             region: 82,
             name: "remove".to_string(),
         })?;
         file.delete::<User>(&(21, 82))?;
         file.push(&User {
-            user_id: 22,
+            fixture_key: 22,
             region: 82,
             name: "final".to_string(),
         })?;
@@ -702,18 +718,18 @@ fn compact_keyed_file_writes_only_final_keyed_state() -> varlit::Result<()> {
     let users = compacted.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(20, 82))?,
+        opt(|o| users.get(&(20, 82), o))?,
         Some(User {
-            user_id: 20,
+            fixture_key: 20,
             region: 82,
             name: "after-op".to_string(),
         })
     );
-    assert_eq!(users.get(&(21, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(21, 82), o))?, None);
     assert_eq!(
-        users.get(&(22, 82))?,
+        opt(|o| users.get(&(22, 82), o))?,
         Some(User {
-            user_id: 22,
+            fixture_key: 22,
             region: 82,
             name: "final".to_string(),
         })
@@ -736,12 +752,12 @@ fn compact_keyed_files_materializes_base_and_delta_shards() -> varlit::Result<()
     {
         let mut file = TestFormat::create(&base)?;
         file.push(&User {
-            user_id: 30,
+            fixture_key: 30,
             region: 82,
             name: "base".to_string(),
         })?;
         file.push(&User {
-            user_id: 31,
+            fixture_key: 31,
             region: 82,
             name: "delete-me".to_string(),
         })?;
@@ -757,7 +773,7 @@ fn compact_keyed_files_materializes_base_and_delta_shards() -> varlit::Result<()
         )?;
         file.delete::<User>(&(31, 82))?;
         file.push(&User {
-            user_id: 32,
+            fixture_key: 32,
             region: 82,
             name: "new".to_string(),
         })?;
@@ -784,18 +800,18 @@ fn compact_keyed_files_materializes_base_and_delta_shards() -> varlit::Result<()
     let users = compacted.keyed_blocks::<User>()?;
     assert_eq!(users.len(), 2);
     assert_eq!(
-        users.get(&(30, 82))?,
+        opt(|o| users.get(&(30, 82), o))?,
         Some(User {
-            user_id: 30,
+            fixture_key: 30,
             region: 82,
             name: "delta".to_string(),
         })
     );
-    assert_eq!(users.get(&(31, 82))?, None);
+    assert_eq!(opt(|o| users.get(&(31, 82), o))?, None);
     assert_eq!(
-        users.get(&(32, 82))?,
+        opt(|o| users.get(&(32, 82), o))?,
         Some(User {
-            user_id: 32,
+            fixture_key: 32,
             region: 82,
             name: "new".to_string(),
         })
@@ -820,7 +836,7 @@ fn keyed_materialization_merge_and_compact_share_one_cumulative_budget() -> varl
     {
         let mut file = TestFormat::create(&base)?;
         file.push(&User {
-            user_id: 1,
+            fixture_key: 1,
             region: 1,
             name: "base materialization".to_string(),
         })?;
@@ -829,7 +845,7 @@ fn keyed_materialization_merge_and_compact_share_one_cumulative_budget() -> varl
     {
         let mut file = TestFormat::create(&delta)?;
         file.push(&User {
-            user_id: 2,
+            fixture_key: 2,
             region: 1,
             name: "delta materialization".to_string(),
         })?;
@@ -882,7 +898,7 @@ fn external_merge_spills_and_preserves_shard_ops_deletes_and_atomic_output() -> 
         let mut file = TestFormat::create(&base)?;
         for id in 0..300 {
             let value = User {
-                user_id: id,
+                fixture_key: id,
                 region: 1,
                 name: format!("base-{id}"),
             };
@@ -908,7 +924,7 @@ fn external_merge_spills_and_preserves_shard_ops_deletes_and_atomic_output() -> 
                 expected.get_mut(&(id, 1)).unwrap().name = name;
             } else {
                 let value = User {
-                    user_id: id,
+                    fixture_key: id,
                     region: 1,
                     name: format!("put-{id}"),
                 };
@@ -966,7 +982,7 @@ fn merge_and_materialized_reject_block_version_mismatch() -> varlit::Result<()> 
     {
         let mut file = TestFormatV2::create(&base)?;
         file.push(&UserV2 {
-            user_id: 1,
+            fixture_key: 1,
             region: 82,
             name: "v2".to_string(),
         })?;
@@ -1028,4 +1044,14 @@ fn cleanup(path: &PathBuf) {
     let mut lock = path.as_os_str().to_os_string();
     lock.push(".lock");
     let _ = remove_file(PathBuf::from(lock));
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
 }

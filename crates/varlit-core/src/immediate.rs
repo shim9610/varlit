@@ -117,8 +117,11 @@ impl ImmediateState {
 }
 
 pub(crate) fn appended_immediate_error(sequence: u64, source: Error) -> Error {
-    Error::AppendedButImmediateFailed {
-        sequence,
-        source: Box::new(source),
-    }
+    crate::fallible::boxed_error(
+        source,
+        Error::ErrorContextAllocationFailed {
+            context: crate::AllocationFailureContext::Appended { sequence },
+        },
+        |source| Error::AppendedButImmediateFailed { sequence, source },
+    )
 }

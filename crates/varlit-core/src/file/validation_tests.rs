@@ -1,0 +1,838 @@
+//! Compare independent framing routes using complete entries, not selected
+//! fields. Framing-only routes deliberately defer payload CRC verification;
+//! scanners deliberately distinguish a recoverable tail from an invalid frame.
+use super::*;
+use std::io::Cursor;
+
+fn spec() -> FormatSpec {
+    FormatSpec::new(
+        b"FRAMECHECK",
+        1,
+        Endian::Little,
+        0,
+        IndexPolicy::ScanOnOpen,
+        IntegrityPolicy::None,
+        RecoveryPolicy::Strict,
+        ManifestPolicy::None,
+        &[],
+    )
+    .with_read_limits(crate::ReadLimits::finite_all(u64::MAX))
+}
+
+fn scan(spec: FormatSpec, bytes: &[u8], offset: u64) -> Result<RecordRead> {
+    read_record_entry_at(
+        spec,
+        &mut Cursor::new(bytes),
+        bytes.len() as u64,
+        offset,
+        ScanChecks {
+            partial_boundary: None,
+            checksum_boundary: None,
+            verify_checksums: true,
+        },
+        &mut ScanAccounting::default(),
+    )
+}
+
+fn snapshot(bytes: &[u8]) -> Result<SnapshotFile> {
+    let mut file = tempfile::tempfile()?;
+    file.write_all(bytes)?;
+    SnapshotFile::new(file)
+}
+
+fn append_frame(
+    spec: FormatSpec,
+    bytes: &mut Vec<u8>,
+    flags: u16,
+    payload: &[u8],
+    footer: RecordFooterFields,
+) -> Result<RecordIndexEntry> {
+    let record_offset = bytes.len() as u64;
+    let payload_offset = record_offset + RECORD_HEADER_LEN;
+    let mut header = RecordHeaderFields {
+        block_id: 37,
+        block_version: 3,
+        flags,
+        sequence: record_offset + 11,
+        payload_len: payload.len() as u64,
+        checksum: 0,
+        uncompressed_len_hint: 0,
+    };
+    let footer_bytes = if spec.spec_needs_record_footer() {
+        encode_record_footer(footer)?.to_vec()
+    } else {
+        Vec::new()
+    };
+    header.checksum = checksum_record_fields(spec, record_offset, header, payload, &footer_bytes)?;
+    bytes.extend_from_slice(&encode_native_record_header(
+        header,
+        record_offset,
+        footer_bytes.len() as u64,
+    )?);
+    bytes.extend_from_slice(payload);
+    bytes.extend_from_slice(&footer_bytes);
+    Ok(RecordIndexEntry {
+        block_id: header.block_id,
+        block_version: header.block_version,
+        flags,
+        sequence: header.sequence,
+        record_offset,
+        payload_offset,
+        payload_len: header.payload_len,
+        checksum: header.checksum,
+        uncompressed_len_hint: 0,
+        footer_offset: (!footer_bytes.is_empty()).then_some(payload_offset + header.payload_len),
+        prev_same_block_offset: footer.prev_same_block_offset,
+        prev_same_key_offset: footer.prev_same_key_offset,
+        mutable_flags: footer.mutable_flags,
+        committed: true,
+    })
+}
+
+// This test requires integrity specifically to make every malformed header's
+// CRC valid. Native and ASan all-feature jobs exhaust the entire u16 domain.
+#[cfg(feature = "integrity")]
+#[test]
+fn every_record_flag_word_has_the_same_framing_verdict() -> Result<()> {
+    let spec = spec().with_integrity_policy(IntegrityPolicy::Crc32WithHeader);
+    let footer = RecordFooterFields {
+        prev_same_block_offset: None,
+        prev_same_key_offset: None,
+        mutable_flags: 0,
+    };
+    let mut bytes = Vec::new();
+    for flags in 0..=u16::MAX {
+        append_frame(spec, &mut bytes, flags, b"payload", footer)?;
+    }
+    let snapshot = snapshot(&bytes)?;
+    let stride = RECORD_HEADER_LEN + b"payload".len() as u64;
+    for flags in 0..=u16::MAX {
+        let offset = u64::from(flags) * stride;
+        let sequential = scan(spec, &bytes, offset);
+        let positional = read_record_entry_positional(spec, &snapshot, offset);
+        // Independent wire contract: bit 0 is compression, bit 1 chunked
+        // (variable payloads with per-chunk checksums), bit 14 in-place
+        // (matrix storage only), bit 15 internal. Adding a flag requires an
+        // explicit contract/test update.
+        let unknown = flags & !0xC003;
+        if unknown != 0 {
+            assert!(
+                matches!(sequential, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
+                "scanner must reject flags {flags:#06x} with UnknownRecordFlags"
+            );
+            assert!(
+                matches!(positional, Err(Error::UnknownRecordFlags(bits)) if bits == unknown),
+                "positional read must reject flags {flags:#06x} with UnknownRecordFlags"
+            );
+        } else if flags & 0xC000 != 0 {
+            // This fixture has user block ID 37. A well-known flag still
+            // cannot relabel that ID as an internal control record, nor take
+            // its payload out of the checksum.
+            assert!(matches!(
+                sequential,
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+            assert!(matches!(
+                positional,
+                Err(Error::InvalidCanonicalEncoding(_))
+            ));
+        } else if flags & 3 != 0 {
+            // No registered compression contract and no variable block 37;
+            // even the known encoding bits (compressed, chunked) are invalid
+            // here. Both paths must enforce that rule too.
+            assert!(matches!(
+                sequential,
+                Err(Error::UnregisteredBlock(37) | Error::InvalidCompressionHeader)
+            ));
+            assert!(matches!(
+                positional,
+                Err(Error::UnregisteredBlock(37) | Error::InvalidCompressionHeader)
+            ));
+        } else {
+            let RecordRead::Entry(sequential) = sequential? else {
+                panic!("complete record became tail")
+            };
+            assert_eq!(sequential, positional?);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn framing_routes_preserve_every_footer_field() -> Result<()> {
+    let policies = if cfg!(feature = "integrity") {
+        vec![
+            IntegrityPolicy::None,
+            IntegrityPolicy::Crc32,
+            IntegrityPolicy::Crc32WithHeader,
+        ]
+    } else {
+        vec![IntegrityPolicy::None]
+    };
+    for integrity in policies {
+        for footer_enabled in [false, true] {
+            for liveness in [LivenessPolicy::None, LivenessPolicy::FooterFlags] {
+                // FooterFlags requires a format that actually stores footers.
+                // FormatSpec validation rejects the other pairing at open.
+                if !footer_enabled && liveness == LivenessPolicy::FooterFlags {
+                    continue;
+                }
+                let spec = spec()
+                    .with_integrity_policy(integrity)
+                    .with_commit_policy(if footer_enabled {
+                        CommitPolicy::RecordFooter
+                    } else {
+                        CommitPolicy::None
+                    })
+                    .with_liveness_policy(liveness);
+                let mut bytes = vec![0; 128];
+                let mut entries = Vec::new();
+                let words: Vec<u32> = if liveness == LivenessPolicy::FooterFlags {
+                    std::iter::once(0)
+                        .chain((0..32).map(|bit| 1u32 << bit))
+                        .chain([u32::MAX])
+                        .collect()
+                } else {
+                    vec![0]
+                };
+                for word in words {
+                    for payload in [b"".as_slice(), b"x", b"distinct payload"] {
+                        let footer = RecordFooterFields {
+                            prev_same_block_offset: spec.spec_needs_record_footer().then_some(32),
+                            prev_same_key_offset: spec.spec_needs_record_footer().then_some(64),
+                            mutable_flags: word,
+                        };
+                        entries.push(append_frame(spec, &mut bytes, 0, payload, footer)?);
+                    }
+                }
+                let snapshot = snapshot(&bytes)?;
+                for expected in entries {
+                    let RecordRead::Entry(sequential) = scan(spec, &bytes, expected.record_offset)?
+                    else {
+                        panic!("complete record became tail")
+                    };
+                    assert_eq!(sequential, expected);
+                    assert_eq!(
+                        read_record_entry_positional(spec, &snapshot, expected.record_offset)?,
+                        expected
+                    );
+                    assert_eq!(
+                        fault_record_entry(&snapshot, spec, expected.record_offset, true)?,
+                        expected
+                    );
+                    assert_eq!(
+                        fault_record_entry_prefixed::<128>(
+                            &snapshot,
+                            spec,
+                            expected.record_offset,
+                            true
+                        )?,
+                        expected
+                    );
+                    // Commit state belongs to the directory, not the bytes.
+                    assert_eq!(
+                        fault_record_entry(&snapshot, spec, expected.record_offset, false)?,
+                        RecordIndexEntry {
+                            committed: false,
+                            ..expected
+                        }
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn no_truncated_frame_is_returned_as_a_complete_record() -> Result<()> {
+    for footer_enabled in [false, true] {
+        let spec = spec().with_commit_policy(if footer_enabled {
+            CommitPolicy::RecordFooter
+        } else {
+            CommitPolicy::None
+        });
+        let mut bytes = Vec::new();
+        append_frame(
+            spec,
+            &mut bytes,
+            0,
+            b"payload",
+            RecordFooterFields {
+                prev_same_block_offset: None,
+                prev_same_key_offset: None,
+                mutable_flags: 0,
+            },
+        )?;
+        for end in 0..bytes.len() {
+            let partial = &bytes[..end];
+            let snapshot = snapshot(partial)?;
+            assert!(
+                !matches!(scan(spec, partial, 0), Ok(RecordRead::Entry(_))),
+                "accepted prefix {end}"
+            );
+            assert!(
+                read_record_entry_positional(spec, &snapshot, 0).is_err(),
+                "accepted prefix {end}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn checksummed_chain_links_must_decrease_and_stay_in_their_block() -> Result<()> {
+    let spec = spec()
+        .with_integrity_policy(IntegrityPolicy::Crc32WithHeader)
+        .with_index_policy(IndexPolicy::KeyedOffsetChain);
+    for key_link in [false, true] {
+        for previous in [128, 129, u64::MAX] {
+            let mut bytes = vec![0; 128];
+            append_frame(
+                spec,
+                &mut bytes,
+                0,
+                b"payload",
+                RecordFooterFields {
+                    prev_same_block_offset: (!key_link).then_some(previous),
+                    prev_same_key_offset: key_link.then_some(previous),
+                    mutable_flags: 0,
+                },
+            )?;
+            let snap = snapshot(&bytes)?;
+            assert!(read_record_entry_positional(spec, &snap, 128).is_err());
+            assert!(!matches!(scan(spec, &bytes, 128), Ok(RecordRead::Entry(_))));
+        }
+    }
+    let mut bytes = vec![0; 128];
+    append_frame(
+        spec,
+        &mut bytes,
+        0,
+        b"payload",
+        RecordFooterFields {
+            prev_same_block_offset: None,
+            prev_same_key_offset: None,
+            mutable_flags: 0,
+        },
+    )?;
+    let snap = snapshot(&bytes)?;
+    let mut correct = BlockChain {
+        spec,
+        snapshot: &snap,
+        block_id: 37,
+        next: Some(128),
+        visited: 0,
+        floor: 0,
+    };
+    assert!(correct.next().unwrap().is_ok());
+    assert!(correct.next().is_none());
+    let mut wrong = BlockChain {
+        spec,
+        snapshot: &snap,
+        block_id: 38,
+        next: Some(128),
+        visited: 0,
+        floor: 0,
+    };
+    assert!(wrong.next().unwrap().is_err());
+    assert!(wrong.next().is_none());
+    Ok(())
+}
+
+#[test]
+fn mark_read_hint_preserves_full_width_geometry() {
+    for count in [0, 1, 31, 32, 33, usize::MAX / 512, usize::MAX] {
+        for bytes in [0, 512, 32 * 512, 32 * 512 + 1, u64::MAX] {
+            assert_eq!(
+                mark_prefers_header_only(bytes, count),
+                count >= 32 && u128::from(bytes) > count as u128 * 512,
+            );
+        }
+    }
+}
+
+#[test]
+fn adaptive_mark_reads_preserve_frames_and_retry_after_io_failure() -> Result<()> {
+    let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
+    for length in [0, 64, 448, 449, 4096] {
+        let mut bytes = Vec::new();
+        let mut expected = None;
+        for i in 0..64 {
+            let mut entry = append_frame(
+                spec,
+                &mut bytes,
+                0,
+                &vec![23; length],
+                RecordFooterFields {
+                    prev_same_block_offset: None,
+                    prev_same_key_offset: None,
+                    mutable_flags: 0,
+                },
+            )?;
+            entry.committed = false;
+            if i == 16 {
+                expected = Some(entry);
+            }
+        }
+        let expected = expected.unwrap();
+        let mut requests = Vec::new();
+        let actual = fault_record_entry_for_mark_with(
+            bytes.len() as u64,
+            64,
+            spec,
+            expected.record_offset,
+            |at, output| {
+                requests.push(output.len());
+                output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                Ok(())
+            },
+        )?;
+        assert_eq!(actual, expected);
+        if length <= 448 {
+            assert_eq!(requests, [512]);
+        } else {
+            assert_eq!(
+                requests,
+                [RECORD_HEADER_LEN as usize, RECORD_FOOTER_LEN as usize]
+            );
+        }
+        for failed_read in 0..requests.len() {
+            let mut call = 0;
+            assert!(
+                fault_record_entry_for_mark_with(
+                    bytes.len() as u64,
+                    64,
+                    spec,
+                    expected.record_offset,
+                    |at, output| {
+                        let fail = call == failed_read;
+                        call += 1;
+                        if fail {
+                            return Err(std::io::Error::from(std::io::ErrorKind::Other).into());
+                        }
+                        output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                        Ok(())
+                    },
+                )
+                .is_err()
+            );
+            assert_eq!(call, failed_read + 1);
+        }
+        // Repair/retry uses the same input and complete framing, on either hint.
+        assert_eq!(
+            fault_record_entry_for_mark_with(
+                bytes.len() as u64,
+                64,
+                spec,
+                expected.record_offset,
+                |at, output| {
+                    output.copy_from_slice(&bytes[at as usize..at as usize + output.len()]);
+                    Ok(())
+                },
+            )?,
+            expected
+        );
+        let end = (expected.footer_offset.unwrap() + RECORD_FOOTER_LEN - 1) as usize;
+        assert!(
+            fault_record_entry_for_mark_with(
+                bytes.len() as u64,
+                64,
+                spec,
+                expected.record_offset,
+                |at, output| {
+                    let input = bytes[..end]
+                        .get(at as usize..at as usize + output.len())
+                        .ok_or(Error::UnexpectedEof)?;
+                    output.copy_from_slice(input);
+                    Ok(())
+                },
+            )
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn mutable_record_prefix_never_accepts_a_truncated_footer() -> Result<()> {
+    let spec = spec().with_commit_policy(CommitPolicy::RecordFooter);
+    for length in [0, 8, 64, 65, 256, 448, 449, 1024] {
+        let mut bytes = Vec::new();
+        let expected = append_frame(
+            spec,
+            &mut bytes,
+            0,
+            &vec![23; length],
+            RecordFooterFields {
+                prev_same_block_offset: None,
+                prev_same_key_offset: None,
+                mutable_flags: 0,
+            },
+        )?;
+        for end in 0..bytes.len() {
+            let snapshot = snapshot(&bytes[..end])?;
+            assert!(
+                fault_record_entry_prefixed::<512>(&snapshot, spec, 0, true).is_err(),
+                "accepted {end} bytes of a {length}-byte payload frame"
+            );
+        }
+        let snapshot = snapshot(&bytes)?;
+        assert_eq!(
+            fault_record_entry_prefixed::<512>(&snapshot, spec, 0, true)?,
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn crc_streaming_preserves_bytes_across_short_reads_and_repair() -> Result<()> {
+    struct Reader {
+        cursor: std::io::Cursor<Vec<u8>>,
+        fail_at: Option<u64>,
+        zero: bool,
+    }
+    impl std::io::Read for Reader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let at = self.cursor.position();
+            if self.fail_at == Some(at) {
+                return if self.zero {
+                    Ok(0)
+                } else {
+                    Err(std::io::Error::other("crc cut"))
+                };
+            }
+            let available = self.fail_at.map_or(usize::MAX, |end| (end - at) as usize);
+            let count = out.len().min(19).min(available);
+            std::io::Read::read(&mut self.cursor, &mut out[..count])
+        }
+    }
+    impl std::io::Seek for Reader {
+        fn seek(&mut self, at: std::io::SeekFrom) -> std::io::Result<u64> {
+            std::io::Seek::seek(&mut self.cursor, at)
+        }
+    }
+    for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+        let bytes: Vec<u8> = (0..len + 8).map(|n| (n % 251) as u8).collect();
+        let mut expected = crc32fast::Hasher::new();
+        expected.update(b"fixture-header");
+        expected.update(&bytes[3..3 + len]);
+        expected.update(b"fixture-footer");
+        let expected = expected.finalize();
+        let mut reader = Reader {
+            cursor: std::io::Cursor::new(bytes),
+            fail_at: None,
+            zero: false,
+        };
+        assert_eq!(
+            crc32_record_file(
+                &mut reader,
+                3,
+                len as u64,
+                b"fixture-header",
+                b"fixture-footer"
+            )?,
+            expected
+        );
+        if len != 0 {
+            for zero in [false, true] {
+                reader.fail_at = Some(3 + (len / 2) as u64);
+                reader.zero = zero;
+                assert!(
+                    crc32_record_file(
+                        &mut reader,
+                        3,
+                        len as u64,
+                        b"fixture-header",
+                        b"fixture-footer"
+                    )
+                    .is_err()
+                );
+                assert_eq!(reader.cursor.position(), reader.fail_at.unwrap());
+                reader.fail_at = None;
+                assert_eq!(
+                    crc32_record_file(
+                        &mut reader,
+                        3,
+                        len as u64,
+                        b"fixture-header",
+                        b"fixture-footer"
+                    )?,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn verified_copy_checks_crc_and_retries_repaired_sources_at_buffer_edges() -> Result<()> {
+    for integrity in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
+        for liveness in [LivenessPolicy::None, LivenessPolicy::FooterFlags] {
+            let spec = spec()
+                .with_integrity_policy(integrity)
+                .with_commit_policy(CommitPolicy::RecordFooter)
+                .with_liveness_policy(liveness);
+            let footer = RecordFooterFields {
+                prev_same_block_offset: None,
+                prev_same_key_offset: None,
+                mutable_flags: if liveness == LivenessPolicy::FooterFlags {
+                    RECORD_MUTABLE_FLAG_DEAD
+                } else {
+                    0
+                },
+            };
+            for len in [0, 1, 1023, 1024, 1025, 65535, 65536, 65537] {
+                let payload: Vec<u8> = (0..len).map(|n| (n % 251) as u8).collect();
+                let mut encoded = vec![0; 17];
+                let entry = append_frame(spec, &mut encoded, 0, &payload, footer)?;
+                let source = snapshot(&encoded)?;
+                let mut output: crate::primary_file::PrimaryFile = tempfile::tempfile()?.into();
+                let mut hash = copy_verified_snapshot_record(
+                    spec,
+                    &source,
+                    &mut output,
+                    &entry,
+                    entry.payload_offset,
+                    len as u64,
+                )?;
+                hash.update(checksummed_footer(spec, &encode_record_footer(footer)?));
+                assert_eq!(hash.finalize(), entry.checksum);
+                output.seek(SeekFrom::Start(0))?;
+                let mut actual = Vec::new();
+                output.read_to_end(&mut actual)?;
+                assert_eq!(actual, payload);
+                output.set_len(0)?;
+                output.seek(SeekFrom::Start(0))?;
+                assert!(
+                    copy_verified_snapshot_record(
+                        spec,
+                        &source,
+                        &mut output,
+                        &entry,
+                        entry.payload_offset + 1,
+                        len as u64
+                    )
+                    .is_err()
+                );
+                assert_eq!(output.len()?, 0);
+                if len != 0 {
+                    let changed_at = entry.payload_offset as usize + len / 2;
+                    encoded[changed_at] ^= 1;
+                    let damaged = snapshot(&encoded)?;
+                    assert!(matches!(
+                        copy_verified_snapshot_record(
+                            spec,
+                            &damaged,
+                            &mut output,
+                            &entry,
+                            entry.payload_offset,
+                            len as u64
+                        ),
+                        Err(Error::ChecksumMismatch { .. })
+                    ));
+                    let mut repair = damaged.try_clone_file()?;
+                    repair.seek(SeekFrom::Start(changed_at as u64))?;
+                    repair.write_all(&payload[len / 2..len / 2 + 1])?;
+                    output.set_len(0)?;
+                    output.seek(SeekFrom::Start(0))?;
+                    copy_verified_snapshot_record(
+                        spec,
+                        &damaged,
+                        &mut output,
+                        &entry,
+                        entry.payload_offset,
+                        len as u64,
+                    )?;
+                    output.seek(SeekFrom::Start(0))?;
+                    actual.clear();
+                    output.read_to_end(&mut actual)?;
+                    assert_eq!(actual, payload);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "integrity")]
+#[test]
+fn read_validation_combinations_separate_damage_detection_and_frame_io() -> Result<()> {
+    use crate::{ReadLimits, ReadValidation};
+    for integrity in [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader] {
+        for footer in [false, true] {
+            let base = spec()
+                .with_integrity_policy(integrity)
+                .with_commit_policy(if footer {
+                    CommitPolicy::RecordFooter
+                } else {
+                    CommitPolicy::None
+                });
+            let mut bytes = Vec::new();
+            let entry = append_frame(
+                base,
+                &mut bytes,
+                0,
+                b"payload",
+                RecordFooterFields {
+                    prev_same_block_offset: None,
+                    prev_same_key_offset: None,
+                    mutable_flags: 0,
+                },
+            )?;
+            for declared in [
+                None,
+                Some(ReadValidation::FULL),
+                Some(ReadValidation::CRC_ONLY),
+                Some(ReadValidation::STRUCTURE_ONLY),
+                Some(ReadValidation::TRUSTED),
+            ] {
+                let policy = declared.unwrap_or(ReadValidation::FULL);
+                let mut limits = ReadLimits::STANDARD;
+                limits.read_validation = declared;
+                let spec = base.with_read_limits(limits);
+                let original = snapshot(&bytes)?;
+                crate::snapshot::take_read_requests();
+                let mut out = Vec::new();
+                entry.read_payload_snapshot_into(spec, &original, &mut out)?;
+                assert_eq!(out, b"payload");
+                let requests = crate::snapshot::take_read_requests();
+                // A small record is read whole in one request when its framing
+                // is checked; without the check, only the payload is read.
+                assert_eq!(requests.0, 1);
+                assert_eq!(
+                    requests.1,
+                    7 + if policy.structure {
+                        RECORD_HEADER_LEN + if footer { RECORD_FOOTER_LEN } else { 0 }
+                    } else {
+                        0
+                    }
+                );
+
+                let mut damaged = bytes.clone();
+                damaged[entry.payload_offset as usize] ^= 1;
+                assert_eq!(
+                    entry
+                        .read_payload_snapshot(spec, &snapshot(&damaged)?)
+                        .is_err(),
+                    policy.data_crc
+                );
+                let mut damaged = bytes.clone();
+                damaged[0] ^= 1;
+                // Metadata is deliberately trusted after capture in CRC-only mode.
+                assert_eq!(
+                    entry
+                        .read_payload_snapshot(spec, &snapshot(&damaged)?)
+                        .is_err(),
+                    policy.structure
+                );
+
+                let physical = crate::disk_index::DiskIndexPhysicalRecord {
+                    physical_len: bytes.len() as u64,
+                    block_id: entry.block_id,
+                    block_version: entry.block_version,
+                    flags: entry.flags,
+                    native_crc: Some(entry.checksum),
+                };
+                if !policy.structure {
+                    crate::snapshot::take_read_requests();
+                    let captured = read_index_entry_from_descriptor(
+                        spec,
+                        &original,
+                        0,
+                        entry.sequence,
+                        physical,
+                    )?;
+                    assert_eq!(captured.read_payload_snapshot(spec, &original)?, b"payload");
+                    assert_eq!(
+                        crate::snapshot::take_read_requests().0,
+                        1 + u64::from(policy.data_crc && footer)
+                    );
+                }
+
+                // Limits/overflow and actual short reads survive all trust choices.
+                let limited = spec.with_read_limits(
+                    ReadLimits::STANDARD
+                        .with_read_validation(policy)
+                        .with_max_record_payload_len(3),
+                );
+                crate::snapshot::take_read_requests();
+                assert!(matches!(
+                    entry.read_payload_snapshot(limited, &original),
+                    Err(Error::LimitExceeded { .. })
+                ));
+                assert_eq!(crate::snapshot::take_read_requests(), (0, 0));
+                let mut hostile = entry.clone();
+                hostile.payload_len = u64::MAX;
+                assert!(hostile.read_payload_snapshot(spec, &original).is_err());
+                let short = snapshot(&bytes)?;
+                short.try_clone_file()?.set_len(entry.payload_offset + 1)?;
+                assert!(entry.read_payload_snapshot(spec, &short).is_err());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_read_validation_preserves_declarations_and_format_identity() -> Result<()> {
+    use crate::{ReadLimits, ReadValidation};
+    let base = spec();
+    for policy in [ReadValidation::STRUCTURE_ONLY, ReadValidation::TRUSTED] {
+        let selected = ReadLimits::STANDARD.with_read_validation(policy);
+        assert_eq!(
+            selected.overlay(ReadLimits::MISSING).read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            selected
+                .tighten(ReadLimits::STANDARD.with_read_validation(ReadValidation::FULL))
+                .read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            ReadLimits::MISSING.overlay(selected).read_validation,
+            Some(policy)
+        );
+        assert_eq!(
+            base.with_read_limits(selected).computed_schema_hash(),
+            base.computed_schema_hash()
+        );
+    }
+    assert!(
+        base.with_read_limits(ReadLimits::STANDARD.with_read_validation(ReadValidation::FULL))
+            .validate()
+            .is_err()
+    );
+    assert!(
+        base.with_read_limits(ReadLimits::STANDARD.with_read_validation(ReadValidation::CRC_ONLY))
+            .validate()
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_no_crc_at_open_keeps_its_scan_unless_trust_is_explicit() {
+    use crate::{ReadLimits, ReadValidation};
+    let base = spec().with_read_limits(
+        ReadLimits::STANDARD.with_integrity_verification(IntegrityVerification::AtOpen),
+    );
+    assert!(!segment_chain_open_is_allowed(base, ScanIntent::ReadOnly));
+    for policy in [ReadValidation::STRUCTURE_ONLY, ReadValidation::TRUSTED] {
+        let selected = base.with_resource_limits(ReadLimits::MISSING.with_read_validation(policy));
+        assert_eq!(
+            segment_chain_open_is_allowed(selected, ScanIntent::ReadOnly),
+            !policy.structure
+        );
+        assert!(!segment_chain_open_is_allowed(
+            selected,
+            ScanIntent::Recover
+        ));
+    }
+}

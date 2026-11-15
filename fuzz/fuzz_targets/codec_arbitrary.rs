@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    match selector % 12 {
+    match selector % 13 {
         0 => drop(decode_from_slice::<FuzzPoint>(payload, Endian::Little)),
         1 => drop(decode_from_slice::<FuzzRecord>(payload, Endian::Little)),
         2 => drop(decode_from_slice::<Vec<u8>>(payload, Endian::Little)),
@@ -38,9 +38,35 @@ fuzz_target!(|data: &[u8]| {
             payload,
             Endian::Little,
         )),
-        _ => drop(decode_from_slice::<(u128, i128, f64, bool)>(
+        11 => drop(decode_from_slice::<(u128, i128, f64, bool)>(
             payload,
             Endian::Little,
         )),
+        _ => {
+            if let Ok(chunks) = varlit::ChunkedBytes::from_encoded(payload.to_vec()) {
+                drop(chunks.decode_to_vec_limited(4 * 1024 * 1024));
+                // A length policy keeps selected-chunk work finite per input;
+                // the output buffer remains tiny even for a large chunk.
+                if chunks.decoded_len() <= 4 * 1024 * 1024 {
+                    let end = chunks.decoded_len();
+                    let start = end / 3;
+                    let mut next = start;
+                    let result = chunks.stream_range(
+                        start..end,
+                        &mut [0; 257],
+                        4 * 1024 * 1024,
+                        |at, bytes| {
+                            assert_eq!(at, next);
+                            next += bytes.len() as u64;
+                            assert!(next <= end);
+                            Ok(())
+                        },
+                    );
+                    if result.is_ok() {
+                        assert_eq!(next, end);
+                    }
+                }
+            }
+        }
     }
 });

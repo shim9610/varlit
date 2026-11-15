@@ -52,28 +52,28 @@ fn mandatory_blocks_cover_prior_writes_and_deletes() -> varlit::Result<()> {
     let mut writer = Boundaries::create_indexed_writer(&path, opts())?;
     let pinned = Boundaries::open_indexed_reader(&path, opts())?;
     writer.push_item(&Item { key: 1, value: 10 })?;
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&1)?
-            .is_none()
-    );
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&1, o))?.is_none());
     writer.push_durable(&Durable { key: 7 })?;
     let current = Boundaries::open_indexed_reader(&path, opts())?;
-    assert_eq!(current.get_item(&1)?, Some(Item { key: 1, value: 10 }));
-    assert_eq!(current.get_durable(&7)?, Some(Durable { key: 7 }));
-    assert!(pinned.get_item(&1)?.is_none());
-    writer.delete_durable(&7)?;
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_durable(&7)?
-            .is_none()
+    assert_eq!(
+        opt(|o| current.get_item(&1, o))?,
+        Some(Item { key: 1, value: 10 })
     );
-    assert_eq!(current.get_durable(&7)?, Some(Durable { key: 7 }));
+    assert_eq!(
+        opt(|o| current.get_durable(&7, o))?,
+        Some(Durable { key: 7 })
+    );
+    assert!(opt(|o| pinned.get_item(&1, o))?.is_none());
+    writer.delete_durable(&7)?;
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_durable(&7, o))?.is_none());
+    assert_eq!(
+        opt(|o| current.get_durable(&7, o))?,
+        Some(Durable { key: 7 })
+    );
     writer.push_item(&Item { key: 1, value: 20 })?;
     writer.push_marker(&Marker { value: 1 })?;
     assert_eq!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&1)?
+        opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&1, o))?
             .unwrap()
             .value,
         20
@@ -92,7 +92,10 @@ fn value_conditions_cut_batches_at_the_record_and_recovery_keeps_the_boundary() 
             if value == 3 || value == 6 {
                 let reader = Boundaries::open_indexed_reader(&path, opts()).unwrap();
                 assert_eq!(
-                    reader.get_conditional(&0).unwrap().unwrap().value,
+                    opt(|o| reader.get_conditional(&0, o))
+                        .unwrap()
+                        .unwrap()
+                        .value,
                     value - 1
                 );
             }
@@ -109,8 +112,7 @@ fn value_conditions_cut_batches_at_the_record_and_recovery_keeps_the_boundary() 
             .map_err(|e| e.source)?;
         assert_eq!(info.records, 8);
         assert_eq!(
-            Boundaries::open_indexed_reader(&path, opts())?
-                .get_conditional(&0)?
+            opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_conditional(&0, o))?
                 .unwrap()
                 .value,
             5
@@ -118,12 +120,11 @@ fn value_conditions_cut_batches_at_the_record_and_recovery_keeps_the_boundary() 
         drop(writer);
         let mut writer = Boundaries::restore_indexed_writer(&path, opts())?;
         let reader = Boundaries::open_indexed_reader(&path, opts())?;
-        assert_eq!(reader.get_conditional(&0)?.unwrap().value, 5);
+        assert_eq!(opt(|o| reader.get_conditional(&0, o))?.unwrap().value, 5);
         writer.push_conditional(&Conditional { key: 0, value: 9 })?;
         writer.immediate()?;
         assert_eq!(
-            Boundaries::open_indexed_reader(&path, opts())?
-                .get_conditional(&0)?
+            opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_conditional(&0, o))?
                 .unwrap()
                 .value,
             9
@@ -143,11 +144,11 @@ fn runtime_conditions_and_explicit_immediate_share_the_same_counters() -> varlit
     let values = (1..=6).map(|value| {
         if value == 4 {
             assert!(
-                Boundaries::open_indexed_reader(&path, opts())
+                opt(|o| Boundaries::open_indexed_reader(&path, opts())
                     .unwrap()
-                    .get_item(&3)
-                    .unwrap()
-                    .is_some()
+                    .get_item(&3, o))
+                .unwrap()
+                .is_some()
             );
         }
         Item { key: value, value }
@@ -157,37 +158,25 @@ fn runtime_conditions_and_explicit_immediate_share_the_same_counters() -> varlit
         .map_err(|e| e.source)?;
     assert_eq!(info.records, 6);
     assert_eq!(info.write_calls, 2);
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&6)?
-            .is_some()
-    );
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&6, o))?.is_some());
     writer.set_immediate_policy(ImmediatePolicy::new().when(|event| {
         event.block_id == 1 && event.operation == varlit::ImmediateOperation::Delete
     }))?;
     writer.push_item(&Item { key: 7, value: 7 })?;
     writer.delete_item(&6)?;
     let reader = Boundaries::open_indexed_reader(&path, opts())?;
-    assert!(reader.get_item(&6)?.is_none());
-    assert!(reader.get_item(&7)?.is_some());
+    assert!(opt(|o| reader.get_item(&6, o))?.is_none());
+    assert!(opt(|o| reader.get_item(&7, o))?.is_some());
     writer.set_immediate_policy(ImmediatePolicy::new().after_records(1000).after_bytes(1))?;
     writer.push_item(&Item { key: 8, value: 8 })?;
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&8)?
-            .is_some()
-    );
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&8, o))?.is_some());
     assert!(matches!(
         writer.set_immediate_policy(ImmediatePolicy::new().after_records(0)),
         Err(Error::InvalidImmediatePolicy)
     ));
     // Invalid installation keeps the old byte condition.
     writer.push_item(&Item { key: 9, value: 9 })?;
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&9)?
-            .is_some()
-    );
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&9, o))?.is_some());
     Ok(())
 }
 
@@ -198,10 +187,10 @@ fn stream_scalar_batch_and_unindexed_batch_honor_declarations() -> varlit::Resul
     let mut writer = StreamBoundaries::create_stream_writer(&path, StreamOptions::default())?;
     writer.push_sample(&Sample { value: 0 })?;
     assert_eq!(
-        StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?
-            .samples()?
-            .collect::<varlit::Result<Vec<_>>>()?
-            .len(),
+        collect_blocks(
+            StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?.samples()?
+        )?
+        .len(),
         0
     );
     writer.push_barrier(&Barrier { value: 0 })?;
@@ -216,20 +205,20 @@ fn stream_scalar_batch_and_unindexed_batch_honor_declarations() -> varlit::Resul
         .push_samples(values, BatchOptions::default())
         .map_err(|e| e.source)?;
     assert_eq!(
-        StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?
-            .samples()?
-            .collect::<varlit::Result<Vec<_>>>()?
-            .len(),
+        collect_blocks(
+            StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?.samples()?
+        )?
+        .len(),
         7
     );
     writer.immediate()?;
     writer.set_immediate_policy(ImmediatePolicy::new().after_records(2))?;
     writer.push_sample(&Sample { value: 10 })?;
     assert_eq!(
-        StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?
-            .samples()?
-            .collect::<varlit::Result<Vec<_>>>()?
-            .len(),
+        collect_blocks(
+            StreamBoundaries::open_stream_reader(&path, StreamOptions::default())?.samples()?
+        )?
+        .len(),
         9
     );
     writer.push_sample(&Sample { value: 11 })?;
@@ -257,7 +246,13 @@ fn stream_scalar_batch_and_unindexed_batch_honor_declarations() -> varlit::Resul
 fn automatic_immediate_failure_reports_the_already_written_prefix() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("failed.varlit");
-    let mut writer = Boundaries::create_indexed_writer(&path, opts())?;
+    // The injected failure is in the sidecar confirmation, so the immediate
+    // sync has to confirm.
+    let confirming = varlit::DiskIndexOptions {
+        confirm: varlit::DiskIndexConfirmPolicy::EVERY_SYNC,
+        ..opts()
+    };
+    let mut writer = Boundaries::create_indexed_writer(&path, confirming)?;
     writer.set_immediate_policy(ImmediatePolicy::new().after_records(3))?;
     varlit::VarlitStreamWriter::inject_generation_restamp_failures(1);
     let error = writer
@@ -274,11 +269,9 @@ fn automatic_immediate_failure_reports_the_already_written_prefix() -> varlit::R
     assert!(matches!(writer.immediate(), Err(Error::WriterPoisoned(_))));
     drop(writer);
     let _writer = Boundaries::restore_indexed_writer(&path, opts())?;
-    assert!(
-        Boundaries::open_indexed_reader(&path, opts())?
-            .get_item(&0)?
-            .is_none()
-    );
+    // The immediate sync made the prefix durable on the primary before the
+    // sidecar confirmation failed, so recovery keeps it.
+    assert!(opt(|o| Boundaries::open_indexed_reader(&path, opts())?.get_item(&0, o))?.is_some());
     Ok(())
 }
 
@@ -300,14 +293,21 @@ fn process_exit_after_immediate_preserves_acknowledged_records() -> varlit::Resu
         let _writer = Boundaries::restore_indexed_writer(&path, opts())?;
         let reader = Boundaries::open_indexed_reader(&path, opts())?;
         for key in 0..3 {
-            assert_eq!(reader.get_item(&key)?.unwrap().value, key, "mode {mode}");
+            assert_eq!(
+                opt(|o| reader.get_item(&key, o))?.unwrap().value,
+                key,
+                "mode {mode}"
+            );
         }
-        assert!(reader.get_item(&3)?.is_none(), "unacknowledged mode {mode}");
+        assert!(
+            opt(|o| reader.get_item(&3, o))?.is_none(),
+            "unacknowledged mode {mode}"
+        );
         if mode == "block" {
-            assert!(reader.get_durable(&1)?.is_some());
+            assert!(opt(|o| reader.get_durable(&1, o))?.is_some());
         }
         if mode == "value" {
-            assert_eq!(reader.get_conditional(&1)?.unwrap().value, 2);
+            assert_eq!(opt(|o| reader.get_conditional(&1, o))?.unwrap().value, 2);
         }
     }
     Ok(())
@@ -352,4 +352,26 @@ fn immediate_crash_child() -> varlit::Result<()> {
     writer.flush()?;
     // Unlike returning from the test this bypasses redb's close-time commit.
     std::process::exit(73)
+}
+
+// Test-local adapters over the caller-owned-output read API: the assertions
+// around each call keep their old `Option` / value shape.
+/// Decodes into a fresh caller-owned value; `None` when the read reports absence.
+fn opt<T: varlit::VarlitEmpty>(
+    read: impl FnOnce(&mut T) -> varlit::Result<bool>,
+) -> varlit::Result<Option<T>> {
+    let mut out = T::empty();
+    Ok(read(&mut out)?.then_some(out))
+}
+
+/// Drains a streaming walk into a `Vec`; the first error ends it.
+fn collect_blocks<T: varlit::VarlitBlock + varlit::VarlitEmpty + Clone>(
+    mut blocks: varlit::StreamingBlocks<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut out = T::empty();
+    let mut all = Vec::new();
+    while blocks.next_into(&mut out)? {
+        all.push(out.clone());
+    }
+    Ok(all)
 }

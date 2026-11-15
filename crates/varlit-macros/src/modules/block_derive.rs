@@ -227,7 +227,7 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
     let fixed_decode = descriptors.iter().map(|field| {
         let name = &field.name;
         let ty = &field.ty;
-        quote!(#name: <#ty as ::varlit::__core::VarlitDecode>::decode_varlit(decoder)?)
+        quote!(#name: decoder.decode_value::<#ty>()?)
     });
 
     let variable_encode = descriptors.iter().map(|field| {
@@ -235,18 +235,9 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         let ty = &field.ty;
         let field_id = field.field_id;
         quote! {
-            // DEF-02: the nested field encoder inherits the parent encoder's
-            // remaining output budget, so a limit-bounded writer entry point
-            // surfaces its typed limit error before an oversized field is
-            // ever fully buffered, instead of after staging the whole child
-            // encoding.
-            let payload = encoder.encode_nested_to_vec(&self.#name)?;
-            ::varlit::__core::write_field(
-                encoder,
-                #field_id,
-                <#ty as ::varlit::__core::VarlitEncode>::WIRE_TYPE,
-                &payload,
-            )?;
+            // Encoded straight into the parent buffer (length patched after),
+            // bounded by the parent encoder's own limit: no per-field buffer.
+            ::varlit::__core::encode_field_in_place::<#ty>(encoder, #field_id, &self.#name)?;
         }
     });
 
@@ -292,6 +283,86 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         }
     });
 
+    // In-place decoding into an existing value (reusing what its fields own).
+    let fixed_decode_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        quote!(decoder.decode_value_into(&mut out.#name)?;)
+    });
+    let seen_vars = descriptors.iter().map(|field| {
+        let var = seen_ident(&field.name);
+        quote!(let mut #var = false;)
+    });
+    let match_arms_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let ty = &field.ty;
+        let field_id = field.field_id;
+        let field_name = field.name.to_string();
+        quote! {
+            #field_id => {
+                if header.wire_type != <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE {
+                    return Err(::varlit::__core::Error::WireTypeMismatch {
+                        field: #field_name,
+                        expected: <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE,
+                        actual: header.wire_type,
+                    });
+                }
+                decoder.decode_nested_into(payload, &mut out.#name)?;
+                #var = true;
+            }
+        }
+    });
+    // The same arms for a walk over the stored record (see `RecordFields`).
+    let match_arms_fields = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let ty = &field.ty;
+        let field_id = field.field_id;
+        let field_name = field.name.to_string();
+        quote! {
+            #field_id => {
+                if field.wire_type() != <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE {
+                    return Err(::varlit::__core::Error::WireTypeMismatch {
+                        field: #field_name,
+                        expected: <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE,
+                        actual: field.wire_type(),
+                    });
+                }
+                fields.decode_into(&field, &mut out.#name)?;
+                #var = true;
+            }
+        }
+    });
+    let seen_vars_fields = seen_vars.clone();
+    let finish_fields_into = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let var = seen_ident(name);
+        let field_id = field.field_id;
+        let field_name = name.to_string();
+        if field.default {
+            quote! {
+                if !#var {
+                    out.#name = ::core::default::Default::default();
+                }
+            }
+        } else {
+            quote! {
+                if !#var {
+                    return Err(::varlit::__core::Error::MissingField {
+                        field: #field_name,
+                        field_id: #field_id,
+                    });
+                }
+            }
+        }
+    });
+    let finish_fields_walk = finish_fields_into.clone();
+    let empty_fields = descriptors.iter().map(|field| {
+        let name = &field.name;
+        let ty = &field.ty;
+        quote!(#name: <#ty as ::varlit::__core::VarlitEmpty>::empty())
+    });
+
     let encode_body = quote! {
         match <Self as ::varlit::__core::VarlitBlock>::KIND {
             ::varlit::__core::BlockKind::Fixed | ::varlit::__core::BlockKind::Matrix => {
@@ -321,6 +392,29 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                     }
                 }
                 ::core::result::Result::Ok(Self { #(#build_fields,)* })
+            }
+            ::varlit::__core::BlockKind::Internal => unreachable!("user blocks cannot be internal"),
+        }
+    };
+
+    let decode_into_body = quote! {
+        match <Self as ::varlit::__core::VarlitBlock>::KIND {
+            ::varlit::__core::BlockKind::Fixed | ::varlit::__core::BlockKind::Matrix => {
+                #(#fixed_decode_into)*
+                ::core::result::Result::Ok(())
+            }
+            ::varlit::__core::BlockKind::Variable => {
+                #(#seen_vars)*
+                while decoder.remaining() > 0 {
+                    let header = ::varlit::__core::read_field_header(decoder)?;
+                    let payload = decoder.read_exact(header.payload_len as usize)?;
+                    match header.field_id {
+                        #(#match_arms_into)*
+                        _ => {}
+                    }
+                }
+                #(#finish_fields_into)*
+                ::core::result::Result::Ok(())
             }
             ::varlit::__core::BlockKind::Internal => unreachable!("user blocks cannot be internal"),
         }
@@ -420,8 +514,98 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
         }
     };
 
+    let record_validator = if is_keyed {
+        quote!(::varlit::__core::RecordValidator::keyed::<Self>())
+    } else {
+        quote!(::varlit::__core::RecordValidator::of::<Self>())
+    };
+
+    // The field view of a variable block: one span per field, the value
+    // itself left in the record for the caller to read into its own buffer.
+    let view_items = if kind_name == "variable" {
+        let view_ident = format_ident!("{}View", ident);
+        let vis = &input.vis;
+        let view_fields = descriptors.iter().map(|field| {
+            let name = &field.name;
+            if field.default {
+                quote!(pub #name: ::core::option::Option<::varlit::__core::FieldSpan>)
+            } else {
+                quote!(pub #name: ::varlit::__core::FieldSpan)
+            }
+        });
+        let view_slots = descriptors.iter().map(|field| {
+            let var = option_ident(&field.name);
+            quote!(let mut #var: ::core::option::Option<::varlit::__core::FieldSpan> = ::core::option::Option::None;)
+        });
+        let view_arms = descriptors.iter().map(|field| {
+            let var = option_ident(&field.name);
+            let ty = &field.ty;
+            let field_id = field.field_id;
+            let field_name = field.name.to_string();
+            quote! {
+                #field_id => {
+                    let expected = <#ty as ::varlit::__core::VarlitDecode>::WIRE_TYPE;
+                    if span.wire_type() != expected {
+                        return ::core::result::Result::Err(
+                            ::varlit::__core::view_wire_mismatch(#field_name, expected, span.wire_type()),
+                        );
+                    }
+                    ::varlit::__core::view_set(&mut #var, span)?;
+                }
+            }
+        });
+        let view_build = descriptors.iter().map(|field| {
+            let name = &field.name;
+            let var = option_ident(name);
+            let field_id = field.field_id;
+            let field_name = name.to_string();
+            if field.default {
+                quote!(#name: #var)
+            } else {
+                quote! {
+                    #name: #var.ok_or(::varlit::__core::Error::MissingField {
+                        field: #field_name,
+                        field_id: #field_id,
+                    })?
+                }
+            }
+        });
+        let doc = format!(
+            "Where each field of a [`{ident}`] record sits (see `VarlitView`): read a large field with `read_span_into` into your own buffer, decode a small one with `decode_field`."
+        );
+        quote! {
+            #[doc = #doc]
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            #vis struct #view_ident {
+                #(#view_fields,)*
+            }
+
+            impl ::varlit::__core::VarlitView for #ident {
+                type View = #view_ident;
+
+                fn view_from_fields(
+                    walk: ::varlit::__core::FieldWalk<'_>,
+                ) -> ::varlit::__core::Result<#view_ident> {
+                    #(#view_slots)*
+                    walk(&mut |field_id, span| {
+                        match field_id {
+                            #(#view_arms)*
+                            _ => {}
+                        }
+                        ::core::result::Result::Ok(())
+                    })?;
+                    ::core::result::Result::Ok(#view_ident { #(#view_build,)* })
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
     Ok(quote! {
         #(#codec_identity_asserts)*
+
+        #view_items
 
         impl ::varlit::__core::VarlitEncode for #ident {
             const WIRE_TYPE: ::varlit::__core::WireType = ::varlit::__core::WireType::Nested;
@@ -439,6 +623,19 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             fn decode_varlit(decoder: &mut ::varlit::__core::Decoder<'_>) -> ::varlit::__core::Result<Self> {
                 #decode_body
             }
+
+            fn decode_varlit_into(
+                out: &mut Self,
+                decoder: &mut ::varlit::__core::Decoder<'_>,
+            ) -> ::varlit::__core::Result<()> {
+                #decode_into_body
+            }
+        }
+
+        impl ::varlit::__core::VarlitEmpty for #ident {
+            fn empty() -> Self {
+                Self { #(#empty_fields,)* }
+            }
         }
 
         impl ::varlit::__core::VarlitBlock for #ident {
@@ -453,6 +650,29 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
             const FIELDS: &'static [::varlit::__core::FieldDescriptor] = &[
                 #(#field_descriptors,)*
             ];
+            const __VARLIT_RECORD_VALIDATOR: ::varlit::__core::RecordValidator = #record_validator;
+            const __VARLIT_FIELDS: ::core::option::Option<::varlit::__core::FieldsCodec<Self>> =
+                ::core::option::Option::Some(::varlit::__core::FieldsCodec {
+                    decode_into: Self::__varlit_decode_fields,
+                });
+        }
+
+        impl #ident {
+            #[doc(hidden)]
+            fn __varlit_decode_fields(
+                out: &mut Self,
+                fields: &mut ::varlit::__core::RecordFields<'_>,
+            ) -> ::varlit::__core::Result<()> {
+                #(#seen_vars_fields)*
+                while let ::core::option::Option::Some(field) = fields.next()? {
+                    match field.id() {
+                        #(#match_arms_fields)*
+                        _ => {}
+                    }
+                }
+                #(#finish_fields_walk)*
+                ::core::result::Result::Ok(())
+            }
         }
 
         #keyed_impl
@@ -464,6 +684,11 @@ pub(super) fn option_ident(name: &Ident) -> Ident {
     format_ident!("__varlit_field_{}", name)
 }
 
+/// Presence flag for a variable field during an in-place decode.
+pub(super) fn seen_ident(name: &Ident) -> Ident {
+    format_ident!("__varlit_seen_{}", name)
+}
+
 /// Deterministic fingerprint of the canonical block schema, emitted as a const
 /// expression the compiler folds in the caller's crate.
 ///
@@ -471,7 +696,7 @@ pub(super) fn option_ident(name: &Ident) -> Ident {
 /// standard `DefaultHasher` output is not stability-guaranteed. The value is a
 /// process-local schema identity, never part of the wire format.
 ///
-/// API-04: each field contributes `<FieldTy as VarlitEncode>::SCHEMA_ID` and
+/// each field contributes `<FieldTy as VarlitEncode>::SCHEMA_ID` and
 /// its decode counterpart — resolved codec identities — alongside the source
 /// spelling, so two custom nested codecs that spell the field type identically
 /// but emit different bytes cannot share a fingerprint. That is why the
@@ -550,7 +775,7 @@ pub(super) fn schema_fingerprint(
 
 /// Compile-time enforcement of the `VarlitEncode::SCHEMA_ID` trust boundary for
 /// every field codec: a field type whose codec declares no identity would
-/// fingerprint by source spelling alone, which is exactly the API-04 collision.
+/// fingerprint by source spelling alone, which is exactly the  collision.
 ///
 /// The rule is deliberately wire-type agnostic. Restricting it to
 /// `WireType::Nested` left the same collision reachable through any other wire

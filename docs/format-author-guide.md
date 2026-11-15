@@ -83,10 +83,12 @@ types can be skipped.
 
 ## Matrix Blocks
 
-Matrix blocks are for bounded runtime-sized grids that need direct cell access
-and copy-on-write same-size overwrite. They are not append-log records. A matrix file
-stores runtime dimensions at create time, preallocates deterministic slot
-regions, and uses commit bitmaps as the only normal read-time validity source.
+Matrix blocks are for runtime-sized grids that need direct cell access and
+same-size overwrite. A matrix file stores its runtime dimensions at create time
+in a metadata record and keeps cells in fixed-shape tiles, which are internal
+records of the append log appended the first time one of their cells is
+written. Each tile's commit bitmap is the only normal read-time validity
+source.
 
 The intended authoring shape is:
 
@@ -144,16 +146,23 @@ prevent. If the per-cell length is genuinely not known until create time, it is
 not a fixed array in a cell; make it a third matrix dimension, or an append-log
 variable block.
 
-Matrix storage uses dense `(scan, ch)` addressing and bounded slot payloads.
-Append-log blocks may coexist after the preallocated logical matrix regions.
+Matrix storage uses `(scan, ch)` addressing and fixed-stride slot payloads.
+A block may declare its tile shape (`tile = [rows, cols]`); otherwise it gets
+the largest power of two of cells whose slots fit 64 KiB. The tile shape is
+part of the schema hash. Append-log blocks coexist with the matrix records in
+the same log.
 
-Each reader captures one confirmed generation of slot bytes, commit maps, CRC
-metadata and aux data. The writer stages copy-on-write pages, including on
-same-cell overwrite; readers remain safe while it writes. Explicit `sync()` or
-Immediate publishes the new root; `flush()` and drop do not. Readers advance
-through `follow(&mut self)` and queries take `&self`. Use one reader per thread.
-The required `.vmg` companion and compaction rules are documented in the
-[durability model](durability-model.md).
+Each reader captures one confirmed generation of slot bytes, commit bitmaps
+and aux data. The writer overwrites cells in place through a write-ahead ring
+inside the primary file; readers remain safe while it writes. Explicit `sync()`
+or Immediate publishes the staged changes as a new generation; `flush()` and
+drop do not. Readers advance through `follow(&mut self)` and queries take
+`&self`. Use one reader per thread. A reader that falls further behind than
+the ring holds gets `MatrixSnapshotExpired` and must `follow()`; the ring size
+is set with `FormatSpec::with_matrix_ring_bytes`. Everything is in the primary
+file; there is no companion file. The byte layout is in the
+[matrix wire contract](spec.md#preallocated-matrix-wire-contract), and the
+durability rules in the [durability model](durability-model.md).
 
 Rules to keep stable:
 
@@ -345,8 +354,12 @@ format authors should still enforce domain limits in custom codecs, adapters,
 compression `max_len`, or caller validation.
 
 For caller-managed compressed blobs, prefer
-`ChunkedBytes::decode_to_vec_limited(limit)` over unbounded decoding when the
-limit is part of the format contract.
+`ChunkedBytes::decode_to_vec_limited(limit)` when a domain ceiling should replace
+the standard decoded-output ceiling. If whole-output materialization is refused,
+the caller can choose the `stream_range` API (available in 0.13.0) with a fixed
+buffer and explicit decoder-window policy. That requires an already available `ChunkedBytes`
+and does not override the enclosing record's limits. Callback output remains
+provisional until success; see [range streaming](chunk-streaming.md).
 
 For physical records, use
 `RecordIndexEntry::read_payload_limited(path, physical_limit)` to cap stored
@@ -357,6 +370,14 @@ before either allocation. These are caller policy controls; Varlit does not gues
 a global domain ceiling.
 
 ## Integrity Policy
+
+The declarations below specify stored checksums. The 0.13.0
+`ReadLimits::with_read_validation` API independently selects optional read checks;
+it does not change these declarations or their schema fingerprints. An unset
+override preserves existing behavior. CRC-on choices require a checksum-bearing
+format; all choices retain bounds, decoder limits and publication guards. Use
+the [read-validation table](api-reference.md#read-validation) to configure a
+runtime override rather than changing the format's stored integrity policy.
 
 `integrity: none` performs structural parsing only. It does not detect payload
 bit flips unless decoding happens to fail.
@@ -416,7 +437,8 @@ Then:
 let mut file = AppFormat::create("f.varlit")?;
 file.write_header_block(&Watermark { label: "ingested".into(), at: 42 })?;
 
-let mark = file.read_header_block::<Watermark>()?;   // takes &self, no I/O
+let mut mark = Watermark::empty();
+let found = file.read_header_block::<Watermark>(&mut mark)?; // &self, no I/O
 let left = file.header_slots_free_bytes()?;
 ```
 
@@ -469,9 +491,10 @@ The checksum is FNV-1a 32 rather than a crc32, so it works without the
 Nothing, measurably: the header bytes and `computed_schema_hash()` are the ones
 your format produced before the option existed. Two refusals to know about — the
 capacity is part of the schema hash, so it cannot be changed for an existing
-file, and a format declaring matrix blocks is refused outright because the
-matrix creation nonce and layout header sit at fixed offsets after the file
-header that a reserved region would move.
+file, and a matrix block cannot be one of the region's blocks
+(`InvalidFormatSpec`). A format declaring matrix blocks may declare the region:
+the matrix's records start after the file header, wherever it ends
+(`header_tails_and_header_slots_combine_with_a_matrix`).
 
 ## Commit And Offset Chains
 
@@ -521,10 +544,6 @@ nothing reads. Each segment record carries 73 bytes per record it covers, so the
 bytes it costs are set by how often you flush; it pays for itself at a commit
 point every few hundred records and not at a commit point per record.
 
-Measured with a commit point every 256 records and 4 KiB payloads: an 852 MB,
-200,000-record file opens in 370 ms instead of 5,867 ms, framing 782 records
-instead of 200,782.
-
 **Finish writing with `flush()`.** Open finds the chain by looking at the record
 at the end of the file, so a writer that stops on a data record leaves nothing to
 start from and the open scans the whole file — correct, but with none of the
@@ -535,7 +554,7 @@ for i in 0..n {
     writer.push(&block)?;
     if i % 256 == 255 { writer.flush()?; }
 }
-writer.flush()?;   // <-- without this, n = 50_000 opens in 1,272 ms, not 60 ms
+writer.flush()?;   // Ensure the final record exposes the segment chain.
 ```
 
 A file it cannot account for — one written before you enabled it, one whose
@@ -563,16 +582,6 @@ let mut buffer = Vec::new();
 let mut map = file.record_map(&mut buffer)?;             // reads nothing yet
 let hit = map.find(|entry| entry.block_id == Note::ID)?; // walks until it finds
 ```
-
-**Which of the two you want is a disk-size question**, and it is the only
-question. Measured on a 31 MB, 50,000-record file with a commit point every 500
-records:
-
-| | read syscalls at open | on-disk cost | builds an index? |
-| --- | --- | --- | --- |
-| neither (scan) | 100,316 | — | yes |
-| `segment_on_flush` | 516 | **+3.67 MB** | yes |
-| `open_digest_on_flush` | **20** | **+12.8 KB** | no |
 
 A segment carries an index entry per record it covers, so what it costs on disk
 tracks your record count. A digest carries 12 bytes per *distinct block id*, so
@@ -630,9 +639,8 @@ assert_eq!(source, LazyOpenSource::HeaderTails);
 format**, the same at two hundred records and at two billion. The `+ 10` is one
 slot per block id varlit reserves for its own records. The update rides
 the durability request that already ends a commit, so there is **no extra
-`fsync`**. Measured on the two-block fixture: a scanning open frames every
-record; this one frames **4** — the commit marker plus one per distinct block id
-— and frames the same 4 on a file ten times larger.
+`fsync`**. Opening from header tails reads the commit marker and declared block
+tails instead of scanning every data-record header.
 
 **What it requires.** `block_offset_chain`, which it turns on for you;
 `integrity: crc32` (or `crc32_with_header`); and a `transaction_marker` commit
@@ -655,10 +663,10 @@ own chain, one chain shared by all keyed blocks, and the rebuild walks it whole
 because it cannot know which entries belong to the block being asked about
 without decoding them.
 
-**What it refuses.** A format declaring matrix blocks (the matrix layout sits at
-a fixed offset after the header, which the region moves), and
-`open_digest_on_flush` — the two are answers to the same question with different
-safety properties, so declare one.
+**What it refuses.** `open_digest_on_flush` — the two are answers to the
+same question with different safety properties, so declare one. A format
+declaring matrix blocks is not refused: the matrix's records are in the append
+log after the header (`header_tails_and_header_slots_combine_with_a_matrix`).
 
 **What it gives up on an in-place replacement.** `replace_fixed` and
 `unsafe replace_fixed_in_place_exclusive` reset the region to cold, so the next

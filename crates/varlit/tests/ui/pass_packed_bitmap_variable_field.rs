@@ -1,4 +1,4 @@
-//! API-04: `PackedBitmap` is a documented public codec, so an ordinary derived
+//! `PackedBitmap` is a documented public codec, so an ordinary derived
 //! variable field must compile.
 //!
 //! `#[derive(VarlitBlock)]` rejects every field codec whose encode or decode

@@ -23,8 +23,10 @@
 //! walk the chain.
 
 #![cfg(feature = "integrity")]
+#[path = "support/pages.rs"]
+mod pages;
 
-use varlit::{VarlitBlock, varlit_format};
+use varlit::{VarlitBlock, VarlitEmpty, varlit_format};
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
 #[varlit(id = 10, version = 1, kind = "fixed")]
@@ -71,24 +73,26 @@ varlit_format! {
 
 fn notes(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec<String>> {
     let file = varlit::VarlitFile::open_readonly(spec, path)?;
-    Ok(file
-        .blocks::<Note>()?
-        .iter()
-        .collect::<varlit::Result<Vec<Note>>>()?
-        .into_iter()
-        .map(|note| note.text)
-        .collect())
+    let blocks = crate::pages::all_blocks!(file, Note)?;
+    let mut cursor = blocks.cursor();
+    let mut note = Note::empty();
+    let mut texts = Vec::new();
+    while cursor.next_into(&mut note)? {
+        texts.push(note.text.clone());
+    }
+    Ok(texts)
 }
 
 fn readings(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec<u64>> {
     let file = varlit::VarlitFile::open_readonly(spec, path)?;
-    Ok(file
-        .blocks::<Reading>()?
-        .iter()
-        .collect::<varlit::Result<Vec<Reading>>>()?
-        .into_iter()
-        .map(|reading| reading.value)
-        .collect())
+    let blocks = crate::pages::all_blocks!(file, Reading)?;
+    let mut cursor = blocks.cursor();
+    let mut reading = Reading::empty();
+    let mut values = Vec::new();
+    while cursor.next_into(&mut reading)? {
+        values.push(reading.value);
+    }
+    Ok(values)
 }
 
 /// Every `Reading` reached by walking the block chain backwards from its tail.
@@ -101,7 +105,8 @@ fn chain(spec: varlit::FormatSpec, path: &std::path::Path) -> varlit::Result<Vec
     for entry in file.block_chain(Reading::ID)? {
         let entry = entry?;
         let mut scratch = Vec::new();
-        let reading: Reading = file.decode_block_into(&entry, &mut scratch)?;
+        let mut reading = Reading::empty();
+        file.decode_block_into(&entry, &mut scratch, &mut reading)?;
         values.push(reading.value);
     }
     values.reverse();

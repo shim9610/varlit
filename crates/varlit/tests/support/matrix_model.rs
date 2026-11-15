@@ -1,5 +1,5 @@
 //! Shared deterministic/fuzz oracle: working, published and pinned generations are independent.
-use varlit::{MatrixCellStatus, MatrixKey, varlit_format};
+use varlit::{MatrixCellStatus, MatrixKey, VarlitEmpty, varlit_format};
 varlit_format! {
     pub format Model {
         magic: b"MMDL";
@@ -67,7 +67,6 @@ pub fn run(data: &[u8]) -> varlit::Result<()> {
                 writer.sync()?;
                 published = working;
                 published_aux = working_aux;
-                writer.compact_matrix()?;
             }
             _ => {
                 working_aux = (step as u64).to_le_bytes();
@@ -87,7 +86,9 @@ pub fn run(data: &[u8]) -> varlit::Result<()> {
                 };
                 if let Some(value) = expected {
                     assert_eq!(view.entry_status(key)?, MatrixCellStatus::Committed);
-                    assert_eq!(view.entry(key)?.value, *value, "step={step} row={row}");
+                    let mut entry = Entry::empty();
+                    view.entry(key, &mut entry)?;
+                    assert_eq!(entry.value, *value, "step={step} row={row}");
                 } else {
                     assert_eq!(
                         view.entry_status(key)?,

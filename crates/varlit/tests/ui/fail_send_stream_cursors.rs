@@ -12,6 +12,10 @@ fn send_events(cursor: StreamEvents) {
     std::thread::spawn(move || { for event in cursor { event.unwrap(); } });
 }
 fn send_blocks(cursor: StreamingBlocks<Sample>) {
-    std::thread::spawn(move || { for value in cursor { value.unwrap(); } });
+    std::thread::spawn(move || {
+        let mut cursor = cursor;
+        let mut out = Sample { value: 0 };
+        while cursor.next_into(&mut out).unwrap() {}
+    });
 }
 fn main() {}

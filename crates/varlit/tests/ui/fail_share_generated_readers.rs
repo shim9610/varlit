@@ -19,7 +19,8 @@ fn stream(reader: Arc<ThreadOwnedStreamReader>) {
 
 fn indexed(reader: Arc<ThreadOwnedIndexedReader>) {
     std::thread::spawn(move || {
-        let _ = reader.get_item(&0);
+        let mut out = Item { key: 0 };
+        let _ = reader.get_item(&0, &mut out);
     });
 }
 

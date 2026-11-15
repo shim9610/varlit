@@ -6,8 +6,21 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use varlit::{
-    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, Error, StreamOptions, varlit_format,
+    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, Error, StreamOptions, StreamingBlocks,
+    VarlitBlock, VarlitEmpty, varlit_format,
 };
+
+/// Drains the rest of a block walk into a `Vec` through one reused value.
+fn drain<T: VarlitBlock + VarlitEmpty + Clone>(
+    blocks: &mut StreamingBlocks<T>,
+) -> varlit::Result<Vec<T>> {
+    let mut value = T::empty();
+    let mut all = Vec::new();
+    while blocks.next_into(&mut value)? {
+        all.push(value.clone());
+    }
+    Ok(all)
+}
 
 varlit_format! {
     pub format Live {
@@ -57,11 +70,9 @@ fn dirty_overwrites_and_deletes_preserve_the_confirmed_index() -> varlit::Result
     writer.immediate()?;
     let mut reader = Live::open_indexed_reader(&path, options())?;
     let mut blocks = reader.items()?;
-    let frozen = reader.items()?;
-    assert_eq!(
-        blocks.by_ref().collect::<varlit::Result<Vec<_>>>()?.len(),
-        3
-    );
+    let mut frozen = reader.items()?;
+    assert_eq!(drain(&mut blocks)?.len(), 3);
+    let mut item = Item::empty();
     let eof = reader.committed_len();
     writer.push_item(&Item { key: 0, value: 1 })?;
     writer.delete_item(&1)?;
@@ -70,28 +81,33 @@ fn dirty_overwrites_and_deletes_preserve_the_confirmed_index() -> varlit::Result
     let mut during = Live::open_indexed_reader(&path, options())?;
     for view in [&reader, &during] {
         assert_eq!(view.committed_len(), eof);
-        assert_eq!(view.get_item(&0)?.unwrap().value, 0);
-        assert_eq!(view.get_item(&1)?.unwrap().value, 0);
-        assert!(view.get_item(&3)?.is_none());
+        assert!(view.get_item(&0, &mut item)?);
+        assert_eq!(item.value, 0);
+        assert!(view.get_item(&1, &mut item)?);
+        assert_eq!(item.value, 0);
+        assert!(!view.get_item(&3, &mut item)?);
     }
     assert_eq!(reader.follow_blocks(&mut blocks)?, 0);
-    assert!(blocks.next().is_none());
+    assert!(!blocks.next_into(&mut item)?);
     writer.immediate()?;
     // Return to Dirty before either existing reader follows the new checkpoint.
     writer.push_item(&Item { key: 0, value: 2 })?;
-    assert_eq!(reader.follow_blocks(&mut blocks)?, 3);
-    assert_eq!(during.follow()?, 3);
+    // Three records and the sync marker that closed them.
+    assert_eq!(reader.follow_blocks(&mut blocks)?, 4);
+    assert_eq!(during.follow()?, 4);
     for view in [&reader, &during] {
-        assert_eq!(view.get_item(&0)?.unwrap().value, 1);
-        assert!(view.get_item(&1)?.is_none());
-        assert_eq!(view.get_item(&3)?.unwrap().value, 1);
+        assert!(view.get_item(&0, &mut item)?);
+        assert_eq!(item.value, 1);
+        assert!(!view.get_item(&1, &mut item)?);
+        assert!(view.get_item(&3, &mut item)?);
+        assert_eq!(item.value, 1);
     }
     assert_eq!(
-        blocks.collect::<varlit::Result<Vec<_>>>()?,
+        drain(&mut blocks)?,
         vec![Item { key: 0, value: 1 }, Item { key: 3, value: 1 }]
     );
     assert_eq!(
-        frozen.collect::<varlit::Result<Vec<_>>>()?,
+        drain(&mut frozen)?,
         (0..3).map(|key| Item { key, value: 0 }).collect::<Vec<_>>()
     );
     Ok(())
@@ -108,16 +124,18 @@ fn stream_cursors_resume_from_eof_across_dirty_generations() -> varlit::Result<(
     let mut blocks = reader.samples()?;
     let mut events = reader.events()?;
     let initial_events = events.by_ref().collect::<varlit::Result<Vec<_>>>()?.len();
-    assert!(blocks.next().is_none());
+    let mut sample = Sample::empty();
+    assert!(!blocks.next_into(&mut sample)?);
     let mut all = Vec::new();
     let mut event_count = initial_events;
     for value in 0..40 {
         assert_eq!(reader.follow_blocks(&mut blocks)?, 0);
-        assert!(blocks.next().is_none());
+        assert!(!blocks.next_into(&mut sample)?);
         writer.immediate()?;
         writer.push_sample(&Sample { value: value + 1 })?;
-        assert_eq!(reader.follow_blocks(&mut blocks)?, 1);
-        all.extend(blocks.by_ref().collect::<varlit::Result<Vec<_>>>()?);
+        // The synced sample and its sync marker.
+        assert_eq!(reader.follow_blocks(&mut blocks)?, 2);
+        all.extend(drain(&mut blocks)?);
         // A cursor can catch up after follow() already advanced the reader.
         assert_eq!(reader.follow_events(&mut events)?, 0);
         event_count += events.by_ref().collect::<varlit::Result<Vec<_>>>()?.len();
@@ -126,7 +144,8 @@ fn stream_cursors_resume_from_eof_across_dirty_generations() -> varlit::Result<(
         all,
         (0..40).map(|value| Sample { value }).collect::<Vec<_>>()
     );
-    assert_eq!(event_count, initial_events + 40);
+    // Each sync adds its sample and its marker.
+    assert_eq!(event_count, initial_events + 80);
     assert_eq!(reader.verify_all()? as usize, event_count);
     Ok(())
 }
@@ -139,10 +158,12 @@ fn readers_open_and_follow_inside_an_active_write_batch() -> varlit::Result<()> 
     writer.push_item(&Item { key: 0, value: 7 })?;
     writer.immediate()?;
     let mut retained = Live::open_indexed_reader(&path, options())?;
+    let mut probe = Item::empty();
     let values = (0..25).map(|key| {
         let reader = Live::open_indexed_reader(&path, options()).unwrap();
-        assert_eq!(reader.get_item(&0).unwrap().unwrap().value, 7);
-        assert!(reader.get_item(&1).unwrap().is_none());
+        assert!(reader.get_item(&0, &mut probe).unwrap());
+        assert_eq!(probe.value, 7);
+        assert!(!reader.get_item(&1, &mut probe).unwrap());
         assert_eq!(retained.follow().unwrap(), 0);
         Item { key, value: 8 }
     });
@@ -157,8 +178,11 @@ fn readers_open_and_follow_inside_an_active_write_batch() -> varlit::Result<()> 
         .map_err(|e| e.source)?;
     assert_eq!(retained.follow()?, 0);
     writer.immediate()?;
-    assert_eq!(retained.follow()?, 25);
-    assert_eq!(retained.get_item(&0)?.unwrap().value, 8);
+    // Twenty-five records and the sync marker that closed them.
+    assert_eq!(retained.follow()?, 26);
+    let mut item = Item::empty();
+    assert!(retained.get_item(&0, &mut item)?);
+    assert_eq!(item.value, 8);
     Ok(())
 }
 
@@ -174,20 +198,26 @@ fn dirty_reopen_and_restore_do_not_invalidate_existing_readers() -> varlit::Resu
     drop(writer);
     let dirty_length = std::fs::metadata(&path)?.len();
     let mut reader = Live::open_indexed_reader(&path, options())?;
-    assert_eq!(reader.get_item(&0)?.unwrap().value, 1);
+    let mut item = Item::empty();
+    assert!(reader.get_item(&0, &mut item)?);
+    assert_eq!(item.value, 1);
     assert_eq!(std::fs::metadata(&path)?.len(), dirty_length);
     let mut cursor = reader.items()?;
-    assert_eq!(cursor.next().unwrap()?.value, 1);
-    assert!(cursor.next().is_none());
+    assert!(cursor.next_into(&mut item)?);
+    assert_eq!(item.value, 1);
+    assert!(!cursor.next_into(&mut item)?);
     let mut writer = Live::restore_indexed_writer(&path, options())?;
     assert!(std::fs::metadata(&path)?.len() < dirty_length);
     assert_eq!(reader.follow()?, 0);
     writer.push_item(&Item { key: 0, value: 3 })?;
     writer.immediate()?;
-    assert_eq!(reader.follow_blocks(&mut cursor)?, 1);
-    assert_eq!(cursor.next().unwrap()?.value, 3);
-    assert!(cursor.next().is_none());
-    assert_eq!(reader.get_item(&0)?.unwrap().value, 3);
+    // The record and its sync marker.
+    assert_eq!(reader.follow_blocks(&mut cursor)?, 2);
+    assert!(cursor.next_into(&mut item)?);
+    assert_eq!(item.value, 3);
+    assert!(!cursor.next_into(&mut item)?);
+    assert!(reader.get_item(&0, &mut item)?);
+    assert_eq!(item.value, 3);
     Ok(())
 }
 
@@ -245,26 +275,30 @@ fn eight_followers_observe_atomic_generations_during_single_writer_updates() -> 
                     let mut parsed = 0;
                     let mut reads = 0;
                     let mut previous = 0;
+                    let mut item = Item::empty();
                     barrier.wait();
                     loop {
                         let done = stop.load(Ordering::Acquire);
                         reader.follow_blocks(&mut cursor)?;
-                        let generation = reader.get_item(&0)?.unwrap().value;
+                        assert!(reader.get_item(&0, &mut item)?);
+                        let generation = item.value;
                         assert!(generation >= previous);
                         for key in 0..KEYS {
-                            assert_eq!(reader.get_item(&key)?.unwrap().value, generation);
+                            assert!(reader.get_item(&key, &mut item)?);
+                            assert_eq!(item.value, generation);
                         }
-                        for value in cursor.by_ref() {
-                            let value = value?;
-                            assert_eq!(value.key, parsed % KEYS);
-                            assert_eq!(value.value, parsed / KEYS);
+                        while cursor.next_into(&mut item)? {
+                            assert_eq!(item.key, parsed % KEYS);
+                            assert_eq!(item.value, parsed / KEYS);
                             parsed += 1;
                         }
                         assert_eq!(parsed, (generation + 1) * KEYS);
                         let fresh = Live::open_indexed_reader(path, options())?;
-                        let fresh_generation = fresh.get_item(&0)?.unwrap().value;
+                        assert!(fresh.get_item(&0, &mut item)?);
+                        let fresh_generation = item.value;
                         for key in 1..KEYS {
-                            assert_eq!(fresh.get_item(&key)?.unwrap().value, fresh_generation);
+                            assert!(fresh.get_item(&key, &mut item)?);
+                            assert_eq!(item.value, fresh_generation);
                         }
                         previous = generation;
                         reads += 1;
