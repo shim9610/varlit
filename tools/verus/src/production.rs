@@ -14,6 +14,7 @@ pub enum Error {
     InvalidMatrixLayout,
     AllocationFailed { resource: &'static str, requested: u64 },
     MatrixKeyOutOfBounds { scan: u64, ch: u64 },
+    LengthOverflow { value: u64 },
 }
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -23,6 +24,11 @@ pub struct MatrixKey {
     pub scan: u64,
     pub ch: u64,
 }
+
+// The production conversion helpers the included file calls from functions
+// Verus does not verify.
+#[path = "../../../crates/varlit-core/src/width.rs"]
+pub(crate) mod width;
 
 #[path = "production_matrix_tiles.rs"]
 pub(crate) mod matrix_tiles;

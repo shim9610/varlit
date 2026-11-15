@@ -45,7 +45,7 @@ impl FieldSpan {
     }
     /// The value's bytes, when it is short enough to be carried here.
     pub fn inline_bytes(&self) -> Option<&[u8]> {
-        (u64::from(self.carried) == self.len).then(|| &self.inline[..self.len as usize])
+        (u64::from(self.carried) == self.len).then(|| &self.inline[..usize::from(self.carried)])
     }
 
     /// The raw data of a length-prefixed value, past its 8-byte prefix: the
@@ -144,7 +144,7 @@ pub(crate) fn walk_fields(
     visit: &mut dyn FnMut(u32, FieldSpan) -> Result<()>,
 ) -> Result<()> {
     let mut position = 0u64;
-    let mut header = [0u8; FIELD_HEADER_LEN as usize];
+    let mut header = [0u8; crate::width::small(FIELD_HEADER_LEN)];
     loop {
         let page = fill_record(spec, snapshot, entry, position, &mut header, cache)?;
         let total = page.end;
@@ -203,7 +203,7 @@ pub(crate) fn walk_fields(
         };
         // The value's first bytes come along: all of a short value, the
         // length prefix of a long one.
-        let head = len.min(FIELD_INLINE as u64) as usize;
+        let head = crate::width::index(len.min(FIELD_INLINE as u64))?;
         if head > 0 {
             let page = fill_record(
                 spec,
@@ -303,7 +303,7 @@ pub(crate) fn decode_field<F: crate::VarlitDecode>(
     // Staged in the handle's scratch, not a buffer made for this call.
     let mut bytes = lend_scratch(cache);
     let decoded = (|| {
-        let len = span.len as usize;
+        let len = crate::width::index(span.len)?;
         if bytes.len() < len {
             bytes
                 .try_reserve_exact(len - bytes.len())

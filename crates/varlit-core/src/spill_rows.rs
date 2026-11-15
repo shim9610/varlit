@@ -181,7 +181,7 @@ impl<const N: usize> SpillRows<N> {
                 if second > first {
                     let candidate = (wanted - first) / (second - first);
                     if candidate < count as u64 {
-                        let at = candidate as usize * N;
+                        let at = crate::width::bounded(candidate, count) * N;
                         let row = &bytes[at..at + N];
                         if key(row) == wanted {
                             return row.try_into().ok();

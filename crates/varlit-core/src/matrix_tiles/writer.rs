@@ -81,11 +81,12 @@ impl TileWriter {
             seq: 1,
             ..RingHeader::default()
         };
-        ring_bytes[HEADER_SLOT_FOR_SEQ1..HEADER_SLOT_FOR_SEQ1 + wal::HEADER_SLOT as usize]
+        ring_bytes
+            [HEADER_SLOT_FOR_SEQ1..HEADER_SLOT_FOR_SEQ1 + crate::width::small(wal::HEADER_SLOT)]
             .copy_from_slice(&header.encode());
         let base = store.append(RecordKind::Ring, &ring_bytes)?;
         geom.encode_meta((base, ring_len), creation_id, &mut meta_bytes);
-        store.write_at(meta, &meta_bytes[..META_FIXED_LEN as usize])?;
+        store.write_at(meta, &meta_bytes[..crate::width::small(META_FIXED_LEN)])?;
         store.sync()?;
         Self::with_parts(
             geom,
@@ -104,7 +105,7 @@ impl TileWriter {
     /// ring header is rewritten only when the frames show a newer publication
     /// than the header records.
     pub(crate) fn open(store: &mut dyn TileStore, geom: Geometry, meta: u64) -> Result<Self> {
-        let mut fixed = [0u8; META_FIXED_LEN as usize];
+        let mut fixed = [0u8; crate::width::small(META_FIXED_LEN)];
         store.read_at(meta, &mut fixed)?;
         let (base, len) = geom.decode_meta(&fixed)?;
         let ring = Ring::within(base, len, store)?;
@@ -434,14 +435,14 @@ impl TileWriter {
         let limit = (self.ring.area() / 4).max(FRAME_MIN * 2);
         let mut frame: Vec<u8> = Vec::new();
         frame
-            .try_reserve(FRAME_HEADER as usize + 12)
+            .try_reserve(crate::width::small(FRAME_HEADER) + 12)
             .map_err(|_| refused(FRAME_HEADER + 12))?;
         let mut entries: Vec<(u64, u64, u32)> = Vec::new();
         let mut next = 0usize;
         loop {
             frame.clear();
             entries.clear();
-            frame.extend_from_slice(&[0u8; FRAME_HEADER as usize]);
+            frame.extend_from_slice(&[0u8; crate::width::small(FRAME_HEADER)]);
             while let Some(target) = targets.get(next).copied() {
                 let bytes = self.pending.get(target).expect("listed above");
                 let need = ENTRY_HEADER + bytes.len() as u64;
@@ -458,7 +459,7 @@ impl TileWriter {
                 // Room for this entry, and for the padding and checksum
                 // that close the frame.
                 frame
-                    .try_reserve(need as usize + 12)
+                    .try_reserve(crate::width::index(need)? + 12)
                     .map_err(|_| refused(need + 12))?;
                 entries.try_reserve(1).map_err(|_| refused(24))?;
                 let bytes_at = frame.len() as u64 + ENTRY_HEADER;
@@ -473,9 +474,9 @@ impl TileWriter {
                 break;
             }
             let len = (frame.len() as u64 + 4).next_multiple_of(8);
-            frame.resize(len as usize - 4, 0);
+            frame.resize(crate::width::index(len)? - 4, 0);
             let flags = if last && commit { FRAME_COMMIT } else { 0 };
-            frame[..FRAME_HEADER as usize].copy_from_slice(&frame_header(
+            frame[..crate::width::small(FRAME_HEADER)].copy_from_slice(&frame_header(
                 flags,
                 generation,
                 len,
@@ -543,11 +544,11 @@ impl TileWriter {
         let remaining = self.ring.area() - self.cursor;
         if remaining >= FRAME_MIN {
             let generation = self.header.published + 1;
-            let mut marker = [0u8; FRAME_MIN as usize];
-            marker[..FRAME_HEADER as usize]
+            let mut marker = [0u8; crate::width::small(FRAME_MIN)];
+            marker[..crate::width::small(FRAME_HEADER)]
                 .copy_from_slice(&frame_header(FRAME_WRAP, generation, FRAME_MIN, 0, 0));
-            let crc = crc32fast::hash(&marker[..FRAME_MIN as usize - 4]);
-            marker[FRAME_MIN as usize - 4..].copy_from_slice(&crc.to_le_bytes());
+            let crc = crc32fast::hash(&marker[..crate::width::small(FRAME_MIN) - 4]);
+            marker[crate::width::small(FRAME_MIN) - 4..].copy_from_slice(&crc.to_le_bytes());
             store.write_at(self.ring.at(self.cursor), &marker)?;
         }
         self.cursor = 0;
@@ -702,7 +703,7 @@ impl TileWriter {
             }
             let mut done = 0u64;
             while done < len {
-                let n = (len - done).min(chunk.len() as u64) as usize;
+                let n = crate::width::index((len - done).min(chunk.len() as u64))?;
                 store.read_at(at + done, &mut chunk[..n])?;
                 let mut piece = &chunk[..n];
                 while !piece.is_empty() {
@@ -785,7 +786,7 @@ impl TileWriter {
 }
 
 /// Where the first header goes in a new ring payload: the slot for sequence 1.
-const HEADER_SLOT_FOR_SEQ1: usize = wal::HEADER_SLOT as usize;
+const HEADER_SLOT_FOR_SEQ1: usize = crate::width::small(wal::HEADER_SLOT);
 
 /// Directory levels a Morton key needs.
 fn levels_for(key: u64) -> u64 {
@@ -796,12 +797,12 @@ fn levels_for(key: u64) -> u64 {
 fn zeroed(len: u64, resource: &'static str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes
-        .try_reserve_exact(len as usize)
+        .try_reserve_exact(crate::width::index(len)?)
         .map_err(|_| Error::AllocationFailed {
             resource,
             requested: len,
         })?;
-    bytes.resize(len as usize, 0);
+    bytes.resize(crate::width::index(len)?, 0);
     Ok(bytes)
 }
 

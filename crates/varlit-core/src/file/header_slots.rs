@@ -409,7 +409,7 @@ impl VarlitFile {
                 .unwrap_or(0)
                 .saturating_add(1)
         };
-        let index = (generation % HEADER_TAILS_SLOTS as u64) as usize;
+        let index = crate::width::index(generation % HEADER_TAILS_SLOTS as u64)?;
         let bytes = encode_header_tails_slot(
             capacity,
             generation,

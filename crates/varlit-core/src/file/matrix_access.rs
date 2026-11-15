@@ -189,7 +189,7 @@ impl VarlitFile {
         self.spec
             .read_limits
             .check(ReadLimitKey::MaterializedBytes, T::SLOT_STRIDE)?;
-        let stride = T::SLOT_STRIDE as usize;
+        let stride = crate::width::small(T::SLOT_STRIDE);
         if out.capacity() < stride {
             out.clear();
             out.try_reserve_exact(stride)
@@ -254,12 +254,12 @@ impl VarlitFile {
         // Range-checked before anything is allocated for it.
         tiles.aux_len(name)?;
         let mut out = Vec::new();
-        out.try_reserve_exact(len as usize)
+        out.try_reserve_exact(crate::width::index(len)?)
             .map_err(|_| Error::AllocationFailed {
                 resource: "matrix aux read",
                 requested: len,
             })?;
-        out.resize(len as usize, 0);
+        out.resize(crate::width::index(len)?, 0);
         tiles.read_aux(&source, name, offset, &mut out)?;
         Ok(out)
     }

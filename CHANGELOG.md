@@ -164,6 +164,11 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   offsets, frame stepping, frame placement, frame entry bounds, slot ranges,
   Morton keys, metadata region ends), two Loom models of the tile reader lock,
   and a test that kills a writer process mid-publication and reopens the file.
+- `varlit-core` no longer converts a file-sized `u64` to `usize` with `as`:
+  263 conversions go through checked helpers, so a value that does not fit a
+  32-bit address space is refused with `LengthOverflow` (or was a format
+  constant, checked at compile time) instead of losing its high half. 64-bit
+  behaviour is unchanged.
 - The crates deny `unsafe_code`: `varlit` and `varlit-macros` forbid it, and
   `varlit-core` allows it only at declared sites, each with a reason. The
   codec's raw-memory code moved into one module with safe functions.

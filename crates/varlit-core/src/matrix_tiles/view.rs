@@ -106,8 +106,13 @@ pub(crate) fn lay_over(out_at: u64, out: &mut [u8], src_at: u64, src: &[u8]) {
     let start = out_at.max(src_at);
     let end = (out_at + out.len() as u64).min(src_at + src.len() as u64);
     if start < end {
-        out[(start - out_at) as usize..(end - out_at) as usize]
-            .copy_from_slice(&src[(start - src_at) as usize..(end - src_at) as usize]);
+        // Both ranges lie inside their slices: `start` and `end` were
+        // clamped to each of them above.
+        let bounded = crate::width::bounded;
+        let (out_len, src_len) = (out.len(), src.len());
+        out[bounded(start - out_at, out_len)..bounded(end - out_at, out_len)].copy_from_slice(
+            &src[bounded(start - src_at, src_len)..bounded(end - src_at, src_len)],
+        );
     }
 }
 
@@ -125,7 +130,7 @@ pub(crate) fn lay_entry(
     if start < end {
         source.read_at(
             entry.at + (start - target),
-            &mut buf[(start - at) as usize..(end - at) as usize],
+            &mut buf[crate::width::index(start - at)?..crate::width::index(end - at)?],
         )?;
     }
     Ok(())
@@ -248,7 +253,7 @@ impl TileReader {
     /// Opens the newest published snapshot of the matrix whose metadata
     /// record payload is at `meta`.
     pub(crate) fn open(source: &dyn TileSource, geom: Geometry, meta: u64) -> Result<Self> {
-        let mut fixed = [0u8; super::geometry::META_FIXED_LEN as usize];
+        let mut fixed = [0u8; crate::width::small(super::geometry::META_FIXED_LEN)];
         source.read_at(meta, &mut fixed)?;
         let (base, len) = geom.decode_meta(&fixed)?;
         let ring = Ring::within(base, len, source)?;

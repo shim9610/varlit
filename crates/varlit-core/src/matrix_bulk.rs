@@ -32,7 +32,7 @@ impl VarlitFile {
         let mut key = start;
         let mut done = 0usize;
         while done < out.len() {
-            let in_row = ((width - key.ch.min(width)) as usize)
+            let in_row = crate::width::index(width - key.ch.min(width))?
                 .min((out.len() - done) / stride)
                 .max(1);
             tiles.read_row_run(&source, T::ID, key, &mut out[done..done + in_row * stride])?;

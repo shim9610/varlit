@@ -73,8 +73,8 @@ impl SyncChain {
             if !rewritten_in_place(*block_id) {
                 continue;
             }
-            let start = (info.payload_offset - chunk_at) as usize;
-            let end = start + info.payload_len as usize;
+            let start = crate::width::bounded(info.payload_offset - chunk_at, bytes.len());
+            let end = start + crate::width::bounded(info.payload_len, bytes.len());
             self.hasher.update(&bytes[at..start]);
             at = end;
         }

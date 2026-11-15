@@ -639,8 +639,8 @@ impl Encoder {
             let used = self.appended_len() as u64;
             let fitting = limit.saturating_sub(used) / W as u64;
             if fitting < count as u64 {
-                // `fitting < count` so it fits in usize.
-                count = fitting as usize;
+                // `fitting < count`, so it is a count in memory.
+                count = crate::width::bounded(fitting, count);
                 exceeded =
                     Some(used.saturating_add(fitting.saturating_add(1).saturating_mul(W as u64)));
             }

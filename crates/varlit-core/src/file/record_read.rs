@@ -126,12 +126,12 @@ impl ChunkCache {
         let buffer = |len: u64, resource: &'static str| -> Result<Vec<u8>> {
             let mut bytes = Vec::new();
             bytes
-                .try_reserve_exact(len as usize)
+                .try_reserve_exact(crate::width::index(len)?)
                 .map_err(|_| Error::AllocationFailed {
                     resource,
                     requested: len,
                 })?;
-            bytes.resize(len as usize, 0);
+            bytes.resize(crate::width::index(len)?, 0);
             Ok(bytes)
         };
         let chunk = if variable { CHUNK_LEN } else { 0 };
@@ -169,7 +169,10 @@ impl ChunkCache {
         entry: &RecordIndexEntry,
         out: &mut Vec<u8>,
     ) -> Result<()> {
-        let stored = staging(&mut self.compressed, entry.payload_len as usize)?;
+        let stored = staging(
+            &mut self.compressed,
+            crate::width::index(entry.payload_len)?,
+        )?;
         snapshot.read_exact_at(entry.payload_offset, stored)?;
         entry.verify_snapshot_record(spec, snapshot, stored)?;
         header_codec::decode_compressed_payload_into(
@@ -336,7 +339,7 @@ pub(crate) fn fill_record(
     if from > total {
         return Err(past_end());
     }
-    let want = (total - from).min(out.len() as u64) as usize;
+    let want = crate::width::index((total - from).min(out.len() as u64))?;
     if want == 0 {
         return if from == total {
             Ok(page(0))
@@ -351,7 +354,7 @@ pub(crate) fn fill_record(
     if total <= CHUNK_LEN {
         // Small enough to check whole: into `out` when it all fits there,
         // through staging otherwise.
-        let total = total as usize;
+        let total = crate::width::index(total)?;
         if from == 0 && want == total {
             snapshot.read_exact_at(entry.payload_offset, &mut out[..total])?;
             entry.verify_snapshot_record(spec, snapshot, &out[..total])?;
@@ -361,7 +364,8 @@ pub(crate) fn fill_record(
             snapshot.read_exact_at(entry.payload_offset, bytes)?;
             entry.verify_snapshot_record(spec, snapshot, bytes)
         })?;
-        out[..want].copy_from_slice(&bytes[from as usize..from as usize + want]);
+        out[..want]
+            .copy_from_slice(&bytes[crate::width::index(from)?..crate::width::index(from)? + want]);
         return Ok(page(want));
     }
     // A long record written before chunking: its one checksum covers all of
@@ -386,7 +390,7 @@ fn record_footer_bytes(snapshot: &SnapshotFile, entry: &RecordIndexEntry) -> Res
     let Some(footer_offset) = entry.footer_offset else {
         return Ok(Vec::new());
     };
-    let mut footer = vec![0u8; RECORD_FOOTER_LEN as usize];
+    let mut footer = vec![0u8; crate::width::small(RECORD_FOOTER_LEN)];
     snapshot.read_exact_at(footer_offset, &mut footer)?;
     Ok(footer)
 }
@@ -402,7 +406,7 @@ fn fill_chunked(
     if entry.payload_len < CHUNK_HEADER_LEN {
         return Err(Error::InvalidCompressionHeader);
     }
-    let mut prefix = [0u8; CHUNK_HEADER_LEN as usize];
+    let mut prefix = [0u8; crate::width::small(CHUNK_HEADER_LEN)];
     snapshot.read_exact_at(entry.payload_offset, &mut prefix)?;
     let header = ChunkHeader::decode(&prefix)?;
     let total = header.logical_len;
@@ -436,7 +440,7 @@ fn fill_chunked(
             let len = header.chunk_len(index);
             let room = (out.len() - filled) as u64;
             if within == 0 && room >= len {
-                let target = &mut out[filled..filled + len as usize];
+                let target = &mut out[filled..filled + crate::width::index(len)?];
                 read_chunk_checked(
                     &mut read,
                     &header,
@@ -448,11 +452,13 @@ fn fill_chunked(
                     &mut decompressor,
                     verify,
                 )?;
-                filled += len as usize;
+                filled += crate::width::index(len)?;
                 position += len;
             } else {
-                let bytes =
-                    cache.get_or_fill(CacheKey::of(entry, index), len as usize, |bytes| {
+                let bytes = cache.get_or_fill(
+                    CacheKey::of(entry, index),
+                    crate::width::index(len)?,
+                    |bytes| {
                         read_chunk_checked(
                             &mut read,
                             &header,
@@ -464,8 +470,9 @@ fn fill_chunked(
                             &mut decompressor,
                             verify,
                         )
-                    })?;
-                let take = (len - within).min(room) as usize;
+                    },
+                )?;
+                let take = crate::width::index((len - within).min(room))?;
                 out[filled..filled + take]
                     .copy_from_slice(&bytes[within as usize..within as usize + take]);
                 filled += take;
@@ -544,8 +551,9 @@ fn fill_compressed(
     if from < total && out.is_empty() {
         return Err(empty_buffer());
     }
-    let want = (total - from).min(out.len() as u64) as usize;
-    out[..want].copy_from_slice(&logical[from as usize..from as usize + want]);
+    let want = crate::width::index((total - from).min(out.len() as u64))?;
+    out[..want]
+        .copy_from_slice(&logical[crate::width::index(from)?..crate::width::index(from)? + want]);
     let position = from + want as u64;
     Ok(RecordPage {
         filled: want,
@@ -567,7 +575,7 @@ pub(crate) fn fill_range(
     if from > end {
         return Err(past_end());
     }
-    let cap = (end - from).min(out.len() as u64) as usize;
+    let cap = crate::width::index((end - from).min(out.len() as u64))?;
     if cap == 0 {
         return if from == end {
             Ok(RecordPage {

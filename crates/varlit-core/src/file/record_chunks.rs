@@ -62,7 +62,7 @@ impl ChunkHeader {
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let bytes = bytes
-            .get(..CHUNK_HEADER_LEN as usize)
+            .get(..crate::width::small(CHUNK_HEADER_LEN))
             .ok_or(malformed("chunked record header is short"))?;
         if &bytes[0..4] != CHUNK_MAGIC {
             return Err(malformed("chunked record header magic"));
@@ -89,8 +89,8 @@ impl ChunkHeader {
         Ok(header)
     }
 
-    fn encode(&self) -> Result<[u8; CHUNK_HEADER_LEN as usize]> {
-        let mut out = [0u8; CHUNK_HEADER_LEN as usize];
+    fn encode(&self) -> Result<[u8; crate::width::small(CHUNK_HEADER_LEN)]> {
+        let mut out = [0u8; crate::width::small(CHUNK_HEADER_LEN)];
         out[0..4].copy_from_slice(CHUNK_MAGIC);
         out[4] = CHUNK_VERSION;
         out[5] = self
@@ -151,10 +151,11 @@ pub(crate) fn lay_plain_chunks(buffer: &mut [u8], room: usize) -> Result<usize> 
     ))?;
     let (front, logical) = buffer.split_at_mut(room);
     let front = &mut front[start..];
-    front[..CHUNK_HEADER_LEN as usize].copy_from_slice(&header.encode()?);
-    for (index, chunk) in logical.chunks(CHUNK_LEN as usize).enumerate() {
+    front[..crate::width::small(CHUNK_HEADER_LEN)].copy_from_slice(&header.encode()?);
+    for (index, chunk) in logical.chunks(crate::width::small(CHUNK_LEN)).enumerate() {
         let end = index as u64 * CHUNK_LEN + chunk.len() as u64;
-        let at = CHUNK_HEADER_LEN as usize + index * CHUNK_ENTRY_LEN as usize;
+        let at =
+            crate::width::small(CHUNK_HEADER_LEN) + index * crate::width::small(CHUNK_ENTRY_LEN);
         front[at..at + 8].copy_from_slice(&end.to_le_bytes());
         front[at + 8..at + 12].copy_from_slice(&crc32fast::hash(chunk).to_le_bytes());
         front[at + 12..at + 16].fill(0);
@@ -172,7 +173,7 @@ pub(crate) fn encode_chunked(
         compression.map(|(algorithm, _)| algorithm),
         logical.len() as u64,
     );
-    let data_at = header.data_at() as usize;
+    let data_at = crate::width::index(header.data_at())?;
     let mut out = Vec::new();
     let initial = data_at
         .checked_add(if compression.is_some() {
@@ -189,14 +190,14 @@ pub(crate) fn encode_chunked(
             requested: initial as u64,
         })?;
     out.resize(data_at, 0);
-    out[..CHUNK_HEADER_LEN as usize].copy_from_slice(&header.encode()?);
+    out[..crate::width::small(CHUNK_HEADER_LEN)].copy_from_slice(&header.encode()?);
     let mut compressor = match compression {
         Some((CompressionAlgorithm::Zstd, level)) => {
             Some(crate::compression_buffers::Compressor::new(level)?)
         }
         None => None,
     };
-    for (index, chunk) in logical.chunks(CHUNK_LEN as usize).enumerate() {
+    for (index, chunk) in logical.chunks(crate::width::small(CHUNK_LEN)).enumerate() {
         let stored: &[u8] = match compressor.as_mut() {
             Some(compressor) => compressor.compress(chunk)?,
             None => chunk,
@@ -208,7 +209,8 @@ pub(crate) fn encode_chunked(
             })?;
         out.extend_from_slice(stored);
         let end = (out.len() - data_at) as u64;
-        let at = CHUNK_HEADER_LEN as usize + index * CHUNK_ENTRY_LEN as usize;
+        let at =
+            crate::width::small(CHUNK_HEADER_LEN) + index * crate::width::small(CHUNK_ENTRY_LEN);
         out[at..at + 8].copy_from_slice(&end.to_le_bytes());
         out[at + 8..at + 12].copy_from_slice(&crc32fast::hash(chunk).to_le_bytes());
     }
@@ -226,7 +228,7 @@ fn chunk_extent(
     index: u64,
 ) -> Result<(u64, u64, u32)> {
     let entry = |read: PayloadRead<'_>, at: u64| -> Result<(u64, u32)> {
-        let mut bytes = [0u8; CHUNK_ENTRY_LEN as usize];
+        let mut bytes = [0u8; crate::width::small(CHUNK_ENTRY_LEN)];
         read(CHUNK_HEADER_LEN + at * CHUNK_ENTRY_LEN, &mut bytes)?;
         if bytes[12..16] != [0; 4] {
             return Err(malformed("chunked record table entry"));
@@ -280,7 +282,7 @@ pub(crate) fn read_chunk(
     match header.algorithm {
         None => read(start, out)?,
         Some(CompressionAlgorithm::Zstd) => {
-            let stored = (end - start) as usize;
+            let stored = crate::width::index(end - start)?;
             scratch.clear();
             scratch
                 .try_reserve_exact(stored)
@@ -335,13 +337,14 @@ pub(crate) fn chunked_in_place(payload: &[u8], max: u64) -> Result<Option<&[u8]>
     for index in 0..header.count {
         let (start, end, crc) = chunk_extent(&mut read, &header, payload.len() as u64, index)?;
         // The extent was checked to lie inside the payload.
-        if crc32fast::hash(&payload[start as usize..end as usize]) != crc {
+        if crc32fast::hash(&payload[crate::width::index(start)?..crate::width::index(end)?]) != crc
+        {
             return Err(Error::ChecksumMismatch { offset: start });
         }
     }
-    let data_at = header.data_at() as usize;
+    let data_at = crate::width::index(header.data_at())?;
     Ok(Some(
-        &payload[data_at..data_at + header.logical_len as usize],
+        &payload[data_at..data_at + crate::width::index(header.logical_len)?],
     ))
 }
 
@@ -367,7 +370,7 @@ pub(crate) fn decode_chunked(payload: &[u8], max: u64) -> Result<Vec<u8>> {
         })?;
     out.resize(logical, 0);
     let mut read = |at: u64, buf: &mut [u8]| -> Result<()> {
-        let from = at as usize;
+        let from = crate::width::index(at)?;
         let bytes = payload
             .get(from..from + buf.len())
             .ok_or(malformed("chunked record extent past its payload"))?;
@@ -377,8 +380,8 @@ pub(crate) fn decode_chunked(payload: &[u8], max: u64) -> Result<Vec<u8>> {
     let mut scratch = Vec::new();
     let mut decompressor = None;
     for index in 0..header.count {
-        let from = (index * CHUNK_LEN) as usize;
-        let len = header.chunk_len(index) as usize;
+        let from = crate::width::index(index * CHUNK_LEN)?;
+        let len = crate::width::index(header.chunk_len(index))?;
         read_chunk(
             &mut read,
             &header,

@@ -499,9 +499,9 @@ pub(crate) fn encode_native_record_header(
     header: RecordHeaderFields,
     record_offset: u64,
     footer_len: u64,
-) -> Result<[u8; crate::file::RECORD_HEADER_LEN as usize]> {
+) -> Result<[u8; crate::width::small(crate::file::RECORD_HEADER_LEN)]> {
     let anchors = NativeRecordAnchors::new(record_offset, header.payload_len, footer_len)?;
-    let mut bytes = [0; crate::file::RECORD_HEADER_LEN as usize];
+    let mut bytes = [0; crate::width::small(crate::file::RECORD_HEADER_LEN)];
     let mut cursor = &mut bytes[..];
     for def in RECORD_HEADER_FIELDS {
         let value = native_header_value(*def, header, anchors)?;
@@ -536,7 +536,7 @@ const fn record_field_offset<const N: usize>(
             );
             found = Some(at);
         }
-        at += def.field.ty.byte_len() as usize;
+        at += crate::width::small(def.field.ty.byte_len());
         i += 1;
     }
     match found {
@@ -554,7 +554,7 @@ pub(crate) fn read_native_record_header<R: Read>(
     reader: &mut R,
     _offset: u64,
 ) -> Result<DecodedRecordHeader> {
-    let mut bytes = [0; crate::file::RECORD_HEADER_LEN as usize];
+    let mut bytes = [0; crate::width::small(crate::file::RECORD_HEADER_LEN)];
     reader.read_exact(&mut bytes)?;
     Ok(DecodedRecordHeader {
         fields: RecordHeaderFields {
@@ -699,8 +699,8 @@ fn read_native_record_header_reference<R: Read>(
 /// short would silently emit trailing zeros as a valid-looking footer.
 pub(crate) fn encode_native_record_footer(
     footer: RecordFooterFields,
-) -> Result<[u8; crate::file::RECORD_FOOTER_LEN as usize]> {
-    let mut bytes = [0; crate::file::RECORD_FOOTER_LEN as usize];
+) -> Result<[u8; crate::width::small(crate::file::RECORD_FOOTER_LEN)]> {
+    let mut bytes = [0; crate::width::small(crate::file::RECORD_FOOTER_LEN)];
     let mut cursor = &mut bytes[..];
     for def in RECORD_FOOTER_FIELDS {
         // The magic is a `&'static [u8]` in the field table and four bytes wide.
@@ -747,13 +747,13 @@ const FOOTER_MAGIC_FIELD: (usize, &[u8]) = {
             assert!(found.is_none(), "duplicate footer magic");
             match (def.field.ty, def.field.source) {
                 (NativeFieldType::Bytes { len }, NativeFieldSource::LiteralBytes(bytes)) => {
-                    assert!(len as usize == bytes.len());
+                    assert!(crate::width::small(len) == bytes.len());
                     found = Some((at, bytes));
                 }
                 _ => panic!("native footer magic changed"),
             }
         }
-        at += def.field.ty.byte_len() as usize;
+        at += crate::width::small(def.field.ty.byte_len());
         i += 1;
     }
     match found {
@@ -771,7 +771,7 @@ pub(crate) fn decode_native_record_footer(
     let invalid = || Error::InvalidRecordFooter {
         offset: footer_offset,
     };
-    if bytes.len() != native_record_footer_len() as usize {
+    if bytes.len() != crate::width::index(native_record_footer_len())? {
         return Err(invalid());
     }
     let (magic_at, magic) = FOOTER_MAGIC_FIELD;

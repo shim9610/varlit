@@ -192,7 +192,7 @@ impl<V: RangeLen> Ranges<V> {
             .try_reserve(1)
             .map_err(|_| refused(self.resource, 32))?;
         self.buckets
-            .try_reserve((last - first + 1) as usize)
+            .try_reserve(crate::width::index(last - first + 1)?)
             .map_err(|_| refused(self.resource, 32))?;
         for bucket in first..=last {
             let list = match self.buckets.entry(bucket) {

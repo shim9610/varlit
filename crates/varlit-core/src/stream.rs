@@ -2539,11 +2539,13 @@ fn blank_in_place_payloads(
             Err(_) => break,
         };
         if crate::sync_marker::rewritten_in_place(entry.block_id) {
-            let start = entry.payload_offset.min(window) as usize;
-            let end = entry
-                .payload_offset
-                .saturating_add(entry.payload_len)
-                .min(window) as usize;
+            let start = crate::width::index(entry.payload_offset.min(window))?;
+            let end = crate::width::index(
+                entry
+                    .payload_offset
+                    .saturating_add(entry.payload_len)
+                    .min(window),
+            )?;
             prefix[start..end].fill(0);
         }
     }

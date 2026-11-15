@@ -59,8 +59,8 @@ pub(crate) struct RingHeader {
 }
 
 impl RingHeader {
-    pub(crate) fn encode(&self) -> [u8; HEADER_SLOT as usize] {
-        let mut out = [0u8; HEADER_SLOT as usize];
+    pub(crate) fn encode(&self) -> [u8; crate::width::small(HEADER_SLOT)] {
+        let mut out = [0u8; crate::width::small(HEADER_SLOT)];
         out[0..4].copy_from_slice(RING_MAGIC);
         out[4..6].copy_from_slice(&1u16.to_le_bytes());
         let fields = [
@@ -186,13 +186,13 @@ impl Ring {
     /// The current header: the valid slot with the higher sequence. Retries a
     /// few times when both slots read torn (a writer in the middle of one).
     pub(crate) fn read_header(&self, source: &dyn TileSource) -> Result<RingHeader> {
-        let mut bytes = [0u8; 2 * HEADER_SLOT as usize];
+        let mut bytes = [0u8; 2 * crate::width::small(HEADER_SLOT)];
         for _ in 0..8 {
             source.read_at(self.base, &mut bytes)?;
             let area = self.area();
             let valid = |slot: &[u8]| RingHeader::decode(slot).filter(|header| header.fits(area));
-            let first = valid(&bytes[..HEADER_SLOT as usize]);
-            let second = valid(&bytes[HEADER_SLOT as usize..]);
+            let first = valid(&bytes[..crate::width::small(HEADER_SLOT)]);
+            let second = valid(&bytes[crate::width::small(HEADER_SLOT)..]);
             match (first, second) {
                 (Some(a), Some(b)) => return Ok(if a.seq >= b.seq { a } else { b }),
                 (Some(a), None) | (None, Some(a)) => return Ok(a),
@@ -321,7 +321,7 @@ pub(crate) fn scan(
     // Entries of the generation being read, reported once it commits.
     let mut held: Vec<ScannedEntry> = Vec::new();
     let mut walked = 0u64;
-    let mut header = [0u8; FRAME_HEADER as usize];
+    let mut header = [0u8; crate::width::small(FRAME_HEADER)];
     let available = source.len()?;
     // One frame buffer for the whole scan, grown to the largest frame seen;
     // a read fills what it uses, so it is zeroed only when it grows.
@@ -357,16 +357,16 @@ pub(crate) fn scan(
             break;
         }
         // The whole frame, checksummed before any of it is believed.
-        if frame_buf.len() < len as usize {
+        if frame_buf.len() < crate::width::index(len)? {
             frame_buf
-                .try_reserve_exact(len as usize - frame_buf.len())
+                .try_reserve_exact(crate::width::index(len)? - frame_buf.len())
                 .map_err(|_| Error::AllocationFailed {
                     resource: "matrix ring frame",
                     requested: len,
                 })?;
-            frame_buf.resize(len as usize, 0);
+            frame_buf.resize(crate::width::index(len)?, 0);
         }
-        let frame = &mut frame_buf[..len as usize];
+        let frame = &mut frame_buf[..crate::width::index(len)?];
         if source.read_at(ring.at(at), frame).is_err() {
             break;
         }
@@ -383,7 +383,7 @@ pub(crate) fn scan(
             at = 0;
             continue;
         }
-        let mut cursor = FRAME_HEADER as usize;
+        let mut cursor = crate::width::small(FRAME_HEADER);
         let mut ok = true;
         for _ in 0..count {
             let Some(entry) = frame_entry(&frame[..body_end], cursor) else {
@@ -437,7 +437,7 @@ pub(crate) struct FrameEntry {
 /// The entry at `cursor` of a frame `body` (a frame without its trailing
 /// checksum), if its header and all its bytes lie inside the body.
 pub(crate) fn frame_entry(body: &[u8], cursor: usize) -> Option<FrameEntry> {
-    let bytes_at = cursor.checked_add(ENTRY_HEADER as usize)?;
+    let bytes_at = cursor.checked_add(crate::width::small(ENTRY_HEADER))?;
     let header = body.get(cursor..bytes_at)?;
     let target = u64::from_le_bytes(header[..8].try_into().expect("eight"));
     let len = u32::from_le_bytes(header[8..12].try_into().expect("four"));
@@ -463,8 +463,8 @@ pub(crate) fn frame_header(
     len: u64,
     count: u32,
     requires: u64,
-) -> [u8; FRAME_HEADER as usize] {
-    let mut out = [0u8; FRAME_HEADER as usize];
+) -> [u8; crate::width::small(FRAME_HEADER)] {
+    let mut out = [0u8; crate::width::small(FRAME_HEADER)];
     out[0..4].copy_from_slice(FRAME_MAGIC);
     out[4..8].copy_from_slice(&flags.to_le_bytes());
     out[8..16].copy_from_slice(&generation.to_le_bytes());

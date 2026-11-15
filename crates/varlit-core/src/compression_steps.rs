@@ -34,7 +34,10 @@ pub(super) fn stream_progress(
 pub(super) fn output_capacity(declared: Option<u64>, bound: u64, maximum: usize) -> Option<usize> {
     match declared {
         Some(actual) if actual > bound || actual > maximum as u64 => None,
-        Some(actual) => Some(actual as usize),
+        // `actual <= maximum` here, so it is a length in memory. (This file
+        // is also compiled on its own by a test and an example, so it does
+        // not reach for the crate's conversion helpers.)
+        Some(actual) => Some(usize::try_from(actual).unwrap_or(maximum)),
         None => Some(usize::try_from(bound).unwrap_or(usize::MAX).min(maximum)),
     }
 }

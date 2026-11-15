@@ -52,6 +52,7 @@ mod spill_rows;
 mod stream;
 mod sync_marker;
 mod traits;
+mod width;
 mod writer_permit;
 
 /// Test-only window onto the crate's mechanical-enforcement types.

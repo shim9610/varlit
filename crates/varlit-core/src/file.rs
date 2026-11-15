@@ -254,8 +254,8 @@ fn decode_digest_payload(
     record_offset: u64,
     physical_end: u64,
 ) -> Result<OpenDigest> {
-    let prefix_len = DIGEST_PREFIX_LEN as usize;
-    let trailer_len = DIGEST_TRAILER_LEN as usize;
+    let prefix_len = crate::width::small(DIGEST_PREFIX_LEN);
+    let trailer_len = crate::width::small(DIGEST_TRAILER_LEN);
     if payload.len() < prefix_len + trailer_len {
         return Err(Error::InvalidIndexSegment);
     }
@@ -279,7 +279,7 @@ fn decode_digest_payload(
     u32_buf.copy_from_slice(&payload[16..20]);
     let count = u32::from_le_bytes(u32_buf) as usize;
     let body_len = count
-        .checked_mul(DIGEST_TAIL_LEN as usize)
+        .checked_mul(crate::width::small(DIGEST_TAIL_LEN))
         .ok_or(Error::InvalidIndexSegment)?;
     if payload.len() != prefix_len + body_len + trailer_len {
         return Err(Error::InvalidIndexSegment);
@@ -297,7 +297,7 @@ fn decode_digest_payload(
         })?;
     let mut previous: Option<u32> = None;
     for index in 0..count {
-        let at = prefix_len + index * DIGEST_TAIL_LEN as usize;
+        let at = prefix_len + index * crate::width::small(DIGEST_TAIL_LEN);
         u32_buf.copy_from_slice(&payload[at..at + 4]);
         let block_id = u32::from_le_bytes(u32_buf);
         u64_buf.copy_from_slice(&payload[at + 4..at + 12]);
@@ -1201,7 +1201,8 @@ impl ReadAhead {
             return snapshot.read_exact_at(offset, into);
         }
         if offset < self.start || end > self.start + self.len as u64 {
-            let len = snapshot.len().saturating_sub(offset).min(READ_AHEAD as u64) as usize;
+            let len =
+                crate::width::index(snapshot.len().saturating_sub(offset).min(READ_AHEAD as u64))?;
             if len < into.len() {
                 return Err(Error::UnexpectedEof);
             }
@@ -1209,7 +1210,7 @@ impl ReadAhead {
             self.start = offset;
             self.len = len;
         }
-        let at = (offset - self.start) as usize;
+        let at = crate::width::index(offset - self.start)?;
         into.copy_from_slice(&self.bytes[at..at + into.len()]);
         Ok(())
     }
@@ -1221,7 +1222,7 @@ impl ReadAhead {
         spec: FormatSpec,
         offset: u64,
     ) -> Result<RecordIndexEntry> {
-        fault_record_entry_with::<{ RECORD_HEADER_LEN as usize }>(
+        fault_record_entry_with::<{ crate::width::small(RECORD_HEADER_LEN) }>(
             snapshot.len(),
             spec,
             offset,
@@ -1755,12 +1756,12 @@ impl RecordIndexEntry {
         spec.read_limits
             .check(ReadLimitKey::RecordPayloadLen, self.payload_len)?;
         self.validate_payload_extent(snapshot.len())?;
-        let header_len = (self.payload_offset - self.record_offset) as usize;
-        let payload_end = header_len + self.payload_len as usize;
+        let header_len = crate::width::index(self.payload_offset - self.record_offset)?;
+        let payload_end = header_len + crate::width::index(self.payload_len)?;
         let footer = match self.footer_offset {
             Some(at) => {
-                let at = (at - self.record_offset) as usize;
-                &whole[at..at + RECORD_FOOTER_LEN as usize]
+                let at = crate::width::index(at - self.record_offset)?;
+                &whole[at..at + crate::width::small(RECORD_FOOTER_LEN)]
             }
             None => &[][..],
         };
@@ -1793,12 +1794,12 @@ impl RecordIndexEntry {
         {
             let mut bytes = [0u8; WHOLE];
             snapshot.read_exact_at(self.record_offset, &mut bytes[..whole])?;
-            let header_len = (self.payload_offset - self.record_offset) as usize;
-            let payload_end = header_len + self.payload_len as usize;
+            let header_len = crate::width::index(self.payload_offset - self.record_offset)?;
+            let payload_end = header_len + crate::width::index(self.payload_len)?;
             let footer = match self.footer_offset {
                 Some(at) => {
-                    let at = (at - self.record_offset) as usize;
-                    &bytes[at..at + RECORD_FOOTER_LEN as usize]
+                    let at = crate::width::index(at - self.record_offset)?;
+                    &bytes[at..at + crate::width::small(RECORD_FOOTER_LEN)]
                 }
                 None => &[][..],
             };
@@ -1809,7 +1810,7 @@ impl RecordIndexEntry {
                 footer,
             )?;
             out.clear();
-            out.try_reserve(self.payload_len as usize)
+            out.try_reserve(crate::width::index(self.payload_len)?)
                 .map_err(|_| Error::AllocationFailed {
                     resource: ReadLimitKey::RecordPayloadLen.resource(),
                     requested: self.payload_len,
@@ -4859,7 +4860,7 @@ pub(crate) fn read_index_entry_from_descriptor(
         // Footer bytes participate in data CRC. The sidecar does not store
         // chain links, so CRC-only mode still needs this one footer read.
         if let Some(at) = entry.footer_offset {
-            let mut bytes = [0; RECORD_FOOTER_LEN as usize];
+            let mut bytes = [0; crate::width::small(RECORD_FOOTER_LEN)];
             snapshot.read_exact_at(at, &mut bytes)?;
             let footer = decode_record_footer(spec, &bytes, at, record_offset)?;
             entry.prev_same_block_offset = footer.prev_same_block_offset;
@@ -4875,7 +4876,7 @@ pub(crate) fn read_record_entry_positional(
     snapshot: &SnapshotFile,
     record_offset: u64,
 ) -> Result<RecordIndexEntry> {
-    let mut header = [0u8; RECORD_HEADER_LEN as usize];
+    let mut header = [0u8; crate::width::small(RECORD_HEADER_LEN)];
     snapshot.read_exact_at(record_offset, &mut header)?;
     let decoded = read_native_record_header(&mut &header[..], record_offset)?;
     let fields = decoded.fields;
@@ -4910,7 +4911,7 @@ pub(crate) fn read_record_entry_positional(
     };
     validate_record_entry(&spec, &entry)?;
     if spec.spec_needs_record_footer() {
-        let mut footer = [0u8; RECORD_FOOTER_LEN as usize];
+        let mut footer = [0u8; crate::width::small(RECORD_FOOTER_LEN)];
         snapshot.read_exact_at(payload_end, &mut footer)?;
         let decoded = decode_record_footer(spec, &footer, payload_end, record_offset)?;
         entry.footer_offset = Some(payload_end);
@@ -5244,13 +5245,13 @@ impl SourceWindow {
                 self.buffer = Some(crate::fallible::try_box([0u8; SOURCE_WINDOW])?);
             }
             let buffer = self.buffer.as_mut().expect("allocated above");
-            let len = (snapshot.len() - offset).min(SOURCE_WINDOW as u64) as usize;
+            let len = crate::width::index((snapshot.len() - offset).min(SOURCE_WINDOW as u64))?;
             snapshot.read_exact_at(offset, &mut buffer[..len])?;
             self.start = offset;
             self.len = len;
         }
         let buffer = self.buffer.as_ref().expect("filled above");
-        let at = (offset - self.start) as usize;
+        let at = crate::width::index(offset - self.start)?;
         out.copy_from_slice(&buffer[at..at + out.len()]);
         Ok(())
     }
@@ -5288,7 +5289,7 @@ fn write_staged_record(
     if cfg!(not(feature = "integrity")) && spec.integrity_policy != IntegrityPolicy::None {
         return Ok(None);
     }
-    let header_len = RECORD_HEADER_LEN as usize;
+    let header_len = crate::width::small(RECORD_HEADER_LEN);
     let payload_len = match payload {
         RewritePayload::Bytes(bytes) => bytes.len(),
         RewritePayload::Snapshot { len, .. } => match usize::try_from(*len) {
@@ -5670,7 +5671,7 @@ fn copy_snapshot_payload_crc<const BUFFER: usize>(
     let mut at = offset;
     let mut buffer = [0; BUFFER];
     while remaining != 0 {
-        let count = remaining.min(buffer.len() as u64) as usize;
+        let count = crate::width::index(remaining.min(buffer.len() as u64))?;
         snapshot.read_exact_at(at, &mut buffer[..count])?;
         output.write_all(&buffer[..count])?;
         payload.update(&buffer[..count]);
@@ -6359,7 +6360,7 @@ where
         })?;
     payload.clear();
     payload
-        .try_reserve(ENVELOPE_LEN as usize)
+        .try_reserve(crate::width::small(ENVELOPE_LEN))
         .map_err(|_| Error::AllocationFailed {
             resource: "internal key payload",
             requested: ENVELOPE_LEN,
@@ -6379,7 +6380,7 @@ where
         payload.clear();
         return Err(error);
     }
-    let key_len = (payload.len() - ENVELOPE_LEN as usize) as u64;
+    let key_len = (payload.len() - crate::width::small(ENVELOPE_LEN)) as u64;
     payload[4..12].copy_from_slice(&key_len.to_le_bytes());
     let total_len = payload.len() as u64;
     spec.read_limits
@@ -6600,15 +6601,20 @@ fn fresh_matrix_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
     const FNV_OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
     let mut nonce = [0u8; MATRIX_CREATION_NONCE_LEN];
-    for lane in 0u64..2 {
+    for lane in 0usize..2 {
         let mut hash = FNV_OFFSET_BASIS;
-        for word in [lane, nanos as u64, (nanos >> 64) as u64, pid, counter] {
+        for word in [
+            lane as u64,
+            nanos as u64,
+            (nanos >> 64) as u64,
+            pid,
+            counter,
+        ] {
             for byte in word.to_le_bytes() {
                 hash ^= u64::from(byte);
                 hash = hash.wrapping_mul(FNV_PRIME);
             }
         }
-        let lane = lane as usize;
         nonce[lane * 8..(lane + 1) * 8].copy_from_slice(&hash.to_le_bytes());
     }
     // The raw entropy words survive the mix: XOR them back in so even a
@@ -6936,7 +6942,9 @@ fn write_record_header(
     write_native_record_header(file, header, record_offset, footer_len)
 }
 
-fn encode_record_footer(footer: RecordFooterFields) -> Result<[u8; RECORD_FOOTER_LEN as usize]> {
+fn encode_record_footer(
+    footer: RecordFooterFields,
+) -> Result<[u8; crate::width::small(RECORD_FOOTER_LEN)]> {
     encode_native_record_footer(footer)
 }
 
@@ -6985,7 +6993,7 @@ pub(crate) fn fault_record_entry(
     record_offset: u64,
     committed: bool,
 ) -> Result<RecordIndexEntry> {
-    fault_record_entry_prefixed::<{ RECORD_HEADER_LEN as usize }>(
+    fault_record_entry_prefixed::<{ crate::width::small(RECORD_HEADER_LEN) }>(
         snapshot,
         spec,
         record_offset,
@@ -7004,7 +7012,7 @@ fn fault_record_entry_prefixed<const PREFIX: usize>(
     committed: bool,
 ) -> Result<RecordIndexEntry> {
     const {
-        assert!(PREFIX >= RECORD_HEADER_LEN as usize);
+        assert!(PREFIX >= crate::width::small(RECORD_HEADER_LEN));
     }
     fault_record_entry_with::<PREFIX>(
         snapshot.len(),
@@ -7032,7 +7040,7 @@ fn fault_record_entry_for_mark_with(
     read: impl FnMut(u64, &mut [u8]) -> Result<()>,
 ) -> Result<RecordIndexEntry> {
     if mark_prefers_header_only(snapshot_len, records) {
-        fault_record_entry_with::<{ RECORD_HEADER_LEN as usize }>(
+        fault_record_entry_with::<{ crate::width::small(RECORD_HEADER_LEN) }>(
             snapshot_len,
             spec,
             record_offset,
@@ -7053,17 +7061,19 @@ fn fault_record_entry_with<const PREFIX: usize>(
 ) -> Result<RecordIndexEntry> {
     count_record_entry_fault();
     let mut header_bytes = [0; PREFIX];
-    let prefix_len = if PREFIX == RECORD_HEADER_LEN as usize {
-        RECORD_HEADER_LEN as usize
+    let prefix_len = if PREFIX == crate::width::small(RECORD_HEADER_LEN) {
+        crate::width::small(RECORD_HEADER_LEN)
     } else {
-        snapshot_len
-            .saturating_sub(record_offset)
-            .min(PREFIX as u64)
-            .max(RECORD_HEADER_LEN) as usize
+        crate::width::index(
+            snapshot_len
+                .saturating_sub(record_offset)
+                .min(PREFIX as u64)
+                .max(RECORD_HEADER_LEN),
+        )?
     };
     read(record_offset, &mut header_bytes[..prefix_len])?;
     let decoded = read_native_record_header(
-        &mut &header_bytes[..RECORD_HEADER_LEN as usize],
+        &mut &header_bytes[..crate::width::small(RECORD_HEADER_LEN)],
         record_offset,
     )?;
     debug_assert_eq!(decoded.lead_in_len, RECORD_HEADER_LEN);
@@ -7095,13 +7105,13 @@ fn fault_record_entry_with<const PREFIX: usize>(
                 resource: "record footer offset",
             });
         };
-        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
-        let within_prefix = if PREFIX > RECORD_HEADER_LEN as usize {
+        let mut footer_bytes = [0; crate::width::small(RECORD_FOOTER_LEN)];
+        let within_prefix = if PREFIX > crate::width::small(RECORD_HEADER_LEN) {
             usize::try_from(footer_offset - record_offset)
                 .ok()
                 .and_then(|start| {
                     start
-                        .checked_add(RECORD_FOOTER_LEN as usize)
+                        .checked_add(crate::width::small(RECORD_FOOTER_LEN))
                         .filter(|&end| end <= prefix_len)
                         .map(|end| (start, end))
                 })
@@ -7127,9 +7137,9 @@ fn fault_record_entry_with<const PREFIX: usize>(
 fn read_record_footer_bytes(
     file: &mut (impl Read + Seek),
     offset: u64,
-) -> Result<[u8; RECORD_FOOTER_LEN as usize]> {
+) -> Result<[u8; crate::width::small(RECORD_FOOTER_LEN)]> {
     file.seek(SeekFrom::Start(offset))?;
-    let mut footer = [0; RECORD_FOOTER_LEN as usize];
+    let mut footer = [0; crate::width::small(RECORD_FOOTER_LEN)];
     file.read_exact(&mut footer)?;
     Ok(footer)
 }
@@ -7305,7 +7315,7 @@ fn checksummed_footer(spec: FormatSpec, footer: &[u8]) -> &[u8] {
         LivenessPolicy::None => footer,
         LivenessPolicy::FooterFlags => footer
             .len()
-            .checked_sub(RECORD_FOOTER_MUTABLE_LEN as usize)
+            .checked_sub(crate::width::small(RECORD_FOOTER_MUTABLE_LEN))
             .map_or(footer, |end| &footer[..end]),
     }
 }

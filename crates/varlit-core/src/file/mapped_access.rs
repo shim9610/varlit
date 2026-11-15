@@ -511,7 +511,7 @@ impl VarlitFile {
             bytes.resize(len as usize, 0);
             crate::matrix_tiles::store::TileSource::read_at(&source, at, &mut bytes)?;
             let mut write = |physical: u64, from: usize, n: usize| -> Result<()> {
-                let start = physical as usize;
+                let start = crate::width::index(physical)?;
                 mapping
                     .get_mut(start..start + n)
                     .ok_or(Error::MmapPayloadOutOfBounds {
@@ -530,7 +530,11 @@ impl VarlitFile {
                         len,
                     } = segment
                     {
-                        write(physical, (logical - target) as usize, len as usize)?;
+                        write(
+                            physical,
+                            crate::width::index(logical - target)?,
+                            crate::width::index(len)?,
+                        )?;
                     }
                     Ok(())
                 })?,

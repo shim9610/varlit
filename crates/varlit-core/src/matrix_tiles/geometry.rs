@@ -247,8 +247,8 @@ impl BlockGeom {
         out[24..32].copy_from_slice(&at.col.to_le_bytes());
         let crc = crc32fast::hash(&out[..32]);
         out[32..36].copy_from_slice(&crc.to_le_bytes());
-        let bitmap = self.bitmap_at() as usize;
-        let len = self.bitmap_len() as usize;
+        let bitmap = crate::width::bounded(self.bitmap_at(), out.len());
+        let len = crate::width::bounded(self.bitmap_len(), out.len());
         let crc = crc32fast::hash(&out[bitmap..bitmap + len]);
         out[bitmap + len..bitmap + len + 4].copy_from_slice(&crc.to_le_bytes());
     }
@@ -307,9 +307,11 @@ impl TileCache {
             let cols = geom.dims[1].div_ceil(block.tile[1]).max(1);
             tiles = tiles.saturating_add(rows.saturating_mul(cols));
         }
-        let len = tiles
-            .clamp(Self::MIN_SLOTS, Self::MAX_SLOTS)
-            .next_power_of_two() as usize;
+        let len = crate::width::index(
+            tiles
+                .clamp(Self::MIN_SLOTS, Self::MAX_SLOTS)
+                .next_power_of_two(),
+        )?;
         let mut slots = Vec::new();
         slots
             .try_reserve_exact(len)
@@ -327,7 +329,10 @@ impl TileCache {
         let mixed = tile.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ (block as u64 + 1).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
         let bits = self.slots.len().trailing_zeros();
-        (mixed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - bits)) as usize
+        crate::width::bounded(
+            mixed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - bits),
+            self.slots.len(),
+        )
     }
 
     pub(crate) fn get(&self, block: usize, tile: u64) -> Option<u64> {
@@ -417,7 +422,7 @@ impl Geometry {
     /// Reads the fixed part of a metadata record: the extents and the ring.
     /// The blocks and the extra area come from the spec, which must agree.
     pub(crate) fn decode_meta(&self, bytes: &[u8]) -> Result<(u64, u64)> {
-        if bytes.len() < META_FIXED_LEN as usize
+        if bytes.len() < crate::width::small(META_FIXED_LEN)
             || &bytes[0..4] != META_MAGIC
             || u16::from_le_bytes([bytes[4], bytes[5]]) != LAYOUT_VERSION
             || crc32fast::hash(&bytes[..64])

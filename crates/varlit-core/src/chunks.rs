@@ -205,7 +205,8 @@ impl ChunkedBytes {
                             if first < last {
                                 visit(
                                     first,
-                                    &bytes[(first - start) as usize..(last - start) as usize],
+                                    &bytes[crate::width::index(first - start)?
+                                        ..crate::width::index(last - start)?],
                                 )?;
                             }
                             Ok(())

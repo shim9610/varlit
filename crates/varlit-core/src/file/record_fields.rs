@@ -182,7 +182,7 @@ impl RecordFields<'_> {
     /// The next field's header, checked as `read_field_header` checks it.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<RecordField>> {
-        let mut header = [0u8; FIELD_HEADER_LEN as usize];
+        let mut header = [0u8; crate::width::small(FIELD_HEADER_LEN)];
         let page = fill_record(
             self.spec,
             self.snapshot,
@@ -280,7 +280,7 @@ impl RecordFields<'_> {
                 },
             );
         }
-        let len = field.len as usize;
+        let len = crate::width::index(field.len)?;
         let mut scratch = std::mem::take(self.scratch);
         let result = (|| {
             if scratch.len() < len {

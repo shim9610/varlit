@@ -160,7 +160,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:896ba0f4c08f0e6c]",
+            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:7631dec52ecaff58]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -170,7 +170,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:d5884a3217181be2]",
+            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:65dc04adf4303cb2]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -372,7 +372,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:896ba0f4c08f0e6c]",
+            "caller": "file::header_codec::decode_segment_payload(_1: format::FormatSpec, _2: &[u8], _3: u64, _4: u64) -> std::result::Result<DecodedSegment, error::Error> [body:7631dec52ecaff58]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -382,7 +382,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:d5884a3217181be2]",
+            "caller": "frame_open_digest(_1: format::FormatSpec, _2: &mut PrimaryFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:65dc04adf4303cb2]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -1929,7 +1929,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::read_run_into(_1: &MatrixReader, _2: matrix::MatrixKey, _3: &mut [T]) -> std::result::Result<(), MatrixReuseError> [body:9f2a4fea5e4dbc99]",
+            "caller": "experimental_matrix::<impl at crates/varlit-core/src/experimental_matrix.rs>::read_run_into(_1: &MatrixReader, _2: matrix::MatrixKey, _3: &mut [T]) -> std::result::Result<(), MatrixReuseError> [body:0f0bd03608dc42a5]",
             "target": "Decoder::decode_from_slice_accounted",
             "result": "model/caller-specific"
           },
@@ -2040,7 +2040,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:f57d2cbf8056d44a]",
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2187,7 +2187,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:f57d2cbf8056d44a]",
+            "caller": "file::<impl at crates/varlit-core/src/file.rs>::read(_1: &mut SourceWindow, _2: &snapshot::SnapshotFile, _3: u64, _4: &mut [u8]) -> std::result::Result<(), error::Error> [body:cfd5cd7380683cda]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2417,22 +2417,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:f902ebe5c0116d97]",
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:11c3fd947803a49b]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:4ea0073161ac82fb]",
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:a5cd817a0bf5f771]",
             "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
           {
-            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:5826d364ca3ba9aa]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:cf5622a81bc6de40]",
             "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
@@ -2442,12 +2442,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:c549ec2498b99544]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:6c7728cc0dcb1519]",
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<Decompressor>) -> std::result::Result<(), error::Error> [body:c549ec2498b99544]",
             "target": "chunk_extent",
             "result": "checked"
           }
@@ -2464,32 +2464,32 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:2bf60ad89878f374]",
+            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:7630d6749a7ab4de]",
             "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
           {
-            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:2bf60ad89878f374]",
+            "caller": "chunked_in_place(_1: &[u8], _2: u64) -> std::result::Result<Option<&[u8]>, error::Error> [body:7630d6749a7ab4de]",
             "target": "chunk_extent",
             "result": "checked"
           },
           {
-            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:dbc514f92edde9c0]",
+            "caller": "decode_chunked(_1: &[u8], _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:792314e12a0f1621]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:bbd2e9399d3847a9]",
+            "caller": "encode_chunked(_1: &[u8], _2: Option<(format::CompressionAlgorithm, format::CompressionLevel)>) -> std::result::Result<Vec<u8>, error::Error> [body:93cf50833b52ae95]",
             "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
           {
-            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:fbf5e8a79e47b666]",
+            "caller": "fill_chunked::{closure#1}(_1: &mut {closure@crates/varlit-core/src/file/record_read.rs}) -> std::result::Result<(), error::Error> [body:5826d364ca3ba9aa]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:9c75e23a8998c595]",
+            "caller": "lay_plain_chunks(_1: &mut [u8], _2: usize) -> std::result::Result<usize, error::Error> [body:cf5622a81bc6de40]",
             "target": "ChunkHeader::data_at",
             "result": "model/caller-specific"
           },
@@ -2499,12 +2499,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:405604d873728951]",
             "target": "ChunkHeader::chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:b8de51dcb317b9ef]",
+            "caller": "read_chunk(_1: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>, _2: &ChunkHeader, _3: u64, _4: u64, _5: u64, _6: &mut [u8], _7: &mut Vec<u8>, _8: &mut Option<compression_buffers::Decompressor>) -> std::result::Result<(), error::Error> [body:405604d873728951]",
             "target": "chunk_extent",
             "result": "checked"
           }
@@ -2554,12 +2554,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:9e6e1a4e83d0a05a]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:9e6e1a4e83d0a05a]",
             "target": "frame_entry",
             "result": "model/caller-specific"
           },
@@ -2606,12 +2606,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:9e6e1a4e83d0a05a]",
             "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:d4968d17783ae707]",
+            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:9e6e1a4e83d0a05a]",
             "target": "frame_entry",
             "result": "model/caller-specific"
           },

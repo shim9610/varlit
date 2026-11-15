@@ -1034,11 +1034,12 @@ impl<'a> FrameWindow<'a> {
             } else {
                 into.len()
             };
-            self.len = self
-                .snapshot
-                .len()
-                .saturating_sub(offset)
-                .min(window as u64) as usize;
+            self.len = crate::width::index(
+                self.snapshot
+                    .len()
+                    .saturating_sub(offset)
+                    .min(window as u64),
+            )?;
             if self.len < into.len() {
                 return Err(Error::UnexpectedEof);
             }
@@ -1046,7 +1047,7 @@ impl<'a> FrameWindow<'a> {
                 .read_exact_at(offset, &mut self.bytes[..self.len])?;
             self.start = offset;
         }
-        let at = (offset - self.start) as usize;
+        let at = crate::width::index(offset - self.start)?;
         into.copy_from_slice(&self.bytes[at..at + into.len()]);
         Ok(())
     }

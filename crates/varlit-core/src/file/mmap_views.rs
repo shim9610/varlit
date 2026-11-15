@@ -503,14 +503,14 @@ impl crate::matrix_tiles::store::TileSource for MmapSource {
                 len,
             } = segment
             {
-                let from = physical as usize;
-                let to = from + len as usize;
+                let from = crate::width::index(physical)?;
+                let to = from + crate::width::index(len)?;
                 let bytes = self
                     .mmap
                     .get(from..to)
                     .ok_or(Error::MmapPayloadOutOfBounds { offset, len })?;
-                let at = (logical - offset) as usize;
-                buf[at..at + len as usize].copy_from_slice(bytes);
+                let at = crate::width::index(logical - offset)?;
+                buf[at..at + crate::width::index(len)?].copy_from_slice(bytes);
             }
             Ok(())
         })
@@ -548,7 +548,7 @@ impl MmapMatrix {
             .ok_or(Error::MatrixNotCommitted)?;
         let at = tile + geom.slot_at(slot);
         let bytes = self.source.contiguous(at, geom.slot_len())?;
-        let (payload, crc) = bytes.split_at(geom.stride as usize);
+        let (payload, crc) = bytes.split_at(crate::width::index(geom.stride)?);
         let expected = u32::from_le_bytes(crc.try_into().expect("four"));
         let actual = crc32fast::hash(payload);
         if expected != actual {

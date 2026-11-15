@@ -124,13 +124,13 @@ impl Write for SpillBytes {
                 file.seek(SeekFrom::Start(self.memory.position()))?;
                 self.disk = Some(file);
                 self.memory = std::io::Cursor::new(Vec::new());
-            } else if end as usize > self.memory.get_ref().capacity() {
+            } else if crate::width::bounded(end, self.limit) > self.memory.get_ref().capacity() {
                 let target = self
                     .memory
                     .get_ref()
                     .capacity()
                     .saturating_mul(2)
-                    .max(end as usize)
+                    .max(crate::width::bounded(end, self.limit))
                     .min(self.limit);
                 let additional = target - self.memory.get_ref().len();
                 self.memory

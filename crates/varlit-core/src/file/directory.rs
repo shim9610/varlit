@@ -566,7 +566,7 @@ impl VarlitFile {
             // `fault_record_entry` would also read the footer and would charge
             // the record-entry fault counter, which several tests measure as a
             // cost model — this probe is not a fault, it is a check.
-            let mut header_bytes = [0; RECORD_HEADER_LEN as usize];
+            let mut header_bytes = [0; crate::width::small(RECORD_HEADER_LEN)];
             self.snapshot
                 .read_exact_at(stated.record_offset, &mut header_bytes)?;
             let actual =
@@ -1441,12 +1441,12 @@ impl VarlitFile {
             let mut bytes = [0u8; WHOLE];
             self.snapshot
                 .read_exact_at(entry.record_offset, &mut bytes[..whole])?;
-            let header_len = (entry.payload_offset - entry.record_offset) as usize;
-            let payload_end = header_len + entry.payload_len as usize;
+            let header_len = crate::width::index(entry.payload_offset - entry.record_offset)?;
+            let payload_end = header_len + crate::width::index(entry.payload_len)?;
             let footer = match entry.footer_offset {
                 Some(at) => {
-                    let at = (at - entry.record_offset) as usize;
-                    &bytes[at..at + RECORD_FOOTER_LEN as usize]
+                    let at = crate::width::index(at - entry.record_offset)?;
+                    &bytes[at..at + crate::width::small(RECORD_FOOTER_LEN)]
                 }
                 None => &[][..],
             };
@@ -1457,7 +1457,7 @@ impl VarlitFile {
                 footer,
             );
         }
-        if entry.payload_len as usize <= payload.capacity() {
+        if crate::width::index(entry.payload_len)? <= payload.capacity() {
             return entry.read_payload_snapshot_into(spec, &self.snapshot, payload);
         }
         entry.verify_snapshot_streamed(spec, &self.snapshot)

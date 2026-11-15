@@ -793,7 +793,7 @@ impl VarlitFile {
 
         let sequence = self.sequence_state.available()?;
         let entry = resolved.entry().clone();
-        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let mut footer_bytes = [0; crate::width::small(RECORD_FOOTER_LEN)];
         let footer = if let Some(footer_offset) = entry.footer_offset {
             self.snapshot
                 .read_exact_at(footer_offset, &mut footer_bytes)?;
@@ -1020,7 +1020,7 @@ impl VarlitFile {
         self.validate_source_generation()?;
         let sequence = self.sequence_state.available()?;
         let entry = target.entry().clone();
-        let mut footer_bytes = [0; RECORD_FOOTER_LEN as usize];
+        let mut footer_bytes = [0; crate::width::small(RECORD_FOOTER_LEN)];
         let footer = if let Some(footer_offset) = entry.footer_offset {
             self.snapshot
                 .read_exact_at(footer_offset, &mut footer_bytes)?;

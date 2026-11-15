@@ -157,7 +157,7 @@ pub(super) struct SegmentPrefix {
 /// Decodes only the fixed prefix, which is everything the chain walk's first
 /// pass needs to check that the links join up.
 pub(super) fn decode_segment_prefix(prefix: &[u8]) -> Result<SegmentPrefix> {
-    let prefix_len = SEGMENT_PREFIX_LEN as usize;
+    let prefix_len = crate::width::small(SEGMENT_PREFIX_LEN);
     if prefix.len() < prefix_len || &prefix[..4] != SEGMENT_MAGIC {
         return Err(Error::InvalidIndexSegment);
     }
@@ -183,9 +183,9 @@ pub(super) fn decode_segment_payload(
     record_offset: u64,
     file_len: u64,
 ) -> Result<DecodedSegment> {
-    let prefix_len = SEGMENT_PREFIX_LEN as usize;
-    let trailer_len = SEGMENT_TRAILER_LEN as usize;
-    let entry_len = SEGMENT_ENTRY_LEN as usize;
+    let prefix_len = crate::width::small(SEGMENT_PREFIX_LEN);
+    let trailer_len = crate::width::small(SEGMENT_TRAILER_LEN);
+    let entry_len = crate::width::small(SEGMENT_ENTRY_LEN);
     if payload.len() < prefix_len + trailer_len || &payload[..4] != SEGMENT_MAGIC {
         return Err(Error::InvalidIndexSegment);
     }
@@ -1544,7 +1544,7 @@ fn header_slots_prefix(flags: u16, capacity: u32, used: u32) -> [u8; 12] {
 /// rather than a large one.
 pub(super) fn decode_header_slots(spec: FormatSpec, payload: &[u8]) -> Result<HeaderSlotsView<'_>> {
     let capacity = spec.header_slots.capacity as usize;
-    let prefix = crate::format::HEADER_SLOTS_PREFIX_LEN as usize;
+    let prefix = crate::width::small(crate::format::HEADER_SLOTS_PREFIX_LEN);
     if payload.len() != prefix + capacity {
         return Err(Error::InvalidCompressionHeader);
     }
@@ -1665,7 +1665,8 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
     let framed_len = usize::try_from(framed)
         .map_err(|_| Error::InvalidFormatSpec("header_slots region length overflows"))?;
     let capacity = spec.header_slots.capacity as usize;
-    let payload_len = framed_len - crate::format::HEADER_SLOTS_BLOCK_FRAMING_LEN as usize;
+    let payload_len =
+        framed_len - crate::width::small(crate::format::HEADER_SLOTS_BLOCK_FRAMING_LEN);
     let payload_len_u32 = u32::try_from(payload_len)
         .map_err(|_| Error::InvalidFormatSpec("header_slots region length overflows"))?;
     let mut region = Vec::new();
@@ -1711,7 +1712,7 @@ pub(super) fn encode_header_slots_payload(
     let checksum = header_slots_checksum_continue(header_slots_checksum(&covered), entries);
 
     let mut payload = Vec::new();
-    let payload_len = crate::format::HEADER_SLOTS_PREFIX_LEN as usize + capacity;
+    let payload_len = crate::width::small(crate::format::HEADER_SLOTS_PREFIX_LEN) + capacity;
     payload
         .try_reserve_exact(payload_len)
         .map_err(|_| Error::AllocationFailed {

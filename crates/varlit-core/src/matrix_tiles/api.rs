@@ -113,7 +113,7 @@ impl MatrixScratch {
     fn payload_batch(geom: &Geometry) -> Result<Vec<u8>> {
         let mut bytes = 0;
         for block in &geom.blocks {
-            let stride = block.stride as usize;
+            let stride = crate::width::index(block.stride)?;
             bytes = bytes.max(batch_cells(stride.max(1), usize::MAX) * stride);
         }
         zeroed(bytes as u64)
@@ -123,7 +123,7 @@ impl MatrixScratch {
 /// The first `len` bytes of a scratch buffer. It was sized for the matrix,
 /// so this grows it only if an earlier call lost it to an error.
 fn sized(buffer: &mut Vec<u8>, len: u64) -> Result<&mut [u8]> {
-    let len = len as usize;
+    let len = crate::width::index(len)?;
     if buffer.len() < len {
         buffer
             .try_reserve_exact(len - buffer.len())
@@ -354,7 +354,7 @@ impl TiledMatrix {
         source: &dyn TileSource,
         meta: u64,
     ) -> Result<(Geometry, Names, [u8; 16])> {
-        let mut fixed = [0u8; super::geometry::META_FIXED_LEN as usize];
+        let mut fixed = [0u8; crate::width::small(super::geometry::META_FIXED_LEN)];
         source.read_at(meta, &mut fixed)?;
         let pair = Geometry::decode_dims(&fixed);
         // Per-channel extents come from the channel dimension, which for the
@@ -604,14 +604,14 @@ impl TiledMatrix {
             let at = tile + geom.slot_at(slot);
             access.read(at, piece)?;
             self.check_slot(piece, geom, at)?;
-            out.copy_from_slice(&piece[..geom.stride as usize]);
+            out.copy_from_slice(&piece[..crate::width::index(geom.stride)?]);
             Ok(())
         })
     }
 
     /// Checks a slot's payload against its CRC (when cells are verified).
     fn check_slot(&self, piece: &[u8], geom: BlockGeom, at: u64) -> Result<()> {
-        let (payload, crc) = piece.split_at(geom.stride as usize);
+        let (payload, crc) = piece.split_at(crate::width::index(geom.stride)?);
         let expected = u32::from_le_bytes(crc.try_into().expect("four"));
         let actual = crc32fast::hash(payload);
         if self.verify_cells && expected != actual {
@@ -637,7 +637,7 @@ impl TiledMatrix {
     ) -> Result<()> {
         let block = self.block_index(block_id)?;
         let geom = self.geom.blocks[block];
-        let stride = geom.stride as usize;
+        let stride = crate::width::index(geom.stride)?;
         let count = (out.len() / stride) as u64;
         if count == 0 {
             return Ok(());
@@ -664,12 +664,15 @@ impl TiledMatrix {
                 if (0..in_tile).any(|i| !bit(bitmap, slot + i)) {
                     return Err(Error::MatrixNotCommitted);
                 }
-                let bytes = &mut slot_bytes[..(in_tile * geom.slot_len()) as usize];
+                let bytes = &mut slot_bytes[..crate::width::index(in_tile * geom.slot_len())?];
                 let first = tile + geom.slot_at(slot);
                 access.read(first, bytes)?;
-                for (i, piece) in bytes.chunks_exact(geom.slot_len() as usize).enumerate() {
+                for (i, piece) in bytes
+                    .chunks_exact(crate::width::index(geom.slot_len())?)
+                    .enumerate()
+                {
                     self.check_slot(piece, geom, first + i as u64 * geom.slot_len())?;
-                    let to = (done as usize + i) * stride;
+                    let to = (crate::width::index(done)? + i) * stride;
                     out[to..to + stride].copy_from_slice(&piece[..stride]);
                 }
                 done += in_tile;
@@ -828,7 +831,7 @@ impl TiledMatrix {
         scratch: &mut [u8],
         bitmap: &mut [u8],
     ) -> Result<()> {
-        let stride = geom.stride as usize;
+        let stride = crate::width::index(geom.stride)?;
         let slot_len = geom.slot_len();
         let span_cap = (CELLS_SPAN_BYTES / slot_len).clamp(1, geom.cells());
         let gap = (CELLS_GAP_BYTES / slot_len).max(1);
@@ -850,11 +853,11 @@ impl TiledMatrix {
                     return Err(Error::MatrixNotCommitted);
                 }
                 let first = tile + geom.slot_at(first_slot);
-                let bytes = &mut scratch[..(span * slot_len) as usize];
+                let bytes = &mut scratch[..crate::width::index(span * slot_len)?];
                 access.read(first, bytes)?;
                 for (_, slot, index) in &order[at..end] {
-                    let from = ((slot - first_slot) * slot_len) as usize;
-                    let piece = &bytes[from..from + slot_len as usize];
+                    let from = crate::width::index((slot - first_slot) * slot_len)?;
+                    let piece = &bytes[from..from + crate::width::index(slot_len)?];
                     self.check_slot(piece, geom, first + from as u64)?;
                     out[index * stride..(index + 1) * stride].copy_from_slice(&piece[..stride]);
                 }
@@ -875,7 +878,7 @@ impl TiledMatrix {
         scratch: &mut [u8],
         bitmap: &mut [u8],
     ) -> Result<(usize, Option<MatrixKey>)> {
-        let stride = geom.stride as usize;
+        let stride = crate::width::index(geom.stride)?;
         let capacity = out.len() / stride;
         let mut key = start;
         let mut filled = 0usize;
@@ -896,16 +899,16 @@ impl TiledMatrix {
                 return Err(Error::MatrixNotCommitted);
             }
             let first = tile + geom.slot_at(slot);
-            let bytes = &mut scratch[..(run * geom.slot_len()) as usize];
+            let bytes = &mut scratch[..crate::width::index(run * geom.slot_len())?];
             access.read(first, bytes)?;
-            for i in 0..run as usize {
-                let piece =
-                    &bytes[i * geom.slot_len() as usize..(i + 1) * geom.slot_len() as usize];
+            for i in 0..crate::width::index(run)? {
+                let piece = &bytes[i * crate::width::index(geom.slot_len())?
+                    ..(i + 1) * crate::width::index(geom.slot_len())?];
                 self.check_slot(piece, geom, first + i as u64 * geom.slot_len())?;
                 out[(filled + i) * stride..(filled + i + 1) * stride]
                     .copy_from_slice(&piece[..stride]);
             }
-            filled += run as usize;
+            filled += crate::width::index(run)?;
             key.ch += run;
             if key.ch == region.col_end {
                 key = MatrixKey::new(key.scan + 1, region.col_start);
@@ -985,7 +988,7 @@ impl TiledMatrix {
         };
         let mut bytes = zeroed(geom.slot_len())?;
         self.read(store, tile + geom.slot_at(slot), &mut bytes)?;
-        let (payload, crc) = bytes.split_at(geom.stride as usize);
+        let (payload, crc) = bytes.split_at(crate::width::index(geom.stride)?);
         let stored = u32::from_le_bytes(crc.try_into().expect("four"));
         if stored != crc32fast::hash(payload) {
             // All zero: never written, or cleared. Anything else: damaged.
@@ -1039,7 +1042,7 @@ impl TiledMatrix {
         for tile in tiles {
             // Unchecked: clearing is also how a damaged bitmap is recovered.
             let mut unit = self.raw_bitmap_unit(store, geom, tile)?;
-            let set: u64 = unit[..geom.bitmap_len() as usize]
+            let set: u64 = unit[..crate::width::index(geom.bitmap_len())?]
                 .iter()
                 .map(|byte| u64::from(byte.count_ones()))
                 .sum();
@@ -1047,7 +1050,7 @@ impl TiledMatrix {
                 continue;
             }
             cleared += set;
-            let bits = geom.bitmap_len() as usize;
+            let bits = crate::width::index(geom.bitmap_len())?;
             unit[..bits].fill(0);
             seal_bitmap(&mut unit);
             self.writer()?
@@ -1072,12 +1075,12 @@ impl TiledMatrix {
             self.read(store, tile + geom.slots_at(), &mut slots)?;
             // Unchecked: the bitmap is rebuilt whole, damaged or not.
             let mut unit = self.raw_bitmap_unit(store, geom, tile)?;
-            let bits = geom.bitmap_len() as usize;
+            let bits = crate::width::index(geom.bitmap_len())?;
             unit[..bits].fill(0);
             for slot in 0..geom.cells() {
-                let piece = &slots
-                    [(slot * geom.slot_len()) as usize..((slot + 1) * geom.slot_len()) as usize];
-                let (payload, crc) = piece.split_at(geom.stride as usize);
+                let piece = &slots[crate::width::index(slot * geom.slot_len())?
+                    ..crate::width::index((slot + 1) * geom.slot_len())?];
+                let (payload, crc) = piece.split_at(crate::width::index(geom.stride)?);
                 if u32::from_le_bytes(crc.try_into().expect("four")) == crc32fast::hash(payload) {
                     unit[(slot / 8) as usize] |= 1 << (slot % 8);
                     committed += 1;
@@ -1138,7 +1141,7 @@ impl TiledMatrix {
         let mut rows = self.geom.dims[0];
         let mut visit = |tile: u64| -> Result<()> {
             let unit = self.bitmap_unit(source, geom, tile)?;
-            committed += unit[..geom.bitmap_len() as usize]
+            committed += unit[..crate::width::index(geom.bitmap_len())?]
                 .iter()
                 .map(|byte| u64::from(byte.count_ones()))
                 .sum::<u64>();
@@ -1327,9 +1330,9 @@ impl TiledMatrix {
         let end = base + (at + len - base).div_ceil(EXTRA_PAGE) * EXTRA_PAGE;
         let mut pages = zeroed(end - first)?;
         self.read(store, first, &mut pages)?;
-        edit(&mut pages[(at - first) as usize..(at - first + len) as usize]);
+        edit(&mut pages[crate::width::index(at - first)?..crate::width::index(at - first + len)?]);
         let writer = self.writer()?;
-        for (index, page) in pages.chunks(EXTRA_PAGE as usize).enumerate() {
+        for (index, page) in pages.chunks(crate::width::small(EXTRA_PAGE)).enumerate() {
             writer.stage(store, first + index as u64 * EXTRA_PAGE, page)?;
         }
         Ok(())
@@ -1358,7 +1361,7 @@ impl TiledMatrix {
             }
             let mut damaged = false;
             for tile in tiles {
-                let mut header = [0u8; super::geometry::TILE_HEADER_LEN as usize];
+                let mut header = [0u8; crate::width::small(super::geometry::TILE_HEADER_LEN)];
                 self.read(source, tile, &mut header)?;
                 let row = u64::from_le_bytes(header[16..24].try_into().expect("eight"));
                 let col = u64::from_le_bytes(header[24..32].try_into().expect("eight"));
@@ -1523,11 +1526,11 @@ fn bit(unit: &[u8], slot: u64) -> bool {
 fn zeroed(len: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes
-        .try_reserve_exact(len as usize)
+        .try_reserve_exact(crate::width::index(len)?)
         .map_err(|_| Error::AllocationFailed {
             resource: "matrix cell buffer",
             requested: len,
         })?;
-    bytes.resize(len as usize, 0);
+    bytes.resize(crate::width::index(len)?, 0);
     Ok(bytes)
 }
