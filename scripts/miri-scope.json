@@ -92,6 +92,16 @@
       "source": "crates/varlit-core/src/file.rs",
       "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
       "covered_by": "native tests and ASan with the mmap feature"
+    },
+    {
+      "source": "crates/varlit-core/src/verification/chunks.rs",
+      "reason": "A Kani proof module, compiled only under cfg(kani): its unsafe code models the allocator or stubs an unsafe function for the model checker.",
+      "covered_by": "the Kani harnesses that use it"
+    },
+    {
+      "source": "crates/varlit-core/src/verification/decoder_callers.rs",
+      "reason": "A Kani proof module, compiled only under cfg(kani): its unsafe code models the allocator or stubs an unsafe function for the model checker.",
+      "covered_by": "the Kani harnesses that use it"
     }
   ],
   "exclusions": []

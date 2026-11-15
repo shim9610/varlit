@@ -1,5 +1,7 @@
 //! Compositional proofs of actual header/entry parsing and full-width table bounds.
 //! Whole arbitrary-length byte parsing is covered by native tests and fuzzing.
+// A stub the proofs install in place of an `unsafe` production function.
+#![allow(unsafe_code)]
 use super::*;
 
 #[kani::proof]

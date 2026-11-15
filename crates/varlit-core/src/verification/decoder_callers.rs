@@ -1,6 +1,8 @@
 //! Actual length decode -> budget charge -> allocation -> complete decode.
 //! At most four payload bytes; arbitrary u64 encoded length and budget. The
 //! allocator obeys Rust's contract; its one reservation may be refused.
+// Allocator models the proofs install in place of the global allocator.
+#![allow(unsafe_code)]
 use super::*;
 use std::alloc::{GlobalAlloc, Layout, System};
 
