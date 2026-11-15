@@ -1576,6 +1576,7 @@ fn opened_sidecar_identity(file: &fs::File) -> DiskIndexResult<Vec<u8>> {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "a Windows file identity call")]
 fn opened_sidecar_identity(file: &fs::File) -> DiskIndexResult<Vec<u8>> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{

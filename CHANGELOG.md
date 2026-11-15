@@ -164,6 +164,15 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   offsets, frame stepping, frame placement, frame entry bounds, slot ranges,
   Morton keys, metadata region ends), two Loom models of the tile reader lock,
   and a test that kills a writer process mid-publication and reopens the file.
+- The crates deny `unsafe_code`: `varlit` and `varlit-macros` forbid it, and
+  `varlit-core` allows it only at declared sites, each with a reason. The
+  codec's raw-memory code moved into one module with safe functions.
+- Miri interprets the unit tests of the modules containing `unsafe` code it can
+  execute instead of every portable unit test, and refuses to run when
+  `unsafe` appears outside `scripts/miri-scope.json`. The run takes minutes
+  instead of exceeding its five-and-a-half-hour limit.
+- A bulk vector decode whose size computation overflows now leaves the
+  destination empty, as every other refused fill does.
 - Verus verifies the matrix tile slot arithmetic in the production source for
   every admitted block shape (`tools/verus`, run in CI). The specifications
   are behind a cfg only Verus sets; ordinary builds are unchanged.

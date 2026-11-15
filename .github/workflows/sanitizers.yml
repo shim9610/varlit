@@ -15,11 +15,14 @@ name: Sanitizers
 #   * ASan runs the real suite with the real syscalls under `--all-features`,
 #     so the mmap / zero-copy surface is exercised. It is the primary tool for
 #     this codebase.
-#   * Miri interprets the portable core only. Of the 28 `unsafe` sites in
-#     `file.rs`, 10 are `mmap`-gated — memmap2 issues the `mmap` syscall, a
-#     foreign function Miri refuses — and 11 are Windows-only, so Miri sees at
-#     most the remaining 7, plus everything in `matrix`, `codec`, `snapshot`.
-#     In exchange it is the one tool here that reports UB that does not crash.
+#   * Miri interprets the unit tests of the modules that contain `unsafe`
+#     code it can execute: raw vector fills, raw allocation and the tile
+#     reader lock. The crates deny `unsafe_code`; `scripts/miri-scope.json`
+#     names every file that allows it and, for the mmap, foreign-call and
+#     Windows-only ones Miri refuses, what covers them instead. Tests of
+#     modules without `unsafe` are not interpreted: safe Rust cannot cause
+#     undefined behaviour by itself, and interpreting all of them took over
+#     five hours. It is the one tool here that reports UB that does not crash.
 #   * The fuzz smoke run exists so a target that stops building, or crashes
 #     within its first minutes, is caught on a PR instead of on the next manual
 #     campaign. It is not a campaign itself: 90 seconds per target finds smoke,
@@ -190,9 +193,9 @@ jobs:
   miri:
     # Same public-repository guard as above.
     if: github.repository == 'shim9610/varlit' && !github.event.repository.private
-    name: miri (varlit-core portable unit tests)
+    name: miri (unsafe modules)
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -204,12 +207,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: miri
-      # Exclusions name exact tests and measured reasons in the public manifest.
-      # The runner rejects stale/ambiguous filters and verifies the final test
-      # count. Unknown unsupported calls, UB and all other failures stay fatal.
-      # Directory fsync is native/ASan coverage: never stub production durability
-      # just to make Miri green. Default alias/validity checks remain enabled.
-      - name: unit tests under Miri
+      # The runner checks that the files allowing `unsafe` are exactly those
+      # in scripts/miri-scope.json, selects the unit tests of the interpreted
+      # ones and verifies the final test count. Unknown unsupported calls, UB
+      # and all other failures stay fatal. Default alias/validity checks
+      # remain enabled.
+      - name: unit tests of the unsafe modules under Miri
         run: python3 scripts/check_miri.py
       - name: ownership refusal, callback errors and real cleanup under Miri
         run: python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership

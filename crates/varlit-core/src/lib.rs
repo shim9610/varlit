@@ -1,4 +1,5 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![deny(unsafe_code)]
 #![cfg_attr(kani, feature(allocator_api))]
 
 extern crate alloc;
@@ -34,6 +35,7 @@ mod matrix_tiles;
 mod merge;
 mod native_layout;
 #[cfg(test)]
+#[allow(unsafe_code, reason = "a test-only probe of platform I/O calls")]
 mod pib_probe;
 mod scalable_extent;
 #[cfg(feature = "scalable-fault-injection")]

@@ -10,6 +10,9 @@
 //! through a mapped matrix, and those critical sections are short, so a
 //! waiter spins briefly and then yields its time slice.
 
+// An `UnsafeCell` behind an atomic flag: the lock itself.
+#![allow(unsafe_code)]
+
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 // The isolated Loom runner explores this lock's interleavings; normal
@@ -137,12 +140,14 @@ mod tests {
 
     #[test]
     fn threads_take_turns_and_every_increment_lands() {
+        // Miri interprets every round; a few hundred still interleave.
+        const ROUNDS: u64 = if cfg!(miri) { 300 } else { 10_000 };
         let lock = Arc::new(ReaderLock::new(0u64));
         let threads: Vec<_> = (0..4)
             .map(|_| {
                 let lock = Arc::clone(&lock);
                 std::thread::spawn(move || {
-                    for _ in 0..10_000 {
+                    for _ in 0..ROUNDS {
                         *lock.lock().unwrap() += 1;
                     }
                 })
@@ -151,7 +156,7 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
-        assert_eq!(*lock.lock().unwrap(), 40_000);
+        assert_eq!(*lock.lock().unwrap(), 4 * ROUNDS);
     }
 
     #[test]

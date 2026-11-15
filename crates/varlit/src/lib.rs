@@ -1,4 +1,4 @@
-#![forbid(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 //! Format-first, append-friendly custom binary formats for Rust.
 //!
 //! Varlit turns a *declaration* of a binary format into the format: you write

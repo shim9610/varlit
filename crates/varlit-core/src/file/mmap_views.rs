@@ -1,4 +1,7 @@
 //! Memory-mapped owned views and bounds checks.
+// Memory mapping: every mapping here is created by an `unsafe` call whose
+// contract (the file is not modified while mapped) the caller accepts.
+#![allow(unsafe_code)]
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "mmap")]

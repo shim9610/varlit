@@ -105,6 +105,10 @@ pub(crate) fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<(
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for file identity, locks and process liveness"
+)]
 pub(crate) fn verify_dedicated_lock_marker(path: &Path, file: &File) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -491,6 +495,10 @@ pub(crate) fn unlock_native_guard(file: &File) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for file identity, locks and process liveness"
+)]
 pub(super) fn unlock_exclusive_range(file: &File, offset: u64) -> std::io::Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::HANDLE;
@@ -514,6 +522,10 @@ pub(super) fn unlock_exclusive_range(file: &File, offset: u64) -> std::io::Resul
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for file identity, locks and process liveness"
+)]
 pub(super) fn try_lock_exclusive_range(
     file: &File,
     offset: u64,
@@ -920,6 +932,10 @@ pub(super) fn absolute_target_path(path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for file identity, locks and process liveness"
+)]
 pub(super) fn process_is_absent(process_id: u32) -> bool {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -958,6 +974,10 @@ pub(super) fn process_is_absent(process_id: u32) -> bool {
 }
 
 #[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for file identity, locks and process liveness"
+)]
 pub(super) fn process_is_absent(process_id: u32) -> bool {
     if process_id == std::process::id() {
         return false;

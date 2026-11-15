@@ -286,6 +286,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[allow(unsafe_code, reason = "a libc call in a test")]
     fn limited_partial_write_tracks_progress() -> io::Result<()> {
         let mut file = SpillFile::new()?;
         assert_eq!(file.maximum, Some(32768));

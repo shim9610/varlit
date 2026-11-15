@@ -1,0 +1,98 @@
+{
+  "interpreted": [
+    {
+      "source": "crates/varlit-core/src/codec/raw_fill.rs",
+      "tests": [
+        "codec::"
+      ],
+      "why": "Sizes vectors from zeroed allocator memory and views number and boolean storage as bytes."
+    },
+    {
+      "source": "crates/varlit-core/src/fallible.rs",
+      "tests": [
+        "fallible::"
+      ],
+      "why": "Allocates through the global allocator directly and hands raw blocks to Vec, Box and Arc."
+    },
+    {
+      "source": "crates/varlit-core/src/matrix_tiles/reader_lock.rs",
+      "tests": [
+        "matrix_tiles::reader_lock::"
+      ],
+      "why": "A hand-written lock: an UnsafeCell behind an atomic flag, with Send and Sync implementations."
+    }
+  ],
+  "not_interpreted": [
+    {
+      "source": "crates/varlit-core/src/chunks.rs",
+      "reason": "Calls into zstd's C library, which Miri cannot execute; behind the compression-zstd feature.",
+      "covered_by": "native tests and ASan with the feature enabled"
+    },
+    {
+      "source": "crates/varlit-core/src/file/mmap_views.rs",
+      "reason": "Memory mapping is a system call Miri refuses; behind the mmap feature.",
+      "covered_by": "native tests and ASan with the feature enabled"
+    },
+    {
+      "source": "crates/varlit-core/src/file/mapped_access.rs",
+      "reason": "Memory mapping is a system call Miri refuses; behind the mmap feature.",
+      "covered_by": "native tests and ASan with the feature enabled"
+    },
+    {
+      "source": "crates/varlit-core/src/file/mutation.rs",
+      "reason": "An unsafe fn whose body is safe code: the keyword marks an exclusivity contract for callers, not raw memory.",
+      "covered_by": "native tests"
+    },
+    {
+      "source": "crates/varlit-core/src/traits.rs",
+      "reason": "Unsafe trait declarations for raw views; implementations are in user code, behind the zero-copy feature.",
+      "covered_by": "native tests and ASan with the feature enabled"
+    },
+    {
+      "source": "crates/varlit-core/src/primary_file.rs",
+      "reason": "One posix_fadvise call, a foreign function Miri does not support.",
+      "covered_by": "native tests and ASan"
+    },
+    {
+      "source": "crates/varlit-core/src/spill_file.rs",
+      "reason": "A libc call inside one unit test.",
+      "covered_by": "native tests and ASan"
+    },
+    {
+      "source": "crates/varlit-core/src/diagnostics.rs",
+      "reason": "Operating-system calls (openat, unlinkat, geteuid, Windows equivalents) Miri does not support.",
+      "covered_by": "native tests and ASan"
+    },
+    {
+      "source": "crates/varlit-core/src/file/locks.rs",
+      "reason": "Operating-system calls for file identity, locks and process liveness.",
+      "covered_by": "native tests on Linux, Windows and macOS; ASan on Linux"
+    },
+    {
+      "source": "crates/varlit-core/src/file/publication.rs",
+      "reason": "Windows file calls; not compiled on the Miri host.",
+      "covered_by": "native tests on Windows"
+    },
+    {
+      "source": "crates/varlit-core/src/disk_index.rs",
+      "reason": "A Windows file identity call; not compiled on the Miri host.",
+      "covered_by": "native tests on Windows"
+    },
+    {
+      "source": "crates/varlit-core/src/stream.rs",
+      "reason": "A Windows file identity call; not compiled on the Miri host.",
+      "covered_by": "native tests on Windows"
+    },
+    {
+      "source": "crates/varlit-core/src/lib.rs",
+      "reason": "Allows unsafe for the test-only pib_probe module, which probes platform I/O calls.",
+      "covered_by": "native tests"
+    },
+    {
+      "source": "crates/varlit-core/src/file.rs",
+      "reason": "Unsafe fn wrappers that forward to the mapping and in-place replacement entry points.",
+      "covered_by": "native tests and ASan with the mmap feature"
+    }
+  ],
+  "exclusions": []
+}

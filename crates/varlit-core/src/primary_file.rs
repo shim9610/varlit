@@ -206,6 +206,7 @@ impl PrimaryFile {
     /// that walks it a fixed buffer at a time. Only a hint: the pages go to the
     /// kernel's cache, nothing is held by this process, and a refusal changes
     /// nothing but speed.
+    #[allow(unsafe_code, reason = "a read-ahead hint to the kernel")]
     pub(crate) fn will_need(&self, offset: u64, len: u64) {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
         {

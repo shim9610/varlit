@@ -20,14 +20,18 @@ python3 scripts/check_miri.py
 python3 scripts/check_miri.py --test fallible_ownership --output target/miri-report/ownership
 ```
 
-The gate records its toolchain, exact selected tests and complete output in
-`target/miri-report/`. Exclusions and reasons are in
-`scripts/miri-exclusions.json`; missing or ambiguous test names fail the gate.
-All 53 exclusions also have alternatives and remaining gaps in
-`scripts/miri-exclusion-audit.json`. Alternatives are not equivalent Miri proofs.
-Directory `fsync`, native pathname cleanup and the real-file redb oracle require
-native tests and ASan. Miri does not establish filesystem durability or cover
-the mmap/Windows surface. Default alias and validity checks remain enabled.
+The three crates deny `unsafe_code`, and `scripts/miri-scope.json` names every
+file that allows it. Miri interprets the unit tests of the three modules whose
+unsafe code it can execute (raw vector fills in `codec/raw_fill.rs`, raw
+allocation in `fallible.rs`, the tile reader lock); for every other file the
+manifest gives the reason Miri cannot (foreign calls, memory mapping,
+Windows-only code) and what covers it instead. The gate refuses to run when the
+sources and the manifest disagree, so `unsafe` added anywhere else fails it.
+It records its toolchain, exact selected tests and complete output in
+`target/miri-report/`. Tests of modules without `unsafe` are not interpreted:
+safe Rust cannot cause undefined behaviour by itself. Miri does not establish
+filesystem durability or cover the mmap/Windows surface; native tests and ASan
+do. Default alias and validity checks remain enabled.
 CI also runs the six `codec_array_allocation` integration tests under the same
 interpreter, covering partial drops, array framing and the custom-codec path.
 

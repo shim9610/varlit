@@ -1279,6 +1279,10 @@ fn cleanup_run_artifacts(
 /// handle is read-only and shares deletion, so it neither blocks the `DELETE`
 /// open below nor blocks the disposition that follows.
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for identity-checked cleanup"
+)]
 pub(crate) fn remove_path_if_same_object(
     path: &Path,
     pinned: &crate::file::PinnedObject,
@@ -1362,6 +1366,10 @@ pub(crate) fn remove_path_if_same_object(
 /// `funlinkat`, so between the final check and `unlinkat` the name is resolved
 /// once more. Measure 1 is what bounds who can be in it.
 #[cfg(not(windows))]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for identity-checked cleanup"
+)]
 pub(crate) fn remove_path_if_same_object(
     path: &Path,
     pinned: &crate::file::PinnedObject,
@@ -1421,6 +1429,10 @@ pub(crate) fn remove_path_if_same_object(
 /// `directory`, without re-resolving any part of the pathname and without
 /// following a final symlink.
 #[cfg(not(windows))]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for identity-checked cleanup"
+)]
 fn open_at_identity(directory: &std::fs::File, name: &std::ffi::CStr) -> Option<Vec<u8>> {
     use std::os::unix::io::{AsRawFd, FromRawFd};
 
@@ -1453,6 +1465,10 @@ fn open_at_identity(directory: &std::fs::File, name: &std::ffi::CStr) -> Option<
 /// of an entry to that entry's owner — which is why the ordinary shared
 /// temporary directory is not refused.
 #[cfg(not(windows))]
+#[allow(
+    unsafe_code,
+    reason = "operating-system calls for identity-checked cleanup"
+)]
 fn directory_is_exclusively_owned(
     directory: &std::fs::File,
 ) -> std::result::Result<(), &'static str> {

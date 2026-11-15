@@ -2615,6 +2615,7 @@ fn opened_file_identity(file: &std::fs::File) -> Result<Vec<u8>> {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "a Windows file identity call")]
 fn opened_file_identity(file: &std::fs::File) -> Result<Vec<u8>> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{

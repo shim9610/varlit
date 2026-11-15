@@ -306,60 +306,8 @@ impl BulkField<'_> {
     }
 }
 
-/// A type whose all-zero bit pattern is a value, so freshly zeroed memory
-/// from the allocator is already initialized storage for it.
-///
-/// # Safety
-///
-/// Implemented only for primitive numbers.
-unsafe trait ZeroInit: Copy + 'static {}
-// SAFETY: zero is a `u8`.
-unsafe impl ZeroInit for u8 {}
-
-/// Sizes `out` to `len` for a fill that overwrites every element.
-///
-/// A vector with room is reused as it is: nothing is reallocated or cleared.
-/// Otherwise its storage is replaced by zeroed memory straight from the
-/// allocator, which for a large request is fresh pages rather than a pass
-/// writing zeros.
-fn size_for_fill<T: ZeroInit>(out: &mut Vec<T>, len: usize, resource: &'static str) -> Result<()> {
-    if out.capacity() >= len {
-        if out.len() >= len {
-            out.truncate(len);
-        } else {
-            // SAFETY: zero is a `T`, so the spare capacity up to `len` can be
-            // zeroed in place and counted as initialized.
-            unsafe {
-                let spare = out.as_mut_ptr().add(out.len());
-                std::ptr::write_bytes(spare, 0, len - out.len());
-                out.set_len(len);
-            }
-        }
-        return Ok(());
-    }
-    let refused = || Error::AllocationFailed {
-        resource,
-        requested: allocation_request::<T>(len),
-    };
-    let layout = std::alloc::Layout::array::<T>(len).map_err(|_| refused())?;
-    // The old contents are about to be overwritten, so its block is freed
-    // before the new one is taken: the two are never live together, and
-    // growing a value peaks at the new size instead of old + new. A refused
-    // allocation leaves `out` empty, as a failed fill does.
-    *out = Vec::new();
-    // SAFETY: `len > capacity >= 0` and `T` is not zero-sized, so the layout
-    // has a nonzero size. The block has `T`'s array layout for `len`
-    // elements, every one a zero `T`, and comes from the global allocator
-    // that `Vec` frees it with.
-    *out = unsafe {
-        let block = std::alloc::alloc_zeroed(layout).cast::<T>();
-        if block.is_null() {
-            return Err(refused());
-        }
-        Vec::from_raw_parts(block, len, len)
-    };
-    Ok(())
-}
+mod raw_fill;
+use raw_fill::{ZeroInit, bools_into_bytes, bytes_into_bools, bytes_of_mut, size_for_fill};
 
 fn fill_bytes_from_storage(
     out: &mut Vec<u8>,
@@ -387,27 +335,9 @@ fn fill_string_from_storage(out: &mut String, field: &mut BulkField<'_>) -> Resu
 fn fill_bools_from_storage(out: &mut Vec<bool>, field: &mut BulkField<'_>) -> Result<()> {
     // The vector's allocation is filled and validated as bytes, and only
     // then counted as booleans again.
-    let mut taken = std::mem::ManuallyDrop::new(std::mem::take(out));
-    // SAFETY: `bool` and `u8` have the same size and alignment, a `bool` is
-    // a valid `u8`, and `taken` gives up its allocation here without dropping.
-    let mut bytes = unsafe {
-        Vec::from_raw_parts(
-            taken.as_mut_ptr().cast::<u8>(),
-            taken.len(),
-            taken.capacity(),
-        )
-    };
+    let mut bytes = bools_into_bytes(std::mem::take(out));
     fill_bytes_from_storage(&mut bytes, field, "sequence entries")?;
-    check_bool_bytes(&bytes)?;
-    let mut bytes = std::mem::ManuallyDrop::new(bytes);
-    // SAFETY: as above, and every byte was just checked to be 0 or 1.
-    *out = unsafe {
-        Vec::from_raw_parts(
-            bytes.as_mut_ptr().cast::<bool>(),
-            bytes.len(),
-            bytes.capacity(),
-        )
-    };
+    *out = bytes_into_bools(bytes)?;
     Ok(())
 }
 
@@ -419,8 +349,6 @@ trait RawNumeric: ZeroInit {
 
 macro_rules! raw_numeric {
     ($($ty:ty),+) => {$(
-        // SAFETY: zero is a value of every primitive number.
-        unsafe impl ZeroInit for $ty {}
         impl RawNumeric for $ty {
             #[inline(always)]
             fn to_native(self, endian: Endian) -> Self {
@@ -443,10 +371,7 @@ fn fill_numeric_from_storage<T: RawNumeric>(
     // Admission already multiplied these without overflow.
     let bytes = len * size_of::<T>();
     size_for_fill(out, len, "sequence entries")?;
-    // SAFETY: `out` holds `len` initialized `T`s, so its storage is `bytes`
-    // initialized, writable bytes; `T` is a primitive number without padding
-    // for which every bit pattern is a value, and `u8` has alignment 1.
-    let raw = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), bytes) };
+    let raw = bytes_of_mut(out.as_mut_slice());
     if let Err(error) = (field.read)(raw) {
         out.clear();
         return Err(error);
@@ -2998,7 +2923,14 @@ mod tests {
     #[test]
     fn bulk_vec_codecs_match_elementwise_bytes_and_values() {
         let mut state = 0x5EED;
-        for len in [0usize, 1, 2, 3, 7, 64, 1000, 5000] {
+        // Miri interprets every element; the largest lengths repeat the
+        // same code paths the smaller ones take.
+        let lengths: &[usize] = if cfg!(miri) {
+            &[0, 1, 2, 3, 7, 64, 200]
+        } else {
+            &[0, 1, 2, 3, 7, 64, 1000, 5000]
+        };
+        for &len in lengths {
             let mut r = || lcg(&mut state);
             check_vec(
                 (0..len).map(|_| r() & 1 == 1).collect::<Vec<bool>>(),
@@ -3583,7 +3515,10 @@ mod field_guard_tests {
     fn field_set_budget_covers_growth_and_rehash() {
         let bytes = [];
         let mut decoder = Decoder::new_limited(&bytes, Endian::Little, 1 << 20);
-        for id in 64..10064 {
+        // Miri interprets every insertion; 1,200 still cross several
+        // growth and rehash steps of the table.
+        let last = if cfg!(miri) { 1264 } else { 10064 };
+        for id in 64..last {
             decoder.note_field_id(id).unwrap();
             let count = (id - 63) as usize;
             let charged = (1 << 20) - decoder.materialization_remaining();

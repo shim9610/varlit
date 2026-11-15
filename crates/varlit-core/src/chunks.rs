@@ -348,6 +348,7 @@ struct OutputPages<'a> {
     advised: Option<(usize, usize)>,
 }
 impl<'a> OutputPages<'a> {
+    #[allow(unsafe_code, reason = "zstd streaming calls")]
     fn new(output: &'a mut Vec<u8>) -> Self {
         #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
         let advised = {
@@ -383,6 +384,7 @@ impl<'a> OutputPages<'a> {
     }
 }
 impl Drop for OutputPages<'_> {
+    #[allow(unsafe_code, reason = "zstd streaming calls")]
     fn drop(&mut self) {
         #[cfg(all(target_os = "linux", target_arch = "x86_64", not(miri)))]
         if let Some((start, end)) = self.advised {

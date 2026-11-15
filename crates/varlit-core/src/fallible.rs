@@ -1,4 +1,7 @@
 //! Explicit allocation-failure propagation for owned values.
+// Raw allocation: this module asks the global allocator for memory itself so a
+// refusal is an error instead of an abort, and hands the block to its owner.
+#![allow(unsafe_code)]
 use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;

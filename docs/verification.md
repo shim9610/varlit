@@ -409,8 +409,11 @@ assumed to behave as documented. See the [driver's README](../tools/verus/README
 ## Miri, ASan and fuzzing
 
 The [self-check guide](self-check-guide.md) gives Miri reproduction commands.
-The 53 portable-core exclusions have reasons and alternative-coverage gaps
-in `scripts/miri-exclusions.json` and `scripts/miri-exclusion-audit.json`.
+Miri interprets the unit tests of the modules that contain `unsafe` code it
+can execute; `scripts/miri-scope.json` lists them, and lists every other file
+that allows `unsafe` with the reason Miri cannot run it and what covers it.
+The crates deny `unsafe_code`, and the gate fails when the manifest and the
+sources disagree.
 Supported pure-memory logic is checked separately where possible. Native/ASan
 coverage does not provide Miri's interpreter guarantees for excluded OS paths.
 

@@ -3629,6 +3629,10 @@ impl VarlitReader {
     /// liveness updates, truncation and external writes can still change the
     /// mapped backing object. Use owned reads when those operations cannot be
     /// excluded for the mapping's lifetime.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` the caller accepts the mapping or exclusivity contract of"
+    )]
     pub unsafe fn mmap_payloads(&self) -> Result<MmapPayloads> {
         // SAFETY: The caller accepts the complete file-backed mapping contract.
         unsafe { self.file.mmap_payloads() }
@@ -3647,6 +3651,10 @@ impl VarlitReader {
     /// # Safety
     ///
     /// The same contract as [`Self::mmap_payloads`], for the mapped records.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` the caller accepts the mapping or exclusivity contract of"
+    )]
     pub unsafe fn mmap_payload_range(
         &self,
         records: std::ops::Range<usize>,
@@ -3662,6 +3670,10 @@ impl VarlitReader {
     /// # Safety
     ///
     /// The backing object must remain immutable and valid for the mapping's lifetime.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` the caller accepts the mapping or exclusivity contract of"
+    )]
     pub unsafe fn mmap_matrix_cell<T: VarlitMatrixBlock>(
         &self,
         key: MatrixKey,
@@ -3691,6 +3703,10 @@ impl VarlitReader {
     /// sound because the one option that rewrites header bytes,
     /// `IndexPolicy::header_tails`, is refused for a format declaring matrix
     /// blocks — the two cannot meet.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` the caller accepts the mapping or exclusivity contract of"
+    )]
     pub unsafe fn mmap_matrix(&self) -> Result<MmapMatrix> {
         // SAFETY: The caller accepts the complete file-backed mapping contract.
         unsafe { self.file.mmap_matrix() }
@@ -4231,6 +4247,10 @@ impl VarlitWriter {
     /// The caller must exclude every reader, writer, mapping, raw reference,
     /// handle, thread, and process for this operation and for the lifetime of
     /// every view that could observe the affected object.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` the caller accepts the mapping or exclusivity contract of"
+    )]
     pub unsafe fn replace_fixed_in_place_exclusive<T: VarlitBlock>(
         &mut self,
         index: usize,

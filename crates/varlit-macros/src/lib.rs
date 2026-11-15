@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote};

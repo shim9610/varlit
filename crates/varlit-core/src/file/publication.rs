@@ -38,6 +38,7 @@ pub(super) fn opened_file_identity_array(file: &File) -> Result<[u8; 16]> {
     Ok(bytes)
 }
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Windows file calls for atomic replacement")]
 pub(super) fn opened_file_identity_array(file: &File) -> Result<[u8; 16]> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -441,6 +442,7 @@ pub(crate) fn publish_open_temp_path_atomically(
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Windows file calls for atomic replacement")]
 pub(super) fn replace_open_path_atomically(
     replacement: &Path,
     target: &Path,
@@ -550,6 +552,7 @@ pub(crate) fn replace_path_atomically(
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "Windows file calls for atomic replacement")]
 pub(crate) fn replace_path_atomically(
     replacement: &Path,
     target: &Path,

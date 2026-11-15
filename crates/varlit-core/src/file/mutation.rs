@@ -973,6 +973,10 @@ impl VarlitFile {
     /// the affected block's tail map is dropped **before** the first byte is
     /// written, so a stale predecessor can never be read afterwards, not even
     /// if the write fails part-way or the contract above is violated.
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` whose exclusivity contract the caller accepts"
+    )]
     pub unsafe fn replace_fixed_in_place_exclusive<T: VarlitBlock>(
         &mut self,
         index: usize,

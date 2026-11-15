@@ -16,6 +16,10 @@ impl VarlitFile {
     /// The caller must still exclude truncation, replacement, compaction and
     /// every operation that could rewrite this record or invalidate its storage.
     #[cfg(feature = "mmap")]
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     pub unsafe fn mmap_payload_window(
         &self,
         entry: &RecordIndexEntry,
@@ -124,6 +128,10 @@ impl VarlitFile {
     /// header and payload where they sit — inside this mapping. A writer of
     /// such a format has to be excluded for the mapping's lifetime like any
     /// other; "I call no `replace_*`" is not enough.
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     pub unsafe fn mmap_payloads(&self) -> Result<MmapPayloads> {
         // The handle's record list when it keeps one, the file walked when it
         // does not: either way every record of the snapshot is mapped.
@@ -169,6 +177,10 @@ impl VarlitFile {
     /// through every handle, thread and process for the full lifetime of the
     /// returned mapping. Appending after the range is permitted; records
     /// outside it are not mapped and not covered by this condition.
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     pub unsafe fn mmap_payload_range(
         &self,
         records: std::ops::Range<usize>,
@@ -216,6 +228,10 @@ impl VarlitFile {
     ///
     /// The caller's mapping contract covers `base..base + span`.
     #[cfg(feature = "mmap")]
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     unsafe fn map_payload_records(
         &self,
         list: &RecordList<'_>,
@@ -403,6 +419,10 @@ impl VarlitFile {
     /// # Safety
     ///
     /// As for [`Self::mmap_matrix`]; this window itself borrows no mapping.
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     pub unsafe fn mmap_matrix_cell<T: VarlitMatrixBlock>(
         &self,
         key: MatrixKey,
@@ -435,6 +455,10 @@ impl VarlitFile {
     /// and process for the full lifetime of the returned mapping. The mapping
     /// remains tied to this already-open backing object even if its path is
     /// renamed or replaced.
+    #[allow(
+        unsafe_code,
+        reason = "memory mapping; the caller accepts that the file is not modified while mapped"
+    )]
     pub unsafe fn mmap_matrix(&self) -> Result<MmapMatrix> {
         let file = self.snapshot.try_clone_file()?;
         let physical_len = file.raw().metadata()?.len();

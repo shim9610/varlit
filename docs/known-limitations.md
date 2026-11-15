@@ -191,7 +191,8 @@ Runner images and some compiler jobs roll over time.
 Kani establishes registered contracts under their stated bounds and assumptions,
 not whole-library OOM freedom or every crash schedule. Loom covers selected
 cancellation/progress behavior and the tile reader lock, not the shared-owner implementation. Miri
-exclusions retain native/ASan alternatives and explicit gaps. Fuzz smoke runs are
+interprets only the modules containing `unsafe` code it can execute; the rest
+of that code has native/ASan coverage and explicit gaps. Fuzz smoke runs are
 finite campaigns. Process kills do not simulate loss of the OS page cache.
 See the [verification guide](verification.md), live CI artifacts and manifests.
 
