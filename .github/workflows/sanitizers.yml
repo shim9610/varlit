@@ -6,7 +6,9 @@ name: Sanitizers
 # memory-safety defect nobody has noticed yet" — a property of the whole tree,
 # not of a diff, and one that costs hours rather than minutes. Run on PRs into
 # main and by explicit dispatch; neither branch pushes nor a schedule duplicate
-# the checked PR. A failure is investigated with its retained evidence.
+# the checked PR. A failure is investigated with its retained evidence. The one
+# scheduled workflow, `fuzz-corpus.yml`, repeats none of these jobs: it only
+# grows and saves the corpus the fuzz smoke run below starts from.
 #
 # What each tool can actually see — measured on 2026-08-08, not assumed:
 #
@@ -62,6 +64,17 @@ jobs:
           workspaces: fuzz
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      # Start from the corpus `fuzz-corpus.yml` saves on the default branch,
+      # when there is one: the 90 seconds below then continue from what
+      # earlier runs reached. This job only reads it. Without a saved corpus
+      # the run starts from the generated seeds, as before.
+      - name: restore the saved corpus
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
       # The target list comes from `cargo fuzz list`, not from a list written
       # here, so a target added to `fuzz/Cargo.toml` is in this job the same
       # week — a hardcoded list is how a new target silently never runs.

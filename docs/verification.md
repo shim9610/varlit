@@ -416,7 +416,14 @@ coverage does not provide Miri's interpreter guarantees for excluded OS paths.
 
 Sanitizers also runs fallible-ownership and codec-array Miri tests, ASan with leak
 detection, and a 90-second smoke run for every declared fuzz target (currently 13).
-The bounded smoke run is not a sustained fuzz campaign. mmap immutability and
+The bounded smoke run is not a sustained fuzz campaign. It starts from the
+corpus the scheduled `fuzz-corpus.yml` workflow saves: every five days that
+workflow fuzzes each target for ten minutes on the default branch, minimizes
+the corpus and stores it in the Actions cache, so a pull request's 90 seconds
+continue from inputs earlier runs reached rather than from the generated
+seeds. The saved corpus exists only once that workflow has run on the default
+branch; before that, and whenever the cache has expired, the smoke run starts
+from the seeds. mmap immutability and
 external-truncate hazards remain documented in [SECURITY.md](../SECURITY.md).
 
 ## Dependency and CodeQL checks

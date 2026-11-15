@@ -1,0 +1,101 @@
+name: Fuzz corpus
+
+# Keeps a fuzzing corpus alive between runs, and nothing else.
+#
+# libFuzzer saves every input that reaches new code and starts the next run
+# from those inputs. The pull-request smoke run in `sanitizers.yml` restores
+# the corpus this workflow saves, so its 90 seconds per target continue from
+# what earlier runs reached instead of from the generated seeds every time.
+#
+# It runs on the default branch because a cache saved there is readable by
+# every pull request, while one saved by a pull request is readable only by
+# that pull request; and every five days because a cache nobody reads for
+# seven days is deleted. GitHub disables scheduled workflows in a repository
+# with no activity for 60 days; `workflow_dispatch` restarts the corpus then.
+#
+# This is not a gate. A crash fails the run and keeps its input as an
+# artifact, but no pull request waits on it.
+
+on:
+  schedule:
+    - cron: '17 3 */5 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same pinned version as sanitizers.yml.
+  CARGO_FUZZ_VERSION: 0.13.2
+  # Seconds of fuzzing per target. Thirteen targets at ten minutes is a little
+  # over two hours.
+  FUZZ_SECONDS: 600
+
+jobs:
+  corpus:
+    # Public repository only, as in the other workflows.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: grow and save the fuzz corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: fuzz-smoke
+          workspaces: fuzz
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      # A cache entry cannot be overwritten, so each run saves under its own
+      # key and restores the most recent earlier one by prefix.
+      - name: restore the previous corpus
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+      - name: fuzz every target from the saved corpus
+        working-directory: fuzz
+        run: |
+          cargo run --locked --example generate_corpus
+          cargo run --locked --example generate_matrix_reuse_corpus
+          cargo fuzz build
+          for target in $(cargo fuzz list); do
+            echo "::group::${target}"
+            cargo fuzz run "$target" -- -max_total_time="$FUZZ_SECONDS" -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+      # Keep only inputs that add coverage, so the cache holds what a later
+      # run needs and not every intermediate file.
+      - name: minimize the corpus
+        working-directory: fuzz
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "::group::${target}"
+            cargo fuzz cmin "$target" -- -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+          du -sh corpus/* | sort -h
+      - name: save the corpus
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+      - name: retain fuzz reproductions
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-corpus-reproductions
+          path: |
+            fuzz/artifacts/
+            fuzz/corpus/
+          retention-days: 14
