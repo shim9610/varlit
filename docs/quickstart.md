@@ -2,7 +2,7 @@
 
 This example stores a stream of numeric samples in application blocks. It uses
 one writer, a buffered append batch and a reader opened while the writer is
-still alive. Install Varlit 0.13.0 with the `integrity` feature as shown in the
+still alive. Install Varlit 0.13.0-alpha.1 with the `integrity` feature as shown in the
 [README](../README.md).
 
 ## Write blocks, then read published data
