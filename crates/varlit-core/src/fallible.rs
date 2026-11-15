@@ -313,6 +313,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
+    fn a_boxed_error_reaches_its_builder_whole() {
+        let built = boxed_error(
+            Error::LengthOverflow { value: 7 },
+            Error::InvalidMatrixLayout,
+            |source| *source,
+        );
+        assert!(matches!(built, Error::LengthOverflow { value: 7 }));
+    }
+
+    #[test]
     fn empty_vector_reservation_checks_layout_and_owns_only_initialized_elements() {
         #[repr(align(256))]
         struct Aligned<'a>(&'a AtomicUsize);

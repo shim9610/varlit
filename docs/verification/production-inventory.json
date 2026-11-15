@@ -387,7 +387,7 @@
     "crates/varlit-core/src/error.rs": "004cda2ef56810cb",
     "crates/varlit-core/src/experimental_matrix.rs": "8b767b46d42c3a05",
     "crates/varlit-core/src/external_merge.rs": "1b6310577d085523",
-    "crates/varlit-core/src/fallible.rs": "ef19dcffbc05e36e",
+    "crates/varlit-core/src/fallible.rs": "050087ba220aee11",
     "crates/varlit-core/src/fallible/memory_proofs.rs": "4eea1dc71b1748cf",
     "crates/varlit-core/src/fallible/proofs.rs": "ce2f7f38c0326c02",
     "crates/varlit-core/src/file.rs": "f3592778757c3a4b",
