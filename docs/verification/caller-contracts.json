@@ -2651,7 +2651,7 @@
       "callers": {
         "default": [
           {
-            "caller": "find_tile(_1: u64, _2: TileCoord, _3: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<Option<u64>, error::Error> [body:55ee96ebcf833cb2]",
+            "caller": "find_tile(_1: u64, _2: TileCoord, _3: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<Option<u64>, error::Error> [body:f046e4bc9e8f5fc5]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
@@ -2698,7 +2698,7 @@
         ],
         "all": [
           {
-            "caller": "find_tile(_1: u64, _2: TileCoord, _3: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<Option<u64>, error::Error> [body:55ee96ebcf833cb2]",
+            "caller": "find_tile(_1: u64, _2: TileCoord, _3: &mut dyn for<'a> FnMut(u64, &'a mut [u8]) -> std::result::Result<(), error::Error>) -> std::result::Result<Option<u64>, error::Error> [body:f046e4bc9e8f5fc5]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },

@@ -156,6 +156,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   generations) and a ring placed outside the file, with `InvalidMatrixLayout`.
   Such a file previously overflowed an offset computation at open, which
   panics in builds with overflow checks.
+- Refuse a matrix tile directory root or entry that cannot be a file offset,
+  and a directory height above eight, with `InvalidMatrixLayout`. Directory
+  pages carry no checksum; such a value previously overflowed an offset
+  computation (found by `matrix_arbitrary`).
 - Verification of tiled matrix storage: ten Kani harnesses (ring headers and
   offsets, frame stepping, frame placement, frame entry bounds, slot ranges,
   Morton keys, metadata region ends), two Loom models of the tile reader lock,

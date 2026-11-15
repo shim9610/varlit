@@ -133,6 +133,32 @@ pub(crate) fn lay_entry(
 
 /// Resolves a tile through a block's radix directory, reading every pointer
 /// with `read_u64`. `None` when the tile was never allocated.
+/// The largest height a directory has: eight levels of nine bits cover a
+/// 64-bit Morton key.
+pub(crate) const DIR_MAX_HEIGHT: u64 = 8;
+
+/// An offset read from a directory page or root. Directory pages carry no
+/// checksum, so what they hold is believed only as far as it can be a place
+/// in a file: no file offset exceeds `i64::MAX`, and below it adding a
+/// tile's or a page's length cannot overflow.
+pub(crate) const fn directory_offset(raw: u64) -> Result<u64> {
+    if raw > i64::MAX as u64 {
+        Err(Error::InvalidMatrixLayout)
+    } else {
+        Ok(raw)
+    }
+}
+
+/// A directory root's page and height, as stored.
+pub(crate) fn directory_root(root: &[u8; 16]) -> Result<(u64, u64)> {
+    let page = directory_offset(u64::from_le_bytes(root[..8].try_into().expect("eight")))?;
+    let height = u64::from_le_bytes(root[8..].try_into().expect("eight"));
+    if page != 0 && (height == 0 || height > DIR_MAX_HEIGHT) {
+        return Err(Error::InvalidMatrixLayout);
+    }
+    Ok((page, height))
+}
+
 pub(crate) fn find_tile(
     root_at: u64,
     coord: TileCoord,
@@ -141,13 +167,9 @@ pub(crate) fn find_tile(
     let key = coord.morton()?;
     let mut root = [0u8; 16];
     read(root_at, &mut root)?;
-    let mut page = u64::from_le_bytes(root[..8].try_into().expect("eight"));
-    let height = u64::from_le_bytes(root[8..].try_into().expect("eight"));
+    let (mut page, height) = directory_root(&root)?;
     if page == 0 {
         return Ok(None);
-    }
-    if height == 0 || height > 8 {
-        return Err(Error::InvalidMatrixLayout);
     }
     if height < 8 && key >> (DIR_LEVEL_BITS * height as u32) != 0 {
         return Ok(None);
@@ -156,7 +178,7 @@ pub(crate) fn find_tile(
         let index = (key >> (DIR_LEVEL_BITS * level as u32)) & (DIR_FANOUT - 1);
         let mut entry = [0u8; 8];
         read(page + index * 8, &mut entry)?;
-        page = u64::from_le_bytes(entry);
+        page = directory_offset(u64::from_le_bytes(entry))?;
         if page == 0 {
             return Ok(None);
         }
@@ -172,13 +194,9 @@ pub(crate) fn for_each_tile(
 ) -> Result<()> {
     let mut root = [0u8; 16];
     read(root_at, &mut root)?;
-    let page = u64::from_le_bytes(root[..8].try_into().expect("eight"));
-    let height = u64::from_le_bytes(root[8..].try_into().expect("eight"));
+    let (page, height) = directory_root(&root)?;
     if page == 0 {
         return Ok(());
-    }
-    if height == 0 || height > 8 {
-        return Err(Error::InvalidMatrixLayout);
     }
     // Depth-first with an explicit stack of (page, level): at most
     // `height` pages of pointers are held at once.
@@ -195,7 +213,7 @@ pub(crate) fn for_each_tile(
         }
         stack.push((page, level, index + 1));
         read(page + index * 8, &mut entries)?;
-        let child = u64::from_le_bytes(entries);
+        let child = directory_offset(u64::from_le_bytes(entries))?;
         if child == 0 {
             continue;
         }

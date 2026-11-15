@@ -1146,7 +1146,9 @@ impl TiledMatrix {
                 let mut header = [0u8; 32];
                 self.read(source, tile, &mut header)?;
                 let row = u64::from_le_bytes(header[16..24].try_into().expect("eight"));
-                rows = rows.max((row + 1) * geom.tile[0]);
+                // The header is read here without its checksum: a row it
+                // names is only ever a larger extent, never an overflow.
+                rows = rows.max(row.saturating_add(1).saturating_mul(geom.tile[0]));
             }
             Ok(())
         };

@@ -679,3 +679,62 @@ fn every_key_has_one_slot_in_one_tile_at_every_admitted_shape() {
     .locate(MatrixKey::new(u64::MAX, u64::MAX));
     assert_eq!((last.0.row, last.0.col), (u64::MAX / 3, u64::MAX / 5));
 }
+
+/// Directory pages carry no checksum: an offset or height read from one is
+/// refused when it cannot be a place in a file, before anything is computed
+/// from it.
+#[test]
+fn directory_offsets_that_are_not_file_offsets_are_refused() {
+    let build = || {
+        let store = MemStore::new();
+        let mut w =
+            TileWriter::create(&mut store.clone(), geometry(false), 1 << 20, [7; 16]).unwrap();
+        put(&mut w, &mut store.clone(), MatrixKey::new(1, 1), 11);
+        w.publish(&mut store.clone()).unwrap();
+        w.checkpoint(&mut store.clone(), u64::MAX).unwrap();
+        let meta = w.meta;
+        let root_at = (meta + geometry(false).root_at(0)) as usize;
+        (store, meta, root_at)
+    };
+    let coord = BLOCK.locate(MatrixKey::new(1, 1)).0;
+    let refused = |store: &MemStore, meta: u64| {
+        let mut r = TileReader::open(store, geometry(false), meta).unwrap();
+        assert!(matches!(
+            r.tile(store, 0, coord),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        let mut seen = 0;
+        assert!(matches!(
+            r.for_each_tile(store, 0, &mut |_| {
+                seen += 1;
+                Ok(())
+            }),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert_eq!(seen, 0);
+        let mut w = TileWriter::open(&mut store.clone(), geometry(false), meta).unwrap();
+        assert!(matches!(
+            w.tile(&mut store.clone(), 0, coord, true),
+            Err(Error::InvalidMatrixLayout)
+        ));
+    };
+    // A root page that is not a file offset.
+    let (store, meta, root_at) = build();
+    store.0.borrow_mut().bytes[root_at..root_at + 8].copy_from_slice(&(u64::MAX - 3).to_le_bytes());
+    refused(&store, meta);
+    // A leaf entry (a tile) that is not a file offset.
+    let (store, meta, root_at) = build();
+    {
+        let mut shared = store.0.borrow_mut();
+        let page = u64::from_le_bytes(shared.bytes[root_at..root_at + 8].try_into().unwrap());
+        let index = coord.morton().unwrap() as usize;
+        let at = page as usize + index * 8;
+        assert_ne!(shared.bytes[at..at + 8], [0; 8], "the tile's entry");
+        shared.bytes[at..at + 8].copy_from_slice(&(u64::MAX - 8).to_le_bytes());
+    }
+    refused(&store, meta);
+    // A height no directory has.
+    let (store, meta, root_at) = build();
+    store.0.borrow_mut().bytes[root_at + 8..root_at + 16].copy_from_slice(&u64::MAX.to_le_bytes());
+    refused(&store, meta);
+}

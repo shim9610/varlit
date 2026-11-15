@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "8152f9c06e81837e",
-    "count": 3446
+    "catalogue": "f37821a2f427fa71",
+    "count": 3448
   },
   "schema": 1,
   "sources": {
@@ -420,17 +420,17 @@
     "crates/varlit-core/src/lib.rs": "0c2688c0c2005903",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
     "crates/varlit-core/src/matrix_bulk.rs": "7957f00c3edccae5",
-    "crates/varlit-core/src/matrix_tiles/api.rs": "c422e8f98edfd4b3",
+    "crates/varlit-core/src/matrix_tiles/api.rs": "fda6c375b69d41ae",
     "crates/varlit-core/src/matrix_tiles/geometry.rs": "3a6bcd24f4562e65",
     "crates/varlit-core/src/matrix_tiles/host.rs": "269ef80db008360b",
     "crates/varlit-core/src/matrix_tiles/mod.rs": "f18653067a9aaa93",
     "crates/varlit-core/src/matrix_tiles/ranges.rs": "f0ff287a195a7f04",
     "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "1698e59a2c58339e",
     "crates/varlit-core/src/matrix_tiles/store.rs": "e1f3ea9e55f112f5",
-    "crates/varlit-core/src/matrix_tiles/tests.rs": "95826231ca2b1092",
-    "crates/varlit-core/src/matrix_tiles/view.rs": "bfc44e795c758fce",
+    "crates/varlit-core/src/matrix_tiles/tests.rs": "731d09f039a40793",
+    "crates/varlit-core/src/matrix_tiles/view.rs": "c1bbf6626dba04f2",
     "crates/varlit-core/src/matrix_tiles/wal.rs": "1c4d650609815487",
-    "crates/varlit-core/src/matrix_tiles/writer.rs": "1cba7dcf634bbf1e",
+    "crates/varlit-core/src/matrix_tiles/writer.rs": "c0b62a3d709929ac",
     "crates/varlit-core/src/merge.rs": "fff6cea04e233a49",
     "crates/varlit-core/src/native_directory.rs": "17fa89cbc6abd656",
     "crates/varlit-core/src/native_layout.rs": "36625800c3cd536f",

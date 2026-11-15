@@ -384,7 +384,12 @@ header or metadata record whose checksum holds but whose fields are impossible
 (offsets outside the ring, unordered or saturated generations, a ring outside
 the file) is refused with `InvalidMatrixLayout`
 (`a_ring_header_with_impossible_fields_is_refused_not_followed`,
-`a_ring_placed_outside_the_file_is_refused`).
+`a_ring_placed_outside_the_file_is_refused`). Tile directory pages carry no
+checksum; a root, entry or height in one that cannot be a place in a file is
+refused the same way
+(`directory_offsets_that_are_not_file_offsets_are_refused`), but a directory
+entry rewritten to another valid offset is not detected by the directory
+itself: only `verify_matrix_metadata`, which checks each tile's header, sees it.
 
 ### Compaction
 

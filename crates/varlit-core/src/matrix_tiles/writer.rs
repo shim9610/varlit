@@ -5,7 +5,9 @@ use super::ranges::Ranges;
 
 use super::geometry::{Geometry, META_FIXED_LEN, TileCache, TileCoord};
 use super::store::{TileSource, TileStore};
-use super::view::{Overlay, OverlayEntry, find_tile, for_each_tile, lay_over};
+use super::view::{
+    Overlay, OverlayEntry, directory_offset, directory_root, find_tile, for_each_tile, lay_over,
+};
 use super::wal::{
     self, ENTRY_HEADER, FRAME_COMMIT, FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan,
     MIN_RING, Ring, RingHeader, ScanEvent, frame_header,
@@ -268,8 +270,7 @@ impl TileWriter {
         let root_at = self.meta + self.geom.root_at(block);
         let mut root = [0u8; 16];
         self.read(store, root_at, &mut root)?;
-        let mut page = u64::from_le_bytes(root[..8].try_into().expect("eight"));
-        let mut height = u64::from_le_bytes(root[8..].try_into().expect("eight"));
+        let (mut page, mut height) = directory_root(&root)?;
         let needed = levels_for(key);
         if page == 0 {
             page = self.append_page(store)?;
@@ -294,7 +295,7 @@ impl TileWriter {
             let at = page + index * 8;
             let mut entry = [0u8; 8];
             self.read(store, at, &mut entry)?;
-            let mut child = u64::from_le_bytes(entry);
+            let mut child = directory_offset(u64::from_le_bytes(entry))?;
             if child == 0 {
                 child = self.append_page(store)?;
                 self.stage(store, at, &child.to_le_bytes())?;
