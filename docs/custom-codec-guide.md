@@ -294,6 +294,12 @@ unsafe impl varlit::VarlitRawFixedBlock for RawPoint {
 }
 ```
 
+`RAW_ENDIAN` is a promise about the bytes of `Self`, and the library compares
+it only with the file's byte order. `RawPoint` above holds plain `u32` fields,
+so its bytes are little-endian only on a little-endian host: on a big-endian
+host the check still passes and the fields read swapped. A raw type that must
+work on both uses explicit-endian fields, such as `zerocopy::byteorder::U32<LE>`.
+
 Default typed reads do not use this path. Callers opt in through unsafe raw
 access:
 

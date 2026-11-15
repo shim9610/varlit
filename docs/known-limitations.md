@@ -184,7 +184,33 @@ interchangeable with the native tiled matrix format.
 ## Verification scope
 
 Native CI runs on Linux, Windows and Intel macOS. Other targets, ARM64 macOS
-and every mounted filesystem are not covered by those jobs. Single-feature,
+and every mounted filesystem are not covered by those jobs.
+
+32-bit and big-endian targets are checked in CI but not on hardware, and
+support for them is unstable:
+
+- **32-bit.** CI builds the workspace for `i686-unknown-linux-gnu` and runs
+  the library and integration tests as 32-bit binaries on an x86_64 runner.
+  `varlit-core` converts a file-sized `u64` to `usize` only through checked
+  helpers, so a length that does not fit a 32-bit address space is refused
+  with `LengthOverflow` instead of being cut short. Offsets stay `u64`, so
+  files beyond 4 GiB can be read record by record; a single value, buffer or
+  mapping cannot exceed the address space, and nothing here was run on a
+  32-bit device or on a 32-bit architecture other than x86.
+- **Big-endian.** No CI job executes big-endian code natively. Miri interprets
+  the unsafe modules and the byte-order-sensitive unit tests (wire layouts,
+  row packers, snapshot codecs) for `s390x-unknown-linux-gnu`. File formats
+  use explicit byte orders; the one place that depends on the host's is the
+  bulk numeric vector decode, which swaps bytes when the two differ. The
+  matrix tile tests, the integration tests and every feature-gated path are
+  not interpreted for a big-endian target.
+- **Raw views on another byte order.** A zero-copy raw view checks the
+  implementer's `RAW_ENDIAN` against the file's byte order, not against the
+  host's. A struct of plain integer fields declared `RAW_ENDIAN = Little`
+  passes that check on a big-endian host and reads swapped values; such a
+  type is only correct where the host's byte order is the declared one.
+  Use explicit-endian field types (for example `zerocopy::byteorder`) for
+  views that must work on both. Single-feature,
 pairwise and all-feature runs do not enumerate every higher-order configuration.
 Runner images and some compiler jobs roll over time.
 

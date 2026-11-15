@@ -164,6 +164,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   offsets, frame stepping, frame placement, frame entry bounds, slot ranges,
   Morton keys, metadata region ends), two Loom models of the tile reader lock,
   and a test that kills a writer process mid-publication and reopens the file.
+- 32-bit and big-endian targets are checked in CI as unstable support: the
+  workspace's tests run as `i686-unknown-linux-gnu` binaries, and Miri
+  interprets the unsafe modules for i686 and s390x and the
+  byte-order-sensitive unit tests for s390x. Nothing was run on such hardware.
 - `varlit-core` no longer converts a file-sized `u64` to `usize` with `as`:
   263 conversions go through checked helpers, so a value that does not fit a
   32-bit address space is refused with `LengthOverflow` (or was a format

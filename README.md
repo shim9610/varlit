@@ -84,7 +84,8 @@ Published performance results are deferred pending a controlled local rerun.
 The [benchmark harness](tools/storage-bench/README.md) retains workload definitions
 and execution instructions; cloud measurements are not used for performance claims.
 
-CI covers native Linux, Windows and Intel macOS, feature interactions, external
+CI covers native Linux, Windows and Intel macOS, 32-bit x86 Linux binaries,
+feature interactions, external
 API consumers, package archives, CodeQL, Kani and deliberate-defect controls.
 The Sanitizers workflow separately runs Miri, ASan/leak checks and a 90-second
 fuzz smoke run per target. Their scopes

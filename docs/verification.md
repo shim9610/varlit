@@ -20,7 +20,11 @@ candidate commit. See [contributor checks](../CONTRIBUTING.md#local-checks).
 ## Native tests, API contracts and failure recovery
 
 CI tests default and all features on Linux, Windows and macOS, with bounded-I/O
-checks on each platform. macOS currently uses one `macos-15-intel` runner with
+checks on each platform. One more job builds the workspace for
+`i686-unknown-linux-gnu` and runs the library and integration tests as 32-bit
+binaries; big-endian code is only interpreted by Miri. See
+[known limitations](known-limitations.md#verification-scope) for what that
+does and does not establish. macOS currently uses one `macos-15-intel` runner with
 separate required steps for those checks; this is not ARM64 coverage. Linux also
 runs discovered single features and pairwise feature interactions. Pairwise and
 all-feature runs do not enumerate every possible higher-order feature subset.

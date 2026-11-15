@@ -769,6 +769,38 @@ jobs:
         working-directory: ${{ runner.temp }}/varlit-archive/tools/public-api-fixture
         run: cargo metadata --locked --format-version 1 > /dev/null
 
+  i686:
+    # 32-bit support is checked, not proven on hardware: an x86_64 Linux
+    # runner executes i686 binaries directly, so this builds the workspace
+    # for a target whose `usize` is 32 bits and runs the library and
+    # integration tests there. varlit-core converts file-sized `u64` values
+    # to `usize` only through checked helpers (`width.rs`); this job is what
+    # notices a new unchecked path. Examples are not built: they add build
+    # time and nothing the tests do not exercise.
+    if: github.repository == 'shim9610/varlit' && !github.event.repository.private
+    name: test (all-features, i686 32-bit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: i686-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: i686
+      - name: Install the 32-bit C toolchain and runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+      - name: Test as 32-bit binaries
+        env:
+          VARLIT_SKIP_UI_SNAPSHOTS: 1
+        run: |
+          cargo test --locked --target i686-unknown-linux-gnu --workspace --all-features \
+            --lib --tests --no-fail-fast
+
   required-gate:
     # Keep this name stable: main protection requires this aggregate check.
     if: always() && github.repository == 'shim9610/varlit' && !github.event.repository.private
@@ -788,6 +820,7 @@ jobs:
       - feature-interactions
       - storage-contracts
       - msrv
+      - i686
       - renamed-dependency
       - public-api
       - rustdoc
