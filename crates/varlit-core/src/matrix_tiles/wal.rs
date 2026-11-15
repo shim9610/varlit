@@ -138,7 +138,10 @@ impl RingHeader {
     /// Whether the ring offsets lie inside a frame area of `area` bytes, on
     /// the 8-byte boundaries frames start on.
     pub(crate) const fn fits(&self, area: u64) -> bool {
-        self.tail < area && self.head < area && self.tail % 8 == 0 && self.head % 8 == 0
+        self.tail < area
+            && self.head < area
+            && self.tail.is_multiple_of(8)
+            && self.head.is_multiple_of(8)
     }
 }
 
@@ -205,7 +208,7 @@ impl Ring {
     /// exactly at the end of the area is followed by offset 0.
     pub(crate) const fn after_frame(&self, at: u64, len: u64) -> Option<u64> {
         let area = self.area();
-        if at >= area || len < FRAME_HEADER + 4 || len > area - at || len % 8 != 0 {
+        if at >= area || len < FRAME_HEADER + 4 || len > area - at || !len.is_multiple_of(8) {
             return None;
         }
         let next = at + len;

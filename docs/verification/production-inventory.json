@@ -358,7 +358,7 @@
     }
   },
   "functions": {
-    "catalogue": "0a8cf598871d8ada",
+    "catalogue": "f8037c86f880b396",
     "count": 3437
   },
   "schema": 1,
@@ -427,9 +427,9 @@
     "crates/varlit-core/src/matrix_tiles/ranges.rs": "f0ff287a195a7f04",
     "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "1698e59a2c58339e",
     "crates/varlit-core/src/matrix_tiles/store.rs": "e1f3ea9e55f112f5",
-    "crates/varlit-core/src/matrix_tiles/tests.rs": "bb27381fbf1749c0",
+    "crates/varlit-core/src/matrix_tiles/tests.rs": "95826231ca2b1092",
     "crates/varlit-core/src/matrix_tiles/view.rs": "bfc44e795c758fce",
-    "crates/varlit-core/src/matrix_tiles/wal.rs": "80bdefb2c289d262",
+    "crates/varlit-core/src/matrix_tiles/wal.rs": "85f2bbcf558db828",
     "crates/varlit-core/src/matrix_tiles/writer.rs": "ee615c7b90d36739",
     "crates/varlit-core/src/merge.rs": "fff6cea04e233a49",
     "crates/varlit-core/src/native_directory.rs": "17fa89cbc6abd656",

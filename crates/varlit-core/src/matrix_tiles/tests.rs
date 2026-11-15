@@ -564,7 +564,8 @@ fn a_ring_header_with_impossible_fields_is_refused_not_followed() {
         (reader, writer)
     };
     let area = (1u64 << 20) - super::wal::FRAMES_AT;
-    let cases: [(&str, &dyn Fn(&mut RingHeader)); 6] = [
+    type Edit<'a> = &'a dyn Fn(&mut RingHeader);
+    let cases: [(&str, Edit<'_>); 6] = [
         ("tail past the ring", &|h| h.tail = area + 8),
         ("tail far past the ring", &|h| h.tail = u64::MAX - 7),
         ("head past the ring", &|h| h.head = area + 8),
