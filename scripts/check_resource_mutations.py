@@ -137,7 +137,7 @@ MUTATIONS = [
      'streaming_step_is_bounded_and_strictly_progresses', 'compression_steps::stream_progress::'),
     ('output-ignores-blocks', 'compression_steps.rs', 'actual > bound || ', '',
      'output_requests_respect_both_limits', 'compression_steps::output_capacity::'),
-    ('output-rejects-valid', 'compression_steps.rs', 'Some(actual) => Some(actual as usize)', 'Some(_actual) => None',
+    ('output-rejects-valid', 'compression_steps.rs', 'Some(actual) => Some(usize::try_from(actual).unwrap_or(maximum))', 'Some(_actual) => None',
      'output_requests_respect_both_limits', 'compression_steps::output_capacity::'),
     ('block-does-not-progress', 'compression_steps.rs', 'offset.checked_add(3)?', 'offset.checked_add(0)?',
      'arbitrary_block_step_progresses_or_rejects', 'compression_steps::block_extent::'),
