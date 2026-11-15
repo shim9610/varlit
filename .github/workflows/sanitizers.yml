@@ -72,7 +72,7 @@ jobs:
       # earlier runs reached. This job only reads it. Without a saved corpus
       # the run starts from the generated seeds, as before.
       - name: restore the saved corpus
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus
           key: fuzz-corpus-${{ github.run_id }}
