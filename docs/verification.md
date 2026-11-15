@@ -122,7 +122,7 @@ cargo +1.95.0 llvm-cov report --ignore-filename-regex '/(vendor|tests|examples|t
 ## Kani
 
 The [contract manifest](verification/proof-contracts.json) currently registers
-82 harnesses in 16 contract groups. Both default and all-feature builds must
+88 harnesses in 18 contract groups. Both default and all-feature builds must
 complete their registered set. Equal counts do not make these configurations
 interchangeable: feature selection changes compiled implementations.
 `scripts/check_proof_contracts.py` rejects missing, duplicate, unexpected or
@@ -147,6 +147,8 @@ A zero-harness run fails.
 | Buffered private row | 1 | A 13-byte row in at most 39 backing bytes |
 | Untrusted sequence candidate | 1 | Full-width sequence subtraction and candidate conversion |
 | Record chunk table | 2 | Chunk geometry for chunked lengths up to 2^40 and table-entry extents on a fixed three-chunk header |
+| Matrix write-ahead ring | 3 | Which stored ring headers are believed, and that offsets of a believed header and every frame a scan steps over stay inside the ring record; checksums, frame entries, checkpoints and crash atomicity are native tests |
+| Matrix tile geometry | 3 | Slot indexes and slot byte ranges for tiles with sides up to 255 and up to 65535 cells of up to 255 bytes; Morton directory keys for all coordinates. Larger shapes and key-to-tile reduction are native tests |
 
 Full-width arithmetic proofs and bounded container/I/O models have different
 scopes. Bounds, allocator/callback assumptions and exclusions are recorded per
@@ -367,6 +369,14 @@ models explore cancellation publication/monotonicity and progress-driver checks,
 without unbounded spinning or a configured preemption bound. They do not model
 triomphe allocation/refcount internals, every single-writer/multiple-reader
 protocol or filesystem durability.
+
+The runner also imports production `matrix_tiles/reader_lock.rs`, the lock
+around a tile reader's cache. Two models check that two `lock()` callers, and
+a `lock()` caller with a `try_lock()` caller, never hold the guarded value
+together and that each access is ordered after the previous release: the
+guarded value is a Loom cell, so a violation fails the model. Under Loom the
+lock's wait is a yield instead of a bounded spin. Poisoning by a panicking
+holder is covered by a native test, not by these models.
 
 The runner refuses a build without `varlit_loom`. Its dependencies have their own
 lockfile and advisory audit and are not library runtime dependencies.

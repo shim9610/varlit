@@ -96,20 +96,49 @@ impl RingHeader {
                     .expect("eight"),
             )
         };
+        Self::from_fields([
+            field(0),
+            field(1),
+            field(2),
+            field(3),
+            field(4),
+            field(5),
+            field(6),
+            field(7),
+        ])
+    }
+
+    /// The header these stored fields describe, if a writer could have
+    /// written them. A checksum proves the fields were written together, not
+    /// that they are sane: the generations must be ordered as every writer
+    /// keeps them, and leave room for the next one.
+    pub(crate) const fn from_fields(fields: [u64; 8]) -> Option<Self> {
         let header = Self {
-            seq: field(0),
-            checkpointed: field(1),
-            mark: field(2),
-            reclaimed: field(3),
-            tail: field(4),
-            tail_gen: field(5),
-            head: field(6),
-            published: field(7),
+            seq: fields[0],
+            checkpointed: fields[1],
+            mark: fields[2],
+            reclaimed: fields[3],
+            tail: fields[4],
+            tail_gen: fields[5],
+            head: fields[6],
+            published: fields[7],
         };
-        (header.reclaimed <= header.checkpointed
-            && header.checkpointed <= header.mark.max(header.checkpointed)
-            && header.checkpointed <= header.published)
-            .then_some(header)
+        if header.reclaimed <= header.checkpointed
+            && header.checkpointed <= header.mark
+            && header.mark <= header.published
+            && header.published < u64::MAX
+            && header.seq < u64::MAX
+        {
+            Some(header)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the ring offsets lie inside a frame area of `area` bytes, on
+    /// the 8-byte boundaries frames start on.
+    pub(crate) const fn fits(&self, area: u64) -> bool {
+        self.tail < area && self.head < area && self.tail % 8 == 0 && self.head % 8 == 0
     }
 }
 
@@ -123,6 +152,16 @@ pub(crate) struct Ring {
 }
 
 impl Ring {
+    /// The ring a metadata record names, once it is known to lie inside the
+    /// file: every offset computed from it afterwards stays in range.
+    pub(crate) fn within(base: u64, len: u64, source: &dyn TileSource) -> Result<Self> {
+        let end = base.checked_add(len).ok_or(Error::InvalidMatrixLayout)?;
+        if !(MIN_RING..=MAX_RING_BYTES).contains(&len) || end > source.len()? {
+            return Err(Error::InvalidMatrixLayout);
+        }
+        Ok(Self { base, len })
+    }
+
     pub(crate) const fn area(&self) -> u64 {
         self.len - FRAMES_AT
     }
@@ -147,8 +186,10 @@ impl Ring {
         let mut bytes = [0u8; 2 * HEADER_SLOT as usize];
         for _ in 0..8 {
             source.read_at(self.base, &mut bytes)?;
-            let first = RingHeader::decode(&bytes[..HEADER_SLOT as usize]);
-            let second = RingHeader::decode(&bytes[HEADER_SLOT as usize..]);
+            let area = self.area();
+            let valid = |slot: &[u8]| RingHeader::decode(slot).filter(|header| header.fits(area));
+            let first = valid(&bytes[..HEADER_SLOT as usize]);
+            let second = valid(&bytes[HEADER_SLOT as usize..]);
             match (first, second) {
                 (Some(a), Some(b)) => return Ok(if a.seq >= b.seq { a } else { b }),
                 (Some(a), None) | (None, Some(a)) => return Ok(a),
@@ -156,6 +197,19 @@ impl Ring {
             }
         }
         Err(Error::InvalidMatrixLayout)
+    }
+
+    /// Where the frame after one of `len` bytes at ring offset `at` starts,
+    /// if such a frame fits there: a whole number of 8-byte words, at least
+    /// a header and a checksum, ending inside the frame area. A frame ending
+    /// exactly at the end of the area is followed by offset 0.
+    pub(crate) const fn after_frame(&self, at: u64, len: u64) -> Option<u64> {
+        let area = self.area();
+        if at >= area || len < FRAME_HEADER + 4 || len > area - at || len % 8 != 0 {
+            return None;
+        }
+        let next = at + len;
+        Some(if next == area { 0 } else { next })
     }
 
     /// The logical offset of the slot a header of sequence `seq` goes to.
@@ -242,9 +296,9 @@ pub(crate) fn scan(
         if requires > available {
             break;
         }
-        if len < FRAME_HEADER + 4 || len > ring.area() - at || len % 8 != 0 {
+        let Some(next) = ring.after_frame(at, len) else {
             break;
-        }
+        };
         let expected = current.unwrap_or(published + 1);
         if generation != expected || generation > max_gen {
             break;
@@ -305,10 +359,7 @@ pub(crate) fn scan(
             break;
         }
         walked += len;
-        at += len;
-        if at == ring.area() {
-            at = 0;
-        }
+        at = next;
         if flags & FRAME_COMMIT != 0 {
             for scanned in held.drain(..) {
                 visit(ScanEvent::Entry(generation, scanned))?;
@@ -347,3 +398,7 @@ pub(crate) fn frame_header(
     out[24..32].copy_from_slice(&requires.to_le_bytes());
     out
 }
+
+#[cfg(kani)]
+#[path = "../verification/matrix_ring.rs"]
+mod ring_proofs;

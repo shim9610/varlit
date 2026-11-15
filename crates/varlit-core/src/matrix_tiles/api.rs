@@ -60,8 +60,9 @@ pub(crate) struct TiledMatrix {
     /// Distinguishes this matrix from any earlier one at the same path.
     pub(crate) creation_id: [u8; 16],
     /// Whether reads check each cell's checksum: the read-validation
-    /// policy's `data_crc`. Reads do not check tile headers or commit
-    /// bitmaps; `verify_matrix_metadata` does.
+    /// policy's `data_crc`. A commit bitmap's checksum is always checked
+    /// before its bits are trusted; tile headers are checked only by
+    /// `verify_matrix_metadata`.
     verify_cells: bool,
     /// The buffers cell reads and writes stage through, sized for this
     /// matrix when it is opened and reused by every call.

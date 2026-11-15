@@ -3597,14 +3597,6 @@ impl VarlitReader {
             .read_matrix_sidecar_with_generation(category, sidecar_path, expected_generation)
     }
 
-    pub fn matrix_recovery_report(&self) -> MatrixRecoveryReport {
-        self.file.matrix_recovery_report()
-    }
-    /// Per-file sparse/allocation observations captured at create/open.
-    pub fn matrix_storage_diagnostics(&self) -> Option<crate::MatrixStorageDiagnostics> {
-        self.file.matrix_storage_diagnostics()
-    }
-
     /// Verifies this matrix's commit metadata now, and reports what was found.
     ///
     /// See [`VarlitFile::verify_matrix_metadata`]: checks every tile header
@@ -3711,10 +3703,6 @@ pub struct VarlitWriter {
 }
 
 impl VarlitWriter {
-    pub fn compact_matrix(&mut self) -> Result<()> {
-        self.file.compact_matrix()
-    }
-
     pub fn matrix_generation(&self) -> Option<u64> {
         self.file.matrix_generation()
     }
@@ -4623,14 +4611,6 @@ impl VarlitWriter {
     ) -> Result<(MatrixSidecarManifest, Vec<u8>)> {
         self.file
             .read_matrix_sidecar_with_generation(category, sidecar_path, expected_generation)
-    }
-
-    pub fn matrix_recovery_report(&self) -> MatrixRecoveryReport {
-        self.file.matrix_recovery_report()
-    }
-    /// Per-file sparse/allocation observations captured at create/open.
-    pub fn matrix_storage_diagnostics(&self) -> Option<crate::MatrixStorageDiagnostics> {
-        self.file.matrix_storage_diagnostics()
     }
 
     /// Verifies this matrix's commit metadata now, and reports what was found.

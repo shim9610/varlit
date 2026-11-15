@@ -1,8 +1,7 @@
 //! Varlit packed matrix: 256 accounts per 11 KiB matrix cell (dense ids map
 //! straight to cells, no key index); the branch secondary index is CSR in two
 //! more matrix blocks (ids and offsets, 1024 per cell). A transaction rewrites
-//! the touched cells and `sync()`s; `compact_matrix()` reclaims superseded
-//! generation pages at the end.
+//! the touched cells and `sync()`s.
 //! app-built: CSR branch index in matrix cells (csr.rs); packing in pack.rs
 use super::pack::*;
 use super::*;
@@ -124,7 +123,6 @@ impl Oltp for W {
         Ok(())
     }
     fn finish(&mut self) -> Result<()> {
-        self.0.compact_matrix()?;
         Ok(())
     }
 }

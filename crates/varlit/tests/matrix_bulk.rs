@@ -1,7 +1,4 @@
-use varlit::{
-    Error, IntegrityPolicy, MatrixDimensions, MatrixKey, MatrixMetadataResidency,
-    MatrixMetadataVerification, ReadLimits, varlit_format,
-};
+use varlit::{Error, IntegrityPolicy, MatrixDimensions, MatrixKey, ReadLimits, varlit_format};
 
 varlit_format! {
     pub format Bulk {
@@ -32,12 +29,7 @@ fn key(i: u64, width: u64) -> MatrixKey {
 fn spec(crc: IntegrityPolicy, growing: bool) -> varlit::FormatSpec {
     let spec = Bulk::spec()
         .with_integrity_policy(crc)
-        .with_resource_limits(
-            ReadLimits::STANDARD
-                .with_matrix_directory_cache_bytes(0)
-                .with_matrix_metadata_residency(MatrixMetadataResidency::Lazy { cache_bytes: 0 })
-                .with_matrix_metadata_verification(MatrixMetadataVerification::OnDemand),
-        );
+        .with_resource_limits(ReadLimits::STANDARD);
     if growing {
         spec.with_growing_matrix_dimension("row", 7)
     } else {
@@ -152,7 +144,6 @@ fn bulk_reads_keep_old_generation_and_reject_a_missing_middle_cell() -> varlit::
         held.read_matrix_run_into(key(0, 3), &mut out)?;
         assert_eq!(out[30].value, 30);
         if !growing {
-            w.compact_matrix()?;
             follow.follow()?;
             assert!(matches!(
                 follow.read_matrix_run_into(key(0, 3), &mut out),
@@ -415,7 +406,6 @@ fn column_snapshots_follow_deletes_and_budget_refusals() -> varlit::Result<()> {
         ));
         held.read_matrix_column_into(MatrixKey::new(0, 1), &mut out)?;
         if !growing {
-            w.compact_matrix()?;
             follow.follow()?;
             assert!(matches!(
                 follow.read_matrix_column_into(MatrixKey::new(0, 1), &mut out),

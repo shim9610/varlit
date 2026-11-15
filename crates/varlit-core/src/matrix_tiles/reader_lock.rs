@@ -12,6 +12,11 @@
 
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
+// The isolated Loom runner explores this lock's interleavings; normal
+// builds use the standard atomics.
+#[cfg(varlit_loom)]
+use loom::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(varlit_loom))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The guarded value was left by a panic while locked.
@@ -32,7 +37,18 @@ unsafe impl<T: Send> Send for ReaderLock<T> {}
 unsafe impl<T: Send> Sync for ReaderLock<T> {}
 
 impl<T> ReaderLock<T> {
+    #[cfg(not(varlit_loom))]
     pub(crate) const fn new(value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            poisoned: AtomicBool::new(false),
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    /// Loom's atomics are not `const`-constructible.
+    #[cfg(varlit_loom)]
+    pub(crate) fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
@@ -57,11 +73,18 @@ impl<T> ReaderLock<T> {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
+            #[cfg(not(varlit_loom))]
             if spins < 64 {
                 spins += 1;
                 std::hint::spin_loop();
             } else {
                 std::thread::yield_now();
+            }
+            // A model has no time: every wait is a yield to the holder.
+            #[cfg(varlit_loom)]
+            {
+                spins = spins.wrapping_add(1);
+                loom::thread::yield_now();
             }
         }
         let guard = ReaderGuard { lock: self };
@@ -72,7 +95,7 @@ impl<T> ReaderLock<T> {
     }
 
     pub(crate) fn get_mut(&mut self) -> Result<&mut T, Poisoned> {
-        if *self.poisoned.get_mut() {
+        if self.poisoned.load(Ordering::Relaxed) {
             return Err(Poisoned);
         }
         Ok(self.value.get_mut())

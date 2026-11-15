@@ -1,12 +1,9 @@
 //! Rustdoc-placement regression gate for `ReadLimits`' effective-policy
 //! accessors.
 //!
-//! `effective_integrity_verification` shipped carrying the doc comment of a
-//! *different* method: the block above it opened with two sentences about
-//! [`MatrixMetadataVerification`], the type it never mentions in its body, and
-//! `effective_matrix_metadata_verification` — the function those sentences
-//! describe — carried no rustdoc at all. Nothing failed, because
-//! `cargo doc` is happy to publish a summary that is about another function.
+//! `effective_integrity_verification` once shipped carrying the doc comment of a
+//! different method, and nothing failed, because `cargo doc` is happy to
+//! publish a summary that is about another function.
 //!
 //! This test reads the source text, not the compiled crate, for that reason: a
 //! "it compiles" or "cargo doc succeeds" check passes both before and after the
@@ -26,8 +23,7 @@ fn format_rs() -> PathBuf {
 /// The contiguous run of `///` lines immediately preceding `signature`.
 ///
 /// Returns the empty string when the line above the signature is not a doc
-/// comment — which is exactly the state the defect left
-/// `effective_matrix_metadata_verification` in.
+/// comment.
 fn doc_block_above(text: &str, signature: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
@@ -53,24 +49,7 @@ fn the_effective_policy_accessors_carry_their_own_rustdoc() {
 
     let integrity = doc_block_above(&text, "pub const fn effective_integrity_verification");
     assert!(
-        !integrity.contains("MatrixMetadataVerification"),
-        "the rustdoc on `effective_integrity_verification` describes matrix \
-         metadata verification, which is a different method:\n{integrity}"
-    );
-    assert!(
         integrity.contains("IntegrityVerification::DEFAULT"),
         "`effective_integrity_verification` lost its own summary:\n{integrity}"
-    );
-
-    let matrix = doc_block_above(&text, "pub const fn effective_matrix_metadata_verification");
-    assert!(
-        !matrix.trim().is_empty(),
-        "`effective_matrix_metadata_verification` has no rustdoc at all; \
-         deleting the misplaced sentences is not the fix, moving them is"
-    );
-    assert!(
-        matrix.contains("MatrixMetadataVerification::DEFAULT"),
-        "`effective_matrix_metadata_verification`'s rustdoc does not say what \
-         `Missing` resolves to:\n{matrix}"
     );
 }

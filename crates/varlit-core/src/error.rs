@@ -471,28 +471,11 @@ pub enum Error {
     #[error("matrix dimension {0} is missing")]
     MatrixDimensionMissing(String),
 
-    #[error("matrix dimension {name} mismatch: expected {expected}, got {actual}")]
-    MatrixDimensionMismatch {
-        name: String,
-        expected: u64,
-        actual: u64,
-    },
-
     #[error("matrix block {0} is missing from the layout")]
     MatrixBlockMissing(u32),
 
     #[error("matrix commit category {0} is missing from the layout")]
     MatrixCommitMissing(String),
-
-    /// Not produced by tiled matrix storage; kept for API compatibility.
-    #[error("matrix commit category {0} is quarantined after integrity failure")]
-    MatrixCommitQuarantined(String),
-
-    /// Not produced by tiled matrix storage; kept for API compatibility.
-    #[error(
-        "matrix recovery report contains fatal findings; default access is fail-closed, use FormatSpec::with_matrix_fatal_forensics for forensic access"
-    )]
-    MatrixFatalCorruption,
 
     /// The durable matrix write completed and the cell is committed and synced;
     /// only the caller's post-commit notification hook failed.
@@ -622,59 +605,6 @@ pub enum Error {
          not keep; a digest and an index segment answer the same question, so declare one"
     )]
     LazyWriterIndexPolicy { policy: &'static str },
-
-    /// A write or commit addressed a chunk that is no longer the open one.
-    ///
-    /// **Nothing in the crate constructs this any more, and that is deliberate
-    /// rather than an oversight.** One chunk is buffered at a time, which is
-    /// what bounds a growing matrix's memory, but *which* chunk is not fixed: a
-    /// write to a row belonging to an already-written chunk writes the open one
-    /// out and loads that chunk back. Every path that used to refuse now
-    /// reloads, and the cases where a reload is impossible say so by name
-    /// through [`Error::MatrixChunkNotReopenable`] instead of through this.
-    ///
-    /// It is kept because the enum is `#[non_exhaustive]` in the other
-    /// direction only — removing a variant breaks a caller matching on it, and
-    /// a caller who wrote that arm against 0.5.0 should get a dead arm rather
-    /// than a compile error. `open` was the chunk a caller could still write
-    /// to, or `None` when there was none.
-    ///
-    /// **Closed, not necessarily written.** This was `MatrixChunkSealed`, and
-    /// both the name and the message claimed the chunk had been written out as
-    /// a record. That is true only when it held a committed cell: a chunk the
-    /// writer moved past with nothing committed is dropped without a record
-    /// ever existing, and the old wording sent anyone debugging that case
-    /// looking through the file for a record that was never there. What the
-    /// refusal actually means is that this chunk is closed to writes.
-    #[error("matrix chunk {chunk} is closed{}", match open {
-        Some(open) => format!("; the open chunk is {open}"),
-        None => String::from("; no chunk is open"),
-    })]
-    MatrixChunkClosed { chunk: u64, open: Option<u64> },
-
-    /// A write addressed an already-written chunk that cannot be loaded back.
-    ///
-    /// Reopening a written chunk rewrites its record where it already sits,
-    /// which needs the rewritten payload to be exactly as long as the one on
-    /// disk. Two format options break that, and each names itself here rather
-    /// than arriving as a generic refusal:
-    ///
-    /// * `"chunk compression"` — a compressed chunk's payload length is a
-    ///   function of its *contents*, so a changed cell changes the length and
-    ///   the record no longer fits its slot. Nothing is lost by refusing: the
-    ///   option is off by default, and a format that does not set it reopens.
-    /// * `"segment_on_flush"` — the same reason
-    ///   [`crate::VarlitFile::replace_fixed`] refuses in-place replacement for
-    ///   these formats.
-    ///
-    /// Both are refusals to *modify*; reads of the chunk are unaffected.
-    ///
-    /// Not produced by tiled matrix storage, which writes no chunk records.
-    #[error("matrix chunk {chunk} cannot be reopened: {reason}")]
-    MatrixChunkNotReopenable { chunk: u64, reason: &'static str },
-
-    #[error("invalid matrix chunk record")]
-    InvalidMatrixChunk,
 
     #[error("invalid matrix sidecar envelope")]
     InvalidMatrixSidecar,

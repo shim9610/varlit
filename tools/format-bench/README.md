@@ -83,7 +83,7 @@ transactions, each applying the net balance deltas of 10 random transfers
 | format | layout |
 |---|---|
 | varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per indexed record (finite key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends one delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
-| varlit-matrix-packed | update-in-place alternative: 256 accounts per 11 KiB matrix cell, read-modify-write of touched cells, `sync()` per transaction, `compact_matrix()` at the end; branch index packed 1024 ids per cell |
+| varlit-matrix-packed | update-in-place alternative: 256 accounts per 11 KiB matrix cell, read-modify-write of touched cells, `sync()` per transaction; branch index packed 1024 ids per cell |
 | sqlite | INTEGER PRIMARY KEY, index on branch built after load, `UPDATE ... SET balance = balance + ?`, WAL + FULL |
 | hdf5 | one dataset per column, CSR branch index; point-selection read + write per transaction, flush + fsync (no transactional atomicity) |
 | parquet | sorted base file with page index; one delta file per transaction (fsync + rename); reader replays deltas; branch index file |

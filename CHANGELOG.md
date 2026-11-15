@@ -18,6 +18,18 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   matrix files written by 0.12.x are refused (with `SchemaHashMismatch` when the
   format declares a schema hash); recreate them. A reader that falls behind the
   ring gets `MatrixSnapshotExpired` and must `follow()`.
+- Breaking: remove matrix APIs that tiled storage never used:
+  `MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits`
+  fields, setters and accessors for matrix metadata residency, verification,
+  generation-cache and directory-cache bytes;
+  `FormatSpec::matrix_fatal_forensics` and `with_matrix_fatal_forensics()`;
+  `compact_matrix()`; `matrix_recovery_report()` (call
+  `verify_matrix_metadata()`); `matrix_storage_diagnostics()` and
+  `MatrixStorageDiagnostics`; the zero-range and sparse-zeroing accessors of
+  `MatrixRecoveryReport`; and the error variants `MatrixCommitQuarantined`,
+  `MatrixFatalCorruption`, `MatrixChunkNotReopenable`, `MatrixChunkClosed`,
+  `InvalidMatrixChunk` and `MatrixDimensionMismatch`. See the
+  [migration guide](docs/migration-guide.md#upgrading-from-0121-to-0130).
 - Variable records longer than 64 KiB in formats with data checksums are stored
   chunked (record flag `0x0002`) with a CRC per 64 KiB chunk. 0.12.x rejects
   such records as having an unknown flag. Stream/indexed sidecars written by
@@ -134,6 +146,20 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `matrix.storage.allocation_map_unavailable` and
   `matrix.storage.hole_punch_unavailable` on every matrix file. They described
   the removed layout; tiled storage uses none of those capabilities.
+- `diagnose_file` on a matrix file now runs `verify_matrix_metadata()`, which
+  checks every tile header and commit bitmap, and reports each finding as
+  `file.matrix.recovery_finding`. If verification itself fails it reports the
+  error `file.matrix.verification_failed`. It previously reported no matrix
+  findings.
+- Refuse a matrix write-ahead ring header whose checksum holds but whose
+  fields are impossible (offsets outside the ring, unordered or saturated
+  generations) and a ring placed outside the file, with `InvalidMatrixLayout`.
+  Such a file previously overflowed an offset computation at open, which
+  panics in builds with overflow checks.
+- Verification of tiled matrix storage: six Kani harnesses (ring headers and
+  offsets, frame stepping, slot ranges, Morton keys), two Loom models of the
+  tile reader lock, and a test that kills a writer process mid-publication and
+  reopens the file.
 - Refuse matrix overlay ranges whose offset would overflow with
   `InvalidMatrixLayout` instead of panicking (found by `matrix_arbitrary`).
 - Add the `mixed_load_bench` example: a concurrent writer and follower on a

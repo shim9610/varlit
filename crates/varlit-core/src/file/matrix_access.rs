@@ -495,25 +495,6 @@ impl VarlitFile {
         })
     }
 
-    /// Per-file storage observations. Tiled storage allocates what it writes
-    /// and never depends on sparse files, so there is nothing to report
-    /// beyond that.
-    pub fn matrix_storage_diagnostics(&self) -> Option<crate::MatrixStorageDiagnostics> {
-        self.spec
-            .has_matrix_blocks()
-            .then(crate::MatrixStorageDiagnostics::not_applicable)
-    }
-
-    /// Always empty under tiled storage, which keeps no findings from open.
-    /// Call [`Self::verify_matrix_metadata`] to check tile headers and commit
-    /// bitmaps; reads do not check them.
-    pub fn matrix_recovery_report(&self) -> MatrixRecoveryReport {
-        MatrixRecoveryReport {
-            findings: Vec::new(),
-            recommended_actions: Vec::new(),
-        }
-    }
-
     /// Verifies every tile's header and commit bitmap now. A damaged one is a
     /// `Recoverable` finding recommending its category be cleared.
     pub fn verify_matrix_metadata(&self) -> Result<MatrixRecoveryReport> {

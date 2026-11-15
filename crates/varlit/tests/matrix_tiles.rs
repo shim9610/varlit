@@ -789,3 +789,177 @@ fn diagnosing_a_tiled_matrix_file_reports_no_storage_warnings() -> varlit::Resul
     );
     Ok(())
 }
+
+// ---- a writer process killed mid-publication ----
+//
+// The crash tests above replay prefixes of writes in memory. This one kills
+// a real writer process at arbitrary moments and reopens the real file. A
+// killed process loses nothing the kernel already accepted, so this checks
+// the publication protocol against partial sequences of system calls, not
+// against power loss.
+
+const CRASH_CHILD: &str = "VARLIT_MATRIX_CRASH_CHILD";
+const CRASH_ROWS: u64 = 32;
+const CRASH_COLS: u64 = 32;
+
+/// A ring small enough that the child checkpoints every few publications,
+/// so kills land in checkpoints as well as in publications.
+fn crash_spec() -> FormatSpec {
+    spec().with_matrix_ring_bytes(4096 + 64 * 1024)
+}
+
+/// A killed writer leaves its lock file behind; the next one breaks it once
+/// that process is gone, as an application recovering from a crash would.
+fn writer_after_kill(path: &std::path::Path) -> varlit::Result<varlit::VarlitWriter> {
+    crash_spec()
+        .open_writer_with_lock_policy(path, varlit::WriterLockBreakPolicy::BreakIfProcessAbsent)
+}
+
+fn crash_keys() -> impl Iterator<Item = MatrixKey> {
+    (0..CRASH_ROWS).flat_map(|row| (0..CRASH_COLS).map(move |col| MatrixKey::new(row, col)))
+}
+
+fn acked(path: &std::path::Path) -> u64 {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| {
+            bytes
+                .get(..8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        })
+        .unwrap_or(0)
+}
+
+/// Every cell of the file holds one round's value: a publication is whole
+/// or absent. Returns that round.
+fn one_round(reader: &impl CellRead, context: &str) -> varlit::Result<u64> {
+    let round = value(reader, MatrixKey::new(0, 0))?;
+    for key in crash_keys() {
+        assert_eq!(
+            value(reader, key)?,
+            round,
+            "{context}: cell {key:?} is from another publication"
+        );
+    }
+    Ok(round)
+}
+
+/// The writer the parent test kills. On its own (no environment variable)
+/// it does nothing; `a_killed_writer_leaves_whole_publications` runs it.
+#[test]
+fn crash_child_publishes_rounds_until_killed() -> varlit::Result<()> {
+    let Some(path) = std::env::var_os(CRASH_CHILD) else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path);
+    let ack = path.with_extension("ack");
+    let mut writer = writer_after_kill(&path)?;
+    let mut round = value(&writer, MatrixKey::new(0, 0))?;
+    loop {
+        round += 1;
+        for key in crash_keys() {
+            put(&mut writer, key, round)?;
+        }
+        writer.sync()?;
+        // Only after the publication is acknowledged, and replaced whole: a
+        // kill never leaves a half-written acknowledgement.
+        let staged = ack.with_extension("ack-next");
+        std::fs::write(&staged, round.to_le_bytes())?;
+        std::fs::rename(&staged, &ack)?;
+    }
+}
+
+#[test]
+fn a_killed_writer_leaves_whole_publications() -> varlit::Result<()> {
+    if std::env::var_os(CRASH_CHILD).is_some() {
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("killed");
+    let ack = path.with_extension("ack");
+    {
+        let mut writer =
+            crash_spec().create_writer_with_dims(&path, dims(CRASH_ROWS, CRASH_COLS))?;
+        for key in crash_keys() {
+            put(&mut writer, key, 0)?;
+        }
+        writer.sync()?;
+    }
+    let mut last = 0;
+    let mut advanced = 0;
+    // Different delays put the kill in different places: staging, ring
+    // frames, the sync, the header update, a checkpoint's in-place writes.
+    for attempt in 0..32u64 {
+        let mut child = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "crash_child_publishes_rounds_until_killed",
+                "--test-threads=1",
+            ])
+            .env(CRASH_CHILD, &path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        // Wait until the child has published at least once (process start-up
+        // time varies widely between machines), then let it run a little
+        // longer so the kill lands somewhere in a later publication.
+        let started = std::time::Instant::now();
+        while acked(&ack) <= last {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "attempt {attempt}: the child published nothing in 60 s"
+            );
+            assert!(
+                child.try_wait()?.is_none(),
+                "attempt {attempt}: the child exited by itself"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        std::thread::sleep(std::time::Duration::from_millis((attempt * 37) % 300));
+        child.kill()?;
+        child.wait()?;
+        let acknowledged = acked(&ack);
+
+        let reader = crash_spec().open_reader(&path)?;
+        let seen = one_round(&reader, "reader after kill")?;
+        assert!(
+            seen == acknowledged || seen == acknowledged + 1,
+            "attempt {attempt}: the file shows round {seen}, the writer acknowledged {acknowledged}"
+        );
+        assert!(
+            seen >= last,
+            "attempt {attempt}: round went back from {last} to {seen}"
+        );
+        let report = reader.verify_matrix_metadata()?;
+        assert!(
+            report.findings.is_empty(),
+            "attempt {attempt}: {:?}",
+            report.findings
+        );
+        drop(reader);
+
+        // A publication whose frames are complete in the ring but whose
+        // header update never happened is finished by the next writer: its
+        // recovery may adopt one round more than a reader saw, never less
+        // and never a partial one, and readers then see what it adopted.
+        let writer = writer_after_kill(&path)?;
+        let adopted = one_round(&writer, "writer after kill")?;
+        assert!(
+            adopted == seen || adopted == seen + 1,
+            "attempt {attempt}: recovery adopted round {adopted}, a reader saw {seen}"
+        );
+        assert!(
+            adopted <= acknowledged + 1,
+            "attempt {attempt}: recovery adopted round {adopted}, acknowledged {acknowledged}"
+        );
+        drop(writer);
+        assert_eq!(
+            one_round(&crash_spec().open_reader(&path)?, "reader after recovery")?,
+            adopted
+        );
+        advanced += u64::from(adopted > last);
+        last = adopted;
+    }
+    assert_eq!(advanced, 32, "every run published at least one round");
+    Ok(())
+}

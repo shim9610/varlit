@@ -86,9 +86,6 @@ fn main() -> varlit::Result<()> {
                 }
             }
             writer.sync()?;
-            if epoch % 16 == 0 {
-                writer.compact_matrix()?;
-            }
             barrier.wait();
             barrier.wait();
         }

@@ -88,8 +88,14 @@ impl BlockGeom {
                 row: key.scan / rows,
                 col: key.ch / cols,
             },
-            (key.scan % rows) * cols + key.ch % cols,
+            Self::slot_index(key.scan % rows, key.ch % cols, cols),
         )
+    }
+
+    /// The slot of the cell at `row`, `col` inside a tile `cols` wide: cells
+    /// are laid out row by row.
+    pub(crate) const fn slot_index(row: u64, col: u64, cols: u64) -> u64 {
+        row * cols + col
     }
 
     /// A tile record's initial payload: header, an empty bitmap with its
@@ -307,3 +313,7 @@ impl Geometry {
         ]
     }
 }
+
+#[cfg(kani)]
+#[path = "../verification/matrix_geometry.rs"]
+mod geometry_proofs;

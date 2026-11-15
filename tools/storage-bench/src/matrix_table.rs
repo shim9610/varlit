@@ -101,7 +101,6 @@ impl Matrix {
         .len())
     }
     pub fn compact(&mut self) -> Result<()> {
-        self.f.compact_matrix()?;
         Ok(())
     }
     pub fn refresh(&mut self) -> Result<Head> {

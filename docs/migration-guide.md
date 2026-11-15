@@ -19,17 +19,39 @@ matrix spec's schema hash includes its tile shape, so matrix files written by
 format declares a schema hash); recreate them from their source. Stream/indexed sidecars written by 0.13.0 cannot be read by
 0.12.x.
 
-Matrix code keeps compiling, with these behavior changes. The `ReadLimits`
-settings `with_matrix_metadata_residency`, `with_matrix_metadata_verification`,
-`with_matrix_generation_cache_bytes` and `with_matrix_directory_cache_bytes`,
-and `FormatSpec::with_matrix_fatal_forensics()`, are accepted and have no
-effect. Open runs no matrix verification; call `verify_matrix_metadata()`.
-`MatrixCommitQuarantined` and `MatrixFatalCorruption` are no longer returned; a
-damaged tile commit bitmap is `InvalidMatrixLayout` until
-`clear_matrix_category` resets it. A matrix reader that falls behind the
-write-ahead ring now gets `MatrixSnapshotExpired` and must `follow()`.
-`compact_matrix()` reclaims nothing, and `matrix_generation_path()` returns the
-primary path. See [durability](durability-model.md#matrix-storage-and-publication).
+Matrix APIs that tiled storage never used were removed. Delete these from
+0.12.x code; unless noted, there is no replacement:
+
+- `ReadLimits::with_matrix_metadata_residency`,
+  `with_matrix_metadata_verification`, `with_matrix_generation_cache_bytes` and
+  `with_matrix_directory_cache_bytes`; the fields of the same names;
+  `effective_matrix_metadata_residency()`,
+  `effective_matrix_metadata_verification()` and
+  `default_matrix_metadata_cache_bytes()`; and the `MatrixMetadataResidency`
+  and `MatrixMetadataVerification` enums.
+- `FormatSpec::with_matrix_fatal_forensics()` and the `matrix_fatal_forensics`
+  field.
+- `compact_matrix()` on `VarlitFile`, `VarlitWriter` and generated writers:
+  delete the call. Overwrites do not grow the file.
+- `matrix_recovery_report()`: call `verify_matrix_metadata()`, which returns a
+  `MatrixRecoveryReport` and can fail.
+- `matrix_storage_diagnostics()` and `MatrixStorageDiagnostics`.
+- `MatrixRecoveryReport::matrix_last_zero_range_streamed_bytes`,
+  `matrix_total_zero_range_streamed_bytes` and
+  `matrix_sparse_zeroing_supported`.
+- Match arms for `Error::MatrixCommitQuarantined`, `MatrixFatalCorruption`,
+  `MatrixChunkNotReopenable`, `MatrixChunkClosed`, `InvalidMatrixChunk` and
+  `MatrixDimensionMismatch`.
+
+Matrix behavior changes: open runs no matrix verification; call
+`verify_matrix_metadata()`. A damaged tile commit bitmap is
+`InvalidMatrixLayout` until `clear_matrix_category` resets it. A matrix reader
+that falls behind the write-ahead ring gets `MatrixSnapshotExpired` and must
+`follow()`. `matrix_generation_path()` returns the primary path. `diagnose_file`
+on a matrix file runs `verify_matrix_metadata()` and reports each finding as
+`file.matrix.recovery_finding`, or the error `file.matrix.verification_failed`
+if verification fails. See
+[durability](durability-model.md#matrix-storage-and-publication).
 
 Typed reads now decode into a value you own instead of returning one; see
 [caller-owned decoding](api-changes.md#caller-owned-decoding) for the full

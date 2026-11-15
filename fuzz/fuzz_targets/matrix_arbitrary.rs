@@ -72,7 +72,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = reader.fuzz_cell(key, &mut FuzzCell { value: 0 });
         let _ = reader.read_scratch_aux(0, 16);
         let reader = reader.into_inner();
-        let _ = reader.matrix_recovery_report();
+        let _ = reader.verify_matrix_metadata();
         let _ = reader.read_matrix_sidecar("fuzz", &sidecar_path);
     }
 });

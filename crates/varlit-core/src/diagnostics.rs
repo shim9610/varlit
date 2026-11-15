@@ -850,7 +850,22 @@ pub fn diagnose_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> FormatDiagnos
     }
 
     if spec.has_matrix_blocks() {
-        let matrix = file.matrix_recovery_report();
+        // The check reads every tile header and commit bitmap; a file that
+        // cannot be walked is itself a finding.
+        let matrix = match file.verify_matrix_metadata() {
+            Ok(matrix) => matrix,
+            Err(error) => {
+                report.push(
+                    Diagnostic::error(
+                        classify_error(&error),
+                        "file.matrix.verification_failed",
+                        error.to_string(),
+                    )
+                    .with_hint("the matrix metadata could not be verified; restore from a backup or recreate the file"),
+                );
+                return report;
+            }
+        };
         for finding in &matrix.findings {
             report.push(
                 Diagnostic::warning(
@@ -903,7 +918,6 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MigrationBlockIdMismatch { .. }
         | Error::MatrixDimensionsRequired
         | Error::MatrixDimensionMissing(_)
-        | Error::MatrixDimensionMismatch { .. }
         | Error::MatrixBlockMissing(_)
         | Error::MatrixCommitMissing(_)
         | Error::MatrixKeyOutOfBounds { .. }
@@ -914,9 +928,6 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MatrixNotCommitted
         | Error::MatrixSnapshotExpired { .. }
         | Error::MatrixCellNotWritten
-        | Error::MatrixChunkClosed { .. }
-        | Error::MatrixChunkNotReopenable { .. }
-        | Error::InvalidMatrixChunk
         | Error::LayoutFieldMissing(_)
         | Error::LayoutFieldUnexpected(_)
         | Error::LayoutFieldTypeMismatch(_)
@@ -1010,8 +1021,6 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::MatrixSidecarMismatch(_)
         | Error::MatrixSidecarChecksumMismatch { .. }
         | Error::MatrixChecksumMismatch { .. }
-        | Error::MatrixCommitQuarantined(_)
-        | Error::MatrixFatalCorruption
         | Error::InvalidMatrixLayout
         | Error::LayoutLiteralMismatch { .. }
         | Error::LayoutAmbiguousSegment { .. }

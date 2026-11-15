@@ -105,28 +105,6 @@ impl VarlitFile {
         }
     }
 
-    /// Requires a clean, synced writer, and then has nothing to do: a tiled
-    /// matrix never grows with overwrites (cells change in place, and the
-    /// write-ahead ring is a fixed size), so there is nothing to reclaim.
-    /// Existing readers keep their generation until they follow.
-    pub fn compact_matrix(&mut self) -> Result<()> {
-        self.check_write()?;
-        self.ensure_tiles_writer()?;
-        if self
-            .tiles
-            .get()
-            .is_some_and(crate::matrix_tiles::api::TiledMatrix::is_dirty)
-        {
-            return Err(Error::InvalidFormatSpec(
-                "sync matrix changes before compaction",
-            ));
-        }
-        if !self.spec.has_matrix_blocks() {
-            return Err(Error::MatrixLayoutMissing);
-        }
-        Ok(())
-    }
-
     /// Published matrix generation this handle shows. Queries never advance it.
     pub fn matrix_generation(&self) -> Option<u64> {
         self.tiles_read().ok().map(|(tiles, _)| tiles.generation())

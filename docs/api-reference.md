@@ -280,16 +280,17 @@ decrease, so a crafted or damaged file cannot make a walk loop.
 CPU, I/O, or memory; large trusted files should use the scalable APIs or explicit
 wider limits instead.
 
-### MatrixMetadataResidency
+### Matrix metadata
 
-`ReadLimits::matrix_metadata_residency` (set with
-`ReadLimits::with_matrix_metadata_residency`, resolved by
-`ReadLimits::effective_matrix_metadata_residency()`) is accepted, composes
-through `overlay`/`tighten`, and resolves its unset `Missing` state to
-`MatrixMetadataResidency::DEFAULT`. The tiled matrix code does not read it:
-no open, read or cache is sized by it, and a declared `cache_bytes` is not
-checked against `max_matrix_bitmap_bytes`. The type remains for source
-compatibility.
+`MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits`
+fields, setters and accessors for them
+(`matrix_metadata_residency`, `matrix_metadata_verification`,
+`matrix_generation_cache_bytes`, `matrix_directory_cache_bytes`, their `with_*`
+setters, `effective_matrix_metadata_residency()`,
+`effective_matrix_metadata_verification()` and
+`default_matrix_metadata_cache_bytes()`) were removed in 0.13.0. Tiled matrix
+storage never read them. The `max_matrix_*` limits remain and are enforced at
+open.
 
 A tiled reader keeps no commit-bitmap cache. It reads a tile's commit bitmap
 with the cells it is reading and checks the bitmap's CRC32 on every read. What
@@ -297,20 +298,13 @@ it does keep is a fixed-size table of resolved tile positions and, for its
 snapshot, an overlay of the ranges published since the last checkpoint (see
 [durability](durability-model.md#what-readers-see)).
 
-### MatrixMetadataVerification
-
-`ReadLimits::matrix_metadata_verification` (set with
-`ReadLimits::with_matrix_metadata_verification`, resolved by
-`ReadLimits::effective_matrix_metadata_verification()`) is accepted and
-composes the same way. The tiled matrix code does not read it either: no open
-runs a verification pass, under `AtOpen` or `OnDemand`.
-
+No open runs a matrix verification pass.
 `verify_matrix_metadata()` on a reader, writer or `VarlitFile` is the
 verification pass. It visits every tile that exists in the handle's view,
 checks each tile's header and commit bitmap against their CRC32s, and returns
 a `MatrixRecoveryReport` with a `Recoverable` `CommitMap` finding per damaged
 tile and a `ClearCategory` recommendation per affected category. It reports and
-changes nothing. `matrix_recovery_report()` returns an empty report. See
+changes nothing. `matrix_recovery_report()` was removed in 0.13.0. See
 [recovery](recovery-model.md).
 
 `max_keyed_tail_bytes` (`limits { keyed_tail: ... }`) now bounds the nominal
@@ -1117,17 +1111,13 @@ asserting a speedup. The ignored
 benchmark, not a CI performance guarantee. Historical shared-handle throughput
 figures do not describe the current ownership model.
 
-`ReadLimits::with_matrix_generation_cache_bytes(bytes)` and
-`with_matrix_directory_cache_bytes(bytes)` are still accepted, but tiled matrix
-reads do not use them. Matrix files written with the removed `VMAT` layout are
-refused. `matrix_generation()` returns the number of the published generation
+Matrix files written with the removed `VMAT` layout are refused. `matrix_generation()` returns the number of the published generation
 the handle shows; `follow()` returns record bytes, so a matrix-only
 publication returns zero from it. A tiled matrix keeps its write-ahead ring in
 the primary file, so `matrix_generation_path()` returns the primary path; there
 is no companion file. `FormatSpec::with_matrix_ring_bytes(bytes)` sets the ring
-size of new matrix files. `compact_matrix()` refuses a writer with unpublished
-matrix changes and otherwise does nothing, because overwrites do not grow the
-file. See [durability](durability-model.md#matrix-storage-and-publication).
+size of new matrix files. `compact_matrix()` was removed in 0.13.0: overwrites
+do not grow the file, so there is nothing to reclaim. See [durability](durability-model.md#matrix-storage-and-publication).
 
 | API | Meaning |
 | --- | --- |
@@ -1149,7 +1139,6 @@ file. See [durability](durability-model.md#matrix-storage-and-publication).
 | `read_matrix_region_into::<T>(region, out)` / `read_matrix_region_from::<T>(cursor, out)` | read a rectangle row-major into `out`; returns how many cells were filled and a cursor to continue from |
 | `read_matrix_cells_into::<T>(keys, out)` | read the cells `keys` names, in any order and with repeats, into `out` in key order |
 | `matrix_resume_signal(category)` | `Clean` when none or all cells of the category are committed, `Partial` otherwise |
-| `matrix_recovery_report()` | always an empty report; open runs no verification |
 | `verify_matrix_metadata()` | check every existing tile's header and commit bitmap now and report damaged tiles |
 | `rebuild_matrix_commit_from_crc::<T>()` | rewrite the block's commit bits: committed exactly where a written slot's CRC32 matches |
 | `follow()` | adopt the newest published generation (read-only handles) |
@@ -1222,9 +1211,9 @@ exists and rewrites its commit bitmap whole: a cell is committed exactly when
 its slot was written and the stored CRC32 matches the payload. A cell written
 but never committed, or cleared with `clear_matrix_cell`, keeps its bytes and is
 committed by the rebuild. It does not read the old bitmap, so it works on a
-damaged one, as `clear_matrix_category` does. `MatrixCommitQuarantined` and
-`MatrixFatalCorruption` are no longer returned by matrix operations, and
-`FormatSpec::with_matrix_fatal_forensics()` is accepted but not consulted. See
+damaged one, as `clear_matrix_category` does. `MatrixCommitQuarantined`,
+`MatrixFatalCorruption` and `FormatSpec::with_matrix_fatal_forensics()` were
+removed in 0.13.0. See
 [recovery](recovery-model.md).
 
 The hook of `write_matrix_cell_durable` runs **after** the cell is committed
@@ -1770,14 +1759,16 @@ minor-version policy as the rest of the library.
 | `InvalidChunkedRange { start, end, len }` | decoded range is reversed or exceeds the declared decoded length |
 | `ErrorContextAllocationFailed { context }` | detailed error storage was refused; inspect `AllocationFailureContext` for completed or uncertain publication before retrying |
 
-## Matrix storage environment
+## Matrix file diagnostics
 
-`matrix_storage_diagnostics()` on native file, reader and writer handles returns
-`None` for a format without matrix blocks and otherwise the same fixed values:
-`sparse_file: Some(false)` and `false` for `allocation_map_available`,
-`hole_punch_api_available` and `sparse_mark_failed`. A tiled matrix allocates
-what it writes and does not use sparse files or range removal, and the
-zero-range counters on `MatrixRecoveryReport` always return 0. See
-[storage diagnostics](storage-diagnostics.md) for the field definitions.
-`diagnose_file` reports no storage warnings for a matrix file, since none of
-these capabilities is used.
+`diagnose_file` on a file whose format has matrix blocks runs
+`verify_matrix_metadata()`, which checks every tile header and commit bitmap.
+Each finding is reported as the warning `file.matrix.recovery_finding`, and
+the counts of findings and recommended actions as the info diagnostic
+`file.matrix.recovery_report`. If verification itself fails, the report ends
+with the error `file.matrix.verification_failed`.
+
+A tiled matrix allocates what it writes and does not use sparse files or range
+removal, so `diagnose_file` reports no storage warnings for a matrix file.
+`matrix_storage_diagnostics()`, `MatrixStorageDiagnostics` and the zero-range
+and sparse-zeroing accessors on `MatrixRecoveryReport` were removed in 0.13.0.

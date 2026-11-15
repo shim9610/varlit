@@ -368,20 +368,29 @@ checkpoint loses no published value
 (`a_crash_inside_a_checkpoint_keeps_every_published_value`). These tests run
 the engine on an in-memory store whose crash keeps the synced bytes plus an
 in-order prefix of the later writes, with the next write torn. They do not
-model reordered writes or a storage device's power loss. The checksums detect
-accidental corruption, not deliberate rewriting.
+model reordered writes or a storage device's power loss.
+
+`a_killed_writer_leaves_whole_publications` kills a real writer process 32
+times at varying points and reopens the real file each time. Every cell must
+show one round, the round must be the last acknowledged one or the one after
+it, and it must never go back. A reader may show one round less than the next
+writer adopts: a publication whose frames are complete in the ring but whose
+header update did not happen is finished by that writer's recovery, after
+which readers see it. A killed process loses nothing the kernel accepted, so
+this checks partial sequences of system calls, not power loss.
+
+The checksums detect accidental corruption, not deliberate rewriting. A ring
+header or metadata record whose checksum holds but whose fields are impossible
+(offsets outside the ring, unordered or saturated generations, a ring outside
+the file) is refused with `InvalidMatrixLayout`
+(`a_ring_header_with_impossible_fields_is_refused_not_followed`,
+`a_ring_placed_outside_the_file_is_refused`).
 
 ### Compaction
 
-`compact_matrix()` requires a writable handle and refuses a writer with
-unpublished matrix changes (`InvalidFormatSpec("sync matrix changes before
-compaction")`). It then returns without doing anything: overwrites happen in
-place and the ring has a fixed size, so there is nothing to reclaim. Tiles,
-once appended, are never removed.
-
-`ReadLimits::with_matrix_generation_cache_bytes(bytes)` and
-`with_matrix_directory_cache_bytes(bytes)` are accepted and stored, but the
-tiled matrix code does not read them.
+There is no matrix compaction; `compact_matrix()` was removed in 0.13.0.
+Overwrites happen in place and the ring has a fixed size, so there is nothing
+to reclaim. Tiles, once appended, are never removed.
 
 ## Append-Log Transaction Markers
 

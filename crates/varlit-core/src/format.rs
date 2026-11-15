@@ -57,153 +57,6 @@ impl ReadLimit {
     }
 }
 
-/// How much of a matrix's commit metadata a reader would keep resident.
-///
-/// Tiled matrix storage does not read this setting: it is accepted, stored,
-/// composed by [`ReadLimits::overlay`], and resolved by
-/// [`ReadLimits::effective_matrix_metadata_residency`], but no read or open
-/// consults it. It is kept so existing format declarations still compile.
-///
-/// `#[non_exhaustive]`, like [`ReadLimit`]: a downstream `match` needs a
-/// wildcard arm. Adding [`Self::Missing`] in 0.5.0 already broke every
-/// exhaustive match, so the attribute went on in the same release rather than
-/// costing a second break later. Match on the variant you care about and let the
-/// wildcard carry the rest — or call
-/// [`ReadLimits::effective_matrix_metadata_residency`], which never yields
-/// [`Self::Missing`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum MatrixMetadataResidency {
-    /// "Nobody declared a policy." The same role [`ReadLimit::Missing`] plays
-    /// for every ceiling on [`ReadLimits`]: it is the state an unset field
-    /// starts in, it never overwrites a policy someone else declared, and it
-    /// resolves to varlit's own choice —
-    /// [`ReadLimits::effective_matrix_metadata_residency`], which resolves it to
-    /// [`Self::DEFAULT`] with the cache derived from the ceiling in force.
-    ///
-    /// Distinguishing it from an explicit [`Self::Lazy`] is what lets
-    /// [`ReadLimits::overlay`] compose: a runtime `ReadLimits` that never called
-    /// [`ReadLimits::with_matrix_metadata_residency`] leaves a format-declared
-    /// policy alone, and one that did wins.
-    Missing,
-    /// A bounded cache of `cache_bytes` per bitmap. Not consulted by tiled
-    /// matrix storage.
-    Lazy {
-        /// Declared cache bound, in bytes, per bitmap.
-        cache_bytes: u64,
-    },
-}
-
-impl MatrixMetadataResidency {
-    /// The policy [`Self::Missing`] resolves to: [`Self::Lazy`] with
-    /// [`Self::DEFAULT_CACHE_BYTES`], clamped to `max_matrix_bitmap_bytes`.
-    pub const DEFAULT: Self = Self::Lazy {
-        cache_bytes: Self::DEFAULT_CACHE_BYTES,
-    };
-
-    /// Cache bound the unstated default resolves to before clamping: one
-    /// thirty-second of `ReadLimits::STANDARD.max_matrix_bitmap_bytes`.
-    pub const DEFAULT_CACHE_BYTES: u64 = match ReadLimits::STANDARD.max_matrix_bitmap_bytes {
-        ReadLimit::Finite(ceiling) => ceiling / 32,
-        _ => 2 * 1024 * 1024,
-    };
-
-    /// Call-time policy wins, `Missing` means the caller said nothing. Exactly
-    /// [`ReadLimit::overlay`]'s rule, which is the point: the two fields
-    /// compose the same way, so no call site has to remember that one of them
-    /// is special.
-    const fn overlay(self, value: Self) -> Self {
-        match value {
-            Self::Missing => self,
-            value => value,
-        }
-    }
-
-    /// A policy is a declaration, not a ceiling, so there is nothing to meet:
-    /// the format's declaration stands and the runtime may only fill in a
-    /// silence. (Before the `Missing` state existed this dropped a runtime
-    /// declaration even when the format had made none.)
-    const fn tighten(self, value: Self) -> Self {
-        match self {
-            Self::Missing => value,
-            declared => declared,
-        }
-    }
-}
-
-/// The unset state is not a policy: [`MatrixMetadataResidency::DEFAULT`] is what
-/// resolves it, so it must itself be resolved.
-const _: () = assert!(
-    !matches!(
-        MatrixMetadataResidency::DEFAULT,
-        MatrixMetadataResidency::Missing
-    ),
-    "MatrixMetadataResidency::DEFAULT must name a real policy"
-);
-
-/// When a matrix's commit metadata would be verified as a whole.
-///
-/// Tiled matrix storage does not read this setting: it is accepted, stored,
-/// composed and resolved by [`ReadLimits::effective_matrix_metadata_verification`],
-/// but no open verifies tile headers or commit bitmaps because of it. Call
-/// `verify_matrix_metadata` to check them; normal reads do not.
-///
-/// `#[non_exhaustive]` for the same reason as [`MatrixMetadataResidency`]: match
-/// the variant you care about and let a wildcard carry the rest, or call
-/// [`ReadLimits::effective_matrix_metadata_verification`], which never yields
-/// [`Self::Missing`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum MatrixMetadataVerification {
-    /// "Nobody declared a policy." Exactly the role [`ReadLimit::Missing`] and
-    /// [`MatrixMetadataResidency::Missing`] play: it never overwrites a policy
-    /// someone else declared, and it resolves — in
-    /// [`ReadLimits::effective_matrix_metadata_verification`], and only there —
-    /// to [`Self::DEFAULT`].
-    Missing,
-    /// Verify while opening. Not acted on by tiled matrix storage.
-    AtOpen,
-    /// Verify only when `verify_matrix_metadata` is called, which is what
-    /// tiled matrix storage does under every variant.
-    OnDemand,
-}
-
-impl MatrixMetadataVerification {
-    /// The policy [`Self::Missing`] resolves to.
-    pub const DEFAULT: Self = Self::AtOpen;
-
-    /// Call-time policy wins, `Missing` means the caller said nothing.
-    /// [`MatrixMetadataResidency::overlay`]'s rule, and [`ReadLimit::overlay`]'s
-    /// before it: the fields compose the same way, so no call site has to
-    /// remember which of them is special.
-    const fn overlay(self, value: Self) -> Self {
-        match value {
-            Self::Missing => self,
-            value => value,
-        }
-    }
-
-    /// A policy is a declaration, not a ceiling, so there is nothing to meet:
-    /// the format's declaration stands and the runtime may only fill in a
-    /// silence.
-    const fn tighten(self, value: Self) -> Self {
-        match self {
-            Self::Missing => value,
-            declared => declared,
-        }
-    }
-}
-
-/// The unset state is not a policy: [`MatrixMetadataVerification::DEFAULT`] is
-/// what resolves it, so it must itself be resolved.
-const _: () = assert!(
-    !matches!(
-        MatrixMetadataVerification::DEFAULT,
-        MatrixMetadataVerification::Missing
-    ),
-    "MatrixMetadataVerification::DEFAULT must name a real policy"
-);
-
 /// When record integrity is verified.
 ///
 /// Separate from [`IntegrityPolicy`], which says *whether* a checksum exists,
@@ -264,7 +117,6 @@ impl IntegrityVerification {
     pub const DEFAULT: Self = Self::OnDemand;
 
     /// A runtime declaration replaces the format's; a runtime silence does not.
-    /// Same rule as `MatrixMetadataVerification::overlay`.
     const fn overlay(self, value: Self) -> Self {
         match value {
             Self::Missing => self,
@@ -272,9 +124,8 @@ impl IntegrityVerification {
         }
     }
 
-    /// A declaration wins over the unset state, and only over that. Same
-    /// composition rule as `MatrixMetadataVerification::tighten`, so a runtime
-    /// `ReadLimits` cannot silently drop a policy the format declared.
+    /// A declaration wins over the unset state, and only over that, so a
+    /// runtime `ReadLimits` cannot silently drop a policy the format declared.
     const fn tighten(self, value: Self) -> Self {
         match self {
             Self::Missing => value,
@@ -372,37 +223,8 @@ pub struct ReadLimits {
     /// Explicit owned-map requests (`key_tail_offsets`) still enforce this
     /// limit on their result instead of spilling a `HashMap` behind the caller.
     pub max_keyed_tail_bytes: ReadLimit,
-    /// Declared matrix commit-metadata residency policy.
-    ///
-    /// [`MatrixMetadataResidency::Missing`] unless somebody declared one, which
-    /// resolves to [`MatrixMetadataResidency::DEFAULT`] — see
-    /// [`Self::effective_matrix_metadata_residency`]. It lives on `ReadLimits`
-    /// rather than on `FormatSpec` because it decides *how*
-    /// `max_matrix_bitmap_bytes` is enforced — as an admission limit on the
-    /// whole live set, or as a bound on a demand-filled cache — and because it
-    /// is a property of one reader's open, not of the file's format.
-    pub matrix_metadata_residency: MatrixMetadataResidency,
-    /// Per-reader cache for immutable matrix generation data and directory pages.
-    /// Missing resolves to 2 MiB; zero disables it. This is separate from the
-    /// bitmap cache and excludes fixed page buffers and map bookkeeping.
-    pub matrix_generation_cache_bytes: ReadLimit,
-    /// Per-bitmap cache for original forward/reverse directory windows. Missing
-    /// defaults to 1 MiB, clamped to the bitmap ceiling. Zero disables this cache;
-    /// misses read the original file, never a reconstructed temporary index.
-    /// Separate from bitmap payload and generation caches; not a file limit.
-    pub matrix_directory_cache_bytes: ReadLimit,
-    /// Declared matrix commit-metadata verification policy.
-    ///
-    /// [`MatrixMetadataVerification::Missing`] unless somebody declared one,
-    /// which resolves to [`MatrixMetadataVerification::DEFAULT`] — see
-    /// [`Self::effective_matrix_metadata_verification`]. It sits beside the
-    /// residency policy rather than inside it because the two are independent:
-    /// verification decides whether the whole commit map is authenticated and
-    /// reported on, residency decides what is kept in memory afterwards, and
-    /// every combination of the two is meaningful.
-    pub matrix_metadata_verification: MatrixMetadataVerification,
     /// Declared record-integrity verification policy; see
-    /// [`IntegrityVerification`]. Like the matrix policies it lives on
+    /// [`IntegrityVerification`]. It lives on
     /// `ReadLimits` rather than on `FormatSpec`, because it is a property of
     /// one open and not of the file: it changes no byte, so it is neither
     /// hashed nor persisted.
@@ -453,17 +275,6 @@ impl ReadLimits {
             crate::native_layout::DEFAULT_MAX_FILE_HEADER_EXTENSION_LEN,
         ),
         max_keyed_tail_bytes: ReadLimit::Finite(256 * 1024 * 1024),
-        // Deliberately `Missing` rather than a concrete policy: `STANDARD` is
-        // what `resolve` overlays onto, so a concrete value here would be
-        // indistinguishable from a caller's declaration and could not be
-        // clamped to whatever `max_matrix_bitmap_bytes` ends up being.
-        matrix_metadata_residency: MatrixMetadataResidency::Missing,
-        matrix_generation_cache_bytes: ReadLimit::Missing,
-        matrix_directory_cache_bytes: ReadLimit::Missing,
-        // `Missing` for the same reason: a preset that declared a verification
-        // policy would be indistinguishable from a caller who declared one, and
-        // would win over a format's declaration through `overlay`.
-        matrix_metadata_verification: MatrixMetadataVerification::Missing,
         integrity_verification: IntegrityVerification::Missing,
         read_validation: None,
         is_trusted_api: false,
@@ -505,78 +316,9 @@ impl ReadLimits {
             max_mmap_len: value,
             max_file_header_extension_len: value,
             max_keyed_tail_bytes: value,
-            // Every field `all` builds is the unset one, this included: `MISSING`
-            // and `TRUSTED_UNBOUNDED` declare no residency and no verification
-            // policy, exactly as they declare no ceilings.
-            matrix_metadata_residency: MatrixMetadataResidency::Missing,
-            matrix_generation_cache_bytes: ReadLimit::Missing,
-            matrix_directory_cache_bytes: ReadLimit::Missing,
-            matrix_metadata_verification: MatrixMetadataVerification::Missing,
             integrity_verification: IntegrityVerification::Missing,
             read_validation: None,
             is_trusted_api: false,
-        }
-    }
-
-    /// Sets the private immutable generation-page cache capacity at open.
-    /// The default is 2 MiB. Zero disables caching; bytes are rounded down to
-    /// full 4096-byte buffers. Bitmap cache capacity is configured separately.
-    pub const fn with_matrix_generation_cache_bytes(mut self, bytes: u64) -> Self {
-        self.matrix_generation_cache_bytes = ReadLimit::Finite(bytes);
-        self
-    }
-
-    /// Sets each matrix directory's original-page cache budget (default 1 MiB).
-    /// Zero disables it. Cache admission charges 4096 bytes plus a conservative
-    /// 128-byte entry allowance; undersized budgets read without retaining pages.
-    /// Fixed page workspace is additional. No sync or temporary mirror is implied.
-    pub const fn with_matrix_directory_cache_bytes(mut self, bytes: u64) -> Self {
-        self.matrix_directory_cache_bytes = ReadLimit::Finite(bytes);
-        self
-    }
-
-    /// Declares the matrix commit-metadata residency policy (see
-    /// [`MatrixMetadataResidency`]). Leaving it unset resolves to
-    /// [`MatrixMetadataResidency::DEFAULT`]; pass
-    /// [`MatrixMetadataResidency::Lazy`] for an open bounded by the working set
-    /// rather than by the file.
-    pub const fn with_matrix_metadata_residency(
-        mut self,
-        residency: MatrixMetadataResidency,
-    ) -> Self {
-        self.matrix_metadata_residency = residency;
-        self
-    }
-
-    /// Declares the matrix commit-metadata verification policy (see
-    /// [`MatrixMetadataVerification`]). Accepted but not acted on by tiled
-    /// matrix storage, which verifies only when `verify_matrix_metadata` is
-    /// called.
-    pub const fn with_matrix_metadata_verification(
-        mut self,
-        verification: MatrixMetadataVerification,
-    ) -> Self {
-        self.matrix_metadata_verification = verification;
-        self
-    }
-
-    /// The residency policy an open actually uses.
-    ///
-    /// [`MatrixMetadataResidency::Missing`] — nobody declared one — resolves
-    /// here, and only here, to [`MatrixMetadataResidency::DEFAULT`], taking the
-    /// cache [`Self::default_matrix_metadata_cache_bytes`] derives. A declared
-    /// policy is returned unchanged, cache and all.
-    pub const fn effective_matrix_metadata_residency(self) -> MatrixMetadataResidency {
-        match self.matrix_metadata_residency {
-            MatrixMetadataResidency::Missing => match MatrixMetadataResidency::DEFAULT {
-                // A default's cache is derived from the ceiling in force, never
-                // a literal, so it cannot be the reason an open fails.
-                MatrixMetadataResidency::Lazy { .. } => MatrixMetadataResidency::Lazy {
-                    cache_bytes: self.default_matrix_metadata_cache_bytes(),
-                },
-                default => default,
-            },
-            declared => declared,
         }
     }
 
@@ -640,43 +382,6 @@ impl ReadLimits {
         }
     }
 
-    /// The verification policy an open actually uses.
-    ///
-    /// [`MatrixMetadataVerification::Missing`] resolves here, and only here, to
-    /// [`MatrixMetadataVerification::DEFAULT`]. A declared policy is returned
-    /// unchanged.
-    pub const fn effective_matrix_metadata_verification(self) -> MatrixMetadataVerification {
-        match self.matrix_metadata_verification {
-            MatrixMetadataVerification::Missing => MatrixMetadataVerification::DEFAULT,
-            declared => declared,
-        }
-    }
-
-    /// The cache a lazy default would use when nobody declared one:
-    /// [`MatrixMetadataResidency::DEFAULT_CACHE_BYTES`], clamped down to
-    /// `max_matrix_bitmap_bytes`.
-    ///
-    /// The clamp is the whole difference between a default and a declaration. A
-    /// caller who writes `with_max_matrix_bitmap_bytes(64 * 1024)` is tightening
-    /// a memory ceiling, not asking for every matrix open to fail; a default
-    /// cache above that ceiling therefore becomes a cache *at* it, down to the
-    /// one-page floor the page store applies. A cache the caller declared
-    /// themselves is refused instead, because that is a contradiction only they
-    /// can resolve.
-    pub const fn default_matrix_metadata_cache_bytes(self) -> u64 {
-        let default = MatrixMetadataResidency::DEFAULT_CACHE_BYTES;
-        match self.max_matrix_bitmap_bytes {
-            ReadLimit::Finite(ceiling) => {
-                if ceiling < default {
-                    ceiling
-                } else {
-                    default
-                }
-            }
-            ReadLimit::Missing | ReadLimit::TrustedUnbounded => default,
-        }
-    }
-
     pub const fn missing() -> Self {
         Self::MISSING
     }
@@ -720,22 +425,6 @@ impl ReadLimits {
 
     pub const fn tighten(self, runtime: Self) -> Self {
         Self {
-            matrix_generation_cache_bytes: self
-                .matrix_generation_cache_bytes
-                .tighten(runtime.matrix_generation_cache_bytes),
-            matrix_directory_cache_bytes: self
-                .matrix_directory_cache_bytes
-                .tighten(runtime.matrix_directory_cache_bytes),
-            // Not a limit: a residency policy is a declaration, not a ceiling,
-            // so there is nothing to meet. The format's declaration stands; a
-            // runtime one is taken only where the format made none.
-            matrix_metadata_residency: self
-                .matrix_metadata_residency
-                .tighten(runtime.matrix_metadata_residency),
-            // Composes identically, for the identical reason.
-            matrix_metadata_verification: self
-                .matrix_metadata_verification
-                .tighten(runtime.matrix_metadata_verification),
             integrity_verification: self
                 .integrity_verification
                 .tighten(runtime.integrity_verification),
@@ -789,27 +478,6 @@ impl ReadLimits {
     /// values as permanent format ceilings.
     pub const fn overlay(self, runtime: Self) -> Self {
         Self {
-            matrix_generation_cache_bytes: self
-                .matrix_generation_cache_bytes
-                .overlay(runtime.matrix_generation_cache_bytes),
-            matrix_directory_cache_bytes: self
-                .matrix_directory_cache_bytes
-                .overlay(runtime.matrix_directory_cache_bytes),
-            // Composes like every ceiling above it: a runtime `ReadLimits` that
-            // never called `with_matrix_metadata_residency` carries `Missing`
-            // and leaves a format-declared policy alone. Taking the runtime
-            // value unconditionally is what made
-            // `open_reader_with_resource_limits(path, STANDARD.with_max_…())`
-            // revert a spec-declared policy to the eager one.
-            matrix_metadata_residency: self
-                .matrix_metadata_residency
-                .overlay(runtime.matrix_metadata_residency),
-            // Composes identically: a runtime `ReadLimits` that never called
-            // `with_matrix_metadata_verification` must not silently switch a
-            // format that declared `OnDemand` back to verifying at open.
-            matrix_metadata_verification: self
-                .matrix_metadata_verification
-                .overlay(runtime.matrix_metadata_verification),
             integrity_verification: self
                 .integrity_verification
                 .overlay(runtime.integrity_verification),
@@ -2157,9 +1825,6 @@ pub struct FormatSpec {
     pub block_identities: &'static [(u32, Option<Endian>, bool, u64)],
     pub layout: LayoutSpec,
     pub read_limits: ReadLimits,
-    /// Accepted and stored, but unused: tiled matrix storage never produces
-    /// [`Error::MatrixFatalCorruption`], so there is no access to opt into.
-    pub matrix_fatal_forensics: bool,
     /// Whether files this spec creates carry fixed-offset anchors. Not part of
     /// the schema: a file's own header says whether it is anchored, and that is
     /// how it is read and appended to. See [`crate::AnchorPolicy`].
@@ -2251,7 +1916,6 @@ impl FormatSpec {
             block_identities: &[],
             layout: LayoutSpec::varlit_native(),
             read_limits: ReadLimits::MISSING,
-            matrix_fatal_forensics: false,
             anchors: crate::AnchorPolicy::DEFAULT,
         }
     }
@@ -2459,13 +2123,6 @@ impl FormatSpec {
 
     pub const fn with_matrix_aux(mut self, aux: &'static [MatrixAuxDescriptor]) -> Self {
         self.matrix_aux = aux;
-        self
-    }
-
-    /// Sets [`Self::matrix_fatal_forensics`]. Accepted but unused: tiled
-    /// matrix storage never produces [`Error::MatrixFatalCorruption`].
-    pub const fn with_matrix_fatal_forensics(mut self) -> Self {
-        self.matrix_fatal_forensics = true;
         self
     }
 

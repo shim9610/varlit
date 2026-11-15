@@ -455,8 +455,7 @@ fn check_format_roundtrip(dir: &std::path::Path) {
     let native = PublicApiFormat::spec()
         .open_reader(&path)
         .expect("native reader");
-    let storage: Option<varlit::MatrixStorageDiagnostics> = native.matrix_storage_diagnostics();
-    assert!(storage.is_some());
+    assert!(native.matrix_generation().is_some());
     // Fixed blocks read a page at a time into the caller's buffer.
     let mut samples: Vec<Sample> = Vec::new();
     let mut sample_out = vec![Sample::empty(); 2];

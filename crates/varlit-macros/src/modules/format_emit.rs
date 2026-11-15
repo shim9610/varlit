@@ -3171,7 +3171,6 @@ pub(super) fn typed_api_tokens(
                 ::core::result::Result::Ok(Self { inner })
             }
 
-            pub fn compact_matrix(&mut self) -> ::varlit::__core::Result<()> { self.inner.compact_matrix() }
             pub fn matrix_generation(&self) -> Option<u64> {self.inner.matrix_generation()}
             pub fn matrix_generation_path(&self) -> Option<&::std::path::Path> {self.inner.matrix_generation_path()}
 

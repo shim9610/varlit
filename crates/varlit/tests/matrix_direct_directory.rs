@@ -1,4 +1,4 @@
-use varlit::{MatrixCellStatus, MatrixMetadataVerification, ReadLimits, varlit_format};
+use varlit::{MatrixCellStatus, ReadLimits, varlit_format};
 
 varlit_format! {
     pub format Multiple {
@@ -13,14 +13,10 @@ varlit_format! {
 }
 
 #[test]
-fn independent_matrix_directories_survive_zero_cache_follow_and_compaction() -> varlit::Result<()> {
+fn independent_matrix_categories_keep_snapshots_across_follow() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("multiple.varlit");
-    let spec = Multiple::spec().with_resource_limits(
-        ReadLimits::STANDARD
-            .with_matrix_directory_cache_bytes(0)
-            .with_matrix_metadata_verification(MatrixMetadataVerification::OnDemand),
-    );
+    let spec = Multiple::spec().with_resource_limits(ReadLimits::STANDARD);
     let mut writer = spec.create_writer_with_dims(
         &path,
         varlit::MatrixDimensions::from_pairs([("row", 128 * 32768), ("col", 1)]),
@@ -39,7 +35,6 @@ fn independent_matrix_directories_survive_zero_cache_follow_and_compaction() -> 
         writer.clear_matrix_cell::<Left>(key(page))?;
     }
     writer.sync()?;
-    writer.compact_matrix()?;
     reader.follow()?;
     for page in 0..128 {
         assert_eq!(

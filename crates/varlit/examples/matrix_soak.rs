@@ -71,11 +71,8 @@ fn epoch(reader: &VarlitReader) -> Result<u64> {
         reader.read_matrix_aux("epoch", 0, 8)?.try_into().unwrap(),
     ))
 }
-fn open(path: &Path, cache: u64) -> varlit::Result<VarlitReader> {
-    Soak::spec().open_reader_with_resource_limits(
-        path,
-        ReadLimits::STANDARD.with_matrix_generation_cache_bytes(cache),
-    )
+fn open(path: &Path) -> varlit::Result<VarlitReader> {
+    Soak::spec().open_reader_with_resource_limits(path, ReadLimits::STANDARD)
 }
 fn latency(name: &str, mut values: Vec<u128>) {
     if values.is_empty() {
@@ -146,10 +143,9 @@ fn run() -> Result {
             workers.push(scope.spawn(move || -> Result {
                 // Both an uncached pinned descriptor and an independently following reader.
                 let _stop_on_exit = StopOnExit(stop);
-                let pinned = open(path, 0)?;
+                let pinned = open(path)?;
                 let pinned_epoch = epoch(&pinned)?;
-                let cache = [0, 4096, 2*1024*1024][id % 3];
-                let mut reader = open(path, cache)?;
+                let mut reader = open(path)?;
                 let mut state = id as u64 + 1;
                 let mut reads = 0u64;
                 let mut previous = 0;
@@ -171,7 +167,7 @@ fn run() -> Result {
                         reads += 2;
                     }
                     if reads.is_multiple_of(1024) {
-                        let fresh = open(path, cache)?;
+                        let fresh = open(path)?;
                         let e = epoch(&fresh)?;
                         check(&fresh, (state >> 32) as u32 % rows, e, groups)?;
                     }
@@ -188,7 +184,6 @@ fn run() -> Result {
         let writer_result = (|| -> Result {
             let mut e = 0;
             let mut syncs = Vec::new();
-            let mut compactions = Vec::new();
             while start.elapsed().as_secs() < seconds && !stop.load(Ordering::Acquire) {
                 e += 1;
                 let base = ((e - 1) % groups) as u32 * GROUP;
@@ -215,7 +210,7 @@ fn run() -> Result {
                 writer.write_epoch_aux(0, &e.to_le_bytes())?;
                 if e % 8 == 0 {
                     writer.flush()?;
-                    let dirty = open(path, 0)?;
+                    let dirty = open(path)?;
                     assert_eq!(epoch(&dirty)?, e - 1);
                     check(&dirty, base, e - 1, groups)?;
                 }
@@ -225,13 +220,9 @@ fn run() -> Result {
                 }
                 latest.store(e, Ordering::Release);
                 if e % groups == 0 {
-                    let t = Instant::now();
-                    writer.compact_matrix()?;
-                    compactions.push(t.elapsed().as_micros());
                     println!(
-                        "{{\"event\":\"progress\",\"epoch\":{e},\"elapsed_seconds\":{},\"compactions\":{}}}",
-                        start.elapsed().as_secs_f64(),
-                        compactions.len()
+                        "{{\"event\":\"progress\",\"epoch\":{e},\"elapsed_seconds\":{}}}",
+                        start.elapsed().as_secs_f64()
                     );
                 }
                 if e % 128 == 0 {
@@ -240,7 +231,6 @@ fn run() -> Result {
                 }
             }
             latency("write-batch-and-sync-first-100000", syncs);
-            latency("compaction", compactions);
             println!(
                 "{{\"event\":\"writer_complete\",\"epochs\":{e},\"payload_bytes_written\":{}}}",
                 (e - e / 7) * u64::from(GROUP) * 4096
@@ -266,7 +256,7 @@ fn run() -> Result {
         Ok(())
     });
     result?;
-    let reader = open(path, 4096)?;
+    let reader = open(path)?;
     let e = epoch(&reader)?;
     for row in 0..rows {
         check(&reader, row, e, groups)?;

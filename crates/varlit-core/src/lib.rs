@@ -146,10 +146,9 @@ pub use format::{
     LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset, LayoutSpec, LeadInDescriptor,
     LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS,
     ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor, MatrixCommitDescriptor,
-    MatrixCommitKind, MatrixDimensionDescriptor, MatrixMetadataResidency,
-    MatrixMetadataVerification, MetadataDescriptor, RawRegionDescriptor, ReadLimit, ReadLimits,
-    ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor, SegmentRepeat,
-    TransactionMarkerMode, VariableCompression, matrix_default_tile,
+    MatrixCommitKind, MatrixDimensionDescriptor, MetadataDescriptor, RawRegionDescriptor,
+    ReadLimit, ReadLimits, ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor,
+    SegmentRepeat, TransactionMarkerMode, VariableCompression, matrix_default_tile,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 pub use sync_marker::SYNC_BLOCK_ID;
@@ -166,7 +165,7 @@ pub use matrix::{
     MatrixCellStatus, MatrixCommitEvent, MatrixCorruptionKind, MatrixCorruptionSeverity,
     MatrixCursor, MatrixDimensionValue, MatrixDimensions, MatrixKey, MatrixPage,
     MatrixRecoveryAction, MatrixRecoveryFinding, MatrixRecoveryReport, MatrixRegion,
-    MatrixResumeSignal, MatrixStorageDiagnostics, PackedBitmap,
+    MatrixResumeSignal, PackedBitmap,
 };
 pub use merge::{
     MergeAction, SequencedMergeAction, VarlitMerge, compact_keyed_file,

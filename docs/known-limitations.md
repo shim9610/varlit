@@ -24,17 +24,15 @@ syncs twice more. A reader that falls further behind than the ring holds gets
 `MatrixSnapshotExpired` and must `follow()`. `verify_matrix_metadata()` visits the tiles that exist; its cost is
 proportional to written tiles, not to the cells a reader intends to access.
 
-`MatrixMetadataVerification`, `MatrixMetadataResidency`,
-`with_matrix_generation_cache_bytes` and `with_matrix_directory_cache_bytes`
-are still accepted in `ReadLimits`, but the tiled matrix path does not consult
-them. Budget accounting covers nominal page/cache payload, not allocator
+`ReadLimits` has no matrix residency, verification or cache-size settings; they
+were removed in 0.13.0. Budget accounting covers nominal page/cache payload, not allocator
 overhead or total process memory. Some caller output operations still require
 materialization.
 
-Overwrites do not grow a tiled matrix, so `compact_matrix()` requires a clean,
-synced writer and reclaims nothing. A tiled matrix does not rely on sparse
-files, allocation maps or hole punching; `matrix_storage_diagnostics()` reports
-those as not applicable. See [storage diagnostics](storage-diagnostics.md).
+Overwrites do not grow a tiled matrix, and tiles, once appended, are never
+removed; there is no matrix compaction (`compact_matrix()` was removed in
+0.13.0). A tiled matrix does not rely on sparse files, allocation maps or hole
+punching.
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic
 channel-selective reads of interleaved payloads are not provided; use planar
@@ -192,7 +190,7 @@ Runner images and some compiler jobs roll over time.
 
 Kani establishes registered contracts under their stated bounds and assumptions,
 not whole-library OOM freedom or every crash schedule. Loom covers selected
-cancellation/progress behavior, not the shared-owner implementation. Miri
+cancellation/progress behavior and the tile reader lock, not the shared-owner implementation. Miri
 exclusions retain native/ASan alternatives and explicit gaps. Fuzz smoke runs are
 finite campaigns. Process kills do not simulate loss of the OS page cache.
 See the [verification guide](verification.md), live CI artifacts and manifests.

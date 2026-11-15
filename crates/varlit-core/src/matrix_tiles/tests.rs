@@ -533,3 +533,148 @@ fn the_tile_cache_is_a_fixed_table() {
     cache.clear();
     assert_eq!(cache.get(0, 199_999), None);
 }
+
+/// A ring header whose checksum holds but whose offsets or generations are
+/// impossible is refused, not followed: a checksum only proves the bytes
+/// were written together, not that a sane writer wrote them.
+#[test]
+fn a_ring_header_with_impossible_fields_is_refused_not_followed() {
+    use super::wal::{HEADER_SLOT, Ring, RingHeader};
+    let hostile = |edit: &dyn Fn(&mut RingHeader)| {
+        let store = MemStore::new();
+        let mut w =
+            TileWriter::create(&mut store.clone(), geometry(false), 1 << 20, [7; 16]).unwrap();
+        let meta = w.meta;
+        put(&mut w, &mut store.clone(), MatrixKey::new(1, 1), 11);
+        w.publish(&mut store.clone()).unwrap();
+        let ring: Ring = w.ring;
+        let mut header = ring.read_header(&store).unwrap();
+        header.seq += 2;
+        edit(&mut header);
+        let bytes = header.encode();
+        {
+            let mut shared = store.0.borrow_mut();
+            for slot in 0..2u64 {
+                let at = (ring.base + slot * HEADER_SLOT) as usize;
+                shared.bytes[at..at + bytes.len()].copy_from_slice(&bytes);
+            }
+        }
+        let reader = TileReader::open(&store, geometry(false), meta).map(|_| ());
+        let writer = TileWriter::open(&mut store.clone(), geometry(false), meta).map(|_| ());
+        (reader, writer)
+    };
+    let area = (1u64 << 20) - super::wal::FRAMES_AT;
+    let cases: [(&str, &dyn Fn(&mut RingHeader)); 6] = [
+        ("tail past the ring", &|h| h.tail = area + 8),
+        ("tail far past the ring", &|h| h.tail = u64::MAX - 7),
+        ("head past the ring", &|h| h.head = area + 8),
+        ("unaligned tail", &|h| h.tail = 3),
+        ("generations at the limit", &|h| {
+            h.checkpointed = u64::MAX;
+            h.mark = u64::MAX;
+            h.published = u64::MAX;
+        }),
+        ("sequence at the limit", &|h| h.seq = u64::MAX),
+    ];
+    for (name, edit) in cases {
+        let (reader, writer) = hostile(edit);
+        assert!(
+            matches!(reader, Err(Error::InvalidMatrixLayout)),
+            "{name}: reader {reader:?}"
+        );
+        assert!(
+            matches!(writer, Err(Error::InvalidMatrixLayout)),
+            "{name}: writer {writer:?}"
+        );
+    }
+}
+
+/// A metadata record naming a ring outside the file is refused before any
+/// ring offset is computed from it.
+#[test]
+fn a_ring_placed_outside_the_file_is_refused() {
+    for base in [u64::MAX - 64, u64::MAX / 2, 1 << 40] {
+        let store = MemStore::new();
+        let w = TileWriter::create(&mut store.clone(), geometry(false), 1 << 20, [7; 16]).unwrap();
+        let meta = w.meta as usize;
+        {
+            let mut shared = store.0.borrow_mut();
+            shared.bytes[meta + 32..meta + 40].copy_from_slice(&base.to_le_bytes());
+            let crc = crc32fast::hash(&shared.bytes[meta..meta + 64]);
+            shared.bytes[meta + 64..meta + 68].copy_from_slice(&crc.to_le_bytes());
+        }
+        assert!(matches!(
+            TileReader::open(&store, geometry(false), meta as u64).map(|_| ()),
+            Err(Error::InvalidMatrixLayout)
+        ));
+        assert!(matches!(
+            TileWriter::open(&mut store.clone(), geometry(false), meta as u64).map(|_| ()),
+            Err(Error::InvalidMatrixLayout)
+        ));
+    }
+}
+
+/// Every key maps to exactly one slot of exactly one tile, and back, at the
+/// smallest, the odd and the largest shapes a spec may declare. Small tiles
+/// are checked cell by cell; the largest at their corners and edges.
+#[test]
+fn every_key_has_one_slot_in_one_tile_at_every_admitted_shape() {
+    use crate::format::{MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS};
+    let shapes: [([u64; 2], u64); 9] = [
+        ([1, 1], 1),
+        ([1, 7], 3),
+        ([5, 3], 8),
+        ([16, 16], 12),
+        ([1, MATRIX_MAX_TILE_CELLS], 60),
+        ([MATRIX_MAX_TILE_CELLS, 1], 60),
+        ([1024, 1024], 60),
+        ([1 << 13, 1 << 7], 60),
+        ([1, 1], MATRIX_MAX_TILE_BYTES - 4),
+    ];
+    for (tile, stride) in shapes {
+        let geom = BlockGeom {
+            block_id: 1,
+            stride,
+            tile,
+        };
+        let [rows, cols] = tile;
+        assert!(geom.cells() <= MATRIX_MAX_TILE_CELLS);
+        assert!(geom.cells() * geom.slot_len() <= MATRIX_MAX_TILE_BYTES);
+        let edge = |n: u64| -> Vec<u64> {
+            if n <= 16 {
+                (0..n).collect()
+            } else {
+                vec![0, 1, 2, n / 2 - 1, n / 2, n - 3, n - 2, n - 1]
+            }
+        };
+        let mut slots = std::collections::BTreeSet::new();
+        for row in edge(rows) {
+            for col in edge(cols) {
+                let slot = BlockGeom::slot_index(row, col, cols);
+                assert!(slot < geom.cells(), "{tile:?} {row} {col}");
+                assert!(slots.insert(slot), "{tile:?}: two cells share slot {slot}");
+                assert_eq!((slot / cols, slot % cols), (row, col));
+                assert!(geom.slot_at(slot) >= geom.slots_at());
+                assert!(geom.slot_at(slot) + geom.slot_len() <= geom.tile_bytes());
+                assert!(slot / 8 < geom.bitmap_len());
+                // The same cell in tiles far apart, up to the last key.
+                for (tile_row, tile_col) in [
+                    (0, 0),
+                    (3, 9),
+                    ((u64::MAX - rows + 1) / rows, (u64::MAX - cols + 1) / cols),
+                ] {
+                    let key = MatrixKey::new(tile_row * rows + row, tile_col * cols + col);
+                    let (coord, located) = geom.locate(key);
+                    assert_eq!((coord.row, coord.col, located), (tile_row, tile_col, slot));
+                }
+            }
+        }
+    }
+    let last = BlockGeom {
+        block_id: 1,
+        stride: 8,
+        tile: [3, 5],
+    }
+    .locate(MatrixKey::new(u64::MAX, u64::MAX));
+    assert_eq!((last.0.row, last.0.col), (u64::MAX / 3, u64::MAX / 5));
+}

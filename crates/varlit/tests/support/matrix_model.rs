@@ -67,7 +67,6 @@ pub fn run(data: &[u8]) -> varlit::Result<()> {
                 writer.sync()?;
                 published = working;
                 published_aux = working_aux;
-                writer.compact_matrix()?;
             }
             _ => {
                 working_aux = (step as u64).to_le_bytes();

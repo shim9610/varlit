@@ -74,17 +74,18 @@ pub enum MatrixRecoveryAction {
 }
 ```
 
-`matrix_recovery_report()` returns an empty report: an open runs no
-verification pass and holds no findings. `verify_matrix_metadata()` visits
+An open runs no verification pass and holds no findings;
+`matrix_recovery_report()` was removed in 0.13.0. `verify_matrix_metadata()` visits
 every tile that exists in the handle's view, checks its header and commit
 bitmap, and returns a report with one `Recoverable` `CommitMap` finding per
 damaged tile and one `ClearCategory` recommendation per category that has a
 damaged tile. It reports; it does not block later access, and its cost is
-proportional to the written tiles.
+proportional to the written tiles. `diagnose_file` runs the same check on a
+matrix file and reports each finding as `file.matrix.recovery_finding`, or
+the error `file.matrix.verification_failed` if the check itself fails.
 
-There is no quarantine. `MatrixCommitQuarantined` and `MatrixFatalCorruption`
-remain in `Error`, but no tiled matrix operation returns them, and
-`FormatSpec::with_matrix_fatal_forensics()` is accepted but not consulted.
+There is no quarantine. `MatrixCommitQuarantined`, `MatrixFatalCorruption` and
+`FormatSpec::with_matrix_fatal_forensics()` were removed in 0.13.0.
 
 `apply_matrix_recovery_action` runs `ClearCell` as
 `clear_matrix_cell_by_category` and `ClearCategory` as `clear_matrix_category`.

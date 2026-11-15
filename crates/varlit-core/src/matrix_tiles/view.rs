@@ -233,7 +233,7 @@ impl TileReader {
         let mut fixed = [0u8; super::geometry::META_FIXED_LEN as usize];
         source.read_at(meta, &mut fixed)?;
         let (base, len) = geom.decode_meta(&fixed)?;
-        let ring = Ring { base, len };
+        let ring = Ring::within(base, len, source)?;
         let tiles = TileCache::for_geometry(&geom)?;
         let mut reader = Self {
             geom,

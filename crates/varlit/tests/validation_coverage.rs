@@ -1203,10 +1203,6 @@ const CONTRACTS: &[Contract] = &[
         valid { let bytes=varlit::encode_to_vec(&IntoWindowRequiredOnly{w:3},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out)?; assert_eq!(out,IntoWindow{w:3,added:Vec::new()}); Ok(()) },
         invalid { let bytes=varlit::encode_to_vec(&IntoWindowDefaultOnly{added:vec![1]},varlit::Endian::Little)?; let mut out=IntoWindow{w:9,added:vec![1,2]}; assert!(matches!(varlit::decode_from_slice_into(&bytes,varlit::Endian::Little,&mut out),Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
-    contract!("core/format.rs::format::MatrixMetadataResidency::variant:Lazy@34b063ac24393ce2",
-        valid { let declared = varlit::MatrixMetadataResidency::Lazy { cache_bytes: 8192 }; assert_eq!(varlit::ReadLimits::STANDARD.with_matrix_metadata_residency(declared).effective_matrix_metadata_residency(), declared); Ok(()) },
-        invalid { let resolved = varlit::ReadLimits::STANDARD.effective_matrix_metadata_residency(); assert_ne!(resolved, varlit::MatrixMetadataResidency::Missing); assert_ne!(resolved, varlit::MatrixMetadataResidency::Lazy { cache_bytes: 8192 }); Ok(()) }
-    ),
     contract!("core/format.rs::format::ReadValidation::const:FULL@65630b1aec77469e",
         valid { assert_eq!(read_policy_probe(varlit::ReadValidation::FULL, false, false)??, Probe { value: 19 }); Ok(()) },
         invalid { let result = read_policy_probe(varlit::ReadValidation::FULL, false, true)?; assert!(matches!(result, Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
@@ -1266,7 +1262,7 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
-    contract!("core/format.rs::format::ReadLimits::const:STANDARD@c6d2cab306ba52f2",
+    contract!("core/format.rs::format::ReadLimits::const:STANDARD@be66e1d7772208c1",
         valid {
             // The resident directory and the keyed tails are finite by
             // default: an attacker-sized file cannot grow either without a
@@ -2000,7 +1996,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let (_directory, path) = slots_fixture()?; let writer = IntoSlots::spec().open_writer(&path)?; let mut out = <SlotMark as varlit::VarlitEmpty>::empty(); assert!(writer.read_header_block::<SlotMark>(&mut out)?); assert_eq!(out, SlotMark { at: 5 }); Ok(()) },
         invalid { let (_directory, path) = slots_fixture()?; let writer = IntoSlots::spec().open_writer(&path)?; let mut out = <SlotOther as varlit::VarlitEmpty>::empty(); assert!(matches!(writer.read_header_block::<SlotOther>(&mut out), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:typed_api_tokens@88befb9cd83dcea9", generated "read_header_block",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:typed_api_tokens@708cd20e764e83da", generated "read_header_block",
         valid { let directory = private_tempdir::private_tempdir()?; let mut writer = IntoSlots::create_writer(directory.path().join("typed.varlit"))?; let mut out = <SlotMark as varlit::VarlitEmpty>::empty(); assert!(!writer.read_header_block::<SlotMark>(&mut out)?); writer.write_header_block(&SlotMark { at: 9 })?; assert!(writer.read_header_block::<SlotMark>(&mut out)?); assert_eq!(out, SlotMark { at: 9 }); Ok(()) },
         invalid { let directory = private_tempdir::private_tempdir()?; let writer = IntoSlots::create_writer(directory.path().join("typed.varlit"))?; let mut out = <SlotOther as varlit::VarlitEmpty>::empty(); assert!(matches!(writer.read_header_block::<SlotOther>(&mut out), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
@@ -2091,26 +2087,6 @@ const CONTRACTS: &[Contract] = &[
     contract!("core/lib.rs::::export:matrix_default_tile@ffe6e4b444ef60e8",
         valid { assert_eq!(varlit::matrix_default_tile(8), <GridCell as varlit::VarlitMatrixBlock>::TILE); Ok(()) },
         invalid { assert_ne!(varlit::matrix_default_tile(8), [0, 0]); Ok(()) }
-    ),
-    contract!("core/matrix.rs::matrix::struct:MatrixStorageDiagnostics@cbf29ce484222325",
-        valid { let (_directory, path) = grid_fixture()?; let file = GridMatrix::spec().open_readonly(&path)?; let diagnostics: varlit::MatrixStorageDiagnostics = file.matrix_storage_diagnostics().expect("a matrix file"); assert_eq!(diagnostics.sparse_file, Some(false)); Ok(()) },
-        invalid { let directory = private_tempdir::private_tempdir()?; let file = ProbeFormat::spec().create(directory.path().join("plain"))?; let none: Option<varlit::MatrixStorageDiagnostics> = file.matrix_storage_diagnostics(); assert!(none.is_none()); Ok(()) }
-    ),
-    contract!("core/matrix.rs::matrix::MatrixStorageDiagnostics::field:sparse_file@df5b26aaaeca973a",
-        valid { let (_directory, path) = grid_fixture()?; let file = GridMatrix::spec().open_readonly(&path)?; assert_eq!(file.matrix_storage_diagnostics().expect("a matrix file").sparse_file, Some(false)); Ok(()) },
-        invalid { assert_eq!(varlit::MatrixStorageDiagnostics::default().sparse_file, None); Ok(()) }
-    ),
-    contract!("core/matrix.rs::matrix::MatrixStorageDiagnostics::field:allocation_map_available@cd2fd49bc6b014bd",
-        valid { let (_directory, path) = grid_fixture()?; let file = GridMatrix::spec().open_readonly(&path)?; assert!(!file.matrix_storage_diagnostics().expect("a matrix file").allocation_map_available); Ok(()) },
-        invalid { assert!(!varlit::MatrixStorageDiagnostics::default().allocation_map_available); Ok(()) }
-    ),
-    contract!("core/matrix.rs::matrix::MatrixStorageDiagnostics::field:hole_punch_api_available@cd2fd49bc6b014bd",
-        valid { let (_directory, path) = grid_fixture()?; let file = GridMatrix::spec().open_readonly(&path)?; assert!(!file.matrix_storage_diagnostics().expect("a matrix file").hole_punch_api_available); Ok(()) },
-        invalid { assert!(!varlit::MatrixStorageDiagnostics::default().hole_punch_api_available); Ok(()) }
-    ),
-    contract!("core/matrix.rs::matrix::MatrixStorageDiagnostics::field:sparse_mark_failed@cd2fd49bc6b014bd",
-        valid { let (_directory, path) = grid_fixture()?; let file = GridMatrix::spec().open_readonly(&path)?; assert!(!file.matrix_storage_diagnostics().expect("a matrix file").sparse_mark_failed); Ok(()) },
-        invalid { assert!(!varlit::MatrixStorageDiagnostics::default().sparse_mark_failed); Ok(()) }
     ),
     contract!("core/traits.rs::traits::VarlitMatrixBlock::const:TILE@3ef62d55ffd757ff",
         valid { assert_eq!(<GridCell as varlit::VarlitMatrixBlock>::TILE, varlit::matrix_default_tile(8)); Ok(()) },

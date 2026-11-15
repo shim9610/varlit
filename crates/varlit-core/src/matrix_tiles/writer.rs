@@ -28,7 +28,7 @@ pub(crate) struct WriterStats {
 pub(crate) struct TileWriter {
     pub(crate) geom: Geometry,
     pub(crate) meta: u64,
-    ring: Ring,
+    pub(crate) ring: Ring,
     header: RingHeader,
     /// Ring offset where the next frame goes (past any frames of the open
     /// generation already written).
@@ -105,10 +105,7 @@ impl TileWriter {
         let mut fixed = [0u8; META_FIXED_LEN as usize];
         store.read_at(meta, &mut fixed)?;
         let (base, len) = geom.decode_meta(&fixed)?;
-        let ring = Ring { base, len };
-        if len < MIN_RING {
-            return Err(Error::InvalidMatrixLayout);
-        }
+        let ring = Ring::within(base, len, store)?;
         let header = ring.read_header(store)?;
         let mut writer = Self::with_parts(geom, meta, ring, header)?;
         writer.recover(store)?;

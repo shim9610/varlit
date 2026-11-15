@@ -176,13 +176,7 @@ fn owned_writer_fixture(
     }
     writer.sync()?;
     drop(writer);
-    Ok(spec.with_read_limits(
-        ReadLimits::finite_all(u64::MAX)
-            .with_matrix_metadata_residency(varlit::MatrixMetadataResidency::Lazy {
-                cache_bytes: 4096,
-            })
-            .with_matrix_generation_cache_bytes(0),
-    ))
+    Ok(spec.with_read_limits(ReadLimits::finite_all(u64::MAX)))
 }
 
 fn owned_writer_integrities() -> &'static [varlit::IntegrityPolicy] {
@@ -194,7 +188,7 @@ fn owned_writer_integrities() -> &'static [varlit::IntegrityPolicy] {
 }
 
 #[test]
-fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> varlit::Result<()> {
+fn dirty_writer_pages_survive_eviction_thread_moves_and_sync() -> varlit::Result<()> {
     for &integrity in owned_writer_integrities() {
         let fixture = TempMatrix::new("owned-writer");
         let spec = owned_writer_fixture(&fixture, integrity)?;
@@ -231,7 +225,6 @@ fn dirty_writer_pages_survive_eviction_thread_moves_sync_and_compaction() -> var
             writer.read_shared(MatrixKey::new(2, 0))?;
             assert_eq!(writer.read_shared(MatrixKey::new(0, 2))?.value, 20);
             writer.sync()?;
-            writer.compact_matrix()?;
             Ok(writer)
         })
         .join()

@@ -222,32 +222,6 @@ pub struct MatrixRecoveryReport {
     pub recommended_actions: Vec<MatrixRecoveryAction>,
 }
 
-/// Range-zeroing counters, kept for API compatibility.
-///
-/// The removed matrix layout zeroed byte ranges when it cleared or rebuilt a
-/// commit map, and streamed zero bytes where the filesystem could not remove a
-/// range. Tiled storage allocates what it writes and never zeroes a range, so
-/// both counters always return `0`.
-impl MatrixRecoveryReport {
-    /// Whether this build targets a platform with a range-removal call.
-    pub const fn matrix_sparse_zeroing_supported() -> bool {
-        cfg!(any(windows, target_os = "linux", target_os = "macos"))
-    }
-
-    /// Bytes the most recent range-zeroing request on this thread streamed.
-    /// Always `0` under tiled storage.
-    pub fn matrix_last_zero_range_streamed_bytes() -> u64 {
-        // Tiled storage never zeroes a range: it allocates what it writes.
-        0
-    }
-
-    /// Bytes streamed by every range-zeroing request on this thread. Always
-    /// `0` under tiled storage.
-    pub fn matrix_total_zero_range_streamed_bytes() -> u64 {
-        0
-    }
-}
-
 /// A rectangle of cells: rows `row_start..row_end` and columns
 /// `col_start..col_end` (`MatrixKey::scan` and `MatrixKey::ch`), read
 /// row-major. A row and a column are regions one cell wide.
@@ -404,33 +378,6 @@ pub(crate) fn ensure_matrix_block<T: VarlitMatrixBlock>(spec: FormatSpec) -> Res
         return Err(Error::InvalidMatrixLayout);
     }
     Ok(matrix.category)
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MatrixStorageDiagnostics {
-    /// Some(true): sparse flag/holes observed. Some(false): disabled or known
-    /// unsupported filesystem. None: sparseness could not be established.
-    pub sparse_file: Option<bool>,
-    /// The actual file answered a bounded allocation-map probe.
-    pub allocation_map_available: bool,
-    /// This build has a native hole-punch API. A filesystem may still refuse
-    /// individual requests. Tiled storage makes no such requests.
-    pub hole_punch_api_available: bool,
-    /// Windows refused the create-time sparse-file request.
-    pub sparse_mark_failed: bool,
-}
-
-impl MatrixStorageDiagnostics {
-    /// What a tiled matrix reports: it allocates what it writes and never
-    /// relies on holes, allocation maps or hole punching.
-    pub(crate) const fn not_applicable() -> Self {
-        Self {
-            sparse_file: Some(false),
-            allocation_map_available: false,
-            hole_punch_api_available: false,
-            sparse_mark_failed: false,
-        }
-    }
 }
 
 const PACKED_BITMAP_RESOURCE: &str = "packed bitmap bytes";

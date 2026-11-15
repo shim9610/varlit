@@ -4,8 +4,8 @@ mod pages;
 use varlit::{MatrixCellStatus, varlit_format};
 
 #[test]
-fn directory_budgets_preserve_snapshots_follow_and_compaction() -> varlit::Result<()> {
-    for cache in [0, 4096, 1024 * 1024] {
+fn readers_keep_snapshots_and_follow_across_integrity_policies() -> varlit::Result<()> {
+    {
         for integrity in [
             varlit::IntegrityPolicy::None,
             #[cfg(feature = "integrity")]
@@ -15,9 +15,7 @@ fn directory_budgets_preserve_snapshots_follow_and_compaction() -> varlit::Resul
             let path = dir.path().join("directory-budget.varlit");
             let spec = Generations::spec()
                 .with_integrity_policy(integrity)
-                .with_resource_limits(
-                    varlit::ReadLimits::STANDARD.with_matrix_directory_cache_bytes(cache),
-                );
+                .with_resource_limits(varlit::ReadLimits::STANDARD);
             let mut writer = spec.create_writer_with_dims(
                 &path,
                 varlit::MatrixDimensions::from_pairs([("scan", 96 * 32768), ("ch", 1)]),
@@ -43,7 +41,6 @@ fn directory_budgets_preserve_snapshots_follow_and_compaction() -> varlit::Resul
             );
             writer.sync()?;
             reader.follow()?;
-            writer.compact_matrix()?;
             reader.follow()?;
             let cold = spec.open_reader(&path)?;
             for i in 0..96 {
@@ -223,7 +220,7 @@ fn reopened_writer_discards_unpublished_matrix_changes() -> varlit::Result<()> {
 }
 
 #[test]
-fn explicit_immediate_publishes_and_cache_capacity_is_configurable() -> varlit::Result<()> {
+fn explicit_immediate_publishes_to_a_following_reader() -> varlit::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("immediate.varlit");
     let key = CellKey { scan: 0, ch: 0 };
@@ -236,8 +233,8 @@ fn explicit_immediate_publishes_and_cache_capacity_is_configurable() -> varlit::
     assert_eq!(reader.cell_status(key)?, MatrixCellStatus::NotCommitted);
     reader.follow()?;
     assert_eq!(filled_out(|o| reader.cell(key, o))?.value, 77);
-    for cache in [0, 4096, 65536] {
-        let limits = varlit::ReadLimits::STANDARD.with_matrix_generation_cache_bytes(cache);
+    {
+        let limits = varlit::ReadLimits::STANDARD;
         let reader = Generations::spec().open_reader_with_resource_limits(&path, limits)?;
         assert_eq!(
             filled_out(|o| reader.read_matrix_cell::<Cell>(varlit::MatrixKey::new(0, 0), o))?.value,
@@ -333,10 +330,6 @@ fn skipped_generations_update_growing_shrinking_and_reordered_bitmap_indexes() -
                 model.fill(None);
             }
             writer.sync()?;
-            // Skip the compaction's own generation, then ordinary publications.
-            if batch == 12 || batch == 13 {
-                writer.compact_matrix()?;
-            }
             if batch % 3 == 2 {
                 reader.follow()?;
                 let fresh = spec.open_reader(&path)?;
@@ -378,10 +371,7 @@ fn tiny_bitmap_budget_follows_growing_and_shrinking_indexes() -> varlit::Result<
     writer.write_matrix_cell(first, &Cell { value: 1 })?;
     writer.commit_matrix_cell::<Cell>(first)?;
     writer.sync()?;
-    let limits = varlit::ReadLimits::STANDARD
-        .with_max_matrix_bitmap_bytes(48)
-        .with_matrix_metadata_residency(varlit::MatrixMetadataResidency::Lazy { cache_bytes: 0 })
-        .with_matrix_generation_cache_bytes(0);
+    let limits = varlit::ReadLimits::STANDARD.with_max_matrix_bitmap_bytes(48);
     let mut reader = spec.open_reader_with_resource_limits(&path, limits)?;
     let generation = reader.matrix_generation();
     writer.write_matrix_cell(first, &Cell { value: 2 })?;
@@ -432,11 +422,7 @@ fn default_matrix_admission_is_independent_of_the_working_set() -> varlit::Resul
         // Beyond the former 16M-cell and 8GiB slot-region defaults. Only two
         // cells and their metadata are written; this is not a physical load test.
         let rows = 1_100_000_000;
-        let limits = varlit::ReadLimits::STANDARD
-            .with_max_matrix_bitmap_bytes(64 * 1024)
-            .with_matrix_metadata_residency(varlit::MatrixMetadataResidency::Lazy {
-                cache_bytes: 4096,
-            });
+        let limits = varlit::ReadLimits::STANDARD.with_max_matrix_bitmap_bytes(64 * 1024);
         let spec = Generations::spec()
             .with_integrity_policy(integrity)
             .with_resource_limits(limits);
@@ -486,9 +472,7 @@ fn follow_spills_many_changed_bitmap_slots_without_publishing_dirty_state() -> v
         varlit::MatrixDimensions::from_pairs([("scan", PAGES * 32768), ("ch", 1)]),
     )?;
     writer.sync()?;
-    let limits = varlit::ReadLimits::STANDARD
-        .with_max_matrix_bitmap_bytes(16)
-        .with_matrix_metadata_residency(varlit::MatrixMetadataResidency::Lazy { cache_bytes: 0 });
+    let limits = varlit::ReadLimits::STANDARD.with_max_matrix_bitmap_bytes(16);
     let mut reader = spec.open_reader_with_resource_limits(&path, limits)?;
     for page in 0..PAGES {
         let key = varlit::MatrixKey::new(page * 32768, 0);

@@ -676,8 +676,7 @@ independent. There is no implicit reader clone or shared-reader mutex.
 A matrix reader also owns its matrix state: a fixed-size table of resolved
 tile positions, sized at open from the declared extents, and an overlay of the
 ranges published since the last checkpoint, which grows with the publications
-the write-ahead ring holds. It keeps no commit-bitmap cache, and
-`ReadLimits::with_matrix_metadata_residency` does not size anything. Memory adds
+the write-ahead ring holds. It keeps no commit-bitmap cache. Memory adds
 across readers; see
 [concurrency limitations](known-limitations.md#42-where-a-reader-gets-a-snapshot-rather-than-live-state).
 
