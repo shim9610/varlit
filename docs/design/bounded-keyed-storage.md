@@ -52,7 +52,9 @@ spreadsheet to grow its file without limit, and varlit should not either.
 ## Where keyed data lives
 
 The format declaration decides, at compile time, which of three placements a
-keyed block uses.
+keyed block uses. A keyed block is placed in place by default; a block
+declared `key_order = increasing` uses sorted runs. An application with
+integer keys and fixed-size values chooses a matrix itself, as it does today.
 
 | Keys | Values | Placement | Lookup |
 | --- | --- | --- | --- |
@@ -84,10 +86,12 @@ never hold two versions of a key.
 
 ### Other keys: in-place records with section filters
 
-Keyed records of this kind are in-place records (`RECORD_FLAG_IN_PLACE`, as
-matrix storage records are): rewritten where they are, outside the sequence
-order and sync-marker chains of the log, checked by their own CRC32s, changed
-atomically through the ring.
+Keyed records of this kind live inside internal region records
+(`RECORD_FLAG_IN_PLACE`, as matrix tiles live inside overflow regions):
+rewritten where they are, outside the sequence order and sync-marker chains
+of the log, checked by their own CRC32s, changed atomically through the ring.
+The log itself stays append-only: framed records are never written into a
+hole, so the footer links of the log keep pointing backwards.
 
 Finding them:
 
@@ -116,8 +120,9 @@ Freed space is reused, not left behind.
   are known at compile time. For each hole size the writer has a table,
   computed from them, of the combination of fixed blocks that fills it most
   tightly. A hole is filled by the next writes that combination admits; what
-  is left is smaller than the smallest fixed block and is covered by a filler
-  record that framing skips.
+  is left is smaller than the smallest fixed block and stays on the free list
+  of its region. Holes are inside region payloads, so no filler record is
+  needed.
 - **Only order-free records go into holes:** keyed in-place records, matrix
   tiles and directory pages, index and filter pages. Log blocks are always
   appended.
@@ -128,9 +133,10 @@ Freed space is reused, not left behind.
   way overflow regions are, and changed through the ring so a crash leaves a
   consistent list. Free-list pages are themselves reusable space.
 - **The ratio is the backstop.** When free space exceeds the declared ratio
-  (1 to 5 % of live data) because nothing has filled it, the writer compacts
-  once: it moves live records out of the sparsest regions and frees them
-  whole.
+  (1 to 5 % of live data, declared in `varlit_format!`, 5 % when omitted, and
+  recorded in the file header) because nothing has filled it, the writer
+  compacts once: it moves live records out of the sparsest regions and frees
+  them whole.
 
 Writing into a hole is safe across a crash for the same reason carving matrix
 tiles is: a record is written and synced before anything that locates it (a
@@ -144,18 +150,29 @@ place goes through the ring, and a reader that falls behind the ring gets
 `MatrixSnapshotExpired`-style expiry and follows. Space a published value
 occupied is reused only after its generation is reclaimed.
 
+## Implementation order
+
+1. Separate the write-ahead ring and the region space from the matrix, so a
+   keyed format owns them too.
+2. In-place keyed records: update and delete in place, free list, ratio
+   compaction, section filters and the reader cache, a per-key `get`.
+3. Sorted runs for `key_order = increasing`.
+4. Remove keyed history (`keyed_offset_chain`, `keyed_chain`, tombstone
+   accumulation, `merge_keyed_files` and `compact_keyed_files`) in one change,
+   with a one-time converter for existing files. Until then both paths exist.
+
 ## Open questions
 
 1. Bits per key in section filters, and the filter fan-out, against the 1 to
-   5 % budget.
-2. The default free-space ratio, and whether it is declared per format or per
-   file.
+   5 % budget. The first implementation uses 10 bits per key and a fan-out of
+   32.
+2. Settled: the free-space ratio is declared per format, 5 % by default.
 3. Whether the stream handles (`.vks`, constant-cost open of unkeyed logs)
    stay: anchors may already give what they give. They stay for now: stream
    `sync` and `follow` run through the verified publication drivers.
 4. Whether the native record directory (13 bytes per record in memory) can be
    replaced by anchor-based lookups, which the memory principle asks for.
-5. The filler record format, and how framing and verification treat it.
+5. Settled: no filler record; holes stay inside region payloads.
 6. Migration: files with keyed history or an indexed primary need a one-time
    conversion (read with the old version, write with the new), as 0.12 matrix
    files do.
