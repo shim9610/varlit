@@ -686,7 +686,7 @@ fn inspect_layout_file_report_inner<P: AsRef<Path>>(
     ensure_custom_layout_spec(spec)?;
     ensure_layout_open_limits(spec)?;
     let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
-        File::open(path.as_ref())?,
+        crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), path.as_ref())?,
         None,
     ))?;
     let file_len = snapshot.len();
@@ -838,12 +838,14 @@ impl LayoutWriter {
         // and returns the parts, a failure releases with a report, and the
         // claim is installed below only once there is a writer to own it.
         let ((file, segment_counts), lock) = crate::file::with_writer_lock_value(lock, |lock| {
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)?;
+            let mut file = crate::primary_file::open_data_file(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false),
+                &path,
+            )?;
             // bind the single-writer object lock before any
             // destructive initialization. Opening with `.truncate(true)`
             // would clear the new object inside the pre-bind window where a
@@ -907,7 +909,10 @@ impl LayoutWriter {
         // taken; see `create_inner` for why this shape uses this wrapper.
         let ((file, segment_counts, index_bytes), lock) =
             crate::file::with_writer_lock_value(lock, |lock| {
-                let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+                let mut file = crate::primary_file::open_data_file(
+                    OpenOptions::new().read(true).write(true),
+                    &path,
+                )?;
                 lock.bind_native(&file, &path)?;
                 let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
                     file.try_clone()?,
@@ -1277,7 +1282,7 @@ impl LayoutReader {
         ensure_layout_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
         let snapshot = SnapshotFile::new(crate::primary_file::PrimaryFile::new(
-            File::open(&path)?,
+            crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), &path)?,
             None,
         ))?;
         let header = read_file_header(spec, &snapshot)?;
@@ -1538,7 +1543,8 @@ fn ensure_custom_layout_spec(spec: FormatSpec) -> Result<()> {
 
 fn inspect_native_layout_file<P: AsRef<Path>>(spec: FormatSpec, path: P) -> Result<LayoutFileInfo> {
     let path = path.as_ref();
-    let mut header_file = File::open(path)?;
+    let mut header_file =
+        crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), path)?;
     let file_header_len = crate::file::read_file_header(spec, &mut header_file)?;
     let file_header_fields = read_native_file_header_fields(path, spec, file_header_len)?;
     let file = crate::file::VarlitFile::open_readonly(spec, path)?;
@@ -1564,7 +1570,8 @@ fn read_native_file_header_fields(
     spec: FormatSpec,
     file_header_len: u64,
 ) -> Result<Vec<LayoutFieldValue>> {
-    let mut file = File::open(path)?;
+    let mut file =
+        crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), path)?;
     let header_len = usize::try_from(file_header_len).map_err(|_| Error::LengthOverflow {
         value: file_header_len,
     })?;
@@ -2895,7 +2902,9 @@ fn finalized_target_absolute(
                 offset: segment_start,
             });
         }
-        return Ok(absolute as u64);
+        return u64::try_from(absolute).map_err(|_| Error::LayoutInvalidSegmentBounds {
+            offset: segment_start,
+        });
     }
     Err(Error::LayoutInvalidSegmentBounds {
         offset: segment_start,

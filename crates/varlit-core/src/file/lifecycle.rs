@@ -1,4 +1,6 @@
-// Native file lifecycle operations.
+// Creating and opening native files: create, open for writing, read-only, scan
+// and lazy opens, and the checks each runs before handing back a file. Included
+// into `file.rs` with `include!`, so it shares that module's scope.
 
 fn lazy_metadata_error(error: Error, source: LazyOpenSource) -> Error {
     match error {
@@ -76,7 +78,10 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = PrimaryFile::new(options.open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(&mut options, &path)?,
+            None,
+        );
         // bind the single-writer object lock before any destructive
         // initialization. Opening with `.truncate(true)` would clear the new
         // object inside the pre-bind window where a concurrent creator that
@@ -194,7 +199,10 @@ impl VarlitFile {
         } else {
             options.create(true);
         }
-        let mut file = PrimaryFile::new(options.open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(&mut options, &path)?,
+            None,
+        );
         // bind the single-writer object lock before any destructive
         // initialization; see `create_impl`.
         lock.bind_native(file.raw(), &path)?;
@@ -329,8 +337,10 @@ impl VarlitFile {
         lock: &mut WriterLock,
         scratch: &mut B,
     ) -> Result<Self> {
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         lock.bind_native(file.raw(), &path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
@@ -469,7 +479,10 @@ impl VarlitFile {
         spec.validate()?;
         ensure_native_open_limits(spec)?;
         let path = path.as_ref().to_path_buf();
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?,
+            None,
+        );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
         check_open_file_len(spec, &file)?;
@@ -758,8 +771,10 @@ impl VarlitFile {
         lock: &mut WriterLock,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), path)?,
+            None,
+        );
         lock.bind_native(file.raw(), path)?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
@@ -838,7 +853,10 @@ impl VarlitFile {
         path: &Path,
         source: LazyOpenSource,
     ) -> Result<Self> {
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), path)?,
+            None,
+        );
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;
         // Logical: measured once the header has installed the anchor layout.
         let captured_len = check_open_file_len(spec, &file)?;
@@ -930,8 +948,10 @@ impl VarlitFile {
         scratch: &mut B,
     ) -> Result<(Self, RecoveryReport)> {
         let spec = spec.with_strict_read_validation();
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         lock.bind_native(file.raw(), &path)?;
         let original_len = file.len()?;
         let (header_len, header_extensions) = read_primary_header(spec, &mut file)?;

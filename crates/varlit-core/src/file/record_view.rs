@@ -90,7 +90,9 @@ impl FieldSpan {
             wire: WireType::Bytes,
             endian: self.endian,
             inline,
-            carried: carried as u8,
+            carried: u8::try_from(carried).map_err(|_| Error::LengthOverflow {
+                value: carried as u64,
+            })?,
         })
     }
 }
@@ -216,7 +218,8 @@ pub(crate) fn walk_fields(
             if page.filled != head {
                 return Err(Error::UnexpectedEof);
             }
-            span.carried = head as u8;
+            span.carried =
+                u8::try_from(head).map_err(|_| Error::LengthOverflow { value: head as u64 })?;
         }
         visit(field_id, span)?;
         position = value_end;

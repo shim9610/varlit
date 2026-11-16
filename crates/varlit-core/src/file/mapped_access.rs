@@ -1,4 +1,5 @@
-// Native file mapped access operations.
+// Mapping a native file's payloads, cells and windows into memory (`mmap`
+// feature). Included into `file.rs` with `include!`, so it shares its scope.
 
 impl VarlitFile {
     /// Maps only the stored payload of a record from this captured generation.

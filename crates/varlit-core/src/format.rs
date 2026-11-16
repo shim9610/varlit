@@ -2831,6 +2831,10 @@ impl FormatSpec {
             // the ordinal alongside each field instead of sorting by id.
             hash.write_bytes(&(block.fields.len() as u64).to_le_bytes());
             for (ordinal, field) in block.fields.iter().enumerate() {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a block's field list is a static slice; its ordinals are far below 2^32"
+                )]
                 hash.write_u32(ordinal as u32);
                 hash.write_u32(field.id);
                 hash.write_str(field.name);

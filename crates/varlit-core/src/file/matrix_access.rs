@@ -1,5 +1,6 @@
-// Native file matrix access operations, over the tiled matrix storage
-// (`crate::matrix_tiles`).
+// Matrix cell and aux access on a native file, and the matrix sidecar
+// operations built on it. Included into `file.rs` with `include!`, so it shares
+// that module's scope.
 
 impl VarlitFile {
     /// Runs a matrix mutation: refused on a read-only or poisoned handle, and

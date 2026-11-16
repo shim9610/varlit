@@ -1,5 +1,10 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(unsafe_code)]
+// A narrowing `as` keeps the low bits of a value that does not fit, so a
+// length written to a file would describe different bytes than follow it.
+// Library code converts with a check (see `width`), or states at the cast why
+// the value cannot exceed the target type. Tests are exempt.
+#![cfg_attr(not(test), deny(clippy::cast_possible_truncation))]
 #![cfg_attr(kani, feature(allocator_api))]
 
 extern crate alloc;

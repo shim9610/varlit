@@ -49,6 +49,14 @@ fn word(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(raw)
 }
 #[inline]
+/// One spilled row's 32-bit length prefix.
+fn row_len(len: usize) -> io::Result<u32> {
+    u32::try_from(len).map_err(|_| io::Error::other("packed row longer than 4 GiB"))
+}
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "each byte takes the low seven bits; the rest are shifted down"
+)]
 fn put_varint(mut value: u64, out: &mut Vec<u8>) {
     while value >= 128 {
         out.push((value as u8) | 128);
@@ -221,7 +229,7 @@ impl<const N: usize> PackedRows<N> {
                     .map_err(oom)?;
             }
             self.retained
-                .extend_from_slice(&(self.encoded.len() as u32).to_le_bytes());
+                .extend_from_slice(&row_len(self.encoded.len())?.to_le_bytes());
             self.retained.extend_from_slice(&self.encoded);
         } else {
             if self.file.is_none() {
@@ -229,7 +237,7 @@ impl<const N: usize> PackedRows<N> {
             }
             let file = self.file.as_mut().unwrap();
             file.seek(SeekFrom::Start(self.file_end))?;
-            file.write_all(&(self.encoded.len() as u32).to_le_bytes())?;
+            file.write_all(&row_len(self.encoded.len())?.to_le_bytes())?;
             file.write_all(&self.encoded)?;
             self.spilled_bytes = end;
         }

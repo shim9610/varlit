@@ -430,8 +430,31 @@ the corpus and stores it in the Actions cache, so a pull request's 90 seconds
 continue from inputs earlier runs reached rather than from the generated
 seeds. The saved corpus exists only once that workflow has run on the default
 branch; before that, and whenever the cache has expired, the smoke run starts
-from the seeds. mmap immutability and
-external-truncate hazards remain documented in [SECURITY.md](../SECURITY.md).
+from the seeds. Run it by hand with a target list and a duration to give one
+slow target a long run; targets left out keep their saved corpus. mmap
+immutability and external-truncate hazards remain documented in
+[SECURITY.md](../SECURITY.md).
+
+## Scheduled qualification
+
+`qualification.yml` runs weekly on the default branch, or by hand, outside
+pull-request CI. It reuses the repository's own entry points and their
+assertions:
+
+| Job | Runs | Fails on |
+| --- | --- | --- |
+| scalable I/O | `scripts/qualify_scalable.py`, `smoke` profile by default (seed 42, 8 epochs, 8 kill cycles), `qualification` by hand | a stage that does not pass, or a source change during the run |
+| endurance | `scripts/endurance.py` in `matrix` and `io` modes, 20 minutes each by default, 1 GiB files | a failed cycle or check in the run |
+| performance smoke | the ignored `perf_smoke` test in release mode | a failed assertion; timings are only recorded |
+
+Each job writes its report or log as an artifact kept for 30 days, and the job
+summary records the commit, compiler, kernel and filesystem. Timings are kept
+for comparison between runs and are never compared with a fixed threshold,
+because hosted runners vary too much for that. A stage the scripts skip, such
+as the 1 PiB sparse probe on a filesystem that cannot hold it, is listed as
+skipped in the report and under `not_covered`, never as passed. The default
+profile is bounded so the whole workflow fits in a few hours of runner time;
+it is a regular check, not a stress campaign.
 
 ## Dependency and CodeQL checks
 

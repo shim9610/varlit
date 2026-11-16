@@ -61,6 +61,7 @@ impl AnchorPolicy {
     /// `small_hole`. `block_log2` must be in `10..=40` and leave room for at
     /// least as much log as anchor between anchors; see [`Self::validate`].
     pub const fn every(block_log2: u8, small_hole: bool) -> Self {
+        #[allow(clippy::cast_possible_truncation, reason = "BLOCK_SHIFT_BASE is 10")]
         let shift = block_log2.saturating_sub(BLOCK_SHIFT_BASE as u8) & BLOCK_SHIFT_MASK;
         Self {
             flags: ANCHORED | if small_hole { SMALL_HOLE } else { 0 } | shift,
@@ -439,7 +440,10 @@ pub(crate) fn encode_summary(
 ) -> bool {
     let room = out.len().saturating_sub(SUMMARY_AT + SUMMARY_PREFIX + 4);
     let count = tails.len();
-    if count.saturating_mul(SUMMARY_TAIL) > room || u32::try_from(count).is_err() {
+    let Ok(count_field) = u32::try_from(count) else {
+        return false;
+    };
+    if count.saturating_mul(SUMMARY_TAIL) > room {
         return false;
     }
     let mut flags = SUMMARY_COMPLETE;
@@ -451,7 +455,7 @@ pub(crate) fn encode_summary(
     }
     let at = SUMMARY_AT;
     out[at..at + 2].copy_from_slice(&flags.to_le_bytes());
-    out[at + 4..at + 8].copy_from_slice(&(count as u32).to_le_bytes());
+    out[at + 4..at + 8].copy_from_slice(&count_field.to_le_bytes());
     out[at + 8..at + 16].copy_from_slice(&records_before.to_le_bytes());
     out[at + 16..at + 24].copy_from_slice(&sequence_high_water.unwrap_or(0).to_le_bytes());
     let (next_position, covered_start) = segment.unwrap_or((0, 0));

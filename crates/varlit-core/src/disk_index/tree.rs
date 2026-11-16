@@ -1145,7 +1145,7 @@ impl Writer<'_> {
                 PageFormat::Reuse => MAGIC_REUSE,
             });
             bytes[8] = height;
-            bytes[10..12].copy_from_slice(&(chunk.len() as u16).to_le_bytes());
+            bytes[10..12].copy_from_slice(&crate::width::field16(chunk.len())?.to_le_bytes());
             bytes[20..28].copy_from_slice(&birth.to_le_bytes());
             let mut count = 0u64;
             for (entry, into) in chunk
@@ -1153,7 +1153,7 @@ impl Writer<'_> {
                 .zip(bytes[HEADER..].chunks_exact_mut(entry_size(format, height)))
             {
                 into[..8].copy_from_slice(&entry.key.offset.to_le_bytes());
-                into[8..12].copy_from_slice(&(entry.key.len as u32).to_le_bytes());
+                into[8..12].copy_from_slice(&crate::width::field32(entry.key.len)?.to_le_bytes());
                 into[12..28].copy_from_slice(&entry.key.prefix);
                 let value_len = into.len() - 28;
                 into[28..].copy_from_slice(&entry.value[..value_len]);

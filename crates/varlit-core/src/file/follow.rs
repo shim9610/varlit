@@ -1,4 +1,6 @@
-// Native file follow operations.
+// Following a writer: adopting newer publications, checking whether the path
+// still names the same file, and reopening. Included into `file.rs` with
+// `include!`, so it shares that module's scope.
 
 impl VarlitFile {
     /// Whether the pathname still resolves to the object this handle opened.

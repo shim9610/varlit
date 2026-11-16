@@ -118,6 +118,31 @@ poisons the writer; reconcile and reopen. Lock files coordinate cooperating
 writers. Unsupported native locking returns an error; advisory locks do not
 prevent arbitrary external file changes.
 
+## Files and I/O progress
+
+Path-based opens accept only regular files. A FIFO, socket, device or
+directory is refused with an `Io` error of kind `InvalidInput`, and on Unix the
+refusal does not wait: the data file, its lock marker and its sidecars are
+opened with `O_NONBLOCK`, which returns at once for a FIFO with no peer and is
+ignored for regular files, and the file type is checked on the open handle,
+not on the path. Opening a FIFO for writing with no reader can instead fail
+with `ENXIO`. A symbolic link to a regular file is followed for the data file,
+as before.
+
+Once a regular file is open, every read, write, `fsync` and lock is an ordinary
+blocking system call. Varlit assumes each call eventually returns, and does not
+time it out. A hung network mount, a stalled FUSE server or a failing disk can
+block a call indefinitely; nothing in the library ends that wait. `Interrupted`
+is retried without limit, so a signal storm that interrupts every call keeps
+the operation retrying.
+
+Cancellation is cooperative. `ScanCancellationToken` is checked between
+records and at progress callbacks during scans, bootstrap and rebuild; it is
+not observed inside a system call, and other operations have no cancellation
+point. A caller that needs a deadline runs the operation on a thread or in a
+process it can abandon or terminate, and treats the file as it would after a
+crash: a writer's next open recovers to the last publication.
+
 <a id="7-resource-limits-what-they-do-and-do-not-bound"></a>
 <a id="71-limit-accounting-is-nominal-not-peak-rss"></a>
 <a id="72-some-allocations-abort-instead-of-returning-an-error"></a>

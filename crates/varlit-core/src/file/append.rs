@@ -1,4 +1,6 @@
-// Native file append operations.
+// Appending records: plain, keyed and linked pushes, deletes and keyed
+// operations, and the keyed tail map that remembers each key's latest record.
+// Included into `file.rs` with `include!`, so it shares that module's scope.
 
 impl VarlitFile {
     pub fn spec(&self) -> FormatSpec {

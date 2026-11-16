@@ -342,7 +342,12 @@ impl TileCache {
 
     pub(crate) fn insert(&mut self, block: usize, tile: u64, at: u64) {
         let slot = self.slot(block, tile);
-        self.slots[slot] = (block as u32 + 1, tile, at);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "block indexes a format's matrix blocks, a static list far below 2^32"
+        )]
+        let tag = block as u32 + 1;
+        self.slots[slot] = (tag, tile, at);
     }
 
     #[cfg(test)]
@@ -409,7 +414,12 @@ impl Geometry {
         out[0..4].copy_from_slice(META_MAGIC);
         out[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&u16::from(self.growing).to_le_bytes());
-        out[8..12].copy_from_slice(&(self.blocks.len() as u32).to_le_bytes());
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a format's matrix blocks, a static list far below 2^32"
+        )]
+        let count = self.blocks.len() as u32;
+        out[8..12].copy_from_slice(&count.to_le_bytes());
         out[16..24].copy_from_slice(&self.dims[0].to_le_bytes());
         out[24..32].copy_from_slice(&self.dims[1].to_le_bytes());
         out[32..40].copy_from_slice(&ring.0.to_le_bytes());

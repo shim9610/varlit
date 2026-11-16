@@ -468,7 +468,14 @@ pub(crate) fn frame_header(
     out[0..4].copy_from_slice(FRAME_MAGIC);
     out[4..8].copy_from_slice(&flags.to_le_bytes());
     out[8..16].copy_from_slice(&generation.to_le_bytes());
-    out[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+    // A frame is at most a quarter of the ring, and a ring at most
+    // MAX_RING_BYTES (64 MiB).
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "bounded by the ring, see above"
+    )]
+    let len = len as u32;
+    out[16..20].copy_from_slice(&len.to_le_bytes());
     out[20..24].copy_from_slice(&count.to_le_bytes());
     out[24..32].copy_from_slice(&requires.to_le_bytes());
     out

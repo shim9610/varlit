@@ -61,6 +61,15 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
   through caller-owned scratch. The scratch never grows; overlapping chunks
   are checked completely, and callback output is provisional until success.
+- Refuse data files that are not regular files. Opening a FIFO, socket,
+  device or directory by path returns an `Io` error of kind `InvalidInput`
+  instead of reading it, and on Unix the open no longer waits on a FIFO with
+  no peer: the data file, lock marker and sidecars open with `O_NONBLOCK` and
+  the type is checked on the open handle. Document the remaining I/O progress
+  assumptions and where cancellation is observed.
+- Refuse narrowing conversions that could silently truncate a length or count
+  written to a file. Library code converts with a check or states the bound at
+  the cast; `clippy::cast_possible_truncation` is denied outside tests.
 - Add `ChunkedBytes::decode_into` to write a whole payload to an `io::Write`.
   It buffers one chunk, refuses a declared total above the limit before any
   output, and writes a chunk only after its length and CRC check; a failure

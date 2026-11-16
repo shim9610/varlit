@@ -1,4 +1,6 @@
-// Native file directory operations.
+// Reading through the record directory: metadata, schema manifest, block and
+// keyed chains, and the payload reads that start from a directory entry.
+// Included into `file.rs` with `include!`, so it shares that module's scope.
 
 impl VarlitFile {
     /// The newest value written for `key`, or `None`.

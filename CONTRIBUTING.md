@@ -78,8 +78,12 @@ Contributions are provided under the project's existing MIT OR Apache-2.0 licens
 Keep native file operations in the focused implementation files under
 `crates/varlit-core/src/file/`: lifecycle, append/publication, directory reads,
 follow, mutation/rewrite, matrix access, mapped access and header slots. Keep
-unit tests beside their owning module. The implementation files share the native
-file module through literal `include!`s, preserving its private boundary. The
+unit tests beside their owning module. Those implementation files share the
+native file module through literal `include!`s, preserving its private
+boundary; codecs, scanning, publication, locks, record reads, checksums and
+matrix sidecars are child modules that expose `pub(super)` items instead.
+[Native file modules](docs/design/native-file-modules.md) lists what each owns
+and the rules for moving code between them. The
 source auditor (`crates/varlit/tests/support/source_audit.rs`) follows those
 includes recursively and reports dynamic, missing or out-of-crate include paths
 as errors. Preserve public signatures

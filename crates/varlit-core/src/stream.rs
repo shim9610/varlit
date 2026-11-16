@@ -323,7 +323,7 @@ where
     // what stops the operating system from recycling its identity behind an
     // unlink, so the post-publication re-check below cannot be satisfied by a
     // different object wearing the same device/inode pair.
-    let verified = OpenOptions::new().read(true).open(&path)?;
+    let verified = crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)?;
     let current_identity = opened_file_identity(&verified)?;
     if current_identity != snapshot_identity {
         return Err(state_error(
@@ -356,11 +356,10 @@ where
     // and can only tell "still my sidecar" from "somebody else's file at the
     // same name" while this handle keeps the identity from being reissued.
     let published = crate::file::PinnedObject::open(&sidecar).ok();
-    let republished_identity = OpenOptions::new()
-        .read(true)
-        .open(&path)
-        .ok()
-        .and_then(|file| opened_file_identity(&file).ok());
+    let republished_identity =
+        crate::primary_file::open_data_file(OpenOptions::new().read(true), &path)
+            .ok()
+            .and_then(|file| opened_file_identity(&file).ok());
     if republished_identity.as_deref() != Some(snapshot_identity.as_slice()) {
         return Err(state_error(retire_sidecar_for_replaced_primary(
             &sidecar, published,
@@ -481,7 +480,10 @@ impl VarlitStreamReader {
         options: StreamOptions,
     ) -> Result<Self> {
         let spec = stream_spec(spec, options, false)?;
-        let mut file = PrimaryFile::new(OpenOptions::new().read(true).open(path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true), path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         let captured_len = file.len()?;
         if captured_len < header_len {
@@ -1068,12 +1070,14 @@ impl VarlitStreamWriter {
         let path = canonical_write_path(path.as_ref())?;
         let mut lock = WriterLock::acquire(&path)?;
         let mut file = PrimaryFile::new(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)?,
+            crate::primary_file::open_data_file(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false),
+                &path,
+            )?,
             None,
         );
         // Bind the authoritative object lock onto the freshly created file. The
@@ -1197,8 +1201,10 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;
@@ -1254,8 +1260,10 @@ impl VarlitStreamWriter {
         let spec = stream_spec(spec, options, false)?;
         let path = std::fs::canonicalize(path.as_ref())?;
         let lock = WriterLock::acquire(&path)?;
-        let mut file =
-            PrimaryFile::new(OpenOptions::new().read(true).write(true).open(&path)?, None);
+        let mut file = PrimaryFile::new(
+            crate::primary_file::open_data_file(OpenOptions::new().read(true).write(true), &path)?,
+            None,
+        );
         let header_len = read_primary_header(spec, &mut file)?.0;
         // Logical: an anchored file's anchors are not part of the log.
         let physical_len = file.len()?;

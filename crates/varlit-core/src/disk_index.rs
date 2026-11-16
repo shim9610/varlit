@@ -1095,7 +1095,7 @@ fn compute_plan_digest(descriptors: &[DiskIndexDescriptor]) -> DiskIndexResult<D
         hasher.update(&descriptor_count.to_le_bytes());
         for (descriptor, codec) in descriptors.iter().zip(&codecs) {
             let codec = codec.as_bytes();
-            let codec_len = codec.len() as u32;
+            let codec_len = crate::width::field32(codec.len())?;
             hasher.update(&descriptor.block_id.to_le_bytes());
             hasher.update(&descriptor.block_version.to_le_bytes());
             hasher.update(&descriptor.key_wire_type.to_le_bytes());
@@ -2271,8 +2271,10 @@ impl DiskIndexStore {
         self.storage.writer()?;
         let tails = canonical_tail_map(tails, metadata.tail_limit, metadata.committed)?;
         let digest = tail_digest(tails.values().copied());
-        metadata.committed_tail_count = tails.len() as u32;
-        metadata.working_tail_count = tails.len() as u32;
+        // canonical_tail_map refused more than `tail_limit`, a u32.
+        let tail_count = crate::width::field32(tails.len())?;
+        metadata.committed_tail_count = tail_count;
+        metadata.working_tail_count = tail_count;
         metadata.committed_tail_digest = digest;
         metadata.working_tail_digest = digest;
         let rows: Vec<_> = tails.values().copied().collect();

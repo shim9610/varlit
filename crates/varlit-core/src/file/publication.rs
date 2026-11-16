@@ -1,4 +1,4 @@
-//! publication implementation, kept within the original parent privacy boundary.
+//! Publishing a replacement file: temp files, object identity and pins, atomic rename and directory sync.
 use super::*;
 
 /// Folds the native matrix file's OS-object identity and schema hash into a
@@ -156,7 +156,7 @@ pub(super) fn open_pin_handle(path: &Path) -> Result<File> {
 
     Ok(OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?)
 }
 
@@ -577,9 +577,10 @@ pub(crate) fn replace_path_atomically(
     // Captured before the call so an indeterminate 1176/1177 failure can be
     // reconciled cheaply afterwards: if the target pathname then resolves to
     // this exact OS object, the replacement de facto owns the target name.
-    let replacement_identity = File::open(replacement)
-        .ok()
-        .and_then(|file| opened_file_identity(&file).ok());
+    let replacement_identity =
+        crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), replacement)
+            .ok()
+            .and_then(|file| opened_file_identity(&file).ok());
 
     let replacement_wide: Vec<u16> = replacement
         .as_os_str()
@@ -648,7 +649,7 @@ pub(crate) fn replace_path_atomically(
 /// Not Windows-only any more: [`VarlitFile::is_current`] is the public half of
 /// exactly this question and needs the same answer on both platforms.
 pub(super) fn path_resolves_to_object(path: &Path, identity: &[u8]) -> bool {
-    File::open(path)
+    crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), path)
         .ok()
         .and_then(|file| opened_file_identity(&file).ok())
         .is_some_and(|current| current == identity)

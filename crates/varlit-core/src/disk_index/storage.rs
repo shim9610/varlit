@@ -270,12 +270,14 @@ impl Store {
         create_version: u32,
     ) -> DiskIndexResult<Self> {
         let writer = if writable {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(create)
-                .truncate(false)
-                .open(path)?;
+            let file = crate::primary_file::open_data_file(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(create)
+                    .truncate(false),
+                path,
+            )?;
             match crate::file::try_lock_native_guard(&file) {
                 Ok(()) => {}
                 Err(crate::file::WriterGuardLockError::WouldBlock) => {
@@ -288,7 +290,10 @@ impl Store {
             None
         };
         // Independent read-only file description; snapshots cannot retain a writer lock.
-        let file = crate::fallible::try_arc(File::open(path)?)?;
+        let file = crate::fallible::try_arc(crate::primary_file::open_data_file(
+            std::fs::OpenOptions::new().read(true),
+            path,
+        )?)?;
         if let Some(writer) = &writer
             && opened_sidecar_identity(&writer.0)? != opened_sidecar_identity(&file)?
         {
@@ -797,7 +802,7 @@ impl Store {
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
         bytes[24..32].copy_from_slice(&root.tree.count.to_le_bytes());
         bytes[32..332].copy_from_slice(&encode_metadata(metadata));
-        bytes[332..336].copy_from_slice(&(tails.len() as u32).to_le_bytes());
+        bytes[332..336].copy_from_slice(&crate::width::field32(tails.len())?.to_le_bytes());
         bytes[336..344].copy_from_slice(&root.slots.offset.to_le_bytes());
         bytes[344..348].copy_from_slice(&root.slots.count.to_le_bytes());
         let checksum = crc32fast::hash(&bytes[..348]);
@@ -1141,7 +1146,7 @@ impl Store {
             page[..8].copy_from_slice(FREE_MAGIC);
             let next = pages.get(i + 1).copied().unwrap_or(0);
             page[8..16].copy_from_slice(&next.to_le_bytes());
-            page[16..20].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
+            page[16..20].copy_from_slice(&crate::width::field32(chunk.len())?.to_le_bytes());
             for (j, (offset, tag)) in chunk.iter().enumerate() {
                 let entry = FREE_HEADER + j * FREE_ENTRY;
                 page[entry..entry + 8].copy_from_slice(&offset.to_le_bytes());
@@ -1209,7 +1214,7 @@ impl Store {
         bytes[16..24].copy_from_slice(&root.tree.offset.to_le_bytes());
         bytes[24..32].copy_from_slice(&root.tree.count.to_le_bytes());
         bytes[32..332].copy_from_slice(&encode_metadata(metadata));
-        bytes[332..336].copy_from_slice(&(tails.len() as u32).to_le_bytes());
+        bytes[332..336].copy_from_slice(&crate::width::field32(tails.len())?.to_le_bytes());
         bytes[336..344].copy_from_slice(&root.slots.offset.to_le_bytes());
         bytes[344..348].copy_from_slice(&root.slots.count.to_le_bytes());
         bytes[348..356].copy_from_slice(&root.tree.birth.to_le_bytes());

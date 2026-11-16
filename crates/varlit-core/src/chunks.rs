@@ -65,7 +65,8 @@ impl ChunkedBytes {
                 let stored_len =
                     u32::try_from(compressed.len()).map_err(|_| Error::InvalidChunkedBytes)?;
                 let at = CHUNKED_HEADER_LEN + index * CHUNK_ENTRY_LEN;
-                encoded[at..at + 4].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
+                encoded[at..at + 4]
+                    .copy_from_slice(&crate::width::field32(chunk.len())?.to_le_bytes());
                 encoded[at + 4..at + 8].copy_from_slice(&stored_len.to_le_bytes());
                 encoded[at + 8..at + 12].copy_from_slice(&crc32_bytes(chunk)?.to_le_bytes());
                 encoded
@@ -215,7 +216,7 @@ impl ChunkedBytes {
                     let actual = crc.finalize();
                     if actual != entry.crc32 {
                         return Err(Error::ChunkChecksumMismatch {
-                            chunk_index: index as u32,
+                            chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
                             expected: entry.crc32,
                             actual,
                         });
@@ -303,7 +304,7 @@ impl ChunkedBytes {
             let actual = crc32_bytes(chunk)?;
             if actual != entry.crc32 {
                 return Err(Error::ChunkChecksumMismatch {
-                    chunk_index: index as u32,
+                    chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
                     expected: entry.crc32,
                     actual,
                 });
@@ -399,7 +400,7 @@ impl ChunkedBytes {
                 }
                 if actual != entry.crc32 {
                     return Err(Error::ChunkChecksumMismatch {
-                        chunk_index: index as u32,
+                        chunk_index: u32::try_from(index).unwrap_or(u32::MAX),
                         expected: entry.crc32,
                         actual,
                     });
@@ -638,7 +639,7 @@ fn parse_header(encoded: &[u8]) -> Result<ChunkedHeader> {
         return Err(Error::InvalidChunkedBytes);
     }
     Ok(ChunkedHeader {
-        chunk_len: chunk_len as u32,
+        chunk_len: u32::try_from(chunk_len).map_err(|_| Error::InvalidChunkedBytes)?,
         uncompressed_len: u64::from_le_bytes(encoded[16..24].try_into().expect("slice")),
         chunk_count: u32::from_le_bytes(encoded[24..28].try_into().expect("slice")),
     })

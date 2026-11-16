@@ -176,11 +176,11 @@ pub(crate) fn find_tile(
     if page == 0 {
         return Ok(None);
     }
-    if height < 8 && key >> (DIR_LEVEL_BITS * height as u32) != 0 {
+    if height < 8 && key >> (u64::from(DIR_LEVEL_BITS) * height) != 0 {
         return Ok(None);
     }
     for level in (0..height).rev() {
-        let index = (key >> (DIR_LEVEL_BITS * level as u32)) & (DIR_FANOUT - 1);
+        let index = (key >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
         let mut entry = [0u8; 8];
         read(page + index * 8, &mut entry)?;
         page = directory_offset(u64::from_le_bytes(entry))?;

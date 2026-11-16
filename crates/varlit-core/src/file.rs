@@ -6562,7 +6562,10 @@ pub(crate) fn read_file_header_anchored(
 
 /// Opens the primary at `path` read-only, with the anchors its header records.
 fn open_primary_by_path(spec: FormatSpec, path: &Path) -> Result<PrimaryFile> {
-    let mut file = PrimaryFile::new(File::open(path)?, None);
+    let mut file = PrimaryFile::new(
+        crate::primary_file::open_data_file(std::fs::OpenOptions::new().read(true), path)?,
+        None,
+    );
     read_primary_header(spec, &mut file)?;
     Ok(file)
 }
@@ -6587,6 +6590,10 @@ pub(crate) fn read_primary_header(
 /// differ between two `create_with_dims` calls that reuse the same OS file
 /// object. Wall-clock nanoseconds, the process id and a per-process counter
 /// are mixed through FNV-1a into two independent 64-bit lanes.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the clock is split into its 64-bit halves and mixed; the low bits are the point"
+)]
 fn fresh_matrix_creation_nonce() -> [u8; MATRIX_CREATION_NONCE_LEN] {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -7198,345 +7205,6 @@ fn checksum_record_fields(
     )
 }
 
-fn checksum_record_file(
-    spec: FormatSpec,
-    file: &mut (impl Read + Seek),
-    entry: &RecordIndexEntry,
-    footer: &[u8],
-) -> Result<u32> {
-    let header = RecordHeaderFields {
-        block_id: entry.block_id,
-        block_version: entry.block_version,
-        flags: entry.flags,
-        sequence: entry.sequence,
-        payload_len: entry.payload_len,
-        checksum: 0,
-        uncompressed_len_hint: entry.uncompressed_len_hint,
-    };
-    let header_bytes = if spec.integrity_policy == IntegrityPolicy::Crc32WithHeader {
-        Some(encode_native_record_header(
-            header,
-            entry.record_offset,
-            record_footer_len(spec),
-        )?)
-    } else {
-        None
-    };
-    crc32_record_file(
-        file,
-        entry.payload_offset,
-        if entry.flags & RECORD_FLAG_IN_PLACE != 0 {
-            0
-        } else {
-            entry.payload_len
-        },
-        header_bytes.as_ref().map(|bytes| &bytes[..]).unwrap_or(&[]),
-        checksummed_footer(spec, footer),
-    )
-}
-
-#[cfg(feature = "integrity")]
-fn crc32_record_file(
-    file: &mut (impl Read + Seek),
-    payload_offset: u64,
-    payload_len: u64,
-    header: &[u8],
-    footer: &[u8],
-) -> Result<u32> {
-    if payload_len <= 1024 {
-        crc32_record_file_buffered::<1024>(file, payload_offset, payload_len, header, footer)
-    } else {
-        crc32_record_file_buffered::<STREAM_BUFFER_LEN>(
-            file,
-            payload_offset,
-            payload_len,
-            header,
-            footer,
-        )
-    }
-}
-
-#[cfg(feature = "integrity")]
-#[inline(never)]
-fn crc32_record_file_buffered<const BUFFER: usize>(
-    file: &mut (impl Read + Seek),
-    payload_offset: u64,
-    payload_len: u64,
-    header: &[u8],
-    footer: &[u8],
-) -> Result<u32> {
-    const {
-        assert!(BUFFER > 0);
-    }
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(header);
-    file.seek(SeekFrom::Start(payload_offset))?;
-    let mut remaining = payload_len;
-    let mut buffer = [0; BUFFER];
-    while remaining != 0 {
-        let chunk_len = usize::try_from(remaining.min(BUFFER as u64)).map_err(|_| {
-            Error::ResourceArithmeticOverflow {
-                resource: "checksum buffer length",
-            }
-        })?;
-        file.read_exact(&mut buffer[..chunk_len])?;
-        hasher.update(&buffer[..chunk_len]);
-        remaining -= chunk_len as u64;
-    }
-    hasher.update(footer);
-    Ok(hasher.finalize())
-}
-
-#[cfg(not(feature = "integrity"))]
-fn crc32_record_file(
-    _file: &mut (impl Read + Seek),
-    _payload_offset: u64,
-    _payload_len: u64,
-    _header: &[u8],
-    _footer: &[u8],
-) -> Result<u32> {
-    Err(Error::IntegrityFeatureDisabled)
-}
-
-/// How much of a record footer the checksum covers.
-///
-/// The whole thing under [`LivenessPolicy::None`], which is what every file
-/// written before that policy existed carries. Under
-/// [`LivenessPolicy::FooterFlags`] the trailing word is excluded, and that
-/// exclusion is the entire mechanism: it is what lets a writer set a flag there
-/// afterwards without re-reading the payload to recompute a CRC, and without
-/// making every reader that already framed the record disagree with the disk.
-///
-/// The price, stated once: those four bytes are unauthenticated. A flipped bit
-/// in them is not detected by anything, so the flags are advisory — a set flag
-/// says "the writer marked this", never "these bytes are sound".
-fn checksummed_footer(spec: FormatSpec, footer: &[u8]) -> &[u8] {
-    match spec.liveness_policy {
-        LivenessPolicy::None => footer,
-        LivenessPolicy::FooterFlags => footer
-            .len()
-            .checked_sub(crate::width::small(RECORD_FOOTER_MUTABLE_LEN))
-            .map_or(footer, |end| &footer[..end]),
-    }
-}
-
-fn checksum_record_bytes(
-    spec: FormatSpec,
-    header: &[u8],
-    payload: &[u8],
-    footer: &[u8],
-) -> Result<u32> {
-    match spec.integrity_policy {
-        IntegrityPolicy::None => Ok(0),
-        IntegrityPolicy::Crc32 => {
-            crc32_record_bytes(&[], payload, checksummed_footer(spec, footer))
-        }
-        IntegrityPolicy::Crc32WithHeader => {
-            crc32_record_bytes(header, payload, checksummed_footer(spec, footer))
-        }
-    }
-}
-
-fn write_matrix_sidecar_file<P: AsRef<Path>>(
-    spec: FormatSpec,
-    category: &str,
-    sidecar_path: P,
-    generation: u64,
-    payload: &[u8],
-    identity: MatrixNativeIdentity,
-) -> Result<MatrixSidecarManifest> {
-    let payload_len =
-        u64::try_from(payload.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
-    let format_magic_len =
-        u64::try_from(spec.magic.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-            resource: "matrix sidecar",
-        })?;
-    let category_len_u64 =
-        u64::try_from(category.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-            resource: "matrix sidecar",
-        })?;
-    crate::matrix::matrix_sidecar_write_len(
-        spec,
-        MATRIX_SIDECAR_FIXED_LEN as u64,
-        format_magic_len,
-        category_len_u64,
-        payload_len,
-    )?;
-    let manifest = matrix_sidecar_manifest_for(spec, category, generation, payload, identity)?;
-    let magic_len =
-        u16::try_from(manifest.format_magic.len()).map_err(|_| Error::InvalidMatrixSidecar)?;
-    let category_len =
-        u16::try_from(manifest.category.len()).map_err(|_| Error::InvalidMatrixSidecar)?;
-    let header_len = MATRIX_SIDECAR_FIXED_LEN
-        .checked_add(magic_len as usize)
-        .and_then(|len| len.checked_add(category_len as usize))
-        .ok_or(Error::ResourceArithmeticOverflow {
-            resource: "sidecar header length",
-        })?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(header_len)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "sidecar header",
-            requested: header_len as u64,
-        })?;
-    bytes.extend_from_slice(MATRIX_SIDECAR_MAGIC);
-    bytes.extend_from_slice(&MATRIX_SIDECAR_VERSION.to_le_bytes());
-    bytes.extend_from_slice(&0u16.to_le_bytes());
-    bytes.extend_from_slice(&manifest.format_version.to_le_bytes());
-    bytes.extend_from_slice(&magic_len.to_le_bytes());
-    bytes.extend_from_slice(&category_len.to_le_bytes());
-    bytes.extend_from_slice(&0u16.to_le_bytes());
-    bytes.extend_from_slice(&manifest.schema_hash.to_le_bytes());
-    bytes.extend_from_slice(&manifest.generation.to_le_bytes());
-    bytes.extend_from_slice(&manifest.payload_len.to_le_bytes());
-    bytes.extend_from_slice(&manifest.payload_crc32.to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&manifest.native_fingerprint);
-    bytes.extend_from_slice(&manifest.matrix_layout_generation.to_le_bytes());
-    bytes.extend_from_slice(&manifest.matrix_creation_nonce);
-    debug_assert_eq!(bytes.len(), MATRIX_SIDECAR_FIXED_LEN);
-    bytes.extend_from_slice(&manifest.format_magic);
-    bytes.extend_from_slice(manifest.category.as_bytes());
-
-    // Publish atomically via a same-directory RAII temp: write the full sidecar
-    // into a private temp, fsync it, then atomically replace the destination and
-    // sync the parent directory. A crash before the replace leaves the previous
-    // sidecar untouched; the old in-place `File::create` truncated it eagerly
-    // and could expose a partial sidecar.
-    let sidecar_path = sidecar_path.as_ref();
-    let (temp_path, mut temp_file) = create_rewrite_temp_file(sidecar_path)?;
-    let write_result = (|| -> Result<()> {
-        temp_file.write_all(&bytes)?;
-        temp_file.write_all(payload)?;
-        temp_file.flush()?;
-        temp_file.sync_all()?;
-        Ok(())
-    })();
-    if let Err(error) = write_result {
-        drop(temp_file);
-        let _ = remove_file(&temp_path);
-        return Err(error);
-    }
-    drop(temp_file);
-
-    match replace_path_atomically(&temp_path, sidecar_path) {
-        Ok(ReplaceDurability::Durable) => Ok(manifest),
-        Ok(ReplaceDurability::ParentSyncPending(sync_error)) => {
-            // The replacement is already visible at `sidecar_path`; only the
-            // parent-directory entry's durability is pending. Do not delete the
-            // now-published file, and surface the durability gap so a caller
-            // that needs a hard guarantee can react (a regenerable sidecar may
-            // simply be rewritten).
-            Err(crate::fallible::boxed_path_error(
-                sync_error,
-                sidecar_path,
-                Error::ErrorContextAllocationFailed {
-                    context: crate::AllocationFailureContext::ParentSyncPending,
-                },
-                |path, source| Error::PublishedButParentSyncPending { path, source },
-            ))
-        }
-        Err(error) => Err(preserve_temp_on_indeterminate(&temp_path, error)),
-    }
-}
-
-fn read_matrix_sidecar_file<P: AsRef<Path>>(
-    spec: FormatSpec,
-    category: &str,
-    sidecar_path: P,
-    expected_generation: Option<u64>,
-    identity: MatrixNativeIdentity,
-) -> Result<(MatrixSidecarManifest, Vec<u8>)> {
-    let mut file = File::open(sidecar_path)?;
-    let file_len = file.metadata()?.len();
-    crate::matrix::check_matrix_sidecar_file_len(spec, file_len)?;
-    if file_len < MATRIX_SIDECAR_FIXED_LEN as u64 {
-        return Err(Error::InvalidMatrixSidecar);
-    }
-    let mut fixed = [0; MATRIX_SIDECAR_FIXED_LEN];
-    file.read_exact(&mut fixed)?;
-    if &fixed[0..4] != MATRIX_SIDECAR_MAGIC {
-        return Err(Error::InvalidMatrixSidecar);
-    }
-    let version = u16::from_le_bytes(fixed[4..6].try_into().expect("slice"));
-    if version != MATRIX_SIDECAR_VERSION {
-        // A different envelope version (legacy v1 lacked native identity,
-        // legacy v2 lacked the matrix creation nonce) is refused as stale and
-        // regenerable rather than trusted.
-        return Err(Error::MatrixSidecarMismatch("sidecar version"));
-    }
-    let format_version = u16::from_le_bytes(fixed[8..10].try_into().expect("slice"));
-    let flags = u16::from_le_bytes(fixed[6..8].try_into().expect("slice"));
-    let magic_len = u64::from(u16::from_le_bytes(fixed[10..12].try_into().expect("slice")));
-    let category_len = u64::from(u16::from_le_bytes(fixed[12..14].try_into().expect("slice")));
-    let reserved = u16::from_le_bytes(fixed[14..16].try_into().expect("slice"));
-    let schema_hash = u64::from_le_bytes(fixed[16..24].try_into().expect("slice"));
-    let generation = u64::from_le_bytes(fixed[24..32].try_into().expect("slice"));
-    let payload_len = u64::from_le_bytes(fixed[32..40].try_into().expect("slice"));
-    let payload_crc32 = u32::from_le_bytes(fixed[40..44].try_into().expect("slice"));
-    let trailing_reserved = u32::from_le_bytes(fixed[44..48].try_into().expect("slice"));
-    let mut native_fingerprint = [0u8; 32];
-    native_fingerprint.copy_from_slice(
-        &fixed[MATRIX_SIDECAR_FINGERPRINT_OFFSET..MATRIX_SIDECAR_LAYOUT_GENERATION_OFFSET],
-    );
-    let matrix_layout_generation = u64::from_le_bytes(
-        fixed[MATRIX_SIDECAR_LAYOUT_GENERATION_OFFSET..MATRIX_SIDECAR_CREATION_NONCE_OFFSET]
-            .try_into()
-            .expect("slice"),
-    );
-    let mut matrix_creation_nonce = [0u8; MATRIX_CREATION_NONCE_LEN];
-    matrix_creation_nonce
-        .copy_from_slice(&fixed[MATRIX_SIDECAR_CREATION_NONCE_OFFSET..MATRIX_SIDECAR_FIXED_LEN]);
-    let plan = crate::matrix::matrix_sidecar_read_plan(
-        spec,
-        file_len,
-        MATRIX_SIDECAR_FIXED_LEN as u64,
-        magic_len,
-        category_len,
-        payload_len,
-        flags,
-        reserved,
-        trailing_reserved,
-    )?;
-    // only the small fixed header and the bounded magic/category
-    // prefix are read before identity validation. A sidecar that belongs to a
-    // different native file, schema, category or generation is rejected here,
-    // before the payload is ever allocated, read or hashed.
-    file.seek(SeekFrom::Start(plan.format_magic_offset))?;
-    let mut format_magic = try_alloc_bytes(magic_len, "sidecar format magic")?;
-    file.read_exact(&mut format_magic)?;
-    file.seek(SeekFrom::Start(plan.category_offset))?;
-    let mut category_bytes = try_alloc_bytes(category_len, "sidecar category")?;
-    file.read_exact(&mut category_bytes)?;
-    let category_text =
-        String::from_utf8(category_bytes).map_err(|_| Error::InvalidMatrixSidecar)?;
-    let manifest = MatrixSidecarManifest {
-        format_magic,
-        format_version,
-        schema_hash,
-        category: category_text,
-        generation,
-        payload_len,
-        payload_crc32,
-        native_fingerprint,
-        matrix_layout_generation,
-        matrix_creation_nonce,
-    };
-    validate_matrix_sidecar_manifest(spec, category, expected_generation, identity, &manifest)?;
-    file.seek(SeekFrom::Start(plan.payload_offset))?;
-    let mut payload = try_alloc_bytes(plan.payload_len, "sidecar payload")?;
-    file.read_exact(&mut payload)?;
-    let actual = crc32_bytes(&payload)?;
-    if actual != payload_crc32 {
-        return Err(Error::MatrixSidecarChecksumMismatch {
-            expected: payload_crc32,
-            actual,
-        });
-    }
-    Ok((manifest, payload))
-}
-
 fn try_alloc_bytes(len: u64, resource: &'static str) -> Result<Vec<u8>> {
     let len = usize::try_from(len).map_err(|_| Error::LengthOverflow { value: len })?;
     let mut bytes = Vec::new();
@@ -7548,119 +7216,6 @@ fn try_alloc_bytes(len: u64, resource: &'static str) -> Result<Vec<u8>> {
         })?;
     bytes.resize(len, 0);
     Ok(bytes)
-}
-
-fn matrix_sidecar_manifest_for(
-    spec: FormatSpec,
-    category: &str,
-    generation: u64,
-    payload: &[u8],
-    identity: MatrixNativeIdentity,
-) -> Result<MatrixSidecarManifest> {
-    if category.is_empty() {
-        return Err(Error::InvalidMatrixSidecar);
-    }
-    let mut format_magic = try_alloc_bytes(
-        u64::try_from(spec.magic.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-            resource: "matrix sidecar",
-        })?,
-        "sidecar format magic",
-    )?;
-    format_magic.copy_from_slice(spec.magic);
-    let category_len =
-        u64::try_from(category.len()).map_err(|_| Error::ResourceArithmeticOverflow {
-            resource: "matrix sidecar",
-        })?;
-    let mut category_text = String::new();
-    category_text
-        .try_reserve_exact(category.len())
-        .map_err(|_| Error::AllocationFailed {
-            resource: "sidecar category",
-            requested: category_len,
-        })?;
-    category_text.push_str(category);
-    Ok(MatrixSidecarManifest {
-        format_magic,
-        format_version: spec.version,
-        schema_hash: spec.computed_schema_hash(),
-        category: category_text,
-        generation,
-        payload_len: payload
-            .len()
-            .try_into()
-            .map_err(|_| Error::InvalidMatrixSidecar)?,
-        payload_crc32: crc32_bytes(payload)?,
-        native_fingerprint: identity.fingerprint,
-        matrix_layout_generation: identity.layout_generation,
-        matrix_creation_nonce: identity.creation_nonce,
-    })
-}
-
-fn validate_matrix_sidecar_manifest(
-    spec: FormatSpec,
-    category: &str,
-    expected_generation: Option<u64>,
-    identity: MatrixNativeIdentity,
-    manifest: &MatrixSidecarManifest,
-) -> Result<()> {
-    if manifest.format_magic != spec.magic {
-        return Err(Error::MatrixSidecarMismatch("format magic"));
-    }
-    if manifest.format_version != spec.version {
-        return Err(Error::MatrixSidecarMismatch("format version"));
-    }
-    if manifest.schema_hash != spec.computed_schema_hash() {
-        return Err(Error::MatrixSidecarMismatch("schema hash"));
-    }
-    if manifest.category != category {
-        return Err(Error::MatrixSidecarMismatch("category"));
-    }
-    // Bind to a specific native file and its matrix layout: a same-spec,
-    // same-generation sibling produces a different OS-object fingerprint and is
-    // rejected.
-    if manifest.native_fingerprint != identity.fingerprint {
-        return Err(Error::MatrixSidecarMismatch("native identity"));
-    }
-    if manifest.matrix_layout_generation != identity.layout_generation {
-        return Err(Error::MatrixSidecarMismatch("matrix layout generation"));
-    }
-    // Same OS object, schema and layout offsets are not enough: a matrix
-    // recreated in the same file object gets a fresh creation nonce, so every
-    // sidecar published against the previous logical matrix is refused as
-    // stale and regenerable.
-    if manifest.matrix_creation_nonce != identity.creation_nonce {
-        return Err(Error::MatrixSidecarMismatch("creation nonce"));
-    }
-    if let Some(expected_generation) = expected_generation
-        && manifest.generation != expected_generation
-    {
-        return Err(Error::MatrixSidecarMismatch("generation"));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "integrity")]
-fn crc32_bytes(payload: &[u8]) -> Result<u32> {
-    Ok(crc32fast::hash(payload))
-}
-
-#[cfg(not(feature = "integrity"))]
-fn crc32_bytes(_payload: &[u8]) -> Result<u32> {
-    Err(Error::IntegrityFeatureDisabled)
-}
-
-#[cfg(feature = "integrity")]
-fn crc32_record_bytes(header: &[u8], payload: &[u8], footer: &[u8]) -> Result<u32> {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(header);
-    hasher.update(payload);
-    hasher.update(footer);
-    Ok(hasher.finalize())
-}
-
-#[cfg(not(feature = "integrity"))]
-fn crc32_record_bytes(_header: &[u8], _payload: &[u8], _footer: &[u8]) -> Result<u32> {
-    Err(Error::IntegrityFeatureDisabled)
 }
 
 #[cfg(test)]
@@ -8176,6 +7731,14 @@ pub(crate) use header_codec::file_header_extensions;
 pub(crate) use header_codec::header_tails_region_len;
 
 pub(crate) use header_codec::blank_mutable_header_bytes;
+
+#[path = "file/matrix_sidecar.rs"]
+mod matrix_sidecar;
+use matrix_sidecar::*;
+
+#[path = "file/record_checksum.rs"]
+mod record_checksum;
+use record_checksum::*;
 
 #[path = "file/scan.rs"]
 mod scan;

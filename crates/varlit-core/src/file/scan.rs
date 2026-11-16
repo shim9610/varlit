@@ -1,4 +1,4 @@
-//! scan implementation, kept within the original parent privacy boundary.
+//! Scanning a native file: framing each record, building the directory, and the stream scanner incremental follow and lazy opens use.
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

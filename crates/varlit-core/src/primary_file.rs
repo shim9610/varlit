@@ -16,6 +16,42 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use crate::anchor::{Anchor, AnchorLayout, Segment};
 use crate::{Error, Result};
 
+/// Opens a data file at a caller's path, accepting only a regular file.
+///
+/// A FIFO with no peer, or a device, can block inside `open` itself, before
+/// any check could run, and nothing the library does afterwards would end
+/// that wait. On Unix the open therefore uses `O_NONBLOCK`, which returns at
+/// once for those and which Unix ignores for regular files; the flag stays
+/// set on the returned handle, where it has no effect. The type is then
+/// checked on the open handle rather than on the path, so a name swapped
+/// between a check and the open cannot bring a different object through.
+/// Anything other than a regular file is refused with `InvalidInput`.
+pub(crate) fn open_data_file(
+    options: &mut std::fs::OpenOptions,
+    path: impl AsRef<std::path::Path>,
+) -> std::io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    refuse_special_file(&file)?;
+    Ok(file)
+}
+
+/// `InvalidInput` unless `file` is a regular file.
+pub(crate) fn refuse_special_file(file: &File) -> std::io::Result<()> {
+    if file.metadata()?.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file: Varlit reads and writes only regular files",
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PrimaryFile {
     file: File,

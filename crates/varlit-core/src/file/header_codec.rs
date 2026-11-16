@@ -1,4 +1,4 @@
-//! header codec implementation, kept within the original parent privacy boundary.
+//! Encoding and decoding the file header, schema manifest, index checkpoints, segment payloads and the header-slot and header-tail regions.
 use super::*;
 
 #[cfg(test)]
@@ -278,7 +278,8 @@ pub(super) fn encode_schema_manifest(spec: FormatSpec) -> Result<Vec<u8>> {
         None => payload.push(0),
     }
     encode_manifest_compression_policy(&mut payload, spec.compression_policy);
-    payload.extend_from_slice(&(spec.blocks.len() as u32).to_le_bytes());
+    let block_count = u32::try_from(spec.blocks.len()).map_err(|_| Error::InvalidSchemaManifest)?;
+    payload.extend_from_slice(&block_count.to_le_bytes());
     for block in spec.blocks {
         payload.extend_from_slice(&block.id.to_le_bytes());
         payload.extend_from_slice(&block.version.to_le_bytes());
@@ -287,7 +288,9 @@ pub(super) fn encode_schema_manifest(spec: FormatSpec) -> Result<Vec<u8>> {
         let name_len = u16::try_from(name.len()).map_err(|_| Error::InvalidSchemaManifest)?;
         payload.extend_from_slice(&name_len.to_le_bytes());
         payload.extend_from_slice(name);
-        payload.extend_from_slice(&(block.fields.len() as u32).to_le_bytes());
+        let field_count =
+            u32::try_from(block.fields.len()).map_err(|_| Error::InvalidSchemaManifest)?;
+        payload.extend_from_slice(&field_count.to_le_bytes());
         for field in block.fields {
             payload.extend_from_slice(&field.id.to_le_bytes());
             payload.push(wire_type_byte(field.wire_type));
@@ -1341,7 +1344,8 @@ pub(super) fn encode_header_tails_slot(
     let (flags, count) = if overflow {
         (HEADER_TAILS_FLAG_OVERFLOW, 0u32)
     } else {
-        (0u16, tails.len() as u32)
+        // `tails.len() <= capacity`, which fits u32 (checked above).
+        (0u16, u32::try_from(tails.len()).unwrap_or(capacity_u32))
     };
     let mut slot = Vec::new();
     slot.try_reserve_exact(slot_len)
@@ -1420,7 +1424,7 @@ pub(super) fn is_known_header_extension_magic(magic: &[u8; 4]) -> bool {
 pub(super) fn encode_liveness_block(flags: u16) -> [u8; 8 + LIVENESS_PAYLOAD_LEN] {
     let mut block = [0u8; 8 + LIVENESS_PAYLOAD_LEN];
     block[..4].copy_from_slice(LIVENESS_MAGIC);
-    block[4..8].copy_from_slice(&(LIVENESS_PAYLOAD_LEN as u32).to_le_bytes());
+    block[4..8].copy_from_slice(&crate::width::small32(LIVENESS_PAYLOAD_LEN).to_le_bytes());
     block[8..10].copy_from_slice(&LIVENESS_BLOCK_VERSION.to_le_bytes());
     block[10..12].copy_from_slice(&flags.to_le_bytes());
     let checksum = liveness_checksum(&block[8..12]);
@@ -1521,8 +1525,10 @@ impl HeaderSlotsView<'_> {
 
     /// What the checksum should be: everything in the payload except the four
     /// bytes holding the checksum itself.
-    pub(super) fn expected_checksum(&self, capacity: usize) -> u32 {
-        let prefix = header_slots_prefix(self.flags, capacity as u32, self.used as u32);
+    pub(super) fn expected_checksum(&self, capacity: u32) -> u32 {
+        // Decoding refused a `used` above the capacity, a u32.
+        let used = u32::try_from(self.used).unwrap_or(capacity);
+        let prefix = header_slots_prefix(self.flags, capacity, used);
         header_slots_checksum_continue(header_slots_checksum(&prefix), self.entries)
     }
 }
@@ -1664,7 +1670,6 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
     let framed = crate::format::header_slots_region_len(spec);
     let framed_len = usize::try_from(framed)
         .map_err(|_| Error::InvalidFormatSpec("header_slots region length overflows"))?;
-    let capacity = spec.header_slots.capacity as usize;
     let payload_len =
         framed_len - crate::width::small(crate::format::HEADER_SLOTS_BLOCK_FRAMING_LEN);
     let payload_len_u32 = u32::try_from(payload_len)
@@ -1678,7 +1683,7 @@ pub(super) fn encode_empty_header_slots_region(spec: FormatSpec) -> Result<Vec<u
         })?;
     region.extend_from_slice(HEADER_SLOTS_MAGIC);
     region.extend_from_slice(&payload_len_u32.to_le_bytes());
-    let prefix = header_slots_prefix(0, capacity as u32, 0);
+    let prefix = header_slots_prefix(0, spec.header_slots.capacity, 0);
     region.extend_from_slice(&prefix);
     region.resize(framed_len, 0);
     let checksum = header_slots_checksum_continue(header_slots_checksum(&prefix), &region[24..]);

@@ -29,6 +29,9 @@ Relevant problems include accepting invalid file structures, exceeding declared
 resource limits, violating confirmed-generation boundaries, losing acknowledged
 records during recovery, memory safety errors, and incorrect file-object handling.
 Format declarations and user-provided codecs are trusted application code.
+A path that names a FIFO, device, socket or directory is refused without
+blocking; the filesystem itself is trusted to complete each I/O call (see
+[files and I/O progress](docs/known-limitations.md#files-and-io-progress)).
 Documented mmap mutation exclusions and experimental feature limitations still
 apply; see [known limitations](docs/known-limitations.md).
 

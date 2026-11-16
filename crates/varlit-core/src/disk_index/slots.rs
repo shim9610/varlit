@@ -373,12 +373,12 @@ impl Reader {
             .unwrap()
             .blocks
             .iter()
-            .map(|b| (b.id, b.len as u32))
+            .map(|b| (b.id, b.len as u64))
             .ne(plan
                 .descriptors()
                 .iter()
                 .filter(|d| d.finite_key_count != 0)
-                .map(|d| (d.block_id, d.finite_key_count)))
+                .map(|d| (d.block_id, u64::from(d.finite_key_count))))
         {
             return Err(bad());
         }
@@ -490,8 +490,8 @@ impl Working {
         if directory
             .blocks
             .iter()
-            .map(|b| (b.id, b.len as u32))
-            .ne(layout.iter().copied())
+            .map(|b| (b.id, b.len as u64))
+            .ne(layout.iter().map(|&(id, len)| (id, u64::from(len))))
         {
             return Err(bad());
         }
@@ -517,7 +517,7 @@ impl Working {
                 let mut key = [0; 7];
                 key[0] = 1;
                 key[1..5].copy_from_slice(&b.id.to_be_bytes());
-                key[5..].copy_from_slice(&(code as u16).to_le_bytes());
+                key[5..].copy_from_slice(&crate::width::field16(code)?.to_le_bytes());
                 rows.push(reader.get(&key)?.flatten());
             }
             if rows.iter().filter(|row| row.is_some()).count() != b.used as usize {
@@ -622,7 +622,7 @@ impl Working {
                 }
                 if format == PageFormat::Reuse {
                     bytes.extend_from_slice(&b.id.to_le_bytes());
-                    bytes.extend_from_slice(&(chunk as u32).to_le_bytes());
+                    bytes.extend_from_slice(&crate::width::field32(chunk)?.to_le_bytes());
                     bytes.extend_from_slice(&birth.to_le_bytes());
                 }
                 bytes.extend_from_slice(&crc32fast::hash(&bytes).to_le_bytes());
@@ -654,16 +654,17 @@ impl Working {
             PageFormat::Append => MAGIC,
             PageFormat::Reuse => MAGIC_REUSE,
         });
-        bytes[12..16].copy_from_slice(&(self.directory.blocks.len() as u32).to_le_bytes());
+        bytes[12..16]
+            .copy_from_slice(&crate::width::field32(self.directory.blocks.len())?.to_le_bytes());
         bytes[16..24].copy_from_slice(&u64::from(count).to_le_bytes());
         if format == PageFormat::Reuse {
             bytes[24..32].copy_from_slice(&birth.to_le_bytes());
         }
         for b in &self.directory.blocks {
             bytes.extend_from_slice(&b.id.to_le_bytes());
-            bytes.extend_from_slice(&(b.len as u32).to_le_bytes());
+            bytes.extend_from_slice(&crate::width::field32(b.len)?.to_le_bytes());
             bytes.extend_from_slice(&b.used.to_le_bytes());
-            bytes.extend_from_slice(&(b.chunks.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&crate::width::field32(b.chunks.len())?.to_le_bytes());
             for (offset, chunk_birth) in b.chunks.iter().zip(&b.births) {
                 bytes.extend_from_slice(&offset.to_le_bytes());
                 if format == PageFormat::Reuse {
@@ -696,7 +697,9 @@ impl Working {
         let blocks = &directory.as_ref().unwrap().blocks;
         let mut layout = Vec::new();
         layout.try_reserve_exact(blocks.len()).map_err(oom)?;
-        layout.extend(blocks.iter().map(|b| (b.id, b.len as u32)));
+        for b in blocks {
+            layout.push((b.id, crate::width::field32(b.len)?));
+        }
         Ok(layout)
     }
 }

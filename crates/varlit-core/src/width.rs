@@ -45,6 +45,37 @@ pub(crate) fn bounded(value: u64, bound: usize) -> usize {
     }
 }
 
+/// `len` as a 32-bit length or count field, or `LengthOverflow` when it does
+/// not fit. Writing it with `as u32` would store the low half and describe
+/// different bytes than the ones that follow.
+#[inline(always)]
+pub(crate) fn field32(len: usize) -> Result<u32> {
+    u32::try_from(len).map_err(|_| Error::LengthOverflow { value: len as u64 })
+}
+
+/// `len` as a 16-bit length or count field, or `LengthOverflow`.
+#[inline(always)]
+pub(crate) fn field16(len: usize) -> Result<u16> {
+    u16::try_from(len).map_err(|_| Error::LengthOverflow { value: len as u64 })
+}
+
+/// A format constant as a 32-bit field. A constant that did not fit would
+/// stop compilation instead of being cut short.
+#[inline(always)]
+pub(crate) const fn small32(value: usize) -> u32 {
+    assert!(
+        value <= u32::MAX as usize,
+        "a format constant must fit 32 bits"
+    );
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "checked against u32::MAX on the line above"
+    )]
+    {
+        value as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +102,24 @@ mod tests {
         assert_eq!(bounded(11, 10), 10);
         assert_eq!(bounded(u64::MAX, 7), 7);
         assert_eq!(bounded(5, usize::MAX), 5);
+    }
+
+    #[test]
+    fn fields_refuse_what_they_cannot_hold() {
+        assert_eq!(field32(0).unwrap(), 0);
+        assert_eq!(field32(u32::MAX as usize).unwrap(), u32::MAX);
+        assert_eq!(field16(u16::MAX as usize).unwrap(), u16::MAX);
+        assert!(matches!(
+            field16(1 << 16),
+            Err(Error::LengthOverflow { value: 65536 })
+        ));
+        #[cfg(target_pointer_width = "64")]
+        assert!(matches!(
+            field32(1 << 32),
+            Err(Error::LengthOverflow { value }) if value == 1 << 32
+        ));
+        const LEN: u32 = small32(4096);
+        assert_eq!(LEN, 4096);
     }
 
     #[test]

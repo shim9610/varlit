@@ -134,7 +134,12 @@ impl Bucket {
             self.inline[kept] = self.more.remove(0);
             kept += 1;
         }
-        self.len = kept as u8;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "kept <= BUCKET_INLINE, which is 4"
+        )]
+        let len = kept as u8;
+        self.len = len;
     }
 }
 

@@ -1315,7 +1315,7 @@ pub(crate) fn remove_path_if_same_object(
             file.as_raw_handle() as HANDLE,
             FileDispositionInfo,
             (&raw const disposition).cast(),
-            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            crate::width::small32(std::mem::size_of::<FILE_DISPOSITION_INFO>()),
         )
     };
     if status == 0 {

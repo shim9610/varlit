@@ -292,7 +292,7 @@ impl TileWriter {
             self.stage(store, root_at, &new_root)?;
         }
         for level in (1..height).rev() {
-            let index = (key >> (DIR_LEVEL_BITS * level as u32)) & (DIR_FANOUT - 1);
+            let index = (key >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
             let at = page + index * 8;
             let mut entry = [0u8; 8];
             self.read(store, at, &mut entry)?;
@@ -464,9 +464,10 @@ impl TileWriter {
                 entries.try_reserve(1).map_err(|_| refused(24))?;
                 let bytes_at = frame.len() as u64 + ENTRY_HEADER;
                 frame.extend_from_slice(&target.to_le_bytes());
-                frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                let bytes_len = crate::width::field32(bytes.len())?;
+                frame.extend_from_slice(&bytes_len.to_le_bytes());
                 frame.extend_from_slice(bytes);
-                entries.push((target, bytes_at, bytes.len() as u32));
+                entries.push((target, bytes_at, bytes_len));
                 next += 1;
             }
             let last = next == targets.len();
@@ -480,7 +481,7 @@ impl TileWriter {
                 flags,
                 generation,
                 len,
-                entries.len() as u32,
+                crate::width::field32(entries.len())?,
                 requires,
             ));
             let crc = crc32fast::hash(&frame);

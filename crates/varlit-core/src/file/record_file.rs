@@ -1,3 +1,4 @@
+//! The file handle records are read and written through, with the counters tests use to observe its I/O.
 use super::{Error, RecordOverwrite, ReservedIndexSlot, Result, opened_file_identity};
 use crate::primary_file::{PrimaryFile, RecordsAnchor};
 use crate::snapshot::WrittenThrough;
