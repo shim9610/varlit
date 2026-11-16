@@ -1033,15 +1033,19 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   file's write-ahead ring; a writer dropped without `sync` publishes nothing.
   A reader keeps its generation until `follow`; one the ring has moved past
   gets `MatrixSnapshotExpired` and must `follow`.
-- **Space.** An update writes the new value to new space and frees the old
-  one, which later updates take once it is in place; deletes leave no
-  tombstone. When free space the next updates will not take exceeds the
-  declared ratio of live bytes the writer moves records out of the sparsest
-  regions. Beyond the live data a file holds whole-region slack (1 MiB
-  regions), the ring (`KeyedStorage::ring_bytes`, 16 MiB by default) and the
-  values the latest publications replaced, until a checkpoint lets updates
-  take their space (as much as one publication's worth); none of these grows
-  with the number of updates.
+- **Space.** Records are kept in about a hundred size classes, each a dense
+  array of fixed-size items (records longer than 64 KiB are chains of
+  items). An update writes the new value into a reusable hole of its class
+  or at the class's end and frees the old one, reusable once the update is
+  in place; deletes leave no tombstone; classes whose last items are free
+  shrink and give their pages to other classes. When reusable holes exceed
+  the declared ratio of live bytes the writer moves classes' last items into
+  them. Beyond the live data a file holds rounding to a class (at most a
+  sixteenth), one partial 64 KiB page per class in use and its bitmaps, the
+  ring (`KeyedStorage::ring_bytes`, 16 MiB by default) and the values freed
+  but not yet reusable (at most about two change budgets); none of these
+  grows with the number of updates or with how sizes change. After deletes,
+  pages wait in a pool for new records; the file does not shrink yet.
 - **Change budget.** `KeyedStorage::with_change_budget(bytes)` (1 MiB to
   1 TiB, 64 MiB by default) bounds what one round of changes allocates. Past
   it the writer publishes the round by itself: changes before a `sync` may

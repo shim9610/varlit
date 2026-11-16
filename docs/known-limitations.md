@@ -78,25 +78,26 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   implemented.
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
-- **Constant slack.** Beyond the live data a file holds whole-region slack
-  (1 MiB regions), the ring (16 MiB by default) and the values the latest
-  publications replaced until a checkpoint frees their space: up to one
-  publication's worth, so a publication that rewrites every value needs
-  about twice the live data. These do not grow with updates, but they
-  dominate a small file.
+- **Constant slack.** Beyond the live data a file holds one partial 64 KiB
+  page per size class in use and up to two bitmap pages per class, the ring
+  (16 MiB by default), and freed values not yet reusable (at most about two
+  change budgets; the writer checkpoints once they pass the ratio, at least
+  1 MiB). These do not grow with updates, but they dominate a small file.
+- **Rounding to a class.** A record takes whole items of its size class: at
+  most a sixteenth more than it needs (16 bytes below 256 bytes), plus a
+  40-byte header per 64 KiB.
 - **Two barriers per publication with updates.** New values written straight
   to the file are made durable before the commit frame, so a `sync` that
   wrote any costs two barriers instead of one, and every few publications a
   checkpoint adds two more.
-- **Fragmentation at the extremes.** With values of every size and more
-  holes than the writer's hole cache holds, holes that fit are not always
-  found and the idle space can grow past the bound (a test reproduces it
-  with a cache of four holes and is ignored). Complete, cache-independent
-  knowledge of free space is being designed
-  ([design](design/bounded-keyed-storage.md#bounds-at-the-extremes)).
-- **The hole cache is in memory.** A reopened writer starts with an empty
-  cache; holes it does not know are reclaimed by compaction when they pass
-  the ratio, not reused at once.
+- **Records larger than the change budget** are written in one round for
+  now; the streamed replacement and the `Refuse` policy are not implemented
+  yet ([design](design/bounded-keyed-storage.md#bounds-at-the-extremes)).
+- **The file does not shrink.** After deletes, emptied pages wait in a pool
+  for new records of any class; returning them to the file system is
+  designed separately.
+- **Buckets do not merge.** Deleting keys leaves the bucket table at the
+  size the most keys needed.
 
 ## Native scans and temporary storage
 

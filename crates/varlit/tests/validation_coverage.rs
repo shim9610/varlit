@@ -1235,7 +1235,7 @@ const CONTRACTS: &[Contract] = &[
         invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; assert!(matches!(file.keyed_storage_stats(), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
     contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:put_keyed@9d20a00aeffa4b66",
-        valid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; let before = std::fs::metadata(&path)?.len(); for round in 0..50u8 { file.put_keyed(&KeyedValue { id: 1, bytes: vec![round; 10] })?; file.sync()?; } assert!(std::fs::metadata(&path)?.len() <= before + 4096, "same-size rewrites stay in place"); Ok(()) },
+        valid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; let mut settled = 0; for round in 0..100u8 { file.put_keyed(&KeyedValue { id: 1, bytes: vec![round; 10] })?; file.sync()?; if round == 49 { settled = std::fs::metadata(&path)?.len(); } } assert!(std::fs::metadata(&path)?.len() <= settled + 65_536, "rewrites reuse the space they free"); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let mut file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; assert!(matches!(file.put_keyed(&KeyedValue { id: 1, bytes: vec![] }), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
     contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:remove_keyed@d29cf813a54a44e3",

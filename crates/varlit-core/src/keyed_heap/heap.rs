@@ -1,317 +1,78 @@
 //! The single writer of keyed storage: puts, deletes and finds records, and
-//! keeps the heap within the declared free-space ratio.
+//! keeps free space at the ends of the size classes.
 //!
-//! Memory is fixed when the writer is opened: the ring's buffers, the hole
-//! cache, 64 bucket page buffers and a small table of sparse regions. Every
-//! chunk is read and written through stack buffers, so puts, deletes, splits
-//! and compaction allocate nothing.
+//! Memory is fixed when the writer is opened: the ring's buffers, 64 bucket
+//! page buffers and one entry per size class. Records are read and written
+//! through stack buffers; puts, deletes, splits and hole filling allocate
+//! nothing.
 //!
-//! **New values go to new space.** A put never writes over the value it
-//! replaces: it takes space no published generation since the last
-//! checkpoint points at (a hole freed by a generation in place, the current
-//! region's tail, a free region or a new one), writes the chunk there
-//! straight to the file when nothing staged covers it, and changes only the
-//! slot through the ring. The old chunk becomes a hole, retaken after the
-//! next checkpoint, which runs once more freed space waits than half the
-//! free-space allowance.
+//! **New values go to the end of their class.** A put appends its items at
+//! the ends of their classes (indexes no generation uses), writes them
+//! straight to the file, and changes only the slot and class entries through
+//! the ring. The items it replaces are logged as holes.
+//!
+//! **Holes are filled from the end.** A hole is filled once the generation
+//! that freed it is in place: the class's last item moves into it (and its
+//! old place is logged as a hole in turn), or, when the hole is the last
+//! item, the class shrinks by one. A class only shrinks by the hole being
+//! filled, so the log never names an index past a class's end, and an index
+//! is reused only after it was dead in every generation a reader or a
+//! recovery may use.
 //!
 //! **Staging units.** A reader's overlay keeps one range per start offset
 //! and lays overlapping ranges in offset order, so every byte this writer
 //! stages is staged in the same units each time: a bucket page whole (from
-//! the page buffers, once per publication), a chunk as its header, its key
-//! and its payload, a region as its header. Where the units themselves
-//! change (a hole or a free region taken for chunks of other sizes), the
-//! space is taken only once the generation that freed it is in place, so no
-//! overlay still holds a range in its old units.
+//! the page buffers, once per publication), an item's header and its bytes
+//! (split at page boundaries), a class entry, an eight-byte directory entry,
+//! a page's first sixteen bytes when it joins the pool.
 
-use super::lookup::{self, InPlaceView, Located, View, slot_at};
+use super::lookup::{self, Ctx, Located, View, slot_at};
 use super::pages::{HeapView, Pages};
 use super::sip::Sip;
 use super::{
-    BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, FREE_BLOCK, Fixed, MAX_BUDGET, META_FIXED_LEN,
-    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, REGION_BYTES, REGION_HEADER,
-    Region, SLOT_LEN, SLOTS_PER_PAGE, Slot, State, corrupt, heap_chunk_len, page_header,
+    BITS_PER_PAGE, BUCKET_HEADER, BUCKET_PAGE, CLASSES, ClassEntry, Fixed, ITEM_HEADER, Item,
+    LOG_ENTRIES, LOG_ENTRY, LOG_HEADER, MAX_BUDGET, MAX_CLASSES, MAX_INDEX, META_FIXED_LEN,
+    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, NO_ITEM, PAGE_BYTES,
+    RESERVED_BLOCK, SLOT_LEN, SLOTS_PER_PAGE, Slot, State, chain_bytes, chain_shape, checked_ref,
+    class_entry_at, class_size, corrupt, item_ref, page_header, radix, ref_class, ref_index,
     set_page_header,
 };
 use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::{TileSource, TileStore};
 use crate::matrix_tiles::view::directory_offset;
-use crate::matrix_tiles::{DIR_FANOUT, DIR_LEVEL_BITS, DIR_PAGE_BYTES, RecordKind};
+use crate::matrix_tiles::{DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
 
-/// Holes the writer remembers. Fixed when the writer is opened; when it is
-/// full the smallest hole is forgotten (compaction reclaims it later).
-const HOLE_CACHE: usize = 4096;
-/// Regions one compaction empties at most.
-const COMPACT_REGIONS: usize = 4;
-/// Regions one walk for holes visits at most.
-const WALK_REGIONS: usize = 64;
-/// Sparse regions remembered as compaction candidates.
-const SPARSE: usize = 32;
-/// Bytes copied per step when a chunk moves or a key is compared.
-const STEP: usize = 4096;
 const HEADER_BYTES: usize = crate::width::small(BUCKET_HEADER);
 const SLOT_BYTES: usize = crate::width::small(SLOT_LEN);
+const STEP: usize = lookup::STEP;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeapStats {
     pub splits: u64,
-    pub regions_appended: u64,
-    pub regions_reused: u64,
+    /// Holes taken by new items, filled by moving a class's last item, and
+    /// removed by shrinking a class.
     pub holes_reused: u64,
-    pub chunks_moved: u64,
-    pub regions_compacted: u64,
-    /// Checkpoints run so freed space could be retaken.
+    pub moves: u64,
+    pub shrinks: u64,
+    pub pages_appended: u64,
+    pub pages_reused: u64,
+    /// Checkpoints run so logged holes could be filled.
     pub checkpoints: u64,
-    /// Chunk units written straight to the file rather than through the
-    /// ring.
-    pub direct_writes: u64,
-    /// Rounds the writer published by itself: the change budget was spent,
-    /// or space to retake needed the round in place.
+    /// Rounds the writer published by itself: the change budget was spent.
     pub rounds: u64,
-    /// Region walks that refilled the hole cache from the file.
-    pub walks: u64,
 }
 
-/// Region headers changed since the last publication, staged once each
-/// when the writer publishes (or when the table needs room), instead of
-/// once per change.
-const DIRTY_REGIONS: usize = 64;
-
-#[derive(Clone, Copy, Debug, Default)]
-struct DirtyRegion {
-    /// The region's offset; `0` for an empty entry.
-    at: u64,
-    header: Region,
-    used: u64,
-}
-
-struct DirtyRegions {
-    entries: [DirtyRegion; DIRTY_REGIONS],
-    clock: u64,
-}
-
-impl DirtyRegions {
-    const fn new() -> Self {
-        Self {
-            entries: [DirtyRegion {
-                at: 0,
-                header: Region {
-                    len: 0,
-                    live: 0,
-                    next_all: 0,
-                    next_free: 0,
-                    freed: 0,
-                },
-                used: 0,
-            }; DIRTY_REGIONS],
-            clock: 0,
-        }
-    }
-
-    fn get(&self, at: u64) -> Option<Region> {
-        self.entries
-            .iter()
-            .find(|entry| entry.at == at && at != 0)
-            .map(|entry| entry.header)
-    }
-
-    /// Records `header` for the region at `at`; returns an entry it pushed
-    /// out to make room, to be staged.
-    fn set(&mut self, at: u64, header: Region) -> Option<(u64, Region)> {
-        self.clock += 1;
-        let index = match self.entries.iter().position(|entry| entry.at == at) {
-            Some(index) => index,
-            None => (0..DIRTY_REGIONS)
-                .min_by_key(|&index| (self.entries[index].at != 0, self.entries[index].used))
-                .expect("entries"),
-        };
-        let old = self.entries[index];
-        self.entries[index] = DirtyRegion {
-            at,
-            header,
-            used: self.clock,
-        };
-        (old.at != 0 && old.at != at).then_some((old.at, old.header))
-    }
-
-    fn take(&mut self) -> Option<(u64, Region)> {
-        let entry = self.entries.iter_mut().find(|entry| entry.at != 0)?;
-        let taken = (entry.at, entry.header);
-        entry.at = 0;
-        Some(taken)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.entries.iter().all(|entry| entry.at == 0)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct Hole {
-    region: u64,
-    at: u64,
-    len: u64,
-    /// The generation that freed it: reusable once that is in place.
-    generation: u64,
-}
-
-struct Holes {
-    entries: Box<[Hole]>,
-    len: usize,
-    /// Bytes of the holes held.
-    bytes: u64,
-}
-
-impl Holes {
-    fn with_capacity(capacity: usize) -> Result<Self> {
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(capacity)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "keyed heap hole cache",
-                requested: (capacity * std::mem::size_of::<Hole>()) as u64,
-            })?;
-        entries.resize(capacity, Hole::default());
-        Ok(Self {
-            entries: entries.into_boxed_slice(),
-            len: 0,
-            bytes: 0,
-        })
-    }
-
-    const fn is_full(&self) -> bool {
-        self.len == self.entries.len()
-    }
-
-    fn add(&mut self, hole: Hole) {
-        if self.len < self.entries.len() {
-            self.entries[self.len] = hole;
-            self.len += 1;
-            self.bytes += hole.len;
-            return;
-        }
-        let (index, smallest) = self.entries[..self.len]
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, held)| held.len)
-            .map(|(index, held)| (index, held.len))
-            .expect("the cache is full");
-        if hole.len > smallest {
-            self.bytes = self.bytes - smallest + hole.len;
-            self.entries[index] = hole;
-        }
-    }
-
-    /// The smallest hole of at least `len` bytes outside `avoid` that a
-    /// generation up to `in_place` freed.
-    fn take_fitting(&mut self, len: u64, avoid: u64, in_place: u64) -> Option<Hole> {
-        let index = self.entries[..self.len]
-            .iter()
-            .enumerate()
-            .filter(|(_, hole)| {
-                hole.len >= len && hole.region != avoid && hole.generation <= in_place
-            })
-            .min_by_key(|(_, hole)| hole.len)
-            .map(|(index, _)| index)?;
-        let hole = self.entries[index];
-        self.len -= 1;
-        self.bytes -= hole.len;
-        self.entries[index] = self.entries[self.len];
-        Some(hole)
-    }
-
-    fn forget_region(&mut self, region: u64) {
-        let mut index = 0;
-        while index < self.len {
-            if self.entries[index].region == region {
-                self.bytes -= self.entries[index].len;
-                self.len -= 1;
-                self.entries[index] = self.entries[self.len];
-            } else {
-                index += 1;
-            }
-        }
-    }
-}
-
-/// The sparsest regions seen: `(region, live, len)`.
-struct Sparse {
-    entries: [(u64, u64, u64); SPARSE],
-    len: usize,
-}
-
-impl Sparse {
-    const fn new() -> Self {
-        Self {
-            entries: [(0, 0, 0); SPARSE],
-            len: 0,
-        }
-    }
-
-    fn forget(&mut self, region: u64) {
-        if let Some(index) = self.entries[..self.len]
-            .iter()
-            .position(|entry| entry.0 == region)
-        {
-            self.len -= 1;
-            self.entries[index] = self.entries[self.len];
-        }
-    }
-
-    /// Notes a region's fill; keeps the [`SPARSE`] emptiest.
-    fn note(&mut self, region: u64, live: u64, len: u64) {
-        self.forget(region);
-        if live >= len {
-            return;
-        }
-        let entry = (region, live, len);
-        if self.len < SPARSE {
-            self.entries[self.len] = entry;
-            self.len += 1;
-            return;
-        }
-        let fullest = (0..self.len)
-            .max_by(|&a, &b| fill(self.entries[a]).total_cmp(&fill(self.entries[b])))
-            .expect("full");
-        if fill(entry) < fill(self.entries[fullest]) {
-            self.entries[fullest] = entry;
-        }
-    }
-
-    fn take(&mut self) -> Option<u64> {
-        let index = (0..self.len)
-            .min_by(|&a, &b| fill(self.entries[a]).total_cmp(&fill(self.entries[b])))?;
-        let region = self.entries[index].0;
-        self.len -= 1;
-        self.entries[index] = self.entries[self.len];
-        Some(region)
-    }
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "a ranking of fill ratios, not an exact quantity"
-)]
-fn fill(entry: (u64, u64, u64)) -> f64 {
-    entry.1 as f64 / entry.2.max(1) as f64
-}
-
-#[cfg(kani)]
-#[path = "../verification/keyed_heap_holes.rs"]
-mod hole_proofs;
-
-/// Sizes of the writer's fixed structures, chosen at open. Tests shrink them
-/// so that what overflows them in a large file overflows in a small one.
+/// Knobs of the writer's own work, chosen at open. Tests turn them down so
+/// that what builds up in a large file builds up in a small one.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Tuning {
-    pub hole_cache: usize,
+    /// Holes filled per item a put or delete frees, at least.
+    pub fills_per_free: u64,
 }
 
 impl Tuning {
-    pub(crate) const DEFAULT: Self = Self {
-        hole_cache: HOLE_CACHE,
-    };
+    pub(crate) const DEFAULT: Self = Self { fills_per_free: 2 };
 }
 
 pub(crate) struct KeyedHeap {
@@ -321,26 +82,20 @@ pub(crate) struct KeyedHeap {
     state: State,
     /// The state as the last publication staged it.
     staged: State,
-    /// The current region's payload length (`0`: none).
-    cur_len: u64,
-    holes: Holes,
-    sparse: Sparse,
+    classes: [ClassEntry; MAX_CLASSES],
+    staged_classes: [ClassEntry; MAX_CLASSES],
     pages: Pages,
-    regions: DirtyRegions,
-    /// Bytes freed by the open generation, and by published generations
-    /// not yet in place: space that cannot be retaken before a checkpoint.
-    freed_open: u64,
-    freed_waiting: u64,
+    tuning: Tuning,
     /// Bytes allocated by the open round, against the change budget.
     round_alloc: u64,
-    /// The region the next walk for holes starts at.
-    walk_cursor: u64,
-    /// Set while compaction moves chunks: its allocations never reclaim.
-    compacting: bool,
-    /// A walk found nothing to take this round, or the round compacted:
-    /// past that it grows, by its budget at most.
-    walked_dry: bool,
-    compacted_this_round: bool,
+    /// Bytes of holes logged by the open generation, and by published
+    /// generations not yet in place: not fillable before a checkpoint.
+    holes_open: u64,
+    holes_waiting: u64,
+    /// Where each class's next search for a bitmap hole starts.
+    cursors: [u64; MAX_CLASSES],
+    /// The class compaction looks at next.
+    compact_class: usize,
     pub(crate) stats: HeapStats,
 }
 
@@ -377,7 +132,7 @@ impl KeyedHeap {
         store.write_at(meta, &fixed.encode())?;
         let mut heap = Self::with_parts(meta, fixed, ring, State::default(), tuning)?;
         let root = heap.new_dir_page(store)?;
-        let bucket = heap.alloc_page(store)?;
+        let bucket = heap.alloc_bucket_page(store)?;
         let page = heap.pages.page_new(&mut heap.ring, store, bucket)?;
         set_page_header(page, 0, 0);
         heap.ring.stage(store, root, &bucket.to_le_bytes())?;
@@ -397,9 +152,20 @@ impl KeyedHeap {
         let state = State::decode(&raw)?;
         let mut heap = Self::with_parts(meta, fixed, ring, state, tuning)?;
         heap.staged = state;
-        if state.cur != 0 {
-            heap.cur_len = heap.region(store, state.cur)?.len;
+        for class in 0..CLASSES {
+            let mut raw = [0u8; crate::width::small(super::CLASS_ENTRY_LEN)];
+            heap.ring
+                .read(store, class_entry_at(meta, class), &mut raw)?;
+            heap.classes[class] = ClassEntry::decode(&raw)?;
         }
+        heap.staged_classes = heap.classes;
+        // Holes the published state logged wait for its checkpoint.
+        let in_bitmaps: u64 = heap.classes[..CLASSES]
+            .iter()
+            .enumerate()
+            .map(|(class, entry)| entry.holes * class_size(class))
+            .sum();
+        heap.holes_waiting = state.hole_bytes.saturating_sub(in_bitmaps);
         Ok(heap)
     }
 
@@ -416,18 +182,15 @@ impl KeyedHeap {
             ring,
             state,
             staged: State::default(),
-            cur_len: 0,
-            holes: Holes::with_capacity(tuning.hole_cache)?,
-            sparse: Sparse::new(),
+            classes: [ClassEntry::default(); MAX_CLASSES],
+            staged_classes: [ClassEntry::default(); MAX_CLASSES],
             pages: Pages::new()?,
-            regions: DirtyRegions::new(),
-            freed_open: 0,
-            freed_waiting: 0,
+            tuning,
             round_alloc: 0,
-            walk_cursor: 0,
-            compacting: false,
-            walked_dry: false,
-            compacted_this_round: false,
+            holes_open: 0,
+            holes_waiting: 0,
+            cursors: [0; MAX_CLASSES],
+            compact_class: 0,
             stats: HeapStats::default(),
         })
     }
@@ -436,113 +199,52 @@ impl KeyedHeap {
         &self.state
     }
 
-    /// Bytes of holes in the heap (see [`State::holes`]).
-    /// The holes the free-space ratio allows: a file whose holes are
-    /// smaller than one region is not worth a move.
-    fn allowance(&self) -> u64 {
-        (self.state.live / 1000 * u64::from(self.fixed.ratio_permille)).max(REGION_BYTES)
-    }
-
-    /// Walks every region and checks that the chunks slots point at add up
-    /// to each region's live bytes and to the state's, and that the regions
-    /// add up to the heap.
+    /// Heap bytes that hold no live item: holes, the unused ends of class
+    /// pages, log pages and pooled pages.
     #[cfg(test)]
-    pub(crate) fn check_consistency(
-        &self,
-        store: &dyn TileSource,
-    ) -> std::result::Result<(), String> {
-        let mut at_region = self.state.regions;
-        let (mut live, mut heap, mut free) = (0u64, 0u64, 0u64);
-        while at_region != 0 {
-            let header = self.region(store, at_region).map_err(|e| format!("{e}"))?;
-            heap += header.len;
-            let is_free = header.next_free != 0 || at_region == self.state.free_regions;
-            if is_free {
-                free += header.len;
-            } else {
-                let end = if at_region == self.state.cur {
-                    at_region + REGION_HEADER + self.state.cur_used
-                } else {
-                    at_region + REGION_HEADER + header.len
-                };
-                let mut at = at_region + REGION_HEADER;
-                let mut region_live = 0u64;
-                while at < end {
-                    let chunk = self.chunk(store, at).map_err(|e| format!("{e}"))?;
-                    let len = chunk.len();
-                    if len < CHUNK_HEADER || len > end - at {
-                        return Err(format!("region {at_region}: bad chunk at {at} len {len}"));
-                    }
-                    if chunk.block_id != FREE_BLOCK
-                        && self
-                            .slot_pointing_at(store, &chunk, at_region, at)
-                            .map_err(|e| format!("{e}"))?
-                            .is_some()
-                    {
-                        region_live += len;
-                    }
-                    at += len;
-                }
-                if region_live != header.live {
-                    return Err(format!(
-                        "region {at_region}: chunks live {region_live}, header {}",
-                        header.live
-                    ));
-                }
-                live += region_live;
-            }
-            at_region = header.next_all;
-        }
-        if live != self.state.live || heap != self.state.heap || free != self.state.free {
-            return Err(format!(
-                "totals: live {live}/{} heap {heap}/{} free {free}/{}",
-                self.state.live, self.state.heap, self.state.free
-            ));
-        }
-        Ok(())
-    }
-
-    /// Heap bytes that hold no live record.
     pub(crate) const fn idle(&self) -> u64 {
-        self.state.heap.saturating_sub(self.state.live)
+        (self.state.pages * PAGE_BYTES).saturating_sub(self.state.live)
     }
 
-    /// What [`Self::idle`] may reach at any point: the ratio's allowance,
-    /// two rounds of the change budget, and whole regions: the one being
-    /// filled, the live bytes one compaction moves and the regions it
-    /// empties (until they are in place), and one of rounding.
+    /// What [`Self::idle`] may reach at any point: two rounds of the change
+    /// budget (holes not yet fillable), one partial page per class, the
+    /// pages the hole log takes, and a few pages of slack.
     #[cfg(test)]
     pub(crate) fn idle_bound(&self) -> u64 {
-        self.allowance() + 2 * self.fixed.budget + (2 + 2 * COMPACT_REGIONS as u64) * REGION_BYTES
+        let log_pages = self.state.logged / LOG_ENTRIES + 2;
+        // A bitmap page per class in use, at most.
+        let bitmap_pages = CLASSES as u64;
+        self.allowance()
+            + 2 * self.fixed.budget
+            + (CLASSES as u64 + log_pages + bitmap_pages + 8) * PAGE_BYTES
     }
 
-    pub(crate) const fn holes(&self) -> u64 {
-        self.state.holes(self.cur_tail())
+    /// Idle bytes in reusable holes the ratio allows before compaction
+    /// moves items to return pages: the declared ratio of live bytes, at
+    /// least a page.
+    fn allowance(&self) -> u64 {
+        (self.state.live / 1000 * u64::from(self.fixed.ratio_permille)).max(PAGE_BYTES)
     }
 
-    const fn cur_tail(&self) -> u64 {
-        if self.state.cur == 0 {
-            0
-        } else {
-            self.cur_len - self.state.cur_used
-        }
-    }
-
-    // ---- publication ----
-
-    /// Publishes everything since the last publication as one generation.
     /// Whether anything changed since the last publication.
     pub(crate) fn is_dirty(&self) -> bool {
         self.ring.is_dirty()
             || self.pages.is_dirty()
-            || !self.regions.is_empty()
+            || self.classes != self.staged_classes
             || self.state != self.staged
     }
 
     pub(crate) fn publish(&mut self, store: &mut dyn TileStore) -> Result<u64> {
         self.pages.flush(&mut self.ring, store)?;
-        while let Some((at, header)) = self.regions.take() {
-            self.ring.stage(store, at, &header.encode())?;
+        for class in 0..CLASSES {
+            if self.classes[class] != self.staged_classes[class] {
+                self.ring.stage(
+                    store,
+                    class_entry_at(self.meta, class),
+                    &self.classes[class].encode(),
+                )?;
+                self.staged_classes[class] = self.classes[class];
+            }
         }
         if self.state != self.staged {
             self.ring
@@ -551,14 +253,22 @@ impl KeyedHeap {
         }
         let generation = self.ring.publish(store)?;
         self.round_alloc = 0;
-        self.walked_dry = false;
-        self.compacted_this_round = false;
-        self.freed_waiting += self.freed_open;
-        self.freed_open = 0;
+        self.holes_waiting += std::mem::take(&mut self.holes_open);
         Ok(generation)
     }
 
     // ---- lookups ----
+
+    fn view(&self) -> HeapView<'_> {
+        HeapView {
+            ring: &self.ring,
+            pages: &self.pages,
+        }
+    }
+
+    fn read(&self, store: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
+        self.pages.read(&self.ring, store, at, buf)
+    }
 
     fn route(&self, block_id: u32, key: &[u8]) -> u32 {
         lookup::route(self.fixed.seed, block_id, key)
@@ -571,37 +281,36 @@ impl KeyedHeap {
         block_id: u32,
         key: &[u8],
     ) -> Result<Option<Located>> {
-        lookup::find(
-            &mut self.view(),
-            store,
-            self.fixed.seed,
-            &self.state,
-            block_id,
-            key,
-        )
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        lookup::find(&mut ctx, self.fixed.seed, &self.state, block_id, key)
     }
 
-    /// Reads a located record's payload into `out`; see [`lookup::read_payload`].
+    /// Reads a located record's payload into `out`, which must be its
+    /// length, and checks it.
     pub(crate) fn read_payload(
         &self,
         store: &dyn TileSource,
         found: &Located,
         out: &mut [u8],
     ) -> Result<()> {
-        lookup::read_payload(&mut self.view(), store, found, out)
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        lookup::read_payload(&mut ctx, found, out)
     }
 
-    fn chunk(&self, store: &dyn TileSource, at: u64) -> Result<Chunk> {
-        lookup::chunk(&mut self.view(), store, at)
-    }
-
-    fn region(&self, store: &dyn TileSource, at: u64) -> Result<Region> {
-        if let Some(header) = self.regions.get(at) {
-            return Ok(header);
+    fn ctx<'a>(&'a self, view: &'a mut dyn View, store: &'a dyn TileSource) -> Ctx<'a> {
+        Ctx {
+            view,
+            source: store,
+            meta: self.meta,
+            classes: Some(&self.classes[..CLASSES]),
         }
-        let mut header = [0u8; crate::width::small(REGION_HEADER)];
-        self.read(store, at, &mut header)?;
-        Region::decode(&header)
+    }
+
+    fn item(&self, store: &dyn TileSource, item: u64) -> Result<Item> {
+        let mut view = self.view();
+        self.ctx(&mut view, store).item(item)
     }
 
     // ---- puts and deletes ----
@@ -615,57 +324,46 @@ impl KeyedHeap {
         key: &[u8],
         payload: &[u8],
     ) -> Result<()> {
-        if block_id == FREE_BLOCK {
+        if block_id == RESERVED_BLOCK {
             return Err(corrupt("reserved keyed block id"));
         }
-        let header = Chunk {
-            payload_len: field32("keyed record payload", payload.len())?,
-            block_id,
-            key_len: field32("keyed record key", key.len())?,
-            crc: 0,
-        };
-        let len = heap_chunk_len(key.len() as u64, payload.len() as u64);
+        let key_len = u32::try_from(key.len()).map_err(|_| Error::LimitExceeded {
+            resource: "keyed record key",
+            actual: key.len() as u64,
+            limit: u64::from(u32::MAX),
+        })?;
+        let total = key.len() as u64 + payload.len() as u64;
+        let bytes = chain_bytes(total);
         // A round allocates at most the change budget: past it, the round
-        // so far is published and put in place, and its freed space reused.
-        if self.round_alloc > 0 && self.round_alloc + len > self.fixed.budget {
+        // so far is published and put in place, and its holes filled.
+        if self.round_alloc > 0 && self.round_alloc + bytes > self.fixed.budget {
             self.end_round(store)?;
         }
-        // Space first: taking it may compact, which moves chunks, the old
-        // value of this key among them.
-        let (region, at) = self.alloc(store, len, 0)?;
-        self.round_alloc += len;
-        let found = self.find(store, block_id, key)?;
-        match found {
-            // A new value goes to new space, never over the old one: space
-            // that can be reused is written straight to the file, and only
-            // the slot that points at it goes through the ring.
+        let route = self.route(block_id, key);
+        let head = self.write_record(store, block_id, route, key_len, key, payload)?;
+        self.round_alloc += bytes;
+        self.state.live += bytes;
+        let freed = match self.find(store, block_id, key)? {
             Some(found) => {
-                self.write_chunk(store, at, header, key, payload)?;
-                self.add_live(store, region, len)?;
-                let slot = Slot {
-                    route: found.slot.route,
-                    offset: offset_in(region, at)?,
-                    region,
-                };
-                self.set_slot(store, found.page, found.index, slot)?;
-                self.release(store, found.slot.region, found.slot.at(), found.chunk.len())?;
+                // The same key's old record: point the slot at the new one.
+                let old = found.slot.item;
+                self.set_slot(store, found.page, found.index, Slot { route, item: head })?;
+                self.release(store, old)?
             }
             None => {
-                self.write_chunk(store, at, header, key, payload)?;
-                self.add_live(store, region, len)?;
-                let slot = Slot {
-                    route: self.route(block_id, key),
-                    offset: offset_in(region, at)?,
-                    region,
-                };
-                self.insert_slot(store, self.state.bucket_of(slot.route), slot)?;
+                self.insert_slot(
+                    store,
+                    self.state.bucket_of(route),
+                    Slot { route, item: head },
+                )?;
                 self.state.keys += 1;
                 while self.state.keys * 4 > self.state.buckets() * SLOTS_PER_PAGE as u64 * 3 {
                     self.split(store)?;
                 }
+                0
             }
-        }
-        self.compact_if_needed(store)
+        };
+        self.fill(store, freed)
     }
 
     /// Removes `key` of `block_id`; `false` when there is none.
@@ -680,182 +378,95 @@ impl KeyedHeap {
         };
         self.remove_slot(store, found.page, found.index)?;
         self.state.keys -= 1;
-        self.release(store, found.slot.region, found.slot.at(), found.chunk.len())?;
-        self.compact_if_needed(store)?;
+        let freed = self.release(store, found.slot.item)?;
+        self.fill(store, freed)?;
         Ok(true)
     }
 
-    fn write_chunk(
+    /// Writes a record's items at the ends of their classes and returns the
+    /// head. The items are new: nothing a published generation uses.
+    fn write_record(
         &mut self,
         store: &mut dyn TileStore,
-        at: u64,
-        mut header: Chunk,
+        block_id: u32,
+        route: u32,
+        key_len: u32,
         key: &[u8],
         payload: &[u8],
-    ) -> Result<()> {
-        let mut crc = crc32fast::Hasher::new();
-        crc.update(&header.encode()[..12]);
-        crc.update(key);
-        crc.update(payload);
-        header.crc = crc.finalize();
-        // The header tiles the region, so it changes only with the
-        // publication: a generation that is dropped, or a crash before it is
-        // published, must find the region tiled as it was. The key and the
-        // payload lie inside space the published tiling gives to one dead
-        // chunk, so they go straight to the file when nothing staged covers
-        // them.
-        self.ring.stage(store, at, &header.encode())?;
-        for (unit_at, bytes) in [
-            (at + CHUNK_HEADER, key),
-            (at + CHUNK_HEADER + key.len() as u64, payload),
-        ] {
-            if bytes.is_empty() {
-                continue;
-            }
-            if self.ring.write_unreferenced(store, unit_at, bytes)? {
-                self.stats.direct_writes += 1;
+    ) -> Result<u64> {
+        let total = key.len() as u64 + payload.len() as u64;
+        let (full, last) = chain_shape(total);
+        let chain = self.state.next_chain;
+        self.state.next_chain += 1;
+        let class_at = |index: u64| if index < full { CLASSES - 1 } else { last };
+        let head = self.alloc(store, class_at(0))?;
+        let mut item = head;
+        let mut prev = NO_ITEM;
+        let mut at = 0u64;
+        for index in 0..=full {
+            let class = ref_class(item);
+            let len = (class_size(class) - ITEM_HEADER).min(total - at);
+            let next = if index < full {
+                self.alloc(store, class_at(index + 1))?
             } else {
-                self.ring.stage(store, unit_at, bytes)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Marks `len` bytes at `at` of `region` free: no longer live, a hole.
-    /// The chunk there keeps its header: no slot points at it any more,
-    /// which is what a walk of the region checks.
-    fn release(&mut self, store: &mut dyn TileStore, region: u64, at: u64, len: u64) -> Result<()> {
-        self.freed_open += len;
-        // A region left empty goes to the free list whole; its holes are
-        // not holes any more.
-        if !self.sub_live(store, region, len)? {
-            let generation = self.ring.published() + 1;
-            self.holes.add(Hole {
-                region,
-                at,
-                len,
-                generation,
+                NO_ITEM
+            };
+            let mut header = Item {
+                len: crate::width::small32(crate::width::index(len)?),
+                head: index == 0,
+                block_or_route: if index == 0 { block_id } else { route },
+                key_len: if index == 0 { key_len } else { 0 },
+                crc: 0,
+                chain,
+                next,
+                total_or_prev: if index == 0 { total } else { prev },
+            };
+            let mut crc = crc32fast::Hasher::new();
+            crc.update(&header.crc_prefix());
+            for_parts(key, payload, at, len, &mut |bytes| crc.update(bytes));
+            header.crc = crc.finalize();
+            self.write_item(store, item, 0, &header.encode())?;
+            let mut done = 0u64;
+            let mut failed = None;
+            for_parts(key, payload, at, len, &mut |bytes| {
+                if failed.is_none()
+                    && let Err(error) = self.write_item(store, item, ITEM_HEADER + done, bytes)
+                {
+                    failed = Some(error);
+                }
+                done += bytes.len() as u64;
             });
-        }
-        Ok(())
-    }
-
-    /// Changes the header of the region at `at`: staged when the writer
-    /// publishes.
-    fn set_region(&mut self, store: &mut dyn TileStore, at: u64, header: Region) -> Result<()> {
-        if let Some((out, out_header)) = self.regions.set(at, header) {
-            self.ring.stage(store, out, &out_header.encode())?;
-        }
-        Ok(())
-    }
-
-    fn add_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<()> {
-        let mut header = self.region(store, region)?;
-        header.live += len;
-        self.state.live += len;
-        self.set_region(store, region, header)?;
-        Ok(())
-    }
-
-    /// Takes `len` live bytes from `region`; `true` when that left it empty
-    /// and it went to the free list.
-    fn sub_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<bool> {
-        let mut header = self.region(store, region)?;
-        header.live = header
-            .live
-            .checked_sub(len)
-            .ok_or(corrupt("keyed heap region accounting"))?;
-        self.state.live = self
-            .state
-            .live
-            .checked_sub(len)
-            .ok_or(corrupt("keyed heap accounting"))?;
-        self.set_region(store, region, header)?;
-        if region != self.state.cur {
-            if header.live == 0 {
-                // Its last record is gone: the whole region is free, found
-                // on the free list rather than through holes.
-                self.free_region(store, region, header)?;
-                return Ok(true);
+            if let Some(error) = failed {
+                return Err(error);
             }
-            self.sparse.note(region, header.live, header.len);
+            at += len;
+            prev = item;
+            item = next;
         }
-        Ok(false)
+        Ok(head)
     }
 
-    // ---- space ----
-
-    /// Finds `len` bytes for a chunk outside region `avoid`: the smallest
-    /// cached hole that holds it, the current region's tail, a free region
-    /// or a new one. Before the file grows past the idle space the ratio
-    /// allows, freed space is retaken: published generations are put in
-    /// place, holes the cache does not hold are found on disk, and holes too
-    /// small to take are compacted into free regions. Returns
-    /// `(region, offset)`.
-    fn alloc(&mut self, store: &mut dyn TileStore, len: u64, avoid: u64) -> Result<(u64, u64)> {
-        if let Some(found) = self.reuse(store, len, avoid)? {
-            return Ok(found);
+    /// Logs every item of the record headed by `head` as a hole. Returns
+    /// the items freed.
+    fn release(&mut self, store: &mut dyn TileStore, head: u64) -> Result<u64> {
+        let mut item = head;
+        let mut freed = 0u64;
+        while item != NO_ITEM {
+            let next = self.item(store, item)?.next;
+            let size = class_size(ref_class(item));
+            self.state.live = self
+                .state
+                .live
+                .checked_sub(size)
+                .ok_or(corrupt("keyed heap accounting"))?;
+            self.log_hole(store, item)?;
+            freed += 1;
+            item = next;
         }
-        if !self.compacting
-            && self.idle() + len > self.allowance() + REGION_BYTES
-            && let Some(found) = self.reclaim(store, len, avoid)?
-        {
-            return Ok(found);
-        }
-        self.grow(store, len, avoid)
+        Ok(freed)
     }
 
-    /// Retakes freed space for `len` bytes, in increasing cost.
-    fn reclaim(
-        &mut self,
-        store: &mut dyn TileStore,
-        len: u64,
-        avoid: u64,
-    ) -> Result<Option<(u64, u64)>> {
-        // The ring may have put everything published in place by itself.
-        if self.ring.published() == self.ring.checkpointed() {
-            self.freed_waiting = 0;
-        }
-        // Space freed by published generations waits for a checkpoint.
-        if self.ring.published() > self.ring.checkpointed() {
-            self.put_in_place(store)?;
-            if let Some(found) = self.reuse(store, len, avoid)? {
-                return Ok(Some(found));
-            }
-        }
-        // Holes the cache does not hold, found on disk: in regions whose
-        // newest freeing generation is in place, every dead chunk is
-        // reusable.
-        let unheld = self
-            .holes()
-            .saturating_sub(self.holes.bytes + self.freed_open + self.freed_waiting);
-        if unheld >= len && !self.walked_dry {
-            if !self.walk(store)? {
-                // Every region a walk visited freed bytes since the last
-                // checkpoint: the next round walks again.
-                self.walked_dry = true;
-            }
-            if let Some(found) = self.reuse(store, len, avoid)? {
-                return Ok(Some(found));
-            }
-        }
-        // Holes too small or scattered to take: empty the sparsest regions.
-        // They are taken once the round is in place.
-        let settled = self
-            .holes()
-            .saturating_sub(self.freed_open + self.freed_waiting);
-        if settled > self.allowance() && !self.compacted_this_round {
-            self.compacted_this_round = true;
-            self.compact(store, settled - self.allowance())?;
-            if let Some(found) = self.reuse(store, len, avoid)? {
-                return Ok(Some(found));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Publishes the open round and puts it in place: what it freed becomes
-    /// reusable.
+    /// Publishes the open round and puts it in place.
     fn end_round(&mut self, store: &mut dyn TileStore) -> Result<()> {
         if self.is_dirty() {
             self.publish(store)?;
@@ -869,494 +480,695 @@ impl KeyedHeap {
             self.ring.checkpoint(store, u64::MAX)?;
             self.stats.checkpoints += 1;
         }
-        self.freed_waiting = 0;
+        self.holes_waiting = 0;
         Ok(())
     }
 
-    /// New space: the current region's successor (a free region or a new
-    /// one), or a region of its own for a record larger than half a region.
-    fn grow(&mut self, store: &mut dyn TileStore, len: u64, avoid: u64) -> Result<(u64, u64)> {
-        if len > REGION_BYTES / 2 {
-            let region = self.new_region(store, len)?;
-            return Ok((region, region + REGION_HEADER));
-        }
-        self.close_cur(store)?;
-        let region = match self.pop_free_region(store, len, avoid)? {
-            Some(region) => region,
-            None => self.new_region(store, REGION_BYTES)?,
-        };
-        self.state.cur = region;
-        self.cur_len = self.region(store, region)?.len;
-        self.state.cur_used = len;
-        self.sparse.forget(region);
-        Ok((region, region + REGION_HEADER))
-    }
+    // ---- items ----
 
-    /// Refills the hole cache from the file: walks up to [`WALK_REGIONS`]
-    /// regions from the cursor, taking the dead chunks of those whose newest
-    /// freeing generation is in place, until the cache is full. Returns
-    /// whether it took any.
-    fn walk(&mut self, store: &mut dyn TileStore) -> Result<bool> {
-        self.stats.walks += 1;
-        let first = self.state.regions;
-        if first == 0 {
-            return Ok(false);
-        }
-        let mut region = if self.walk_cursor == 0 {
-            first
-        } else {
-            self.walk_cursor
-        };
-        let held = self.holes.len;
-        // The published state must be the one in place, so that a chunk no
-        // slot points at there was dead in every generation a reader or a
-        // recovery may still use.
-        self.put_in_place(store)?;
-        let mut in_place = [0u8; State::FIELDS * 8];
-        store.read_at(self.meta + META_STATE_AT, &mut in_place)?;
-        let in_place = State::decode(&in_place)?;
-        for _ in 0..WALK_REGIONS {
-            let header = self.region(store, region)?;
-            if region != self.state.cur
-                && header.next_free == 0
-                && region != self.state.free_regions
-                && header.live < header.len
-            {
-                self.walk_region(store, region, header.len, &in_place)?;
-            }
-            region = if header.next_all == 0 {
-                first
-            } else {
-                header.next_all
-            };
-            if self.holes.is_full() {
-                break;
-            }
-        }
-        self.walk_cursor = region;
-        Ok(self.holes.len > held)
-    }
-
-    /// Takes into the cache every chunk of `region` that no slot points at,
-    /// as this writer sees it or as the published state `in_place` (the
-    /// file without the ring) has it.
-    fn walk_region(
+    /// Writes `bytes` at byte `from` of item `item`, straight to the file
+    /// where nothing staged covers them, split at page boundaries.
+    fn write_item(
         &mut self,
         store: &mut dyn TileStore,
-        region: u64,
-        len: u64,
-        in_place: &State,
+        item: u64,
+        from: u64,
+        bytes: &[u8],
     ) -> Result<()> {
-        // Holes the cache held here are found again.
-        self.holes.forget_region(region);
-        let end = region + REGION_HEADER + len;
-        let mut at = region + REGION_HEADER;
-        while at < end {
-            let chunk = self.chunk(store, at)?;
-            let chunk_len = chunk.len();
-            if chunk_len < CHUNK_HEADER || chunk_len > end - at {
-                return Err(corrupt("keyed heap chunk length"));
+        let class = ref_class(item);
+        let mut at = ref_index(item) * class_size(class) + from;
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let page = self.page_of(store, class, at / PAGE_BYTES)?;
+            let within = at % PAGE_BYTES;
+            let n = crate::width::bounded(PAGE_BYTES - within, bytes.len() - done);
+            let piece = &bytes[done..done + n];
+            if !self.ring.write_unreferenced(store, page + within, piece)? {
+                self.ring.stage(store, page + within, piece)?;
             }
-            // Each dead chunk is a hole of its own: adjacent ones are not
-            // merged, since a value written straight into a merged hole
-            // would overwrite the headers that tile it as published.
-            if self.dead_now_and_in_place(store, &chunk, region, at, in_place)? {
-                self.holes.add(Hole {
-                    region,
-                    at,
-                    len: chunk_len,
-                    generation: self.ring.checkpointed(),
-                });
-            }
-            at += chunk_len;
-            if self.holes.is_full() {
-                break;
-            }
+            done += n;
+            at += n as u64;
         }
         Ok(())
     }
 
-    /// Space that exists already: a cached hole, the current region's tail,
-    /// or a free region as the new current one.
-    fn reuse(
+    /// Changes the header of a live item: through the ring, with the
+    /// publication.
+    fn rewrite_header(
         &mut self,
         store: &mut dyn TileStore,
-        len: u64,
-        avoid: u64,
-    ) -> Result<Option<(u64, u64)>> {
-        if let Some(hole) = self
-            .holes
-            .take_fitting(len, avoid, self.ring.checkpointed())
-        {
-            self.stats.holes_reused += 1;
-            if hole.len > len {
-                // The rest was in place too: never staged in other units.
-                self.ring
-                    .stage(store, hole.at + len, &Chunk::free(hole.len - len)?.encode())?;
-                self.holes.add(Hole {
-                    region: hole.region,
-                    at: hole.at + len,
-                    len: hole.len - len,
-                    generation: hole.generation,
-                });
-            }
-            return Ok(Some((hole.region, hole.at)));
+        item: u64,
+        header: &Item,
+    ) -> Result<()> {
+        let class = ref_class(item);
+        let at = ref_index(item) * class_size(class);
+        let bytes = header.encode();
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let offset = at + done as u64;
+            let page = self.page_of(store, class, offset / PAGE_BYTES)?;
+            let within = offset % PAGE_BYTES;
+            let n = crate::width::bounded(PAGE_BYTES - within, bytes.len() - done);
+            self.ring
+                .stage(store, page + within, &bytes[done..done + n])?;
+            done += n;
         }
-        let cur = self.state.cur;
-        if cur != 0 && cur != avoid && self.state.cur_used + len <= self.cur_len {
-            let at = cur + REGION_HEADER + self.state.cur_used;
-            self.state.cur_used += len;
-            return Ok(Some((cur, at)));
-        }
-        if len > REGION_BYTES / 2 {
-            return Ok(None);
-        }
-        let Some(region) = self.pop_free_region(store, len, avoid)? else {
-            return Ok(None);
-        };
-        self.close_cur(store)?;
-        self.state.cur = region;
-        self.cur_len = self.region(store, region)?.len;
-        self.state.cur_used = len;
-        self.sparse.forget(region);
-        Ok(Some((region, region + REGION_HEADER)))
-    }
-
-    /// Ends the current region: its unused tail becomes a free chunk.
-    fn close_cur(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let cur = self.state.cur;
-        if cur == 0 {
-            return Ok(());
-        }
-        let tail = self.cur_len - self.state.cur_used;
-        if tail > 0 {
-            let at = cur + REGION_HEADER + self.state.cur_used;
-            self.ring.stage(store, at, &Chunk::free(tail)?.encode())?;
-            // Nothing was ever staged in the tail but its free header, in
-            // the unit a chunk header there uses: reusable at once.
-            self.holes.add(Hole {
-                region: cur,
-                at,
-                len: tail,
-                generation: 0,
-            });
-        }
-        self.state.cur = 0;
-        self.state.cur_used = 0;
-        self.cur_len = 0;
-        let header = self.region(store, cur)?;
-        self.sparse.note(cur, header.live, header.len);
         Ok(())
     }
 
-    fn new_region(&mut self, store: &mut dyn TileStore, len: u64) -> Result<u64> {
-        let header = Region {
-            len,
-            live: 0,
-            next_all: self.state.regions,
-            next_free: 0,
-            freed: 0,
-        };
-        let at = self.ring.place_record(
-            store,
-            RecordKind::Heap,
-            &header.encode(),
-            REGION_HEADER + len,
-        )?;
-        self.state.regions = at;
-        self.state.heap += len;
-        self.stats.regions_appended += 1;
+    fn page_of(&self, store: &dyn TileSource, class: usize, page: u64) -> Result<u64> {
+        let mut view = self.view();
+        let at = radix::get(&mut view, store, self.classes[class].dir, page)?;
+        if at == 0 {
+            return Err(corrupt("keyed item page"));
+        }
         Ok(at)
     }
 
-    /// Takes a free region of at least `len` bytes from the head of the free
-    /// list. Only the head is looked at: free regions are ordinary ones, and
-    /// a larger record gets its own region anyway.
-    fn pop_free_region(
-        &mut self,
-        store: &mut dyn TileStore,
-        len: u64,
-        avoid: u64,
-    ) -> Result<Option<u64>> {
-        let head = self.state.free_regions;
-        if head == 0 || head == avoid {
-            return Ok(None);
+    /// An item of `class` no generation uses: a hole of the class's bitmap
+    /// when it has one, else a new item at its end.
+    fn alloc(&mut self, store: &mut dyn TileStore, class: usize) -> Result<u64> {
+        if self.classes[class].holes > 0 {
+            let index = self.next_hole(store, class)?;
+            self.set_bit(store, class, Bitmap::Holes, index, false)?;
+            self.classes[class].holes -= 1;
+            self.state.hole_bytes -= class_size(class);
+            self.stats.holes_reused += 1;
+            return Ok(item_ref(class, index));
         }
-        let mut header = self.region(store, head)?;
-        if header.len < len || header.freed > self.ring.checkpointed() {
-            return Ok(None);
-        }
-        // The last free region links to itself.
-        if header.next_free == head {
-            self.state.free_regions = 0;
-            self.state.free_tail = 0;
-        } else {
-            self.state.free_regions = header.next_free;
-        }
-        self.state.free -= header.len;
-        header.next_free = 0;
-        header.live = 0;
-        header.freed = 0;
-        self.set_region(store, head, header)?;
-        self.stats.regions_reused += 1;
-        Ok(Some(head))
+        self.append(store, class)
     }
 
-    // ---- compaction ----
+    /// A new item at the end of `class`: an index no generation uses.
+    fn append(&mut self, store: &mut dyn TileStore, class: usize) -> Result<u64> {
+        let index = self.classes[class].end;
+        if index >= MAX_INDEX {
+            return Err(Error::LimitExceeded {
+                resource: "keyed size class items",
+                actual: index,
+                limit: MAX_INDEX,
+            });
+        }
+        let size = class_size(class);
+        let mapped = (index * size).div_ceil(PAGE_BYTES);
+        let needed = ((index + 1) * size).div_ceil(PAGE_BYTES);
+        for page in mapped..needed {
+            let at = self.take_page(store)?;
+            let root = self.classes[class].dir;
+            self.classes[class].dir = self.dir_set(store, root, page, at)?;
+        }
+        self.classes[class].end = index + 1;
+        Ok(item_ref(class, index))
+    }
 
-    /// Empties the sparsest regions when the holes not freed since the last
-    /// checkpoint pass the allowance: those too small or scattered to take.
-    fn compact_if_needed(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let settled = self
-            .holes()
-            .saturating_sub(self.freed_open + self.freed_waiting);
-        if settled > self.allowance() {
-            self.compact(store, settled - self.allowance())?;
+    /// Shrinks `class` by its last item, which is a hole no generation uses,
+    /// returning pages left empty to the pool.
+    fn shrink(&mut self, store: &mut dyn TileStore, class: usize) -> Result<()> {
+        let end = self.classes[class].end;
+        let size = class_size(class);
+        let needed = ((end - 1) * size).div_ceil(PAGE_BYTES);
+        let mapped = (end * size).div_ceil(PAGE_BYTES);
+        for page in needed..mapped {
+            let at = self.page_of(store, class, page)?;
+            let root = self.classes[class].dir;
+            self.classes[class].dir = self.dir_set(store, root, page, 0)?;
+            self.pool_page(store, at)?;
+        }
+        self.classes[class].end = end - 1;
+        self.stats.shrinks += 1;
+        Ok(())
+    }
+
+    // ---- pages ----
+
+    /// A page for a class or the log: the pool's oldest, once the
+    /// generation that pooled it is in place, else a new one.
+    fn take_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+        let head = self.state.pool_head;
+        if head != 0 {
+            let mut link = [0u8; 16];
+            self.read(store, head, &mut link)?;
+            let next = u64::from_le_bytes(link[..8].try_into().expect("eight"));
+            let pooled_by = u64::from_le_bytes(link[8..].try_into().expect("eight"));
+            if pooled_by <= self.ring.checkpointed() {
+                self.state.pool_head =
+                    directory_offset(next).map_err(|_| corrupt("keyed page pool"))?;
+                if self.state.pool_head == 0 {
+                    self.state.pool_tail = 0;
+                }
+                self.state.pooled -= 1;
+                self.stats.pages_reused += 1;
+                return Ok(head);
+            }
+        }
+        self.state.pages += 1;
+        self.stats.pages_appended += 1;
+        self.ring
+            .place_record(store, RecordKind::Heap, &[], PAGE_BYTES)
+    }
+
+    /// Puts `page` at the end of the pool. Its first sixteen bytes change
+    /// through the ring: a published generation may still read them.
+    fn pool_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
+        let mut link = [0u8; 16];
+        link[8..].copy_from_slice(&(self.ring.published() + 1).to_le_bytes());
+        self.ring.stage(store, page, &link)?;
+        let tail = self.state.pool_tail;
+        if tail == 0 {
+            self.state.pool_head = page;
+        } else {
+            let mut old = [0u8; 16];
+            self.read(store, tail, &mut old)?;
+            old[..8].copy_from_slice(&page.to_le_bytes());
+            self.ring.stage(store, tail, &old)?;
+        }
+        self.state.pool_tail = page;
+        self.state.pooled += 1;
+        Ok(())
+    }
+
+    // ---- the hole log ----
+
+    fn log_hole(&mut self, store: &mut dyn TileStore, item: u64) -> Result<()> {
+        // Entries are never written where a published log may still have
+        // one: the log only grows at its tail, and a consumed page waits in
+        // the pool until the generation that consumed it is in place.
+        if self.state.log_tail == 0 || self.state.log_tail_at == LOG_ENTRIES {
+            let page = self.take_page(store)?;
+            // The new page's link: staged, in the unit the pool uses.
+            self.ring.stage(store, page, &[0u8; 16])?;
+            let old = self.state.log_tail;
+            if old == 0 {
+                self.state.log_head = page;
+                self.state.log_head_at = 0;
+            } else if self.state.logged == 0 {
+                // Empty, and its only page used up: start on the new one.
+                self.state.log_head = page;
+                self.state.log_head_at = 0;
+                self.pool_page(store, old)?;
+            } else {
+                // The old tail is part of the published log: its link
+                // changes with the publication.
+                let mut link = [0u8; 16];
+                link[..8].copy_from_slice(&page.to_le_bytes());
+                self.ring.stage(store, old, &link)?;
+            }
+            self.state.log_tail = page;
+            self.state.log_tail_at = 0;
+        }
+        let mut entry = [0u8; 16];
+        entry[..8].copy_from_slice(&item.to_le_bytes());
+        entry[8..].copy_from_slice(&(self.ring.published() + 1).to_le_bytes());
+        let at = self.state.log_tail + LOG_HEADER + self.state.log_tail_at * LOG_ENTRY;
+        if !self.ring.write_unreferenced(store, at, &entry)? {
+            self.ring.stage(store, at, &entry)?;
+        }
+        self.state.log_tail_at += 1;
+        self.set_bit(
+            store,
+            ref_class(item),
+            Bitmap::Pending,
+            ref_index(item),
+            true,
+        )?;
+        let size = class_size(ref_class(item));
+        self.state.logged += 1;
+        self.state.hole_bytes += size;
+        self.holes_open += size;
+        Ok(())
+    }
+
+    /// The oldest logged hole: `(item, generation that freed it)`.
+    fn log_peek(&self, store: &dyn TileSource) -> Result<Option<(u64, u64)>> {
+        if self.state.logged == 0 {
+            return Ok(None);
+        }
+        let at = self.state.log_head + LOG_HEADER + self.state.log_head_at * LOG_ENTRY;
+        let mut entry = [0u8; 16];
+        self.read(store, at, &mut entry)?;
+        let item = checked_ref(u64::from_le_bytes(entry[..8].try_into().expect("eight")))?;
+        let freed = u64::from_le_bytes(entry[8..].try_into().expect("eight"));
+        Ok(Some((item, freed)))
+    }
+
+    /// Takes the oldest entry off the log; the hole it names stays a hole
+    /// (it moves to its class's bitmap).
+    fn log_pop(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        self.state.logged -= 1;
+        self.state.log_head_at += 1;
+        if self.state.log_head_at == LOG_ENTRIES && self.state.log_head != self.state.log_tail {
+            let mut link = [0u8; 16];
+            self.read(store, self.state.log_head, &mut link)?;
+            let next = directory_offset(u64::from_le_bytes(link[..8].try_into().expect("eight")))
+                .map_err(|_| corrupt("keyed hole log"))?;
+            if next == 0 {
+                return Err(corrupt("keyed hole log"));
+            }
+            let done = self.state.log_head;
+            self.state.log_head = next;
+            self.state.log_head_at = 0;
+            self.pool_page(store, done)?;
         }
         Ok(())
     }
 
-    /// Empties the sparsest regions until about `excess` bytes of holes
-    /// are in free regions, four at most per call.
-    fn compact(&mut self, store: &mut dyn TileStore, excess: u64) -> Result<()> {
-        self.compacting = true;
-        let result = self.compact_regions(store, excess);
-        self.compacting = false;
-        result
-    }
+    // ---- holes ----
 
-    fn compact_regions(&mut self, store: &mut dyn TileStore, excess: u64) -> Result<()> {
-        let Some(mut region) = self.sparsest(store)? else {
-            return Ok(());
-        };
-        // Put what is published in place first: the holes and free regions
-        // earlier generations left become reusable, so the moves below fill
-        // them instead of growing the file.
-        self.put_in_place(store)?;
-        // Each pass empties one region; a few bound one call's work.
-        let mut reclaimed = 0u64;
-        for _ in 0..COMPACT_REGIONS {
-            let header = self.region(store, region)?;
-            self.empty_region(store, region)?;
-            reclaimed += header.len - header.live;
-            if reclaimed >= excess {
+    /// Moves logged holes whose freeing generation is in place to their
+    /// classes' bitmaps, shrinks classes whose last items are holes, and
+    /// when reusable holes pass the allowance, moves classes' last items
+    /// into their holes (at least the tuning's rate per item freed).
+    fn fill(&mut self, store: &mut dyn TileStore, freed: u64) -> Result<()> {
+        if self.ring.published() == self.ring.checkpointed() {
+            self.holes_waiting = 0;
+        }
+        // Freed items wait for a checkpoint before they are reusable: once
+        // more wait than the ratio allows (at least 1 MiB, at most half a
+        // budget), run it.
+        let patience = self.allowance().max(1 << 20).min(self.fixed.budget / 2);
+        if self.holes_waiting > patience {
+            self.put_in_place(store)?;
+        }
+        while let Some((item, freed_by)) = self.log_peek(store)? {
+            if freed_by > self.ring.checkpointed() {
                 break;
             }
-            match self.sparsest(store)? {
-                Some(next) => region = next,
-                None => break,
+            self.log_pop(store)?;
+            let class = ref_class(item);
+            if ref_index(item) >= self.classes[class].end {
+                return Err(corrupt("keyed hole past its class"));
             }
+            self.set_bit(store, class, Bitmap::Pending, ref_index(item), false)?;
+            self.set_bit(store, class, Bitmap::Holes, ref_index(item), true)?;
+            self.classes[class].holes += 1;
+            self.shrink_holes(store, class)?;
+        }
+        let mut work = freed * self.tuning.fills_per_free + 1;
+        while work > 0 && self.reusable_hole_bytes() > self.allowance() {
+            if !self.compact_one(store)? {
+                break;
+            }
+            work -= 1;
         }
         Ok(())
     }
 
-    fn sparsest(&mut self, store: &mut dyn TileStore) -> Result<Option<u64>> {
-        if self.sparse.len == 0 {
-            // Reopened, or every candidate was used: look at every region.
-            let mut at = self.state.regions;
-            while at != 0 {
-                let header = self.region(store, at)?;
-                if at != self.state.cur && header.next_free == 0 && at != self.state.free_regions {
-                    self.sparse.note(at, header.live, header.len);
-                }
-                at = header.next_all;
-            }
-        }
-        while let Some(region) = self.sparse.take() {
-            if region != self.state.cur && !self.is_free_region(store, region)? {
-                return Ok(Some(region));
-            }
-        }
-        Ok(None)
+    fn reusable_hole_bytes(&self) -> u64 {
+        self.classes[..CLASSES]
+            .iter()
+            .enumerate()
+            .map(|(class, entry)| entry.holes * class_size(class))
+            .sum()
     }
 
-    fn is_free_region(&self, store: &dyn TileSource, region: u64) -> Result<bool> {
-        Ok(region == self.state.free_regions || self.region(store, region)?.next_free != 0)
-    }
-
-    /// Moves every live chunk out of `region` and puts it on the free list.
-    fn empty_region(&mut self, store: &mut dyn TileStore, region: u64) -> Result<()> {
-        let header = self.region(store, region)?;
-        let end = region + REGION_HEADER + header.len;
-        let mut at = region + REGION_HEADER;
-        while at < end {
-            let chunk = self.chunk(store, at)?;
-            let len = chunk.len();
-            if len < CHUNK_HEADER || len > end - at {
-                return Err(corrupt("keyed heap chunk length"));
+    /// Shrinks `class` while its last item is a bitmap hole.
+    fn shrink_holes(&mut self, store: &mut dyn TileStore, class: usize) -> Result<()> {
+        while self.classes[class].end > 0 {
+            let last = self.classes[class].end - 1;
+            if !self.bit(store, class, Bitmap::Holes, last)? {
+                break;
             }
-            if chunk.block_id != FREE_BLOCK
-                && let Some((page, index, slot)) =
-                    self.slot_pointing_at(store, &chunk, region, at)?
-            {
-                let (to_region, to) = self.alloc(store, len, region)?;
-                self.move_chunk(store, &chunk, at, to)?;
-                self.add_live(store, to_region, len)?;
-                let moved = Slot {
-                    route: slot.route,
-                    offset: offset_in(to_region, to)?,
-                    region: to_region,
-                };
-                self.set_slot(store, page, index, moved)?;
-                self.stats.chunks_moved += 1;
-            }
-            at += len;
+            self.set_bit(store, class, Bitmap::Holes, last, false)?;
+            self.classes[class].holes -= 1;
+            self.state.hole_bytes -= class_size(class);
+            self.shrink(store, class)?;
         }
-        let mut header = self.region(store, region)?;
-        self.state.live = self
-            .state
-            .live
-            .checked_sub(header.live)
-            .ok_or(corrupt("keyed heap accounting"))?;
-        header.live = 0;
-        self.free_region(store, region, header)?;
-        self.stats.regions_compacted += 1;
         Ok(())
     }
 
-    /// Puts the empty region at `region` at the end of the free list.
-    fn free_region(
-        &mut self,
-        store: &mut dyn TileStore,
-        region: u64,
-        mut header: Region,
-    ) -> Result<()> {
-        header.freed = self.ring.published() + 1;
-        // Free regions queue oldest first, so the one taken next is the one
-        // most likely in place already. A free region always has a nonzero
-        // link: the last links to itself.
-        header.next_free = region;
-        self.set_region(store, region, header)?;
-        let tail = self.state.free_tail;
-        if tail == 0 {
-            self.state.free_regions = region;
-        } else {
-            let mut last = self.region(store, tail)?;
-            last.next_free = region;
-            self.set_region(store, tail, last)?;
-        }
-        self.state.free_tail = region;
-        self.state.free += header.len;
-        self.holes.forget_region(region);
-        self.sparse.forget(region);
-        Ok(())
-    }
-
-    /// Whether the chunk at `at` is dead as this writer sees it and was
-    /// dead in the published state, read from the file without the ring.
-    /// Its header and key there may differ from what the writer sees.
-    fn dead_now_and_in_place(
-        &self,
-        store: &dyn TileSource,
-        chunk: &Chunk,
-        region: u64,
-        at: u64,
-        in_place: &State,
-    ) -> Result<bool> {
-        if chunk.block_id != FREE_BLOCK
-            && self.slot_pointing_at(store, chunk, region, at)?.is_some()
-        {
-            return Ok(false);
-        }
-        let old = lookup::chunk(&mut InPlaceView, store, at)?;
-        if old.block_id == FREE_BLOCK {
+    /// Moves the last item of a class with reusable holes into its lowest
+    /// hole; `false` when no class can do so now.
+    fn compact_one(&mut self, store: &mut dyn TileStore) -> Result<bool> {
+        for _ in 0..CLASSES {
+            let class = self.compact_class;
+            self.compact_class = (class + 1) % CLASSES;
+            if self.classes[class].holes == 0 {
+                continue;
+            }
+            let index = self.classes[class].end - 1;
+            let last = item_ref(class, index);
+            // Holes at the end were shrunk; a freed item still logged is
+            // not moved: it becomes a hole when its turn comes.
+            if self.bit(store, class, Bitmap::Pending, index)? {
+                continue;
+            }
+            let referrer = self
+                .referrer(store, last)?
+                .ok_or(corrupt("keyed item without a referrer"))?;
+            let target = self.next_hole(store, class)?;
+            self.set_bit(store, class, Bitmap::Holes, target, false)?;
+            self.classes[class].holes -= 1;
+            let hole = item_ref(class, target);
+            self.move_item(store, last, hole, referrer)?;
+            // The old place is a hole a published generation still uses.
+            self.state.hole_bytes -= class_size(class);
+            self.log_hole(store, last)?;
+            self.stats.moves += 1;
             return Ok(true);
         }
-        Ok(self
-            .slot_in(&mut InPlaceView, in_place, store, &old, region, at)?
-            .is_none())
+        Ok(false)
     }
 
-    /// The slot that makes the chunk at `at` live: `(page, index, slot)`.
-    fn slot_pointing_at(
-        &self,
-        store: &dyn TileSource,
-        chunk: &Chunk,
-        region: u64,
-        at: u64,
-    ) -> Result<Option<(u64, usize, Slot)>> {
-        self.slot_in(&mut self.view(), &self.state, store, chunk, region, at)
+    fn map_root(&self, class: usize, map: Bitmap) -> (u64, u64) {
+        match map {
+            Bitmap::Holes => self.classes[class].bits,
+            Bitmap::Pending => self.classes[class].pending,
+        }
     }
 
-    /// [`Self::slot_pointing_at`] through `view` with table `state`.
-    fn slot_in(
+    /// Where bit `index` of one of `class`'s bitmaps is: `(page, byte)`;
+    /// page `0` when the bitmap has no page there.
+    fn bit_at(
         &self,
-        view: &mut dyn View,
-        state: &State,
         store: &dyn TileSource,
-        chunk: &Chunk,
-        region: u64,
-        at: u64,
-    ) -> Result<Option<(u64, usize, Slot)>> {
+        class: usize,
+        map: Bitmap,
+        index: u64,
+    ) -> Result<(u64, u64)> {
+        let mut view = self.view();
+        let root = self.map_root(class, map);
+        let page = radix::get(&mut view, store, root, index / BITS_PER_PAGE)?;
+        Ok((page, (index % BITS_PER_PAGE) / 64 * 8))
+    }
+
+    fn bit(&self, store: &dyn TileSource, class: usize, map: Bitmap, index: u64) -> Result<bool> {
+        let (page, at) = self.bit_at(store, class, map, index)?;
+        if page == 0 {
+            return Ok(false);
+        }
+        let mut word = [0u8; 8];
+        self.read(store, page + at, &mut word)?;
+        Ok(u64::from_le_bytes(word) >> (index % 64) & 1 == 1)
+    }
+
+    fn set_bit(
+        &mut self,
+        store: &mut dyn TileStore,
+        class: usize,
+        map: Bitmap,
+        index: u64,
+        value: bool,
+    ) -> Result<()> {
+        let (mut page, at) = self.bit_at(store, class, map, index)?;
+        if page == 0 {
+            if !value {
+                return Ok(());
+            }
+            page = self.take_page(store)?;
+            // A page from the pool holds old bytes: clear it, in the units
+            // its words are staged in.
+            let zero = [0u8; 8];
+            for word in 0..PAGE_BYTES / 8 {
+                if !self
+                    .ring
+                    .write_unreferenced(store, page + word * 8, &zero)?
+                {
+                    self.ring.stage(store, page + word * 8, &zero)?;
+                }
+            }
+            let root = self.map_root(class, map);
+            let root = self.dir_set(store, root, index / BITS_PER_PAGE, page)?;
+            match map {
+                Bitmap::Holes => self.classes[class].bits = root,
+                Bitmap::Pending => self.classes[class].pending = root,
+            }
+        }
+        let mut word = [0u8; 8];
+        self.read(store, page + at, &mut word)?;
+        let mut bits = u64::from_le_bytes(word);
+        if value {
+            bits |= 1 << (index % 64);
+        } else {
+            bits &= !(1 << (index % 64));
+        }
+        // The bitmap is part of the published state: through the ring.
+        self.ring.stage(store, page + at, &bits.to_le_bytes())
+    }
+
+    /// The first bitmap hole of `class` from its cursor on, wrapping once.
+    fn next_hole(&mut self, store: &dyn TileSource, class: usize) -> Result<u64> {
+        let end = self.classes[class].end;
+        let start = self.cursors[class].min(end) / 64 * 64;
+        let mut index = start;
+        let mut wrapped = false;
+        loop {
+            if index >= end {
+                if wrapped {
+                    return Err(corrupt("keyed hole bitmap"));
+                }
+                wrapped = true;
+                index = 0;
+            }
+            let (page, at) = self.bit_at(store, class, Bitmap::Holes, index)?;
+            if page != 0 {
+                let mut word = [0u8; 8];
+                self.read(store, page + at, &mut word)?;
+                let bits = u64::from_le_bytes(word) >> (index % 64);
+                if bits != 0 {
+                    let found = index + u64::from(bits.trailing_zeros());
+                    if found < end {
+                        self.cursors[class] = found;
+                        return Ok(found);
+                    }
+                }
+                index = (index / 64 + 1) * 64;
+            } else {
+                // A page without bits: skip to the next.
+                index = (index / BITS_PER_PAGE + 1) * BITS_PER_PAGE;
+            }
+            if wrapped && index >= start {
+                return Err(corrupt("keyed hole bitmap"));
+            }
+        }
+    }
+
+    /// What points at live item `item`: its slot (a head) or the item
+    /// before it. Only for items the bitmaps show live.
+    fn referrer(&self, store: &dyn TileSource, item: u64) -> Result<Option<Referrer>> {
+        let header = self.item(store, item)?;
+        if header.head {
+            let route = self.head_route(store, item, &header)?;
+            return Ok(self
+                .slot_with(store, route, |slot, _| Ok(slot.item == item))?
+                .map(|(page, index)| Referrer::Slot(page, index, route)));
+        }
+        // A live continuation: the item before it points at it.
+        let prev = checked_ref(header.total_or_prev)?;
+        Ok((self.item(store, prev)?.next == item).then_some(Referrer::Prev(prev)))
+    }
+
+    /// The route of the record headed by `head`, from its key.
+    fn head_route(&self, store: &dyn TileSource, head: u64, header: &Item) -> Result<u32> {
         let mut hasher = Sip::new(self.fixed.seed);
-        hasher.write(&chunk.block_id.to_le_bytes());
-        let mut step = [0u8; STEP];
-        let mut done = 0u64;
-        let key_len = u64::from(chunk.key_len);
-        while done < key_len {
-            let n = crate::width::bounded(key_len - done, STEP);
-            view.read(store, at + CHUNK_HEADER + done, &mut step[..n])?;
-            hasher.write(&step[..n]);
-            done += n as u64;
+        hasher.write(&header.block_or_route.to_le_bytes());
+        let mut left = u64::from(header.key_len);
+        if left > 0 {
+            let mut view = self.view();
+            let mut ctx = self.ctx(&mut view, store);
+            lookup::stream(&mut ctx, head, &mut |bytes| {
+                let n = crate::width::bounded(left, bytes.len());
+                hasher.write(&bytes[..n]);
+                left -= n as u64;
+                Ok(left > 0)
+            })?;
         }
         #[allow(
             clippy::cast_possible_truncation,
             reason = "the low 32 bits route and fingerprint"
         )]
         let route = hasher.finish() as u32;
-        let offset = offset_in(region, at)?;
-        let mut page_at = lookup::bucket(view, store, state, state.bucket_of(route))?;
+        Ok(route)
+    }
+
+    /// The first slot of route `route` that `matches`: `(page, index)`.
+    fn slot_with(
+        &self,
+        store: &dyn TileSource,
+        route: u32,
+        mut matches: impl FnMut(&Slot, &Self) -> Result<bool>,
+    ) -> Result<Option<(u64, usize)>> {
+        let mut at = self.bucket(store, self.state.bucket_of(route))?;
         let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
-        while page_at != 0 {
-            view.read(store, page_at, &mut page)?;
+        while at != 0 {
+            self.read(store, at, &mut page)?;
             let (count, next) = page_header(&page)?;
             for index in 0..count {
                 let slot = slot_at(&page, index);
-                if slot.route == route && slot.region == region && slot.offset == offset {
-                    return Ok(Some((page_at, index, slot)));
+                if slot.route == route && matches(&slot, self)? {
+                    return Ok(Some((at, index)));
                 }
             }
-            page_at = next;
+            at = next;
         }
         Ok(None)
     }
 
-    /// Copies a chunk to `to` in its three units, as a put would write it.
-    fn move_chunk(
+    /// Moves live item `from` to hole `to` of the same class and points its
+    /// referrer and the item after it there.
+    fn move_item(
         &mut self,
         store: &mut dyn TileStore,
-        chunk: &Chunk,
         from: u64,
         to: u64,
+        referrer: Referrer,
     ) -> Result<()> {
-        self.ring.stage(store, to, &chunk.encode())?;
-        let key = u64::from(chunk.key_len);
-        let payload = u64::from(chunk.payload_len);
-        if key > 0 {
-            self.ring
-                .stage_copy(store, from + CHUNK_HEADER, to + CHUNK_HEADER, key)?;
+        let header = self.item(store, from)?;
+        // In the units a put writes: the header, then the bytes.
+        self.write_item(store, to, 0, &header.encode())?;
+        let len = u64::from(header.len);
+        let mut step = [0u8; STEP];
+        let mut done = 0u64;
+        while done < len {
+            let n = crate::width::bounded(len - done, STEP);
+            {
+                let mut view = self.view();
+                self.ctx(&mut view, store)
+                    .read_item(from, ITEM_HEADER + done, &mut step[..n])?;
+            }
+            self.write_item(store, to, ITEM_HEADER + done, &step[..n])?;
+            done += n as u64;
         }
-        if payload > 0 {
-            self.ring.stage_copy(
-                store,
-                from + CHUNK_HEADER + key,
-                to + CHUNK_HEADER + key,
-                payload,
-            )?;
+        match referrer {
+            Referrer::Slot(page, index, route) => {
+                self.set_slot(store, page, index, Slot { route, item: to })?;
+            }
+            Referrer::Prev(prev) => {
+                let mut before = self.item(store, prev)?;
+                before.next = to;
+                self.rewrite_header(store, prev, &before)?;
+            }
+        }
+        if header.next != NO_ITEM {
+            let mut after = self.item(store, header.next)?;
+            after.total_or_prev = to;
+            self.rewrite_header(store, header.next, &after)?;
         }
         Ok(())
     }
 
-    /// Reads as this writer sees the file: its bucket pages over its ring.
-    fn read(&self, store: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
-        self.pages.read(&self.ring, store, at, buf)
+    // ---- consistency (tests) ----
+
+    /// Checks that every index below each class's end is live or logged
+    /// once, that live items add up to the state's, and that no hole is
+    /// past its class.
+    #[cfg(test)]
+    pub(crate) fn check_consistency(
+        &self,
+        store: &dyn TileSource,
+    ) -> std::result::Result<(), String> {
+        let text = |error: Error| format!("{error}");
+        let mut logged = std::collections::HashSet::new();
+        let mut at_page = self.state.log_head;
+        let mut at = self.state.log_head_at;
+        for _ in 0..self.state.logged {
+            if at == LOG_ENTRIES {
+                let mut link = [0u8; 16];
+                self.read(store, at_page, &mut link).map_err(text)?;
+                at_page = u64::from_le_bytes(link[..8].try_into().expect("eight"));
+                at = 0;
+            }
+            let mut entry = [0u8; 16];
+            self.read(store, at_page + LOG_HEADER + at * LOG_ENTRY, &mut entry)
+                .map_err(text)?;
+            let item = u64::from_le_bytes(entry[..8].try_into().expect("eight"));
+            if !logged.insert(item) {
+                return Err(format!("hole {item:x} logged twice"));
+            }
+            at += 1;
+        }
+        if logged
+            .iter()
+            .any(|&item| ref_index(item) >= self.classes[ref_class(item)].end)
+        {
+            return Err("a hole past its class".into());
+        }
+        let (mut live, mut hole_bytes) = (0u64, 0u64);
+        for class in 0..CLASSES {
+            let mut holes = 0u64;
+            for index in 0..self.classes[class].end {
+                let item = item_ref(class, index);
+                let hole = self.bit(store, class, Bitmap::Holes, index).map_err(text)?;
+                let pending = self
+                    .bit(store, class, Bitmap::Pending, index)
+                    .map_err(text)?;
+                if pending != logged.contains(&item) {
+                    return Err(format!(
+                        "item {item:x}: pending {pending}, logged {}",
+                        !pending
+                    ));
+                }
+                if hole && pending {
+                    return Err(format!("item {item:x} both a hole and pending"));
+                }
+                holes += u64::from(hole);
+                if hole || pending {
+                    hole_bytes += class_size(class);
+                } else if self.referrer(store, item).map_err(text)?.is_some() {
+                    live += class_size(class);
+                } else {
+                    return Err(format!("live item {item:x} without a referrer"));
+                }
+            }
+            if holes != self.classes[class].holes {
+                return Err(format!(
+                    "class {class}: {holes} holes, entry says {}",
+                    self.classes[class].holes
+                ));
+            }
+        }
+        // Every record a slot reaches is made of live items.
+        let mut reached = 0u64;
+        for bucket in 0..self.state.buckets() {
+            let mut at = self.bucket(store, bucket).map_err(text)?;
+            let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
+            while at != 0 {
+                self.read(store, at, &mut page).map_err(text)?;
+                let (count, next) = page_header(&page).map_err(text)?;
+                for index in 0..count {
+                    let mut item = slot_at(&page, index).item;
+                    while item != NO_ITEM {
+                        let (class, at_index) = (ref_class(item), ref_index(item));
+                        if at_index >= self.classes[class].end
+                            || self
+                                .bit(store, class, Bitmap::Holes, at_index)
+                                .map_err(text)?
+                            || self
+                                .bit(store, class, Bitmap::Pending, at_index)
+                                .map_err(text)?
+                        {
+                            return Err(format!("a record reaches dead item {item:x}"));
+                        }
+                        reached += class_size(class);
+                        item = self.item(store, item).map_err(text)?.next;
+                    }
+                }
+                at = next;
+            }
+        }
+        if reached != live {
+            return Err(format!("records reach {reached} bytes, {live} live"));
+        }
+        if live != self.state.live || hole_bytes != self.state.hole_bytes {
+            return Err(format!(
+                "live {live}/{} holes {hole_bytes}/{}",
+                self.state.live, self.state.hole_bytes
+            ));
+        }
+        Ok(())
     }
 
-    fn view(&self) -> HeapView<'_> {
-        HeapView {
-            ring: &self.ring,
-            pages: &self.pages,
-        }
+    // ---- buckets ----
+
+    fn set_slot(
+        &mut self,
+        store: &mut dyn TileStore,
+        page: u64,
+        index: usize,
+        slot: Slot,
+    ) -> Result<()> {
+        let bytes = self.pages.page_mut(&mut self.ring, store, page)?;
+        put_slot(bytes, index, &slot.encode());
+        Ok(())
     }
 
     /// Replaces the bucket page at `at` with `page`.
@@ -1372,20 +1184,6 @@ impl KeyedHeap {
         Ok(())
     }
 
-    fn set_slot(
-        &mut self,
-        store: &mut dyn TileStore,
-        page: u64,
-        index: usize,
-        slot: Slot,
-    ) -> Result<()> {
-        let bytes = self.pages.page_mut(&mut self.ring, store, page)?;
-        put_slot(bytes, index, &slot.encode());
-        Ok(())
-    }
-
-    // ---- buckets ----
-
     fn insert_slot(&mut self, store: &mut dyn TileStore, bucket: u64, slot: Slot) -> Result<()> {
         let mut at = self.bucket(store, bucket)?;
         loop {
@@ -1399,7 +1197,7 @@ impl KeyedHeap {
                 return Ok(());
             }
             if next == 0 {
-                let page_at = self.alloc_page(store)?;
+                let page_at = self.alloc_bucket_page(store)?;
                 let page = self.pages.page_new(&mut self.ring, store, page_at)?;
                 set_page_header(page, 1, 0);
                 put_slot(page, 0, &slot.encode());
@@ -1432,8 +1230,9 @@ impl KeyedHeap {
         let bit = 1u64 << self.state.level;
         let to = from + bit;
         let head = self.bucket(store, from)?;
-        let to_head = self.alloc_page(store)?;
-        self.set_bucket(store, to, to_head)?;
+        let to_head = self.alloc_bucket_page(store)?;
+        let dir = self.state.dir;
+        self.state.dir = self.dir_set(store, dir, to, to_head)?;
 
         let mut read = [0u8; crate::width::small(BUCKET_PAGE)];
         let mut stay = [0u8; crate::width::small(BUCKET_PAGE)];
@@ -1449,10 +1248,10 @@ impl KeyedHeap {
             let (count, next) = page_header(&read)?;
             for index in 0..count {
                 let start = HEADER_BYTES + index * SLOT_BYTES;
-                let bytes = &read[start..start + crate::width::small(SLOT_LEN)];
+                let bytes = &read[start..start + SLOT_BYTES];
                 if u64::from(Slot::decode(bytes).route) & bit != 0 {
                     if moved_count == SLOTS_PER_PAGE {
-                        let next_page = self.alloc_page(store)?;
+                        let next_page = self.alloc_bucket_page(store)?;
                         set_page_header(&mut moved, moved_count, next_page);
                         self.put_page(store, moved_at, &moved)?;
                         moved_at = next_page;
@@ -1462,7 +1261,7 @@ impl KeyedHeap {
                     moved_count += 1;
                 } else {
                     if stay_count == SLOTS_PER_PAGE {
-                        let next_page = self.next_page(store, stay_at)?;
+                        let next_page = self.next_bucket_page(store, stay_at)?;
                         set_page_header(&mut stay, stay_count, next_page);
                         self.put_page(store, stay_at, &stay)?;
                         stay_at = next_page;
@@ -1474,7 +1273,7 @@ impl KeyedHeap {
             }
             at = next;
         }
-        let mut spare = self.next_page(store, stay_at)?;
+        let mut spare = self.next_bucket_page(store, stay_at)?;
         set_page_header(&mut stay, stay_count, 0);
         zero_slots(&mut stay, stay_count);
         self.put_page(store, stay_at, &stay)?;
@@ -1482,8 +1281,8 @@ impl KeyedHeap {
         zero_slots(&mut moved, moved_count);
         self.put_page(store, moved_at, &moved)?;
         while spare != 0 {
-            let next = self.next_page(store, spare)?;
-            self.free_page(store, spare)?;
+            let next = self.next_bucket_page(store, spare)?;
+            self.free_bucket_page(store, spare)?;
             spare = next;
         }
         self.state = self.state.after_split();
@@ -1491,18 +1290,18 @@ impl KeyedHeap {
         Ok(())
     }
 
-    fn next_page(&self, store: &dyn TileSource, page: u64) -> Result<u64> {
+    fn next_bucket_page(&self, store: &dyn TileSource, page: u64) -> Result<u64> {
         let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
         self.read(store, page, &mut header)?;
         Ok(page_header(&header)?.1)
     }
 
-    fn alloc_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
-        let head = self.state.free_pages;
+    fn alloc_bucket_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+        let head = self.state.free_buckets;
         if head != 0 {
             let mut link = [0u8; 8];
             self.read(store, head + 8, &mut link)?;
-            self.state.free_pages = u64::from_le_bytes(link);
+            self.state.free_buckets = u64::from_le_bytes(link);
             return Ok(head);
         }
         let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
@@ -1511,39 +1310,51 @@ impl KeyedHeap {
             .place_record(store, RecordKind::Bucket, &header, BUCKET_PAGE)
     }
 
-    fn free_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
-        let free_pages = self.state.free_pages;
+    fn free_bucket_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
+        let free = self.state.free_buckets;
         let bytes = self.pages.page_new(&mut self.ring, store, page)?;
-        set_page_header(bytes, 0, free_pages);
-        self.state.free_pages = page;
+        set_page_header(bytes, 0, free);
+        self.state.free_buckets = page;
         Ok(())
     }
 
-    // ---- bucket directory ----
-
     /// The first page of bucket `bucket`.
     fn bucket(&self, store: &dyn TileSource, bucket: u64) -> Result<u64> {
-        lookup::bucket(&mut self.view(), store, &self.state, bucket)
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        lookup::bucket(&mut ctx, &self.state, bucket)
     }
 
-    fn set_bucket(&mut self, store: &mut dyn TileStore, bucket: u64, first: u64) -> Result<()> {
-        let (mut root, mut height) = self.state.dir;
-        let bits = 64 - bucket.leading_zeros();
-        let needed = u64::from(bits.div_ceil(DIR_LEVEL_BITS).max(1));
+    // ---- directories ----
+
+    /// Maps `key` to `value` in the directory `root` and returns the root,
+    /// grown when it did not reach `key`.
+    fn dir_set(
+        &mut self,
+        store: &mut dyn TileStore,
+        root: (u64, u64),
+        key: u64,
+        value: u64,
+    ) -> Result<(u64, u64)> {
+        let (mut page, mut height) = root;
+        let needed = radix::height_for(key);
+        if page == 0 {
+            page = self.new_dir_page(store)?;
+            height = 1;
+        }
         while height < needed {
             let taller = self.new_dir_page(store)?;
-            self.ring.stage(store, taller, &root.to_le_bytes())?;
-            root = taller;
+            self.ring.stage(store, taller, &page.to_le_bytes())?;
+            page = taller;
             height += 1;
         }
-        self.state.dir = (root, height);
-        let mut page = root;
+        let root = (page, height);
         for level in (1..height).rev() {
-            let index = (bucket >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
-            let at = page + index * 8;
+            let at = page + radix::index_at(key, level) * 8;
             let mut entry = [0u8; 8];
             self.read(store, at, &mut entry)?;
-            let mut child = directory_offset(u64::from_le_bytes(entry))?;
+            let mut child = directory_offset(u64::from_le_bytes(entry))
+                .map_err(|_| corrupt("keyed directory entry"))?;
             if child == 0 {
                 child = self.new_dir_page(store)?;
                 self.ring.stage(store, at, &child.to_le_bytes())?;
@@ -1552,9 +1363,10 @@ impl KeyedHeap {
         }
         self.ring.stage(
             store,
-            page + (bucket & (DIR_FANOUT - 1)) * 8,
-            &first.to_le_bytes(),
-        )
+            page + radix::index_at(key, 0) * 8,
+            &value.to_le_bytes(),
+        )?;
+        Ok(root)
     }
 
     fn new_dir_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
@@ -1563,24 +1375,44 @@ impl KeyedHeap {
     }
 }
 
+/// One of a class's two bitmaps.
+#[derive(Clone, Copy, Debug)]
+enum Bitmap {
+    /// Items no generation since the last checkpoint freed: reusable.
+    Holes,
+    /// Items freed and logged, waiting to become holes.
+    Pending,
+}
+
+/// What points at a live item.
+#[derive(Clone, Copy, Debug)]
+enum Referrer {
+    /// Its slot: page, index, route.
+    Slot(u64, usize, u32),
+    /// The item before it in its record.
+    Prev(u64),
+}
+
+/// Calls `visit` with the parts of `key ‖ payload` in `[at, at + len)`.
+fn for_parts(key: &[u8], payload: &[u8], at: u64, len: u64, visit: &mut dyn FnMut(&[u8])) {
+    // Within `key ‖ payload`, which are in memory.
+    let start = usize::try_from(at).expect("within the record");
+    let end = usize::try_from(at + len).expect("within the record");
+    let key_end = key.len();
+    if start < key_end {
+        visit(&key[start..end.min(key_end)]);
+    }
+    if end > key_end {
+        visit(&payload[start.max(key_end) - key_end..end - key_end]);
+    }
+}
+
 fn put_slot(page: &mut [u8], index: usize, bytes: &[u8]) {
     let start = HEADER_BYTES + index * SLOT_BYTES;
-    page[start..start + crate::width::small(SLOT_LEN)].copy_from_slice(bytes);
+    page[start..start + SLOT_BYTES].copy_from_slice(bytes);
 }
 
 fn zero_slots(page: &mut [u8], from: usize) {
     let start = HEADER_BYTES + from * SLOT_BYTES;
     page[start..].fill(0);
-}
-
-fn offset_in(region: u64, at: u64) -> Result<u32> {
-    u32::try_from(at - region).map_err(|_| corrupt("keyed heap chunk offset"))
-}
-
-fn field32(resource: &'static str, len: usize) -> Result<u32> {
-    u32::try_from(len).map_err(|_| Error::LimitExceeded {
-        resource,
-        actual: len as u64,
-        limit: u64::from(u32::MAX),
-    })
 }

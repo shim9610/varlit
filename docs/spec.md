@@ -96,7 +96,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 4 | tile | one `VTIL` tile |
   | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
   | 6 | keyed metadata | the `VKMT` record (see Keyed Storage Wire Contract) |
-  | 7 | heap region | one `VHRG` region of keyed records |
+  | 7 | keyed page | a 64 KiB page of keyed storage: items, freed item log, bitmap, or pooled |
   | 8 | bucket page | one `VBKT` slot bucket page |
 
 - Each record is appended once and its payload is then rewritten in place. For
@@ -429,19 +429,20 @@ matrix engine (`matrix_tiles/ring_store.rs`, `matrix_tiles/view.rs`), so
 everything under Write-Ahead Ring, Overflow Regions, Publication Indexes and
 Snapshots And Overlay applies unchanged. All integers are little-endian.
 Its records have block id `0xFFFF_FFF3` and block versions 6 to 8 (see the
-table under Records). The schema hash folds `keyed-storage-v1` and the
+table under Records): metadata, 64 KiB pages (items, the log, bitmaps and
+the pool), and bucket pages. The schema hash folds `keyed-storage-v1` and the
 free-space ratio. A format cannot declare both keyed storage and matrix
 blocks, nor keyed storage and `keyed_offset_chain`.
 
 ### Metadata Record (`VKMT`)
 
 - The first record of the log, appended at create; its payload is read at
-  `append_log_start + 32`. 184 bytes:
+  `append_log_start + 32`. 8416 bytes:
 
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VKMT"` |
-  | 4..6 | version, 1 |
+  | 4..6 | version, 2 |
   | 6..8 | free-space ratio in thousandths of live bytes, 10 to 50 |
   | 8..24 | the SipHash-1-3 key: two `u64`, random per file |
   | 24..40 | ring payload offset and length |
@@ -450,27 +451,44 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   | 56..60 | CRC32 of bytes 0..56 |
   | 60..64 | zero |
   | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
-  | 72..184 | the state: 14 `u64` fields, changed through the ring |
+  | 72..224 | the state: 19 `u64` fields, changed through the ring |
+  | 224..8416 | 128 class entries of 64 bytes, changed through the ring |
 
 - The state fields, in order: bucket directory root page and height; linear
-  hashing level and split pointer; live keys; live chunk bytes; heap region
-  bytes; current region and its used bytes; newest heap region; first free
-  region; first free bucket page; free region bytes; last free region.
+  hashing level and split pointer; live keys; live item bytes; pages; the
+  page pool's head, tail and length; the free bucket page list; the freed
+  item log's head page and entry, tail page and entry count there, and
+  entries; bytes of every hole; the next record chain id; zero.
+- A class entry: its end (items `[0, end)`), its page directory root and
+  height, its hole count, its hole bitmap's directory root and height, its
+  pending bitmap's directory root and height.
 
-### Heap Regions (`VHRG`)
+### Size Classes, Items And Records
 
-- A 48-byte header (`magic | 0 | len | live | next_all | next_free |
-  freed`) then `len` bytes of chunks. `next_all` links every region, newest
-  first. A region on the free list has a nonzero `next_free` (the last links
-  to itself) and `freed`, the generation that emptied it.
-- A chunk is a 16-byte header (`payload_len u32 | block_id u32 | key_len u32
-  | crc32`), the key's canonical encoding, the block's encoded payload, then
-  zero padding to a multiple of 16. The CRC32 covers the header's first 12
-  bytes, the key and the payload. A free chunk has block id `0xFFFF_FFFF`
-  and its payload length is its length less 16. Chunks tile a region, so a
-  region can be walked header to header. A replaced or deleted chunk keeps
-  its header: no slot points at it any more.
-- A record longer than half a region (1 MiB) gets a region of its own.
+- About a hundred classes: 48 to 256 bytes in 16-byte steps, then each
+  1/16 larger than the last (rounded up to 16 bytes) up to 65536. A class is
+  an array of items of its size; item `i` is at byte `i × size` of the
+  class's space, which 64 KiB pages hold through the class's radix
+  directory (pages are records of block version 7, 65536 bytes). An item may
+  straddle two pages.
+- A record's bytes are its key then its payload. It is a chain of items:
+  full 64 KiB items, then one item of the smallest class holding the rest.
+- An item starts with a 40-byte header (`len u32 | block id or route u32 |
+  key length u32 | crc32 | chain id u64 | next item u64 | total length or
+  previous item u64`). `len`'s top bit marks a continuation. A head carries
+  the block id, key length and the record's total length; a continuation
+  carries the key's route and the item before it. The CRC32 covers the
+  header's first eight bytes and the item's record bytes.
+- An item reference is the class in the top byte and the index below;
+  `u64::MAX` is none.
+- Every item below a class's end is live, logged as freed (its pending
+  bit set), or a hole (its hole bit set). An item in neither bitmap is
+  live; its slot (a head) or the item before it (a continuation) points
+  at it.
+- The freed item log: 64 KiB pages of a 16-byte link then 16-byte entries
+  (`item | generation that freed it`), oldest first.
+- Free pages: a pool, oldest first; a pooled page's first 16 bytes hold the
+  next pooled page and the generation that pooled it.
 
 ### Slot Buckets (`VBKT`)
 
@@ -479,43 +497,34 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   the table has `2^level + split` buckets and the key's bucket is
   `route mod 2^level`, or `route mod 2^(level+1)` when that is below `split`.
 - A bucket page is 4096 bytes: `magic b"VBKT" | count u32 | next page u64`
-  then 255 slots of 16 bytes (`route u32 | offset in region u32 | region
-  u64`). Slots `0..count` are in use; a bucket's pages chain through `next`.
+  then 255 slots of 16 bytes (`route u32 | zero u32 | head item u64`).
+  Slots `0..count` are in use; a bucket's pages chain through `next`.
 - Bucket numbers map to first pages through a radix directory of 4096-byte
-  pages (512 entries, 9 bits per level), as matrix tiles map to theirs.
-- A chunk is live exactly when a slot points at it.
+  pages (512 entries, 9 bits per level); class pages and bitmap pages are
+  mapped the same way.
 
 ### Writing
 
-- A put never writes over the value it replaces. It takes space no
-  generation since the last checkpoint points at: a hole or a free region
-  freed by a generation in place (at or below the ring's `checkpointed`),
-  the current region's tail, or a new region. Its chunk goes straight to the
-  file when no range staged since the last checkpoint (in the ring or an
-  index) covers it, else through the ring; its header and the slot that
-  points at it always go through the ring (headers tile the region, and a
-  generation that is dropped or lost in a crash must find the region tiled
-  as it was published). A publication makes such chunks
-  durable before its commit frame, as it does appended records. A reader
-  whose snapshot is older than that checkpoint has expired (the checkpoint
-  raised the mark past it), so no reader sees these bytes as its own.
-- Staged bytes are staged in the same units each time: a bucket page whole,
-  a chunk's header, key and payload, a region's header. Bucket pages and
-  region headers are staged once per publication from buffers allocated at
-  open.
+- A put writes the record's items into holes of their classes (from the
+  hole bitmap) or at the classes' ends, straight to the file when nothing
+  staged covers them; the slot, the class entries, the bitmaps, the log
+  pointers and the state go through the ring. The items it replaces are
+  logged as freed (pending bit set).
+- A logged item becomes a hole once the generation that freed it is in
+  place (at or below the ring's `checkpointed`): its pending bit is cleared
+  and its hole bit set. A class whose last items are holes shrinks; pages
+  left empty go to the pool, reusable once the generation that pooled them
+  is in place. Log positions are never rewritten while a published log may
+  name them.
+- When reusable holes exceed the declared ratio of live bytes (at least a
+  page), the writer moves classes' last live items into their holes,
+  repointing the slot or the item before and after, and logs the old
+  places.
 - A round allocates at most the change budget: past it the writer publishes
   the round and puts it in place before the next allocation, so a `sync`
-  that changes more is several publications, each atomic.
-- Space freed by a generation is retaken after the next checkpoint. A region
-  left without live bytes goes on the free list at once. Before the file
-  grows past the allowance (the declared ratio of live bytes, at least one
-  region), the writer checkpoints what is published, then refills its hole
-  cache by walking regions: a chunk is taken when no slot points at it as
-  the writer sees it nor in the file without the ring (the published state,
-  once everything published is in place).
-- When holes not freed since the last checkpoint exceed the allowance, the
-  writer empties the sparsest regions into the free list, moving their live
-  chunks.
+  that changes more is several publications, each atomic. The writer also
+  puts what is published in place once more freed items wait than the
+  ratio allows (at least 1 MiB, at most half the budget).
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 

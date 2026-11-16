@@ -1,17 +1,18 @@
-//! Finding a key's record, the same for the writer and for a reader: only
-//! the [`View`] its bytes come through differs.
+//! Finding and reading records, the same for the writer and for a reader:
+//! only the [`View`] bytes come through, and where class entries come from,
+//! differ.
 
 use super::{
-    BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, SLOT_LEN, Slot, State, corrupt, page_header,
-    sip,
+    BUCKET_HEADER, BUCKET_PAGE, ClassEntry, ITEM_HEADER, Item, NO_ITEM, PAGE_BYTES, SLOT_LEN, Slot,
+    State, checked_ref, class_entry_at, class_size, corrupt, page_header, radix, ref_class,
+    ref_index, sip,
 };
 use crate::matrix_tiles::store::TileSource;
-use crate::matrix_tiles::view::{RingReader, directory_offset};
-use crate::matrix_tiles::{DIR_FANOUT, DIR_LEVEL_BITS};
+use crate::matrix_tiles::view::RingReader;
 use crate::{Error, Result};
 
-/// Bytes read per step when a key is compared or checksummed.
-const STEP: usize = 4096;
+/// Bytes read per step when a key is compared or a record is checked.
+pub(crate) const STEP: usize = 4096;
 
 /// Reads the file as one snapshot shows it.
 pub(crate) trait View {
@@ -26,15 +27,70 @@ impl View for RingReader {
     }
 }
 
-/// The file as its last checkpoint left it: what is in place, without the
-/// ring. With every published generation in place this is the published
-/// state, apart from bytes the open generation wrote straight into space
-/// that state does not use.
-pub(crate) struct InPlaceView;
+/// What a lookup reads through: a view, the file, the metadata record, and
+/// the class entries when the caller holds them (the writer does; a reader
+/// reads them through its view).
+pub(crate) struct Ctx<'a> {
+    pub view: &'a mut dyn View,
+    pub source: &'a dyn TileSource,
+    pub meta: u64,
+    pub classes: Option<&'a [ClassEntry]>,
+}
 
-impl View for InPlaceView {
-    fn read(&mut self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
-        source.read_at(at, buf)
+impl Ctx<'_> {
+    pub(crate) fn read(&mut self, at: u64, buf: &mut [u8]) -> Result<()> {
+        self.view.read(self.source, at, buf)
+    }
+
+    pub(crate) fn class(&mut self, class: usize) -> Result<ClassEntry> {
+        if let Some(classes) = self.classes {
+            return classes
+                .get(class)
+                .copied()
+                .ok_or(corrupt("keyed item reference"));
+        }
+        let mut raw = [0u8; crate::width::small(super::CLASS_ENTRY_LEN)];
+        let at = class_entry_at(self.meta, class);
+        self.read(at, &mut raw)?;
+        ClassEntry::decode(&raw)
+    }
+
+    /// Reads `buf.len()` bytes of item `item` from byte `from` of it. An
+    /// item may straddle two pages.
+    pub(crate) fn read_item(&mut self, item: u64, from: u64, buf: &mut [u8]) -> Result<()> {
+        let item = checked_ref(item)?;
+        let class = ref_class(item);
+        let entry = self.class(class)?;
+        let size = class_size(class);
+        if ref_index(item) >= entry.end || from + buf.len() as u64 > size {
+            return Err(corrupt("keyed item reference"));
+        }
+        let mut at = ref_index(item) * size + from;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let page = radix::get(self.view, self.source, entry.dir, at / PAGE_BYTES)?;
+            if page == 0 {
+                return Err(corrupt("keyed item page"));
+            }
+            let within = at % PAGE_BYTES;
+            let n = crate::width::bounded(PAGE_BYTES - within, buf.len() - done);
+            self.read(page + within, &mut buf[done..done + n])?;
+            done += n;
+            at += n as u64;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn item(&mut self, item: u64) -> Result<Item> {
+        let mut header = [0u8; crate::width::small(ITEM_HEADER)];
+        self.read_item(item, 0, &mut header)?;
+        let item_header = Item::decode(&header);
+        if u64::from(item_header.len) + ITEM_HEADER > class_size(ref_class(item))
+            || (item_header.next != NO_ITEM && checked_ref(item_header.next).is_err())
+        {
+            return Err(corrupt("keyed item header"));
+        }
+        Ok(item_header)
     }
 }
 
@@ -45,16 +101,14 @@ pub(crate) struct Located {
     /// The bucket page holding the slot, and its index there.
     pub page: u64,
     pub index: usize,
-    pub chunk: Chunk,
-    /// The checksum of the chunk's header fields and key, which the payload
-    /// continues.
-    pub prefix_crc: u32,
+    /// The head item's header.
+    pub head: Item,
 }
 
 impl Located {
-    /// Where the payload starts.
-    pub(crate) const fn payload_at(&self) -> u64 {
-        self.slot.at() + CHUNK_HEADER + self.chunk.key_len as u64
+    /// The payload's length.
+    pub(crate) const fn payload_len(&self) -> u64 {
+        self.head.total_or_prev - self.head.key_len as u64
     }
 }
 
@@ -68,33 +122,92 @@ pub(crate) fn route(seed: [u64; 2], block_id: u32, key: &[u8]) -> u32 {
     route
 }
 
-/// Finds `key` of `block_id`.
+/// Calls `visit(bytes)` with a record's bytes in order, from byte `from`,
+/// item by item through `buf`. Stops early when `visit` returns `false`.
+/// Checks every item's checksum when `from` is 0 and the whole record is
+/// visited.
+pub(crate) fn stream(
+    ctx: &mut Ctx<'_>,
+    head: u64,
+    visit: &mut dyn FnMut(&[u8]) -> Result<bool>,
+) -> Result<()> {
+    let mut step = [0u8; STEP];
+    let mut item = head;
+    let mut first = true;
+    let mut total = 0u64;
+    let mut expected = 0u64;
+    // A chain is no longer than its record allows: bounded by the record.
+    loop {
+        let header = ctx.item(item)?;
+        if first {
+            if !header.head {
+                return Err(corrupt("keyed record head"));
+            }
+            expected = header.total_or_prev;
+            first = false;
+        } else if header.head {
+            return Err(corrupt("keyed record chain"));
+        }
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(&header.crc_prefix());
+        let len = u64::from(header.len);
+        let mut done = 0u64;
+        let mut stop = false;
+        while done < len {
+            let n = crate::width::bounded(len - done, STEP);
+            ctx.read_item(item, ITEM_HEADER + done, &mut step[..n])?;
+            crc.update(&step[..n]);
+            if !stop && !visit(&step[..n])? {
+                stop = true;
+            }
+            done += n as u64;
+        }
+        if crc.finalize() != header.crc {
+            return Err(Error::ChecksumMismatch { offset: item });
+        }
+        total += len;
+        if stop || header.next == NO_ITEM {
+            break;
+        }
+        if total >= expected {
+            return Err(corrupt("keyed record chain"));
+        }
+        item = header.next;
+    }
+    Ok(())
+}
+
+/// Finds `key` of `block_id` in the table `state`.
 pub(crate) fn find(
-    view: &mut dyn View,
-    source: &dyn TileSource,
+    ctx: &mut Ctx<'_>,
     seed: [u64; 2],
     state: &State,
     block_id: u32,
     key: &[u8],
 ) -> Result<Option<Located>> {
     let route = route(seed, block_id, key);
-    let mut at = bucket(view, source, state, state.bucket_of(route))?;
+    let mut at = bucket(ctx, state, state.bucket_of(route))?;
     let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
     while at != 0 {
-        view.read(source, at, &mut page)?;
+        ctx.read(at, &mut page)?;
         let (count, next) = page_header(&page)?;
         for index in 0..count {
             let slot = slot_at(&page, index);
             if slot.route != route {
                 continue;
             }
-            if let Some((chunk, prefix_crc)) = record_at(view, source, slot.at(), block_id, key)? {
+            let head = ctx.item(slot.item)?;
+            if head.head
+                && head.block_or_route == block_id
+                && head.key_len as usize == key.len()
+                && head.total_or_prev >= key.len() as u64
+                && key_equals(ctx, slot.item, key)?
+            {
                 return Ok(Some(Located {
                     slot,
                     page: at,
                     index,
-                    chunk,
-                    prefix_crc,
+                    head,
                 }));
             }
         }
@@ -103,107 +216,82 @@ pub(crate) fn find(
     Ok(None)
 }
 
-/// Reads a located record's payload into `out`, which must be its length,
-/// and checks the chunk's checksum.
-pub(crate) fn read_payload(
-    view: &mut dyn View,
-    source: &dyn TileSource,
-    found: &Located,
-    out: &mut [u8],
-) -> Result<()> {
-    if out.len() != found.chunk.payload_len as usize {
-        return Err(Error::BufferTooSmall {
-            resource: "keyed record payload",
-            required: found.chunk.payload_len as usize,
-            provided: out.len(),
-        });
-    }
-    view.read(source, found.payload_at(), out)?;
-    let mut crc = crc32fast::Hasher::new_with_initial(found.prefix_crc);
-    crc.update(out);
-    if crc.finalize() != found.chunk.crc {
-        return Err(Error::ChecksumMismatch {
-            offset: found.slot.at(),
-        });
-    }
-    Ok(())
-}
-
-/// The chunk at `at` when it holds `key` of `block_id`, with the checksum
-/// of its header fields and key. A key that fits one step is read with the
-/// header in one read.
-fn record_at(
-    view: &mut dyn View,
-    source: &dyn TileSource,
-    at: u64,
-    block_id: u32,
-    key: &[u8],
-) -> Result<Option<(Chunk, u32)>> {
-    let header_len = crate::width::small(CHUNK_HEADER);
-    let mut step = [0u8; STEP];
-    let end = header_len + key.len();
-    // A chunk shorter than the combined read (another key's, under a
-    // colliding route) can end at the end of the file: when that read
-    // fails, the header and the key are read on their own.
-    let together = end <= STEP && view.read(source, at, &mut step[..end]).is_ok();
-    if !together {
-        view.read(source, at, &mut step[..header_len])?;
-    }
-    let chunk = Chunk::decode(step[..header_len].try_into().expect("header"));
-    if chunk.block_id != block_id || chunk.key_len as usize != key.len() {
-        return Ok(None);
-    }
-    let matches = if together {
-        step[header_len..end] == *key
-    } else {
-        key_equals(view, source, at + CHUNK_HEADER, key)?
-    };
-    if !matches {
-        return Ok(None);
-    }
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(&chunk.encode()[..12]);
-    crc.update(key);
-    Ok(Some((chunk, crc.finalize())))
-}
-
-pub(crate) fn chunk(view: &mut dyn View, source: &dyn TileSource, at: u64) -> Result<Chunk> {
-    let mut header = [0u8; crate::width::small(CHUNK_HEADER)];
-    view.read(source, at, &mut header)?;
-    Ok(Chunk::decode(&header))
-}
-
-fn key_equals(view: &mut dyn View, source: &dyn TileSource, at: u64, key: &[u8]) -> Result<bool> {
-    let mut step = [0u8; STEP];
-    for (index, piece) in key.chunks(STEP).enumerate() {
-        let read = &mut step[..piece.len()];
-        view.read(source, at + (index * STEP) as u64, read)?;
-        if read != piece {
+/// Whether the record headed by `head` starts with `key`.
+fn key_equals(ctx: &mut Ctx<'_>, head: u64, key: &[u8]) -> Result<bool> {
+    let mut matched = 0usize;
+    let mut equal = true;
+    let mut item = head;
+    while matched < key.len() {
+        let header = ctx.item(item)?;
+        let len = crate::width::index(u64::from(header.len))?;
+        let n = len.min(key.len() - matched);
+        let mut step = [0u8; STEP];
+        let mut done = 0usize;
+        while done < n {
+            let m = (n - done).min(STEP);
+            ctx.read_item(item, ITEM_HEADER + done as u64, &mut step[..m])?;
+            if step[..m] != key[matched + done..matched + done + m] {
+                equal = false;
+                break;
+            }
+            done += m;
+        }
+        if !equal {
             return Ok(false);
+        }
+        matched += n;
+        if matched < key.len() {
+            if header.next == NO_ITEM {
+                return Ok(false);
+            }
+            item = header.next;
         }
     }
     Ok(true)
 }
 
+/// Reads a located record's payload into `out`, which must be its length,
+/// checking every item.
+pub(crate) fn read_payload(ctx: &mut Ctx<'_>, found: &Located, out: &mut [u8]) -> Result<()> {
+    let payload_len = found.payload_len();
+    if out.len() as u64 != payload_len {
+        return Err(Error::BufferTooSmall {
+            resource: "keyed record payload",
+            required: crate::width::index(payload_len)?,
+            provided: out.len(),
+        });
+    }
+    let mut skip = u64::from(found.head.key_len);
+    let mut written = 0usize;
+    stream(ctx, found.slot.item, &mut |bytes| {
+        let mut bytes = bytes;
+        if skip > 0 {
+            let n = crate::width::bounded(skip, bytes.len());
+            skip -= n as u64;
+            bytes = &bytes[n..];
+        }
+        let end = written + bytes.len();
+        let target = out
+            .get_mut(written..end)
+            .ok_or(corrupt("keyed record length"))?;
+        target.copy_from_slice(bytes);
+        written = end;
+        Ok(true)
+    })?;
+    if written != out.len() {
+        return Err(corrupt("keyed record length"));
+    }
+    Ok(())
+}
+
 /// The first page of bucket `bucket`.
-pub(crate) fn bucket(
-    view: &mut dyn View,
-    source: &dyn TileSource,
-    state: &State,
-    bucket: u64,
-) -> Result<u64> {
-    let (mut page, height) = state.dir;
-    if height < 8 && bucket >> (u64::from(DIR_LEVEL_BITS) * height) != 0 {
+pub(crate) fn bucket(ctx: &mut Ctx<'_>, state: &State, bucket: u64) -> Result<u64> {
+    if !radix::reaches(state.dir.1, bucket) {
         return Err(corrupt("keyed bucket directory"));
     }
-    for level in (0..height).rev() {
-        let index = (bucket >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
-        let mut entry = [0u8; 8];
-        view.read(source, page + index * 8, &mut entry)?;
-        page = directory_offset(u64::from_le_bytes(entry))?;
-        if page == 0 {
-            return Err(corrupt("keyed bucket directory"));
-        }
+    let page = radix::get(ctx.view, ctx.source, state.dir, bucket)?;
+    if page == 0 {
+        return Err(corrupt("keyed bucket directory"));
     }
     Ok(page)
 }

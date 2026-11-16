@@ -320,22 +320,16 @@ impl Coalescer<'_> {
     }
 }
 
-/// Bytes copied per step when a staged range is copied from the file.
-const COPY_PIECE: usize = 4096;
-
-/// What a staged range holds: bytes from the caller, or bytes this writer
-/// sees elsewhere in the file.
+/// What a staged range holds: bytes from the caller.
 #[derive(Clone, Copy)]
 enum Src<'a> {
     Bytes(&'a [u8]),
-    Copy { from: u64, len: u64 },
 }
 
 impl Src<'_> {
     const fn len(&self) -> u64 {
         match self {
             Self::Bytes(bytes) => bytes.len() as u64,
-            Self::Copy { len, .. } => *len,
         }
     }
 }
@@ -500,19 +494,6 @@ impl RingStore {
         self.stage_src(store, target, Src::Bytes(bytes))
     }
 
-    /// Stages the `len` bytes this writer sees at `from` to be written at
-    /// `to`, streamed through a stack buffer: one range, as [`Self::stage`]
-    /// of those bytes would be.
-    pub(crate) fn stage_copy(
-        &mut self,
-        store: &mut dyn TileStore,
-        from: u64,
-        to: u64,
-        len: u64,
-    ) -> Result<()> {
-        self.stage_src(store, to, Src::Copy { from, len })
-    }
-
     fn stage_src(&mut self, store: &mut dyn TileStore, target: u64, src: Src<'_>) -> Result<()> {
         if self.is_fresh(target, src.len()) {
             self.write_src(store, target, src, false)?;
@@ -542,19 +523,6 @@ impl RingStore {
                 store.write_at(at, bytes)?;
                 if hash && let Some(frame) = self.frame.as_mut() {
                     frame.hasher.update(bytes);
-                }
-            }
-            Src::Copy { from, len } => {
-                let mut piece = [0u8; COPY_PIECE];
-                let mut done = 0u64;
-                while done < len {
-                    let n = crate::width::bounded(len - done, COPY_PIECE);
-                    self.read(&*store, from + done, &mut piece[..n])?;
-                    store.write_at(at + done, &piece[..n])?;
-                    if hash && let Some(frame) = self.frame.as_mut() {
-                        frame.hasher.update(&piece[..n]);
-                    }
-                    done += n as u64;
                 }
             }
         }

@@ -173,7 +173,7 @@ impl VarlitFile {
                 let Some(found) = heap.find(&source, T::ID, &scratch[KEY_ENVELOPE..])? else {
                     return Ok(false);
                 };
-                read_into(scratch, found.chunk.payload_len, |buf| {
+                read_into(scratch, found.payload_len(), |buf| {
                     heap.read_payload(&source, &found, buf)
                 })?;
             }
@@ -215,8 +215,8 @@ impl VarlitFile {
             generation,
             keys: state.keys,
             live_bytes: state.live,
-            heap_bytes: state.heap,
-            free_region_bytes: state.free,
+            heap_bytes: state.pages * crate::keyed_heap::PAGE_BYTES,
+            free_region_bytes: state.pooled * crate::keyed_heap::PAGE_BYTES,
             buckets: state.buckets(),
         })
     }
@@ -247,10 +247,10 @@ const KEY_ENVELOPE: usize = 12;
 /// Sizes `scratch` to a payload of `len` bytes and fills it with `read`.
 fn read_into(
     scratch: &mut Vec<u8>,
-    len: u32,
+    len: u64,
     read: impl FnOnce(&mut [u8]) -> Result<()>,
 ) -> Result<()> {
-    let len = len as usize;
+    let len = crate::width::index(len)?;
     scratch.clear();
     scratch
         .try_reserve(len)

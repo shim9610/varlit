@@ -584,12 +584,12 @@
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:bac1741b8c546da6]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:c5cf681a3183748d]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:ae4140595a46fc7f]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:3a8269f9b11d10e2]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -631,12 +631,12 @@
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:d52b3dc3034e7ca3]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:1d071c05f06ece42]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:17057b0969968bf9]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:6c6a16e34dd1c484]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -668,7 +668,7 @@
       "callers": {
         "default": [
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:bac1741b8c546da6]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:c5cf681a3183748d]",
             "target": "checkpoint",
             "result": "model/caller-specific"
           },
@@ -705,7 +705,7 @@
         ],
         "all": [
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:d52b3dc3034e7ca3]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:1d071c05f06ece42]",
             "target": "checkpoint",
             "result": "model/caller-specific"
           },
@@ -2714,8 +2714,8 @@
     },
     "keyed-heap": {
       "symbols": [
-        "heap_chunk_len",
-        "Holes::take_fitting",
+        "class_of",
+        "chain_shape",
         "keyed_heap::State::bucket_of",
         "keyed_heap::State::after_split"
       ],
@@ -2723,84 +2723,94 @@
       "callers": {
         "default": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
-            "target": "heap_chunk_len",
+            "caller": "chain_bytes(_1: u64) -> u64 [CTFE] [body:93b5c02516d98290]",
+            "target": "chain_shape",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
+            "caller": "chain_bytes(_1: u64) -> u64 [body:2832452163571bda]",
+            "target": "chain_shape",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "class_of_fitting(_1: u64) -> usize [CTFE] [body:d98096de5ea26958]",
+            "target": "class_of",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "class_of_fitting(_1: u64) -> usize [body:2b3e9e5975521449]",
+            "target": "class_of",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:912c8fbb8f3e62ad]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:85775acadec0594e]",
-            "target": "Holes::take_fitting",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_in(_1: &KeyedHeap, _2: &mut dyn View, _3: &keyed_heap::State, _4: &dyn TileSource, _5: &Chunk, _6: u64, _7: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cf87371c8e9fe8bf]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_with(_1: &KeyedHeap, _2: &dyn TileSource, _3: u32, _4: impl FnMut(&Slot, &Self) -> Result<bool>) -> std::result::Result<Option<(u64, usize)>, error::Error> [body:28e7fe9c67c4bf93]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:af3b9edd1ec85321]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:cead2e0439115ab8]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
           {
-            "caller": "keyed_heap::<impl at crates/varlit-core/src/keyed_heap/mod.rs>::len(_1: &Chunk) -> u64 [CTFE] [body:5385c25efa4be78e]",
-            "target": "heap_chunk_len",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:d69123b414e52337]",
+            "target": "chain_shape",
             "result": "model/caller-specific"
           },
           {
-            "caller": "keyed_heap::<impl at crates/varlit-core/src/keyed_heap/mod.rs>::len(_1: &Chunk) -> u64 [body:a834c9b1c77fbb81]",
-            "target": "heap_chunk_len",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:df870b112f114493]",
+            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:a8c321ba8186c77e]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }
         ],
         "all": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
-            "target": "heap_chunk_len",
+            "caller": "chain_bytes(_1: u64) -> u64 [CTFE] [body:93b5c02516d98290]",
+            "target": "chain_shape",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
+            "caller": "chain_bytes(_1: u64) -> u64 [body:2832452163571bda]",
+            "target": "chain_shape",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "class_of_fitting(_1: u64) -> usize [CTFE] [body:d98096de5ea26958]",
+            "target": "class_of",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "class_of_fitting(_1: u64) -> usize [body:2b3e9e5975521449]",
+            "target": "class_of",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:912c8fbb8f3e62ad]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:85775acadec0594e]",
-            "target": "Holes::take_fitting",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_in(_1: &KeyedHeap, _2: &mut dyn View, _3: &keyed_heap::State, _4: &dyn TileSource, _5: &Chunk, _6: u64, _7: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cf87371c8e9fe8bf]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_with(_1: &KeyedHeap, _2: &dyn TileSource, _3: u32, _4: impl FnMut(&Slot, &Self) -> Result<bool>) -> std::result::Result<Option<(u64, usize)>, error::Error> [body:28e7fe9c67c4bf93]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:af3b9edd1ec85321]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:cead2e0439115ab8]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
           {
-            "caller": "keyed_heap::<impl at crates/varlit-core/src/keyed_heap/mod.rs>::len(_1: &Chunk) -> u64 [CTFE] [body:5385c25efa4be78e]",
-            "target": "heap_chunk_len",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::write_record(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: u32, _5: u32, _6: &[u8], _7: &[u8]) -> std::result::Result<u64, error::Error> [body:d69123b414e52337]",
+            "target": "chain_shape",
             "result": "model/caller-specific"
           },
           {
-            "caller": "keyed_heap::<impl at crates/varlit-core/src/keyed_heap/mod.rs>::len(_1: &Chunk) -> u64 [body:a834c9b1c77fbb81]",
-            "target": "heap_chunk_len",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:df870b112f114493]",
+            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:a8c321ba8186c77e]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }
@@ -2809,12 +2819,11 @@
       "required_harnesses": [
         "keyed_heap::heap_proofs::every_route_lands_in_a_bucket_of_the_table",
         "keyed_heap::heap_proofs::a_split_moves_exactly_the_keys_whose_routing_bit_is_set",
-        "keyed_heap::heap_proofs::chunk_lengths_are_aligned_and_hold_the_record",
-        "keyed_heap::heap_proofs::a_free_chunk_reads_back_as_its_length",
-        "keyed_heap::heap_proofs::slots_round_trip",
-        "keyed_heap::heap_proofs::region_headers_round_trip",
-        "keyed_heap::heap_proofs::holes_are_never_more_than_the_heap",
-        "keyed_heap::heap::hole_proofs::a_taken_hole_is_one_the_request_may_take"
+        "keyed_heap::heap_proofs::an_item_goes_to_the_smallest_class_that_holds_it",
+        "keyed_heap::heap_proofs::a_record_splits_into_items_that_hold_it",
+        "keyed_heap::heap_proofs::item_references_round_trip",
+        "keyed_heap::heap_proofs::layouts_round_trip",
+        "keyed_heap::heap_proofs::class_entries_round_trip"
       ]
     }
   },

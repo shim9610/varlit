@@ -3,7 +3,7 @@
 //! moved past gets `MatrixSnapshotExpired` and must follow, never a mixed
 //! answer.
 
-use super::lookup::{self, View};
+use super::lookup::{self, Ctx, View};
 use super::{Fixed, META_FIXED_LEN, META_STATE_AT, State};
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::RingReader;
@@ -83,6 +83,7 @@ impl KeyedReader {
             let result = attempt(
                 &mut view,
                 source,
+                self.meta,
                 self.seed,
                 &self.state,
                 block_id,
@@ -110,6 +111,7 @@ impl KeyedReader {
 fn attempt(
     view: &mut Unsettled<'_>,
     source: &dyn TileSource,
+    meta: u64,
     seed: [u64; 2],
     state: &State,
     block_id: u32,
@@ -122,10 +124,16 @@ fn attempt(
     let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
-    let Some(found) = lookup::find(view, source, seed, state, block_id, key)? else {
+    let mut ctx = Ctx {
+        view,
+        source,
+        meta,
+        classes: None,
+    };
+    let Some(found) = lookup::find(&mut ctx, seed, state, block_id, key)? else {
         return Ok(false);
     };
-    let len = u64::from(found.chunk.payload_len);
+    let len = found.payload_len();
     if len > max_payload {
         return Err(Error::LimitExceeded {
             resource: "keyed record payload",
@@ -140,7 +148,7 @@ fn attempt(
         requested: len as u64,
     })?;
     buf.resize(len, 0);
-    lookup::read_payload(view, source, &found, buf)?;
+    lookup::read_payload(&mut ctx, &found, buf)?;
     Ok(true)
 }
 

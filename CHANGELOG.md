@@ -57,9 +57,12 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add bounded keyed storage (opt-in). A format that declares
   `keyed_storage: in_place(free_space = N%)` (or
   `FormatSpec::with_keyed_storage`) stores each keyed block once per key in a
-  record heap inside the file (a new value goes to space freed by earlier
-  generations, written straight to the file; only slots, bucket pages and
-  region headers go through the write-ahead ring),
+  record heap inside the file: size classes 1/16 apart, each a dense array
+  of fixed-size items with free space only at its end (records over 64 KiB
+  are item chains); freed items are logged and become reusable holes once
+  in place, tracked in per-class bitmaps; new values are written straight
+  to the file and only slots, bitmaps and entries go through the write-ahead
+  ring,
   found through linear-hashed slot buckets keyed by a per-file SipHash seed,
   and compacted when free space passes the declared 1 to 5 % of live data.
   Repeated updates no longer grow the file (the growth the security advisory

@@ -1,9 +1,11 @@
-//! Keyed heap arithmetic and layouts: where linear hashing routes a key and
-//! that a split moves exactly the keys `heap::split` moves, chunk lengths,
-//! and that every stored structure decodes to what was encoded. I/O, the
-//! ring and checksums are outside these harnesses.
+//! Keyed storage arithmetic and layouts: where linear hashing routes a key
+//! and that a split moves exactly the keys `heap::split` moves, which size
+//! class an item goes to and how a record splits into items, and that every
+//! stored structure decodes to what was encoded. I/O, the ring and checksums
+//! are outside these harnesses.
 use super::{
-    CHUNK_ALIGN, CHUNK_HEADER, Chunk, FREE_BLOCK, Region, SLOT_LEN, Slot, State, heap_chunk_len,
+    CLASSES, ClassEntry, ITEM_HEADER, Item, MAX_ITEM, Slot, State, chain_bytes, chain_shape,
+    class_of, class_size, item_ref, ref_class, ref_index,
 };
 
 /// A table shape a writer can reach: up to 2^31 primary buckets, the split
@@ -53,83 +55,93 @@ fn a_split_moves_exactly_the_keys_whose_routing_bit_is_set() {
     }
 }
 
-/// A chunk is whole alignment units, holds its header, key and payload, and
-/// wastes less than one unit; its header gives the same length back.
+/// An item of any length up to the largest goes to the smallest class that
+/// holds it, which wastes at most a sixteenth (or 16 bytes).
 #[kani::proof]
-fn chunk_lengths_are_aligned_and_hold_the_record() {
-    let key_len: u32 = kani::any();
-    let payload_len: u32 = kani::any();
-    let block_id: u32 = kani::any();
-    kani::assume(block_id != FREE_BLOCK);
-    let needed = CHUNK_HEADER + u64::from(key_len) + u64::from(payload_len);
-    let len = heap_chunk_len(u64::from(key_len), u64::from(payload_len));
-    assert!(len.is_multiple_of(CHUNK_ALIGN));
-    assert!(len >= needed);
-    assert!(len < needed + CHUNK_ALIGN);
-    let chunk = Chunk {
-        payload_len,
-        block_id,
-        key_len,
-        crc: kani::any(),
-    };
-    assert_eq!(Chunk::decode(&chunk.encode()), chunk);
-    assert_eq!(chunk.len(), len);
-}
-
-/// A free chunk of any whole-unit length reads back as that length.
-#[kani::proof]
-fn a_free_chunk_reads_back_as_its_length() {
+#[kani::unwind(9)]
+fn an_item_goes_to_the_smallest_class_that_holds_it() {
     let len: u64 = kani::any();
-    kani::assume(len >= CHUNK_HEADER && len - CHUNK_HEADER <= u64::from(u32::MAX));
-    kani::assume(len.is_multiple_of(CHUNK_ALIGN));
-    let free = Chunk::free(len).expect("fits");
-    let read = Chunk::decode(&free.encode());
-    assert_eq!(read.block_id, FREE_BLOCK);
-    assert_eq!(read.len(), len);
+    kani::assume(len >= 1 && len <= MAX_ITEM);
+    let class = class_of(len).expect("fits");
+    assert!(class < CLASSES);
+    assert!(class_size(class) >= len);
+    if class > 0 {
+        assert!(class_size(class - 1) < len);
+    }
+    // Past the smallest class, at most a sixteenth (or 15 bytes) larger.
+    if len > class_size(0) {
+        assert!(class_size(class) <= (len * 17 / 16).next_multiple_of(16).max(len + 15));
+    }
 }
 
-/// Slots decode to what was encoded.
+/// A record of any length below 16 MiB splits into full items and one that
+/// holds the rest; the items hold the record and its headers. (Longer
+/// records take the same arithmetic; the verifier's division circuit is
+/// what bounds the length here, and the native tests check longer ones.)
 #[kani::proof]
-fn slots_round_trip() {
+#[kani::unwind(9)]
+fn a_record_splits_into_items_that_hold_it() {
+    let total: u64 = kani::any();
+    kani::assume(total < 1 << 24);
+    let (full, last) = chain_shape(total);
+    let per_full = MAX_ITEM - ITEM_HEADER;
+    assert!(last < CLASSES);
+    let rest = total - full * per_full;
+    assert!(rest + ITEM_HEADER <= class_size(last));
+    assert!(full == 0 || rest >= 1);
+    assert_eq!(chain_bytes(total), full * MAX_ITEM + class_size(last));
+}
+
+/// Item references keep their class and index.
+#[kani::proof]
+fn item_references_round_trip() {
+    let class: usize = kani::any();
+    let index: u64 = kani::any();
+    kani::assume(class < CLASSES);
+    kani::assume(index < 1 << 56);
+    let item = item_ref(class, index);
+    assert_eq!(ref_class(item), class);
+    assert_eq!(ref_index(item), index);
+}
+
+/// Slots, item headers and class entries decode to what was encoded.
+#[kani::proof]
+fn layouts_round_trip() {
     let slot = Slot {
         route: kani::any(),
-        offset: kani::any(),
-        region: kani::any(),
+        item: kani::any(),
     };
-    let bytes = slot.encode();
-    assert_eq!(bytes.len() as u64, SLOT_LEN);
-    assert_eq!(Slot::decode(&bytes), slot);
-}
-
-/// Region headers decode to what was encoded.
-///
-/// The result is forgotten, not dropped: dropping a `Result` whose variant
-/// the verifier cannot fix makes it model the drop of every `Error` variant,
-/// which takes more than 14 GB. Decoding itself takes seconds.
-#[kani::proof]
-fn region_headers_round_trip() {
-    let region = Region {
+    assert_eq!(Slot::decode(&slot.encode()), slot);
+    let item = Item {
         len: kani::any(),
-        live: kani::any(),
-        next_all: kani::any(),
-        next_free: kani::any(),
-        freed: kani::any(),
+        head: kani::any(),
+        block_or_route: kani::any(),
+        key_len: kani::any(),
+        crc: kani::any(),
+        chain: kani::any(),
+        next: kani::any(),
+        total_or_prev: kani::any(),
     };
-    kani::assume(region.live <= region.len);
-    let read = Region::decode(&region.encode());
-    assert!(matches!(&read, Ok(read) if *read == region));
-    core::mem::forget(read);
+    kani::assume(item.len < 1 << 31);
+    assert_eq!(Item::decode(&item.encode()), item);
 }
 
-/// Hole accounting never wraps: the holes are never more than the heap.
+/// Class entries decode to what was encoded. Apart from the slot and item
+/// harness: together they take more of the verifier's memory than needed.
 #[kani::proof]
-fn holes_are_never_more_than_the_heap() {
-    let state = State {
-        heap: kani::any(),
-        live: kani::any(),
-        free: kani::any(),
-        ..State::default()
+fn class_entries_round_trip() {
+    let entry = ClassEntry {
+        end: kani::any(),
+        dir: (kani::any(), kani::any()),
+        holes: kani::any(),
+        bits: (kani::any(), kani::any()),
+        pending: (kani::any(), kani::any()),
     };
-    let tail: u64 = kani::any();
-    assert!(state.holes(tail) <= state.heap);
+    kani::assume(entry.end < 1 << 56 && entry.holes <= entry.end);
+    for (page, height) in [entry.dir, entry.bits, entry.pending] {
+        kani::assume(height <= 8 && (page == 0) == (height == 0));
+    }
+    let read = ClassEntry::decode(&entry.encode());
+    assert!(matches!(&read, Ok(read) if *read == entry));
+    core::mem::forget(read);
 }

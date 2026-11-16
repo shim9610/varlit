@@ -236,15 +236,18 @@ moved item. No search, no fragmentation, no compaction.
   64 KiB records, all the same size: a page left empty at a class's tail
   goes on a free page list shared by every class.
 - **Atomicity.** An item freed in a round may still be read through a
-  published generation, so its place is filled only after that generation
-  is in place. Each class keeps `count` (its dense prefix) and `high` (the
-  end of what the published state may use). Freed indexes go to a pending
-  log (16 bytes each, appended to log pages, at most the change budget's
-  worth per round). At the start of the next round, after the checkpoint,
-  each pending index is filled from the tail; new items of a round are
-  appended at `max(count, high)`, so nothing a published generation uses is
-  written before it is in place. The gap this leaves is filled the round
-  after.
+  published generation, so its place is reused only after that generation
+  is in place. A freed item is logged (16 bytes, appended to log pages) and
+  marked in the class's pending bitmap; once the generation that freed it is
+  in place it moves to the class's hole bitmap. A new item takes a hole of
+  its class from the bitmap (all items of a class have one size: no search
+  for one that fits) or the class's end. Trailing holes shrink the class;
+  when reusable holes exceed the ratio, the class's last items move into
+  them. An item in neither bitmap is live, so liveness never depends on
+  heuristics. (An earlier version filled holes only by moving the last
+  item; appends then buried the vacated places, and a class whose last item
+  was itself waiting could not make progress. Tests with every structure
+  checked after every step found both.)
 
 **Shrinking.** Deletes merge buckets (linear hashing in reverse, with a gap
 between the split and merge thresholds so alternating inserts and deletes do

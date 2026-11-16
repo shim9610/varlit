@@ -1,28 +1,28 @@
-//! Keyed records stored in place: a dense record heap found through slot
-//! buckets (see `docs/design/bounded-keyed-storage.md`).
+//! Keyed records stored once per key: size-class item arrays found through
+//! slot buckets (see `docs/design/bounded-keyed-storage.md`).
 //!
-//! Every structure lives in internal in-place records of the primary file and
+//! Every structure lives in internal records of the primary file and
 //! changes through the write-ahead ring of a
-//! [`RingStore`](crate::matrix_tiles::ring_store::RingStore), exactly as
-//! matrix tiles do, so a publication is atomic and a reader keeps its
-//! snapshot until the ring moves past it.
+//! [`RingStore`](crate::matrix_tiles::ring_store::RingStore), as matrix
+//! tiles do, so a publication is atomic and a reader keeps its snapshot
+//! until the ring moves past it.
 //!
 //! - **Metadata** (one record): the ring's place, the free-space ratio, the
-//!   per-file hash seed, and the mutable state: the bucket directory root,
-//!   the linear-hashing level and split pointer, counters and list heads.
-//! - **Heap regions**: records packed densely. A key's record is overwritten
-//!   where it is when the new value fits; otherwise it moves and its old
-//!   place becomes a hole. Every chunk of a region starts with a header that
-//!   gives its length, so a region can be walked; a free chunk is marked.
-//! - **Slot buckets**: 4 KiB pages of 16-byte slots (hash low bits, region,
-//!   offset in the region), found through a radix directory by bucket
-//!   number. Buckets grow one at a time by linear hashing.
+//!   change budget, the per-file hash seed, the mutable state (bucket
+//!   directory, linear hashing, counters, the page pool and the hole log)
+//!   and one entry per size class.
+//! - **Size classes**: about a hundred item sizes, 1/16 apart, from 48 bytes
+//!   to 64 KiB. A class is a dense array of fixed-size items over 64 KiB
+//!   pages, mapped through a radix directory; free space is only at its end.
+//! - **Records**: a chain of items, full 64 KiB items then one of the class
+//!   the rest fits. A record's bytes are its key then its payload.
+//! - **Slot buckets**: 4 KiB pages of 16-byte slots (hash low bits, head
+//!   item), found through a radix directory by bucket number; buckets grow
+//!   one at a time by linear hashing.
 //!
-//! A slot is the only thing that makes a record live: a chunk no slot points
-//! at is free whatever its header says. Holes are reused through a fixed
-//! cache, and when holes exceed the declared ratio of live bytes the writer
-//! empties the sparsest region by moving its live records, after which the
-//! whole region is reused.
+//! A slot is the only thing that makes a record live. An item freed is
+//! logged as a hole; once the generation that freed it is in place, the
+//! class's last item moves into it, or the class shrinks when it is the last.
 
 pub(crate) mod heap;
 #[cfg(kani)]
@@ -30,6 +30,7 @@ pub(crate) mod heap;
 mod heap_proofs;
 pub(crate) mod lookup;
 pub(crate) mod pages;
+pub(crate) mod radix;
 pub(crate) mod reader;
 pub(crate) mod sip;
 #[cfg(test)]
@@ -38,7 +39,7 @@ mod tests;
 use crate::{Error, Result};
 
 pub(crate) const META_MAGIC: &[u8; 4] = b"VKMT";
-pub(crate) const META_VERSION: u16 = 1;
+pub(crate) const META_VERSION: u16 = 2;
 /// The fixed, checksummed part of the metadata record.
 pub(crate) const META_FIXED_LEN: u64 = 64;
 /// Where the ring keeps its overflow list head: the first mutable field.
@@ -46,34 +47,119 @@ pub(crate) const META_OVERFLOW_HEAD_AT: u64 = META_FIXED_LEN;
 /// The mutable state, changed through the ring.
 pub(crate) const META_STATE_AT: u64 = META_OVERFLOW_HEAD_AT + 8;
 pub(crate) const META_STATE_LEN: u64 = State::FIELDS as u64 * 8;
-pub(crate) const META_LEN: u64 = META_STATE_AT + META_STATE_LEN;
+/// One [`ClassEntry`] per possible class, changed through the ring.
+pub(crate) const META_CLASSES_AT: u64 = META_STATE_AT + META_STATE_LEN;
+pub(crate) const CLASS_ENTRY_LEN: u64 = 64;
+pub(crate) const MAX_CLASSES: usize = 128;
+pub(crate) const META_LEN: u64 = META_CLASSES_AT + MAX_CLASSES as u64 * CLASS_ENTRY_LEN;
 
-pub(crate) const REGION_MAGIC: &[u8; 4] = b"VHRG";
-/// `magic | 0 | len | live | next_all | next_free | freed`: a multiple of
-/// the chunk alignment, so chunks stay aligned.
-pub(crate) const REGION_HEADER: u64 = 48;
-/// Payload bytes of an ordinary heap region. A record larger than half of
-/// this gets a region of its own.
-pub(crate) const REGION_BYTES: u64 = 1 << 20;
-/// The change budget's bounds: at least one region, at most 1 TiB.
-pub(crate) const MIN_BUDGET: u64 = REGION_BYTES;
+/// Item pages, log pages and pooled pages: one size for all.
+pub(crate) const PAGE_BYTES: u64 = 64 << 10;
+/// The largest item; longer records are chains.
+pub(crate) const MAX_ITEM: u64 = PAGE_BYTES;
+/// Every item starts with a header of this length.
+pub(crate) const ITEM_HEADER: u64 = 40;
+/// The change budget's bounds: at least one page's worth of items many
+/// times over, at most 1 TiB.
+pub(crate) const MIN_BUDGET: u64 = 1 << 20;
 pub(crate) const MAX_BUDGET: u64 = 1 << 40;
 /// The change budget when a format declares none.
 pub(crate) const DEFAULT_BUDGET: u64 = 64 << 20;
 
-/// `payload_len | block_id | key_len | crc32`.
-pub(crate) const CHUNK_HEADER: u64 = 16;
-/// The block id of a free chunk; its payload length is the chunk's length
-/// less the header.
-pub(crate) const FREE_BLOCK: u32 = u32::MAX;
-
+/// `hash low bits | 0 | head item`.
 pub(crate) const BUCKET_MAGIC: &[u8; 4] = b"VBKT";
 pub(crate) const BUCKET_PAGE: u64 = 4096;
 /// `magic | count | next page`.
 pub(crate) const BUCKET_HEADER: u64 = 16;
-/// `hash low bits | offset in region | region`.
 pub(crate) const SLOT_LEN: u64 = 16;
 pub(crate) const SLOTS_PER_PAGE: usize = ((BUCKET_PAGE - BUCKET_HEADER) / SLOT_LEN) as usize;
+
+/// An item reference: class in the top byte, index below.
+pub(crate) const NO_ITEM: u64 = u64::MAX;
+pub(crate) const MAX_INDEX: u64 = (1 << 56) - 1;
+
+/// A block id no record may use.
+pub(crate) const RESERVED_BLOCK: u32 = u32::MAX;
+
+// ---- size classes ----
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "every class is at most MAX_ITEM (64 KiB)"
+)]
+const fn build_classes() -> ([u32; MAX_CLASSES], usize) {
+    let mut sizes = [0u32; MAX_CLASSES];
+    let mut count = 0;
+    // 16-byte steps up to 256 bytes, the smallest holding a header and a
+    // byte.
+    let mut size = 48u64;
+    while size < 256 {
+        sizes[count] = size as u32;
+        count += 1;
+        size += 16;
+    }
+    // Then 1/16 apart, rounded up to 16 bytes, to the largest item.
+    loop {
+        sizes[count] = size as u32;
+        count += 1;
+        if size >= MAX_ITEM {
+            break;
+        }
+        let next = (size * 17 / 16).next_multiple_of(16);
+        size = if next > MAX_ITEM { MAX_ITEM } else { next };
+    }
+    (sizes, count)
+}
+
+const CLASS_TABLE: ([u32; MAX_CLASSES], usize) = build_classes();
+/// The number of size classes.
+pub(crate) const CLASSES: usize = CLASS_TABLE.1;
+const _: () = assert!(CLASSES <= MAX_CLASSES);
+
+/// The item size of class `class`.
+pub(crate) const fn class_size(class: usize) -> u64 {
+    CLASS_TABLE.0[class] as u64
+}
+
+/// The smallest class whose items hold `len` bytes (header included);
+/// `None` when `len` is larger than the largest item.
+pub(crate) const fn class_of(len: u64) -> Option<usize> {
+    if len > MAX_ITEM {
+        return None;
+    }
+    let (mut low, mut high) = (0usize, CLASSES - 1);
+    while low < high {
+        let mid = (low + high) / 2;
+        if class_size(mid) >= len {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    Some(low)
+}
+
+pub(crate) const fn item_ref(class: usize, index: u64) -> u64 {
+    ((class as u64) << 56) | index
+}
+
+pub(crate) const fn ref_class(item: u64) -> usize {
+    (item >> 56) as usize
+}
+
+pub(crate) const fn ref_index(item: u64) -> u64 {
+    item & MAX_INDEX
+}
+
+/// A reference read from the file, checked to name an existing class.
+pub(crate) const fn checked_ref(item: u64) -> Result<u64> {
+    if ref_class(item) >= CLASSES {
+        return Err(corrupt("keyed item reference"));
+    }
+    Ok(item)
+}
+
+// ---- metadata ----
 
 /// The fixed part of the metadata record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,46 +226,61 @@ pub(crate) struct State {
     pub split: u64,
     /// Live keys.
     pub keys: u64,
-    /// Bytes of live chunks.
+    /// Bytes of live items (whole items: headers and rounding included).
     pub live: u64,
-    /// Payload bytes of every heap region.
-    pub heap: u64,
-    /// The region new chunks are appended to, and how much of it is used.
-    pub cur: u64,
-    pub cur_used: u64,
-    /// Newest region (each links the older one), and the lists of free
-    /// regions and free bucket pages.
-    pub regions: u64,
-    pub free_regions: u64,
-    /// The last free region: freed regions join the queue here.
-    pub free_tail: u64,
-    pub free_pages: u64,
-    /// Payload bytes of the regions on the free list.
-    pub free: u64,
+    /// Item, log and pooled pages, all [`PAGE_BYTES`] long.
+    pub pages: u64,
+    /// The page pool: pages no class or log uses, oldest first.
+    pub pool_head: u64,
+    pub pool_tail: u64,
+    pub pooled: u64,
+    /// Free bucket pages.
+    pub free_buckets: u64,
+    /// The log of items freed, oldest first: its first page and entry, its
+    /// last page and entry count there, and its entries. An entry moves to
+    /// its class's hole bitmap once the generation that freed it is in
+    /// place.
+    pub log_head: u64,
+    pub log_head_at: u64,
+    pub log_tail: u64,
+    pub log_tail_at: u64,
+    pub logged: u64,
+    /// Bytes of every hole: logged or in a bitmap.
+    pub hole_bytes: u64,
+    /// The next record chain's id.
+    pub next_chain: u64,
 }
 
 impl State {
-    pub(crate) const FIELDS: usize = 14;
+    pub(crate) const FIELDS: usize = 19;
 
-    pub(crate) fn encode(&self) -> [u8; Self::FIELDS * 8] {
-        let fields = [
+    const fn fields(&self) -> [u64; Self::FIELDS] {
+        [
             self.dir.0,
             self.dir.1,
             self.level,
             self.split,
             self.keys,
             self.live,
-            self.heap,
-            self.cur,
-            self.cur_used,
-            self.regions,
-            self.free_regions,
-            self.free_pages,
-            self.free,
-            self.free_tail,
-        ];
+            self.pages,
+            self.pool_head,
+            self.pool_tail,
+            self.pooled,
+            self.free_buckets,
+            self.log_head,
+            self.log_head_at,
+            self.log_tail,
+            self.log_tail_at,
+            self.logged,
+            self.hole_bytes,
+            self.next_chain,
+            0,
+        ]
+    }
+
+    pub(crate) fn encode(&self) -> [u8; Self::FIELDS * 8] {
         let mut out = [0u8; Self::FIELDS * 8];
-        for (index, field) in fields.into_iter().enumerate() {
+        for (index, field) in self.fields().into_iter().enumerate() {
             out[index * 8..index * 8 + 8].copy_from_slice(&field.to_le_bytes());
         }
         out
@@ -195,21 +296,28 @@ impl State {
             split: word(3),
             keys: word(4),
             live: word(5),
-            heap: word(6),
-            cur: word(7),
-            cur_used: word(8),
-            regions: word(9),
-            free_regions: word(10),
-            free_pages: word(11),
-            free: word(12),
-            free_tail: word(13),
+            pages: word(6),
+            pool_head: word(7),
+            pool_tail: word(8),
+            pooled: word(9),
+            free_buckets: word(10),
+            log_head: word(11),
+            log_head_at: word(12),
+            log_tail: word(13),
+            log_tail_at: word(14),
+            logged: word(15),
+            hole_bytes: word(16),
+            next_chain: word(17),
         };
         if state.level >= 32
             || state.split >= 1u64 << state.level
+            || state.pooled > state.pages
             || state
                 .live
-                .checked_add(state.free)
-                .is_none_or(|used| used > state.heap)
+                .checked_add(state.hole_bytes)
+                .is_none_or(|used| used > state.pages.saturating_mul(PAGE_BYTES))
+            || state.log_head_at > LOG_ENTRIES
+            || state.log_tail_at > LOG_ENTRIES
             || state.dir.0 == 0
             || state.dir.1 == 0
             || state.dir.1 > crate::matrix_tiles::view::DIR_MAX_HEIGHT
@@ -222,15 +330,6 @@ impl State {
     /// Buckets in the table.
     pub(crate) const fn buckets(&self) -> u64 {
         (1u64 << self.level) + self.split
-    }
-
-    /// Bytes of the heap no live chunk, free region or unused tail of the
-    /// current region accounts for: the holes the free-space ratio governs.
-    pub(crate) const fn holes(&self, cur_tail: u64) -> u64 {
-        self.heap
-            .saturating_sub(self.live)
-            .saturating_sub(self.free)
-            .saturating_sub(cur_tail)
     }
 
     /// The table after the bucket at the split pointer is split: its slots
@@ -257,104 +356,173 @@ impl State {
     }
 }
 
-/// A heap region's header.
+/// One size class: its items `[0, end)`, each live, logged as freed, or a
+/// hole in the class's bitmap; the radix directory of its pages; the
+/// bitmap's directory and how many holes it marks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Region {
-    pub len: u64,
-    pub live: u64,
-    pub next_all: u64,
-    pub next_free: u64,
-    /// The generation that freed the region: its chunk boundaries may change
-    /// only once that generation is in place (see [`heap`]).
-    pub freed: u64,
+pub(crate) struct ClassEntry {
+    pub end: u64,
+    /// Directory root page and height (`0, 0` for none).
+    pub dir: (u64, u64),
+    /// Holes no generation since the last checkpoint freed: reusable.
+    pub holes: u64,
+    /// Directory of the hole bitmap's pages.
+    pub bits: (u64, u64),
+    /// Directory of the bitmap of items freed and logged, not yet holes:
+    /// an item in neither bitmap is live.
+    pub pending: (u64, u64),
 }
 
-impl Region {
-    pub(crate) fn encode(&self) -> [u8; crate::width::small(REGION_HEADER)] {
-        let mut out = [0u8; crate::width::small(REGION_HEADER)];
-        out[0..4].copy_from_slice(REGION_MAGIC);
-        out[8..16].copy_from_slice(&self.len.to_le_bytes());
-        out[16..24].copy_from_slice(&self.live.to_le_bytes());
-        out[24..32].copy_from_slice(&self.next_all.to_le_bytes());
-        out[32..40].copy_from_slice(&self.next_free.to_le_bytes());
-        out[40..48].copy_from_slice(&self.freed.to_le_bytes());
+impl ClassEntry {
+    pub(crate) fn encode(&self) -> [u8; crate::width::small(CLASS_ENTRY_LEN)] {
+        let mut out = [0u8; crate::width::small(CLASS_ENTRY_LEN)];
+        out[0..8].copy_from_slice(&self.end.to_le_bytes());
+        out[8..16].copy_from_slice(&self.dir.0.to_le_bytes());
+        out[16..24].copy_from_slice(&self.dir.1.to_le_bytes());
+        out[24..32].copy_from_slice(&self.holes.to_le_bytes());
+        out[32..40].copy_from_slice(&self.bits.0.to_le_bytes());
+        out[40..48].copy_from_slice(&self.bits.1.to_le_bytes());
+        out[48..56].copy_from_slice(&self.pending.0.to_le_bytes());
+        out[56..64].copy_from_slice(&self.pending.1.to_le_bytes());
         out
     }
 
-    pub(crate) fn decode(bytes: &[u8; crate::width::small(REGION_HEADER)]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8; crate::width::small(CLASS_ENTRY_LEN)]) -> Result<Self> {
         let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight"));
-        let region = Self {
-            len: word(8),
-            live: word(16),
-            next_all: word(24),
-            next_free: word(32),
-            freed: word(40),
+        let entry = Self {
+            end: word(0),
+            dir: (word(8), word(16)),
+            holes: word(24),
+            bits: (word(32), word(40)),
+            pending: (word(48), word(56)),
         };
-        if &bytes[0..4] != REGION_MAGIC || region.live > region.len {
-            return Err(corrupt("keyed heap region"));
+        let height = crate::matrix_tiles::view::DIR_MAX_HEIGHT;
+        if entry.end > MAX_INDEX
+            || entry.holes > entry.end
+            || entry.dir.1 > height
+            || entry.bits.1 > height
+            || (entry.dir.0 == 0) != (entry.dir.1 == 0)
+            || entry.pending.1 > height
+            || (entry.bits.0 == 0) != (entry.bits.1 == 0)
+            || (entry.pending.0 == 0) != (entry.pending.1 == 0)
+        {
+            return Err(corrupt("keyed size class"));
         }
-        Ok(region)
+        Ok(entry)
     }
 }
 
-/// A chunk's header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Chunk {
-    pub payload_len: u32,
-    pub block_id: u32,
-    pub key_len: u32,
-    pub crc: u32,
+/// The metadata offset of class `class`'s entry.
+pub(crate) const fn class_entry_at(meta: u64, class: usize) -> u64 {
+    meta + META_CLASSES_AT + class as u64 * CLASS_ENTRY_LEN
 }
 
-impl Chunk {
-    pub(crate) fn encode(&self) -> [u8; crate::width::small(CHUNK_HEADER)] {
-        let mut out = [0u8; crate::width::small(CHUNK_HEADER)];
-        out[0..4].copy_from_slice(&self.payload_len.to_le_bytes());
-        out[4..8].copy_from_slice(&self.block_id.to_le_bytes());
+// ---- items ----
+
+/// An item's header. A head item starts a record (`block_id`, `key_len`,
+/// the record's `total` length); a continuation item names its record's
+/// key `route` and its `prev` item. Both carry the record's `chain` id and
+/// the `next` item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Item {
+    /// Record bytes in this item.
+    pub len: u32,
+    pub head: bool,
+    /// A head: the block id; a continuation: the key's route.
+    pub block_or_route: u32,
+    /// A head: the key's length; a continuation: zero.
+    pub key_len: u32,
+    /// CRC32 of the header's first eight bytes and this item's bytes.
+    pub crc: u32,
+    pub chain: u64,
+    pub next: u64,
+    /// A head: the record's total length; a continuation: the item before.
+    pub total_or_prev: u64,
+}
+
+/// `len`'s top bit marks a continuation item.
+const CONTINUATION: u32 = 1 << 31;
+
+impl Item {
+    pub(crate) fn encode(&self) -> [u8; crate::width::small(ITEM_HEADER)] {
+        let mut out = [0u8; crate::width::small(ITEM_HEADER)];
+        let len = if self.head {
+            self.len
+        } else {
+            self.len | CONTINUATION
+        };
+        out[0..4].copy_from_slice(&len.to_le_bytes());
+        out[4..8].copy_from_slice(&self.block_or_route.to_le_bytes());
         out[8..12].copy_from_slice(&self.key_len.to_le_bytes());
         out[12..16].copy_from_slice(&self.crc.to_le_bytes());
+        out[16..24].copy_from_slice(&self.chain.to_le_bytes());
+        out[24..32].copy_from_slice(&self.next.to_le_bytes());
+        out[32..40].copy_from_slice(&self.total_or_prev.to_le_bytes());
         out
     }
 
-    pub(crate) fn decode(bytes: &[u8; crate::width::small(CHUNK_HEADER)]) -> Self {
+    pub(crate) fn decode(bytes: &[u8; crate::width::small(ITEM_HEADER)]) -> Self {
         let half = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("four"));
+        let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight"));
+        let len = half(0);
         Self {
-            payload_len: half(0),
-            block_id: half(4),
+            len: len & !CONTINUATION,
+            head: len & CONTINUATION == 0,
+            block_or_route: half(4),
             key_len: half(8),
             crc: half(12),
+            chain: word(16),
+            next: word(24),
+            total_or_prev: word(32),
         }
     }
 
-    /// A free chunk of `len` bytes, header included.
-    pub(crate) fn free(len: u64) -> Result<Self> {
-        Ok(Self {
-            payload_len: u32::try_from(len - CHUNK_HEADER)
-                .map_err(|_| corrupt("keyed heap chunk length"))?,
-            block_id: FREE_BLOCK,
-            key_len: 0,
-            crc: 0,
-        })
-    }
-
-    /// The chunk's length, header and padding included.
-    pub(crate) const fn len(&self) -> u64 {
-        if self.block_id == FREE_BLOCK {
-            CHUNK_HEADER + self.payload_len as u64
-        } else {
-            heap_chunk_len(self.key_len as u64, self.payload_len as u64)
-        }
+    /// The bytes the checksum starts with: the encoded length and the
+    /// block id or route.
+    pub(crate) fn crc_prefix(&self) -> [u8; 8] {
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&self.encode()[..8]);
+        out
     }
 }
 
-/// Chunks are whole multiples of this, so what is left when a chunk takes
-/// part of a hole can always carry a free chunk's header.
-pub(crate) const CHUNK_ALIGN: u64 = CHUNK_HEADER;
-
-/// The length of a chunk holding a key and a payload of these lengths.
-pub(crate) const fn heap_chunk_len(key_len: u64, payload_len: u64) -> u64 {
-    (CHUNK_HEADER + key_len + payload_len).next_multiple_of(CHUNK_ALIGN)
+/// How a record of `total` bytes (key and payload) is split into items:
+/// the number of full items and the class of the last one.
+pub(crate) const fn chain_shape(total: u64) -> (u64, usize) {
+    let per_full = MAX_ITEM - ITEM_HEADER;
+    if total + ITEM_HEADER <= MAX_ITEM {
+        // `class_of` is `Some` for any length up to `MAX_ITEM`.
+        return (0, class_of_fitting(ITEM_HEADER + total));
+    }
+    let full = (total - 1) / per_full;
+    let rest = total - full * per_full;
+    (full, class_of_fitting(ITEM_HEADER + rest))
 }
+
+const fn class_of_fitting(len: u64) -> usize {
+    match class_of(len) {
+        Some(class) => class,
+        None => CLASSES - 1,
+    }
+}
+
+/// The bytes of the items a record of `total` bytes takes.
+pub(crate) const fn chain_bytes(total: u64) -> u64 {
+    let (full, last) = chain_shape(total);
+    full * MAX_ITEM + class_size(last)
+}
+
+// ---- the hole log ----
+
+/// Hole bitmap bits per page.
+pub(crate) const BITS_PER_PAGE: u64 = PAGE_BYTES * 8;
+
+/// A log page: its next page, then entries `item | generation freed`.
+pub(crate) const LOG_HEADER: u64 = 16;
+pub(crate) const LOG_ENTRY: u64 = 16;
+pub(crate) const LOG_ENTRIES: u64 = (PAGE_BYTES - LOG_HEADER) / LOG_ENTRY;
+
+// ---- slots ----
 
 /// A slot in a bucket page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -362,31 +530,23 @@ pub(crate) struct Slot {
     /// The low 32 bits of the key's hash: they route the key to its bucket
     /// at every level, and serve as its fingerprint.
     pub route: u32,
-    /// Where the chunk is: its offset inside its region, and the region.
-    pub offset: u32,
-    pub region: u64,
+    /// The record's head item.
+    pub item: u64,
 }
 
 impl Slot {
     pub(crate) fn encode(&self) -> [u8; crate::width::small(SLOT_LEN)] {
         let mut out = [0u8; crate::width::small(SLOT_LEN)];
         out[0..4].copy_from_slice(&self.route.to_le_bytes());
-        out[4..8].copy_from_slice(&self.offset.to_le_bytes());
-        out[8..16].copy_from_slice(&self.region.to_le_bytes());
+        out[8..16].copy_from_slice(&self.item.to_le_bytes());
         out
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Self {
         Self {
             route: u32::from_le_bytes(bytes[0..4].try_into().expect("four")),
-            offset: u32::from_le_bytes(bytes[4..8].try_into().expect("four")),
-            region: u64::from_le_bytes(bytes[8..16].try_into().expect("eight")),
+            item: u64::from_le_bytes(bytes[8..16].try_into().expect("eight")),
         }
-    }
-
-    /// The chunk's logical offset.
-    pub(crate) const fn at(&self) -> u64 {
-        self.region + self.offset as u64
     }
 }
 
@@ -410,7 +570,9 @@ pub(crate) const fn corrupt(what: &'static str) -> Error {
     Error::InvalidCanonicalEncoding(what)
 }
 
-// A bucket page is staged as 16-byte units: its header and each slot.
+// A bucket page is staged whole; its header is one slot long.
 const _: () = assert!(BUCKET_HEADER == SLOT_LEN);
-// Region payloads start chunk-aligned.
-const _: () = assert!(REGION_HEADER.is_multiple_of(CHUNK_ALIGN));
+// The smallest class holds a header and at least one byte.
+const _: () = assert!(class_size(0) > ITEM_HEADER);
+// Every class is a multiple of 16 bytes, the largest exactly one page.
+const _: () = assert!(class_size(CLASSES - 1) == MAX_ITEM);
