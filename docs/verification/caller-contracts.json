@@ -2763,7 +2763,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:a8c321ba8186c77e]",
+            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:29ca540df6b4b46a]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }
@@ -2810,7 +2810,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:a8c321ba8186c77e]",
+            "caller": "lookup::find(_1: &mut Ctx<'_>, _2: [u64; 2], _3: &keyed_heap::State, _4: u32, _5: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:29ca540df6b4b46a]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }

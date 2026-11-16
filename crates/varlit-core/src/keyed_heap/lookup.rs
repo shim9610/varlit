@@ -35,9 +35,43 @@ pub(crate) struct Ctx<'a> {
     pub source: &'a dyn TileSource,
     pub meta: u64,
     pub classes: Option<&'a [ClassEntry]>,
+    /// The last page a class's directory resolved: `(class, page, offset)`.
+    /// One lookup reads the same item, and so the same page, several
+    /// times; within it the snapshot does not change.
+    pub memo: Option<(usize, u64, u64)>,
 }
 
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
+    pub(crate) fn new(
+        view: &'a mut dyn View,
+        source: &'a dyn TileSource,
+        meta: u64,
+        classes: Option<&'a [ClassEntry]>,
+    ) -> Self {
+        Self {
+            view,
+            source,
+            meta,
+            classes,
+            memo: None,
+        }
+    }
+
+    fn page(&mut self, class: usize, entry: &ClassEntry, page: u64) -> Result<u64> {
+        if let Some((memo_class, memo_page, at)) = self.memo
+            && memo_class == class
+            && memo_page == page
+        {
+            return Ok(at);
+        }
+        let at = radix::get(self.view, self.source, entry.dir, page)?;
+        if at == 0 {
+            return Err(corrupt("keyed item page"));
+        }
+        self.memo = Some((class, page, at));
+        Ok(at)
+    }
+
     pub(crate) fn read(&mut self, at: u64, buf: &mut [u8]) -> Result<()> {
         self.view.read(self.source, at, buf)
     }
@@ -68,10 +102,7 @@ impl Ctx<'_> {
         let mut at = ref_index(item) * size + from;
         let mut done = 0usize;
         while done < buf.len() {
-            let page = radix::get(self.view, self.source, entry.dir, at / PAGE_BYTES)?;
-            if page == 0 {
-                return Err(corrupt("keyed item page"));
-            }
+            let page = self.page(class, &entry, at / PAGE_BYTES)?;
             let within = at % PAGE_BYTES;
             let n = crate::width::bounded(PAGE_BYTES - within, buf.len() - done);
             self.read(page + within, &mut buf[done..done + n])?;
@@ -84,7 +115,18 @@ impl Ctx<'_> {
     pub(crate) fn item(&mut self, item: u64) -> Result<Item> {
         let mut header = [0u8; crate::width::small(ITEM_HEADER)];
         self.read_item(item, 0, &mut header)?;
-        let item_header = Item::decode(&header);
+        checked_item(item, &header)
+    }
+}
+
+/// Decodes and checks the header of item `item`.
+fn checked_item(item: u64, header: &[u8]) -> Result<Item> {
+    let item_header = Item::decode(
+        header[..crate::width::small(ITEM_HEADER)]
+            .try_into()
+            .expect("header"),
+    );
+    {
         if u64::from(item_header.len) + ITEM_HEADER > class_size(ref_class(item))
             || (item_header.next != NO_ITEM && checked_ref(item_header.next).is_err())
         {
@@ -138,7 +180,11 @@ pub(crate) fn stream(
     let mut expected = 0u64;
     // A chain is no longer than its record allows: bounded by the record.
     loop {
-        let header = ctx.item(item)?;
+        // The header and the first bytes in one read.
+        let size = class_size(checked_ref(item).map(ref_class)?);
+        let head_read = crate::width::bounded(size, STEP);
+        ctx.read_item(item, 0, &mut step[..head_read])?;
+        let header = checked_item(item, &step[..head_read])?;
         if first {
             if !header.head {
                 return Err(corrupt("keyed record head"));
@@ -151,8 +197,17 @@ pub(crate) fn stream(
         let mut crc = crc32fast::Hasher::new();
         crc.update(&header.crc_prefix());
         let len = u64::from(header.len);
-        let mut done = 0u64;
+        let header_len = crate::width::small(ITEM_HEADER);
+        let first_part = crate::width::bounded(len, head_read - header_len);
         let mut stop = false;
+        {
+            let bytes = &step[header_len..header_len + first_part];
+            crc.update(bytes);
+            if !visit(bytes)? {
+                stop = true;
+            }
+        }
+        let mut done = first_part as u64;
         while done < len {
             let n = crate::width::bounded(len - done, STEP);
             ctx.read_item(item, ITEM_HEADER + done, &mut step[..n])?;
@@ -196,13 +251,23 @@ pub(crate) fn find(
             if slot.route != route {
                 continue;
             }
-            let head = ctx.item(slot.item)?;
-            if head.head
+            // The header and the key in one read when the key fits.
+            let size = class_size(checked_ref(slot.item).map(ref_class)?);
+            let header_len = crate::width::small(ITEM_HEADER);
+            let mut prefix = [0u8; STEP];
+            let want = crate::width::bounded(size, STEP).min(header_len + key.len());
+            ctx.read_item(slot.item, 0, &mut prefix[..want])?;
+            let head = checked_item(slot.item, &prefix[..want])?;
+            let matches = head.head
                 && head.block_or_route == block_id
                 && head.key_len as usize == key.len()
                 && head.total_or_prev >= key.len() as u64
-                && key_equals(ctx, slot.item, key)?
-            {
+                && if want == header_len + key.len() && head.len as usize >= key.len() {
+                    prefix[header_len..want] == *key
+                } else {
+                    key_equals(ctx, slot.item, key)?
+                };
+            if matches {
                 return Ok(Some(Located {
                     slot,
                     page: at,

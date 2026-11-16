@@ -300,12 +300,7 @@ impl KeyedHeap {
     }
 
     fn ctx<'a>(&'a self, view: &'a mut dyn View, store: &'a dyn TileSource) -> Ctx<'a> {
-        Ctx {
-            view,
-            source: store,
-            meta: self.meta,
-            classes: Some(&self.classes[..CLASSES]),
-        }
+        Ctx::new(view, store, self.meta, Some(&self.classes[..CLASSES]))
     }
 
     fn item(&self, store: &dyn TileSource, item: u64) -> Result<Item> {

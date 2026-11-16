@@ -124,12 +124,7 @@ fn attempt(
     let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
-    let mut ctx = Ctx {
-        view,
-        source,
-        meta,
-        classes: None,
-    };
+    let mut ctx = Ctx::new(view, source, meta, None);
     let Some(found) = lookup::find(&mut ctx, seed, state, block_id, key)? else {
         return Ok(false);
     };
