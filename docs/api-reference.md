@@ -1042,6 +1042,10 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   values the latest publications replaced, until a checkpoint lets updates
   take their space (as much as one publication's worth); none of these grows
   with the number of updates.
+- **Change budget.** `KeyedStorage::with_change_budget(bytes)` (1 MiB to
+  1 TiB, 64 MiB by default) bounds what one round of changes allocates. Past
+  it the writer publishes the round by itself: changes before a `sync` may
+  become visible, and survive a crash, in rounds of at most the budget.
 - **Refusals.** In a keyed-storage format, appending a keyed block to the log
   (`push_info`, `push_keyed`, `delete`) fails with
   `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed

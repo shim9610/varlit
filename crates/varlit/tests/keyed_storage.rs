@@ -140,7 +140,7 @@ fn repeated_updates_do_not_grow_the_file() -> varlit::Result<()> {
     let mut file = VarlitFile::create(spec(), &path)?;
     let mut state = 11u64;
     let keys = 2000u64;
-    let rounds = 40u64;
+    let rounds = 60u64;
     let mut settled = 0;
     for round in 0..rounds {
         for id in 0..keys {
@@ -148,7 +148,7 @@ fn repeated_updates_do_not_grow_the_file() -> varlit::Result<()> {
             file.put_keyed(&account(id, len, round))?;
         }
         file.sync()?;
-        if round == 10 {
+        if round == 20 {
             settled = std::fs::metadata(&path)?.len();
         }
     }
@@ -158,9 +158,9 @@ fn repeated_updates_do_not_grow_the_file() -> varlit::Result<()> {
     // holes and free regions settle; nothing past that.
     assert!(
         len <= settled + (1 << 20) + 4096,
-        "the file grew from {settled} to {len} bytes between rounds 10 and {rounds}: {stats:?}"
+        "the file grew from {settled} to {len} bytes between rounds 20 and {rounds}: {stats:?}"
     );
-    // Thirty more rounds of about `live` bytes each wrote 30 times the live
+    // Forty more rounds of about `live` bytes each wrote 40 times the live
     // data; the file holds it once plus constants.
     assert!(
         len < 6 * stats.live_bytes,

@@ -1250,13 +1250,25 @@ const CONTRACTS: &[Contract] = &[
         valid { let spec = ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE); spec.validate()?; assert_ne!(spec.computed_schema_hash(), ProbeFormat::spec().computed_schema_hash()); Ok(()) },
         invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(6)).validate().is_err()); Ok(()) }
     ),
-    contract!("core/format.rs::format::KeyedStorage::const:IN_PLACE@ebd1f455ad036e67",
+    contract!("core/format.rs::format::KeyedStorage::const:IN_PLACE@af9752f5ba463c25",
         valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.free_space_permille, 50); assert_eq!(varlit::KeyedStorage::IN_PLACE.ring_bytes, None); Ok(()) },
         invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { free_space_permille: 0, ..varlit::KeyedStorage::IN_PLACE }).validate().is_err()); Ok(()) }
     ),
+    contract!("core/format.rs::format::KeyedStorage::field:change_budget@0504e5cb6c5993db",
+        valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.with_change_budget(8 << 20).change_budget, Some(8 << 20)); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { change_budget: Some(1024), ..varlit::KeyedStorage::IN_PLACE }).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::fn:with_change_budget@de7d526597711071",
+        valid { let dir = private_tempdir::private_tempdir()?; let spec = KeyedStore::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_change_budget(1 << 20)); spec.validate()?; let mut file = varlit::VarlitFile::create(spec, dir.path().join("budget"))?; for id in 0..40u64 { file.put_keyed(&KeyedValue { id, bytes: vec![7; 60_000] })?; } let reader = varlit::VarlitFile::open_readonly(spec, dir.path().join("budget"))?; assert!(reader.keyed_storage_stats()?.keys > 0, "a round past the budget is published before sync"); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_change_budget((1 << 40) + 1)).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::fn:budget@896d15a55c4e0400",
+        valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.budget(), 64 << 20); assert_eq!(varlit::KeyedStorage::IN_PLACE.with_change_budget(2 << 20).budget(), 2 << 20); Ok(()) },
+        invalid { assert_ne!(varlit::KeyedStorage::IN_PLACE.with_change_budget(1 << 30).budget(), varlit::KeyedStorage::IN_PLACE.budget()); Ok(()) }
+    ),
     contract!("core/format.rs::format::KeyedStorage::field:free_space_permille@4d24d3193e7ef3bf",
         valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(1).free_space_permille, 10); Ok(()) },
-        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { free_space_permille: 51, ring_bytes: None }).validate().is_err()); Ok(()) }
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { free_space_permille: 51, ring_bytes: None, change_budget: None }).validate().is_err()); Ok(()) }
     ),
     contract!("core/format.rs::format::KeyedStorage::field:ring_bytes@0504e5cb6c5993db",
         valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.with_ring_bytes(1 << 20).ring_bytes, Some(1 << 20)); Ok(()) },

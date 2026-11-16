@@ -1837,7 +1837,7 @@ pub struct FormatSpec {
 }
 
 /// How a format stores its keyed blocks when it declares bounded keyed
-/// storage: once per key, in a record heap inside the file, changed in place
+/// storage: once per key, in a record heap inside the file, published
 /// through the file's write-ahead ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyedStorage {
@@ -1847,13 +1847,18 @@ pub struct KeyedStorage {
     /// Bytes of write-ahead ring a new file reserves; `None` for the default
     /// (16 MiB). A reader may fall behind by as many publications as fit.
     pub ring_bytes: Option<u64>,
+    /// Bytes one round of changes may allocate before the writer publishes
+    /// it; `None` for the default (64 MiB). A `sync` that changes more is
+    /// several publications, each atomic. 1 MiB to 1 TiB.
+    pub change_budget: Option<u64>,
 }
 
 impl KeyedStorage {
-    /// The default: 5 % free space, the default ring.
+    /// The default: 5 % free space, the default ring and change budget.
     pub const IN_PLACE: Self = Self {
         free_space_permille: 50,
         ring_bytes: None,
+        change_budget: None,
     };
 
     /// Allows `percent` (1 to 5) of free space before compaction.
@@ -1868,10 +1873,30 @@ impl KeyedStorage {
         self
     }
 
+    /// Lets one round of changes allocate `bytes` (1 MiB to 1 TiB).
+    pub const fn with_change_budget(mut self, bytes: u64) -> Self {
+        self.change_budget = Some(bytes);
+        self
+    }
+
+    /// The change budget in bytes.
+    pub const fn budget(self) -> u64 {
+        match self.change_budget {
+            Some(bytes) => bytes,
+            None => crate::keyed_heap::DEFAULT_BUDGET,
+        }
+    }
+
     pub(crate) const fn validate(self) -> Result<()> {
         if self.free_space_permille < 10 || self.free_space_permille > 50 {
             return Err(Error::InvalidFormatSpec(
                 "keyed storage free space must be 1 to 5 %",
+            ));
+        }
+        let budget = self.budget();
+        if budget < crate::keyed_heap::MIN_BUDGET || budget > crate::keyed_heap::MAX_BUDGET {
+            return Err(Error::InvalidFormatSpec(
+                "keyed storage change budget must be 1 MiB to 1 TiB",
             ));
         }
         Ok(())

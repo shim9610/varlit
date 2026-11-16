@@ -55,6 +55,11 @@ pub(crate) const REGION_HEADER: u64 = 48;
 /// Payload bytes of an ordinary heap region. A record larger than half of
 /// this gets a region of its own.
 pub(crate) const REGION_BYTES: u64 = 1 << 20;
+/// The change budget's bounds: at least one region, at most 1 TiB.
+pub(crate) const MIN_BUDGET: u64 = REGION_BYTES;
+pub(crate) const MAX_BUDGET: u64 = 1 << 40;
+/// The change budget when a format declares none.
+pub(crate) const DEFAULT_BUDGET: u64 = 64 << 20;
 
 /// `payload_len | block_id | key_len | crc32`.
 pub(crate) const CHUNK_HEADER: u64 = 16;
@@ -77,6 +82,8 @@ pub(crate) struct Fixed {
     pub ratio_permille: u16,
     pub seed: [u64; 2],
     pub ring: (u64, u64),
+    /// Bytes one round may allocate before the writer publishes it.
+    pub budget: u64,
 }
 
 impl Fixed {
@@ -89,6 +96,7 @@ impl Fixed {
         out[16..24].copy_from_slice(&self.seed[1].to_le_bytes());
         out[24..32].copy_from_slice(&self.ring.0.to_le_bytes());
         out[32..40].copy_from_slice(&self.ring.1.to_le_bytes());
+        out[40..48].copy_from_slice(&self.budget.to_le_bytes());
         let crc = crc32fast::hash(&out[..56]);
         out[56..60].copy_from_slice(&crc.to_le_bytes());
         out
@@ -105,7 +113,9 @@ impl Fixed {
         }
         let ratio_permille = u16::from_le_bytes([bytes[6], bytes[7]]);
         let ring = (word(24), word(32));
+        let budget = word(40);
         if !(10..=50).contains(&ratio_permille)
+            || !(MIN_BUDGET..=MAX_BUDGET).contains(&budget)
             || !(crate::matrix_tiles::wal::MIN_RING..=crate::matrix_tiles::wal::MAX_RING_BYTES)
                 .contains(&ring.1)
         {
@@ -115,6 +125,7 @@ impl Fixed {
             ratio_permille,
             seed: [word(8), word(16)],
             ring,
+            budget,
         })
     }
 }

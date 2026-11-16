@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
-use super::heap::KeyedHeap;
+use super::heap::{KeyedHeap, Tuning};
 use super::{REGION_BYTES, SLOTS_PER_PAGE};
 use crate::matrix_tiles::store::memory::MemStore;
 
 const RING: u64 = 1 << 20;
 const SEED: [u64; 2] = [0x1234_5678, 0x9abc_def0];
+const BUDGET: u64 = super::DEFAULT_BUDGET;
 
 type Model = BTreeMap<(u32, Vec<u8>), Vec<u8>>;
 
@@ -45,7 +46,7 @@ fn value(len: usize, fill: u64) -> Vec<u8> {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn puts_deletes_and_reopens_match_a_model_across_splits() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let mut model = Model::new();
     let mut state = 7u64;
     for step in 0..6000u64 {
@@ -68,7 +69,7 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
         }
         if step % 1000 == 999 {
             heap.publish(&mut store).unwrap();
-            heap = KeyedHeap::open(&mut store, heap.meta).unwrap();
+            heap = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
             check(&heap, &store, &model);
         }
     }
@@ -86,7 +87,7 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn repeated_updates_keep_the_file_within_the_ratio() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let keys = 2000u64;
     let mut state = 3u64;
     let mut live_target = 0u64;
@@ -96,8 +97,12 @@ fn repeated_updates_keep_the_file_within_the_ratio() {
             let len = 64 + (random(&mut state) % 2000) as usize;
             let bytes = value(len, round ^ key);
             heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
+            assert_bounded(&heap, &format!("round {round} key {key}"));
         }
         heap.publish(&mut store).unwrap();
+        if let Err(error) = heap.check_consistency(&store) {
+            panic!("round {round}: {error}: {:?}", heap.stats);
+        }
         if round == 0 {
             live_target = heap.state().live;
         }
@@ -138,7 +143,7 @@ fn repeated_updates_keep_the_file_within_the_ratio() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn deleting_everything_returns_the_space_for_reuse() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     for cycle in 0..10u64 {
         for key in 0..1000u64 {
             heap.put(&mut store, 1, &key.to_le_bytes(), &value(1000, cycle))
@@ -166,7 +171,7 @@ fn deleting_everything_returns_the_space_for_reuse() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn a_crash_after_any_write_keeps_the_last_publication() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let mut model = Model::new();
     for key in 0..300u64 {
         let bytes = value(50 + key as usize % 300, key);
@@ -190,8 +195,9 @@ fn a_crash_after_any_write_keeps_the_last_publication() {
         for torn in [0usize, 5] {
             let crashed = store.crashed(keep, torn);
             let mut reopened = crashed.clone();
-            let heap = KeyedHeap::open(&mut reopened, meta).unwrap();
+            let heap = KeyedHeap::open(&mut reopened, meta, Tuning::DEFAULT).unwrap();
             check(&heap, &reopened, &model);
+            heap.check_consistency(&reopened).unwrap();
             assert!(
                 heap.find(&reopened, 1, &399u64.to_le_bytes())
                     .unwrap()
@@ -221,7 +227,7 @@ fn shows(heap: &KeyedHeap, store: &MemStore, model: &Model) -> bool {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn values_written_straight_into_reused_space_survive_a_crash() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let meta = heap.meta;
     let mut model = Model::new();
     for round in 0..3u64 {
@@ -246,8 +252,9 @@ fn values_written_straight_into_reused_space_survive_a_crash() {
     for keep in (0..pending).step_by((pending / 40).max(1)) {
         for torn in [0usize, 5] {
             let mut crashed = store.crashed(keep, torn);
-            let reopened = KeyedHeap::open(&mut crashed, meta).unwrap();
+            let reopened = KeyedHeap::open(&mut crashed, meta, Tuning::DEFAULT).unwrap();
             assert!(shows(&reopened, &crashed, &model), "crash at write {keep}");
+            reopened.check_consistency(&crashed).unwrap();
         }
     }
     heap.publish(&mut store).unwrap();
@@ -255,15 +262,16 @@ fn values_written_straight_into_reused_space_survive_a_crash() {
     for keep in 0..=pending {
         for torn in [0usize, 5] {
             let mut crashed = store.crashed(keep, torn);
-            let reopened = KeyedHeap::open(&mut crashed, meta).unwrap();
+            let reopened = KeyedHeap::open(&mut crashed, meta, Tuning::DEFAULT).unwrap();
             assert!(
                 shows(&reopened, &crashed, &model) || shows(&reopened, &crashed, &next),
                 "crash at publication write {keep}"
             );
+            reopened.check_consistency(&crashed).unwrap();
         }
     }
     let mut reopened = store.clone();
-    let heap = KeyedHeap::open(&mut reopened, meta).unwrap();
+    let heap = KeyedHeap::open(&mut reopened, meta, Tuning::DEFAULT).unwrap();
     check(&heap, &reopened, &next);
 }
 
@@ -271,7 +279,7 @@ fn values_written_straight_into_reused_space_survive_a_crash() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn values_larger_than_half_a_region_get_their_own() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let big = value(3 * REGION_BYTES as usize / 2, 9);
     heap.put(&mut store, 1, b"big", &big).unwrap();
     heap.put(&mut store, 1, b"small", b"x").unwrap();
@@ -283,7 +291,7 @@ fn values_larger_than_half_a_region_get_their_own() {
         get(&heap, &store, 1, b"big").as_deref(),
         Some(&b"now small"[..])
     );
-    let reopened = KeyedHeap::open(&mut store, heap.meta).unwrap();
+    let reopened = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
     assert_eq!(
         get(&reopened, &store, 1, b"small").as_deref(),
         Some(&b"x"[..])
@@ -308,7 +316,7 @@ fn read(
 #[test]
 fn a_reader_keeps_its_generation_until_it_follows() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     heap.put(&mut store, 1, b"k", b"one").unwrap();
     heap.publish(&mut store).unwrap();
     let mut reader = super::reader::KeyedReader::open(&store, heap.meta).unwrap();
@@ -340,7 +348,7 @@ fn a_reader_keeps_its_generation_until_it_follows() {
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
 fn a_reader_the_ring_moved_past_expires_instead_of_mixing_generations() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     heap.put(&mut store, 1, b"k", &value(100, 0)).unwrap();
     heap.publish(&mut store).unwrap();
     let mut reader = super::reader::KeyedReader::open(&store, heap.meta).unwrap();
@@ -370,7 +378,7 @@ fn a_reader_the_ring_moved_past_expires_instead_of_mixing_generations() {
 #[test]
 fn a_reader_never_sees_values_written_into_space_it_points_at() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     for key in 0..50u64 {
         heap.put(&mut store, 1, &key.to_le_bytes(), &value(200, key))
             .unwrap();
@@ -457,7 +465,8 @@ fn layouts_are_the_same_bytes_on_every_platform() {
 #[test]
 fn a_few_puts_and_deletes_match_a_model() {
     let mut store = MemStore::new();
-    let mut heap = KeyedHeap::create(&mut store, 70 * 1024, 50, SEED).unwrap();
+    let mut heap =
+        KeyedHeap::create(&mut store, 70 * 1024, 50, BUDGET, SEED, Tuning::DEFAULT).unwrap();
     let mut model = Model::new();
     for step in 0..60u64 {
         let key = (step % 17).to_le_bytes().to_vec();
@@ -473,8 +482,143 @@ fn a_few_puts_and_deletes_match_a_model() {
         }
         if step % 20 == 19 {
             heap.publish(&mut store).unwrap();
-            heap = KeyedHeap::open(&mut store, heap.meta).unwrap();
+            heap = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
         }
     }
     check(&heap, &store, &model);
+}
+
+/// The writer's fixed structures, as small as they go: what overflows them
+/// in a large file overflows them here.
+const TINY: Tuning = Tuning { hole_cache: 4 };
+
+fn assert_bounded(heap: &KeyedHeap, when: &str) {
+    assert!(
+        heap.idle() <= heap.idle_bound(),
+        "{when}: idle {} over the bound {} (live {}, heap {}): {:?}",
+        heap.idle(),
+        heap.idle_bound(),
+        heap.state().live,
+        heap.state().heap,
+        heap.stats
+    );
+}
+
+/// Every value rewritten in one publication, many more of them than the
+/// hole cache holds, round after round: the idle space stays within the
+/// bound after every put, not only on average.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn bulk_rewrites_past_the_hole_cache_stay_within_the_bound() {
+    let mut store = MemStore::new();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, super::MIN_BUDGET, SEED, TINY).unwrap();
+    // Ten times the bound's constant part, so the bound is about the data.
+    for round in 0..8u64 {
+        for key in 0..20_000u64 {
+            heap.put(&mut store, 1, &key.to_le_bytes(), &value(500, key ^ round))
+                .unwrap();
+            assert_bounded(&heap, &format!("round {round} key {key}"));
+        }
+        heap.publish(&mut store).unwrap();
+    }
+}
+
+/// Random puts, deletes, publications and reopens over a few hundred keys,
+/// with every fixed structure as small as it goes: after every operation the
+/// heap is consistent, every key reads back, and the idle space stays within
+/// the bound over the most data the heap ever held (returning space after
+/// deletes is not done yet).
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn random_histories_stay_consistent_and_bounded() {
+    for seed in 1..=4u64 {
+        let mut store = MemStore::new();
+        let mut heap =
+            KeyedHeap::create(&mut store, RING, 50, super::MIN_BUDGET, SEED, TINY).unwrap();
+        let meta = heap.meta;
+        let mut model = Model::new();
+        let mut published = Model::new();
+        let mut state = seed;
+        let mut most_live = 0u64;
+        for step in 0..3000u32 {
+            let roll = random(&mut state) % 100;
+            let key = (random(&mut state) % 300).to_le_bytes().to_vec();
+            if roll < 70 {
+                let len = match random(&mut state) % 10 {
+                    0 => 40_000,
+                    1..=3 => 4_000,
+                    _ => 1 + (random(&mut state) % 600) as usize,
+                };
+                let bytes = value(len, random(&mut state));
+                let generation = heap.ring.published();
+                heap.put(&mut store, 1, &key, &bytes).unwrap();
+                // A put that ends a round publishes what came before it.
+                if heap.ring.published() != generation {
+                    published = model.clone();
+                }
+                model.insert((1, key), bytes);
+            } else if roll < 88 {
+                let removed = heap.delete(&mut store, 1, &key).unwrap();
+                let expected = model.remove(&(1, key.clone())).is_some();
+                assert_eq!(
+                    removed, expected,
+                    "seed {seed} step {step}: delete of {key:?}: {:?}",
+                    heap.stats
+                );
+            } else if roll < 97 {
+                heap.publish(&mut store).unwrap();
+                published = model.clone();
+            } else {
+                // Unpublished changes are lost; a reopened writer starts from
+                // the last publication with empty caches.
+                heap = KeyedHeap::open(&mut store, meta, TINY).unwrap();
+                model = published.clone();
+            }
+            most_live = most_live.max(heap.state().live);
+            if step % 10 == 0
+                && let Err(error) = heap.check_consistency(&store)
+            {
+                panic!("seed {seed} step {step}: {error}: {:?}", heap.stats);
+            }
+            assert!(
+                heap.state().heap <= most_live + heap.idle_bound(),
+                "seed {seed} step {step}: heap {} for most live {most_live} (bound {}): {:?}",
+                heap.state().heap,
+                heap.idle_bound(),
+                heap.stats
+            );
+        }
+        check(&heap, &store, &model);
+    }
+}
+
+/// Updates of random keys with random sizes, many more than the hole cache
+/// holds, in rounds of the smallest budget: holes are scattered and of
+/// every size, so walks and compaction must keep up. The idle space stays
+/// within the bound after every put.
+#[test]
+#[ignore = "fails: with holes of every size and a cache that cannot hold them, \
+            the writer does not find holes that fit and the idle space grows; \
+            see docs/design/bounded-keyed-storage.md (Bounds at the extremes)"]
+fn scattered_updates_past_the_hole_cache_stay_within_the_bound() {
+    let mut store = MemStore::new();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, super::MIN_BUDGET, SEED, TINY).unwrap();
+    let mut state = 7u64;
+    for key in 0..20_000u64 {
+        let len = 64 + (random(&mut state) % 2000) as usize;
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, key))
+            .unwrap();
+    }
+    heap.publish(&mut store).unwrap();
+    for step in 0..200_000u64 {
+        let key = random(&mut state) % 20_000;
+        let len = 64 + (random(&mut state) % 2000) as usize;
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(len, step))
+            .unwrap();
+        assert_bounded(&heap, &format!("step {step}"));
+        if step % 500 == 0 {
+            heap.publish(&mut store).unwrap();
+        }
+    }
+    heap.check_consistency(&store).unwrap();
 }

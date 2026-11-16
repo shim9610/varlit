@@ -63,7 +63,8 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   found through linear-hashed slot buckets keyed by a per-file SipHash seed,
   and compacted when free space passes the declared 1 to 5 % of live data.
   Repeated updates no longer grow the file (the growth the security advisory
-  describes). Generated `put_<block>`, `get_<block>` and `remove_<block>`;
+  describes). `KeyedStorage::with_change_budget` (64 MiB by default) bounds
+  one round of changes; past it the writer publishes the round itself. Generated `put_<block>`, `get_<block>` and `remove_<block>`;
   `VarlitFile::put_keyed`, `get_keyed`, `remove_keyed`, `keyed_storage_stats`;
   `KeyedStorage`, `KeyedStorageStats` and
   `Error::KeyedStorageRequiresPut`. Kani proofs cover routing, splits, chunk

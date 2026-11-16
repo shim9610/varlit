@@ -9,7 +9,7 @@
 
 use super::matrix_tiles_io::{FileTiles, FileTilesRead};
 use super::*;
-use crate::keyed_heap::heap::KeyedHeap;
+use crate::keyed_heap::heap::{KeyedHeap, Tuning};
 use crate::keyed_heap::reader::KeyedReader;
 
 /// The default write-ahead ring of a new file's keyed storage.
@@ -40,7 +40,14 @@ impl VarlitFile {
         let seed = keyed_seed();
         let ring = keyed.ring_bytes.unwrap_or(DEFAULT_RING_BYTES);
         let mut store = FileTiles::new(self);
-        let heap = KeyedHeap::create(&mut store, ring, keyed.free_space_permille, seed)?;
+        let heap = KeyedHeap::create(
+            &mut store,
+            ring,
+            keyed.free_space_permille,
+            keyed.budget(),
+            seed,
+            Tuning::DEFAULT,
+        )?;
         if heap.meta != expected {
             return Err(Error::InvalidCanonicalEncoding(
                 "keyed storage metadata is not the first record",
@@ -75,7 +82,11 @@ impl VarlitFile {
             Some(KeyedEngine::Writer(heap)) => heap,
             _ => {
                 let meta = self.keyed_meta_offset()?;
-                Box::new(KeyedHeap::open(&mut FileTiles::new(self), meta)?)
+                Box::new(KeyedHeap::open(
+                    &mut FileTiles::new(self),
+                    meta,
+                    Tuning::DEFAULT,
+                )?)
             }
         };
         let result = op(&mut heap, &mut FileTiles::new(self));

@@ -1,8 +1,9 @@
 # Bounded keyed storage
 
-Status: in progress. The indexed primary is removed; in-place keyed storage
-(step 2 below: record heap, slot buckets, compaction) is implemented as an
-opt-in declaration; sorted runs and the removal of keyed history are pending.
+Status: in progress. The indexed primary is removed; keyed storage (step 2
+below: record heap, slot buckets, compaction) is implemented as an opt-in
+declaration and is being reworked to hold the bounds under "Bounds at the
+extremes"; sorted runs and the removal of keyed history are pending.
 
 ## Problem
 
@@ -181,6 +182,66 @@ publication) go through the ring. The file still keeps one copy of each key
 plus the values the latest publications replaced, which updates take after
 the next checkpoint. Measured on the same oltp run: p99 27 ms to 4.2 ms,
 p50 0.9 ms to 1.5 ms (a second barrier per publication), file size unchanged.
+
+## Bounds at the extremes
+
+The first heap failed at scale where small tests could not reach: one
+publication rewrote 65 536 chunks, the 4096-entry hole cache forgot most of
+the freed space, and every step grew the file by the data's size. A fixed
+structure must never bound what the writer can reuse, and no publication may
+need extra space in proportion to its size. The rules below hold for any
+sequence of operations; the writer checks them in tests and the space policy
+is verified as a state machine.
+
+**Change budget `B`.** A format declares how many bytes one round may
+allocate (`KeyedStorage::change_budget`, 64 MiB by default, recorded in the
+metadata). Puts accumulate in a round; when the next allocation would pass
+`B`, the writer publishes the round and checkpoints it, so the space the
+round freed is reused by the next one. A `sync` that changes more than `B`
+is therefore several publications, each atomic; a crash keeps a prefix of
+rounds. Extra space for values not yet reusable never exceeds about `2B`.
+
+**Records larger than `B`.** Replacing a value atomically needs the old and
+the new bytes at once, so a record larger than `B` follows the format's
+`LargeRecords` policy:
+
+- `Stream` (default): a begin signature marks the record as being replaced
+  (one round; readers then find no record for the key, `get` returns
+  `false`), after that round is in place the record's extents are
+  overwritten and extended in rounds of at most `B`, each publishing how many
+  bytes are durable, and a completion signature makes the new value visible.
+  There is no rollback: a crash leaves the record incomplete. Puts of the
+  same value resume it (the durable prefix is checked against its checksum),
+  and incomplete records can be counted, listed and discarded.
+- `Refuse`: a record larger than `B` fails with `LimitExceeded`.
+
+**Uniform space.** Every record is a chain of extents of at most half a
+region; every heap region is 1 MiB. Space freed by any record fits any other,
+so sizes that change or grow without bound leave no space only larger
+records could use. A chunk header (48 bytes) carries the record's total
+length, the next extent, the bytes written (for streamed replacement), flags
+and a checksum of the header.
+
+**Free space is found on disk.** A region whose last live byte is freed goes
+on the free list at once. The hole cache only speeds reuse: when it runs dry
+and the accounting shows reusable space it does not hold, the writer walks
+regions (through fixed buffers, from a cursor) right after a checkpoint, when
+every dead chunk is reusable, and refills it. When holes too small to use
+exceed the ratio and an allocation would grow the file, the writer empties
+the sparsest regions and ends the round, so the emptied regions are reused
+instead of growing the file.
+
+**Shrinking.** Deletes merge buckets (linear hashing in reverse, with a gap
+between the split and merge thresholds so alternating inserts and deletes do
+not thrash) and compaction keeps holes within the ratio. Returning space at
+the end of the file to the filesystem needs the native log to cut trailing
+records safely (commit markers, anchors and digests); it is designed
+separately.
+
+**The bound.** Apart from the end-of-file question above, at every point:
+heap space not holding live data is at most the ratio's allowance, `2B`,
+whole-region slack, the ring and the bucket and directory pages the live keys
+need.
 
 ## Open questions
 

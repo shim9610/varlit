@@ -26,6 +26,18 @@ impl View for RingReader {
     }
 }
 
+/// The file as its last checkpoint left it: what is in place, without the
+/// ring. With every published generation in place this is the published
+/// state, apart from bytes the open generation wrote straight into space
+/// that state does not use.
+pub(crate) struct InPlaceView;
+
+impl View for InPlaceView {
+    fn read(&mut self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
+        source.read_at(at, buf)
+    }
+}
+
 /// Where a key's record is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Located {

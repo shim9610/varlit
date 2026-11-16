@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "80ab4dbe2ebe16be",
-    "count": 3493
+    "catalogue": "a2764345457ef44f",
+    "count": 3506
   },
   "schema": 1,
   "sources": {
@@ -396,7 +396,7 @@
     "crates/varlit-core/src/file/follow.rs": "881c849233661229",
     "crates/varlit-core/src/file/header_codec.rs": "e986c6eff534a2d0",
     "crates/varlit-core/src/file/header_slots.rs": "9d9bf42f2143300b",
-    "crates/varlit-core/src/file/keyed_access.rs": "05c66f0c41a7fe79",
+    "crates/varlit-core/src/file/keyed_access.rs": "7f77443b3267de2c",
     "crates/varlit-core/src/file/lifecycle.rs": "bc0e4fb8c3fb4807",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
     "crates/varlit-core/src/file/mapped_access.rs": "4cc708e2eb033758",
@@ -416,15 +416,15 @@
     "crates/varlit-core/src/file/scan.rs": "ef411cccdafad280",
     "crates/varlit-core/src/file/tests.rs": "a975d73e3e0eea09",
     "crates/varlit-core/src/file/validation_tests.rs": "b70c8465eea9e364",
-    "crates/varlit-core/src/format.rs": "cff367f00d071c48",
+    "crates/varlit-core/src/format.rs": "58536abf26cbec72",
     "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
-    "crates/varlit-core/src/keyed_heap/heap.rs": "b61a221f160b7100",
-    "crates/varlit-core/src/keyed_heap/lookup.rs": "a91015ccc4929719",
-    "crates/varlit-core/src/keyed_heap/mod.rs": "93f050b86f0f76ff",
+    "crates/varlit-core/src/keyed_heap/heap.rs": "00268cb25322ccdd",
+    "crates/varlit-core/src/keyed_heap/lookup.rs": "3e8ac692627f9b9e",
+    "crates/varlit-core/src/keyed_heap/mod.rs": "d4da6e237f4ee904",
     "crates/varlit-core/src/keyed_heap/pages.rs": "67aacfba17a225ef",
     "crates/varlit-core/src/keyed_heap/reader.rs": "905150cf9d29ef6e",
     "crates/varlit-core/src/keyed_heap/sip.rs": "20816b0c53b27770",
-    "crates/varlit-core/src/keyed_heap/tests.rs": "12f572d1be297e95",
+    "crates/varlit-core/src/keyed_heap/tests.rs": "3ea0a0049853b4aa",
     "crates/varlit-core/src/layout.rs": "22e1b983bacd6e22",
     "crates/varlit-core/src/lib.rs": "5a45a88ae381b759",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",

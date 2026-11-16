@@ -24,13 +24,14 @@
 //! space is taken only once the generation that freed it is in place, so no
 //! overlay still holds a range in its old units.
 
-use super::lookup::{self, Located, slot_at};
+use super::lookup::{self, InPlaceView, Located, View, slot_at};
 use super::pages::{HeapView, Pages};
 use super::sip::Sip;
 use super::{
-    BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, FREE_BLOCK, Fixed, META_FIXED_LEN, META_LEN,
-    META_OVERFLOW_HEAD_AT, META_STATE_AT, REGION_BYTES, REGION_HEADER, Region, SLOT_LEN,
-    SLOTS_PER_PAGE, Slot, State, corrupt, heap_chunk_len, page_header, set_page_header,
+    BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, FREE_BLOCK, Fixed, MAX_BUDGET, META_FIXED_LEN,
+    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, REGION_BYTES, REGION_HEADER,
+    Region, SLOT_LEN, SLOTS_PER_PAGE, Slot, State, corrupt, heap_chunk_len, page_header,
+    set_page_header,
 };
 use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::{TileSource, TileStore};
@@ -41,6 +42,10 @@ use crate::{Error, Result};
 /// Holes the writer remembers. Fixed when the writer is opened; when it is
 /// full the smallest hole is forgotten (compaction reclaims it later).
 const HOLE_CACHE: usize = 4096;
+/// Regions one compaction empties at most.
+const COMPACT_REGIONS: usize = 4;
+/// Regions one walk for holes visits at most.
+const WALK_REGIONS: usize = 64;
 /// Sparse regions remembered as compaction candidates.
 const SPARSE: usize = 32;
 /// Bytes copied per step when a chunk moves or a key is compared.
@@ -61,6 +66,11 @@ pub(crate) struct HeapStats {
     /// Chunk units written straight to the file rather than through the
     /// ring.
     pub direct_writes: u64,
+    /// Rounds the writer published by itself: the change budget was spent,
+    /// or space to retake needed the round in place.
+    pub rounds: u64,
+    /// Region walks that refilled the hole cache from the file.
+    pub walks: u64,
 }
 
 /// Region headers changed since the last publication, staged once each
@@ -149,13 +159,11 @@ struct Hole {
 struct Holes {
     entries: Box<[Hole]>,
     len: usize,
+    /// Bytes of the holes held.
+    bytes: u64,
 }
 
 impl Holes {
-    fn new() -> Result<Self> {
-        Self::with_capacity(HOLE_CACHE)
-    }
-
     fn with_capacity(capacity: usize) -> Result<Self> {
         let mut entries = Vec::new();
         entries
@@ -168,13 +176,19 @@ impl Holes {
         Ok(Self {
             entries: entries.into_boxed_slice(),
             len: 0,
+            bytes: 0,
         })
+    }
+
+    const fn is_full(&self) -> bool {
+        self.len == self.entries.len()
     }
 
     fn add(&mut self, hole: Hole) {
         if self.len < self.entries.len() {
             self.entries[self.len] = hole;
             self.len += 1;
+            self.bytes += hole.len;
             return;
         }
         let (index, smallest) = self.entries[..self.len]
@@ -184,6 +198,7 @@ impl Holes {
             .map(|(index, held)| (index, held.len))
             .expect("the cache is full");
         if hole.len > smallest {
+            self.bytes = self.bytes - smallest + hole.len;
             self.entries[index] = hole;
         }
     }
@@ -201,6 +216,7 @@ impl Holes {
             .map(|(index, _)| index)?;
         let hole = self.entries[index];
         self.len -= 1;
+        self.bytes -= hole.len;
         self.entries[index] = self.entries[self.len];
         Some(hole)
     }
@@ -209,6 +225,7 @@ impl Holes {
         let mut index = 0;
         while index < self.len {
             if self.entries[index].region == region {
+                self.bytes -= self.entries[index].len;
                 self.len -= 1;
                 self.entries[index] = self.entries[self.len];
             } else {
@@ -284,6 +301,19 @@ fn fill(entry: (u64, u64, u64)) -> f64 {
 #[path = "../verification/keyed_heap_holes.rs"]
 mod hole_proofs;
 
+/// Sizes of the writer's fixed structures, chosen at open. Tests shrink them
+/// so that what overflows them in a large file overflows in a small one.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tuning {
+    pub hole_cache: usize,
+}
+
+impl Tuning {
+    pub(crate) const DEFAULT: Self = Self {
+        hole_cache: HOLE_CACHE,
+    };
+}
+
 pub(crate) struct KeyedHeap {
     pub(crate) meta: u64,
     fixed: Fixed,
@@ -301,9 +331,16 @@ pub(crate) struct KeyedHeap {
     /// not yet in place: space that cannot be retaken before a checkpoint.
     freed_open: u64,
     freed_waiting: u64,
-    /// Bytes freed by the last published generation: the puts after it
-    /// take them first.
-    freed_last: u64,
+    /// Bytes allocated by the open round, against the change budget.
+    round_alloc: u64,
+    /// The region the next walk for holes starts at.
+    walk_cursor: u64,
+    /// Set while compaction moves chunks: its allocations never reclaim.
+    compacting: bool,
+    /// A walk found nothing to take this round, or the round compacted:
+    /// past that it grows, by its budget at most.
+    walked_dry: bool,
+    compacted_this_round: bool,
     pub(crate) stats: HeapStats,
 }
 
@@ -314,23 +351,31 @@ impl KeyedHeap {
         store: &mut dyn TileStore,
         ring_len: u64,
         ratio_permille: u16,
+        budget: u64,
         seed: [u64; 2],
+        tuning: Tuning,
     ) -> Result<Self> {
         if !(10..=50).contains(&ratio_permille) {
             return Err(Error::InvalidFormatSpec(
                 "keyed storage free-space ratio must be 1 to 5 %",
             ));
         }
+        if !(MIN_BUDGET..=MAX_BUDGET).contains(&budget) {
+            return Err(Error::InvalidFormatSpec(
+                "keyed storage change budget must be 1 MiB to 1 TiB",
+            ));
+        }
         let mut fixed = Fixed {
             ratio_permille,
             seed,
             ring: (0, 0),
+            budget,
         };
         let meta = store.append_zeroed(RecordKind::KeyedMeta, &fixed.encode(), META_LEN)?;
         let ring = RingStore::create(store, ring_len, meta + META_OVERFLOW_HEAD_AT)?;
         fixed.ring = (ring.ring.base, ring.ring.len);
         store.write_at(meta, &fixed.encode())?;
-        let mut heap = Self::with_parts(meta, fixed, ring, State::default())?;
+        let mut heap = Self::with_parts(meta, fixed, ring, State::default(), tuning)?;
         let root = heap.new_dir_page(store)?;
         let bucket = heap.alloc_page(store)?;
         let page = heap.pages.page_new(&mut heap.ring, store, bucket)?;
@@ -342,7 +387,7 @@ impl KeyedHeap {
     }
 
     /// Opens keyed storage whose metadata payload is at `meta`.
-    pub(crate) fn open(store: &mut dyn TileStore, meta: u64) -> Result<Self> {
+    pub(crate) fn open(store: &mut dyn TileStore, meta: u64, tuning: Tuning) -> Result<Self> {
         let mut bytes = [0u8; crate::width::small(META_FIXED_LEN)];
         store.read_at(meta, &mut bytes)?;
         let fixed = Fixed::decode(&bytes)?;
@@ -350,7 +395,7 @@ impl KeyedHeap {
         let mut raw = [0u8; State::FIELDS * 8];
         ring.read(store, meta + META_STATE_AT, &mut raw)?;
         let state = State::decode(&raw)?;
-        let mut heap = Self::with_parts(meta, fixed, ring, state)?;
+        let mut heap = Self::with_parts(meta, fixed, ring, state, tuning)?;
         heap.staged = state;
         if state.cur != 0 {
             heap.cur_len = heap.region(store, state.cur)?.len;
@@ -358,7 +403,13 @@ impl KeyedHeap {
         Ok(heap)
     }
 
-    fn with_parts(meta: u64, fixed: Fixed, ring: RingStore, state: State) -> Result<Self> {
+    fn with_parts(
+        meta: u64,
+        fixed: Fixed,
+        ring: RingStore,
+        state: State,
+        tuning: Tuning,
+    ) -> Result<Self> {
         Ok(Self {
             meta,
             fixed,
@@ -366,13 +417,17 @@ impl KeyedHeap {
             state,
             staged: State::default(),
             cur_len: 0,
-            holes: Holes::new()?,
+            holes: Holes::with_capacity(tuning.hole_cache)?,
             sparse: Sparse::new(),
             pages: Pages::new()?,
             regions: DirtyRegions::new(),
             freed_open: 0,
             freed_waiting: 0,
-            freed_last: 0,
+            round_alloc: 0,
+            walk_cursor: 0,
+            compacting: false,
+            walked_dry: false,
+            compacted_this_round: false,
             stats: HeapStats::default(),
         })
     }
@@ -388,12 +443,77 @@ impl KeyedHeap {
         (self.state.live / 1000 * u64::from(self.fixed.ratio_permille)).max(REGION_BYTES)
     }
 
-    /// Holes apart from those the last two generations freed: those are
-    /// what the next puts take (after a checkpoint), not fragmentation a
-    /// move should fix.
-    pub(crate) fn settled_holes(&self) -> u64 {
-        self.holes()
-            .saturating_sub(self.freed_open + self.freed_last)
+    /// Walks every region and checks that the chunks slots point at add up
+    /// to each region's live bytes and to the state's, and that the regions
+    /// add up to the heap.
+    #[cfg(test)]
+    pub(crate) fn check_consistency(
+        &self,
+        store: &dyn TileSource,
+    ) -> std::result::Result<(), String> {
+        let mut at_region = self.state.regions;
+        let (mut live, mut heap, mut free) = (0u64, 0u64, 0u64);
+        while at_region != 0 {
+            let header = self.region(store, at_region).map_err(|e| format!("{e}"))?;
+            heap += header.len;
+            let is_free = header.next_free != 0 || at_region == self.state.free_regions;
+            if is_free {
+                free += header.len;
+            } else {
+                let end = if at_region == self.state.cur {
+                    at_region + REGION_HEADER + self.state.cur_used
+                } else {
+                    at_region + REGION_HEADER + header.len
+                };
+                let mut at = at_region + REGION_HEADER;
+                let mut region_live = 0u64;
+                while at < end {
+                    let chunk = self.chunk(store, at).map_err(|e| format!("{e}"))?;
+                    let len = chunk.len();
+                    if len < CHUNK_HEADER || len > end - at {
+                        return Err(format!("region {at_region}: bad chunk at {at} len {len}"));
+                    }
+                    if chunk.block_id != FREE_BLOCK
+                        && self
+                            .slot_pointing_at(store, &chunk, at_region, at)
+                            .map_err(|e| format!("{e}"))?
+                            .is_some()
+                    {
+                        region_live += len;
+                    }
+                    at += len;
+                }
+                if region_live != header.live {
+                    return Err(format!(
+                        "region {at_region}: chunks live {region_live}, header {}",
+                        header.live
+                    ));
+                }
+                live += region_live;
+            }
+            at_region = header.next_all;
+        }
+        if live != self.state.live || heap != self.state.heap || free != self.state.free {
+            return Err(format!(
+                "totals: live {live}/{} heap {heap}/{} free {free}/{}",
+                self.state.live, self.state.heap, self.state.free
+            ));
+        }
+        Ok(())
+    }
+
+    /// Heap bytes that hold no live record.
+    pub(crate) const fn idle(&self) -> u64 {
+        self.state.heap.saturating_sub(self.state.live)
+    }
+
+    /// What [`Self::idle`] may reach at any point: the ratio's allowance,
+    /// two rounds of the change budget, and whole regions: the one being
+    /// filled, the live bytes one compaction moves and the regions it
+    /// empties (until they are in place), and one of rounding.
+    #[cfg(test)]
+    pub(crate) fn idle_bound(&self) -> u64 {
+        self.allowance() + 2 * self.fixed.budget + (2 + 2 * COMPACT_REGIONS as u64) * REGION_BYTES
     }
 
     pub(crate) const fn holes(&self) -> u64 {
@@ -430,8 +550,11 @@ impl KeyedHeap {
             self.staged = self.state;
         }
         let generation = self.ring.publish(store)?;
+        self.round_alloc = 0;
+        self.walked_dry = false;
+        self.compacted_this_round = false;
         self.freed_waiting += self.freed_open;
-        self.freed_last = std::mem::take(&mut self.freed_open);
+        self.freed_open = 0;
         Ok(generation)
     }
 
@@ -502,9 +625,15 @@ impl KeyedHeap {
             crc: 0,
         };
         let len = heap_chunk_len(key.len() as u64, payload.len() as u64);
+        // A round allocates at most the change budget: past it, the round
+        // so far is published and put in place, and its freed space reused.
+        if self.round_alloc > 0 && self.round_alloc + len > self.fixed.budget {
+            self.end_round(store)?;
+        }
         // Space first: taking it may compact, which moves chunks, the old
         // value of this key among them.
         let (region, at) = self.alloc(store, len, 0)?;
+        self.round_alloc += len;
         let found = self.find(store, block_id, key)?;
         match found {
             // A new value goes to new space, never over the old one: space
@@ -569,10 +698,14 @@ impl KeyedHeap {
         crc.update(key);
         crc.update(payload);
         header.crc = crc.finalize();
-        // Each unit goes straight to the file when nothing staged covers it,
-        // else through the ring.
+        // The header tiles the region, so it changes only with the
+        // publication: a generation that is dropped, or a crash before it is
+        // published, must find the region tiled as it was. The key and the
+        // payload lie inside space the published tiling gives to one dead
+        // chunk, so they go straight to the file when nothing staged covers
+        // them.
+        self.ring.stage(store, at, &header.encode())?;
         for (unit_at, bytes) in [
-            (at, &header.encode()[..]),
             (at + CHUNK_HEADER, key),
             (at + CHUNK_HEADER + key.len() as u64, payload),
         ] {
@@ -592,15 +725,18 @@ impl KeyedHeap {
     /// The chunk there keeps its header: no slot points at it any more,
     /// which is what a walk of the region checks.
     fn release(&mut self, store: &mut dyn TileStore, region: u64, at: u64, len: u64) -> Result<()> {
-        self.sub_live(store, region, len)?;
         self.freed_open += len;
-        let generation = self.ring.published() + 1;
-        self.holes.add(Hole {
-            region,
-            at,
-            len,
-            generation,
-        });
+        // A region left empty goes to the free list whole; its holes are
+        // not holes any more.
+        if !self.sub_live(store, region, len)? {
+            let generation = self.ring.published() + 1;
+            self.holes.add(Hole {
+                region,
+                at,
+                len,
+                generation,
+            });
+        }
         Ok(())
     }
 
@@ -621,7 +757,9 @@ impl KeyedHeap {
         Ok(())
     }
 
-    fn sub_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<()> {
+    /// Takes `len` live bytes from `region`; `true` when that left it empty
+    /// and it went to the free list.
+    fn sub_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<bool> {
         let mut header = self.region(store, region)?;
         header.live = header
             .live
@@ -634,38 +772,110 @@ impl KeyedHeap {
             .ok_or(corrupt("keyed heap accounting"))?;
         self.set_region(store, region, header)?;
         if region != self.state.cur {
+            if header.live == 0 {
+                // Its last record is gone: the whole region is free, found
+                // on the free list rather than through holes.
+                self.free_region(store, region, header)?;
+                return Ok(true);
+            }
             self.sparse.note(region, header.live, header.len);
         }
-        Ok(())
+        Ok(false)
     }
 
     // ---- space ----
 
     /// Finds `len` bytes for a chunk outside region `avoid`: the smallest
     /// cached hole that holds it, the current region's tail, a free region
-    /// or a new one. Returns `(region, offset)`.
+    /// or a new one. Before the file grows past the idle space the ratio
+    /// allows, freed space is retaken: published generations are put in
+    /// place, holes the cache does not hold are found on disk, and holes too
+    /// small to take are compacted into free regions. Returns
+    /// `(region, offset)`.
     fn alloc(&mut self, store: &mut dyn TileStore, len: u64, avoid: u64) -> Result<(u64, u64)> {
         if let Some(found) = self.reuse(store, len, avoid)? {
             return Ok(found);
         }
-        // Space freed by generations not yet in place may not be retaken
-        // (see the module notes). Once more of it waits than half the
-        // free-space allowance, put those generations in place and look
-        // again rather than grow the file; below that, growing is cheaper
-        // than a checkpoint (two barriers) for every few records.
-        if self.ring.checkpointed() == self.ring.published() {
+        if !self.compacting
+            && self.idle() + len > self.allowance() + REGION_BYTES
+            && let Some(found) = self.reclaim(store, len, avoid)?
+        {
+            return Ok(found);
+        }
+        self.grow(store, len, avoid)
+    }
+
+    /// Retakes freed space for `len` bytes, in increasing cost.
+    fn reclaim(
+        &mut self,
+        store: &mut dyn TileStore,
+        len: u64,
+        avoid: u64,
+    ) -> Result<Option<(u64, u64)>> {
+        // The ring may have put everything published in place by itself.
+        if self.ring.published() == self.ring.checkpointed() {
             self.freed_waiting = 0;
         }
-        if self.ring.published() > self.ring.checkpointed()
-            && (self.state.free >= len || self.freed_waiting > self.allowance() / 2)
-        {
-            self.ring.checkpoint(store, u64::MAX)?;
-            self.freed_waiting = 0;
-            self.stats.checkpoints += 1;
+        // Space freed by published generations waits for a checkpoint.
+        if self.ring.published() > self.ring.checkpointed() {
+            self.put_in_place(store)?;
             if let Some(found) = self.reuse(store, len, avoid)? {
-                return Ok(found);
+                return Ok(Some(found));
             }
         }
+        // Holes the cache does not hold, found on disk: in regions whose
+        // newest freeing generation is in place, every dead chunk is
+        // reusable.
+        let unheld = self
+            .holes()
+            .saturating_sub(self.holes.bytes + self.freed_open + self.freed_waiting);
+        if unheld >= len && !self.walked_dry {
+            if !self.walk(store)? {
+                // Every region a walk visited freed bytes since the last
+                // checkpoint: the next round walks again.
+                self.walked_dry = true;
+            }
+            if let Some(found) = self.reuse(store, len, avoid)? {
+                return Ok(Some(found));
+            }
+        }
+        // Holes too small or scattered to take: empty the sparsest regions.
+        // They are taken once the round is in place.
+        let settled = self
+            .holes()
+            .saturating_sub(self.freed_open + self.freed_waiting);
+        if settled > self.allowance() && !self.compacted_this_round {
+            self.compacted_this_round = true;
+            self.compact(store, settled - self.allowance())?;
+            if let Some(found) = self.reuse(store, len, avoid)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Publishes the open round and puts it in place: what it freed becomes
+    /// reusable.
+    fn end_round(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.is_dirty() {
+            self.publish(store)?;
+            self.stats.rounds += 1;
+        }
+        self.put_in_place(store)
+    }
+
+    fn put_in_place(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.ring.published() > self.ring.checkpointed() {
+            self.ring.checkpoint(store, u64::MAX)?;
+            self.stats.checkpoints += 1;
+        }
+        self.freed_waiting = 0;
+        Ok(())
+    }
+
+    /// New space: the current region's successor (a free region or a new
+    /// one), or a region of its own for a record larger than half a region.
+    fn grow(&mut self, store: &mut dyn TileStore, len: u64, avoid: u64) -> Result<(u64, u64)> {
         if len > REGION_BYTES / 2 {
             let region = self.new_region(store, len)?;
             return Ok((region, region + REGION_HEADER));
@@ -680,6 +890,90 @@ impl KeyedHeap {
         self.state.cur_used = len;
         self.sparse.forget(region);
         Ok((region, region + REGION_HEADER))
+    }
+
+    /// Refills the hole cache from the file: walks up to [`WALK_REGIONS`]
+    /// regions from the cursor, taking the dead chunks of those whose newest
+    /// freeing generation is in place, until the cache is full. Returns
+    /// whether it took any.
+    fn walk(&mut self, store: &mut dyn TileStore) -> Result<bool> {
+        self.stats.walks += 1;
+        let first = self.state.regions;
+        if first == 0 {
+            return Ok(false);
+        }
+        let mut region = if self.walk_cursor == 0 {
+            first
+        } else {
+            self.walk_cursor
+        };
+        let held = self.holes.len;
+        // The published state must be the one in place, so that a chunk no
+        // slot points at there was dead in every generation a reader or a
+        // recovery may still use.
+        self.put_in_place(store)?;
+        let mut in_place = [0u8; State::FIELDS * 8];
+        store.read_at(self.meta + META_STATE_AT, &mut in_place)?;
+        let in_place = State::decode(&in_place)?;
+        for _ in 0..WALK_REGIONS {
+            let header = self.region(store, region)?;
+            if region != self.state.cur
+                && header.next_free == 0
+                && region != self.state.free_regions
+                && header.live < header.len
+            {
+                self.walk_region(store, region, header.len, &in_place)?;
+            }
+            region = if header.next_all == 0 {
+                first
+            } else {
+                header.next_all
+            };
+            if self.holes.is_full() {
+                break;
+            }
+        }
+        self.walk_cursor = region;
+        Ok(self.holes.len > held)
+    }
+
+    /// Takes into the cache every chunk of `region` that no slot points at,
+    /// as this writer sees it or as the published state `in_place` (the
+    /// file without the ring) has it.
+    fn walk_region(
+        &mut self,
+        store: &mut dyn TileStore,
+        region: u64,
+        len: u64,
+        in_place: &State,
+    ) -> Result<()> {
+        // Holes the cache held here are found again.
+        self.holes.forget_region(region);
+        let end = region + REGION_HEADER + len;
+        let mut at = region + REGION_HEADER;
+        while at < end {
+            let chunk = self.chunk(store, at)?;
+            let chunk_len = chunk.len();
+            if chunk_len < CHUNK_HEADER || chunk_len > end - at {
+                return Err(corrupt("keyed heap chunk length"));
+            }
+            // Each dead chunk is a hole of its own: adjacent ones are not
+            // merged, since a value written straight into a merged hole
+            // would overwrite the headers that tile it as published.
+            if self.dead_now_and_in_place(store, &chunk, region, at, in_place)? {
+                self.holes.add(Hole {
+                    region,
+                    at,
+                    len: chunk_len,
+                    generation: self.ring.checkpointed(),
+                });
+            }
+            at += chunk_len;
+            if self.holes.is_full() {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Space that exists already: a cached hole, the current region's tail,
@@ -810,32 +1104,38 @@ impl KeyedHeap {
 
     // ---- compaction ----
 
-    /// Empties the sparsest regions when the holes the next puts will not
-    /// take exceed the allowance.
+    /// Empties the sparsest regions when the holes not freed since the last
+    /// checkpoint pass the allowance: those too small or scattered to take.
     fn compact_if_needed(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let excess = self.settled_holes().saturating_sub(self.allowance());
-        if excess == 0 {
-            return Ok(());
+        let settled = self
+            .holes()
+            .saturating_sub(self.freed_open + self.freed_waiting);
+        if settled > self.allowance() {
+            self.compact(store, settled - self.allowance())?;
         }
-        self.compact(store, excess)
+        Ok(())
     }
 
     /// Empties the sparsest regions until about `excess` bytes of holes
     /// are in free regions, four at most per call.
     fn compact(&mut self, store: &mut dyn TileStore, excess: u64) -> Result<()> {
+        self.compacting = true;
+        let result = self.compact_regions(store, excess);
+        self.compacting = false;
+        result
+    }
+
+    fn compact_regions(&mut self, store: &mut dyn TileStore, excess: u64) -> Result<()> {
         let Some(mut region) = self.sparsest(store)? else {
             return Ok(());
         };
         // Put what is published in place first: the holes and free regions
         // earlier generations left become reusable, so the moves below fill
         // them instead of growing the file.
-        if self.ring.published() > self.ring.checkpointed() {
-            self.ring.checkpoint(store, u64::MAX)?;
-            self.freed_waiting = 0;
-        }
+        self.put_in_place(store)?;
         // Each pass empties one region; a few bound one call's work.
         let mut reclaimed = 0u64;
-        for _ in 0..4 {
+        for _ in 0..COMPACT_REGIONS {
             let header = self.region(store, region)?;
             self.empty_region(store, region)?;
             reclaimed += header.len - header.live;
@@ -909,6 +1209,18 @@ impl KeyedHeap {
             .checked_sub(header.live)
             .ok_or(corrupt("keyed heap accounting"))?;
         header.live = 0;
+        self.free_region(store, region, header)?;
+        self.stats.regions_compacted += 1;
+        Ok(())
+    }
+
+    /// Puts the empty region at `region` at the end of the free list.
+    fn free_region(
+        &mut self,
+        store: &mut dyn TileStore,
+        region: u64,
+        mut header: Region,
+    ) -> Result<()> {
         header.freed = self.ring.published() + 1;
         // Free regions queue oldest first, so the one taken next is the one
         // most likely in place already. A free region always has a nonzero
@@ -927,13 +1239,50 @@ impl KeyedHeap {
         self.state.free += header.len;
         self.holes.forget_region(region);
         self.sparse.forget(region);
-        self.stats.regions_compacted += 1;
         Ok(())
+    }
+
+    /// Whether the chunk at `at` is dead as this writer sees it and was
+    /// dead in the published state, read from the file without the ring.
+    /// Its header and key there may differ from what the writer sees.
+    fn dead_now_and_in_place(
+        &self,
+        store: &dyn TileSource,
+        chunk: &Chunk,
+        region: u64,
+        at: u64,
+        in_place: &State,
+    ) -> Result<bool> {
+        if chunk.block_id != FREE_BLOCK
+            && self.slot_pointing_at(store, chunk, region, at)?.is_some()
+        {
+            return Ok(false);
+        }
+        let old = lookup::chunk(&mut InPlaceView, store, at)?;
+        if old.block_id == FREE_BLOCK {
+            return Ok(true);
+        }
+        Ok(self
+            .slot_in(&mut InPlaceView, in_place, store, &old, region, at)?
+            .is_none())
     }
 
     /// The slot that makes the chunk at `at` live: `(page, index, slot)`.
     fn slot_pointing_at(
         &self,
+        store: &dyn TileSource,
+        chunk: &Chunk,
+        region: u64,
+        at: u64,
+    ) -> Result<Option<(u64, usize, Slot)>> {
+        self.slot_in(&mut self.view(), &self.state, store, chunk, region, at)
+    }
+
+    /// [`Self::slot_pointing_at`] through `view` with table `state`.
+    fn slot_in(
+        &self,
+        view: &mut dyn View,
+        state: &State,
         store: &dyn TileSource,
         chunk: &Chunk,
         region: u64,
@@ -946,7 +1295,7 @@ impl KeyedHeap {
         let key_len = u64::from(chunk.key_len);
         while done < key_len {
             let n = crate::width::bounded(key_len - done, STEP);
-            self.read(store, at + CHUNK_HEADER + done, &mut step[..n])?;
+            view.read(store, at + CHUNK_HEADER + done, &mut step[..n])?;
             hasher.write(&step[..n]);
             done += n as u64;
         }
@@ -956,10 +1305,10 @@ impl KeyedHeap {
         )]
         let route = hasher.finish() as u32;
         let offset = offset_in(region, at)?;
-        let mut page_at = self.bucket(store, self.state.bucket_of(route))?;
+        let mut page_at = lookup::bucket(view, store, state, state.bucket_of(route))?;
         let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
         while page_at != 0 {
-            self.read(store, page_at, &mut page)?;
+            view.read(store, page_at, &mut page)?;
             let (count, next) = page_header(&page)?;
             for index in 0..count {
                 let slot = slot_at(&page, index);

@@ -445,7 +445,8 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   | 6..8 | free-space ratio in thousandths of live bytes, 10 to 50 |
   | 8..24 | the SipHash-1-3 key: two `u64`, random per file |
   | 24..40 | ring payload offset and length |
-  | 40..56 | zero |
+  | 40..48 | change budget: bytes one round may allocate, 1 MiB to 1 TiB |
+  | 48..56 | zero |
   | 56..60 | CRC32 of bytes 0..56 |
   | 60..64 | zero |
   | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
@@ -491,8 +492,10 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   freed by a generation in place (at or below the ring's `checkpointed`),
   the current region's tail, or a new region. Its chunk goes straight to the
   file when no range staged since the last checkpoint (in the ring or an
-  index) covers it, else through the ring; the slot that points at it always
-  goes through the ring, in its bucket page. A publication makes such chunks
+  index) covers it, else through the ring; its header and the slot that
+  points at it always go through the ring (headers tile the region, and a
+  generation that is dropped or lost in a crash must find the region tiled
+  as it was published). A publication makes such chunks
   durable before its commit frame, as it does appended records. A reader
   whose snapshot is older than that checkpoint has expired (the checkpoint
   raised the mark past it), so no reader sees these bytes as its own.
@@ -500,13 +503,19 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   a chunk's header, key and payload, a region's header. Bucket pages and
   region headers are staged once per publication from buffers allocated at
   open.
-- Space freed by a generation is retaken after the next checkpoint. The
-  writer checkpoints once more such space waits than half the allowance (the
-  declared ratio of live bytes, at least one region), rather than grow the
-  file.
-- When holes other than those the last two generations freed exceed the
-  allowance, the writer empties the sparsest regions into the free list,
-  moving their live chunks.
+- A round allocates at most the change budget: past it the writer publishes
+  the round and puts it in place before the next allocation, so a `sync`
+  that changes more is several publications, each atomic.
+- Space freed by a generation is retaken after the next checkpoint. A region
+  left without live bytes goes on the free list at once. Before the file
+  grows past the allowance (the declared ratio of live bytes, at least one
+  region), the writer checkpoints what is published, then refills its hole
+  cache by walking regions: a chunk is taken when no slot points at it as
+  the writer sees it nor in the file without the ring (the published state,
+  once everything published is in place).
+- When holes not freed since the last checkpoint exceed the allowance, the
+  writer empties the sparsest regions into the free list, moving their live
+  chunks.
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 

@@ -88,6 +88,12 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   to the file are made durable before the commit frame, so a `sync` that
   wrote any costs two barriers instead of one, and every few publications a
   checkpoint adds two more.
+- **Fragmentation at the extremes.** With values of every size and more
+  holes than the writer's hole cache holds, holes that fit are not always
+  found and the idle space can grow past the bound (a test reproduces it
+  with a cache of four holes and is ignored). Complete, cache-independent
+  knowledge of free space is being designed
+  ([design](design/bounded-keyed-storage.md#bounds-at-the-extremes)).
 - **The hole cache is in memory.** A reopened writer starts with an empty
   cache; holes it does not know are reclaimed by compaction when they pass
   the ratio, not reused at once.

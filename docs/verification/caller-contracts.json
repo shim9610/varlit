@@ -2723,27 +2723,27 @@
       "callers": {
         "default": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:fa0644460f555310]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
             "target": "heap_chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:fa0644460f555310]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:4f2124012acf7ff9]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:85775acadec0594e]",
             "target": "Holes::take_fitting",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_pointing_at(_1: &KeyedHeap, _2: &dyn TileSource, _3: &Chunk, _4: u64, _5: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cbb5e862447270e6]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_in(_1: &KeyedHeap, _2: &mut dyn View, _3: &keyed_heap::State, _4: &dyn TileSource, _5: &Chunk, _6: u64, _7: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cf87371c8e9fe8bf]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:70cc5bf85942a9ef]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:af3b9edd1ec85321]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
@@ -2765,27 +2765,27 @@
         ],
         "all": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:fa0644460f555310]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
             "target": "heap_chunk_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:fa0644460f555310]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:9f00eb48e8eb59e1]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:4f2124012acf7ff9]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::reuse(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u64, _4: u64) -> std::result::Result<Option<(u64, u64)>, error::Error> [body:85775acadec0594e]",
             "target": "Holes::take_fitting",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_pointing_at(_1: &KeyedHeap, _2: &dyn TileSource, _3: &Chunk, _4: u64, _5: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cbb5e862447270e6]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::slot_in(_1: &KeyedHeap, _2: &mut dyn View, _3: &keyed_heap::State, _4: &dyn TileSource, _5: &Chunk, _6: u64, _7: u64) -> std::result::Result<Option<(u64, usize, Slot)>, error::Error> [body:cf87371c8e9fe8bf]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:70cc5bf85942a9ef]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::split(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:af3b9edd1ec85321]",
             "target": "keyed_heap::State::after_split",
             "result": "model/caller-specific"
           },
