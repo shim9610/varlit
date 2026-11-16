@@ -573,7 +573,8 @@ fn external_entries(
             resource: "matrix ring scan",
             requested: u64::from(count) * 24,
         })?;
-    for entry in table.chunks_exact(crate::width::small(EXTERNAL_ENTRY)) {
+    const ENTRY: usize = crate::width::small(EXTERNAL_ENTRY);
+    for entry in table.as_chunks::<ENTRY>().0 {
         let target = u64::from_le_bytes(entry[0..8].try_into().expect("eight"));
         let len = u32::from_le_bytes(entry[8..12].try_into().expect("four"));
         let offset = u64::from_le_bytes(entry[16..24].try_into().expect("eight"));
