@@ -60,7 +60,7 @@ integer keys and fixed-size values chooses a matrix itself, as it does today.
 | --- | --- | --- | --- |
 | integers, dense enough to tile | fixed size | a matrix | arithmetic: key to tile and slot |
 | increasing (time, sequence, position id) | any | sorted runs in the log | binary search over anchor key ranges |
-| anything else (strings, sparse or random ids) | any | in-place records | section filters and a reader cache |
+| anything else (strings, sparse or random ids) | any | record heap | slot buckets by seeded hash |
 
 ### Integer keys and fixed-size values: matrices
 
@@ -84,33 +84,37 @@ it covers.
 An update of a key already written is an in-place update (below), so runs
 never hold two versions of a key.
 
-### Other keys: in-place records with section filters
+### Other keys: a record heap and slot buckets
 
-Keyed records of this kind live inside internal region records
-(`RECORD_FLAG_IN_PLACE`, as matrix tiles live inside overflow regions):
-rewritten where they are, outside the sequence order and sync-marker chains
-of the log, checked by their own CRC32s, changed atomically through the ring.
-The log itself stays append-only: framed records are never written into a
-hole, so the footer links of the log keep pointing backwards.
+Keyed records of this kind live in a record heap: internal region records
+(`RECORD_FLAG_IN_PLACE`, as matrix tiles live inside overflow regions) filled
+densely with records, each checked by its own CRC32 and changed atomically
+through the ring. The log itself stays append-only: framed records are never
+written into a hole, so the footer links of the log keep pointing backwards.
 
 Finding them:
 
-- **Section filters.** Each anchor section that holds keyed records carries a
-  Bloom filter of their keys, a fixed number of bits per key (to be chosen;
-  10 bits gives about 1 % false positives). Hashes are keyed with a random
-  per-file seed so keys cannot be chosen to defeat the filters.
-- **Filter hierarchy.** Every 32 sections have a filter of their keys, every
-  32 of those another, so a lookup descends only through filters that may
-  hold the key: four levels cover a million sections. Each level holds each
-  key once, so the total is levels x bits per key, proportional to the data.
-- **Reader cache.** Each reader has a fixed-size cache of recent key
-  locations (recency and frequency, as ARC does) and of the top filter levels.
-  A hit reads the record directly; a miss reads a few filters and one section.
-- **Newest first.** Sections are searched from the newest, so the first match
-  is the current value.
+- **Slot buckets.** A key's seeded hash picks a bucket, a 4 KiB page of
+  slots. A slot is the key's fingerprint and its record's offset (12 bytes).
+  Buckets grow by linear hashing: when one is full, the bucket at the split
+  pointer is split in two, so the table grows one bucket at a time and never
+  rehashes as a whole. The hash is keyed with a random per-file seed so keys
+  cannot be chosen to fill one bucket.
+- **Bucket directory.** Bucket numbers map to bucket pages through a small
+  radix tree of pages, as matrix tiles map to their pages.
+- **Lookup.** Hash the key, read the bucket page (the upper directory levels
+  are in a fixed reader cache), read the record whose slot fingerprint
+  matches, and compare its key. Usually two reads; never a wrong answer.
+- **Update.** A value that fits where the old one is is overwritten there.
+  Otherwise it goes into a hole or at the end of the heap, the slot's offset
+  changes, and the old place becomes a hole.
+- **Delete.** The slot is removed and the record's place becomes a hole. No
+  tombstone stays.
 
-A lookup is always exact: a false positive costs one more section read, never
-a wrong answer.
+Buckets are not full on average (a split leaves two half-full buckets), but
+that slack is in 12-byte slots, not in records: about 16 bytes per key in
+all. This index cost is reported separately and is not part of the
+free-space ratio, which governs holes in the record heap.
 
 ## Space reuse
 
@@ -123,8 +127,8 @@ Freed space is reused, not left behind.
   is left is smaller than the smallest fixed block and stays on the free list
   of its region. Holes are inside region payloads, so no filler record is
   needed.
-- **Only order-free records go into holes:** keyed in-place records, matrix
-  tiles and directory pages, index and filter pages. Log blocks are always
+- **Only order-free records go into holes:** keyed heap records, matrix
+  tiles and directory pages, bucket and index pages. Log blocks are always
   appended.
 - **Variable-length records** go into a hole that fits when there is one; the
   remainder of the hole returns to the free list.
@@ -140,7 +144,7 @@ Freed space is reused, not left behind.
 
 Writing into a hole is safe across a crash for the same reason carving matrix
 tiles is: a record is written and synced before anything that locates it (a
-filter, a run range, a matrix directory, the free list) is published, so a
+slot, a run range, a matrix directory, the free list) is published, so a
 crash before publication leaves the hole a hole.
 
 ## Readers
@@ -154,8 +158,8 @@ occupied is reused only after its generation is reclaimed.
 
 1. Separate the write-ahead ring and the region space from the matrix, so a
    keyed format owns them too.
-2. In-place keyed records: update and delete in place, free list, ratio
-   compaction, section filters and the reader cache, a per-key `get`.
+2. Keyed records in the record heap: update and delete in place, slot
+   buckets, free list, ratio compaction, a per-key `get`.
 3. Sorted runs for `key_order = increasing`.
 4. Remove keyed history (`keyed_offset_chain`, `keyed_chain`, tombstone
    accumulation, `merge_keyed_files` and `compact_keyed_files`) in one change,
@@ -163,9 +167,8 @@ occupied is reused only after its generation is reclaimed.
 
 ## Open questions
 
-1. Bits per key in section filters, and the filter fan-out, against the 1 to
-   5 % budget. The first implementation uses 10 bits per key and a fan-out of
-   32.
+1. Settled: slot buckets instead of section filters (filters need a newest-
+   first search over many versions, and in-place records keep one).
 2. Settled: the free-space ratio is declared per format, 5 % by default.
 3. Whether the stream handles (`.vks`, constant-cost open of unkeyed logs)
    stay: anchors may already give what they give. They stay for now: stream
