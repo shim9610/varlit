@@ -2,12 +2,12 @@
 
 This standalone diagnostic crate compares Varlit, SQLite and HDF5 using matched
 logical work. It is outside the Cargo workspace; native SQLite and HDF5 are not
-requirements for library users. Earlier cloud measurements and their generated
-reports were withdrawn. The current comparison, with its machine, method and
-limits, is [cross-format-20261116](../../docs/performance/cross-format-20261116.md);
-it asks whether Varlit can reach comparable performance, and its SQLite and
-HDF5 code reflects the patterns the author knows, not those libraries' limits.
-This directory holds the harness, analysis tools and a report template.
+requirements for library users. Measurement reports are not kept in the
+repository. A comparison asks whether Varlit can reach performance comparable
+with similar formats, not whether it is better; its SQLite and HDF5 code
+follows the patterns the author knows to be efficient and does not mark those
+libraries' limits, and a report states the machine it ran on. This directory
+holds the harness, analysis tools and a report template.
 
 ## Scenarios
 
