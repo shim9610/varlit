@@ -64,6 +64,9 @@ pub(crate) enum RecordKind {
     Ring,
     Directory,
     Tile,
+    /// The bytes and table of an external ring frame: ranges of a
+    /// publication larger than the ring.
+    Overflow,
 }
 
 impl RecordKind {
@@ -74,6 +77,7 @@ impl RecordKind {
             Self::Ring => 2,
             Self::Directory => 3,
             Self::Tile => 4,
+            Self::Overflow => 5,
         }
     }
 }

@@ -62,6 +62,13 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
   through caller-owned scratch. The scratch never grows; overlapping chunks
   are checked completely, and callback output is provisional until success.
+- A matrix publication is no longer limited by the write-ahead ring. One that
+  would take more than half the ring streams the rest of its changes into
+  overflow records and names them with small ring frames; it commits with the
+  same single barrier and is still all-or-nothing for readers and after a
+  crash. Previously a sync that overwrote more than the ring held failed with
+  `LimitExceeded`. Overflow records are reused by the same writer once no
+  reader can need them.
 - Refuse data files that are not regular files. Opening a FIFO, socket,
   device or directory by path returns an `Io` error of kind `InvalidInput`
   instead of reading it, and on Unix the open no longer waits on a FIFO with

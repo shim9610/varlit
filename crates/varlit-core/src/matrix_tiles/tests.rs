@@ -738,3 +738,224 @@ fn directory_offsets_that_are_not_file_offsets_are_refused() {
     store.0.borrow_mut().bytes[root_at + 8..root_at + 16].copy_from_slice(&u64::MAX.to_le_bytes());
     refused(&store, meta);
 }
+
+/// A block of 1 KiB cells, 64 x 64 of them: one overwrite of every cell is
+/// about 4 MiB, sixty times the smallest ring.
+const WIDE_CELLS: BlockGeom = BlockGeom {
+    block_id: 9,
+    stride: 1024,
+    tile: [4, 8],
+};
+
+fn wide_geometry() -> Geometry {
+    Geometry {
+        dims: [64, 64],
+        growing: false,
+        blocks: vec![WIDE_CELLS],
+        extra_len: 0,
+    }
+}
+
+fn wide_cell(value: u8) -> Vec<u8> {
+    let mut out = vec![value; 1028];
+    let crc = crc32fast::hash(&out[..1024]);
+    out[1024..].copy_from_slice(&crc.to_le_bytes());
+    out
+}
+
+fn wide_keys() -> impl Iterator<Item = MatrixKey> {
+    (0..64).flat_map(|r| (0..64).map(move |c| MatrixKey::new(r, c)))
+}
+
+fn wide_put_all(w: &mut TileWriter, store: &MemStore, value: u8) {
+    for key in wide_keys() {
+        let (coord, index) = WIDE_CELLS.locate(key);
+        let tile = w.tile(&mut store.clone(), 0, coord, true).unwrap().unwrap();
+        w.stage(
+            &mut store.clone(),
+            tile + WIDE_CELLS.slot_at(index),
+            &wide_cell(value),
+        )
+        .unwrap();
+    }
+}
+
+/// The value a reader sees in a wide cell, after checking the cell is whole.
+fn wide_seen(r: &mut TileReader, store: &MemStore, key: MatrixKey) -> crate::Result<Option<u8>> {
+    let (coord, index) = WIDE_CELLS.locate(key);
+    let Some(tile) = r.tile(store, 0, coord)? else {
+        return Ok(None);
+    };
+    let mut bytes = vec![0u8; 1028];
+    r.read(store, tile + WIDE_CELLS.slot_at(index), &mut bytes)?;
+    assert!(
+        bytes[..1024].iter().all(|b| *b == bytes[0]),
+        "{key:?} mixes two publications"
+    );
+    Ok(Some(bytes[0]))
+}
+
+#[test]
+fn a_publication_larger_than_the_ring_streams_through_overflow_and_commits_whole() {
+    let store = MemStore::new();
+    let mut w = TileWriter::create(
+        &mut store.clone(),
+        wide_geometry(),
+        super::wal::MIN_RING,
+        [7; 16],
+    )
+    .unwrap();
+    let meta = w.meta;
+    // The first load appends fresh tiles and never touches the ring.
+    wide_put_all(&mut w, &store, 1);
+    w.publish(&mut store.clone()).unwrap();
+    let mut before = TileReader::open(&store, wide_geometry(), meta).unwrap();
+
+    // Overwriting every cell is sixty rings' worth of bytes in one publication.
+    wide_put_all(&mut w, &store, 2);
+    assert!(
+        w.stats.overflow_appended > 0,
+        "nothing streamed past the ring"
+    );
+    assert_eq!(
+        wide_seen(&mut before, &store, MatrixKey::new(63, 63)).unwrap(),
+        Some(1),
+        "streamed bytes reached a reader before the commit"
+    );
+    w.publish(&mut store.clone()).unwrap();
+    for key in wide_keys() {
+        assert_eq!(
+            wide_seen(&mut before, &store, key).unwrap(),
+            Some(1),
+            "{key:?}"
+        );
+    }
+    before.follow(&store).unwrap();
+    for key in wide_keys() {
+        assert_eq!(
+            wide_seen(&mut before, &store, key).unwrap(),
+            Some(2),
+            "{key:?}"
+        );
+    }
+
+    // A reopened writer and a new reader find the publication.
+    let mut reopened = TileWriter::open(&mut store.clone(), wide_geometry(), meta).unwrap();
+    let mut fresh = TileReader::open(&store, wide_geometry(), meta).unwrap();
+    for key in wide_keys().step_by(97) {
+        assert_eq!(
+            wide_seen(&mut fresh, &store, key).unwrap(),
+            Some(2),
+            "{key:?}"
+        );
+        let (coord, index) = WIDE_CELLS.locate(key);
+        let tile = reopened
+            .tile(&mut store.clone(), 0, coord, false)
+            .unwrap()
+            .unwrap();
+        let mut bytes = vec![0u8; 1028];
+        reopened
+            .read(&store, tile + WIDE_CELLS.slot_at(index), &mut bytes)
+            .unwrap();
+        assert_eq!(bytes[0], 2);
+    }
+}
+
+#[test]
+fn overflow_regions_are_reused_once_no_reader_can_need_them() {
+    let store = MemStore::new();
+    let mut w = TileWriter::create(
+        &mut store.clone(),
+        wide_geometry(),
+        super::wal::MIN_RING,
+        [7; 16],
+    )
+    .unwrap();
+    let meta = w.meta;
+    wide_put_all(&mut w, &store, 1);
+    w.publish(&mut store.clone()).unwrap();
+    wide_put_all(&mut w, &store, 2);
+    w.publish(&mut store.clone()).unwrap();
+    // A reader holding the second generation while the writer moves on.
+    let mut held = TileReader::open(&store, wide_geometry(), meta).unwrap();
+    let appended = w.stats.overflow_appended;
+    let len = store.len();
+    for value in 3..8 {
+        wide_put_all(&mut w, &store, value);
+        w.publish(&mut store.clone()).unwrap();
+    }
+    assert!(w.stats.overflow_reused > 0, "no region was reused");
+    assert!(
+        w.stats.overflow_appended <= appended * 2,
+        "five more large publications kept appending regions: {} after {appended}",
+        w.stats.overflow_appended
+    );
+    let grown = store.len() - len;
+    assert!(
+        grown <= 2 * (len / 2).max(8 << 20),
+        "the file grew {grown} bytes for five rewrites of the same cells"
+    );
+    // The held reader sees its own generation or is told it expired; it
+    // never reads a reused region's newer bytes as its own.
+    for key in wide_keys().step_by(53) {
+        match wide_seen(&mut held, &store, key) {
+            Ok(value) => assert_eq!(value, Some(2), "{key:?}"),
+            Err(Error::MatrixSnapshotExpired { .. }) => {}
+            Err(error) => panic!("{error}"),
+        }
+    }
+    held.follow(&store).unwrap();
+    for key in wide_keys() {
+        assert_eq!(
+            wide_seen(&mut held, &store, key).unwrap(),
+            Some(7),
+            "{key:?}"
+        );
+    }
+}
+
+/// A crash at any point of a publication that streamed through overflow
+/// regions recovers the state before it or the whole publication.
+#[test]
+fn a_crash_inside_a_streamed_publication_recovers_all_or_nothing() {
+    let mut outcomes = [0usize; 2];
+    for failing_sync in 1..=3 {
+        let store = MemStore::new();
+        let mut w = TileWriter::create(
+            &mut store.clone(),
+            wide_geometry(),
+            super::wal::MIN_RING,
+            [7; 16],
+        )
+        .unwrap();
+        let meta = w.meta;
+        wide_put_all(&mut w, &store, 1);
+        w.publish(&mut store.clone()).unwrap();
+        wide_put_all(&mut w, &store, 2);
+        store.fail_sync_in(failing_sync);
+        if w.publish(&mut store.clone()).is_ok() {
+            continue;
+        }
+        let writes = store.writes_since_sync();
+        let step = (writes / 12).max(1);
+        for keep in (0..=writes).step_by(step).chain([writes]) {
+            for torn in [0usize, 3000] {
+                let crashed = store.crashed(keep, torn);
+                TileWriter::open(&mut crashed.clone(), wide_geometry(), meta).unwrap();
+                let mut r = TileReader::open(&crashed, wide_geometry(), meta).unwrap();
+                let values: Vec<_> = wide_keys()
+                    .step_by(31)
+                    .map(|key| wide_seen(&mut r, &crashed, key).unwrap())
+                    .collect();
+                let old = values.iter().all(|v| *v == Some(1));
+                let new = values.iter().all(|v| *v == Some(2));
+                assert!(
+                    old || new,
+                    "sync {failing_sync} keep {keep} torn {torn}: {values:?}"
+                );
+                outcomes[usize::from(new)] += 1;
+            }
+        }
+    }
+    assert!(outcomes[0] > 0 && outcomes[1] > 0, "{outcomes:?}");
+}

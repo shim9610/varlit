@@ -9,8 +9,9 @@ use super::view::{
     Overlay, OverlayEntry, directory_offset, directory_root, find_tile, for_each_tile, lay_over,
 };
 use super::wal::{
-    self, ENTRY_HEADER, FRAME_COMMIT, FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan,
-    MIN_RING, Ring, RingHeader, ScanEvent, frame_header,
+    self, ENTRY_HEADER, EXTERNAL_ENTRY, EXTERNAL_FRAME_LEN, ExternalDescriptor, FRAME_COMMIT,
+    FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan, MIN_RING, Ring, RingHeader,
+    ScanEvent, frame_header,
 };
 use super::{DIR_FANOUT, DIR_LEVEL_BITS, DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
@@ -25,6 +26,20 @@ pub(crate) struct WriterStats {
     pub checkpoints: u64,
     pub frames: u64,
     pub in_place_writes: u64,
+    /// Overflow regions written: reused ones and appended ones.
+    pub overflow_reused: u64,
+    pub overflow_appended: u64,
+}
+
+/// An overflow record this writer appended: where its payload is, how long
+/// it is, and the newest generation whose ranges it holds. Once that
+/// generation is checkpointed and reclaimed no reader can need its bytes, and
+/// the next large publication writes over it instead of growing the file.
+#[derive(Clone, Copy, Debug)]
+struct OverflowRegion {
+    at: u64,
+    len: u64,
+    generation: u64,
 }
 
 pub(crate) struct TileWriter {
@@ -56,6 +71,11 @@ pub(crate) struct TileWriter {
     /// frame it writes may point into, so what the frame `requires`.
     requires: u64,
     tiles: TileCache,
+    /// Ring bytes the open generation's frames take: past half the ring the
+    /// rest of the publication streams into overflow regions.
+    open_ring_bytes: u64,
+    /// Overflow records appended by this writer, reusable once reclaimed.
+    overflow: Vec<OverflowRegion>,
     pub(crate) stats: WriterStats,
 }
 
@@ -131,6 +151,8 @@ impl TileWriter {
             fresh: Vec::new(),
             requires: 0,
             tiles,
+            open_ring_bytes: 0,
+            overflow: Vec::new(),
             stats: WriterStats::default(),
         })
     }
@@ -231,6 +253,7 @@ impl TileWriter {
             self.spilled = false;
         }
         self.cursor = self.header.head;
+        self.open_ring_bytes = 0;
         self.tiles.clear();
         self.fresh.clear();
     }
@@ -399,6 +422,7 @@ impl TileWriter {
         header.head = self.cursor;
         self.write_header(store, header)?;
         self.spilled = false;
+        self.open_ring_bytes = 0;
         // Published now: later changes to them must not reach a reader early.
         self.fresh.clear();
         Ok(generation)
@@ -407,7 +431,27 @@ impl TileWriter {
     /// Writes the staged ranges to the ring as a frame of the open
     /// generation, the commit frame when `commit`.
     fn spill(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<()> {
-        if self.appended {
+        // A publication that would take more than half the ring, or a range
+        // no frame can hold, streams the rest of its ranges outside the ring.
+        let largest = self
+            .pending
+            .iter()
+            .map(|(_, bytes)| bytes.len() as u64)
+            .max();
+        let frame_room =
+            (self.ring.area() / 4).max(FRAME_MIN * 2) - FRAME_HEADER - ENTRY_HEADER - 12;
+        let ring_need =
+            self.pending_bytes + self.pending.len() as u64 * ENTRY_HEADER + FRAME_HEADER;
+        if self.open_ring_bytes + ring_need > self.ring.area() / 2
+            || largest.is_some_and(|len| len > frame_room)
+        {
+            return self.spill_external(store, commit);
+        }
+        // Everything a commit frame points at, appended records and overflow
+        // regions alike, is durable before the commit frame is written. A
+        // frame that is not the commit needs no barrier: if a crash leaves
+        // it without its commit, the generation never happened.
+        if self.appended && commit {
             store.sync()?;
             self.stats.barriers += 1;
             self.appended = false;
@@ -489,6 +533,7 @@ impl TileWriter {
             let at = self.place(store, len)?;
             store.write_at(self.ring.at(at), &frame)?;
             self.stats.frames += 1;
+            self.open_ring_bytes += len;
             for (target, bytes_at, n) in entries.drain(..) {
                 self.overlay.insert(
                     target,
@@ -511,6 +556,161 @@ impl TileWriter {
         self.pending.clear();
         self.pending_bytes = 0;
         Ok(())
+    }
+
+    /// Writes every staged range to an overflow region, the bytes followed
+    /// by a table of them, and one external frame pointing at it: the commit
+    /// frame when `commit`. The ring takes one small frame however much is
+    /// staged, so a publication of any size streams through it.
+    fn spill_external(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<()> {
+        let generation = self.header.published + 1;
+        let refused = |requested: u64| Error::AllocationFailed {
+            resource: "matrix overflow region",
+            requested,
+        };
+        let mut targets: Vec<u64> = Vec::new();
+        targets
+            .try_reserve_exact(self.pending.len())
+            .map_err(|_| refused(self.pending.len() as u64 * 8))?;
+        targets.extend(self.pending.iter().map(|(target, _)| target));
+        targets.sort_unstable();
+        let count = crate::width::field32(targets.len())?;
+        let data_len = self.pending_bytes;
+        let table_len = u64::from(count) * EXTERNAL_ENTRY;
+        let table_len_field = u32::try_from(table_len).map_err(|_| Error::LimitExceeded {
+            resource: "matrix overflow table",
+            actual: table_len,
+            limit: u64::from(u32::MAX),
+        })?;
+        let total = data_len + table_len;
+        let mut region: Vec<u8> = Vec::new();
+        region
+            .try_reserve_exact(crate::width::index(total)?)
+            .map_err(|_| refused(total))?;
+        let mut table: Vec<u8> = Vec::new();
+        table
+            .try_reserve_exact(crate::width::index(table_len)?)
+            .map_err(|_| refused(table_len))?;
+        let mut entries: Vec<(u64, u64, u32)> = Vec::new();
+        entries
+            .try_reserve_exact(targets.len())
+            .map_err(|_| refused(targets.len() as u64 * 24))?;
+        for target in targets {
+            let bytes = self.pending.get(target).expect("listed above");
+            let len = crate::width::field32(bytes.len())?;
+            let offset = region.len() as u64;
+            table.extend_from_slice(&wal::encode_external_entry(target, len, offset));
+            region.extend_from_slice(bytes);
+            entries.push((target, offset, len));
+        }
+        region.extend_from_slice(&table);
+        let table_crc = crc32fast::hash(&table);
+        let base = self.overflow_write(store, &mut region, generation)?;
+        self.appended = true;
+        // The region is complete on disk before a commit frame names it.
+        if commit {
+            store.sync()?;
+            self.stats.barriers += 1;
+            self.appended = false;
+        }
+        let descriptor = ExternalDescriptor {
+            base,
+            data_len,
+            table_crc,
+            table_len: table_len_field,
+        };
+        let flags = if commit { FRAME_COMMIT } else { 0 };
+        let frame = wal::external_frame(flags, generation, count, self.requires, &descriptor);
+        let at = self.place(store, EXTERNAL_FRAME_LEN)?;
+        store.write_at(self.ring.at(at), &frame)?;
+        self.stats.frames += 1;
+        self.open_ring_bytes += EXTERNAL_FRAME_LEN;
+        for (target, offset, len) in entries {
+            self.overlay.insert(
+                target,
+                OverlayEntry {
+                    generation,
+                    at: base + offset,
+                    len,
+                },
+            )?;
+        }
+        self.cursor = at + EXTERNAL_FRAME_LEN;
+        if self.cursor == self.ring.area() {
+            self.cursor = 0;
+        }
+        self.spilled = true;
+        self.pending.clear();
+        self.pending_bytes = 0;
+        Ok(())
+    }
+
+    /// Writes `bytes` as the overflow region of `generation` and returns its
+    /// logical offset: over a region this writer appended before, when one
+    /// is large enough and every generation in it is reclaimed (no reader can
+    /// still read it), else as a new overflow record. A region waiting only
+    /// for a checkpoint is freed by one when it would avoid growing the file.
+    fn overflow_write(
+        &mut self,
+        store: &mut dyn TileStore,
+        bytes: &mut Vec<u8>,
+        generation: u64,
+    ) -> Result<u64> {
+        let len = bytes.len() as u64;
+        let mut reusable = self.reusable_overflow(len);
+        if reusable.is_none()
+            && self.overflow.iter().any(|region| {
+                region.len >= len
+                    && region.generation <= self.header.published
+                    && region.generation > self.header.reclaimed
+            })
+        {
+            self.checkpoint(store, u64::MAX)?;
+            reusable = self.reusable_overflow(len);
+        }
+        if let Some(index) = reusable {
+            let region = &mut self.overflow[index];
+            region.generation = generation;
+            let at = region.at;
+            store.write_at(at, bytes)?;
+            self.stats.overflow_reused += 1;
+            return Ok(at);
+        }
+        self.overflow
+            .try_reserve(1)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "matrix overflow regions",
+                requested: (self.overflow.len() as u64 + 1) * 24,
+            })?;
+        // Whole mebibytes, so the slightly different sizes of later spills
+        // fit the same regions.
+        let capacity = len.next_multiple_of(1 << 20);
+        bytes
+            .try_reserve_exact(crate::width::index(capacity - len)?)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "matrix overflow region",
+                requested: capacity,
+            })?;
+        bytes.resize(crate::width::index(capacity)?, 0);
+        let at = store.append(RecordKind::Overflow, bytes)?;
+        self.requires = self.requires.max(at + capacity);
+        self.overflow.push(OverflowRegion {
+            at,
+            len: capacity,
+            generation,
+        });
+        self.stats.overflow_appended += 1;
+        Ok(at)
+    }
+
+    /// The smallest reclaimed overflow region that holds `len` bytes.
+    fn reusable_overflow(&self, len: u64) -> Option<usize> {
+        self.overflow
+            .iter()
+            .enumerate()
+            .filter(|(_, region)| region.len >= len && region.generation <= self.header.reclaimed)
+            .min_by_key(|(_, region)| region.len)
+            .map(|(index, _)| index)
     }
 
     /// Finds ring room for a frame of `len` bytes at the cursor, writing a

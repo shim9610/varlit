@@ -12,6 +12,13 @@
 //! the last carrying [`FRAME_COMMIT`]. A frame that does not fit before the
 //! end of the ring is preceded by a [`FRAME_WRAP`] marker, or, when not even
 //! a marker fits, the scan wraps by itself.
+//!
+//! A publication larger than the ring streams the rest of its ranges into
+//! overflow records outside the ring: such a frame carries
+//! [`FRAME_EXTERNAL`] and, instead of entries, one descriptor of an overflow
+//! region holding the ranges' bytes followed by a table of them. The ring
+//! then holds only a small frame per region, so a publication of any size
+//! commits atomically with the same commit frame and barrier.
 
 use super::store::TileSource;
 use crate::{Error, Result};
@@ -29,6 +36,16 @@ pub(crate) const FRAME_MIN: u64 = 40;
 pub(crate) const ENTRY_HEADER: u64 = 12;
 pub(crate) const FRAME_COMMIT: u32 = 1;
 pub(crate) const FRAME_WRAP: u32 = 2;
+/// The frame's entries are in an overflow region; its body is an
+/// [`ExternalDescriptor`].
+pub(crate) const FRAME_EXTERNAL: u32 = 4;
+/// An external frame: header, descriptor, four bytes of padding, CRC.
+pub(crate) const EXTERNAL_FRAME_LEN: u64 = FRAME_HEADER + EXTERNAL_DESCRIPTOR + 8;
+/// Region base (u64), data length (u64), table CRC32 (u32), table length (u32).
+pub(crate) const EXTERNAL_DESCRIPTOR: u64 = 24;
+/// One table entry: target (u64), length (u32), padding (u32), offset of the
+/// bytes from the region base (u64).
+pub(crate) const EXTERNAL_ENTRY: u64 = 24;
 /// The smallest ring: its header page and room for a few frames.
 pub(crate) const MIN_RING: u64 = FRAMES_AT + 64 * 1024;
 /// The largest ring a matrix may have: a format constant, so a ring length
@@ -284,7 +301,8 @@ pub(crate) enum ScanEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScannedEntry {
     pub target: u64,
-    /// Logical offset of the bytes inside the ring.
+    /// Logical offset of the bytes: inside the ring, or inside an overflow
+    /// region for an external frame.
     pub at: u64,
     pub len: u32,
 }
@@ -383,24 +401,11 @@ pub(crate) fn scan(
             at = 0;
             continue;
         }
-        let mut cursor = crate::width::small(FRAME_HEADER);
-        let mut ok = true;
-        for _ in 0..count {
-            let Some(entry) = frame_entry(&frame[..body_end], cursor) else {
-                ok = false;
-                break;
-            };
-            held.try_reserve(1).map_err(|_| Error::AllocationFailed {
-                resource: "matrix ring scan",
-                requested: (held.len() as u64 + 1) * 24,
-            })?;
-            held.push(ScannedEntry {
-                target: entry.target,
-                at: ring.at(at) + entry.bytes_at as u64,
-                len: entry.len,
-            });
-            cursor = entry.next;
-        }
+        let ok = if flags & FRAME_EXTERNAL != 0 {
+            external_entries(source, &frame[..body_end], count, available, &mut held)?
+        } else {
+            inline_entries(&frame[..body_end], count, ring.at(at), &mut held)?
+        };
         if !ok {
             break;
         }
@@ -422,6 +427,169 @@ pub(crate) fn scan(
         }
     }
     Ok(ScanEnd { published, head })
+}
+
+/// The entries of an ordinary frame `body` (without its CRC), whose bytes
+/// follow each entry header inside the frame at logical offset `frame_at`,
+/// appended to `held`. `false` when an entry runs past the body.
+fn inline_entries(
+    body: &[u8],
+    count: u32,
+    frame_at: u64,
+    held: &mut Vec<ScannedEntry>,
+) -> Result<bool> {
+    let mut cursor = crate::width::small(FRAME_HEADER);
+    for _ in 0..count {
+        let Some(entry) = frame_entry(body, cursor) else {
+            return Ok(false);
+        };
+        held.try_reserve(1).map_err(|_| Error::AllocationFailed {
+            resource: "matrix ring scan",
+            requested: (held.len() as u64 + 1) * 24,
+        })?;
+        held.push(ScannedEntry {
+            target: entry.target,
+            at: frame_at + entry.bytes_at as u64,
+            len: entry.len,
+        });
+        cursor = entry.next;
+    }
+    Ok(true)
+}
+
+/// Where an external frame's ranges are: an overflow region whose first
+/// `data_len` bytes hold the ranges' bytes, followed by a table of
+/// `table_len` bytes listing them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalDescriptor {
+    pub base: u64,
+    pub data_len: u64,
+    pub table_crc: u32,
+    pub table_len: u32,
+}
+
+impl ExternalDescriptor {
+    pub(crate) fn encode(&self) -> [u8; crate::width::small(EXTERNAL_DESCRIPTOR)] {
+        let mut out = [0u8; crate::width::small(EXTERNAL_DESCRIPTOR)];
+        out[0..8].copy_from_slice(&self.base.to_le_bytes());
+        out[8..16].copy_from_slice(&self.data_len.to_le_bytes());
+        out[16..20].copy_from_slice(&self.table_crc.to_le_bytes());
+        out[20..24].copy_from_slice(&self.table_len.to_le_bytes());
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Self {
+        Self {
+            base: u64::from_le_bytes(bytes[0..8].try_into().expect("eight")),
+            data_len: u64::from_le_bytes(bytes[8..16].try_into().expect("eight")),
+            table_crc: u32::from_le_bytes(bytes[16..20].try_into().expect("four")),
+            table_len: u32::from_le_bytes(bytes[20..24].try_into().expect("four")),
+        }
+    }
+}
+
+/// One table entry of an overflow region.
+pub(crate) fn encode_external_entry(
+    target: u64,
+    len: u32,
+    offset: u64,
+) -> [u8; crate::width::small(EXTERNAL_ENTRY)] {
+    let mut out = [0u8; crate::width::small(EXTERNAL_ENTRY)];
+    out[0..8].copy_from_slice(&target.to_le_bytes());
+    out[8..12].copy_from_slice(&len.to_le_bytes());
+    out[16..24].copy_from_slice(&offset.to_le_bytes());
+    out
+}
+
+/// A whole external frame for `descriptor`, CRC included.
+pub(crate) fn external_frame(
+    flags: u32,
+    generation: u64,
+    count: u32,
+    requires: u64,
+    descriptor: &ExternalDescriptor,
+) -> [u8; crate::width::small(EXTERNAL_FRAME_LEN)] {
+    let mut out = [0u8; crate::width::small(EXTERNAL_FRAME_LEN)];
+    let header = crate::width::small(FRAME_HEADER);
+    out[..header].copy_from_slice(&frame_header(
+        flags | FRAME_EXTERNAL,
+        generation,
+        EXTERNAL_FRAME_LEN,
+        count,
+        requires,
+    ));
+    out[header..header + crate::width::small(EXTERNAL_DESCRIPTOR)]
+        .copy_from_slice(&descriptor.encode());
+    let body = out.len() - 4;
+    let crc = crc32fast::hash(&out[..body]);
+    out[body..].copy_from_slice(&crc.to_le_bytes());
+    out
+}
+
+/// The entries an external frame `body` (without its CRC) lists, appended to
+/// `held`. `false` when the frame is not one a writer could have written:
+/// a body of the wrong length, a region or entry outside the file, a table
+/// whose checksum or length does not match its entry count.
+fn external_entries(
+    source: &dyn TileSource,
+    body: &[u8],
+    count: u32,
+    available: u64,
+    held: &mut Vec<ScannedEntry>,
+) -> Result<bool> {
+    let header = crate::width::small(FRAME_HEADER);
+    if body.len() != crate::width::small(EXTERNAL_FRAME_LEN) - 4 {
+        return Ok(false);
+    }
+    let descriptor = ExternalDescriptor::decode(
+        &body[header..header + crate::width::small(EXTERNAL_DESCRIPTOR)],
+    );
+    let table_len = u64::from(descriptor.table_len);
+    let Some(table_at) = descriptor.base.checked_add(descriptor.data_len) else {
+        return Ok(false);
+    };
+    if table_len != u64::from(count) * EXTERNAL_ENTRY
+        || table_at
+            .checked_add(table_len)
+            .is_none_or(|end| end > available)
+    {
+        return Ok(false);
+    }
+    let mut table = Vec::new();
+    table
+        .try_reserve_exact(crate::width::index(table_len)?)
+        .map_err(|_| Error::AllocationFailed {
+            resource: "matrix overflow table",
+            requested: table_len,
+        })?;
+    table.resize(crate::width::index(table_len)?, 0);
+    if source.read_at(table_at, &mut table).is_err()
+        || crc32fast::hash(&table) != descriptor.table_crc
+    {
+        return Ok(false);
+    }
+    held.try_reserve(table.len() / crate::width::small(EXTERNAL_ENTRY))
+        .map_err(|_| Error::AllocationFailed {
+            resource: "matrix ring scan",
+            requested: u64::from(count) * 24,
+        })?;
+    for entry in table.chunks_exact(crate::width::small(EXTERNAL_ENTRY)) {
+        let target = u64::from_le_bytes(entry[0..8].try_into().expect("eight"));
+        let len = u32::from_le_bytes(entry[8..12].try_into().expect("four"));
+        let offset = u64::from_le_bytes(entry[16..24].try_into().expect("eight"));
+        if offset
+            .checked_add(u64::from(len))
+            .is_none_or(|end| end > descriptor.data_len)
+        {
+            return Ok(false);
+        }
+        held.push(ScannedEntry {
+            target,
+            at: descriptor.base + offset,
+            len,
+        });
+    }
+    Ok(true)
 }
 
 /// One entry of a frame body: where it goes, where its bytes are in the body

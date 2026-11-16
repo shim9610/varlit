@@ -238,7 +238,9 @@ directory pages that locate it. After that, cell slots, tile commit bitmaps,
 directory entries, single and per-channel commit flags and aux bytes are
 rewritten in place. Overwrites do not grow the file
 (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`,
-`the_ring_holds_the_disk_space_constant`). There is no companion file:
+`the_ring_holds_the_disk_space_constant`), except that a publication larger
+than half the ring adds overflow records once, which later large publications
+of the same writer reuse (see below). There is no companion file:
 `matrix_generation_path()` returns the primary path, and copying the primary
 copies the whole matrix. Primary-file replacement, rewrite and defragmentation
 are refused for matrix files with `InvalidFormatSpec`. An indexed
@@ -298,9 +300,31 @@ The ring size is fixed when the matrix is created.
 `FormatSpec::with_matrix_ring_bytes(bytes)` declares it; otherwise it is twice
 the slot bytes of the declared extents, kept between 256 KiB and 16 MiB and no
 larger than the `RecordPayloadLen` limit. A ring larger than 64 MiB is refused
-with `LimitExceeded`. A frame holds at most a quarter of the ring, and one
-staged unit (a slot, a tile bitmap, a 256-byte page of flags or aux bytes)
-that does not fit in a frame is refused with `LimitExceeded`.
+with `LimitExceeded`. A frame holds at most a quarter of the ring.
+
+### Publications larger than the ring
+
+A publication is not limited by the ring. Once its frames would take more
+than half the ring, or a single staged unit does not fit in a frame, the rest
+streams outside it: each early write of staged changes (at most an eighth of
+the ring, 4 MiB) goes to an overflow record, the changes' bytes followed by a
+checksummed table of where each belongs, and the ring takes one 64-byte frame
+naming that record. Memory stays bounded by that early-write size whatever the
+publication's total. The commit is unchanged: the file is synced before the
+commit frame is written, so the overflow records a commit frame names are
+durable first, and readers see the whole publication or none of it
+(`a_sync_larger_than_the_ring_publishes_whole_and_reuses_its_overflow`,
+`a_crash_inside_a_streamed_publication_recovers_all_or_nothing`).
+
+A checkpoint writes overflowed changes in place like ring frames. An overflow
+record is written over by a later publication only after every generation in
+it is checkpointed and the ring header records that no reader may still read
+it (`reclaimed`); a reader that was behind gets `MatrixSnapshotExpired`, never
+the newer bytes. When a large publication finds no free region, the writer
+checkpoints first if that frees one, so repeating a large rewrite reuses the
+same regions instead of growing the file. Records are allocated in whole
+mebibytes. Reuse lasts for the writer handle: a reopened writer appends new
+regions and leaves the old ones unused.
 
 When a frame does not fit, the writer runs a checkpoint inside that call. It
 chooses the oldest published generations whose removal leaves room for the
