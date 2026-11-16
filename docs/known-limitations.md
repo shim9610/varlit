@@ -32,10 +32,12 @@ materialization.
 Overwrites do not grow a tiled matrix, and tiles, once appended, are never
 removed; there is no matrix compaction. A single publication larger than half
 the write-ahead ring streams through overflow records: the file grows by
-about the largest such publication, those records are reused by the same
-writer's later large publications, and a reopened writer appends new ones
-and leaves the old ones unused; nothing reclaims them (`compact_matrix()` was
-removed in 0.13.0). A tiled matrix does not rely on sparse files, allocation maps or hole
+about the largest such publication. Those records are reused by later large
+publications, a reopened writer included, and their free space takes new
+tiles and directory pages; nothing returns them to the filesystem
+(`compact_matrix()` was removed in 0.13.0). A publication is limited by the
+external frames half the ring holds, 64 bytes per 4 MiB streamed: about
+8 GiB for the smallest default ring (256 KiB), about 2 GiB for `MIN_RING`. A tiled matrix does not rely on sparse files, allocation maps or hole
 punching.
 
 Dimensions are fixed at creation unless explicitly declared growing. Generic

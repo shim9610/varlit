@@ -813,9 +813,14 @@ fn a_publication_larger_than_the_ring_streams_through_overflow_and_commits_whole
 
     // Overwriting every cell is sixty rings' worth of bytes in one publication.
     wide_put_all(&mut w, &store, 2);
+    // Later spills fill the region the first one opened, and each new region
+    // is at least as large as what streamed before it: a few regions, not
+    // one per spill.
     assert!(
-        w.stats.overflow_appended > 0,
-        "nothing streamed past the ring"
+        (1..=4).contains(&w.stats.overflow_appended),
+        "the publication took {} regions: {:?}",
+        w.stats.overflow_appended,
+        w.stats
     );
     assert_eq!(
         wide_seen(&mut before, &store, MatrixKey::new(63, 63)).unwrap(),
@@ -954,6 +959,164 @@ fn a_crash_inside_a_streamed_publication_recovers_all_or_nothing() {
                     "sync {failing_sync} keep {keep} torn {torn}: {values:?}"
                 );
                 outcomes[usize::from(new)] += 1;
+            }
+        }
+    }
+    assert!(outcomes[0] > 0 && outcomes[1] > 0, "{outcomes:?}");
+}
+
+fn wide_put(
+    w: &mut TileWriter,
+    store: &MemStore,
+    keys: impl Iterator<Item = MatrixKey>,
+    value: u8,
+) {
+    for key in keys {
+        let (coord, index) = WIDE_CELLS.locate(key);
+        let tile = w.tile(&mut store.clone(), 0, coord, true).unwrap().unwrap();
+        w.stage(
+            &mut store.clone(),
+            tile + WIDE_CELLS.slot_at(index),
+            &wide_cell(value),
+        )
+        .unwrap();
+    }
+}
+
+fn wide_rows(rows: std::ops::Range<u64>) -> impl Iterator<Item = MatrixKey> {
+    rows.flat_map(|r| (0..64).map(move |c| MatrixKey::new(r, c)))
+}
+
+/// A writer whose top half was written twice, the second time streamed
+/// through an overflow region that a checkpoint then freed.
+fn wide_with_free_overflow() -> (MemStore, TileWriter) {
+    let store = MemStore::new();
+    let mut w = TileWriter::create(
+        &mut store.clone(),
+        wide_geometry(),
+        super::wal::MIN_RING,
+        [7; 16],
+    )
+    .unwrap();
+    wide_put(&mut w, &store, wide_rows(0..32), 1);
+    w.publish(&mut store.clone()).unwrap();
+    wide_put(&mut w, &store, wide_rows(0..32), 2);
+    w.publish(&mut store.clone()).unwrap();
+    assert!(w.stats.overflow_appended > 0);
+    w.checkpoint_all(&mut store.clone()).unwrap();
+    (store, w)
+}
+
+#[test]
+fn new_tiles_fill_free_overflow_space_and_the_space_survives_a_reopen() {
+    let (store, mut w) = wide_with_free_overflow();
+    let meta = w.meta;
+    let len = store.len();
+    // The bottom half's tiles are new: they go into the free region.
+    wide_put(&mut w, &store, wide_rows(32..64), 3);
+    assert!(
+        w.stats.carved > 0,
+        "no tile was placed in free overflow space"
+    );
+    w.publish(&mut store.clone()).unwrap();
+    let tile_bytes = WIDE_CELLS.tile_bytes();
+    let grown = store.len() - len;
+    assert!(
+        grown < 64 * tile_bytes,
+        "the file grew {grown} bytes for 64 new tiles of {tile_bytes} bytes"
+    );
+    let regions = w.overflow_regions();
+    let mut r = TileReader::open(&store, wide_geometry(), meta).unwrap();
+    for key in wide_keys() {
+        let want = if key.scan < 32 { 2 } else { 3 };
+        assert_eq!(
+            wide_seen(&mut r, &store, key).unwrap(),
+            Some(want),
+            "{key:?}"
+        );
+    }
+
+    // A reopened writer finds the region, with the carved space recorded,
+    // and streams its next large publication into what is left of it.
+    let mut again = TileWriter::open(&mut store.clone(), wide_geometry(), meta).unwrap();
+    assert_eq!(again.overflow_regions(), regions);
+    let len = store.len();
+    wide_put(&mut again, &store, wide_rows(0..8), 4);
+    again.publish(&mut store.clone()).unwrap();
+    assert_eq!(again.stats.overflow_appended, 0, "{:?}", again.stats);
+    assert!(again.stats.overflow_reused > 0, "{:?}", again.stats);
+    assert_eq!(store.len(), len, "the reopened writer grew the file");
+    r.follow(&store).unwrap();
+    for key in wide_keys() {
+        let want = match key.scan {
+            0..8 => 4,
+            8..32 => 2,
+            _ => 3,
+        };
+        assert_eq!(
+            wide_seen(&mut r, &store, key).unwrap(),
+            Some(want),
+            "{key:?}"
+        );
+    }
+    again.checkpoint_all(&mut store.clone()).unwrap();
+    let mut fresh = TileReader::open(&store, wide_geometry(), meta).unwrap();
+    for key in wide_keys() {
+        let want = match key.scan {
+            0..8 => 4,
+            8..32 => 2,
+            _ => 3,
+        };
+        assert_eq!(
+            wide_seen(&mut fresh, &store, key).unwrap(),
+            Some(want),
+            "{key:?}"
+        );
+    }
+}
+
+/// A crash at any point of a publication whose new tiles were placed in free
+/// overflow space recovers the state before it or the whole publication,
+/// and the reopened writer's record of the carved space agrees.
+#[test]
+fn a_crash_while_tiles_fill_overflow_space_recovers_all_or_nothing() {
+    let mut outcomes = [0usize; 2];
+    for failing_sync in 1..=3 {
+        let (store, mut w) = wide_with_free_overflow();
+        let meta = w.meta;
+        let before = w.overflow_regions();
+        wide_put(&mut w, &store, wide_rows(32..64), 3);
+        assert!(w.stats.carved > 0);
+        let after = w.overflow_regions();
+        store.fail_sync_in(failing_sync);
+        if w.publish(&mut store.clone()).is_ok() {
+            continue;
+        }
+        let writes = store.writes_since_sync();
+        let step = (writes / 12).max(1);
+        for keep in (0..=writes).step_by(step).chain([writes]) {
+            for torn in [0usize, 3000] {
+                let crashed = store.crashed(keep, torn);
+                let reopened =
+                    TileWriter::open(&mut crashed.clone(), wide_geometry(), meta).unwrap();
+                let mut r = TileReader::open(&crashed, wide_geometry(), meta).unwrap();
+                let top: Vec<_> = wide_rows(0..32)
+                    .step_by(31)
+                    .map(|key| wide_seen(&mut r, &crashed, key).unwrap())
+                    .collect();
+                assert!(top.iter().all(|v| *v == Some(2)), "{top:?}");
+                let bottom: Vec<_> = wide_rows(32..64)
+                    .step_by(31)
+                    .map(|key| wide_seen(&mut r, &crashed, key).unwrap())
+                    .collect();
+                if bottom.iter().all(Option::is_none) {
+                    assert_eq!(reopened.overflow_regions(), before, "keep {keep}");
+                    outcomes[0] += 1;
+                } else {
+                    assert!(bottom.iter().all(|v| *v == Some(3)), "{bottom:?}");
+                    assert_eq!(reopened.overflow_regions(), after, "keep {keep}");
+                    outcomes[1] += 1;
+                }
             }
         }
     }

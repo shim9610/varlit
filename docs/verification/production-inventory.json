@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "a3317c0ff242f154",
-    "count": 3461
+    "catalogue": "d94bc2849647d6ce",
+    "count": 3476
   },
   "schema": 1,
   "sources": {
@@ -394,7 +394,7 @@
     "crates/varlit-core/src/file/append.rs": "a47f349aebd953b4",
     "crates/varlit-core/src/file/directory.rs": "d7fabed364d3e3c9",
     "crates/varlit-core/src/file/follow.rs": "15bca25f448f1904",
-    "crates/varlit-core/src/file/header_codec.rs": "a82d159e20b40f04",
+    "crates/varlit-core/src/file/header_codec.rs": "3ba97de9183c292f",
     "crates/varlit-core/src/file/header_slots.rs": "9d9bf42f2143300b",
     "crates/varlit-core/src/file/lifecycle.rs": "2f10d89507e0395e",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
@@ -424,16 +424,16 @@
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
     "crates/varlit-core/src/matrix_bulk.rs": "4f76e0dce341bd34",
     "crates/varlit-core/src/matrix_tiles/api.rs": "3ca97d3c0b709ef5",
-    "crates/varlit-core/src/matrix_tiles/geometry.rs": "3eb3784dd309e718",
+    "crates/varlit-core/src/matrix_tiles/geometry.rs": "9509edd1cc056798",
     "crates/varlit-core/src/matrix_tiles/host.rs": "269ef80db008360b",
-    "crates/varlit-core/src/matrix_tiles/mod.rs": "f18653067a9aaa93",
+    "crates/varlit-core/src/matrix_tiles/mod.rs": "1b27e86bce0463ef",
     "crates/varlit-core/src/matrix_tiles/ranges.rs": "f96c15eb40f2c7bb",
     "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "36114c9e65832fc9",
     "crates/varlit-core/src/matrix_tiles/store.rs": "e1f3ea9e55f112f5",
-    "crates/varlit-core/src/matrix_tiles/tests.rs": "731d09f039a40793",
+    "crates/varlit-core/src/matrix_tiles/tests.rs": "9841584dddd96c18",
     "crates/varlit-core/src/matrix_tiles/view.rs": "986e481636d8fba5",
-    "crates/varlit-core/src/matrix_tiles/wal.rs": "1c8702c905e1f9bf",
-    "crates/varlit-core/src/matrix_tiles/writer.rs": "e645d35f2c55859a",
+    "crates/varlit-core/src/matrix_tiles/wal.rs": "202ffbf22143275e",
+    "crates/varlit-core/src/matrix_tiles/writer.rs": "2d20bc7a4053ec71",
     "crates/varlit-core/src/merge.rs": "fff6cea04e233a49",
     "crates/varlit-core/src/native_directory.rs": "4b1b7482d8d27b35",
     "crates/varlit-core/src/native_layout.rs": "41634ca2a58cd3f8",

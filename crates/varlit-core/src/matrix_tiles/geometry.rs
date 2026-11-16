@@ -7,7 +7,7 @@ use vstd::prelude::*;
 
 pub(crate) const TILE_MAGIC: &[u8; 4] = b"VTIL";
 pub(crate) const META_MAGIC: &[u8; 4] = b"VMTA";
-pub(crate) const LAYOUT_VERSION: u16 = 1;
+pub(crate) const LAYOUT_VERSION: u16 = 2;
 
 /// Tile record: fixed header, then the commit bitmap and its checksum (one
 /// unit, rewritten whole), then the slots (each the cell bytes and their
@@ -15,8 +15,12 @@ pub(crate) const LAYOUT_VERSION: u16 = 1;
 #[cfg_attr(verus_keep_ghost, verus_verify)]
 pub(crate) const TILE_HEADER_LEN: u64 = 40;
 /// Bytes of the metadata record before the per-block directory roots:
-/// fields (48), the creation nonce (16), their CRC32 (4), padding.
-pub(crate) const META_FIXED_LEN: u64 = 72;
+/// fields (48), the creation nonce (16), their CRC32 (4), padding, and the
+/// head of the overflow region list.
+pub(crate) const META_FIXED_LEN: u64 = 80;
+/// Where in the metadata record the newest overflow region's payload offset
+/// is (`0`: none). Outside the CRC: it changes through the ring like a root.
+pub(crate) const META_OVERFLOW_HEAD_AT: u64 = 72;
 /// One directory root: `(page offset, height)`.
 pub(crate) const META_ROOT_LEN: u64 = 16;
 

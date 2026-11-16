@@ -2564,7 +2564,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:aff26e075da1b1ef]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:2ecd34900e26051b]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2599,7 +2599,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:0ad01d54fe6ea6f7]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:8add086441125c8a]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2616,7 +2616,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:a9783afd72c5d2d7]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:455be6eb90eaddb8]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2651,7 +2651,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:c262d39680c2c736]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:c222ddc88260ff84]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },

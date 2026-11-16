@@ -94,6 +94,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 2 | ring | the write-ahead ring, one per matrix |
   | 3 | directory | one 4096-byte directory page |
   | 4 | tile | one `VTIL` tile |
+  | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
 
 - Each record is appended once and its payload is then rewritten in place. For
   a record with `RECORD_FLAG_IN_PLACE` the record checksum leaves the payload
@@ -102,7 +103,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   (`checksum_record_fields` in `file.rs`). The record validator refuses
   `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
   missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
-  flag disagrees with block id")`, and a block version outside `1..=4` with
+  flag disagrees with block id")`, and a block version outside `1..=5` with
   `InvalidCanonicalEncoding("unsupported internal record version")`. The
   sync-marker chain of an indexed primary also leaves these payloads out of
   its checksums.
@@ -111,8 +112,11 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   payload is read at `append_log_start + 32`. In an indexed primary it is
   located among the first 8 records of the log. Tiles and directory pages are
   appended later, the first time a cell in them is written, so a tile that was
-  never written does not exist in the file.
-- The matrix tile layout version is **1** (`LAYOUT_VERSION` in
+  never written does not exist in the file. A new tile or directory page is
+  placed in the free space of an overflow region instead of a record of its
+  own when one has room (see Overflow Regions); directory entries and roots
+  hold payload offsets either way.
+- The matrix tile layout version is **2** (`LAYOUT_VERSION` in
   `matrix_tiles/geometry.rs`). It is stored in the metadata record and in
   every tile header. The schema hash of a matrix block folds `matrix-tile-v1`
   and the block's effective tile shape. A 0.12.x file stores its matrix in a
@@ -137,8 +141,11 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
 | 48..64 | 16-byte creation nonce |
 | 64..68 | CRC32 of bytes 0..64 |
 | 68..72 | zero |
+| 72..80 | payload offset of the newest overflow region, `u64`; `0` for none |
 
-- From byte 72, one 16-byte directory root per matrix block in spec order:
+- Bytes 72..80 are outside the CRC32: like the roots, they change through the
+  ring.
+- From byte 80, one 16-byte directory root per matrix block in spec order:
   root page offset `u64`, then directory height `u64`. Offset `0` means the
   block has no tile yet.
 - After the roots comes the extra area, at offsets relative to the start of
@@ -261,19 +268,31 @@ circularly.
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VWFR"` |
-  | 4..8 | flags `u32`: `1` commit, `2` wrap |
+  | 4..8 | flags `u32`: `1` commit, `2` wrap, `4` external |
   | 8..16 | generation `u64` |
   | 16..20 | frame length `u32`, CRC32 included |
   | 20..24 | entry count `u32` |
   | 24..32 | `requires` `u64`: the file length the frame's targets lie within |
 
   Each entry is a target offset `u64`, a length `u32`, and that many bytes to
-  be written at the target. A wrap marker is a 40-byte frame with the wrap
+  be written at the target. An external frame (flag `4`) is 64 bytes and
+  holds, instead of entries, a 24-byte descriptor of bytes in an overflow
+  region: base offset `u64`, data length `u64`, CRC32 of the table `u32`,
+  table length `u32`, then 4 zero bytes before the frame CRC32. Its entry
+  count is the number of table entries. The table follows the data at
+  `base + data length`; each 24-byte entry is a target `u64`, a length `u32`,
+  four zero bytes, and the offset of the bytes from `base` `u64`. A scan
+  refuses an external frame whose table length is not `count * 24`, whose
+  table lies past `requires` or the file, whose table CRC32 does not match,
+  or whose entry bytes run past the data length. A wrap marker is a 40-byte frame with the wrap
   flag and no entries; it sends the scan to ring offset 0. With fewer than 40
   bytes left before the end of the ring, the scan wraps without a marker.
 - A publication is one generation: one or more frames carrying the same
   generation number, the last with the commit flag. The writer keeps each frame
-  at most a quarter of the ring.
+  at most a quarter of the ring. Once a publication's frames would take more
+  than half the ring, or a staged range does not fit in a frame, the writer
+  writes its staged ranges to an overflow region in batches of up to 4 MiB and
+  names each batch with an external frame.
 - A scan reads frames from `tail` and stops at the first frame with a wrong
   magic, a `requires` past the file's current length, a length under 36,
   not a multiple of 8 or past the end of the ring, a generation other than the
@@ -302,6 +321,42 @@ circularly.
   `[256 KiB, 16 MiB]` and to the record payload limit. A declared size over
   `MAX_RING_BYTES` (64 MiB) is `LimitExceeded`. The writer raises a size below
   `MIN_RING` to `MIN_RING` and rounds it up to a multiple of 8.
+
+### Overflow Regions
+
+- An overflow region is the payload of a record with block version 5. It
+  starts with a 40-byte header:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VOVF"` |
+  | 4..8 | zero |
+  | 8..16 | payload offset of the region appended before this one, `0` for none |
+  | 16..24 | payload length, header included |
+  | 24..32 | `carved`: bytes at the end of the region holding tiles and directory pages |
+  | 32..36 | CRC32 of bytes 0..32 |
+  | 36..40 | zero |
+
+- Regions form a list from the metadata record's bytes 72..80, newest first;
+  each region's offset is lower than the one before it in the list. A new
+  region is appended whole (header, data and tables, padded to a whole MiB,
+  and at least as long as what the publication streamed before it) before
+  the frame naming it, and the new head is
+  staged through the ring in the same publication.
+- Between the header and `len - carved` is staged data: the batches of one
+  publication, each followed by its table, 8-byte aligned. The writer writes
+  over it only when every generation it holds is at or below `reclaimed`.
+- New tiles and directory pages are placed at the end of the free space of
+  such a region: `carved` grows by their 8-byte-rounded length and the
+  header, CRC32 included, is staged through the ring with the publication
+  whose directory first points at them. Until that publication commits
+  nothing points into the space, and a crash leaves the header as it was.
+- A reopened writer walks the list through its overlay. It stops at a header
+  whose magic, CRC32 or `carved` (a multiple of 8, at most `len - 40`) does
+  not check out, at a region past the file's length, or at an offset not
+  lower than the previous one; the regions past that point are never reused.
+  A region with ranges of a generation still in the ring is in use until that
+  generation is reclaimed.
 
 ### Snapshots And Overlay
 

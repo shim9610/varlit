@@ -67,8 +67,11 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   overflow records and names them with small ring frames; it commits with the
   same single barrier and is still all-or-nothing for readers and after a
   crash. Previously a sync that overwrote more than the ring held failed with
-  `LimitExceeded`. Overflow records are reused by the same writer once no
-  reader can need them.
+  `LimitExceeded`. Overflow records are reused once no reader can need them,
+  also after the writer is reopened, and their free space takes new tiles and
+  directory pages before the file grows. The matrix layout version is now 2:
+  the metadata record gains the overflow list head, and matrix files written
+  by an earlier 0.13 pre-release are refused with `InvalidMatrixLayout`.
 - Refuse data files that are not regular files. Opening a FIFO, socket,
   device or directory by path returns an `Io` error of kind `InvalidInput`
   instead of reading it, and on Unix the open no longer waits on a FIFO with

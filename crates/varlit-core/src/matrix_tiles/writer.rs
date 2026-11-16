@@ -3,7 +3,7 @@
 
 use super::ranges::Ranges;
 
-use super::geometry::{Geometry, META_FIXED_LEN, TileCache, TileCoord};
+use super::geometry::{Geometry, META_FIXED_LEN, META_OVERFLOW_HEAD_AT, TileCache, TileCoord};
 use super::store::{TileSource, TileStore};
 use super::view::{
     Overlay, OverlayEntry, directory_offset, directory_root, find_tile, for_each_tile, lay_over,
@@ -29,17 +29,76 @@ pub(crate) struct WriterStats {
     /// Overflow regions written: reused ones and appended ones.
     pub overflow_reused: u64,
     pub overflow_appended: u64,
+    /// Tiles and directory pages placed in free overflow space instead of
+    /// appended.
+    pub carved: u64,
 }
 
-/// An overflow record this writer appended: where its payload is, how long
-/// it is, and the newest generation whose ranges it holds. Once that
-/// generation is checkpointed and reclaimed no reader can need its bytes, and
-/// the next large publication writes over it instead of growing the file.
+/// The header at the start of every overflow region's payload.
+///
+/// | Bytes | Field |
+/// | --- | --- |
+/// | 0..4 | magic `b"VOVF"` |
+/// | 4..8 | zero |
+/// | 8..16 | payload offset of the region appended before this one, `0` for none |
+/// | 16..24 | payload length of this region, header included |
+/// | 24..32 | bytes at the end of the region given to tiles and directory pages |
+/// | 32..36 | CRC32 of bytes 0..32 |
+/// | 36..40 | zero |
+///
+/// The first two fields never change. The carved count changes through the
+/// ring, with the publication whose directory first points into the space.
+pub(crate) const OVERFLOW_HEADER: u64 = 40;
+/// The staged bytes a streaming publication holds in memory before writing
+/// them to its overflow region.
+const STREAM_SPILL_BYTES: u64 = 4 << 20;
+const OVERFLOW_MAGIC: &[u8; 4] = b"VOVF";
+
+fn encode_overflow_header(next: u64, len: u64, carved: u64) -> [u8; 40] {
+    let mut out = [0u8; 40];
+    out[..4].copy_from_slice(OVERFLOW_MAGIC);
+    out[8..16].copy_from_slice(&next.to_le_bytes());
+    out[16..24].copy_from_slice(&len.to_le_bytes());
+    out[24..32].copy_from_slice(&carved.to_le_bytes());
+    let crc = crc32fast::hash(&out[..32]);
+    out[32..36].copy_from_slice(&crc.to_le_bytes());
+    out
+}
+
+/// `(next, len, carved)` of a well-formed header.
+fn decode_overflow_header(bytes: &[u8; 40]) -> Option<(u64, u64, u64)> {
+    let field = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight"));
+    let crc = u32::from_le_bytes(bytes[32..36].try_into().expect("four"));
+    if &bytes[..4] != OVERFLOW_MAGIC || crc32fast::hash(&bytes[..32]) != crc {
+        return None;
+    }
+    let (next, len, carved) = (field(8), field(16), field(24));
+    (len >= OVERFLOW_HEADER && carved <= len - OVERFLOW_HEADER && carved % 8 == 0)
+        .then_some((next, len, carved))
+}
+
+/// An overflow record: where its payload is, how long it is, the newest
+/// generation whose ranges it holds, and how many bytes at its end hold
+/// tiles and directory pages. Once that generation is checkpointed and
+/// reclaimed no reader can need its staged bytes: the next large publication
+/// writes over them instead of growing the file, and a new tile or directory
+/// page that fits is placed at the end of the free space instead of being
+/// appended.
 #[derive(Clone, Copy, Debug)]
 struct OverflowRegion {
     at: u64,
     len: u64,
     generation: u64,
+    carved: u64,
+    /// The region appended before this one, as its header records.
+    next: u64,
+}
+
+impl OverflowRegion {
+    /// Bytes between the header and the carved space.
+    const fn free_room(&self) -> u64 {
+        self.len - OVERFLOW_HEADER - self.carved
+    }
 }
 
 pub(crate) struct TileWriter {
@@ -74,8 +133,18 @@ pub(crate) struct TileWriter {
     /// Ring bytes the open generation's frames take: past half the ring the
     /// rest of the publication streams into overflow regions.
     open_ring_bytes: u64,
-    /// Overflow records appended by this writer, reusable once reclaimed.
+    /// Every overflow record of the matrix, newest first, reusable once
+    /// reclaimed.
     overflow: Vec<OverflowRegion>,
+    /// The newest overflow region as this writer sees it: the head of the
+    /// list the metadata record points at, staged or published.
+    overflow_head: u64,
+    /// The region the open generation is streaming into and the data bytes
+    /// it has put there: later spills of the same publication fill it before
+    /// another region is taken.
+    filling: Option<(u64, u64)>,
+    /// Bytes the open generation has streamed to overflow regions.
+    streamed: u64,
     pub(crate) stats: WriterStats,
 }
 
@@ -132,6 +201,7 @@ impl TileWriter {
         let header = ring.read_header(store)?;
         let mut writer = Self::with_parts(geom, meta, ring, header)?;
         writer.recover(store)?;
+        writer.adopt_overflow(store)?;
         Ok(writer)
     }
 
@@ -153,8 +223,21 @@ impl TileWriter {
             tiles,
             open_ring_bytes: 0,
             overflow: Vec::new(),
+            overflow_head: 0,
+            filling: None,
+            streamed: 0,
             stats: WriterStats::default(),
         })
+    }
+
+    /// The overflow regions this writer knows, newest first:
+    /// `(payload offset, length, carved bytes)`.
+    #[cfg(test)]
+    pub(crate) fn overflow_regions(&self) -> Vec<(u64, u64, u64)> {
+        self.overflow
+            .iter()
+            .map(|region| (region.at, region.len, region.carved))
+            .collect()
     }
 
     /// The newest published generation.
@@ -216,10 +299,10 @@ impl TileWriter {
         Ok(())
     }
 
-    /// Whether `[target, target + len)` lies inside a record appended since
-    /// the last publication.
+    /// Whether `[target, target + len)` lies inside a record appended, or
+    /// space carved, since the last publication.
     fn is_fresh(&self, target: u64, len: u64) -> bool {
-        // Appended in order, so sorted by start.
+        // Kept sorted by start.
         let at = self.fresh.partition_point(|(start, _)| *start <= target);
         at > 0 && target + len <= self.fresh[at - 1].1
     }
@@ -231,13 +314,22 @@ impl TileWriter {
                 resource: "matrix fresh records",
                 requested: 16,
             })?;
-        self.fresh.push((start, end));
+        // Appended records come in order; space carved from an overflow
+        // region lies before them.
+        let at = self.fresh.partition_point(|(other, _)| *other < start);
+        self.fresh.insert(at, (start, end));
         self.requires = self.requires.max(end);
         Ok(())
     }
 
     fn spill_threshold(&self) -> u64 {
-        (self.ring.area() / 8).clamp(FRAME_MIN, 4 << 20)
+        if self.filling.is_some() {
+            // Streaming: each spill costs one small frame whatever its size,
+            // so spills are as large as the memory bound allows.
+            STREAM_SPILL_BYTES
+        } else {
+            (self.ring.area() / 8).clamp(FRAME_MIN, STREAM_SPILL_BYTES)
+        }
     }
 
     /// Forgets everything staged or spilled since the last publication.
@@ -254,6 +346,8 @@ impl TileWriter {
         }
         self.cursor = self.header.head;
         self.open_ring_bytes = 0;
+        self.filling = None;
+        self.streamed = 0;
         self.tiles.clear();
         self.fresh.clear();
     }
@@ -329,9 +423,7 @@ impl TileWriter {
         let geom = self.geom.blocks[block];
         let mut tile = zeroed(geom.tile_bytes(), "matrix tile")?;
         geom.encode_empty_tile(coord, &mut tile);
-        let tile_at = store.append(RecordKind::Tile, &tile)?;
-        self.appended = true;
-        self.note_fresh(tile_at, tile_at + geom.tile_bytes())?;
+        let tile_at = self.place_record(store, RecordKind::Tile, &tile)?;
         let at = page + (key & (DIR_FANOUT - 1)) * 8;
         self.stage(store, at, &tile_at.to_le_bytes())?;
         Ok(tile_at)
@@ -339,10 +431,58 @@ impl TileWriter {
 
     fn append_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
         let page = zeroed(DIR_PAGE_BYTES, "matrix directory page")?;
+        self.place_record(store, RecordKind::Directory, &page)
+    }
+
+    /// Writes a new tile or directory page: into free overflow space when a
+    /// region has room, else as a new record. Either way nothing published
+    /// points at it yet, so it is fresh until the next publication.
+    fn place_record(
+        &mut self,
+        store: &mut dyn TileStore,
+        kind: RecordKind,
+        bytes: &[u8],
+    ) -> Result<u64> {
+        let len = bytes.len() as u64;
+        let at = match self.carve(store, len)? {
+            Some(at) => {
+                store.write_at(at, bytes)?;
+                self.stats.carved += 1;
+                at
+            }
+            None => store.append(kind, bytes)?,
+        };
         self.appended = true;
-        let at = store.append(RecordKind::Directory, &page)?;
-        self.note_fresh(at, at + DIR_PAGE_BYTES)?;
+        self.note_fresh(at, at + len)?;
         Ok(at)
+    }
+
+    /// Takes `len` bytes (rounded up to 8) from the end of the free space of
+    /// the reclaimed overflow region with the least room that holds them, and
+    /// stages the region's new carved count. `None` when no region can.
+    fn carve(&mut self, store: &mut dyn TileStore, len: u64) -> Result<Option<u64>> {
+        let len = len.next_multiple_of(8);
+        let reclaimed = self.header.reclaimed;
+        let Some(index) = self
+            .overflow
+            .iter()
+            .enumerate()
+            .filter(|(_, region)| region.generation <= reclaimed && region.free_room() >= len)
+            .min_by_key(|(_, region)| region.free_room())
+            .map(|(index, _)| index)
+        else {
+            return Ok(None);
+        };
+        let region = &mut self.overflow[index];
+        region.carved += len;
+        let (region_at, next, region_len, carved) =
+            (region.at, region.next, region.len, region.carved);
+        self.stage(
+            store,
+            region_at,
+            &encode_overflow_header(next, region_len, carved),
+        )?;
+        Ok(Some(region_at + region_len - carved))
     }
 
     /// The payload offset of `block`'s tile `coord` if it exists, without
@@ -423,6 +563,8 @@ impl TileWriter {
         self.write_header(store, header)?;
         self.spilled = false;
         self.open_ring_bytes = 0;
+        self.filling = None;
+        self.streamed = 0;
         // Published now: later changes to them must not reach a reader early.
         self.fresh.clear();
         Ok(generation)
@@ -445,7 +587,11 @@ impl TileWriter {
         if self.open_ring_bytes + ring_need > self.ring.area() / 2
             || largest.is_some_and(|len| len > frame_room)
         {
-            return self.spill_external(store, commit);
+            // A new overflow region leaves the list head staged: it goes out
+            // in a small frame after, the commit frame when this is one.
+            if self.spill_external(store, commit)? || !commit {
+                return Ok(());
+            }
         }
         // Everything a commit frame points at, appended records and overflow
         // regions alike, is durable before the commit frame is written. A
@@ -560,9 +706,11 @@ impl TileWriter {
 
     /// Writes every staged range to an overflow region, the bytes followed
     /// by a table of them, and one external frame pointing at it: the commit
-    /// frame when `commit`. The ring takes one small frame however much is
-    /// staged, so a publication of any size streams through it.
-    fn spill_external(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<()> {
+    /// frame when `commit`, unless the region is new. The ring takes one
+    /// small frame however much is staged, so a publication of any size
+    /// streams through it. A new region's place in the overflow list is
+    /// staged after the frame; returns whether the frame was the commit.
+    fn spill_external(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<bool> {
         let generation = self.header.published + 1;
         let refused = |requested: u64| Error::AllocationFailed {
             resource: "matrix overflow region",
@@ -582,11 +730,13 @@ impl TileWriter {
             actual: table_len,
             limit: u64::from(u32::MAX),
         })?;
-        let total = data_len + table_len;
+        // Room for the region header first: a new region is appended whole.
+        let total = OVERFLOW_HEADER + data_len + table_len;
         let mut region: Vec<u8> = Vec::new();
         region
             .try_reserve_exact(crate::width::index(total)?)
             .map_err(|_| refused(total))?;
+        region.resize(crate::width::small(OVERFLOW_HEADER), 0);
         let mut table: Vec<u8> = Vec::new();
         table
             .try_reserve_exact(crate::width::index(table_len)?)
@@ -598,15 +748,16 @@ impl TileWriter {
         for target in targets {
             let bytes = self.pending.get(target).expect("listed above");
             let len = crate::width::field32(bytes.len())?;
-            let offset = region.len() as u64;
+            let offset = region.len() as u64 - OVERFLOW_HEADER;
             table.extend_from_slice(&wal::encode_external_entry(target, len, offset));
             region.extend_from_slice(bytes);
             entries.push((target, offset, len));
         }
         region.extend_from_slice(&table);
         let table_crc = crc32fast::hash(&table);
-        let base = self.overflow_write(store, &mut region, generation)?;
+        let (base, new_region) = self.overflow_write(store, &mut region, generation)?;
         self.appended = true;
+        let commit = commit && !new_region;
         // The region is complete on disk before a commit frame names it.
         if commit {
             store.sync()?;
@@ -642,25 +793,50 @@ impl TileWriter {
         self.spilled = true;
         self.pending.clear();
         self.pending_bytes = 0;
-        Ok(())
+        if new_region {
+            let head = self.overflow_head;
+            self.stage(
+                store,
+                self.meta + META_OVERFLOW_HEAD_AT,
+                &head.to_le_bytes(),
+            )?;
+        }
+        Ok(commit)
     }
 
-    /// Writes `bytes` as the overflow region of `generation` and returns its
-    /// logical offset: over a region this writer appended before, when one
-    /// is large enough and every generation in it is reclaimed (no reader can
-    /// still read it), else as a new overflow record. A region waiting only
-    /// for a checkpoint is freed by one when it would avoid growing the file.
+    /// Writes `bytes` (an unfilled region header, then the data) as the
+    /// overflow region of `generation`. Returns the logical offset of the
+    /// data and whether the region is new: over the free space of an
+    /// existing region, when one is large enough and every generation in it
+    /// is reclaimed (no reader can still read it), else as a new overflow
+    /// record, the head of the list. A region waiting only for a checkpoint
+    /// is freed by one when it would avoid growing the file.
     fn overflow_write(
         &mut self,
         store: &mut dyn TileStore,
         bytes: &mut Vec<u8>,
         generation: u64,
-    ) -> Result<u64> {
-        let len = bytes.len() as u64;
+    ) -> Result<(u64, bool)> {
+        let header = crate::width::small(OVERFLOW_HEADER);
+        let len = bytes.len() as u64 - OVERFLOW_HEADER;
+        let taken = len.next_multiple_of(8);
+        let streamed = self.streamed;
+        self.streamed += taken;
+        // The region this publication is already streaming into, when what
+        // is left of it holds these bytes.
+        if let Some((region_at, used)) = self.filling
+            && let Some(region) = self.overflow.iter().find(|region| region.at == region_at)
+            && region.free_room() - used >= len
+        {
+            let at = region_at + OVERFLOW_HEADER + used;
+            store.write_at(at, &bytes[header..])?;
+            self.filling = Some((region_at, used + taken));
+            return Ok((at, false));
+        }
         let mut reusable = self.reusable_overflow(len);
         if reusable.is_none()
             && self.overflow.iter().any(|region| {
-                region.len >= len
+                region.free_room() >= len
                     && region.generation <= self.header.published
                     && region.generation > self.header.reclaimed
             })
@@ -671,10 +847,11 @@ impl TileWriter {
         if let Some(index) = reusable {
             let region = &mut self.overflow[index];
             region.generation = generation;
-            let at = region.at;
-            store.write_at(at, bytes)?;
+            let at = region.at + OVERFLOW_HEADER;
+            store.write_at(at, &bytes[header..])?;
+            self.filling = Some((region.at, taken));
             self.stats.overflow_reused += 1;
-            return Ok(at);
+            return Ok((at, false));
         }
         self.overflow
             .try_reserve(1)
@@ -683,33 +860,99 @@ impl TileWriter {
                 requested: (self.overflow.len() as u64 + 1) * 24,
             })?;
         // Whole mebibytes, so the slightly different sizes of later spills
-        // fit the same regions.
-        let capacity = len.next_multiple_of(1 << 20);
+        // fit the same regions; and at least what this publication streamed
+        // so far, so a long one takes a few regions of doubling size, not
+        // one per spill.
+        let whole = bytes.len() as u64;
+        let capacity = whole.max(streamed).next_multiple_of(1 << 20);
         bytes
-            .try_reserve_exact(crate::width::index(capacity - len)?)
+            .try_reserve_exact(crate::width::index(capacity - whole)?)
             .map_err(|_| Error::AllocationFailed {
                 resource: "matrix overflow region",
                 requested: capacity,
             })?;
         bytes.resize(crate::width::index(capacity)?, 0);
+        let next = self.overflow_head;
+        bytes[..header].copy_from_slice(&encode_overflow_header(next, capacity, 0));
         let at = store.append(RecordKind::Overflow, bytes)?;
         self.requires = self.requires.max(at + capacity);
-        self.overflow.push(OverflowRegion {
-            at,
-            len: capacity,
-            generation,
-        });
+        self.overflow.insert(
+            0,
+            OverflowRegion {
+                at,
+                len: capacity,
+                generation,
+                carved: 0,
+                next,
+            },
+        );
+        self.overflow_head = at;
+        self.filling = Some((at, taken));
         self.stats.overflow_appended += 1;
-        Ok(at)
+        Ok((at + OVERFLOW_HEADER, true))
     }
 
-    /// The smallest reclaimed overflow region that holds `len` bytes.
+    /// Finds the overflow regions a reopened matrix already has, walking the
+    /// list from the head the metadata record points at. A region holding
+    /// ranges of a publication still in the ring is in use until that
+    /// generation is reclaimed; any other is free once what was checkpointed
+    /// before this open is reclaimed. A header that does not check out ends
+    /// the walk: the regions past it are left alone, never reused.
+    fn adopt_overflow(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        let mut head = [0u8; 8];
+        self.read(store, self.meta + META_OVERFLOW_HEAD_AT, &mut head)?;
+        self.overflow_head = u64::from_le_bytes(head);
+        let end = store.len()?;
+        let mut at = self.overflow_head;
+        // Each region points at an older, earlier one, so the walk ends.
+        let mut before = u64::MAX;
+        while at != 0 && at < before && at.checked_add(OVERFLOW_HEADER).is_some_and(|e| e <= end) {
+            let mut bytes = [0u8; crate::width::small(OVERFLOW_HEADER)];
+            self.read(store, at, &mut bytes)?;
+            let Some((next, len, carved)) = decode_overflow_header(&bytes) else {
+                break;
+            };
+            if at.checked_add(len).is_none_or(|e| e > end) {
+                break;
+            }
+            let generation = self
+                .overlay
+                .ranges
+                .iter()
+                .filter(|(_, entry)| entry.at >= at && entry.at < at + len)
+                .map(|(_, entry)| entry.generation)
+                .max()
+                .unwrap_or(0)
+                .max(self.header.checkpointed);
+            self.overflow
+                .try_reserve(1)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "matrix overflow regions",
+                    requested: (self.overflow.len() as u64 + 1) * 40,
+                })?;
+            self.overflow.push(OverflowRegion {
+                at,
+                len,
+                generation,
+                carved,
+                next,
+            });
+            before = at;
+            at = next;
+        }
+        Ok(())
+    }
+
+    /// The reclaimed overflow region with the least room that holds `len`
+    /// bytes.
     fn reusable_overflow(&self, len: u64) -> Option<usize> {
         self.overflow
             .iter()
             .enumerate()
-            .filter(|(_, region)| region.len >= len && region.generation <= self.header.reclaimed)
-            .min_by_key(|(_, region)| region.len)
+            .filter(|(_, region)| {
+                region.free_room() >= len && region.generation <= self.header.reclaimed
+            })
+            .min_by_key(|(_, region)| region.free_room())
             .map(|(index, _)| index)
     }
 

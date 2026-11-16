@@ -307,10 +307,11 @@ with `LimitExceeded`. A frame holds at most a quarter of the ring.
 A publication is not limited by the ring. Once its frames would take more
 than half the ring, or a single staged unit does not fit in a frame, the rest
 streams outside it: each early write of staged changes (at most an eighth of
-the ring, 4 MiB) goes to an overflow record, the changes' bytes followed by a
-checksummed table of where each belongs, and the ring takes one 64-byte frame
-naming that record. Memory stays bounded by that early-write size whatever the
-publication's total. The commit is unchanged: the file is synced before the
+the ring, then 4 MiB once streaming) goes to an overflow record, the changes'
+bytes followed by a checksummed table of where each belongs, and the ring
+takes one 64-byte frame naming them. Later batches of the same publication
+fill the region the first one opened. Memory stays bounded by that
+early-write size whatever the publication's total. The commit is unchanged: the file is synced before the
 commit frame is written, so the overflow records a commit frame names are
 durable first, and readers see the whole publication or none of it
 (`a_sync_larger_than_the_ring_publishes_whole_and_reuses_its_overflow`,
@@ -323,8 +324,18 @@ it (`reclaimed`); a reader that was behind gets `MatrixSnapshotExpired`, never
 the newer bytes. When a large publication finds no free region, the writer
 checkpoints first if that frees one, so repeating a large rewrite reuses the
 same regions instead of growing the file. Records are allocated in whole
-mebibytes. Reuse lasts for the writer handle: a reopened writer appends new
-regions and leaves the old ones unused.
+mebibytes, each at least as long as what its publication streamed before
+it, so a long publication takes a few regions of doubling size. The metadata record points at a list of the
+regions, so a reopened writer finds and reuses them too.
+
+Free overflow space also takes new tiles and directory pages: one that fits
+is placed at the end of a free region instead of being appended, and the
+region's header records the space as taken through the ring, with the
+publication that first points at it. Rewriting a large part of the matrix
+and then extending it therefore fills the space the rewrite used before the
+file grows
+(`new_tiles_fill_free_overflow_space_and_the_space_survives_a_reopen`,
+`a_crash_while_tiles_fill_overflow_space_recovers_all_or_nothing`).
 
 When a frame does not fit, the writer runs a checkpoint inside that call. It
 chooses the oldest published generations whose removal leaves room for the
