@@ -32,6 +32,8 @@ const POLL: Duration = Duration::from_micros(100);
 pub fn cells() -> usize {
     if std::env::var_os("FB_SMALL").is_some() {
         1 << 18
+    } else if let Some(gb) = data_gb() {
+        (gb * 1e9 / CELL as f64) as usize / (1 << 16) * (1 << 16)
     } else {
         1 << 24
     }

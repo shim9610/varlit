@@ -31,6 +31,8 @@ pub const TS0: i64 = 1_700_000_000_000;
 pub fn rows() -> usize {
     if std::env::var_os("FB_SMALL").is_some() {
         4 << 20
+    } else if let Some(gb) = data_gb() {
+        (gb * 1e9 / 67.0) as usize / BATCH * BATCH
     } else {
         200_000_000
     }

@@ -38,6 +38,8 @@ pub const START: i64 = 1000;
 pub fn accounts() -> u64 {
     if std::env::var_os("FB_SMALL").is_some() {
         1_000_000
+    } else if let Some(gb) = data_gb() {
+        (gb * 1e9 / 52.0) as u64 / 100 * 100
     } else {
         200_000_000
     }

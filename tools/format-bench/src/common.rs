@@ -217,3 +217,13 @@ pub fn peak_rss_mb() -> u64 {
         })
         .map_or(0, |kb| kb / 1024)
 }
+
+/// Logical data size every scenario is scaled to, in GB (10^9 bytes), from
+/// `FB_DATA_GB`; unset keeps each scenario's own default size. `FB_SMALL`
+/// still selects the small smoke shapes and takes precedence.
+pub fn data_gb() -> Option<f64> {
+    if std::env::var_os("FB_SMALL").is_some() {
+        return None;
+    }
+    std::env::var("FB_DATA_GB").ok().and_then(|v| v.parse::<f64>().ok()).filter(|v| *v > 0.0)
+}

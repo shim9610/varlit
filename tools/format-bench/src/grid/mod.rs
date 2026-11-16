@@ -43,7 +43,11 @@ pub const SHAPES: &[&str] = &["bal", "plane", "cube", "time"];
 pub fn shape() -> Ix {
     match std::env::var("FB_GRID").as_deref() {
         Ok("small") => [16, 8, 4, 8, 128, 128],
-        _ => [64, 8, 4, 16, 256, 512],
+        _ => {
+            let step = 8 * 4 * 16 * 256 * 512 * 4;
+            let time = data_gb().map_or(64, |gb| ((gb * 1e9 / step as f64).round() as usize).max(1));
+            [time, 8, 4, 16, 256, 512]
+        }
     }
 }
 /// Elements per time step.
