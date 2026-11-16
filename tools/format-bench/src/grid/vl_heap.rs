@@ -65,6 +65,9 @@ impl GridWrite for Wr {
             self.w.put_h_chunk(&self.cur)?;
         }
         self.w.sync()?;
+        if std::env::var_os("FB_KEYED_TRACE").is_some() {
+            eprintln!("step {t} {:?}", self.w.inner().file().keyed_storage_stats()?);
+        }
         Ok(())
     }
     fn finish(self: Box<Self>) -> Result<()> {
