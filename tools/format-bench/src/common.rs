@@ -225,5 +225,8 @@ pub fn data_gb() -> Option<f64> {
     if std::env::var_os("FB_SMALL").is_some() {
         return None;
     }
-    std::env::var("FB_DATA_GB").ok().and_then(|v| v.parse::<f64>().ok()).filter(|v| *v > 0.0)
+    std::env::var("FB_DATA_GB")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
 }
