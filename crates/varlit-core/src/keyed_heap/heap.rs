@@ -1,0 +1,1160 @@
+//! The single writer of keyed storage: puts, deletes and finds records, and
+//! keeps the heap within the declared free-space ratio.
+//!
+//! Memory is fixed when the writer is opened: the ring's buffers, the hole
+//! cache and a small table of sparse regions. Every page and chunk is read
+//! and written through stack buffers, so puts, deletes, splits and
+//! compaction allocate nothing.
+//!
+//! **Staging units.** A reader's overlay keeps one range per start offset
+//! and lays overlapping ranges in offset order, so every byte this writer
+//! changes is staged in the same units each time: a bucket page as its
+//! 16-byte header and 16-byte slots, a chunk as its header, its key and its
+//! payload, a region as its header. Where the units themselves change (a hole
+//! or a free region taken for chunks of other sizes), the space is taken only
+//! once the generation that freed it is in place, so no overlay still holds
+//! a range in its old units.
+
+use super::sip::{self, Sip};
+use super::{
+    BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, FREE_BLOCK, Fixed, META_FIXED_LEN, META_LEN,
+    META_OVERFLOW_HEAD_AT, META_STATE_AT, REGION_BYTES, REGION_HEADER, Region, SLOT_LEN,
+    SLOTS_PER_PAGE, Slot, State, corrupt, heap_chunk_len, page_header, set_page_header,
+};
+use crate::matrix_tiles::ring_store::RingStore;
+use crate::matrix_tiles::store::{TileSource, TileStore};
+use crate::matrix_tiles::view::directory_offset;
+use crate::matrix_tiles::{DIR_FANOUT, DIR_LEVEL_BITS, DIR_PAGE_BYTES, RecordKind};
+use crate::{Error, Result};
+
+/// Holes the writer remembers. Fixed when the writer is opened; when it is
+/// full the smallest hole is forgotten (compaction reclaims it later).
+const HOLE_CACHE: usize = 4096;
+/// Sparse regions remembered as compaction candidates.
+const SPARSE: usize = 32;
+/// Bytes copied per step when a chunk moves or a key is compared.
+const STEP: usize = 4096;
+const HEADER_BYTES: usize = crate::width::small(BUCKET_HEADER);
+const SLOT_BYTES: usize = crate::width::small(SLOT_LEN);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HeapStats {
+    pub splits: u64,
+    pub regions_appended: u64,
+    pub regions_reused: u64,
+    pub holes_reused: u64,
+    pub chunks_moved: u64,
+    pub regions_compacted: u64,
+    /// Checkpoints run so freed space could be retaken.
+    pub checkpoints: u64,
+}
+
+/// Where a key's record is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Located {
+    pub slot: Slot,
+    /// The bucket page holding the slot, and its index there.
+    pub page: u64,
+    pub index: usize,
+    pub chunk: Chunk,
+}
+
+impl Located {
+    /// Where the payload starts.
+    pub(crate) const fn payload_at(&self) -> u64 {
+        self.slot.at() + CHUNK_HEADER + self.chunk.key_len as u64
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Hole {
+    region: u64,
+    at: u64,
+    len: u64,
+    /// The generation that freed it: reusable once that is in place.
+    generation: u64,
+}
+
+struct Holes {
+    entries: Box<[Hole]>,
+    len: usize,
+}
+
+impl Holes {
+    fn new() -> Result<Self> {
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(HOLE_CACHE)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "keyed heap hole cache",
+                requested: (HOLE_CACHE * std::mem::size_of::<Hole>()) as u64,
+            })?;
+        entries.resize(HOLE_CACHE, Hole::default());
+        Ok(Self {
+            entries: entries.into_boxed_slice(),
+            len: 0,
+        })
+    }
+
+    fn add(&mut self, hole: Hole) {
+        if self.len < self.entries.len() {
+            self.entries[self.len] = hole;
+            self.len += 1;
+            return;
+        }
+        let (index, smallest) = self.entries[..self.len]
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, held)| held.len)
+            .map(|(index, held)| (index, held.len))
+            .expect("the cache is full");
+        if hole.len > smallest {
+            self.entries[index] = hole;
+        }
+    }
+
+    /// The smallest hole of at least `len` bytes outside `avoid` that a
+    /// generation up to `in_place` freed.
+    fn take(&mut self, len: u64, avoid: u64, in_place: u64) -> Option<Hole> {
+        let index = self.entries[..self.len]
+            .iter()
+            .enumerate()
+            .filter(|(_, hole)| {
+                hole.len >= len && hole.region != avoid && hole.generation <= in_place
+            })
+            .min_by_key(|(_, hole)| hole.len)
+            .map(|(index, _)| index)?;
+        let hole = self.entries[index];
+        self.len -= 1;
+        self.entries[index] = self.entries[self.len];
+        Some(hole)
+    }
+
+    fn forget_region(&mut self, region: u64) {
+        let mut index = 0;
+        while index < self.len {
+            if self.entries[index].region == region {
+                self.len -= 1;
+                self.entries[index] = self.entries[self.len];
+            } else {
+                index += 1;
+            }
+        }
+    }
+}
+
+/// The sparsest regions seen: `(region, live, len)`.
+struct Sparse {
+    entries: [(u64, u64, u64); SPARSE],
+    len: usize,
+}
+
+impl Sparse {
+    const fn new() -> Self {
+        Self {
+            entries: [(0, 0, 0); SPARSE],
+            len: 0,
+        }
+    }
+
+    fn forget(&mut self, region: u64) {
+        if let Some(index) = self.entries[..self.len]
+            .iter()
+            .position(|entry| entry.0 == region)
+        {
+            self.len -= 1;
+            self.entries[index] = self.entries[self.len];
+        }
+    }
+
+    /// Notes a region's fill; keeps the [`SPARSE`] emptiest.
+    fn note(&mut self, region: u64, live: u64, len: u64) {
+        self.forget(region);
+        if live >= len {
+            return;
+        }
+        let entry = (region, live, len);
+        if self.len < SPARSE {
+            self.entries[self.len] = entry;
+            self.len += 1;
+            return;
+        }
+        let fullest = (0..self.len)
+            .max_by(|&a, &b| fill(self.entries[a]).total_cmp(&fill(self.entries[b])))
+            .expect("full");
+        if fill(entry) < fill(self.entries[fullest]) {
+            self.entries[fullest] = entry;
+        }
+    }
+
+    fn take(&mut self) -> Option<u64> {
+        let index = (0..self.len)
+            .min_by(|&a, &b| fill(self.entries[a]).total_cmp(&fill(self.entries[b])))?;
+        let region = self.entries[index].0;
+        self.len -= 1;
+        self.entries[index] = self.entries[self.len];
+        Some(region)
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a ranking of fill ratios, not an exact quantity"
+)]
+fn fill(entry: (u64, u64, u64)) -> f64 {
+    entry.1 as f64 / entry.2.max(1) as f64
+}
+
+pub(crate) struct KeyedHeap {
+    pub(crate) meta: u64,
+    fixed: Fixed,
+    pub(crate) ring: RingStore,
+    state: State,
+    /// The state as the last publication staged it.
+    staged: State,
+    /// The current region's payload length (`0`: none).
+    cur_len: u64,
+    holes: Holes,
+    sparse: Sparse,
+    pub(crate) stats: HeapStats,
+}
+
+impl KeyedHeap {
+    /// Lays out empty keyed storage: the metadata record, a ring of
+    /// `ring_len` bytes, one empty bucket and its directory, published.
+    pub(crate) fn create(
+        store: &mut dyn TileStore,
+        ring_len: u64,
+        ratio_permille: u16,
+        seed: [u64; 2],
+    ) -> Result<Self> {
+        if !(10..=50).contains(&ratio_permille) {
+            return Err(Error::InvalidFormatSpec(
+                "keyed storage free-space ratio must be 1 to 5 %",
+            ));
+        }
+        let mut fixed = Fixed {
+            ratio_permille,
+            seed,
+            ring: (0, 0),
+        };
+        let meta = store.append_zeroed(RecordKind::KeyedMeta, &fixed.encode(), META_LEN)?;
+        let ring = RingStore::create(store, ring_len, meta + META_OVERFLOW_HEAD_AT)?;
+        fixed.ring = (ring.ring.base, ring.ring.len);
+        store.write_at(meta, &fixed.encode())?;
+        let mut heap = Self::with_parts(meta, fixed, ring, State::default())?;
+        let root = heap.new_dir_page(store)?;
+        let bucket = heap.alloc_page(store)?;
+        let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
+        set_page_header(&mut page, 0, 0);
+        heap.stage_page(store, bucket, &page)?;
+        heap.ring.stage(store, root, &bucket.to_le_bytes())?;
+        heap.state.dir = (root, 1);
+        heap.publish(store)?;
+        Ok(heap)
+    }
+
+    /// Opens keyed storage whose metadata payload is at `meta`.
+    pub(crate) fn open(store: &mut dyn TileStore, meta: u64) -> Result<Self> {
+        let mut bytes = [0u8; crate::width::small(META_FIXED_LEN)];
+        store.read_at(meta, &mut bytes)?;
+        let fixed = Fixed::decode(&bytes)?;
+        let ring = RingStore::open(store, fixed.ring, meta + META_OVERFLOW_HEAD_AT)?;
+        let mut raw = [0u8; State::FIELDS * 8];
+        ring.read(store, meta + META_STATE_AT, &mut raw)?;
+        let state = State::decode(&raw)?;
+        let mut heap = Self::with_parts(meta, fixed, ring, state)?;
+        heap.staged = state;
+        if state.cur != 0 {
+            heap.cur_len = heap.region(store, state.cur)?.len;
+        }
+        Ok(heap)
+    }
+
+    fn with_parts(meta: u64, fixed: Fixed, ring: RingStore, state: State) -> Result<Self> {
+        Ok(Self {
+            meta,
+            fixed,
+            ring,
+            state,
+            staged: State::default(),
+            cur_len: 0,
+            holes: Holes::new()?,
+            sparse: Sparse::new(),
+            stats: HeapStats::default(),
+        })
+    }
+
+    pub(crate) const fn state(&self) -> &State {
+        &self.state
+    }
+
+    /// Bytes of holes in the heap (see [`State::holes`]).
+    pub(crate) const fn holes(&self) -> u64 {
+        self.state.holes(self.cur_tail())
+    }
+
+    const fn cur_tail(&self) -> u64 {
+        if self.state.cur == 0 {
+            0
+        } else {
+            self.cur_len - self.state.cur_used
+        }
+    }
+
+    // ---- publication ----
+
+    /// Publishes everything since the last publication as one generation.
+    pub(crate) fn publish(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+        if self.state != self.staged {
+            self.ring
+                .stage(store, self.meta + META_STATE_AT, &self.state.encode())?;
+            self.staged = self.state;
+        }
+        self.ring.publish(store)
+    }
+
+    // ---- lookups ----
+
+    fn route(&self, block_id: u32, key: &[u8]) -> u32 {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the low 32 bits route and fingerprint"
+        )]
+        let route = sip::hash(self.fixed.seed, &[&block_id.to_le_bytes(), key]) as u32;
+        route
+    }
+
+    /// Finds `key` of `block_id`.
+    pub(crate) fn find(
+        &self,
+        store: &dyn TileSource,
+        block_id: u32,
+        key: &[u8],
+    ) -> Result<Option<Located>> {
+        let route = self.route(block_id, key);
+        let mut at = self.bucket(store, self.state.bucket_of(route))?;
+        let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
+        while at != 0 {
+            self.ring.read(store, at, &mut page)?;
+            let (count, next) = page_header(&page)?;
+            for index in 0..count {
+                let slot = slot_at(&page, index);
+                if slot.route != route {
+                    continue;
+                }
+                let chunk = self.chunk(store, slot.at())?;
+                if chunk.block_id == block_id
+                    && chunk.key_len as usize == key.len()
+                    && self.key_equals(store, slot.at() + CHUNK_HEADER, key)?
+                {
+                    return Ok(Some(Located {
+                        slot,
+                        page: at,
+                        index,
+                        chunk,
+                    }));
+                }
+            }
+            at = next;
+        }
+        Ok(None)
+    }
+
+    /// Reads a located record's payload into `out`, which must be its
+    /// length, and checks the chunk's checksum.
+    pub(crate) fn read_payload(
+        &self,
+        store: &dyn TileSource,
+        found: &Located,
+        out: &mut [u8],
+    ) -> Result<()> {
+        if out.len() != found.chunk.payload_len as usize {
+            return Err(Error::BufferTooSmall {
+                resource: "keyed record payload",
+                required: found.chunk.payload_len as usize,
+                provided: out.len(),
+            });
+        }
+        self.ring.read(store, found.payload_at(), out)?;
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(&found.chunk.encode()[..12]);
+        let mut step = [0u8; STEP];
+        let mut done = 0u64;
+        let key_len = u64::from(found.chunk.key_len);
+        while done < key_len {
+            let n = crate::width::bounded(key_len - done, STEP);
+            self.ring
+                .read(store, found.slot.at() + CHUNK_HEADER + done, &mut step[..n])?;
+            crc.update(&step[..n]);
+            done += n as u64;
+        }
+        crc.update(out);
+        if crc.finalize() != found.chunk.crc {
+            return Err(Error::ChecksumMismatch {
+                offset: found.slot.at(),
+            });
+        }
+        Ok(())
+    }
+
+    fn chunk(&self, store: &dyn TileSource, at: u64) -> Result<Chunk> {
+        let mut header = [0u8; crate::width::small(CHUNK_HEADER)];
+        self.ring.read(store, at, &mut header)?;
+        Ok(Chunk::decode(&header))
+    }
+
+    fn key_equals(&self, store: &dyn TileSource, at: u64, key: &[u8]) -> Result<bool> {
+        let mut step = [0u8; STEP];
+        for (index, piece) in key.chunks(STEP).enumerate() {
+            let read = &mut step[..piece.len()];
+            self.ring.read(store, at + (index * STEP) as u64, read)?;
+            if read != piece {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn region(&self, store: &dyn TileSource, at: u64) -> Result<Region> {
+        let mut header = [0u8; crate::width::small(REGION_HEADER)];
+        self.ring.read(store, at, &mut header)?;
+        Region::decode(&header)
+    }
+
+    // ---- puts and deletes ----
+
+    /// Stores `payload` as the record of `key` of `block_id`, replacing the
+    /// one there is.
+    pub(crate) fn put(
+        &mut self,
+        store: &mut dyn TileStore,
+        block_id: u32,
+        key: &[u8],
+        payload: &[u8],
+    ) -> Result<()> {
+        if block_id == FREE_BLOCK {
+            return Err(corrupt("reserved keyed block id"));
+        }
+        let header = Chunk {
+            payload_len: field32("keyed record payload", payload.len())?,
+            block_id,
+            key_len: field32("keyed record key", key.len())?,
+            crc: 0,
+        };
+        let len = heap_chunk_len(key.len() as u64, payload.len() as u64);
+        let found = self.find(store, block_id, key)?;
+        match found {
+            Some(found) if len <= found.chunk.len() => {
+                let at = found.slot.at();
+                self.write_chunk(store, at, header, key, payload)?;
+                let left = found.chunk.len() - len;
+                if left > 0 {
+                    self.release(store, found.slot.region, at + len, left)?;
+                }
+            }
+            Some(found) => {
+                let (region, at) = self.alloc(store, len, 0)?;
+                self.write_chunk(store, at, header, key, payload)?;
+                self.add_live(store, region, len)?;
+                let slot = Slot {
+                    route: found.slot.route,
+                    offset: offset_in(region, at)?,
+                    region,
+                };
+                self.ring
+                    .stage(store, slot_offset(found.page, found.index), &slot.encode())?;
+                self.release(store, found.slot.region, found.slot.at(), found.chunk.len())?;
+            }
+            None => {
+                let (region, at) = self.alloc(store, len, 0)?;
+                self.write_chunk(store, at, header, key, payload)?;
+                self.add_live(store, region, len)?;
+                let slot = Slot {
+                    route: self.route(block_id, key),
+                    offset: offset_in(region, at)?,
+                    region,
+                };
+                self.insert_slot(store, self.state.bucket_of(slot.route), slot)?;
+                self.state.keys += 1;
+                while self.state.keys * 4 > self.state.buckets() * SLOTS_PER_PAGE as u64 * 3 {
+                    self.split(store)?;
+                }
+            }
+        }
+        self.compact_if_needed(store)
+    }
+
+    /// Removes `key` of `block_id`; `false` when there is none.
+    pub(crate) fn delete(
+        &mut self,
+        store: &mut dyn TileStore,
+        block_id: u32,
+        key: &[u8],
+    ) -> Result<bool> {
+        let Some(found) = self.find(store, block_id, key)? else {
+            return Ok(false);
+        };
+        self.remove_slot(store, found.page, found.index)?;
+        self.state.keys -= 1;
+        self.release(store, found.slot.region, found.slot.at(), found.chunk.len())?;
+        self.compact_if_needed(store)?;
+        Ok(true)
+    }
+
+    fn write_chunk(
+        &mut self,
+        store: &mut dyn TileStore,
+        at: u64,
+        mut header: Chunk,
+        key: &[u8],
+        payload: &[u8],
+    ) -> Result<()> {
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(&header.encode()[..12]);
+        crc.update(key);
+        crc.update(payload);
+        header.crc = crc.finalize();
+        self.ring.stage(store, at, &header.encode())?;
+        if !key.is_empty() {
+            self.ring.stage(store, at + CHUNK_HEADER, key)?;
+        }
+        if !payload.is_empty() {
+            self.ring
+                .stage(store, at + CHUNK_HEADER + key.len() as u64, payload)?;
+        }
+        Ok(())
+    }
+
+    /// Marks `len` bytes at `at` of `region` free: no longer live, a hole.
+    fn release(&mut self, store: &mut dyn TileStore, region: u64, at: u64, len: u64) -> Result<()> {
+        self.ring.stage(store, at, &Chunk::free(len)?.encode())?;
+        self.sub_live(store, region, len)?;
+        let generation = self.ring.published() + 1;
+        self.holes.add(Hole {
+            region,
+            at,
+            len,
+            generation,
+        });
+        Ok(())
+    }
+
+    fn add_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<()> {
+        let mut header = self.region(store, region)?;
+        header.live += len;
+        self.state.live += len;
+        self.ring.stage(store, region, &header.encode())?;
+        Ok(())
+    }
+
+    fn sub_live(&mut self, store: &mut dyn TileStore, region: u64, len: u64) -> Result<()> {
+        let mut header = self.region(store, region)?;
+        header.live = header
+            .live
+            .checked_sub(len)
+            .ok_or(corrupt("keyed heap region accounting"))?;
+        self.state.live = self
+            .state
+            .live
+            .checked_sub(len)
+            .ok_or(corrupt("keyed heap accounting"))?;
+        self.ring.stage(store, region, &header.encode())?;
+        if region != self.state.cur {
+            self.sparse.note(region, header.live, header.len);
+        }
+        Ok(())
+    }
+
+    // ---- space ----
+
+    /// Finds `len` bytes for a chunk outside region `avoid`: the smallest
+    /// cached hole that holds it, the current region's tail, a free region
+    /// or a new one. Returns `(region, offset)`.
+    fn alloc(&mut self, store: &mut dyn TileStore, len: u64, avoid: u64) -> Result<(u64, u64)> {
+        if let Some(found) = self.reuse(store, len, avoid)? {
+            return Ok(found);
+        }
+        // Space freed by generations not yet in place may not be retaken
+        // (see the module notes). Rather than grow the file past it, put
+        // those generations in place now and look again.
+        if self.ring.published() > self.ring.checkpointed()
+            && (self.state.free >= len || self.holes() >= len)
+        {
+            self.ring.checkpoint(store, u64::MAX)?;
+            self.stats.checkpoints += 1;
+            if let Some(found) = self.reuse(store, len, avoid)? {
+                return Ok(found);
+            }
+        }
+        if len > REGION_BYTES / 2 {
+            let region = self.new_region(store, len)?;
+            return Ok((region, region + REGION_HEADER));
+        }
+        self.close_cur(store)?;
+        let region = match self.pop_free_region(store, len, avoid)? {
+            Some(region) => region,
+            None => self.new_region(store, REGION_BYTES)?,
+        };
+        self.state.cur = region;
+        self.cur_len = self.region(store, region)?.len;
+        self.state.cur_used = len;
+        self.sparse.forget(region);
+        Ok((region, region + REGION_HEADER))
+    }
+
+    /// Space that exists already: a cached hole, the current region's tail,
+    /// or a free region as the new current one.
+    fn reuse(
+        &mut self,
+        store: &mut dyn TileStore,
+        len: u64,
+        avoid: u64,
+    ) -> Result<Option<(u64, u64)>> {
+        if let Some(hole) = self.holes.take(len, avoid, self.ring.checkpointed()) {
+            self.stats.holes_reused += 1;
+            if hole.len > len {
+                // The rest was in place too: never staged in other units.
+                self.ring
+                    .stage(store, hole.at + len, &Chunk::free(hole.len - len)?.encode())?;
+                self.holes.add(Hole {
+                    region: hole.region,
+                    at: hole.at + len,
+                    len: hole.len - len,
+                    generation: hole.generation,
+                });
+            }
+            return Ok(Some((hole.region, hole.at)));
+        }
+        let cur = self.state.cur;
+        if cur != 0 && cur != avoid && self.state.cur_used + len <= self.cur_len {
+            let at = cur + REGION_HEADER + self.state.cur_used;
+            self.state.cur_used += len;
+            return Ok(Some((cur, at)));
+        }
+        if len > REGION_BYTES / 2 {
+            return Ok(None);
+        }
+        let Some(region) = self.pop_free_region(store, len, avoid)? else {
+            return Ok(None);
+        };
+        self.close_cur(store)?;
+        self.state.cur = region;
+        self.cur_len = self.region(store, region)?.len;
+        self.state.cur_used = len;
+        self.sparse.forget(region);
+        Ok(Some((region, region + REGION_HEADER)))
+    }
+
+    /// Ends the current region: its unused tail becomes a free chunk.
+    fn close_cur(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        let cur = self.state.cur;
+        if cur == 0 {
+            return Ok(());
+        }
+        let tail = self.cur_len - self.state.cur_used;
+        if tail > 0 {
+            let at = cur + REGION_HEADER + self.state.cur_used;
+            self.ring.stage(store, at, &Chunk::free(tail)?.encode())?;
+            // Nothing was ever staged in the tail but its free header, in
+            // the unit a chunk header there uses: reusable at once.
+            self.holes.add(Hole {
+                region: cur,
+                at,
+                len: tail,
+                generation: 0,
+            });
+        }
+        self.state.cur = 0;
+        self.state.cur_used = 0;
+        self.cur_len = 0;
+        let header = self.region(store, cur)?;
+        self.sparse.note(cur, header.live, header.len);
+        Ok(())
+    }
+
+    fn new_region(&mut self, store: &mut dyn TileStore, len: u64) -> Result<u64> {
+        let header = Region {
+            len,
+            live: 0,
+            next_all: self.state.regions,
+            next_free: 0,
+            freed: 0,
+        };
+        let at = self.ring.place_record(
+            store,
+            RecordKind::Heap,
+            &header.encode(),
+            REGION_HEADER + len,
+        )?;
+        self.state.regions = at;
+        self.state.heap += len;
+        self.stats.regions_appended += 1;
+        Ok(at)
+    }
+
+    /// Takes a free region of at least `len` bytes from the head of the free
+    /// list. Only the head is looked at: free regions are ordinary ones, and
+    /// a larger record gets its own region anyway.
+    fn pop_free_region(
+        &mut self,
+        store: &mut dyn TileStore,
+        len: u64,
+        avoid: u64,
+    ) -> Result<Option<u64>> {
+        let head = self.state.free_regions;
+        if head == 0 || head == avoid {
+            return Ok(None);
+        }
+        let mut header = self.region(store, head)?;
+        if header.len < len || header.freed > self.ring.checkpointed() {
+            return Ok(None);
+        }
+        // The last free region links to itself.
+        if header.next_free == head {
+            self.state.free_regions = 0;
+            self.state.free_tail = 0;
+        } else {
+            self.state.free_regions = header.next_free;
+        }
+        self.state.free -= header.len;
+        header.next_free = 0;
+        header.live = 0;
+        header.freed = 0;
+        self.ring.stage(store, head, &header.encode())?;
+        self.stats.regions_reused += 1;
+        Ok(Some(head))
+    }
+
+    // ---- compaction ----
+
+    fn compact_if_needed(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        // A file whose holes are smaller than one region is not worth a move.
+        let allowed =
+            (self.state.live / 1000 * u64::from(self.fixed.ratio_permille)).max(REGION_BYTES);
+        if self.holes() <= allowed {
+            return Ok(());
+        }
+        let Some(mut region) = self.sparsest(store)? else {
+            return Ok(());
+        };
+        // Put what is published in place first: the holes and free regions
+        // earlier generations left become reusable, so the moves below fill
+        // them instead of growing the file.
+        if self.ring.published() > self.ring.checkpointed() {
+            self.ring.checkpoint(store, u64::MAX)?;
+        }
+        // Each pass empties one region; a few bound one call's work.
+        for _ in 0..4 {
+            self.empty_region(store, region)?;
+            if self.holes() <= allowed {
+                break;
+            }
+            match self.sparsest(store)? {
+                Some(next) => region = next,
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
+    fn sparsest(&mut self, store: &mut dyn TileStore) -> Result<Option<u64>> {
+        if self.sparse.len == 0 {
+            // Reopened, or every candidate was used: look at every region.
+            let mut at = self.state.regions;
+            while at != 0 {
+                let header = self.region(store, at)?;
+                if at != self.state.cur && header.next_free == 0 && at != self.state.free_regions {
+                    self.sparse.note(at, header.live, header.len);
+                }
+                at = header.next_all;
+            }
+        }
+        while let Some(region) = self.sparse.take() {
+            if region != self.state.cur && !self.is_free_region(store, region)? {
+                return Ok(Some(region));
+            }
+        }
+        Ok(None)
+    }
+
+    fn is_free_region(&self, store: &dyn TileSource, region: u64) -> Result<bool> {
+        Ok(region == self.state.free_regions || self.region(store, region)?.next_free != 0)
+    }
+
+    /// Moves every live chunk out of `region` and puts it on the free list.
+    fn empty_region(&mut self, store: &mut dyn TileStore, region: u64) -> Result<()> {
+        let header = self.region(store, region)?;
+        let end = region + REGION_HEADER + header.len;
+        let mut at = region + REGION_HEADER;
+        while at < end {
+            let chunk = self.chunk(store, at)?;
+            let len = chunk.len();
+            if len < CHUNK_HEADER || len > end - at {
+                return Err(corrupt("keyed heap chunk length"));
+            }
+            if chunk.block_id != FREE_BLOCK
+                && let Some((page, index, slot)) =
+                    self.slot_pointing_at(store, &chunk, region, at)?
+            {
+                let (to_region, to) = self.alloc(store, len, region)?;
+                self.move_chunk(store, &chunk, at, to)?;
+                self.add_live(store, to_region, len)?;
+                let moved = Slot {
+                    route: slot.route,
+                    offset: offset_in(to_region, to)?,
+                    region: to_region,
+                };
+                self.ring
+                    .stage(store, slot_offset(page, index), &moved.encode())?;
+                self.stats.chunks_moved += 1;
+            }
+            at += len;
+        }
+        let mut header = self.region(store, region)?;
+        self.state.live = self
+            .state
+            .live
+            .checked_sub(header.live)
+            .ok_or(corrupt("keyed heap accounting"))?;
+        header.live = 0;
+        header.freed = self.ring.published() + 1;
+        // Free regions queue oldest first, so the one taken next is the one
+        // most likely in place already. A free region always has a nonzero
+        // link: the last links to itself.
+        header.next_free = region;
+        self.ring.stage(store, region, &header.encode())?;
+        let tail = self.state.free_tail;
+        if tail == 0 {
+            self.state.free_regions = region;
+        } else {
+            let mut last = self.region(store, tail)?;
+            last.next_free = region;
+            self.ring.stage(store, tail, &last.encode())?;
+        }
+        self.state.free_tail = region;
+        self.state.free += header.len;
+        self.holes.forget_region(region);
+        self.sparse.forget(region);
+        self.stats.regions_compacted += 1;
+        Ok(())
+    }
+
+    /// The slot that makes the chunk at `at` live: `(page, index, slot)`.
+    fn slot_pointing_at(
+        &self,
+        store: &dyn TileSource,
+        chunk: &Chunk,
+        region: u64,
+        at: u64,
+    ) -> Result<Option<(u64, usize, Slot)>> {
+        let mut hasher = Sip::new(self.fixed.seed);
+        hasher.write(&chunk.block_id.to_le_bytes());
+        let mut step = [0u8; STEP];
+        let mut done = 0u64;
+        let key_len = u64::from(chunk.key_len);
+        while done < key_len {
+            let n = crate::width::bounded(key_len - done, STEP);
+            self.ring
+                .read(store, at + CHUNK_HEADER + done, &mut step[..n])?;
+            hasher.write(&step[..n]);
+            done += n as u64;
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the low 32 bits route and fingerprint"
+        )]
+        let route = hasher.finish() as u32;
+        let offset = offset_in(region, at)?;
+        let mut page_at = self.bucket(store, self.state.bucket_of(route))?;
+        let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
+        while page_at != 0 {
+            self.ring.read(store, page_at, &mut page)?;
+            let (count, next) = page_header(&page)?;
+            for index in 0..count {
+                let slot = slot_at(&page, index);
+                if slot.route == route && slot.region == region && slot.offset == offset {
+                    return Ok(Some((page_at, index, slot)));
+                }
+            }
+            page_at = next;
+        }
+        Ok(None)
+    }
+
+    /// Copies a chunk to `to` in its three units, as a put would write it.
+    fn move_chunk(
+        &mut self,
+        store: &mut dyn TileStore,
+        chunk: &Chunk,
+        from: u64,
+        to: u64,
+    ) -> Result<()> {
+        self.ring.stage(store, to, &chunk.encode())?;
+        let key = u64::from(chunk.key_len);
+        let payload = u64::from(chunk.payload_len);
+        if key > 0 {
+            self.ring
+                .stage_copy(store, from + CHUNK_HEADER, to + CHUNK_HEADER, key)?;
+        }
+        if payload > 0 {
+            self.ring.stage_copy(
+                store,
+                from + CHUNK_HEADER + key,
+                to + CHUNK_HEADER + key,
+                payload,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Stages a whole bucket page: at once when it is fresh, else as its
+    /// header and slot units (see the module notes).
+    fn stage_page(
+        &mut self,
+        store: &mut dyn TileStore,
+        at: u64,
+        page: &[u8; crate::width::small(BUCKET_PAGE)],
+    ) -> Result<()> {
+        if self.ring.is_fresh_range(at, BUCKET_PAGE) {
+            return self.ring.stage(store, at, page);
+        }
+        let (count, _) = page_header(page)?;
+        for unit in 0..=count {
+            let start = unit * crate::width::small(SLOT_LEN);
+            self.ring.stage(
+                store,
+                at + start as u64,
+                &page[start..start + crate::width::small(SLOT_LEN)],
+            )?;
+        }
+        Ok(())
+    }
+
+    // ---- buckets ----
+
+    fn insert_slot(&mut self, store: &mut dyn TileStore, bucket: u64, slot: Slot) -> Result<()> {
+        let mut at = self.bucket(store, bucket)?;
+        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
+        loop {
+            self.ring.read(store, at, &mut header)?;
+            let (count, next) = page_header(&header)?;
+            if count < SLOTS_PER_PAGE {
+                self.ring
+                    .stage(store, slot_offset(at, count), &slot.encode())?;
+                set_page_header(&mut header, count + 1, next);
+                return self.ring.stage(store, at, &header);
+            }
+            if next == 0 {
+                let page_at = self.alloc_page(store)?;
+                let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
+                set_page_header(&mut page, 1, 0);
+                page[HEADER_BYTES..HEADER_BYTES + SLOT_BYTES].copy_from_slice(&slot.encode());
+                self.stage_page(store, page_at, &page)?;
+                set_page_header(&mut header, count, page_at);
+                return self.ring.stage(store, at, &header);
+            }
+            at = next;
+        }
+    }
+
+    fn remove_slot(&mut self, store: &mut dyn TileStore, page: u64, index: usize) -> Result<()> {
+        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
+        self.ring.read(store, page, &mut header)?;
+        let (count, next) = page_header(&header)?;
+        let last = count.checked_sub(1).ok_or(corrupt("keyed bucket page"))?;
+        if index != last {
+            let mut moved = [0u8; crate::width::small(SLOT_LEN)];
+            self.ring.read(store, slot_offset(page, last), &mut moved)?;
+            self.ring.stage(store, slot_offset(page, index), &moved)?;
+        }
+        set_page_header(&mut header, last, next);
+        self.ring.stage(store, page, &header)
+    }
+
+    /// Splits the bucket at the split pointer: slots whose next routing bit
+    /// is set move to a new bucket, the rest are packed back into the old
+    /// bucket's pages, and pages left over go to the free list.
+    fn split(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        let from = self.state.split;
+        let bit = 1u64 << self.state.level;
+        let to = from + bit;
+        let head = self.bucket(store, from)?;
+        let to_head = self.alloc_page(store)?;
+        self.set_bucket(store, to, to_head)?;
+
+        let mut read = [0u8; crate::width::small(BUCKET_PAGE)];
+        let mut stay = [0u8; crate::width::small(BUCKET_PAGE)];
+        let mut moved = [0u8; crate::width::small(BUCKET_PAGE)];
+        let (mut stay_count, mut moved_count) = (0usize, 0usize);
+        // Stay pages overwrite the old chain from its head: never ahead of
+        // the page being read, since they hold no more slots than were read.
+        let mut stay_at = head;
+        let mut moved_at = to_head;
+        let mut at = head;
+        while at != 0 {
+            self.ring.read(store, at, &mut read)?;
+            let (count, next) = page_header(&read)?;
+            for index in 0..count {
+                let start = HEADER_BYTES + index * SLOT_BYTES;
+                let bytes = &read[start..start + crate::width::small(SLOT_LEN)];
+                if u64::from(Slot::decode(bytes).route) & bit != 0 {
+                    if moved_count == SLOTS_PER_PAGE {
+                        let next_page = self.alloc_page(store)?;
+                        set_page_header(&mut moved, moved_count, next_page);
+                        self.stage_page(store, moved_at, &moved)?;
+                        moved_at = next_page;
+                        moved_count = 0;
+                    }
+                    put_slot(&mut moved, moved_count, bytes);
+                    moved_count += 1;
+                } else {
+                    if stay_count == SLOTS_PER_PAGE {
+                        let next_page = self.next_page(store, stay_at)?;
+                        set_page_header(&mut stay, stay_count, next_page);
+                        self.stage_page(store, stay_at, &stay)?;
+                        stay_at = next_page;
+                        stay_count = 0;
+                    }
+                    put_slot(&mut stay, stay_count, bytes);
+                    stay_count += 1;
+                }
+            }
+            at = next;
+        }
+        let mut spare = self.next_page(store, stay_at)?;
+        set_page_header(&mut stay, stay_count, 0);
+        zero_slots(&mut stay, stay_count);
+        self.stage_page(store, stay_at, &stay)?;
+        set_page_header(&mut moved, moved_count, 0);
+        zero_slots(&mut moved, moved_count);
+        self.stage_page(store, moved_at, &moved)?;
+        while spare != 0 {
+            let next = self.next_page(store, spare)?;
+            self.free_page(store, spare)?;
+            spare = next;
+        }
+        self.state.split += 1;
+        if self.state.split == bit {
+            self.state.level += 1;
+            self.state.split = 0;
+        }
+        self.stats.splits += 1;
+        Ok(())
+    }
+
+    fn next_page(&self, store: &dyn TileSource, page: u64) -> Result<u64> {
+        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
+        self.ring.read(store, page, &mut header)?;
+        Ok(page_header(&header)?.1)
+    }
+
+    fn alloc_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+        let head = self.state.free_pages;
+        if head != 0 {
+            let mut link = [0u8; 8];
+            self.ring.read(store, head + 8, &mut link)?;
+            self.state.free_pages = u64::from_le_bytes(link);
+            return Ok(head);
+        }
+        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
+        set_page_header(&mut header, 0, 0);
+        self.ring
+            .place_record(store, RecordKind::Bucket, &header, BUCKET_PAGE)
+    }
+
+    fn free_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
+        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
+        set_page_header(&mut header, 0, self.state.free_pages);
+        self.ring.stage(store, page, &header)?;
+        self.state.free_pages = page;
+        Ok(())
+    }
+
+    // ---- bucket directory ----
+
+    /// The first page of bucket `bucket`.
+    fn bucket(&self, store: &dyn TileSource, bucket: u64) -> Result<u64> {
+        let (mut page, height) = self.state.dir;
+        if height < 8 && bucket >> (u64::from(DIR_LEVEL_BITS) * height) != 0 {
+            return Err(corrupt("keyed bucket directory"));
+        }
+        for level in (0..height).rev() {
+            let index = (bucket >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
+            let mut entry = [0u8; 8];
+            self.ring.read(store, page + index * 8, &mut entry)?;
+            page = directory_offset(u64::from_le_bytes(entry))?;
+            if page == 0 {
+                return Err(corrupt("keyed bucket directory"));
+            }
+        }
+        Ok(page)
+    }
+
+    fn set_bucket(&mut self, store: &mut dyn TileStore, bucket: u64, first: u64) -> Result<()> {
+        let (mut root, mut height) = self.state.dir;
+        let bits = 64 - bucket.leading_zeros();
+        let needed = u64::from(bits.div_ceil(DIR_LEVEL_BITS).max(1));
+        while height < needed {
+            let taller = self.new_dir_page(store)?;
+            self.ring.stage(store, taller, &root.to_le_bytes())?;
+            root = taller;
+            height += 1;
+        }
+        self.state.dir = (root, height);
+        let mut page = root;
+        for level in (1..height).rev() {
+            let index = (bucket >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
+            let at = page + index * 8;
+            let mut entry = [0u8; 8];
+            self.ring.read(store, at, &mut entry)?;
+            let mut child = directory_offset(u64::from_le_bytes(entry))?;
+            if child == 0 {
+                child = self.new_dir_page(store)?;
+                self.ring.stage(store, at, &child.to_le_bytes())?;
+            }
+            page = child;
+        }
+        self.ring.stage(
+            store,
+            page + (bucket & (DIR_FANOUT - 1)) * 8,
+            &first.to_le_bytes(),
+        )
+    }
+
+    fn new_dir_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+        self.ring
+            .place_record(store, RecordKind::Directory, &[], DIR_PAGE_BYTES)
+    }
+}
+
+fn slot_at(page: &[u8], index: usize) -> Slot {
+    let start = HEADER_BYTES + index * SLOT_BYTES;
+    Slot::decode(&page[start..start + crate::width::small(SLOT_LEN)])
+}
+
+fn put_slot(page: &mut [u8], index: usize, bytes: &[u8]) {
+    let start = HEADER_BYTES + index * SLOT_BYTES;
+    page[start..start + crate::width::small(SLOT_LEN)].copy_from_slice(bytes);
+}
+
+fn zero_slots(page: &mut [u8], from: usize) {
+    let start = HEADER_BYTES + from * SLOT_BYTES;
+    page[start..].fill(0);
+}
+
+const fn slot_offset(page: u64, index: usize) -> u64 {
+    page + BUCKET_HEADER + index as u64 * SLOT_LEN
+}
+
+fn offset_in(region: u64, at: u64) -> Result<u32> {
+    u32::try_from(at - region).map_err(|_| corrupt("keyed heap chunk offset"))
+}
+
+fn field32(resource: &'static str, len: usize) -> Result<u32> {
+    u32::try_from(len).map_err(|_| Error::LimitExceeded {
+        resource,
+        actual: len as u64,
+        limit: u64::from(u32::MAX),
+    })
+}

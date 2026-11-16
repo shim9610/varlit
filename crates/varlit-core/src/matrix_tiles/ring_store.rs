@@ -320,6 +320,26 @@ impl Coalescer<'_> {
     }
 }
 
+/// Bytes copied per step when a staged range is copied from the file.
+const COPY_PIECE: usize = 4096;
+
+/// What a staged range holds: bytes from the caller, or bytes this writer
+/// sees elsewhere in the file.
+#[derive(Clone, Copy)]
+enum Src<'a> {
+    Bytes(&'a [u8]),
+    Copy { from: u64, len: u64 },
+}
+
+impl Src<'_> {
+    const fn len(&self) -> u64 {
+        match self {
+            Self::Bytes(bytes) => bytes.len() as u64,
+            Self::Copy { len, .. } => *len,
+        }
+    }
+}
+
 pub(crate) struct RingStore {
     /// Where the newest overflow region's payload offset is kept (`0`: none),
     /// a field of the owner's metadata changed through the ring.
@@ -477,20 +497,80 @@ impl RingStore {
         target: u64,
         bytes: &[u8],
     ) -> Result<()> {
-        let len = bytes.len() as u64;
-        if self.is_fresh(target, len) {
-            store.write_at(target, bytes)?;
+        self.stage_src(store, target, Src::Bytes(bytes))
+    }
+
+    /// Stages the `len` bytes this writer sees at `from` to be written at
+    /// `to`, streamed through a stack buffer: one range, as [`Self::stage`]
+    /// of those bytes would be.
+    pub(crate) fn stage_copy(
+        &mut self,
+        store: &mut dyn TileStore,
+        from: u64,
+        to: u64,
+        len: u64,
+    ) -> Result<()> {
+        self.stage_src(store, to, Src::Copy { from, len })
+    }
+
+    fn stage_src(&mut self, store: &mut dyn TileStore, target: u64, src: Src<'_>) -> Result<()> {
+        if self.is_fresh(target, src.len()) {
+            self.write_src(store, target, src, false)?;
             self.appended = true;
             return Ok(());
         }
         self.spilled = true;
-        if self.building.is_none() && !self.stage_in_ring(store, target, bytes)? {
+        if self.building.is_none() && !self.stage_in_ring(store, target, src)? {
             self.start_index(store)?;
         }
         if self.building.is_some() {
-            self.stage_in_index(store, target, bytes)?;
+            self.stage_in_index(store, target, src)?;
         }
         Ok(())
+    }
+
+    /// Writes `src` at `at`, feeding the open frame's checksum when `hash`.
+    fn write_src(
+        &mut self,
+        store: &mut dyn TileStore,
+        at: u64,
+        src: Src<'_>,
+        hash: bool,
+    ) -> Result<()> {
+        match src {
+            Src::Bytes(bytes) => {
+                store.write_at(at, bytes)?;
+                if hash && let Some(frame) = self.frame.as_mut() {
+                    frame.hasher.update(bytes);
+                }
+            }
+            Src::Copy { from, len } => {
+                let mut piece = [0u8; COPY_PIECE];
+                let mut done = 0u64;
+                while done < len {
+                    let n = crate::width::bounded(len - done, COPY_PIECE);
+                    self.read(&*store, from + done, &mut piece[..n])?;
+                    store.write_at(at + done, &piece[..n])?;
+                    if hash && let Some(frame) = self.frame.as_mut() {
+                        frame.hasher.update(&piece[..n]);
+                    }
+                    done += n as u64;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The newest generation in place: ranges staged in it or before are no
+    /// longer in any overlay.
+    pub(crate) const fn checkpointed(&self) -> u64 {
+        self.header.checkpointed
+    }
+
+    /// Whether `[target, target + len)` was appended or carved since the
+    /// last publication, so writing it goes straight to the file.
+    pub(crate) fn is_fresh_range(&self, target: u64, len: u64) -> bool {
+        self.is_fresh(target, len)
     }
 
     /// Whether `[target, target + len)` lies inside a record appended, or
@@ -512,9 +592,9 @@ impl RingStore {
         &mut self,
         store: &mut dyn TileStore,
         target: u64,
-        bytes: &[u8],
+        src: Src<'_>,
     ) -> Result<bool> {
-        let len = bytes.len() as u64;
+        let len = src.len();
         let need = ENTRY_HEADER + len;
         // Room for the entry, a header, padding and the checksum.
         let whole = FRAME_HEADER + need + 12;
@@ -541,27 +621,33 @@ impl RingStore {
         let at = self.ring.at(frame.at + frame.len);
         let mut entry = [0u8; crate::width::small(ENTRY_HEADER)];
         entry[..8].copy_from_slice(&target.to_le_bytes());
-        entry[8..].copy_from_slice(&crate::width::field32(bytes.len())?.to_le_bytes());
+        let len32 = crate::width::field32(crate::width::small(len))?;
+        entry[8..].copy_from_slice(&len32.to_le_bytes());
         let header_len = entry.len();
-        if header_len + bytes.len() <= self.copy.len() {
-            self.copy[..header_len].copy_from_slice(&entry);
-            self.copy[header_len..header_len + bytes.len()].copy_from_slice(bytes);
-            store.write_at(at, &self.copy[..header_len + bytes.len()])?;
-        } else {
-            store.write_at(at, &entry)?;
-            store.write_at(at + ENTRY_HEADER, bytes)?;
-        }
         frame.hasher.update(&entry);
-        frame.hasher.update(bytes);
         frame.len += need;
         frame.count += 1;
+        match src {
+            Src::Bytes(bytes) if header_len + bytes.len() <= self.copy.len() => {
+                self.copy[..header_len].copy_from_slice(&entry);
+                self.copy[header_len..header_len + bytes.len()].copy_from_slice(bytes);
+                store.write_at(at, &self.copy[..header_len + bytes.len()])?;
+                if let Some(frame) = self.frame.as_mut() {
+                    frame.hasher.update(bytes);
+                }
+            }
+            _ => {
+                store.write_at(at, &entry)?;
+                self.write_src(store, at + ENTRY_HEADER, src, true)?;
+            }
+        }
         self.open_ring_bytes += need;
         let inserted = self.layers.overlay.insert(
             target,
             OverlayEntry {
                 generation: self.header.published + 1,
                 at: at + ENTRY_HEADER,
-                len: crate::width::field32(bytes.len())?,
+                len: len32,
             },
         );
         debug_assert!(inserted, "room was made above");
@@ -646,16 +732,16 @@ impl RingStore {
         &mut self,
         store: &mut dyn TileStore,
         target: u64,
-        bytes: &[u8],
+        src: Src<'_>,
     ) -> Result<()> {
         let generation = self.header.published + 1;
         let reclaimed = self.header.reclaimed;
-        let mut pending = Some((target, bytes));
+        let mut pending = Some((target, src));
         let mut head: [u8; 8];
-        while let Some((target, bytes)) = pending.take() {
-            let len = bytes.len() as u64;
+        while let Some((target, src)) = pending.take() {
+            let len = src.len();
             let at = self.space.reserve(store, len, generation, reclaimed)?;
-            store.write_at(at, bytes)?;
+            self.write_src(store, at, src, false)?;
             self.appended = true;
             let space = &mut self.space;
             let cache = self
@@ -669,7 +755,7 @@ impl RingStore {
                 &mut |store, len| space.reserve(store, len, generation, reclaimed),
                 target,
                 at,
-                crate::width::field32(bytes.len())?,
+                crate::width::field32(crate::width::small(len))?,
             )?;
             // Pages written back now keep room for clean pages a read can
             // evict.
@@ -681,7 +767,7 @@ impl RingStore {
             if self.space.head_moved {
                 self.space.head_moved = false;
                 head = self.space.head.to_le_bytes();
-                pending = Some((self.head_at, &head[..]));
+                pending = Some((self.head_at, Src::Bytes(&head)));
             }
         }
         self.note_space();

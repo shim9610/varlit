@@ -30,6 +30,11 @@ mod fallible;
 mod file;
 mod format;
 mod immediate;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "wired into the native writer in the next step")
+)]
+mod keyed_heap;
 
 #[cfg(feature = "experimental-matrix-reuse")]
 pub mod experimental_matrix;

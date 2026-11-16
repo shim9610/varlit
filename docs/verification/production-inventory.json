@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "c77f467152ee79cf",
-    "count": 3325
+    "catalogue": "30118ef26ba20c98",
+    "count": 3415
   },
   "schema": 1,
   "sources": {
@@ -394,7 +394,7 @@
     "crates/varlit-core/src/file/append.rs": "d10d82d814d3acf4",
     "crates/varlit-core/src/file/directory.rs": "d7fabed364d3e3c9",
     "crates/varlit-core/src/file/follow.rs": "15bca25f448f1904",
-    "crates/varlit-core/src/file/header_codec.rs": "3ba97de9183c292f",
+    "crates/varlit-core/src/file/header_codec.rs": "e986c6eff534a2d0",
     "crates/varlit-core/src/file/header_slots.rs": "9d9bf42f2143300b",
     "crates/varlit-core/src/file/lifecycle.rs": "2f10d89507e0395e",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
@@ -417,8 +417,12 @@
     "crates/varlit-core/src/file/validation_tests.rs": "b70c8465eea9e364",
     "crates/varlit-core/src/format.rs": "50a282f8c793c9f2",
     "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
+    "crates/varlit-core/src/keyed_heap/heap.rs": "8381a90ce83b6f6f",
+    "crates/varlit-core/src/keyed_heap/mod.rs": "accf49388657c4a3",
+    "crates/varlit-core/src/keyed_heap/sip.rs": "3ea8bc7fd6767636",
+    "crates/varlit-core/src/keyed_heap/tests.rs": "72ca7468b970eef1",
     "crates/varlit-core/src/layout.rs": "22e1b983bacd6e22",
-    "crates/varlit-core/src/lib.rs": "15ee2a41fb355482",
+    "crates/varlit-core/src/lib.rs": "8317e6bc0001f4ea",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
     "crates/varlit-core/src/matrix_bulk.rs": "4f76e0dce341bd34",
     "crates/varlit-core/src/matrix_tiles/api.rs": "91636dac281e430a",
@@ -426,9 +430,9 @@
     "crates/varlit-core/src/matrix_tiles/geometry.rs": "f04e9aab0bf55417",
     "crates/varlit-core/src/matrix_tiles/host.rs": "9145ae6000d3c2d2",
     "crates/varlit-core/src/matrix_tiles/index.rs": "268b9b9a99b656b5",
-    "crates/varlit-core/src/matrix_tiles/mod.rs": "b9a17aad5c4ccadd",
+    "crates/varlit-core/src/matrix_tiles/mod.rs": "bdcd090b95a82993",
     "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "36114c9e65832fc9",
-    "crates/varlit-core/src/matrix_tiles/ring_store.rs": "c7ba60d330a14b69",
+    "crates/varlit-core/src/matrix_tiles/ring_store.rs": "1bd11bd1c13b7b49",
     "crates/varlit-core/src/matrix_tiles/store.rs": "72dada412e0d476e",
     "crates/varlit-core/src/matrix_tiles/tests.rs": "6fa566507327fb6a",
     "crates/varlit-core/src/matrix_tiles/view.rs": "9e5189079c2ec9b0",
