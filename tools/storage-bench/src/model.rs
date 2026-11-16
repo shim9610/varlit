@@ -78,22 +78,13 @@ static BLOCKS: &[BlockDescriptor] = &[
         fields: &[],
     },
 ];
-static INDEXED: &[DiskIndexedBlock] = &[
-    DiskIndexedBlock::of::<Frame>(),
-    DiskIndexedBlock::of::<Row>(),
-    DiskIndexedBlock::of::<Head>(),
-];
-pub fn spec(indexed: bool) -> FormatSpec {
+pub fn spec() -> FormatSpec {
     FormatSpec::new(
         b"MIXBEN01",
         1,
         Endian::Little,
         0,
-        if indexed {
-            IndexPolicy::KeyedOffsetChain
-        } else {
-            IndexPolicy::BlockOffsetChain
-        },
+        IndexPolicy::BlockOffsetChain,
         IntegrityPolicy::Crc32,
         RecoveryPolicy::Strict,
         ManifestPolicy::None,
@@ -106,18 +97,12 @@ pub fn spec(indexed: bool) -> FormatSpec {
         Head::IDENTITY,
     ])
 }
-pub fn plan() -> DiskIndexPlan {
-    DiskIndexPlan::canonical(spec(true), INDEXED).unwrap()
-}
-pub fn options(cache: usize) -> DiskIndexOptions {
-    DiskIndexOptions {
-        cache_bytes: cache,
-        ..Default::default()
-    }
-}
 pub fn stream_options(cache: usize) -> StreamOptions {
     StreamOptions {
-        state: options(cache),
+        state: DiskIndexOptions {
+            cache_bytes: cache,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

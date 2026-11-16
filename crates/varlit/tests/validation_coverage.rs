@@ -204,7 +204,7 @@ fn paged_dsl(
 varlit::varlit_format! {
     pub format OwnershipIndex {
         magic: b"OWIX"; version: 1; index: keyed_offset_chain;
-        blocks { variable OwnedEntry(id = 71, key = [id], key_index = disk) { id: u64, value: u64, } }
+        blocks { variable OwnedEntry(id = 71, key = [id]) { id: u64, value: u64, } }
     }
 }
 
@@ -406,117 +406,17 @@ varlit::varlit_format! {
 }
 
 varlit::varlit_format! {
-    pub format IndexedGridMatrix {
-        magic: b"VIDXGRID"; version: 1; endian: little;
-        limits {
-            file_len: 8_589_934_592; records: 4_000_000; index_bytes: 536_870_912;
-            scan_bytes: 8_589_934_592; record_payload: 67_108_864; logical_payload: 268_435_456;
-            materialized_bytes: 1_073_741_824; segments: 4_000_000; matrix_dimension: 16_000_000;
-            matrix_cells: 16_000_000; matrix_bitmap: 64_000_000; matrix_crc: 128_000_000;
-            matrix_metadata: 268_435_456; matrix_slot_region: 8_589_934_592; sidecar: 268_435_456;
-            mmap: 8_589_934_592;
-        }
-        dims { row: u32, col: u32, }
-        commit: cell_bitmap { keyspace = [row, col]; categories = [data]; };
-        blocks {
-            matrix IdxCell(id = 75, dims = [row, col], category = data) { value: u64, }
-            fixed IdxEntry(id = 76, key = [id], key_index = disk) { id: u64, value: u64 }
-        }
-    }
-}
-
-varlit::varlit_format! {
-    pub format IndexedNoMatrix {
-        magic: b"VIDXNOMX"; version: 1; endian: little;
-        limits {
-            file_len: 8_589_934_592; records: 4_000_000; index_bytes: 536_870_912;
-            scan_bytes: 8_589_934_592; record_payload: 67_108_864; logical_payload: 268_435_456;
-            materialized_bytes: 1_073_741_824; segments: 4_000_000; sidecar: 268_435_456;
-            mmap: 8_589_934_592;
-        }
-        blocks { fixed NoMxEntry(id = 77, key = [id], key_index = disk) { id: u64, value: u64 } }
-    }
-}
-
-fn idx_plan(spec: varlit::FormatSpec) -> varlit::Result<varlit::DiskIndexPlan> {
-    const BLOCKS: &[varlit::DiskIndexedBlock] = &[varlit::DiskIndexedBlock::of::<IdxEntry>()];
-    Ok(varlit::DiskIndexPlan::canonical(spec, BLOCKS)?)
-}
-
-fn idx_dims() -> varlit::MatrixDimensions {
-    varlit::MatrixDimensions::from_pairs([("row", 2), ("col", 2)])
-}
-
-/// An indexed primary with a 2x2 matrix: every cell committed (`full`, (r, c)
-/// holds 10 * r + c + 1) or only (0, 0) (holding 1).
-fn indexed_grid_fixture(
-    full: bool,
-) -> Result<(tempfile::TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
-    let directory = private_tempdir::private_tempdir()?;
-    let path = directory.path().join("indexed-grid.varlit");
-    let spec = IndexedGridMatrix::spec();
-    let mut writer = varlit::VarlitIndexedWriter::create_with_dims(
-        spec,
-        &path,
-        varlit::DiskIndexOptions::default(),
-        idx_plan(spec)?,
-        idx_dims(),
-    )?;
-    for row in 0..2u64 {
-        for col in 0..2u64 {
-            if !full && (row, col) != (0, 0) {
-                continue;
-            }
-            let key = varlit::MatrixKey::new(row, col);
-            writer.write_matrix_cell(
-                key,
-                &IdxCell {
-                    value: 10 * row + col + 1,
-                },
-            )?;
-            writer.commit_matrix_cell::<IdxCell>(key)?;
-        }
-    }
-    writer.push_info(&IdxEntry { id: 1, value: 2 })?;
-    writer.sync()?;
-    drop(writer);
-    Ok((directory, path))
-}
-
-fn idx_reader(path: &std::path::Path) -> varlit::Result<varlit::VarlitIndexedReader> {
-    let spec = IndexedGridMatrix::spec();
-    varlit::VarlitIndexedReader::open(
-        spec,
-        path,
-        varlit::DiskIndexOptions::default(),
-        idx_plan(spec)?,
-    )
-}
-
-fn idx_writer(path: &std::path::Path) -> varlit::Result<varlit::VarlitIndexedWriter> {
-    let spec = IndexedGridMatrix::spec();
-    varlit::VarlitIndexedWriter::open(
-        spec,
-        path,
-        varlit::DiskIndexOptions::default(),
-        idx_plan(spec)?,
-    )
-}
-
-varlit::varlit_format! {
     pub format ChunkFmt {
         magic: b"VCHUNKFX"; version: 1; endian: little; integrity: crc32_with_header;
-        blocks { variable ChunkBlob(id = 78, key = [id], key_index = disk) { id: u64, bytes: Vec<u8>, } }
+        blocks { variable ChunkBlob(id = 78, key = [id]) { id: u64, bytes: Vec<u8>, } }
     }
 }
 
 /// A file with one chunked record (id 1, 200 000 bytes) and one short one
-/// (id 2, no bytes), as native and as indexed primaries.
-fn chunk_fixture()
--> Result<(tempfile::TempDir, std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
+/// (id 2, no bytes).
+fn chunk_fixture() -> Result<(tempfile::TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
     let directory = private_tempdir::private_tempdir()?;
     let native = directory.path().join("chunks.varlit");
-    let indexed = directory.path().join("chunks-indexed.varlit");
     let big = ChunkBlob {
         id: 1,
         bytes: (0..200_000u32).map(|i| (i % 251) as u8).collect(),
@@ -530,13 +430,7 @@ fn chunk_fixture()
     writer.push_keyed(&small)?;
     writer.sync()?;
     drop(writer);
-    let mut writer =
-        ChunkFmt::create_indexed_writer(&indexed, varlit::DiskIndexOptions::default())?;
-    writer.push_chunk_blob(&big)?;
-    writer.push_chunk_blob(&small)?;
-    writer.sync()?;
-    drop(writer);
-    Ok((directory, native, indexed))
+    Ok((directory, native))
 }
 
 /// The fixture's entries: the chunked record first, then the short one.
@@ -547,16 +441,6 @@ fn chunk_entries(
     let mut entries = Vec::new();
     reader.block_entries_into::<ChunkBlob>(&mut entries)?;
     Ok(entries)
-}
-
-fn chunk_indexed(path: &std::path::Path) -> varlit::Result<varlit::VarlitIndexedReader> {
-    const BLOCKS: &[varlit::DiskIndexedBlock] = &[varlit::DiskIndexedBlock::of::<ChunkBlob>()];
-    varlit::VarlitIndexedReader::open(
-        ChunkFmt::spec(),
-        path,
-        varlit::DiskIndexOptions::default(),
-        varlit::DiskIndexPlan::canonical(ChunkFmt::spec(), BLOCKS)?,
-    )
 }
 
 /// A 2x2 matrix whose cell (0, 0) holds 11.
@@ -595,34 +479,42 @@ fn full_grid_fixture() -> Result<(tempfile::TempDir, std::path::PathBuf), Box<dy
 }
 
 varlit::varlit_format! {
-    pub format IntoIndex {
-        magic: b"VINTOIDX"; version: 1; integrity: crc32_with_header; index: keyed_offset_chain;
+    pub format IntoStream {
+        magic: b"VINTOSTR"; version: 1; integrity: crc32_with_header;
         blocks {
-            variable IndexedEntry(id = 75, key = [id], key_index = disk) { id: u64, value: u64, }
-            variable ChainEntry(id = 76, key = [id]) { id: u64, value: u64, }
+            variable StreamEntry(id = 75) { id: u64, value: u64, }
+            variable OtherEntry(id = 76) { id: u64, }
         }
     }
 }
 
-/// A reader over an indexed file holding `IndexedEntry { id: 7, value: 70 }`,
+/// A stream reader over a file holding `StreamEntry { id: 7, value: 70 }`,
 /// opened before the optional damage so that only the later read meets it.
-fn indexed_fixture(
+fn stream_fixture(
     damaged: bool,
-) -> Result<(tempfile::TempDir, IntoIndexIndexedReader), Box<dyn std::error::Error>> {
+) -> Result<(tempfile::TempDir, IntoStreamStreamReader), Box<dyn std::error::Error>> {
     let directory = private_tempdir::private_tempdir()?;
-    let path = directory.path().join("indexed.varlit");
-    let mut writer = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?;
-    let info = writer.push_indexed_entry(&IndexedEntry { id: 7, value: 70 })?;
+    let path = directory.path().join("stream.varlit");
+    let mut writer = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?;
+    let info = writer.push_stream_entry(&StreamEntry { id: 7, value: 70 })?;
     writer.sync()?;
     drop(writer);
-    let reader = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions::default())?;
+    let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?;
     if damaged {
         flip_byte(&path, info.payload_offset)?;
     }
     Ok((directory, reader))
 }
 
-/// Syncs one `IndexedEntry` per round under `options` and returns how many
+/// Stream options with these state-sidecar options.
+fn stream_options(state: varlit::DiskIndexOptions) -> varlit::StreamOptions {
+    varlit::StreamOptions {
+        state,
+        ..varlit::StreamOptions::default()
+    }
+}
+
+/// Syncs one `StreamEntry` per round under `options` and returns how many
 /// sidecar confirmations a reader observed, checking that every synced entry
 /// is readable whether or not it was confirmed.
 fn confirmations(
@@ -631,31 +523,34 @@ fn confirmations(
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("confirm.varlit");
-    let mut writer = IntoIndex::create_indexed_writer(&path, options)?;
-    let reader = IntoIndex::open_indexed_reader(&path, options)?;
+    let mut writer = IntoStream::create_stream_writer(&path, stream_options(options))?;
+    let reader = IntoStream::open_stream_reader(&path, stream_options(options))?;
     let before = reader.snapshot_status()?.confirmed_generation;
     for round in 0..rounds {
-        writer.push_indexed_entry(&IndexedEntry {
+        writer.push_stream_entry(&StreamEntry {
             id: round,
             value: round,
         })?;
         writer.sync()?;
     }
     let after = reader.snapshot_status()?.confirmed_generation;
-    let fresh = IntoIndex::open_indexed_reader(&path, options)?;
-    let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty();
-    assert!(fresh.get_indexed_entry(&(rounds - 1), &mut out)?);
+    let fresh = IntoStream::open_stream_reader(&path, stream_options(options))?.into_inner();
+    let mut blocks = fresh.blocks::<StreamEntry>()?;
+    let mut out = <StreamEntry as varlit::VarlitEmpty>::empty();
+    let mut seen = 0;
+    while blocks.next_into(&mut out)? {
+        seen += 1;
+    }
+    assert_eq!(seen, rounds);
     assert_eq!(out.value, rounds - 1);
     drop(writer);
     Ok(after - before)
 }
 
-/// A reader holds the first generation while the writer confirms `rounds`
-/// syncs of rewrites under `reclaim_after`; returns its first lookup failure.
-fn stale_lookup(
-    reclaim_after: u64,
-    rounds: u64,
-) -> Result<Option<varlit::Error>, Box<dyn std::error::Error>> {
+/// The state sidecar's size after `rounds` confirmed syncs under
+/// `reclaim_after`: freed pages are reused once that many further
+/// generations are confirmed, so the delay sets how far the sidecar grows.
+fn sidecar_after_syncs(reclaim_after: u64, rounds: u64) -> Result<u64, Box<dyn std::error::Error>> {
     let directory = private_tempdir::private_tempdir()?;
     let path = directory.path().join("reclaim.varlit");
     let options = varlit::DiskIndexOptions {
@@ -663,32 +558,19 @@ fn stale_lookup(
         reclaim_after,
         ..varlit::DiskIndexOptions::default()
     };
-    let mut writer = IntoIndex::create_indexed_writer(&path, options)?;
-    for id in 0..2_000 {
-        writer.push_indexed_entry(&IndexedEntry { id, value: 0 })?;
-    }
-    writer.sync()?;
-    let stale = IntoIndex::open_indexed_reader(&path, options)?;
-    let mut seed = 0x2545_f491_4f6c_dd1du64;
-    for round in 1..=rounds {
-        for _ in 0..40 {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            writer.push_indexed_entry(&IndexedEntry {
-                id: seed % 2_000,
-                value: round,
-            })?;
-        }
+    let mut writer = IntoStream::create_stream_writer(&path, stream_options(options))?;
+    for round in 0..rounds {
+        writer.push_stream_entry(&StreamEntry {
+            id: round,
+            value: round,
+        })?;
+        writer.push_other_entry(&OtherEntry { id: round })?;
         writer.sync()?;
     }
-    let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty();
-    for id in 0..2_000 {
-        if let Err(error) = stale.get_indexed_entry(&id, &mut out) {
-            return Ok(Some(error));
-        }
-    }
-    Ok(None)
+    drop(writer);
+    let mut sidecar = path.into_os_string();
+    sidecar.push(".vks");
+    Ok(std::fs::metadata(sidecar)?.len())
 }
 
 varlit::varlit_format! {
@@ -1095,10 +977,6 @@ const CONTRACTS: &[Contract] = &[
         valid { let dir = private_tempdir::private_tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
     ),
-    contract!("core/conformance.rs::conformance::RecordValidator::fn:requiring_disk_index@e957c756694053c1",
-        valid { let dir = private_tempdir::private_tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[varlit::__core::RecordValidator::of::<Probe>().requiring_disk_index()])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); assert!(r.checks().iter().any(|c| c.code == "sidecar.coherence" && c.status == varlit::FileCheckStatus::Unverified)); Ok(()) },
-        invalid { let dir = private_tempdir::private_tempdir()?; let v = varlit::__core::RecordValidator::of::<Probe>().requiring_disk_index(); let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
-    ),
     contract!("core/conformance.rs::conformance::enum:FileCheckStatus@cbf29ce484222325",
         valid { let report = qualification_probe(false)?; assert!(report.passed()); assert!(report.checks().iter().all(|c| c.status != varlit::FileCheckStatus::Violated)); Ok(()) },
         invalid { let report = qualification_probe(true)?; assert!(!report.passed()); assert!(report.checks().iter().any(|c| c.status == varlit::FileCheckStatus::Violated)); Ok(()) }
@@ -1147,7 +1025,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let dir = private_tempdir::private_tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[<Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let v = <Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@fa4db551a394b7d8", generated "check_file",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@31d84b4bb760462d", generated "check_file",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); let file = QualificationProbe::open_readonly(&path)?; let entry = crate::pages::all_entries!(file)[0].clone(); let mut stored = Vec::new(); file.read_payload_into(&entry, &mut stored)?; assert_eq!(QualificationProbe::read_payload(&entry, &path)?, stored); assert_eq!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len)?, stored); let mut logical = Vec::new(); file.read_logical_payload_into(&entry, &mut logical)?; assert_eq!(QualificationProbe::read_logical_payload(&entry, &path)?, logical); assert_eq!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, logical.len() as u64)?, logical); assert_eq!(QualificationProbe::read_logical_payload_with_resource_limits(&entry, &path, varlit::ReadLimits::STANDARD)?, logical); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let entry = crate::pages::all_entries!(QualificationProbe::open_readonly(&path)?)[0].clone(); assert!(entry.payload_len > 0); assert!(matches!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len - 1), Err(varlit::Error::LimitExceeded { .. }))); assert!(matches!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, 0), Err(varlit::Error::LimitExceeded { .. }))); assert!(QualificationProbe::read_payload(&entry, dir.path().join("missing")).is_err()); assert!(QualificationProbe::read_logical_payload(&entry, dir.path().join("missing")).is_err()); Ok(()) }
     ),
@@ -1290,9 +1168,17 @@ const CONTRACTS: &[Contract] = &[
         valid { let token = varlit::ScanCancellationToken::try_new()?; assert!(!token.is_cancelled()); token.cancel(); assert!(token.is_cancelled()); Ok(()) },
         invalid { let result = refusing_allocations(|| varlit::ScanCancellationToken::try_new().map(|token| token.is_cancelled())); assert!(matches!(result, Err(varlit::Error::Io(e)) if e.kind() == std::io::ErrorKind::OutOfMemory)); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@2ab09424b04a38fb", generated "get_indexed_entry",
-        valid { let plan = OwnershipIndex::disk_index_plan()?; assert_eq!(plan.descriptors().len(), 1); assert!(plan.validate(OwnershipIndex::spec()).is_ok()); let (_directory, reader) = indexed_fixture(false)?; let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(reader.get_indexed_entry(&7, &mut out)?); assert_eq!(out, IndexedEntry { id: 7, value: 70 }); let before = out.clone(); assert!(!reader.get_indexed_entry(&8, &mut out)?); assert_eq!(out, before); Ok(()) },
-        invalid { let plan = OwnershipIndex::disk_index_plan()?; let error = plan.validate(ProbeFormat::spec()).unwrap_err(); assert!(matches!(error, varlit::DiskIndexError::PlanBlockMissing { .. })); let error = refusing_allocations(|| varlit::Error::from(error)); assert!(matches!(error, varlit::Error::AllocationFailed { .. })); let (_directory, reader) = indexed_fixture(true)?; let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(reader.get_indexed_entry(&7, &mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
+    contract!("macros/modules/format_emit.rs::format_emit::generator:generated_writer_doc@a2ef2fbb91d67c7e", generated "from_inner",
+        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("typed.varlit"); let inner = ChunkFmt::spec().create_writer(&path)?; let mut w: ChunkFmtWriter = ChunkFmtWriter::from_inner(inner)?; w.inner_mut().push_keyed(&ChunkBlob { id: 3, bytes: vec![1, 2, 3] })?; w.inner_mut().sync()?; drop(w); let entries = chunk_entries(&path)?; assert_eq!(entries.len(), 1); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("typed.varlit"); let spec = ChunkFmt::spec().with_read_limits(varlit::ReadLimits::STANDARD.with_max_record_payload_len(16)); let inner = spec.create_writer(&path)?; let mut w: ChunkFmtWriter = ChunkFmtWriter::from_inner(inner)?; assert!(matches!(w.inner_mut().push_keyed(&ChunkBlob { id: 3, bytes: vec![0; 64] }), Err(varlit::Error::LimitExceeded { .. }))); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:generated_writer_construction_doc@6ef995cc7ffde12e", generated "from_inner",
+        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("primed.varlit"); { let mut w = OwnershipIndex::spec().create_writer(&path)?; for id in 0..3 { w.push_keyed(&OwnedEntry { id, value: id })?; } w.sync()?; } let inner = OwnershipIndex::spec().open_writer(&path)?; let mut w: OwnershipIndexWriter = OwnershipIndexWriter::from_inner(inner)?; let info = w.inner_mut().push_keyed_info(&OwnedEntry { id: 1, value: 10 })?; assert!(info.prev_same_key_offset.is_some(), "priming must find the key written before open"); w.inner_mut().sync()?; Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("primed.varlit"); { let mut w = OwnershipIndex::spec().create_writer(&path)?; for id in 0..64 { w.push_keyed(&OwnedEntry { id, value: id })?; } w.sync()?; } let spec = OwnershipIndex::spec().with_read_limits(varlit::ReadLimits::STANDARD.with_max_materialized_bytes(1)); let inner = spec.open_writer(&path)?; assert!(OwnershipIndexWriter::from_inner(inner).is_err(), "priming must refuse a record over the materialization limit"); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@a9b8fbc451734f72", generated "push_stream_entry",
+        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("generated.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; let info = w.push_stream_entry(&StreamEntry { id: 7, value: 70 })?; w.sync()?; drop(w); assert!(info.payload_len > 0); let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?.into_inner(); let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(blocks.next_into(&mut out)?); assert_eq!(out, StreamEntry { id: 7, value: 70 }); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("generated.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; let info = w.push_stream_entry(&StreamEntry { id: 7, value: 70 })?; w.sync()?; drop(w); let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?.into_inner(); flip_byte(&path, info.payload_offset)?; let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(blocks.next_into(&mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
     ),
     contract!("macros/modules/format_emit.rs::format_emit::generator:layout_field_struct_tokens@1b03f39d4b518018", generated "__varlit_layout_values",
         valid { let fields = OwnershipHeaderHeaderLayoutFields { kind: 42 }.__varlit_layout_values()?; assert_eq!(fields.len(), 1); assert_eq!(fields[0].value.to_u16("kind")?, 42); Ok(()) },
@@ -1944,14 +1830,9 @@ const CONTRACTS: &[Contract] = &[
         invalid { let (_directory, keyed) = keyed_probe(true)?; let mut out = <KeyedProbe as varlit::VarlitEmpty>::empty(); assert!(matches!(keyed.get(&7, &mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
     ),
     contract!("core/stream.rs::stream::StreamingBlocks < T >::fn:next_into@3543e49de9ffc7d2",
-        valid { let (_directory, reader) = indexed_fixture(false)?; let reader = reader.into_inner(); let mut blocks = reader.blocks::<IndexedEntry>()?; let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(blocks.next_into(&mut out)?); assert_eq!(out, IndexedEntry { id: 7, value: 70 }); assert!(!blocks.next_into(&mut out)?); assert_eq!(out.value, 70); Ok(()) },
-        invalid { let (_directory, reader) = indexed_fixture(true)?; let reader = reader.into_inner(); let mut blocks = reader.blocks::<IndexedEntry>()?; let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(blocks.next_into(&mut out), Err(varlit::Error::ChecksumMismatch { .. }))); assert!(!blocks.next_into(&mut out)?); Ok(()) }
+        valid { let (_directory, reader) = stream_fixture(false)?; let reader = reader.into_inner(); let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(blocks.next_into(&mut out)?); assert_eq!(out, StreamEntry { id: 7, value: 70 }); assert!(!blocks.next_into(&mut out)?); assert_eq!(out.value, 70); Ok(()) },
+        invalid { let (_directory, reader) = stream_fixture(true)?; let reader = reader.into_inner(); let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(blocks.next_into(&mut out), Err(varlit::Error::ChecksumMismatch { .. }))); assert!(!blocks.next_into(&mut out)?); Ok(()) }
     ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:get@dc02727698bf29fb",
-        valid { let (_directory, reader) = indexed_fixture(false)?; let reader = reader.into_inner(); let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(reader.get::<IndexedEntry>(&7, &mut out)?); assert_eq!(out, IndexedEntry { id: 7, value: 70 }); assert!(!reader.get::<IndexedEntry>(&8, &mut out)?); assert_eq!(out.value, 70); Ok(()) },
-        invalid { let (_directory, reader) = indexed_fixture(false)?; let reader = reader.into_inner(); let mut out = <ChainEntry as varlit::VarlitEmpty>::empty(); assert!(reader.get::<ChainEntry>(&7, &mut out).unwrap_err().to_string().contains("key_index = disk")); let (_damaged, reader) = indexed_fixture(true)?; let reader = reader.into_inner(); let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(matches!(reader.get::<IndexedEntry>(&7, &mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
-    ),
-    // Decoding into caller-owned values: file handles.
     contract!("core/file.rs::file::VarlitFile::fn:decode_block_into@74051333b12869e1",
         valid { let (_directory, reader, offset) = probe(false)?; let entry = reader.record_entry_at(offset)?; let mut out = <Probe as varlit::VarlitEmpty>::empty(); reader.decode_block_into(&entry, &mut Vec::new(), &mut out)?; assert_eq!(out, Probe { value: 19 }); Ok(()) },
         invalid { let (_directory, reader, offset) = probe(false)?; let mut entry = reader.record_entry_at(offset)?; entry.block_version += 1; let mut out = <Probe as varlit::VarlitEmpty>::empty(); assert!(matches!(reader.decode_block_into(&entry, &mut Vec::new(), &mut out), Err(varlit::Error::BlockVersionMismatch { .. }))); let (_damaged, reader, offset) = probe(true)?; let entry = reader.record_entry_at(offset)?; assert!(matches!(reader.decode_block_into(&entry, &mut Vec::new(), &mut out), Err(varlit::Error::ChecksumMismatch { .. }))); Ok(()) }
@@ -2119,7 +2000,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let spec = GridMatrix::spec(); assert_eq!(spec.matrix_blocks[0].effective_tile(), <GridCell as varlit::VarlitMatrixBlock>::TILE); spec.validate()?; Ok(()) },
         invalid { let spec = GridMatrix::spec(); assert_eq!(spec.matrix_blocks.len(), 1); assert!(spec.with_chunk_compression(varlit::VariableCompression::zstd(varlit::CompressionHeaderMode::RecordExplicit)).validate().is_err()); Ok(()) }
     ),
-    contract!("macros/modules/format_parse.rs::format_parse::generator:parse_inline_block@f87283ae4de49669", generated "spec",
+    contract!("macros/modules/format_parse.rs::format_parse::generator:parse_inline_block@10f98627b27aed98", generated "spec",
         valid { assert_eq!(GridMatrix::spec().matrix_blocks[0].category, "data"); Ok(()) },
         invalid { assert_ne!(GridMatrix::spec().matrix_blocks[0].tile, [0, 0]); Ok(()) }
     ),
@@ -2163,313 +2044,221 @@ const CONTRACTS: &[Contract] = &[
         valid { let (_directory, path) = full_grid_fixture()?; let handle = GridMatrix::spec().open_writer(&path)?; let mut out = [0u8; 16]; handle.read_matrix_cells_bytes_into::<GridCell>(&[varlit::MatrixKey::new(1, 0), varlit::MatrixKey::new(0, 1)], &mut out)?; assert_eq!(u64::from_le_bytes(out[..8].try_into()?), 11); assert_eq!(u64::from_le_bytes(out[8..].try_into()?), 2); Ok(()) },
         invalid { let (_directory, path) = full_grid_fixture()?; let handle = GridMatrix::spec().open_writer(&path)?; let mut out = [0u8; 8]; assert!(matches!(handle.read_matrix_cells_bytes_into::<GridCell>(&[varlit::MatrixKey::new(0, 0), varlit::MatrixKey::new(1, 1)], &mut out), Err(varlit::Error::MatrixSizeMismatch { .. }))); Ok(()) }
     ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:matrix_cell_status@6f3305a58db69ad7",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; assert_eq!(handle.matrix_cell_status::<IdxCell>(varlit::MatrixKey::new(1, 1))?, varlit::MatrixCellStatus::Committed); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; assert!(matches!(handle.matrix_cell_status::<IdxCell>(varlit::MatrixKey::new(2, 0)), Err(varlit::Error::MatrixKeyOutOfBounds { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:read_matrix_cell@b1223a9f317f6615",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); handle.read_matrix_cell::<IdxCell>(varlit::MatrixKey::new(1, 0), &mut out)?; assert_eq!(out.value, 11); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_reader(&path)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); assert!(matches!(handle.read_matrix_cell::<IdxCell>(varlit::MatrixKey::new(1, 1), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:read_matrix_cells_into@8dfe438a869a865c",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 2]; handle.read_matrix_cells_into::<IdxCell>(&[varlit::MatrixKey::new(1, 1), varlit::MatrixKey::new(0, 1)], &mut out)?; assert_eq!((out[0].value, out[1].value), (12, 2)); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; assert!(matches!(handle.read_matrix_cells_into::<IdxCell>(&[varlit::MatrixKey::new(1, 1), varlit::MatrixKey::new(0, 1)], &mut out), Err(varlit::Error::MatrixSizeMismatch { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:read_matrix_region_into@4da15e3526589c4b",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 4]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::new(0..2, 0..2), &mut out)?; assert_eq!(page.filled, 4); assert_eq!(out[3].value, 12); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 4]; assert!(matches!(handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::new(0..2, 0..2), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:read_matrix_region_from@c481feaf33f56499",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::row(1, 0..2), &mut out)?; let page = handle.read_matrix_region_from::<IdxCell>(page.next.expect("one more"), &mut out)?; assert_eq!((page.filled, page.next), (1, None)); assert_eq!(out[0].value, 12); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::row(0, 0..2), &mut out)?; assert!(matches!(handle.read_matrix_region_from::<IdxCell>(page.next.expect("one more"), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:read_matrix_row_into@7986f0c60d7e4056",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 2]; handle.read_matrix_row_into::<IdxCell>(1, &mut out)?; assert_eq!((out[0].value, out[1].value), (11, 12)); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 3]; assert!(matches!(handle.read_matrix_row_into::<IdxCell>(1, &mut out), Err(varlit::Error::MatrixSizeMismatch { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:matrix_cell_status@6f3305a58db69ad7",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; assert_eq!(handle.matrix_cell_status::<IdxCell>(varlit::MatrixKey::new(1, 1))?, varlit::MatrixCellStatus::Committed); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; assert!(matches!(handle.matrix_cell_status::<IdxCell>(varlit::MatrixKey::new(2, 0)), Err(varlit::Error::MatrixKeyOutOfBounds { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:read_matrix_cell@b1223a9f317f6615",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); handle.read_matrix_cell::<IdxCell>(varlit::MatrixKey::new(1, 0), &mut out)?; assert_eq!(out.value, 11); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_writer(&path)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); assert!(matches!(handle.read_matrix_cell::<IdxCell>(varlit::MatrixKey::new(1, 1), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:read_matrix_cells_into@8dfe438a869a865c",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 2]; handle.read_matrix_cells_into::<IdxCell>(&[varlit::MatrixKey::new(1, 1), varlit::MatrixKey::new(0, 1)], &mut out)?; assert_eq!((out[0].value, out[1].value), (12, 2)); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; assert!(matches!(handle.read_matrix_cells_into::<IdxCell>(&[varlit::MatrixKey::new(1, 1), varlit::MatrixKey::new(0, 1)], &mut out), Err(varlit::Error::MatrixSizeMismatch { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:read_matrix_region_into@4da15e3526589c4b",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 4]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::new(0..2, 0..2), &mut out)?; assert_eq!(page.filled, 4); assert_eq!(out[3].value, 12); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 4]; assert!(matches!(handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::new(0..2, 0..2), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:read_matrix_region_from@c481feaf33f56499",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::row(1, 0..2), &mut out)?; let page = handle.read_matrix_region_from::<IdxCell>(page.next.expect("one more"), &mut out)?; assert_eq!((page.filled, page.next), (1, None)); assert_eq!(out[0].value, 12); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 1]; let page = handle.read_matrix_region_into::<IdxCell>(varlit::MatrixRegion::row(0, 0..2), &mut out)?; assert!(matches!(handle.read_matrix_region_from::<IdxCell>(page.next.expect("one more"), &mut out), Err(varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:read_matrix_row_into@7986f0c60d7e4056",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 2]; handle.read_matrix_row_into::<IdxCell>(1, &mut out)?; assert_eq!((out[0].value, out[1].value), (11, 12)); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_writer(&path)?; let mut out = vec![<IdxCell as varlit::VarlitEmpty>::empty(); 3]; assert!(matches!(handle.read_matrix_row_into::<IdxCell>(1, &mut out), Err(varlit::Error::MatrixSizeMismatch { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedReader::fn:matrix_generation@7b3a03dde266f443",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let handle = idx_reader(&path)?; assert!(handle.matrix_generation()? >= 1); Ok(()) },
-        invalid { let directory = private_tempdir::private_tempdir()?; let path = directory.path().join("nomx.varlit"); let spec = IndexedNoMatrix::spec(); const BLOCKS: &[varlit::DiskIndexedBlock] = &[varlit::DiskIndexedBlock::of::<NoMxEntry>()]; let plan = varlit::DiskIndexPlan::canonical(spec, BLOCKS)?; drop(varlit::VarlitIndexedWriter::create(spec, &path, varlit::DiskIndexOptions::default(), plan)?); let handle = varlit::VarlitIndexedReader::open(spec, &path, varlit::DiskIndexOptions::default(), plan)?; assert!(matches!(handle.matrix_generation(), Err(varlit::Error::MatrixLayoutMissing))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:write_matrix_cell@a97005569bd68189",
-        valid { let (_d, path) = indexed_grid_fixture(false)?; let mut handle = idx_writer(&path)?; let key = varlit::MatrixKey::new(1, 1); handle.write_matrix_cell(key, &IdxCell { value: 9 })?; assert_eq!(handle.matrix_cell_status::<IdxCell>(key)?, varlit::MatrixCellStatus::NotCommitted); handle.commit_matrix_cell::<IdxCell>(key)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); handle.read_matrix_cell::<IdxCell>(key, &mut out)?; assert_eq!(out.value, 9); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let mut handle = idx_writer(&path)?; assert!(matches!(handle.write_matrix_cell(varlit::MatrixKey::new(0, 2), &IdxCell { value: 9 }), Err(varlit::Error::MatrixKeyOutOfBounds { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:commit_matrix_cell@519dad70962e62c4",
-        valid { let (_d, path) = indexed_grid_fixture(false)?; let mut handle = idx_writer(&path)?; let key = varlit::MatrixKey::new(0, 1); handle.write_matrix_cell(key, &IdxCell { value: 4 })?; handle.commit_matrix_cell::<IdxCell>(key)?; handle.sync()?; drop(handle); let reader = idx_reader(&path)?; let mut out = <IdxCell as varlit::VarlitEmpty>::empty(); reader.read_matrix_cell::<IdxCell>(key, &mut out)?; assert_eq!(out.value, 4); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(false)?; let mut handle = idx_writer(&path)?; assert!(matches!(handle.commit_matrix_cell::<IdxCell>(varlit::MatrixKey::new(1, 1)), Err(varlit::Error::MatrixCellNotWritten { .. } | varlit::Error::MatrixNotCommitted))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:clear_matrix_cell@487215310c8ecb86",
-        valid { let (_d, path) = indexed_grid_fixture(true)?; let mut handle = idx_writer(&path)?; let key = varlit::MatrixKey::new(1, 0); handle.clear_matrix_cell::<IdxCell>(key)?; assert_eq!(handle.matrix_cell_status::<IdxCell>(key)?, varlit::MatrixCellStatus::NotCommitted); Ok(()) },
-        invalid { let (_d, path) = indexed_grid_fixture(true)?; let mut handle = idx_writer(&path)?; assert!(matches!(handle.clear_matrix_cell::<IdxCell>(varlit::MatrixKey::new(5, 0)), Err(varlit::Error::MatrixKeyOutOfBounds { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed/matrix.rs::indexed::matrix::VarlitIndexedWriter::fn:create_with_dims@8a94461c3dd494b4",
-        valid { let directory = private_tempdir::private_tempdir()?; let path = directory.path().join("made.varlit"); let spec = IndexedGridMatrix::spec(); let writer = varlit::VarlitIndexedWriter::create_with_dims(spec, &path, varlit::DiskIndexOptions::default(), idx_plan(spec)?, idx_dims())?; assert_eq!(writer.matrix_cell_status::<IdxCell>(varlit::MatrixKey::new(1, 1))?, varlit::MatrixCellStatus::NotCommitted); drop(writer); let reader = idx_reader(&path)?; assert!(reader.matrix_generation().is_ok()); Ok(()) },
-        invalid { let directory = private_tempdir::private_tempdir()?; let path = directory.path().join("nomx.varlit"); let spec = IndexedNoMatrix::spec(); const BLOCKS: &[varlit::DiskIndexedBlock] = &[varlit::DiskIndexedBlock::of::<NoMxEntry>()]; let plan = varlit::DiskIndexPlan::canonical(spec, BLOCKS)?; assert!(matches!(varlit::VarlitIndexedWriter::create_with_dims(spec, &path, varlit::DiskIndexOptions::default(), plan, idx_dims()), Err(varlit::Error::MatrixLayoutMissing))); Ok(()) }
-    ),
     contract!("core/file.rs::file::RecordIndexEntry::fn:is_chunked@4bce4029df21c02e",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; assert!(entries[0].is_chunked()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; assert!(!entries[1].is_chunked()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; assert!(entries[0].is_chunked()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; assert!(!entries[1].is_chunked()); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:decode_field@d5ee0e20ba2e2979",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:read_record_from@2f15527b6011740f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:read_record_into@884eefd26c76923f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:read_span_into@b70f6ce39bf190ae",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:view_block@4650df2a0bb91c7c",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitWriter::fn:decode_field@d5ee0e20ba2e2979",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitWriter::fn:read_record_from@2f15527b6011740f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitWriter::fn:read_record_into@884eefd26c76923f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitWriter::fn:read_span_into@b70f6ce39bf190ae",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitWriter::fn:view_block@4650df2a0bb91c7c",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_writer(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:FIELD_INLINE@fdc86922091ac192",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:FieldSpan@ceb6c48bf51dc57e",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:FieldWalk@66de5867d4edeaaf",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:RecordCursor@e8b43d67da8633b0",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
     ),
     contract!("core/file.rs::file::export:RecordPage@422233ae43e3fe39",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:VarlitView@77de35f0a56fcdb5",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
     contract!("core/file.rs::file::export:view_set@9b4a65a3eb812b94",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
     ),
     contract!("core/file.rs::file::export:view_wire_mismatch@946433594595f7e6",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordCursor::fn:end@21d37496e7dbbeb4",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.end(), u64::MAX); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let view = h.view_block::<ChunkBlob>(&e)?; let data = view.bytes.data()?; let cursor = h.read_span_into(&e, data, &mut out)?.next.expect("more"); assert_eq!(cursor.end(), data.offset() + data.len()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.end(), u64::MAX); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let view = h.view_block::<ChunkBlob>(&e)?; let data = view.bytes.data()?; let cursor = h.read_span_into(&e, data, &mut out)?.next.expect("more"); assert_eq!(cursor.end(), data.offset() + data.len()); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordCursor::fn:offset@eeb5edcd950f95fa",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordCursor::fn:record_offset@be378c80bd931ee8",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.record_offset(), e.record_offset); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let cursor = h.read_span_into(&e, view.bytes.data()?, &mut out)?.next.expect("more"); assert_ne!(cursor.record_offset(), s.record_offset); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.record_offset(), e.record_offset); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let cursor = h.read_span_into(&e, view.bytes.data()?, &mut out)?.next.expect("more"); assert_ne!(cursor.record_offset(), s.record_offset); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordPage::field:end@4d35d3193e8d66f2",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(page.end > 200_000); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let view = h.view_block::<ChunkBlob>(&e)?; let page = h.read_span_into(&e, view.id, &mut out)?; assert_eq!(page.end, view.id.offset() + view.id.len()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(page.end > 200_000); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let view = h.view_block::<ChunkBlob>(&e)?; let page = h.read_span_into(&e, view.id, &mut out)?; assert_eq!(page.end, view.id.offset() + view.id.len()); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordPage::field:filled@d978be71270b16c1",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::RecordPage::field:next@cc5364f0b6d8a819",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(page.next.is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page = h.read_record_into(&s, &mut out)?; assert!(page.next.is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(page.next.is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page = h.read_record_into(&s, &mut out)?; assert!(page.next.is_none()); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::VarlitFile::fn:read_record_from@2f15527b6011740f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::VarlitFile::fn:read_record_into@884eefd26c76923f",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::struct:RecordCursor@cbf29ce484222325",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
     ),
     contract!("core/file/record_read.rs::file::record_read::struct:RecordPage@cbf29ce484222325",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:data@667e96fcaefbfeec",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.data()?.len(), 200_000); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.data().is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.data()?.len(), 200_000); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.data().is_err()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:inline_bytes@576d43629dcdecd4",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.inline_bytes(), Some(&1u64.to_le_bytes()[..])); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.inline_bytes().is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.inline_bytes(), Some(&1u64.to_le_bytes()[..])); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.inline_bytes().is_none()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:is_empty@2db41bc361487a64",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(short.bytes.data()?.is_empty()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(!view.bytes.data()?.is_empty()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(short.bytes.data()?.is_empty()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(!view.bytes.data()?.is_empty()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:len@0f492946bc24be78",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.len(), 8); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.len(), 200_008); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.len(), 8); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.len(), 200_008); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:offset@2aa8e0d8f7cb616c",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.offset() > view.id.offset()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.data()?.offset(), view.bytes.offset() + 8); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.offset() > view.id.offset()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.data()?.offset(), view.bytes.offset() + 8); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::FieldSpan::fn:wire_type@cec14d111df8ea19",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.wire_type(), varlit::WireType::U64); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.wire_type(), varlit::WireType::Bytes); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.id.wire_type(), varlit::WireType::U64); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert_eq!(view.bytes.wire_type(), varlit::WireType::Bytes); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::VarlitFile::fn:decode_field@d5ee0e20ba2e2979",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::VarlitFile::fn:read_span_into@7ac6f8c73d15a26d",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::VarlitFile::fn:view_block@4650df2a0bb91c7c",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_readonly(&path)?; let e = entries[0].clone(); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::VarlitView::fn:view_from_fields@c3920b0384088ef1",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::VarlitView::type:View@fd2fbe088eee5ef7",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::const:FIELD_INLINE@90ada0a7acd81e58",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::fn:view_set@5bce7c591d3cb2c4",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::fn:view_wire_mismatch@d99af80b447d0bb3",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::struct:FieldSpan@cbf29ce484222325",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::trait:VarlitView@cbf29ce484222325",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
     contract!("core/file/record_view.rs::file::record_view::type:FieldWalk@e84110449fdafe05",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:decode_field@0d2f8961b9ff7f4e",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let view = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.decode_field::<String>(&e, view.id), Err(varlit::Error::WireTypeMismatch { .. }))); assert!(h.decode_field::<Vec<u8>>(&e, view.bytes).is_err()); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:lookup_entry@745cc9d2c7bd6cee",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; assert!(h.lookup_entry::<ChunkBlob>(&1)?.expect("present").is_chunked()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; assert!(h.lookup_entry::<ChunkBlob>(&99)?.is_none()); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:read_record_from@f7c9b95778031fc9",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; let page = h.read_record_from(page.next.expect("more"), &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert!(matches!(h.read_record_from(page.next.expect("more"), &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:read_record_into@ff9e6c55ae68bf76",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let mut out = vec![0u8; 4096]; let page = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); assert!(page.next.is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); assert!(matches!(h.read_record_into(&e, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:read_span_into@773c79ad0ec79f5c",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let view = h.view_block::<ChunkBlob>(&e)?; let mut out = vec![0u8; 1000]; let page = h.read_span_into(&e, view.bytes.data()?, &mut out)?; assert_eq!(page.filled, 1000); assert_eq!(out[999], (999 % 251) as u8); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let view = h.view_block::<ChunkBlob>(&e)?; assert!(matches!(h.read_span_into(&e, view.bytes, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); Ok(()) }
-    ),
-    contract!("core/indexed.rs::indexed::VarlitIndexedReader::fn:view_block@42f0e967d95d7deb",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let view: ChunkBlobView = h.view_block::<ChunkBlob>(&e)?; assert_eq!(h.decode_field::<u64>(&e, view.id)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = chunk_indexed(&indexed)?; let e = h.lookup_entry::<ChunkBlob>(&1)?.expect("present"); let mut wrong = e.clone(); wrong.block_id = 5; assert!(h.view_block::<ChunkBlob>(&wrong).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:FIELD_INLINE@24dc1e46edff0431",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.id.len() as usize <= varlit::FIELD_INLINE && view.id.inline_bytes().is_some()); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(view.bytes.len() as usize > varlit::FIELD_INLINE && view.bytes.inline_bytes().is_none()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:FieldSpan@7f1b462764053117",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.id; assert_eq!(h.decode_field::<u64>(&e, span)?, 1); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let span: varlit::FieldSpan = view.bytes; assert!(h.decode_field::<u64>(&e, span).is_err()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:FieldWalk@2af1b24601792e9e",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let bytes = view.bytes; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; let w: varlit::FieldWalk<'_> = &mut walk; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let id = view.id; let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(1, id) }; let w: varlit::FieldWalk<'_> = &mut walk; assert!(<ChunkBlob as varlit::VarlitView>::view_from_fields(w).is_err()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:RecordCursor@cd539acc0915f4da",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert_eq!(cursor.offset(), 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let cursor: varlit::RecordCursor = h.read_record_into(&e, &mut out)?.next.expect("more"); assert!(matches!(h.read_record_from(cursor, &mut []), Err(varlit::Error::BufferTooSmall { .. }))); assert_eq!(cursor.offset(), 4096); Ok(()) }
     ),
     contract!("core/lib.rs::::export:RecordPage@1403639b9b072173",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let page: varlit::RecordPage = h.read_record_into(&e, &mut out)?; assert_eq!(page.filled, 4096); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let mut out = vec![0u8; 4096]; let s = entries[1].clone(); let page: varlit::RecordPage = h.read_record_into(&s, &mut out)?; assert!(page.filled < 4096); assert!(page.next.is_none()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:VarlitView@63b03dd6a50f9fa2",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let again: <ChunkBlob as varlit::VarlitView>::View = h.view_block::<ChunkBlob>(&e)?; assert_eq!(again, view); let (id, bytes) = (view.id, view.bytes); let mut walk = |visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { visit(1, id)?; visit(2, bytes) }; assert_eq!(<ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk)?, view); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut walk = |_visit: &mut dyn FnMut(u32, varlit::FieldSpan) -> varlit::Result<()>| -> varlit::Result<()> { Ok(()) }; let refused: varlit::Result<<ChunkBlob as varlit::VarlitView>::View> = <ChunkBlob as varlit::VarlitView>::view_from_fields(&mut walk); assert!(matches!(refused, Err(varlit::Error::MissingField { .. }))); Ok(()) }
     ),
     contract!("core/lib.rs::::export:view_set@c915b9bbaa3df7c7",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = None; varlit::view_set(&mut slot, view.id)?; assert_eq!(slot, Some(view.id)); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let mut slot = Some(view.id); assert!(varlit::view_set(&mut slot, view.id).is_err()); Ok(()) }
     ),
     contract!("core/lib.rs::::export:view_wire_mismatch@34f4d9a0f81773e5",
-        valid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
-        invalid { let (_d, path, indexed) = chunk_fixture()?; let entries = chunk_entries(&path)?; let _ = &indexed; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
+        valid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; assert!(matches!(varlit::view_wire_mismatch("id", varlit::WireType::U64, varlit::WireType::Bytes), varlit::Error::WireTypeMismatch { field: "id", .. })); Ok(()) },
+        invalid { let (_d, path) = chunk_fixture()?; let entries = chunk_entries(&path)?; let h = ChunkFmt::spec().open_reader(&path)?; let e = entries[0].clone(); let s = entries[1].clone(); let view = h.view_block::<ChunkBlob>(&e)?; let short = h.view_block::<ChunkBlob>(&s)?; let made = varlit::view_wire_mismatch("field", varlit::WireType::String, varlit::WireType::U64); let got = h.decode_field::<String>(&e, view.id).expect_err("refused"); assert_eq!(got.to_string(), made.to_string()); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitReader::fn:read_matrix_region_into@4da15e3526589c4b",
         valid { let (_directory, path) = full_grid_fixture()?; let handle = GridMatrix::spec().open_reader(&path)?; let mut out = vec![<GridCell as varlit::VarlitEmpty>::empty(); 4]; let page = handle.read_matrix_region_into::<GridCell>(varlit::MatrixRegion::new(0..2, 0..2), &mut out)?; assert_eq!(page.filled, 4); assert_eq!(out[3].value, 12); Ok(()) },
@@ -2706,24 +2495,16 @@ const CONTRACTS: &[Contract] = &[
         valid { let policy = varlit::DiskIndexConfirmPolicy::EVERY_SYNC; assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 1)?, 1); Ok(()) },
         invalid { let policy = varlit::DiskIndexConfirmPolicy::default(); assert!(policy.max_bytes > 0 && policy.max_records > 0); assert_eq!(confirmations(varlit::DiskIndexOptions { confirm: policy, ..varlit::DiskIndexOptions::default() }, 1)?, 0); Ok(()) }
     ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexOptions::field:max_tail_records@4d35d3193e8d66f2",
-        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("tail.varlit"); let mut w = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?; w.push_indexed_entry(&IndexedEntry { id: 1, value: 10 })?; w.sync()?; let r = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions { max_tail_records: 2, ..varlit::DiskIndexOptions::default() })?; let mut out = <IndexedEntry as varlit::VarlitEmpty>::empty(); assert!(r.get_indexed_entry(&1, &mut out)?); assert_eq!(out.value, 10); drop(w); Ok(()) },
-        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("tail.varlit"); let mut w = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?; w.push_indexed_entry(&IndexedEntry { id: 1, value: 10 })?; w.sync()?; let opened = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions { max_tail_records: 1, ..varlit::DiskIndexOptions::default() }); assert!(opened.is_err()); drop(w); Ok(()) }
-    ),
     contract!("core/disk_index.rs::disk_index::DiskIndexOptions::field:reclaim_after@4d35d3193e8d66f2",
-        valid { let options = varlit::DiskIndexOptions { reclaim_after: 1_000, ..varlit::DiskIndexOptions::default() }; assert!(stale_lookup(options.reclaim_after, 60)?.is_none()); Ok(()) },
-        invalid { let options = varlit::DiskIndexOptions { reclaim_after: 0, ..varlit::DiskIndexOptions::default() }; assert!(stale_lookup(options.reclaim_after, 60)?.is_some()); Ok(()) }
-    ),
-    contract!("core/disk_index.rs::disk_index::DiskIndexError::variant:PageReclaimed@b31125477191296c",
-        valid { let outcome = stale_lookup(1_000, 60)?; assert!(!matches!(&outcome, Some(varlit::Error::DiskIndex(e)) if matches!(**e, varlit::DiskIndexError::PageReclaimed))); assert!(outcome.is_none()); Ok(()) },
-        invalid { let outcome = stale_lookup(0, 60)?; assert!(matches!(&outcome, Some(varlit::Error::DiskIndex(e)) if matches!(**e, varlit::DiskIndexError::PageReclaimed)), "{outcome:?}"); Ok(()) }
+        valid { let options = varlit::DiskIndexOptions { reclaim_after: 2, ..varlit::DiskIndexOptions::default() }; let small = sidecar_after_syncs(options.reclaim_after, 200)?; assert!(small < 256 * 1024, "{small}"); Ok(()) },
+        invalid { let options = varlit::DiskIndexOptions { reclaim_after: 1_000, ..varlit::DiskIndexOptions::default() }; let delayed = sidecar_after_syncs(options.reclaim_after, 200)?; let small = sidecar_after_syncs(2, 200)?; assert!(delayed > 8 * small, "{delayed} vs {small}"); Ok(()) }
     ),
     contract!("core/sync_marker.rs::sync_marker::const:SYNC_BLOCK_ID@b743b3c893debb89",
-        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?; w.push_indexed_entry(&IndexedEntry { id: 1, value: 1 })?; w.sync()?; let r = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions::default())?; let ids: Vec<u32> = r.events()?.map(|e| e.map(|e| e.block_id)).collect::<varlit::Result<_>>()?; assert_eq!(ids.last(), Some(&varlit::SYNC_BLOCK_ID)); drop(w); Ok(()) },
-        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?; w.push_indexed_entry(&IndexedEntry { id: 1, value: 1 })?; w.flush()?; let r = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions::default())?; let ids: Vec<u32> = r.events()?.map(|e| e.map(|e| e.block_id)).collect::<varlit::Result<_>>()?; assert!(!ids.contains(&varlit::SYNC_BLOCK_ID)); assert!(!ids.contains(&75)); drop(w); Ok(()) }
+        valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 1 })?; w.sync()?; let r = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?; let ids: Vec<u32> = r.events()?.map(|e| e.map(|e| e.block_id)).collect::<varlit::Result<_>>()?; assert_eq!(ids.last(), Some(&varlit::SYNC_BLOCK_ID)); drop(w); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 1 })?; w.flush()?; let r = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?; let ids: Vec<u32> = r.events()?.map(|e| e.map(|e| e.block_id)).collect::<varlit::Result<_>>()?; assert!(!ids.contains(&varlit::SYNC_BLOCK_ID)); assert!(!ids.contains(&75)); drop(w); Ok(()) }
     ),
     contract!("core/lib.rs::::export:SYNC_BLOCK_ID@9b93dc73b3174862",
-        valid { const { assert!(varlit::SYNC_BLOCK_ID >= 0xFFFF_FF00) }; let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoIndex::create_indexed_writer(&path, varlit::DiskIndexOptions::default())?; w.push_indexed_entry(&IndexedEntry { id: 1, value: 1 })?; w.sync()?; let r = IntoIndex::open_indexed_reader(&path, varlit::DiskIndexOptions::default())?; assert!(r.events()?.any(|e| e.is_ok_and(|e| e.block_id == varlit::SYNC_BLOCK_ID))); drop(w); Ok(()) },
+        valid { const { assert!(varlit::SYNC_BLOCK_ID >= 0xFFFF_FF00) }; let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("marker.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 1 })?; w.sync()?; let r = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?; assert!(r.events()?.any(|e| e.is_ok_and(|e| e.block_id == varlit::SYNC_BLOCK_ID))); drop(w); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("plain.varlit"); let mut f = QualificationProbe::create(&path)?; f.push(&Probe { value: 1 })?; f.sync()?; drop(f); let f = QualificationProbe::open_readonly(&path)?; let entries = crate::pages::all_entries!(f); assert!(!entries.iter().any(|e| e.block_id == varlit::SYNC_BLOCK_ID)); Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitFile::fn:record_map_from@db621a5c990f1f13",
@@ -2913,6 +2694,18 @@ const CONTRACTS: &[Contract] = &[
     contract!("core/file/record_file.rs::file::record_file::macro:thread_local@6dda689fe20cb010", generated "take_header_region_writes",
         valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let _ = varlit::VarlitFile::take_header_region_writes(); { let mut w = TailProbe::create(d.path().join("t"))?; w.push(&Probe { value: 1 })?; w.flush()?; } assert!(varlit::VarlitFile::take_header_region_writes() >= 1); } Ok(()) },
         invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; let _ = varlit::VarlitFile::take_header_region_writes(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.flush()?; } assert_eq!(varlit::VarlitFile::take_header_region_writes(), 0); } Ok(()) }
+    ),
+    contract!("core/disk_index.rs::disk_index::scaling_counters::macro:thread_local@88a095f09966ce6f", generated "primary_generation_scans",
+        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
+        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::VarlitStreamWriter::fn:primary_generation_scans@5d7a23efb398c940",
+        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
+        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
+    ),
+    contract!("core/stream.rs::stream::VarlitStreamWriter::fn:reset_scaling_counters@315210fef3121107",
+        valid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = IntoStream::create_stream_writer(d.path().join("s"), varlit::StreamOptions::default())?; w.push_stream_entry(&StreamEntry { id: 1, value: 10 })?; w.sync()?; } assert!(varlit::VarlitStreamWriter::primary_generation_scans() > 0); varlit::VarlitStreamWriter::reset_scaling_counters(); assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) },
+        invalid { #[cfg(feature = "scalable-fault-injection")] { let d = private_tempdir::private_tempdir()?; varlit::VarlitStreamWriter::reset_scaling_counters(); { let mut w = ProbeFormat::create(d.path().join("p"))?; w.push(&Probe { value: 1 })?; w.sync()?; } assert_eq!(varlit::VarlitStreamWriter::primary_generation_scans(), 0); } Ok(()) }
     ),
     contract!("core/file.rs::file::VarlitFile::fn:index_entries@ae1f38692dde64d3",
         valid { let (_d, path) = paged_probe(20)?; let file = ProbeFormat::spec().open_readonly(&path)?; let mut buf = vec![varlit::RecordIndexEntry::default(); 7]; let page = file.index_entries(&mut buf)?; assert_eq!(page.filled, 7); assert!(page.next.is_some()); Ok(()) },

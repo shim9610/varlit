@@ -41,8 +41,8 @@ class VerdictTests(unittest.TestCase):
     def test_full_campaign_has_all_required_gates(self):
         stages = qualify.campaign("qualification", [0, 1, 42, 2**64 - 1], 64, 64, True)
         names = [stage["name"] for stage in stages]
-        self.assertEqual(len(names), 20)
-        for name in ["regression", "immediate-policy", "immediate-native", "reader-open-churn", "reader-follow", "reader-management", "schema-key-kinds", "finite-key-limit", "finite-slot-storage", "native-redb-oracle", "index-redb-oracle", "fault-matrix", "external-kill", "memory-growth", "sparse-tib", "sparse-pib"]:
+        self.assertEqual(len(names), 17)
+        for name in ["regression", "immediate-policy", "immediate-native", "reader-open-churn", "reader-follow", "reader-management", "schema-key-kinds", "finite-key-limit", "index-redb-oracle", "fault-matrix", "external-kill", "sparse-tib", "sparse-pib"]:
             self.assertIn(name, names)
         churn = next(stage for stage in stages if stage["name"] == "reader-open-churn")
         self.assertNotIn("--ignored", churn["command"])

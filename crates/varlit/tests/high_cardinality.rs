@@ -4,13 +4,12 @@ mod pages;
 // These keys are synthetic fixture identifiers, never real user identities.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use varlit::{
-    BatchOptions, DiskIndexOptions, ScanCancellationToken, ScanOptions, ScanProgressOptions,
-    ScanProgressPhase, disk_index_sidecar_path, varlit_format,
+    BatchOptions, ScanCancellationToken, ScanOptions, ScanProgressOptions, ScanProgressPhase,
+    varlit_format,
 };
 
 struct CountingAllocator;
@@ -83,16 +82,6 @@ fn record_allocation(size: usize) {
     }
 }
 
-fn begin_allocation_window() -> usize {
-    let baseline = LIVE_BYTES.load(Ordering::SeqCst);
-    PEAK_BYTES.store(baseline, Ordering::SeqCst);
-    baseline
-}
-
-fn peak_delta(baseline: usize) -> usize {
-    PEAK_BYTES.load(Ordering::SeqCst).saturating_sub(baseline)
-}
-
 varlit_format! {
     pub format CardinalityFormat {
         magic: b"HCRD";
@@ -102,148 +91,13 @@ varlit_format! {
             fixed Metadata(id = 2) {
                 run: u64,
             }
-            variable Frame(id = 1, key = [scan, frame], key_index = disk) {
+            variable Frame(id = 1, key = [scan, frame]) {
                 scan: u32,
                 frame: u32,
                 payload: Vec<u8>,
             }
         }
     }
-}
-
-#[test]
-fn generated_indexed_api_stays_key_map_free_and_preserves_latest_values() -> varlit::Result<()> {
-    let repeated_peak = allocation_profile(false, 2_000)?;
-    let unique_peak = allocation_profile(true, 2_000)?;
-    assert!(
-        unique_peak <= repeated_peak.saturating_mul(3) + 2 * 1024 * 1024,
-        "unique-key peak {unique_peak} grew beyond repeated-key peak {repeated_peak}"
-    );
-
-    let directory = tempfile::tempdir()?;
-    let stream_path = directory.path().join("chain-unkeyed-stream.varlit");
-    let mut stream_writer =
-        CardinalityFormat::create_stream_writer(&stream_path, varlit::StreamOptions::default())?;
-    let stream_report = stream_writer
-        .push_metadatas(
-            [Metadata { run: 1 }, Metadata { run: 2 }],
-            BatchOptions::default(),
-        )
-        .map_err(|error| error.source)?;
-    assert_eq!(stream_report.records, 2);
-    assert_eq!(stream_report.write_calls, 1);
-    stream_writer.sync()?;
-    drop(stream_writer);
-    let stream_reader =
-        CardinalityFormat::open_stream_reader(&stream_path, varlit::StreamOptions::default())?;
-    let runs = collect_stream(stream_reader.metadatas()?)?
-        .into_iter()
-        .map(|metadata| metadata.run)
-        .collect::<Vec<_>>();
-    assert_eq!(runs, [1, 2]);
-
-    let path = directory.path().join("cardinality.varlit");
-    let mut writer = CardinalityFormat::create_indexed_writer(
-        &path,
-        DiskIndexOptions {
-            cache_bytes: 1024 * 1024,
-            ..DiskIndexOptions::default()
-        },
-    )?;
-    writer.push_metadata(&Metadata { run: 42 })?;
-    let metadata_batch = writer
-        .push_metadatas(
-            [Metadata { run: 43 }, Metadata { run: 44 }],
-            BatchOptions::default(),
-        )
-        .map_err(|error| error.source)?;
-    assert_eq!(metadata_batch.records, 2);
-    assert_eq!(metadata_batch.write_calls, 1);
-
-    let report = writer
-        .push_frames(
-            (0..10_000u32).map(|key| Frame {
-                scan: key / 100,
-                frame: key,
-                payload: key.to_le_bytes().to_vec(),
-            }),
-            BatchOptions::default(),
-        )
-        .map_err(|error| error.source)?;
-    assert_eq!(report.records, 10_000);
-    assert!(report.write_calls < 10_000);
-    writer.push_frame(&Frame {
-        scan: 49,
-        frame: 4_999,
-        payload: b"latest".to_vec(),
-    })?;
-    writer.delete_frame(&(50, 5_000))?;
-    let state = writer.resident_state();
-    assert_eq!(state.retained_record_entries, 0);
-    assert_eq!(state.retained_key_entries, 0);
-    writer.sync()?;
-    drop(writer);
-
-    let reader = CardinalityFormat::open_indexed_reader(
-        &path,
-        DiskIndexOptions {
-            cache_bytes: 1024 * 1024,
-            ..DiskIndexOptions::default()
-        },
-    )?;
-    for key in [0, 1, 4_999, 9_999] {
-        let value = filled(|o| reader.get_frame(&(key / 100, key), o))?.expect("indexed value");
-        if key == 4_999 {
-            assert_eq!(value.payload, b"latest");
-        } else {
-            assert_eq!(value.payload, key.to_le_bytes());
-        }
-    }
-    assert!(filled(|o| reader.get_frame(&(50, 5_000), o))?.is_none());
-    let metadata_runs = collect_stream(reader.metadatas()?)?
-        .into_iter()
-        .map(|metadata| metadata.run)
-        .collect::<Vec<_>>();
-    assert_eq!(metadata_runs, [42, 43, 44]);
-    assert_eq!(reader.resident_state().retained_key_entries, 0);
-    Ok(())
-}
-
-fn allocation_profile(unique: bool, records: u32) -> varlit::Result<usize> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join(if unique {
-        "unique.varlit"
-    } else {
-        "repeat.varlit"
-    });
-    let mut writer = CardinalityFormat::create_indexed_writer(
-        &path,
-        DiskIndexOptions {
-            cache_bytes: 1024 * 1024,
-            ..DiskIndexOptions::default()
-        },
-    )?;
-    let baseline = begin_allocation_window();
-    writer
-        .push_frames(
-            (0..records).map(|ordinal| {
-                let key = if unique { ordinal } else { 0 };
-                Frame {
-                    scan: key / 100,
-                    frame: key,
-                    payload: ordinal.to_le_bytes().to_vec(),
-                }
-            }),
-            BatchOptions::default(),
-        )
-        .map_err(|error| error.source)?;
-    Ok(peak_delta(baseline))
-}
-
-fn state_sidecar_path(path: &Path) -> PathBuf {
-    let mut sidecar = path.as_os_str().to_os_string();
-    sidecar.push(".vks");
-    PathBuf::from(sidecar)
 }
 
 fn every_record_scan<'a>(token: Option<&'a ScanCancellationToken>) -> ScanOptions<'a> {
@@ -306,160 +160,6 @@ fn explicit_scan_progress_and_cancellation_are_exact() -> varlit::Result<()> {
     assert_eq!(phases.first(), Some(&ScanProgressPhase::Started));
     assert_eq!(phases.last(), Some(&ScanProgressPhase::Complete));
     Ok(())
-}
-
-#[test]
-fn cancelled_bootstrap_and_rebuild_publish_nothing() -> varlit::Result<()> {
-    let directory = tempfile::tempdir()?;
-
-    let stream_path = directory.path().join("cancel-bootstrap.varlit");
-    let mut resident = CardinalityFormat::create_writer(&stream_path)?;
-    resident.push_metadata(&Metadata { run: 1 })?;
-    resident.push_metadata(&Metadata { run: 2 })?;
-    resident.sync()?;
-    drop(resident);
-    assert!(!state_sidecar_path(&stream_path).exists());
-
-    let bootstrap_token = ScanCancellationToken::new();
-    let callback_token = bootstrap_token.clone();
-    let error = CardinalityFormat::bootstrap_stream_checkpoint_with_progress(
-        &stream_path,
-        varlit::StreamOptions::default(),
-        every_record_scan(Some(&bootstrap_token)),
-        move |progress| {
-            if progress.phase == ScanProgressPhase::Complete {
-                callback_token.cancel();
-            }
-        },
-    )
-    .expect_err("final callback cancellation must precede publication");
-    assert!(matches!(error, varlit::Error::ScanCancelled { .. }));
-    assert!(!state_sidecar_path(&stream_path).exists());
-
-    let indexed_path = directory.path().join("cancel-rebuild.varlit");
-    let mut indexed =
-        CardinalityFormat::create_indexed_writer(&indexed_path, DiskIndexOptions::default())?;
-    indexed.push_frame(&Frame {
-        scan: 0,
-        frame: 1,
-        payload: b"one".to_vec(),
-    })?;
-    indexed.push_frame(&Frame {
-        scan: 0,
-        frame: 2,
-        payload: b"two".to_vec(),
-    })?;
-    indexed.sync()?;
-    drop(indexed);
-    let index_path = disk_index_sidecar_path(&indexed_path);
-    let before = std::fs::read(&index_path)?;
-
-    let rebuild_token = ScanCancellationToken::new();
-    let callback_token = rebuild_token.clone();
-    let error = CardinalityFormat::rebuild_disk_index_with_progress(
-        &indexed_path,
-        DiskIndexOptions::default(),
-        every_record_scan(Some(&rebuild_token)),
-        move |progress| {
-            if progress.phase == ScanProgressPhase::Running && progress.records == 1 {
-                callback_token.cancel();
-            }
-        },
-    )
-    .expect_err("cancelled rebuild must retain the prior sidecar");
-    assert!(matches!(error, varlit::Error::ScanCancelled { .. }));
-    assert_eq!(std::fs::read(index_path)?, before);
-    Ok(())
-}
-
-#[test]
-#[ignore = "one-million-key allocator stress probe; run alone with --test-threads=1"]
-fn million_unique_keys_keep_varlit_resident_maps_empty() -> varlit::Result<()> {
-    cardinality_profile(1_000_000).map(|_| ())
-}
-
-#[test]
-#[ignore = "10k/100k/1m memory growth gate; run alone with --test-threads=1"]
-fn cardinality_growth_respects_memory_budget() -> varlit::Result<()> {
-    let small = cardinality_profile(10_000)?;
-    let medium = cardinality_profile(100_000)?;
-    let large = cardinality_profile(1_000_000)?;
-    // A finite acceptance budget, not a proof of asymptotic complexity. Each
-    // profile includes database creation, ingestion, sync, reopen and lookups.
-    // Fixed cache (8 MiB) and batch limits must not mask per-key resident maps.
-    for peak in [medium, large] {
-        assert!(
-            peak <= small + 16 * 1024 * 1024,
-            "heap peak grew by more than 16 MiB from 10k keys: small={small}, larger={peak}"
-        );
-    }
-    Ok(())
-}
-
-fn cardinality_profile(records: u32) -> varlit::Result<usize> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("million.varlit");
-    let baseline = begin_allocation_window();
-    let mut writer = CardinalityFormat::create_indexed_writer(
-        &path,
-        DiskIndexOptions {
-            cache_bytes: 8 * 1024 * 1024,
-            ..DiskIndexOptions::default()
-        },
-    )?;
-    let append_started = Instant::now();
-    let report = writer
-        .push_frames(
-            (0..records).map(|key| Frame {
-                scan: key / 1000,
-                frame: key,
-                payload: key.to_le_bytes().to_vec(),
-            }),
-            BatchOptions::default(),
-        )
-        .map_err(|error| error.source)?;
-    assert_eq!(report.records, u64::from(records));
-    assert!(report.write_calls <= u64::from(records.div_ceil(16_384)));
-    let append_elapsed = append_started.elapsed();
-    assert_eq!(writer.resident_state().retained_key_entries, 0);
-    let sync_started = Instant::now();
-    writer.sync()?;
-    let sync_elapsed = sync_started.elapsed();
-    let native_bytes = std::fs::metadata(&path)?.len();
-    let sidecar_bytes = std::fs::metadata(disk_index_sidecar_path(&path))?.len();
-    drop(writer);
-
-    let open_started = Instant::now();
-    let reader = CardinalityFormat::open_indexed_reader(
-        &path,
-        DiskIndexOptions {
-            cache_bytes: 8 * 1024 * 1024,
-            ..DiskIndexOptions::default()
-        },
-    )?;
-    let open_elapsed = open_started.elapsed();
-    let lookup_started = Instant::now();
-    for key in (0..records).step_by((records / 10_000).max(1) as usize) {
-        let value = filled(|o| reader.get_frame(&(key / 1000, key), o))?.expect("persisted key");
-        assert_eq!(value.payload, key.to_le_bytes());
-    }
-    assert!(filled(|o| reader.get_frame(&(records / 1000, records), o))?.is_none());
-    assert_eq!(reader.resident_state().retained_key_entries, 0);
-    let lookup_elapsed = lookup_started.elapsed();
-    let peak = peak_delta(baseline);
-    eprintln!(
-        "QUAL_MEMORY {{\"keys\":{records},\"peak_heap_bytes\":{peak},\"cache_bytes\":8388608,\"native_bytes\":{native_bytes},\"sidecar_bytes\":{sidecar_bytes},\"append_ms\":{},\"sync_ms\":{},\"open_ms\":{},\"lookup_ms\":{},\"write_calls\":{}}}",
-        append_elapsed.as_millis(),
-        sync_elapsed.as_millis(),
-        open_elapsed.as_millis(),
-        lookup_elapsed.as_millis(),
-        report.write_calls,
-    );
-    assert!(
-        peak <= 64 * 1024 * 1024,
-        "allocator peak exceeds 64 MiB budget: {peak}"
-    );
-    Ok(peak)
 }
 
 // the resident keyed merge/compact family

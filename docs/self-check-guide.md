@@ -210,13 +210,14 @@ format; an incomplete fixture is not thereby a corrupt file. To inspect
 legitimate larger records, supply finite limits with
 `AppFormat::check_file_with_resource_limits(path, limits)`.
 
-Full matrix-cell payload coverage, custom physical-layout payload mappings and
-declared disk-index companion coherence currently report `Unverified`.
+Full matrix-cell payload coverage and custom physical-layout payload mappings
+currently report `Unverified`. The disk-index companion condition always
+reports `NotApplicable`, because no block declares a disk index.
 Merge-operation keys and envelopes are inspected, but their separate operation
 codecs are not registered and therefore also prevent a pass. Custom
-physical layout headers and segment structure are still inspected. Runtime
-sidecar plans attached outside the format declaration are not discovered; this
-checker does not qualify those application-owned companions.
+physical layout headers and segment structure are still inspected. The checker
+does not inspect a stream `.vks` sidecar or other application-owned companion
+files.
 
 The file and its companions must remain unchanged throughout inspection; marker
 absence alone cannot establish this. Custom codec/key callbacks must terminate,
@@ -327,26 +328,21 @@ use Python 3 and the repository's Rust toolchain:
 ```sh
 python3 scripts/qualify_scalable.py --profile qualification --epochs 256 --kill-cycles 128 --output /path/to/new-qualification
 cargo build --locked --release -p varlit --features integrity --example scalable_load --example matrix_soak
-python3 scripts/load_scalable.py --suite large --only raw-20g --only indexed-20g --only indexed-r8-20g --read-seconds 30 --output /path/to/new-report --data-root /path/to/new-data
+python3 scripts/load_scalable.py --suite large --only raw-20g --only stream-20g --only stream-r8-20g --output /path/to/new-report --data-root /path/to/new-data
 ```
 
-Qualification checks model histories, independent reader snapshots, indexed
-writer process-kill recovery, native/redb oracles and bounded memory. Real-file
+Qualification checks model histories, independent reader snapshots, stream
+writer process-kill recovery with a live reader kept across each crash, a redb
+oracle for the sidecar page store, and bounded memory. Real-file
 runs write, verify and delete owned payload files; sparse addressability probes
 are separate and do not measure storage bandwidth. Use each runner's `--help`
 for workload sizes, timeouts and comparison options.
 
-The default concurrent workload reads continuously until the writer finishes.
-It measures saturation behavior, with variable total read work. For a paired
-performance comparison, add `--reader-checks-per-epoch 16384` to an indexed
-concurrent case on both sides. Each mutation epoch overlaps the writer with an
-exact batch per reader, then waits for both to finish. Pinned readers retain
-the original snapshot; following readers use the previous confirmed epoch.
-The runner checks every reader's count and deterministic key/snapshot trace.
-No sleep or additional cache budget is used. Keep the original saturation
-results as well, and record CPU quota/throttling before attributing a wall-time
-difference to the library. The fixed-work completion time includes the wait
-for readers; per-epoch `reader_wait_ns` reports it separately.
+In a stream case with readers (`stream-r4-20g`, `stream-r8-20g`), the readers
+open once the base epochs are published and read repeatedly until the writer
+finishes. This measures saturation behavior, with variable total read work.
+Record CPU quota/throttling before attributing a wall-time difference to the
+library.
 
 Compare reports with `python3 scripts/compare_load.py --before before/report.json
 --after after/report.json`; repeat each flag for separate alternating runs.
@@ -368,7 +364,8 @@ Remove `--plan` to execute; use `--hours 72` for a longer run. Run matrix and I/
 campaigns sequentially. Output and data directories must be new, outside the
 checkout, with existing parents. Keep source and binaries unchanged throughout.
 Matrix mode retains pinned and following readers during mutation and explicit
-compaction; I/O mode rotates raw, indexed and concurrent-reader cases, with full
+compaction; I/O mode rotates the `raw-20g`, `stream-20g` and `stream-r8-20g`
+cases, with full
 payload verification and cleanup each cycle. The requested duration is a lower
 bound: I/O finishes the current case before stopping.
 
@@ -380,8 +377,8 @@ shutdown; SIGKILL or machine termination cannot guarantee cleanup.
 
 These checks do not simulate power loss or establish Windows runtime behavior.
 The default matrix hot set is 256 MiB and may fit entirely in RAM; it does not
-prove performance for a working set larger than available memory. Indexed
-process-kill tests do not cover every matrix compaction or ENOSPC boundary.
+prove performance for a working set larger than available memory. Stream
+process-kill tests do not cover every ENOSPC boundary.
 
 ## Native platform I/O checks
 

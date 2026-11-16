@@ -21,7 +21,7 @@ BASE = dict(scenario="mixed", records=256, payload=65536, variable=True,
 
 
 def profiles(suite):
-    """Return complete configurations; never splice unindexed writes into indexed reads."""
+    """Return complete configurations; never splice writes of one profile into reads of another."""
     if suite.startswith("grouped"):
         out = []
         shapes = [(1 << 20, 1, 1), (1 << 20, 1, 8), (1 << 20, 4, 8),
@@ -34,7 +34,7 @@ def profiles(suite):
                 c = dict(BASE, records=items//group, payload=group*128,
                          group_items=group, per_tx=publication//group, variable=False,
                          producers=producers, readers=readers, lookups=True, telemetry=True)
-                for engine in ["varlit-indexed", "sqlite", "hdf5"]:
+                for engine in ["sqlite", "hdf5"]:
                     p = dict(name=f"grouped-n{items}-g{group}-t{publication}-w{producers}-r{readers}-{engine}",
                              kind="mixed", engine=engine, config=c)
                     if suite == "grouped-tuning":
@@ -58,11 +58,11 @@ def profiles(suite):
             for group in [512,8192]:
                 c=dict(BASE,records=(8<<20)//group,payload=group*128,group_items=group,
                        per_tx=8192//group,variable=False,producers=4,readers=8,lookups=True,telemetry=True)
-                for engine in ["varlit-indexed","sqlite","hdf5"]:
+                for engine in ["sqlite","hdf5"]:
                     out.append(dict(name=f"grouped-n{8<<20}-g{group}-t8192-w4-r8-{engine}",kind="mixed",engine=engine,config=c))
         if suite == "grouped-control":
             out=[]
-            for engine, lookups in [("varlit-indexed",True),("sqlite",True),
+            for engine, lookups in [("sqlite",True),
                                     ("varlit-stream",False),("sqlite",False),("hdf5",False)]:
                 c=dict(BASE,records=1<<20,payload=128,variable=False,per_tx=131072,
                        readers=8,lookups=lookups,telemetry=True)
@@ -109,8 +109,8 @@ def profiles(suite):
         return out
     small = suite == "smoke"
     full = suite == "full"
-    mixed_engines = ["varlit-stream", "varlit-indexed", "sqlite", "hdf5"]
-    table_engines = ["varlit-indexed", "varlit-matrix", "sqlite", "hdf5"]
+    mixed_engines = ["varlit-stream", "sqlite", "hdf5"]
+    table_engines = ["varlit-matrix", "sqlite", "hdf5"]
     out = []
     for readers in ([1, 8] if not small else [2]):
         for payload in ([65536, 1 << 20] if full else [65536]):
@@ -127,7 +127,7 @@ def profiles(suite):
     for e in mixed_engines:
         out.append(dict(name=f"objects-follow-{e}", kind="mixed", engine=e, config=c))
     keyed = dict(c, lookups=True)
-    for e in ["varlit-indexed", "sqlite"]:
+    for e in ["sqlite"]:
         out.append(dict(name=f"objects-keyed-{e}", kind="mixed", engine=e, config=keyed))
     for producers in ([1, 4] if not small else [4]):
         c = dict(BASE, scenario="table", records=1000000 if full else (1024 if small else 100000),
@@ -137,7 +137,7 @@ def profiles(suite):
             out.append(dict(name=f"table-w{producers}-{e}", kind="mixed", engine=e, config=c))
     # 16 finite f64 channels per logical sample. Stored in large groups, never one
     # Varlit frame per sample. Only SQLite's typed-table candidate uses sample rows.
-    modes = ["native-view", "stream", "indexed", "matrix-mmap", "matrix-owned", "sql-columns", "sql-chunks",
+    modes = ["native-view", "stream", "matrix-mmap", "matrix-owned", "sql-columns", "sql-chunks",
              "hdf-contiguous-bulk", "hdf-chunked-bulk", "hdf-chunked-fletcher-bulk"]
     for total in ([16 << 20, 256 << 20, 1 << 30] if full else [16 << 20 if small else 256 << 20]):
         for group in ([65536, 1 << 20] if full else [1 << 20]):

@@ -23,8 +23,8 @@ impl Writer {
         Ok(match e {
             "varlit-matrix-packed" => Self::Packed(packed_table::Matrix::open(p, c, true)?),
             "varlit-matrix" => Self::Matrix(matrix_table::Matrix::open(p, c, true)?),
-            "varlit-indexed" | "varlit-stream" => {
-                let mut w = native::Writer::create(p, c, e == "varlit-indexed")?;
+            "varlit-stream" => {
+                let mut w = native::Writer::create(p, c)?;
                 w.initial()?;
                 Self::Native(w)
             }
@@ -43,17 +43,9 @@ impl Writer {
         }
         Ok(())
     }
-    fn maintain(&mut self, p: &Path, c: &Config, last: &mut u64) -> Result<Option<(u64, u64)>> {
+    fn maintain(&mut self, c: &Config, last: &mut u64) -> Result<Option<(u64, u64)>> {
         if c.compact_bytes == 0 {
             return Ok(None);
-        }
-        if let Self::Native(native::Writer::Indexed(w)) = self {
-            let bytes = std::fs::metadata(varlit::disk_index_sidecar_path(p))?.len();
-            if bytes >= c.compact_bytes.max(last.saturating_mul(2)) {
-                let result = w.compact_index()?;
-                *last = result.after_bytes;
-                return Ok(Some((result.before_bytes, result.after_bytes)));
-            }
         }
         if let Self::Matrix(w) = self {
             let before = w.generation_bytes()?;
@@ -95,9 +87,7 @@ impl Reader {
         Ok(match e {
             "varlit-matrix-packed" => Self::Packed(packed_table::Matrix::open(p, c, false)?),
             "varlit-matrix" => Self::Matrix(matrix_table::Matrix::open(p, c, false)?),
-            "varlit-indexed" | "varlit-stream" => {
-                Self::Native(native::Reader::open(p, c, e == "varlit-indexed")?)
-            }
+            "varlit-stream" => Self::Native(native::Reader::open(p, c)?),
             "sqlite" => {
                 let r = sqlite::Sql::open(p, c, false, false)?;
                 r.exec("BEGIN");
@@ -334,10 +324,7 @@ fn run(e: &str, root: &Path, c: &Config, config: &Path) -> Result<()> {
                     publication_spans.push((head.txns, start_ns, monotonic_ns()));
                 }
                 let maintenance = Stopwatch::start();
-                if writer
-                    .maintain(&root.join("data/store"), c, &mut compact_after)?
-                    .is_some()
-                {
+                if writer.maintain(c, &mut compact_after)?.is_some() {
                     let (w, cpu) = maintenance.stop();
                     compact_count += 1;
                     compact_wall += w;

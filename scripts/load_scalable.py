@@ -139,8 +139,6 @@ def execute(command, output, name, environment, timeout, required, data_root):
         status = "timeout"
     elif process.returncode == 0 and required in markers:
         status = "passed"
-    elif name == "churn" and "contract_failure" in markers:
-        status = "contract_failure"
     else:
         status = "failed"
     result = {"command": command, "status": status, "returncode": process.returncode,
@@ -163,86 +161,49 @@ def execute(command, output, name, environment, timeout, required, data_root):
     return result
 
 
-def case_command(binary, case, directory, phase, total, epoch, read_seconds):
+def case_command(binary, case, directory, phase, total, epoch):
     values = {"phase": phase, "mode": case["mode"], "root": str(directory), "total-bytes": total,
               "epoch-bytes": epoch, "record-bytes": case.get("record", 65536),
               "batch-bytes": case.get("batch", 4 * 1024**2), "index-batch-records": case.get("index_batch", 16384),
               "cache-bytes": case.get("cache", 8 * 1024**2), "readers": case.get("readers", 0),
-              "pinned-readers": case.get("pinned", 1),
-              "crc": str(case.get("crc", True)).lower(), "reader-pause-us": case.get("pause_us", 0), "seconds": read_seconds}
-    if phase == "write" and case.get("checks_per_epoch"):
-        values["reader-checks-per-epoch"] = case["checks_per_epoch"]
+              "crc": str(case.get("crc", True)).lower()}
     return [str(binary)] + [arg for key, value in values.items() for arg in ("--" + key, str(value))]
-
-
-def validate_fixed_readers(case, total, epoch_bytes, events):
-    """Reject shortened work or a different key/snapshot trace, even on exit 0."""
-    checks = case["checks_per_epoch"]
-    batches = total // epoch_bytes // 2
-    keys = total // 2 // case.get("record", 65536)
-    workers = case["readers"] + case.get("pinned", 1)
-    rows = [event for event in events if event.get("event") == "reader"]
-    if len(rows) != workers or {row["id"] for row in rows} != set(range(workers)):
-        raise ValueError("fixed-work reader set mismatch")
-    mask = 2**64 - 1
-    for row in rows:
-        pinned = row["id"] < case.get("pinned", 1)
-        if (row.get("batches"), row.get("snapshots"), row.get("latency", {}).get("count")) != (
-                batches, 1 if pinned else batches, batches * checks):
-            raise ValueError("fixed-work reader count/snapshot mismatch")
-        state, trace = row["id"] + 123, 0
-        for batch in range(batches):
-            snapshot_epoch = batches - 1 + (0 if pinned else batch)
-            for _ in range(checks):
-                state = (state + 0x9e3779b97f4a7c15) & mask
-                value = ((state ^ (state >> 30)) * 0xbf58476d1ce4e5b9) & mask
-                value = ((value ^ (value >> 27)) * 0x94d049bb133111eb) & mask
-                key = (value ^ (value >> 31)) % (keys + 32)
-                trace = (((trace * 31 + key) & mask) * 31 + snapshot_epoch) & mask
-        if row.get("trace_hash") != trace:
-            raise ValueError("fixed-work key/snapshot trace mismatch")
 
 
 def cases(suite):
     if suite == "tuned":
         return [
             {"name": "raw-20g", "mode": "raw"},
-            {"name": "indexed-20g", "mode": "indexed", "churn": True},
-            {"name": "indexed-r4-20g", "mode": "indexed", "readers": 4},
-            {"name": "indexed-r8-20g", "mode": "indexed", "readers": 8},
-            {"name": "indexed-r5-refresh-only-20g", "mode": "indexed", "readers": 5, "pinned": 0},
-            {"name": "indexed-batch16m-20g", "mode": "indexed", "batch": 16 * 1024**2},
-            {"name": "indexed-r4-batch16m-20g", "mode": "indexed", "readers": 4, "batch": 16 * 1024**2},
-            {"name": "indexed-record4k-20g", "mode": "indexed", "record": 4096},
+            {"name": "stream-20g", "mode": "stream"},
+            {"name": "stream-r4-20g", "mode": "stream", "readers": 4},
+            {"name": "stream-r8-20g", "mode": "stream", "readers": 8},
+            {"name": "stream-batch16m-20g", "mode": "stream", "batch": 16 * 1024**2},
+            {"name": "stream-r4-batch16m-20g", "mode": "stream", "readers": 4, "batch": 16 * 1024**2},
+            {"name": "stream-record4k-20g", "mode": "stream", "record": 4096},
         ]
     if suite == "large":
         return [
             {"name": "raw-20g", "mode": "raw"},
             {"name": "stream-20g", "mode": "stream"},
             {"name": "stream-r4-20g", "mode": "stream", "readers": 4},
-            {"name": "indexed-20g", "mode": "indexed", "churn": True},
-            {"name": "indexed-r4-20g", "mode": "indexed", "readers": 4},
-            {"name": "indexed-r8-20g", "mode": "indexed", "readers": 8},
+            {"name": "stream-r8-20g", "mode": "stream", "readers": 8},
         ]
     if suite == "sweep":
         return [
-            {"name": "indexed-batch-64k", "mode": "indexed", "batch": 65536},
-            {"name": "indexed-batch-1m", "mode": "indexed", "batch": 1024**2},
-            {"name": "indexed-batch-4m", "mode": "indexed"},
-            {"name": "indexed-batch-16m", "mode": "indexed", "batch": 16 * 1024**2},
-            {"name": "indexed-no-crc", "mode": "indexed", "crc": False},
-            {"name": "indexed-record-4k", "mode": "indexed", "record": 4096},
-            {"name": "indexed-cache-64m", "mode": "indexed", "cache": 64 * 1024**2},
-            {"name": "indexed-r1", "mode": "indexed", "readers": 1},
-            {"name": "indexed-r2", "mode": "indexed", "readers": 2},
-            {"name": "indexed-r4", "mode": "indexed", "readers": 4},
-            {"name": "indexed-r8", "mode": "indexed", "readers": 8},
-            {"name": "indexed-r16", "mode": "indexed", "readers": 16},
-            {"name": "indexed-r4-pause100us", "mode": "indexed", "readers": 4, "pause_us": 100},
+            {"name": "stream-batch-64k", "mode": "stream", "batch": 65536},
+            {"name": "stream-batch-1m", "mode": "stream", "batch": 1024**2},
+            {"name": "stream-batch-4m", "mode": "stream"},
+            {"name": "stream-batch-16m", "mode": "stream", "batch": 16 * 1024**2},
+            {"name": "stream-no-crc", "mode": "stream", "crc": False},
+            {"name": "stream-record-4k", "mode": "stream", "record": 4096},
+            {"name": "stream-r1", "mode": "stream", "readers": 1},
+            {"name": "stream-r2", "mode": "stream", "readers": 2},
+            {"name": "stream-r4", "mode": "stream", "readers": 4},
+            {"name": "stream-r8", "mode": "stream", "readers": 8},
+            {"name": "stream-r16", "mode": "stream", "readers": 16},
         ]
     return [{"name": "raw-smoke", "mode": "raw"},
-            {"name": "stream-smoke", "mode": "stream", "readers": 2},
-            {"name": "indexed-smoke", "mode": "indexed", "readers": 4, "churn": True}]
+            {"name": "stream-smoke", "mode": "stream", "readers": 2}]
 
 
 def main():
@@ -256,9 +217,6 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="new report directory")
     parser.add_argument("--binary", type=Path, default=ROOT / "target/release/examples/scalable_load")
     parser.add_argument("--timeout", type=int, default=1800)
-    parser.add_argument("--read-seconds", type=int, default=10)
-    parser.add_argument("--reader-checks-per-epoch", type=int, default=0,
-                        help="fixed reads per reader per mutation epoch; indexed concurrent cases only")
     parser.add_argument("--instrument", choices=["none", "strace", "perf"], default="none")
     args = parser.parse_args()
     if platform.system() != "Linux":
@@ -266,17 +224,10 @@ def main():
     selected = [case for case in cases(args.suite) if not args.only or case["name"] in args.only]
     if not selected or (args.only and set(args.only) != {case["name"] for case in selected}):
         parser.error("unknown or empty case selection")
-    if args.reader_checks_per_epoch < 0:
-        parser.error("reader checks must be nonnegative")
-    if args.reader_checks_per_epoch:
-        if any(case["mode"] != "indexed" or not case.get("readers") or case.get("pause_us", 0)
-               for case in selected):
-            parser.error("fixed reader work requires indexed concurrent cases without pauses")
-        selected = [{**case, "checks_per_epoch": args.reader_checks_per_epoch} for case in selected]
     total = int((args.total_gib if args.total_gib is not None else {"large": 20, "tuned": 20, "sweep": 1, "smoke": 0.25}[args.suite]) * GIB)
     epoch = (args.epoch_mib or (32 if args.suite == "smoke" else 256)) * 1024**2
-    if args.repeat < 1 or total < 2 * epoch or total % (2 * epoch) or args.read_seconds < 1:
-        parser.error("need positive repetitions, at least two aligned epochs, and positive read duration")
+    if args.repeat < 1 or total < 2 * epoch or total % (2 * epoch):
+        parser.error("need positive repetitions and at least two aligned epochs")
     binary = args.binary.resolve(strict=True)
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=False)
@@ -296,8 +247,7 @@ def main():
     source_hashes = {os.fsdecode(name): hashlib.sha256((ROOT / os.fsdecode(name)).read_bytes()).hexdigest()
                      for name in sorted(set(source_files) - {b""}) if (ROOT / os.fsdecode(name)).is_file()}
     atomic_json(output / "source-files.json", source_hashes)
-    markers = {"write": "write_complete", "verify": "verify_complete", "point": "point_complete",
-               "random": "random_complete", "churn": "churn_complete", "restore": "restore_complete", "cross-read": "cross_read_complete"}
+    markers = {"write": "write_complete", "verify": "verify_complete"}
     try:
         for repeat in range(args.repeat):
             for case in selected:
@@ -309,31 +259,23 @@ def main():
                 directory = data_root / name; directory.mkdir()
                 logs = output / name; logs.mkdir()
                 record = {"name": name, "config": case, "stages": [], "status": "running",
-                          "write_workload": "fixed-reader-work" if case.get("checks_per_epoch") else "read-until-writer-finishes"}
+                          "write_workload": "read-until-writer-finishes"}
                 report["cases"].append(record)
                 stages = ["write", "verify"]
-                if case["mode"] == "indexed":
-                    stages += ["point", "random"]
-                    if case.get("churn"):
-                        stages += ["cross-read", "churn", "restore", "point"]
-                for index, phase in enumerate(stages):
+                for phase in stages:
                     print(f"{name}: {phase}", flush=True)
-                    command = case_command(binary, case, directory, phase, total, epoch, args.read_seconds)
-                    advice = evict_files(directory) if phase in ("verify", "point", "random") else []
+                    command = case_command(binary, case, directory, phase, total, epoch)
+                    advice = evict_files(directory) if phase == "verify" else []
                     if phase == "write" and args.instrument == "perf":
                         command = ["perf", "record", "-e", "cpu-clock:u", "-F", "99", "--call-graph", "fp", "-o", str(logs / "perf.data"), "--", *command]
                     elif phase == "write" and args.instrument == "strace":
                         command = ["strace", "-ff", "-ttt", "-T", "-yy", "-s", "0", "-e",
                                    "trace=read,write,pread64,pwrite64,fsync,fdatasync,openat,close,flock,rename,ftruncate,futex",
                                    "-o", str(logs / "trace"), *command]
-                    # Keep the churn phase's name for explicit contract-failure
-                    # classification, and distinguish the second point check.
-                    stage_name = f"{phase}-after-recovery" if index > 5 and phase == "point" else phase
+                    stage_name = phase
                     result = execute(command, logs, stage_name, environment, args.timeout, markers[phase], data_root)
                     result["cache_advice"] = advice
                     record["stages"].append({"phase": stage_name, **result})
-                    if phase == "write" and result["status"] == "passed" and case.get("checks_per_epoch"):
-                        validate_fixed_readers(case, total, epoch, result["events"])
                     if phase == "write" and result["status"] == "passed":
                         record["files"] = [{"path": file.name, "logical_bytes": file.stat().st_size,
                                             "allocated_bytes": file.stat().st_blocks * 512}

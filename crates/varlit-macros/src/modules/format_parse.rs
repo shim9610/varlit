@@ -266,12 +266,6 @@ pub(super) enum InlineBlockKind {
     Matrix(MatrixBlockMeta),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum KeyIndexChoice {
-    Memory,
-    Disk,
-}
-
 pub(super) struct InlineBlock {
     pub(super) kind: InlineBlockKind,
     pub(super) name: Ident,
@@ -279,7 +273,6 @@ pub(super) struct InlineBlock {
     pub(super) version: u16,
     pub(super) key_fields: Vec<Ident>,
     pub(super) finite_key: Option<finite_key::FiniteKey>,
-    pub(super) key_index: KeyIndexChoice,
     pub(super) durability: Option<LitStr>,
     pub(super) immediate_if: Option<LitStr>,
     pub(super) fields: Vec<InlineField>,
@@ -1189,8 +1182,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
     let mut id = None;
     let mut version = 1u16;
     let mut key_fields = Vec::new();
-    let mut key_index = KeyIndexChoice::Memory;
-    let mut key_index_span = None;
     let mut finite_key_decl = None;
     let mut durability = None;
     let mut immediate_if = None;
@@ -1249,18 +1240,11 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
                 immediate_if = Some(LitStr::new(&quote!(#value).to_string(), key.span()));
             }
             "key_index" => {
-                if key_index_span.is_some() {
-                    return Err(syn::Error::new_spanned(key, "duplicate key_index"));
-                }
-                let value: Ident = meta.parse()?;
-                key_index = match value.to_string().as_str() {
-                    "memory" => KeyIndexChoice::Memory,
-                    "disk" => KeyIndexChoice::Disk,
-                    _ => {
-                        return Err(syn::Error::new_spanned(value, "expected memory or disk"));
-                    }
-                };
-                key_index_span = Some(key.span());
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "key_index was removed: keyed records no longer keep a disk \
+                     index sidecar; see docs/design/bounded-keyed-storage.md",
+                ));
             }
             "dims" => {
                 let inner;
@@ -1302,7 +1286,7 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
             _ => {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "expected id, version, key, key_values, key_domain, key_index, durability, immediate_if, dims, category, or tile",
+                    "expected id, version, key, key_values, key_domain, durability, immediate_if, dims, category, or tile",
                 ));
             }
         }
@@ -1311,12 +1295,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         }
     }
     let kind = if matches!(&kind, InlineBlockKind::Matrix(_)) {
-        if let Some(span) = key_index_span {
-            return Err(syn::Error::new(
-                span,
-                "key_index is not supported on matrix blocks",
-            ));
-        }
         if !key_fields.is_empty() {
             return Err(syn::Error::new_spanned(
                 &name,
@@ -1350,14 +1328,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         }
         kind
     };
-    if let Some(span) = key_index_span
-        && key_fields.is_empty()
-    {
-        return Err(syn::Error::new(
-            span,
-            "key_index requires a keyed fixed or variable block",
-        ));
-    }
     let body;
     braced!(body in input);
     let mut fields = Vec::new();
@@ -1459,7 +1429,6 @@ pub(super) fn parse_inline_block(input: ParseStream<'_>) -> Result<InlineBlock> 
         version,
         key_fields,
         finite_key,
-        key_index,
         durability,
         immediate_if,
         fields,

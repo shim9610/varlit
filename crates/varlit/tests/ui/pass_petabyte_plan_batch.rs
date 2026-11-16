@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use varlit::{
-    BatchAppendError, BatchAppendInfo, BatchOptions, DiskIndexOptions,
-    DiskIndexPlan, DiskIndexRebuildReport, Result as VarlitResult, ScanOptions,
+    BatchAppendError, BatchAppendInfo, BatchOptions, Result as VarlitResult, ScanOptions,
     StreamBootstrapReport, StreamOptions, WriterLockBreakPolicy, varlit_format,
 };
 
@@ -12,7 +11,7 @@ varlit_format! {
         version: 1;
         index: keyed_offset_chain;
         blocks {
-            variable Frame(id = 8, key = [scan, frame], key_index = disk) {
+            variable Frame(id = 8, key = [scan, frame]) {
                 scan: u32,
                 frame: u32,
                 payload: Vec<u8>,
@@ -22,12 +21,12 @@ varlit_format! {
                 value: u64,
             }
 
-            variable Observation(id = 2, key = [id], key_index = disk) {
+            variable Observation(id = 2, key = [id]) {
                 id: u64,
                 payload: Vec<u8>,
             }
 
-            fixed Account(id = 6, key = [id], key_index = memory) {
+            fixed Account(id = 6, key = [id]) {
                 id: u64,
                 active: bool,
             }
@@ -35,44 +34,11 @@ varlit_format! {
     }
 }
 
-fn generated_plan() -> DiskIndexPlan {
-    PetabytePlanBatchFormat::disk_index_plan().unwrap()
-}
-
 fn stream_borrowed_batch(
     writer: &mut PetabytePlanBatchFormatStreamWriter,
     samples: &[Sample],
 ) -> Result<BatchAppendInfo, BatchAppendError> {
     writer.push_samples(samples, BatchOptions::default())
-}
-
-fn indexed_owned_batch(
-    writer: &mut PetabytePlanBatchFormatIndexedWriter,
-    observations: Vec<Observation>,
-) -> Result<BatchAppendInfo, BatchAppendError> {
-    writer.push_observations(observations, BatchOptions::default())
-}
-
-fn indexed_borrowed_batches(
-    writer: &mut PetabytePlanBatchFormatIndexedWriter,
-    frames: &[Frame],
-    samples: &[Sample],
-) {
-    let _: Result<BatchAppendInfo, BatchAppendError> =
-        writer.push_frames(frames, BatchOptions::default());
-    let _: Result<BatchAppendInfo, BatchAppendError> =
-        writer.push_samples(samples, BatchOptions::default());
-}
-
-fn indexed_explicit_scans(
-    reader: &PetabytePlanBatchFormatIndexedReader,
-) -> VarlitResult<()> {
-    let _events = reader.events()?;
-    let _frames = reader.frames()?;
-    let _samples = reader.samples()?;
-    let _verified = reader.verify_all()?;
-    let _verified = reader.verify_all_with_progress(ScanOptions::default(), |_| {})?;
-    Ok(())
 }
 
 fn bootstrap_stream(path: &Path) -> VarlitResult<StreamBootstrapReport> {
@@ -94,25 +60,6 @@ fn restore_stream(
     PetabytePlanBatchFormat::restore_stream_writer(path, StreamOptions::default())
 }
 
-fn rebuild_index(path: &Path) -> VarlitResult<DiskIndexRebuildReport> {
-    PetabytePlanBatchFormat::rebuild_disk_index(path, DiskIndexOptions::default())
-}
-
-fn rebuild_index_with_progress(path: &Path) -> VarlitResult<DiskIndexRebuildReport> {
-    PetabytePlanBatchFormat::rebuild_disk_index_with_progress(
-        path,
-        DiskIndexOptions::default(),
-        ScanOptions::default(),
-        |_| {},
-    )
-}
-
-fn restore_index(
-    path: &Path,
-) -> VarlitResult<PetabytePlanBatchFormatIndexedWriter> {
-    PetabytePlanBatchFormat::restore_indexed_writer(path, DiskIndexOptions::default())
-}
-
 fn clear_stale_lock(path: &Path) -> VarlitResult<()> {
     PetabytePlanBatchFormat::clear_stale_writer_lock(
         path,
@@ -122,17 +69,10 @@ fn clear_stale_lock(path: &Path) -> VarlitResult<()> {
 
 fn main() {
     let _ = (
-        generated_plan,
         stream_borrowed_batch,
-        indexed_owned_batch,
-        indexed_borrowed_batches,
-        indexed_explicit_scans,
         bootstrap_stream,
         bootstrap_stream_with_progress,
         restore_stream,
-        rebuild_index,
-        rebuild_index_with_progress,
-        restore_index,
         clear_stale_lock,
     );
 }

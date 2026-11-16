@@ -1,10 +1,20 @@
 //! Varlit grouped: 256 accounts packed per keyed record (application layout,
-//! 44 bytes per account slot), plus branch -> ids records. A transaction
-//! rewrites each touched group and `sync()`s.
-//! app-built: branch -> ids records (csr.rs); packing in pack.rs
+//! 44 bytes per account slot), plus branch -> ids records, in a native append
+//! file. A transaction rewrites each touched group and `sync()`s.
+//!
+//! Keyed lookup is application-built: the native file has no on-disk key
+//! index. The writer keeps the newest record offset of every group (one `u64`
+//! per group, from each append's `AppendInfo`) and reads a group back by
+//! offset. A reader lists the record entries of each block in file order
+//! (the resident directory, nothing decoded): the base groups and the branch
+//! records are written in key order, so entry `g` is group `g` and entry `b`
+//! is branch `b`; only the group versions rewritten by transactions, which
+//! follow the base, are decoded at open to learn their key.
+//! app-built: branch -> ids records (csr.rs); packing in pack.rs; key -> record
+//! lookup (write order + rewrite overlay)
 use super::pack::*;
 use super::*;
-use varlit::{BatchOptions, DiskIndexOptions, VarlitEmpty, varlit_format};
+use varlit::{RecordIndexEntry, VarlitEmpty, VarlitReader, varlit_format};
 
 varlit_format! {
     pub format BankGrouped {
@@ -15,11 +25,11 @@ varlit_format! {
         integrity: crc32_with_header;
         index: keyed_offset_chain;
         blocks {
-            variable AcctGroup(id = 1, key = [g], key_index = disk) {
+            variable AcctGroup(id = 1, key = [g]) {
                 g: u32,
                 data: Vec<u8>,
             }
-            variable Branch(id = 2, key = [branch], key_index = disk) {
+            variable Branch(id = 2, key = [branch]) {
                 branch: u32,
                 ids: Vec<u64>,
             }
@@ -27,112 +37,151 @@ varlit_format! {
     }
 }
 
-fn opts() -> DiskIndexOptions {
-    vl_dio(DiskIndexOptions {
-        cache_bytes: 256 << 20,
-        ..DiskIndexOptions::default()
-    })
-}
-
 pub struct W {
-    w: BankGroupedIndexedWriter,
-    r: Option<BankGroupedIndexedReader>,
-    p: PathBuf,
+    w: BankGroupedWriter,
+    /// Newest record offset of each group, indexed by group number.
+    at: Vec<u64>,
+    scratch: Vec<u8>,
 }
 pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
     Ok(Box::new(W {
-        w: BankGrouped::create_indexed_writer(p, opts())?,
-        r: None,
-        p: p.to_path_buf(),
+        w: BankGrouped::create_writer(p)?,
+        at: Vec::new(),
+        scratch: Vec::new(),
     }))
 }
 impl Oltp for W {
     fn load(&mut self) -> Result<()> {
-        let groups = (0..ngroups()).map(|g| {
-            let mut data = vec![0u8; G * AB];
-            initial_group(g, &mut data);
-            AcctGroup { g: g as u32, data }
-        });
-        self.w
-            .push_acct_groups(groups, BatchOptions::default())
-            .map_err(|f| f.source)?;
-        let mut batch = Vec::new();
+        let mut blk = AcctGroup {
+            g: 0,
+            data: vec![0u8; G * AB],
+        };
+        self.at = Vec::with_capacity(ngroups());
+        for g in 0..ngroups() {
+            blk.g = g as u32;
+            initial_group(g, &mut blk.data);
+            self.at.push(self.w.push_acct_group(&blk)?.record_offset);
+        }
         let w = &mut self.w;
+        let mut br = Branch {
+            branch: 0,
+            ids: Vec::new(),
+        };
         csr::by_branch(&std::env::temp_dir().join("csr"), |b, ids| {
-            batch.push(Branch {
-                branch: b,
-                ids: ids.to_vec(),
-            });
-            if batch.len() == 10_000 {
-                w.push_branchs(std::mem::take(&mut batch), BatchOptions::default())
-                    .map_err(|f| f.source)?;
-            }
+            br.branch = b;
+            br.ids.clear();
+            br.ids.extend_from_slice(ids);
+            w.push_branch(&br)?;
             Ok(())
         })?;
-        self.w
-            .push_branchs(batch, BatchOptions::default())
-            .map_err(|f| f.source)?;
         self.w.sync()?;
-        self.w.compact_index()?;
-        self.r = Some(BankGrouped::open_indexed_reader(&self.p, opts())?);
         Ok(())
     }
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()> {
-        let r = self.r.as_mut().unwrap();
-        let mut out = Vec::new();
+        let mut blk = AcctGroup::empty();
         for (g, ups) in by_group(deltas) {
-            let mut blk = got(|o| r.get_acct_group(&(g as u32), o), "missing group")?;
+            self.w
+                .inner()
+                .file()
+                .read_block_at(self.at[g], &mut self.scratch, &mut blk)?;
+            if blk.g as usize != g {
+                return Err("group offset names another group".into());
+            }
             for (slot, d) in ups {
                 add_bal(&mut blk.data, slot, d);
             }
-            out.push(blk);
+            self.at[g] = self.w.push_acct_group(&blk)?.record_offset;
         }
-        self.w
-            .push_acct_groups(out, BatchOptions::default())
-            .map_err(|f| f.source)?;
         self.w.sync()?;
-        r.follow()?;
-        Ok(())
-    }
-    fn finish(&mut self) -> Result<()> {
-        self.w.compact_index()?;
         Ok(())
     }
 }
 
-pub struct R(pub BankGroupedIndexedReader);
+pub struct R {
+    r: VarlitReader,
+    /// Newest entry of each group, indexed by group number.
+    groups: Vec<RecordIndexEntry>,
+    /// The entry of each branch, indexed by branch number.
+    branches: Vec<RecordIndexEntry>,
+    scratch: Vec<u8>,
+    blk: AcctGroup,
+    br: Branch,
+}
 pub fn open_reader(p: &Path) -> Result<R> {
-    Ok(R(BankGrouped::open_indexed_reader(p, opts())?))
+    let r = vl_spec(BankGrouped::spec()).open_reader(p)?;
+    let f = r.file();
+    let mut groups = Vec::new();
+    f.block_entries_into::<AcctGroup>(&mut groups)?;
+    let n = ngroups();
+    if groups.len() < n {
+        return Err("missing base groups".into());
+    }
+    // Versions rewritten by transactions follow the base in file order.
+    let (mut scratch, mut blk) = (Vec::new(), AcctGroup::empty());
+    for i in n..groups.len() {
+        let e = groups[i].clone();
+        f.decode_block_into(&e, &mut scratch, &mut blk)?;
+        groups[blk.g as usize] = e;
+    }
+    groups.truncate(n);
+    let mut brs = Vec::new();
+    f.block_entries_into::<Branch>(&mut brs)?;
+    if brs.len() != branches() as usize {
+        return Err("missing branches".into());
+    }
+    Ok(R {
+        r,
+        groups,
+        branches: brs,
+        scratch,
+        blk,
+        br: Branch::empty(),
+    })
 }
 pub fn open(p: &Path) -> Result<Box<dyn OltpRead>> {
     Ok(Box::new(open_reader(p)?))
 }
 impl R {
-    pub fn branch_ids(&self, b: u32) -> Result<Vec<u64>> {
-        Ok(got(|o| self.0.get_branch(&b, o), "missing branch")?.ids)
+    fn group(&mut self, g: usize) -> Result<()> {
+        let e = self.groups.get(g).ok_or("missing group")?;
+        self.r
+            .file()
+            .decode_block_into(e, &mut self.scratch, &mut self.blk)?;
+        if self.blk.g as usize != g {
+            return Err("group entry names another group".into());
+        }
+        Ok(())
+    }
+    fn load_branch(&mut self, b: u32) -> Result<()> {
+        let e = self.branches.get(b as usize).ok_or("missing branch")?;
+        self.r
+            .file()
+            .decode_block_into(e, &mut self.scratch, &mut self.br)?;
+        if self.br.branch != b {
+            return Err("branch entry names another branch".into());
+        }
+        Ok(())
+    }
+    pub fn branch_ids(&mut self, b: u32) -> Result<Vec<u64>> {
+        self.load_branch(b)?;
+        Ok(self.br.ids.clone())
     }
 }
 impl OltpRead for R {
     fn point(&mut self, id: u64) -> Result<Row> {
-        let blk = got(
-            |o| self.0.get_acct_group(&((id as usize / G) as u32), o),
-            "missing",
-        )?;
+        self.group(id as usize / G)?;
         let s = id as usize % G;
-        Ok(dec(id, &blk.data[s * AB..(s + 1) * AB]))
+        Ok(dec(id, &self.blk.data[s * AB..(s + 1) * AB]))
     }
     fn branch(&mut self, b: u32) -> Result<(i64, u64)> {
-        let br = got(|o| self.0.get_branch(&b, o), "missing branch")?;
+        let ids = self.branch_ids(b)?;
         let mut sum = 0;
-        let mut blk = AcctGroup::empty();
-        for (g, slots) in by_group(&br.ids.iter().map(|&id| (id, 0)).collect::<Vec<_>>()) {
-            if !self.0.get_acct_group(&(g as u32), &mut blk)? {
-                return Err("missing".into());
-            }
+        for (g, slots) in by_group(&ids.iter().map(|&id| (id, 0)).collect::<Vec<_>>()) {
+            self.group(g)?;
             for (slot, _) in slots {
-                sum += bal_at(&blk.data, slot);
+                sum += bal_at(&self.blk.data, slot);
             }
         }
-        Ok((sum, br.ids.len() as u64))
+        Ok((sum, ids.len() as u64))
     }
 }

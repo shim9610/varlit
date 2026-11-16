@@ -1065,7 +1065,7 @@ pub fn error_hint(error: &Error) -> &'static str {
         )
     {
         return "the sidecar does not describe this generation of the primary file; \
-                republish it with rebuild_disk_index (never trust it)";
+                rebuild it with bootstrap_stream_checkpoint (never trust it)";
     }
     match classify_error(error) {
         DiagnosticDomain::FormatDefinition => "inspect the format declaration and generated schema",

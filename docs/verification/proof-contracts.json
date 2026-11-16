@@ -170,15 +170,13 @@
     {
       "id": "materialization",
       "harnesses": [
-        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
-        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
       ],
       "sources": [
         "crates/varlit-core/src/verification/materialization.rs",
-        "crates/varlit-core/src/collections.rs",
-        "crates/varlit-core/src/verification/decoder_callers.rs"
+        "crates/varlit-core/src/collections.rs"
       ],
-      "scope": "full-width inductive budget step; actual MaterializationBudget::decode twice across short input, callback errors and retry",
+      "scope": "full-width inductive budget step: consume, failed charge and reset",
       "limits": "Budget reset requires prior record release; not a whole-process live-memory bound",
       "specification": {
         "requires": "0<=remaining<=limit; returning codecs read/charge through Decoder and do not manipulate its private state.",

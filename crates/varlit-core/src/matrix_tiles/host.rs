@@ -5,11 +5,10 @@
 //! once.
 
 use super::api::TiledMatrix;
-use super::store::{TileSource, TileStore};
+use super::store::TileSource;
 use crate::format::ReadLimitKey;
 use crate::{
-    Error, FormatSpec, MatrixCellStatus, MatrixCursor, MatrixKey, MatrixPage, MatrixRegion, Result,
-    VarlitMatrixBlock,
+    Error, FormatSpec, MatrixCursor, MatrixKey, MatrixPage, MatrixRegion, Result, VarlitMatrixBlock,
 };
 
 /// Cells decoded per batch of a typed read: the payload scratch is at most
@@ -24,104 +23,6 @@ pub(crate) fn stride<T: VarlitMatrixBlock>(spec: FormatSpec) -> Result<usize> {
         .ok()
         .filter(|stride| *stride != 0)
         .ok_or(Error::InvalidMatrixLayout)
-}
-
-fn zeroed(len: usize, resource: &'static str) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(len)
-        .map_err(|_| Error::AllocationFailed {
-            resource,
-            requested: len as u64,
-        })?;
-    bytes.resize(len, 0);
-    Ok(bytes)
-}
-
-/// Encodes `value` into exactly `T::SLOT_STRIDE` bytes, using `scratch`.
-pub(crate) fn encode_slot<T: VarlitMatrixBlock>(
-    spec: FormatSpec,
-    value: &T,
-    scratch: &mut Vec<u8>,
-) -> Result<Vec<u8>> {
-    match crate::codec::encode_into_limited(
-        value,
-        T::ENDIAN.unwrap_or(spec.endian),
-        T::SLOT_STRIDE.saturating_add(1),
-        "matrix slot payload",
-        scratch,
-    ) {
-        Ok(()) if scratch.len() as u64 == T::SLOT_STRIDE => {
-            let mut out = zeroed(0, "matrix slot payload")?;
-            out.try_reserve_exact(scratch.len())
-                .map_err(|_| Error::AllocationFailed {
-                    resource: "matrix slot payload",
-                    requested: scratch.len() as u64,
-                })?;
-            out.extend_from_slice(scratch);
-            Ok(out)
-        }
-        Ok(()) => Err(Error::MatrixSizeMismatch {
-            expected: T::SLOT_STRIDE,
-            actual: scratch.len() as u64,
-        }),
-        Err(Error::LimitExceeded { actual, .. }) => Err(Error::MatrixSizeMismatch {
-            expected: T::SLOT_STRIDE,
-            actual,
-        }),
-        Err(error) => Err(error),
-    }
-}
-
-/// Stores `value` as `key`'s slot, uncommitted.
-pub(crate) fn write_cell<T: VarlitMatrixBlock>(
-    spec: FormatSpec,
-    tiles: &mut TiledMatrix,
-    store: &mut dyn TileStore,
-    key: MatrixKey,
-    value: &T,
-    scratch: &mut Vec<u8>,
-) -> Result<()> {
-    stride::<T>(spec)?;
-    let payload = encode_slot(spec, value, scratch)?;
-    tiles.write_cell(store, T::ID, key, &payload)
-}
-
-pub(crate) fn cell_status<T: VarlitMatrixBlock>(
-    spec: FormatSpec,
-    tiles: &TiledMatrix,
-    source: &dyn TileSource,
-    key: MatrixKey,
-) -> Result<MatrixCellStatus> {
-    crate::matrix::ensure_matrix_block::<T>(spec)?;
-    tiles.cell_status(source, T::ID, key)
-}
-
-/// Decodes one committed cell into `out`.
-pub(crate) fn read_cell<T: VarlitMatrixBlock>(
-    spec: FormatSpec,
-    tiles: &TiledMatrix,
-    source: &dyn TileSource,
-    key: MatrixKey,
-    out: &mut T,
-) -> Result<()> {
-    let stride = stride::<T>(spec)?;
-    spec.read_limits
-        .check(ReadLimitKey::MaterializedBytes, stride as u64)?;
-    tiles.with_payloads(stride, |payload| {
-        tiles.read_cell(source, T::ID, key, payload)?;
-        let limit = spec
-            .read_limits
-            .require(ReadLimitKey::MaterializedBytes)?
-            .unwrap_or(u64::MAX)
-            - stride as u64;
-        crate::codec::Decoder::decode_from_slice_limited_into(
-            payload,
-            T::ENDIAN.unwrap_or(spec.endian),
-            limit,
-            out,
-        )
-    })
 }
 
 /// The decode budget left once `inline` bytes are charged.
@@ -269,31 +170,4 @@ pub(crate) fn read_region_bytes<T: VarlitMatrixBlock>(
         filled,
         next: next.map(|key| MatrixCursor::new(region, key)),
     })
-}
-
-/// Reads one whole row (`out.len()` must equal dimension 1).
-pub(crate) fn read_row<T: VarlitMatrixBlock>(
-    spec: FormatSpec,
-    tiles: &TiledMatrix,
-    source: &dyn TileSource,
-    row: u64,
-    out: &mut [T],
-) -> Result<()> {
-    let width = tiles.geom.dims[1];
-    if out.len() as u64 != width {
-        return Err(Error::MatrixSizeMismatch {
-            expected: width,
-            actual: out.len() as u64,
-        });
-    }
-    let page = read_region(
-        spec,
-        tiles,
-        source,
-        MatrixRegion::row(row, 0..width),
-        MatrixKey::new(row, 0),
-        out,
-    )?;
-    debug_assert!(page.next.is_none());
-    Ok(())
 }

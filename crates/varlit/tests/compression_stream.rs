@@ -5,10 +5,9 @@ mod pages;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use varlit::{
-    CommitPolicy, CompressionHeaderMode, CompressionPolicy, DiskIndexOptions, DiskIndexPlan,
-    DiskIndexedBlock, Error, FormatSpec, IntegrityPolicy, StreamOptions, VariableCompression,
-    VarlitBlock, VarlitEmpty, VarlitIndexedReader, VarlitIndexedWriter, VarlitStreamReader,
-    VarlitStreamWriter, disk_index_sidecar_path, rebuild_disk_index, varlit_format,
+    CommitPolicy, CompressionHeaderMode, CompressionPolicy, Error, FormatSpec, IntegrityPolicy,
+    StreamOptions, VariableCompression, VarlitBlock, VarlitEmpty, VarlitStreamReader,
+    VarlitStreamWriter, varlit_format,
 };
 
 #[derive(Clone, Debug, PartialEq, VarlitBlock)]
@@ -29,11 +28,6 @@ varlit_format! {
     }
 }
 
-/// Looks `key` up through a fresh output value.
-fn fetch(reader: &VarlitIndexedReader, key: u64) -> varlit::Result<Option<Item>> {
-    let mut out = Item::empty();
-    Ok(reader.get::<Item>(&key, &mut out)?.then_some(out))
-}
 fn specs() -> impl Iterator<Item = FormatSpec> {
     [IntegrityPolicy::Crc32, IntegrityPolicy::Crc32WithHeader]
         .into_iter()
@@ -121,93 +115,6 @@ fn compressed_crc_stream_preserves_format_contract_and_checks_payloads() -> varl
             reader.events()?.last().unwrap(),
             Err(Error::ChecksumMismatch { .. })
         ));
-    }
-    Ok(())
-}
-
-#[test]
-fn compressed_crc_rebuild_preserves_format_contract_and_checks_payloads() -> varlit::Result<()> {
-    const BLOCKS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
-    for spec in specs() {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("indexed.varlit");
-        let options = DiskIndexOptions::default();
-        let plan = DiskIndexPlan::canonical(spec, BLOCKS).unwrap();
-        let value = Item {
-            id: 7,
-            payload: vec![41; 16 * 1024],
-        };
-        let payload_offset;
-        {
-            let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
-            let info = writer.push_info(&value)?;
-            payload_offset = info.payload_offset + info.payload_len - 1;
-            writer.push_info(&Item {
-                id: 8,
-                payload: vec![42; 16 * 1024],
-            })?;
-            writer.delete_info::<Item>(&8)?;
-            writer.sync()?;
-        }
-        std::fs::remove_file(disk_index_sidecar_path(&path))?;
-        // Three user records, the creation nonce and one sync marker.
-        assert_eq!(rebuild_disk_index(spec, &path, options, plan)?.records, 5);
-        {
-            let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-            assert_eq!(fetch(&reader, 7)?, Some(value));
-            assert_eq!(fetch(&reader, 8)?, None);
-        }
-        std::fs::remove_file(disk_index_sidecar_path(&path))?;
-        corrupt_payload(&path, payload_offset)?;
-        let error = rebuild_disk_index(spec, &path, options, plan).unwrap_err();
-        assert!(
-            matches!(error, Error::ChecksumMismatch { .. }),
-            "corrupt compressed payload must return ChecksumMismatch"
-        );
-        assert!(!disk_index_sidecar_path(&path).exists());
-    }
-    Ok(())
-}
-
-#[test]
-fn embedded_manifest_leaves_capacity_for_creation_and_tombstone_tails() -> varlit::Result<()> {
-    const BLOCKS: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<Item>()];
-    for spec in specs() {
-        let spec = spec
-            .with_manifest_policy(varlit::ManifestPolicy::Embedded)
-            .with_index_policy(varlit::IndexPolicy::KeyedOffsetChain)
-            .with_computed_schema_hash();
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("manifest-tails.varlit");
-        let options = DiskIndexOptions::default();
-        let plan = DiskIndexPlan::canonical(spec, BLOCKS).unwrap();
-        let value = Item {
-            id: 7,
-            payload: vec![41; 4096],
-        };
-        {
-            let mut writer = VarlitIndexedWriter::create(spec, &path, options, plan)?;
-            writer.push_info(&value)?;
-            writer.sync()?;
-            writer.delete_info::<Item>(&value.id)?;
-            writer.sync()?;
-        }
-        let mut reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-        assert_eq!(fetch(&reader, value.id)?, None);
-        {
-            let mut writer = VarlitIndexedWriter::open(spec, &path, options, plan)?;
-            writer.push_info(&value)?;
-            writer.sync()?;
-            writer.compact_index()?;
-        }
-        reader.follow()?;
-        assert_eq!(fetch(&reader, value.id)?, Some(value.clone()));
-        drop(reader);
-        std::fs::remove_file(disk_index_sidecar_path(&path))?;
-        // Five records as before plus the three sync markers that closed them.
-        assert_eq!(rebuild_disk_index(spec, &path, options, plan)?.records, 8);
-        let reader = VarlitIndexedReader::open(spec, &path, options, plan)?;
-        assert_eq!(fetch(&reader, value.id)?, Some(value));
     }
     Ok(())
 }

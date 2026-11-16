@@ -9,7 +9,6 @@ license = "MIT OR Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
-redb = { version = "4.4.0", path = "../vendor/redb" }
 libfuzzer-sys = "0.4"
 tempfile = "3"
 
@@ -82,13 +81,6 @@ bench = false
 [[bin]]
 name = "sidecar_state_machine"
 path = "fuzz_targets/sidecar_state_machine.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "native_redb_differential"
-path = "fuzz_targets/native_redb_differential.rs"
 test = false
 doc = false
 bench = false

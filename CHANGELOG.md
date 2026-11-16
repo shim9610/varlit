@@ -38,8 +38,29 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   [migration guide](docs/migration-guide.md#upgrading-from-0121-to-0130).
 - Variable records longer than 64 KiB in formats with data checksums are stored
   chunked (record flag `0x0002`) with a CRC per 64 KiB chunk. 0.12.x rejects
-  such records as having an unknown flag. Stream/indexed sidecars written by
+  such records as having an unknown flag. Stream state sidecars written by
   0.13.0 are also not readable by earlier versions.
+- Breaking: remove the indexed primary. Updating a keyed record appended a new
+  version and an indexed primary could never reclaim the old ones, so a file
+  grew with the number of updates rather than with its data; the replacement is
+  designed in [bounded keyed storage](docs/design/bounded-keyed-storage.md).
+  Removed: `VarlitIndexedWriter`, `VarlitIndexedReader`, `rebuild_disk_index`,
+  `rebuild_disk_index_with_progress`, `DiskIndexRebuildReport`,
+  `DiskIndexPlan`, `DiskIndexedBlock`, `DiskIndexEntry`, `DiskIndexKeyTag`,
+  `VarlitDiskKey`, `disk_index_sidecar_path`, the `.vki` sidecar, the
+  generated `*_indexed_*` constructors and `*Indexed*` handle types,
+  `DiskIndexError::PageReclaimed` and `DiskIndexOptions::max_tail_records`.
+  The `key_index` block attribute is now a compile error. Stream handles, the
+  `.vks` state sidecar, native keyed files and matrices are unchanged; read
+  indexed data with 0.12.1 and rewrite it (see the
+  [migration guide](docs/migration-guide.md)).
+- Stream `sync` and stream reader `follow` now run through the verified
+  publication drivers that the indexed writer used, so the commit and follow
+  protocols checked by Kani are the ones stream handles execute.
+- Fix: a stream writer's immediate policy counted the format's own creation
+  nonce and manifest records, so `after_records(n)` and `after_bytes(n)` fired
+  one record early after `create`; counting now starts at the first caller
+  write.
 
 - Add explicit typed file inspection and strict application self-test qualification.
   Generated registries include user-defined block types; incomplete coverage is
@@ -166,7 +187,7 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   buffer, and unlinked deletes reuse the writer's buffer for the tombstone.
   For the cases in `crates/varlit/tests/write_allocations.rs` (no
   compression), appends, deletes, flushes and syncs make no allocator calls
-  after warm-up. Stream and indexed writers are unchanged.
+  after warm-up. Stream writers are unchanged.
 - Fix `merge_keyed_files`, `compact_keyed_file(s)` and the merge estimate failing
   with `UnexpectedEof` on inputs large enough to open from an anchor.
 - Fix `follow()` failing with `CorruptTail` when it met the writer's next record
@@ -226,7 +247,6 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `InvalidMatrixLayout` instead of panicking (found by `matrix_arbitrary`).
 - Add the `mixed_load_bench` example: a concurrent writer and follower on a
   file of a given size, reporting per-phase heap peak, allocator calls and read
-  system calls. The storage benchmark harness now follows and retries indexed
-  lookups that meet `DiskIndexError::PageReclaimed`, as that error documents.
+  system calls.
 
 Earlier releases are recorded in the [version history](https://github.com/shim9610/varlit/blob/9343ea1754947d3af8e03dfa525d6ba5af856008/CHANGELOG.md).

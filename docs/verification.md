@@ -50,7 +50,7 @@ exhaustive input-space claim.
 
 The read-policy suite exercises unset compatibility and four explicit modes,
 CRC/structure selection, positional-read counts, decoder/resource refusal,
-compression headers, native/indexed/mmap/matrix routes and pending/confirmed
+compression headers, native/stream/mmap/matrix routes and pending/confirmed
 visibility. Explicit verification remains strict when ordinary reads trust
 captured metadata. The [policy contract](design/read-validation-policy-review.md)
 defines which checks can be omitted.

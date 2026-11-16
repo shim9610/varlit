@@ -16,8 +16,10 @@ Files: native files need no conversion. In a format with data checksums,
 new record flag, which 0.12.x refuses. Matrix storage is now tiled and a
 matrix spec's schema hash includes its tile shape, so matrix files written by
 0.12.x (layout `VMAT` v5) are refused (with `SchemaHashMismatch` when the
-format declares a schema hash); recreate them from their source. Stream/indexed sidecars written by 0.13.0 cannot be read by
-0.12.x.
+format declares a schema hash); recreate them from their source. Stream
+sidecars written by 0.13.0 cannot be read by 0.12.x. Indexed files (a native
+primary with a `.vki` sidecar) are no longer supported; see
+[Indexed primary removed](#indexed-primary-removed).
 
 Matrix APIs that tiled storage never used were removed. Delete these from
 0.12.x code; unless noted, there is no replacement:
@@ -59,13 +61,13 @@ table. The mechanical rewrite:
 
 ```rust
 // before
-let frame = reader.get_frame(&key)?.ok_or(Missing)?;
+let frame = reader.frames()?.get(&key)?.ok_or(Missing)?;
 for record in reader.frames()? { let record = record?; use_it(&record); }
 
 // after
 use varlit::VarlitEmpty;
 let mut frame = Frame::empty();
-if !reader.get_frame(&key, &mut frame)? { return Err(Missing); }
+if !reader.frames()?.get(&key, &mut frame)? { return Err(Missing); }
 let mut cursor = reader.frames()?;
 let mut record = Frame::empty();
 while cursor.next_into(&mut record)? { use_it(&record); }
@@ -87,6 +89,47 @@ Use `*_lazy_or_scan[_with_report]` to retain the former behavior, or match the
 error and explicitly call `VarlitFile::open_readonly_scan` / `open_scan`.
 Strict lazy open selects header tails when declared, otherwise the trailing
 digest. See [lazy-open changes](api-changes.md#lazy-open-and-explicit-scan-selection).
+
+### Indexed primary removed
+
+The indexed primary is removed: `VarlitIndexedWriter`, `VarlitIndexedReader`,
+the `.vki` sidecar, the generated `create_indexed_writer`,
+`open_indexed_writer`, `restore_indexed_writer`, `open_indexed_reader` and
+`rebuild_disk_index` constructors, the generated `<Format>IndexedWriter` /
+`<Format>IndexedReader` types and their lookups by key (`get_<block>`,
+`lookup_entry`, `historical_distinct_keys`), `rebuild_disk_index_with_progress`,
+`DiskIndexRebuildReport`, `DiskIndexPlan`, `DiskIndexedBlock`,
+`DiskIndexEntry`, `DiskIndexKeyTag`, `VarlitDiskKey`,
+`DiskIndexError::PageReclaimed` and `DiskIndexOptions::max_tail_records`.
+Updating keyed records grew its files without bound, and it could never
+reclaim superseded versions. The replacement design is
+[bounded keyed storage](design/bounded-keyed-storage.md); it is not
+implemented.
+
+There is no automatic conversion. For each file written through an indexed
+writer:
+
+1. Read its data with the release that wrote it.
+2. Write it again with this release as a native file (`create_writer`), a
+   stream (`create_stream_writer`) or a matrix.
+3. Delete the old `.vki` sidecar.
+
+In code:
+
+- Delete `key_index = disk` and `key_index = memory` from block declarations.
+  The attribute is now a compile error ("key_index was removed"). A keyed block
+  without it keeps working with the resident handles: `push_<block>`,
+  `delete_<block>`, `keyed_blocks::<T>()` and `<blocks>()?.get(&key, &mut out)`.
+- Replace indexed writers with stream writers for append-only ingest, or with
+  resident writers where the application looks records up by key. In a
+  `keyed_offset_chain` format the stream writer generates no method for a keyed
+  block.
+- Replace `rebuild_disk_index` with `bootstrap_stream_checkpoint` for stream
+  files.
+- Finite keys (`key_values`, `key_domain`) still generate their key enum and
+  work with the resident keyed API.
+- A stream writer's Immediate policy counters now start at the first caller
+  write; the records `create` writes itself no longer count.
 
 <a id="060-pre-10-wire-changes"></a>
 
@@ -155,8 +198,8 @@ there is no automatic migration path for these surfaces:
 - Decoding a very large `HashMap` under a tight explicit materialization limit
   can now fail with `Error::LimitExceeded`: the charge is the hash table actually
   allocated rather than a per-entry model that under-counted it.
-- Stream and disk-indexed primaries now begin with an internal creation-nonce
-  record. Existing primaries keep working, but record counts, sequence numbers,
+- Stream primaries (and the indexed primaries of those releases) now begin
+  with an internal creation-nonce record. Existing primaries keep working, but record counts, sequence numbers,
   and record offsets of newly created primaries shift by one relative to 0.3.0;
   tests or tools that assert absolute counts on a freshly created stream or
   indexed file must account for it.
@@ -165,7 +208,9 @@ there is no automatic migration path for these surfaces:
   `DiskIndexError::MetadataLength` rather than `MetadataVersion`, because
   `decode_metadata` checks the record length before magic and version and the
   record grew from 260 to 300 bytes; a sidecar published against an older plan
-  digest is refused as stale. Both recover with `rebuild_disk_index`. This is
+  digest is refused as stale. Both recovered with `rebuild_disk_index`, which
+  0.13.0 removed; a stream `.vks` recovers by removal and
+  `bootstrap_stream_checkpoint`. This is
   hypothetical: `disk_index.rs` is new in 0.4.0, so no released version wrote a
   v2 sidecar.
 - Decoding now charges the materialization budget 8 bytes for each distinct

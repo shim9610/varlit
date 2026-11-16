@@ -598,7 +598,7 @@ pub enum Error {
     /// leave files that open slower than their spec says they should.
     ///
     /// A segment and a digest solve the same problem: what an open needs that
-    /// lives in no single record. Select a scanning/indexed writer when
+    /// lives in no single record. Select a scanning or stream writer when
     /// checkpoint or segment serialization is required.
     #[error(
         "a lazy writer open cannot serve {policy}, which serializes the resident index it does \

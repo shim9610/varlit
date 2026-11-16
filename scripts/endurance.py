@@ -16,7 +16,7 @@ import time
 from load_scalable import ROOT, GIB, atomic_json
 from qualify_scalable import source_identity
 
-CASES = ("raw-20g", "indexed-20g", "indexed-r8-20g")
+CASES = ("raw-20g", "stream-20g", "stream-r8-20g")
 
 
 def checked_result(code, report, mode):

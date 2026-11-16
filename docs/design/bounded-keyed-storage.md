@@ -1,6 +1,7 @@
 # Bounded keyed storage
 
-Status: design, agreed in discussion; not implemented.
+Status: design, agreed in discussion; not implemented. The indexed primary
+(the first item under "What goes away") has been removed; the rest is pending.
 
 ## Problem
 
@@ -150,7 +151,8 @@ occupied is reused only after its generation is reclaimed.
 2. The default free-space ratio, and whether it is declared per format or per
    file.
 3. Whether the stream handles (`.vks`, constant-cost open of unkeyed logs)
-   stay: anchors may already give what they give.
+   stay: anchors may already give what they give. They stay for now: stream
+   `sync` and `follow` run through the verified publication drivers.
 4. Whether the native record directory (13 bytes per record in memory) can be
    replaced by anchor-based lookups, which the memory principle asks for.
 5. The filler record format, and how framing and verification treat it.

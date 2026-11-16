@@ -6,7 +6,7 @@
 //! [`tree::PageAlloc`] hands out: every chunk carries its block, position and
 //! birth generation, the directory names each chunk's birth, and the root names
 //! the directory's, so a reader holding an old root that reaches a rewritten
-//! page sees [`DiskIndexError::PageReclaimed`] rather than another chunk's rows.
+//! page sees a damaged-sidecar error rather than another chunk's rows.
 use super::*;
 use crate::fallible::Arc;
 use std::{cell::RefCell, collections::VecDeque, fs::File};
@@ -152,7 +152,7 @@ fn chunk_len(format: PageFormat, rows: usize) -> usize {
 fn reclaimed(format: PageFormat) -> DiskIndexError {
     match format {
         PageFormat::Append => bad(),
-        PageFormat::Reuse => DiskIndexError::PageReclaimed,
+        PageFormat::Reuse => tree::reclaimed_page(),
     }
 }
 impl Directory {
@@ -361,29 +361,6 @@ impl Reader {
         }
         Ok(())
     }
-    pub(super) fn validate_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
-        // An unpublished/empty table has no rows capable of shadowing a tree.
-        if self.root.offset == 0 {
-            return Ok(());
-        }
-        self.ensure_directory()?;
-        let directory = self.directory.borrow();
-        if directory
-            .as_ref()
-            .unwrap()
-            .blocks
-            .iter()
-            .map(|b| (b.id, b.len as u64))
-            .ne(plan
-                .descriptors()
-                .iter()
-                .filter(|d| d.finite_key_count != 0)
-                .map(|d| (d.block_id, u64::from(d.finite_key_count))))
-        {
-            return Err(bad());
-        }
-        Ok(())
-    }
     fn directory(&self) -> DiskIndexResult<Directory> {
         self.ensure_directory()?;
         self.directory.borrow().as_ref().unwrap().try_clone()
@@ -437,7 +414,7 @@ impl Reader {
                 || read_u32(&bytes, trailer + 4) as usize != chunk
                 || read_u64(&bytes, trailer + 8) != b.births[chunk]
             {
-                return Err(DiskIndexError::PageReclaimed);
+                return Err(tree::reclaimed_page());
             }
         }
         let result = decode(&bytes)?;
@@ -541,20 +518,6 @@ impl Working {
             .iter()
             .map(|b| u64::from(b.used))
             .sum()
-    }
-    pub fn get(&self, key: &[u8]) -> DiskIndexResult<Option<Option<[u8; LATEST_LEN]>>> {
-        Ok(self.directory.find(key)?.map(|(b, k)| self.values[b][k]))
-    }
-    pub fn put(&mut self, key: &[u8], value: [u8; LATEST_LEN]) -> DiskIndexResult<bool> {
-        let Some((b, k)) = self.directory.find(key)? else {
-            return Ok(false);
-        };
-        if self.values[b][k].is_none() {
-            self.directory.blocks[b].used += 1;
-        }
-        self.values[b][k] = Some(value);
-        self.dirty[b][k / WIDTH] = true;
-        Ok(true)
     }
     pub fn compact(&mut self) {
         for (b, dirty) in self.directory.blocks.iter_mut().zip(&mut self.dirty) {

@@ -56,7 +56,7 @@ varlit_format! {
                 b: u32,
             }
 
-            variable Item(id = 2, key = [id], key_index = disk) {
+            variable Item(id = 2, key = [id]) {
                 id: u64,
                 name: String,
             }
@@ -116,7 +116,6 @@ fn main() {
 #[allow(dead_code)]
 fn default_storage_apis(path: &std::path::Path) -> vv::Result<()> {
     let _ = RenamedFormat::open_stream_reader(path, vv::StreamOptions::default())?;
-    let _ = RenamedFormat::open_indexed_reader(path, vv::DiskIndexOptions::default())?;
     let _ = vv::ScanOptions::default();
     Ok(())
 }

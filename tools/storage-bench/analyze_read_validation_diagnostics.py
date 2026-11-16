@@ -10,7 +10,7 @@ from analyze_read_validation import observed_gate
 def analyze(root):
     manifest = json.loads((root / 'manifest.json').read_text())
     rows = [json.loads(x) for x in (root / 'results.jsonl').read_text().splitlines()]
-    assert len(rows) == 170
+    assert len(rows) == 140
     assert all(not r.get('error') and r['result']['verified'] for r in rows)
     profiles = {}
     for p in manifest['profiles']:
@@ -18,10 +18,7 @@ def analyze(root):
         timing = [r for r in selected if not r['probe']]
         probes = [r for r in selected if r['probe']]
         keys = (['api_wall_seconds', 'api_cpu_seconds', 'oracle_seconds', 'open_seconds', 'write_seconds']
-                if p['kind'] == 'payload' else
-                ['initialization_seconds', 'writer_seconds', 'finalize_seconds', 'writer_thread_cpu_seconds',
-                 'producer_thread_cpu_seconds', 'readback_seconds', 'readback_cpu_seconds']
-                if p['workload'] == 'writer-only' else ['range_seconds', 'point_seconds', 'scan_seconds'])
+                if p['kind'] == 'payload' else ['range_seconds', 'point_seconds', 'scan_seconds'])
         if p['workload'] == 'memory-replication':
             assert not timing and len(probes) == 3
             keys = []
@@ -38,7 +35,7 @@ def analyze(root):
             values=values, medians={k:statistics.median(v) for k,v in values.items()},
             ranges={k:[min(v),max(v)] for k,v in values.items()})
     comparisons = []
-    for w in ['payload-g65536', 'payload-g1048576', 'writer-only', 'range-repeated']:
+    for w in ['payload-g65536', 'payload-g1048576', 'range-repeated']:
         modes = {p['profile']['variant']:p for p in profiles.values() if p['profile']['workload'] == w}
         for metric in modes['before-a']['medians']:
             if metric.endswith('_mib'): continue
@@ -54,7 +51,7 @@ def analyze(root):
             comparisons.append(row)
     before = (root/'memory-before.txt').read_text(); after = (root/'memory-after.txt').read_text()
     assert before == after, 'resource events changed; inspect instead of publishing a pass'
-    return dict(profiles=profiles, comparisons=comparisons, timing_observations=144, resource_probes=26,
+    return dict(profiles=profiles, comparisons=comparisons, timing_observations=114, resource_probes=26,
         resource_caps=dict(cpu=4,memory_gib=16,disk_gib=32), memory_events_unchanged=True,
         qualification='Supplemental cohorts, never pooled with primary. Six balanced timing repeats. Single payload probes and three memory probes are observations, not 5% certification.')
 

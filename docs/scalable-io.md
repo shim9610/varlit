@@ -1,11 +1,21 @@
-# Scalable Stream And Disk-Index I/O
+# Scalable Stream I/O
 
-This guide covers the default stream/indexed public API. It is the
-Varlit path intended for very large append logs. Its normal open and append
-paths do not rescan the complete native prefix. Resident buffers are bounded;
-this is not a constant-total-cost claim for an unrestricted disk index. Its
-tree height, changed pages, key locality and publication frequency still affect
-lookup/update work and companion growth.
+This guide covers the stream handles of the default public API. They are the
+Varlit path intended for very large append logs. Their normal open, append and
+follow paths do not rescan the complete native prefix. A stream file has a
+`<file>.vks` state sidecar that holds bounded resume state: the confirmed EOF,
+record count, next sequence and one tail per declared block. It holds no keys.
+Resident buffers are bounded; sidecar size, publication frequency and the
+number of declared blocks still affect publication work.
+
+> **Keyed lookup.** Stream readers have no lookup by key. The indexed primary
+> (`VarlitIndexedWriter`, `VarlitIndexedReader`, the `.vki` sidecar and the
+> `key_index` block attribute) was removed: updating keyed records grew its
+> files without bound and it could never reclaim superseded versions. Keyed
+> lookup is now resident only. The replacement design is
+> [bounded keyed storage](design/bounded-keyed-storage.md); it is not
+> implemented. See the [migration guide](migration-guide.md) for existing
+> indexed files.
 
 The resident `create_writer`, `open_reader`, `blocks`, and `keyed_blocks`
 APIs can still scan the complete file at open. Their ordinary 13-byte private rows use
@@ -26,18 +36,18 @@ is read at open; this guide does not publish measurements for them.
 Ordinary keyed merge/compact also spills bounded index buffers, but still needs
 scratch disk and per-record decoding workspace. A `record_map` walk remains a
 forward walk of the record chain — `O(records before the answer)`, rather than a
-keyed lookup. Stream/indexed handles keep primary open/append work independent
-of the complete native directory; choose a digest when native open scans are
-the immediate cost to reduce.
+keyed lookup. Stream handles keep primary open/append work independent of the
+complete native directory; choose a digest when native open scans are the
+immediate cost to reduce.
 
-> **API availability.** Stream/indexed handles, disk-index
-> plans, finite keys and scan control are part of the default public API, also
-> with `--no-default-features`. Remove `high-cardinality-dev` from Cargo manifests.
+> **API availability.** Stream handles, finite keys and scan control are part
+> of the default public API, also with `--no-default-features`. Remove
+> `high-cardinality-dev` from Cargo manifests.
 > Repository release and long-duration load qualification are tracked separately.
 > A release tag does not establish a completed endurance test.
-> Explicit `compact_index()` reclaims obsolete companion pages; whole-native-log
+> Explicit `compact_index()` reclaims obsolete sidecar pages; whole-native-log
 > keyed merge/compact uses bounded buffers and private spill files.
-> See [Known Limitations §3](known-limitations.md#3-streamindexed-api-status)
+> See [Known Limitations §3](known-limitations.md#3-stream-api-status)
 > and [§6](known-limitations.md#6-not-verified) for the remaining scope.
 
 This guide describes Varlit 0.13.0, including read-check selection and fallible
@@ -65,7 +75,7 @@ for model histories, concurrent snapshots, external-kill recovery, memory budget
 and actual-file write/read/delete validation. Passing a bounded campaign does
 not establish power-loss safety or long-duration endurance.
 
-## Declare The Policy
+## Declare The Format
 
 ```rust
 use varlit::varlit_format;
@@ -75,15 +85,13 @@ varlit_format! {
         magic: b"CAPT";
         version: 1;
         schema_hash: computed;
-        index: keyed_offset_chain;
 
         blocks {
             fixed Run(id = 1) {
                 id: u64,
             }
 
-            variable Frame(id = 2, key = [scan, frame], key_index = disk,
-                key_domain = [scan = 0..4, frame = 0..16]) {
+            variable Frame(id = 2) {
                 scan: u32,
                 frame: u32,
                 payload: Vec<u8>,
@@ -93,23 +101,39 @@ varlit_format! {
 }
 ```
 
-`key_index = disk` is declaration-time policy. The macro generates a canonical
-disk plan for `Frame`, typed indexed reader/writer methods, and stable key codec
-identities. It does not generate chain-unsafe mutation methods for a keyed
-block that lacks the required disk plan.
+Every format generates the stream handles; no block attribute selects them.
+The block attribute `key_index` (with any value) is a compile error: keyed
+records no longer keep a disk index sidecar.
+
+A stream writer generates `push_<block>` and `push_<blocks>` for every
+non-matrix block. A keyed block in a format without `keyed_offset_chain` also
+gets `delete_<block>(&key)`. In a `keyed_offset_chain` format the stream writer
+generates no method for a keyed block, because it keeps no previous-key chain;
+write those blocks through the resident writer.
+
+Generated non-keyed block methods continue to work in a
+`keyed_offset_chain` format. Generated `VarlitBlock` implementations carry an
+`IS_KEYED` type fact so the runtime rejects chain-unsafe low-level batch calls
+without rescanning the file.
+
+Manual `VarlitBlock` implementations
+must declare `const IS_KEYED: bool`; there is no chain-unsafe default. Set it
+to `true` for every manual `VarlitKeyedBlock` implementation and `false`
+otherwise. Omitting it is a compile error.
 
 ### Finite schema keys
 
-A key identifies a **declared value combination**, not a record and not merely
-its block type. Declare either named combinations or a Cartesian domain:
+A finite key identifies a **declared value combination**, not a record and not
+merely its block type. Declare either named combinations or a Cartesian domain
+on a keyed block:
 
 ```rust
-fixed Frame(id = 2, key = [scan, frame], key_index = disk,
+fixed Frame(id = 2, key = [scan, frame],
     key_values = [Scan1Frame2 = (1, 2), Scan2Frame4 = (2, 4)]) {
     scan: u32, frame: u32, payload: u64,
 }
 // Alternative: 4 * 16 = 64 permitted combinations.
-fixed Sample(id = 3, key = [scan, frame], key_index = disk,
+fixed Sample(id = 3, key = [scan, frame],
     key_domain = [scan = 0..4, frame = 0..16]) {
     scan: u32, frame: u32, payload: u64,
 }
@@ -118,17 +142,17 @@ fixed Sample(id = 3, key = [scan, frame], key_index = disk,
 The enclosing format must use `schema_hash: computed;`. The macro generates
 `FrameKey::{Scan1Frame2, Scan2Frame4}` and a block with **`key: FrameKey`** and
 `payload: u64`. The declared `scan` and `frame` fields become that one key field;
-their raw values are not repeated in the record or the point index. The generated
+their raw values are not repeated in the record. The generated
 key occupies the first removed key field's position and field ID; other field
 IDs are preserved. A non-key field named `key` is therefore rejected.
 
 ```rust
 let key = FrameKey::from_values((1, 2))?;
 let record = Frame { key, payload: 17 };
-writer.push_frame(&record)?;
-writer.sync()?;
+writer.push_frame(&record)?; // resident writer
+writer.flush()?;
 let mut latest = Frame::empty();
-let found = reader.get_frame(&FrameKey::Scan1Frame2, &mut latest)?;
+let found = reader.frames()?.get(&FrameKey::Scan1Frame2, &mut latest)?;
 assert_eq!(key.values(), (1, 2));
 assert!(FrameKey::from_values((1, 4)).is_err());
 ```
@@ -157,89 +181,37 @@ an enum variant. Public block construction takes a valid enum, so there is no
 unchecked raw tuple hiding in a constructed block.
 
 Codes follow declaration order. Reordering or changing the value/code mapping
-changes the key codec identity, block fingerprint, and computed format hash.
-Opening a file with a reassigned mapping is rejected. Schema changes require an
-explicit migration/new file; mappings are not silently reconciled at runtime.
-Renaming a variant alone does not change its on-disk meaning.
+changes the key's codec schema identity, the block fingerprint, and the computed
+format hash. Opening a file with a reassigned mapping is rejected. Schema
+changes require an explicit migration/new file; mappings are not silently
+reconciled at runtime. Renaming a variant alone does not change its on-disk
+meaning.
 
-The API's encoded lookup key is `[present=1: u8][block ID: u32][enum code: u16]`
-(7 bytes), but finite keys are **not stored in B-tree leaves**. The schema block
-selects a fixed table; `code / 64` selects an immutable slot chunk and `code % 64`
-selects its row. Neither the enum code nor the block ID is repeated in each row.
-Each row occupies 40 bytes: the native record offset plus sequence, extent,
-deletion state and integrity information needed to validate the target record.
-An unused row is all zero. A full chunk contains 64 rows plus a 4-byte CRC.
-`DiskIndexKeyTag` remains the API presence/block discriminator, not the value enum.
-
-These tables are persistent extents in the `.vki` sidecar, not temporary files
-or OS memory pages. Each reader caches chunks privately within its configured
-`DiskIndexOptions.cache_bytes` budget. CRC is checked when a chunk enters that
-cache; only the requested row is decoded for a lookup. An already known native
-record offset does not need key lookup at all.
-
-There is no runtime value dictionary, registration API, or shared cache added
-for finite keys. A block's distinct key rows cannot exceed its declared domain.
-Repeated writes update the latest offset for the same code; the previous-record
-chain and sequential scan retain the distinct records. Use unkeyed blocks and
-record offsets for ever-growing record identities. The sole writer updates its
-own fixed arrays in memory. Small internal batches and `flush()` do not publish
-new slot extents. At the caller's `sync()`/Immediate boundary, only changed
-64-slot chunks are appended, followed by a flat block/chunk directory and the
-confirmed checkpoint. Old readers retain the old directory and extents; `follow()`
-adopts a new confirmed generation. No reader mutex or writer wait was added.
-Append-only chunk versions and checkpoints still accumulate until explicit
-`compact_index()`; the finite key bound is not a bound on total file size.
+There is no runtime value dictionary, registration API, or shared cache for
+finite keys. A block's distinct keys cannot exceed its declared domain. Each
+write of a key appends a new record; the finite domain bounds the number of
+distinct keys, not the number of records or the file size.
 
 The raw `key = [fields]` form without `key_values` or `key_domain` remains an
-**unrestricted key API** for existing generic storage tests and applications
-that explicitly need that model. It uses the generic COW B-tree and does not
-provide the finite-key guarantee. Both kinds can coexist in one format.
-The finite enum facility and disk-index APIs are both included by default. The mistaken `<Format>KeyKind` enum has been removed.
+**unrestricted key** declaration. Both kinds can coexist in one format.
+The mistaken `<Format>KeyKind` enum has been removed.
 
-The sidecar container is now `VARVEIX5`, with `VIXROOT4` checkpoints. Old sidecars
-require explicit rebuild; native record encoding has not changed in this storage
-revision. Finite keys address fixed slots directly; small internal batches do
-not publish new slot versions. Only changed slot chunks and their directory
-are appended at a confirmed sync boundary. File growth therefore depends on
-changed chunks and sync frequency, not just the number of enum variants.
-
-Generated non-keyed block methods continue to work in a
-`keyed_offset_chain` format. Generated `VarlitBlock` implementations carry an
-`IS_KEYED` type fact so the runtime rejects chain-unsafe low-level batch calls
-without rescanning the file.
-
-Manual `VarlitBlock` implementations
-must declare `const IS_KEYED: bool`; there is no chain-unsafe default. Set it
-to `true` for every manual `VarlitKeyedBlock` implementation and `false`
-otherwise. Omitting it is a compile error.
-
-## Choose One File Mode
-
-| Mode | Sidecar | Use when |
-| --- | --- | --- |
-| stream | `<file>.vks` | sequential append and explicit lazy scans are enough |
-| indexed | `<file>.vki` | one or more blocks need disk-backed latest-key lookup |
-
-Use one mode consistently for a file. A `.vks` stores only bounded resume
-state. A `.vki` stores the same resume state plus the declared disk-key B-tree.
-Unindexed blocks in an indexed file update only coverage and optional block
-tails; they do not create key rows.
-
-## Indexed Write And Read
+## Stream Write And Read
 
 ```rust
-use varlit::{BatchOptions, DiskIndexOptions};
+use varlit::{BatchOptions, StreamOptions};
 
-let mut writer = Capture::create_indexed_writer(
+let mut writer = Capture::create_stream_writer(
     "capture.varlit",
-    DiskIndexOptions::default(),
+    StreamOptions::default(),
 )?;
 
 writer.push_run(&Run { id: 7 })?;
 
 let report = writer.push_frames(
     (0..1_000_000u32).map(|sequence| Frame {
-        key: FrameKey::from_values((sequence % 4, (sequence / 4) % 16)).unwrap(),
+        scan: sequence % 4,
+        frame: (sequence / 4) % 16,
         payload: Vec::new(),
     }),
     BatchOptions::default(),
@@ -248,55 +220,24 @@ let report = writer.push_frames(
 assert_eq!(report.records, 1_000_000);
 writer.sync()?;
 
-let reader = Capture::open_indexed_reader(
+let reader = Capture::open_stream_reader(
     "capture.varlit",
-    DiskIndexOptions::default(),
+    StreamOptions::default(),
 )?;
-
-let mut frame = Frame::empty();
-let found = reader.get_frame(&FrameKey::from_values((2, 3))?, &mut frame)?;
 let all_runs = reader.runs()?;       // explicit lazy native scan
 let all_events = reader.events()?;  // explicit lazy native scan
 let verified = reader.verify_all()?; // explicit eager full validation
 # Ok::<(), varlit::Error>(())
 ```
 
-`get_frame` performs one B-tree lookup and one bounded positional native
-record read. Opening the reader does not *scan* the native record region, but it
-does read a bounded prefix of it: the primary-generation witness digests the
-leading window of the file — at most 4 KiB from offset 0 — and takes one point
-read of the leading record for the creation nonce. No scanner is created at
-open. Calling `runs`, `frames`, `events`, or `verify_all` explicitly creates a
-native scanner; their cost is linear in the selected snapshot.
-
-## Stream Write And Read
-
-For a format/file that does not need disk-key lookup:
-
-```rust
-use varlit::{BatchOptions, StreamOptions};
-
-let mut writer = Capture::create_stream_writer(
-    "capture-stream.varlit",
-    StreamOptions::default(),
-)?;
-
-let report = writer.push_runs(
-    (0..100_000u64).map(|id| Run { id }),
-    BatchOptions::default(),
-).map_err(|error| error.source)?;
-writer.sync()?;
-
-let reader = Capture::open_stream_reader(
-    "capture-stream.varlit",
-    StreamOptions::default(),
-)?;
-let runs = reader.runs()?;
-# Ok::<(), varlit::Error>(())
-```
-
-The stream writer does not expose `push_frame` for this declaration because
-`Frame` requires a previous-key chain backed by the disk index.
+Opening the reader does not *scan* the native record region, but it does read
+a bounded part of it: the primary-generation witness digests the leading window
+of the file — at most 4 KiB from offset 0 — and takes one point read of the
+leading record for the creation nonce. It then walks the records synced after
+the sidecar's confirmed EOF, which `DiskIndexConfirmPolicy` bounds (see
+[Durability And Recovery](#durability-and-recovery)). Calling `runs`, `frames`,
+`events`, or `verify_all` explicitly creates a native scanner; their cost is
+linear in the selected snapshot.
 
 ## Batch Cost And Memory
 
@@ -304,32 +245,31 @@ The stream writer does not expose `push_frame` for this declaration because
 
 An application item, an encoded Varlit record, a buffered append batch, and a
 durable publication are different units. `push_frames(items, BatchOptions)`
-coalesces writes, but still encodes one Frame per input item. If each Frame has
-a distinct disk key, it still creates one latest-key index entry per Frame.
-`sync()` publishes the accumulated work; calling it less often does not remove
-the individual framing or key entries.
+coalesces writes, but still encodes one Frame per input item. `sync()` publishes
+the accumulated work; calling it less often does not remove the individual
+framing.
 
 For small samples/items normally consumed together, declare a block containing
-hundreds or thousands of items. Index the block and locate an item inside its
-payload. For example, 1,048,576 128-byte items can be stored as 2,048 blocks of
+hundreds or thousands of items and locate an item inside its payload. For
+example, 1,048,576 128-byte items can be stored as 2,048 blocks of
 512 items (64 KiB payload each), or 128 blocks of 8,192 items (1 MiB each).
 These are still 1,048,576 logical items, not that many physical records or
-durability boundaries. The block size controls framing/index amortization and
-the bytes fetched on a cache miss. The publication size independently controls
+durability boundaries. The block size controls framing amortization and the
+bytes fetched on a cache miss. The publication size independently controls
 durability cost, reader visibility latency and producer buffering.
-The disk index counts distinct block keys in this layout; it does not
-automatically index every logical item inside a payload. Packing is an explicit
-application schema choice, not something `BatchOptions` performs implicitly.
+Packing is an explicit application schema choice, not something `BatchOptions`
+performs implicitly.
 
-Use this layout when the application can identify an item's block: a declared
-`(block_key, slot)` key, fixed-size dense IDs, or a persisted routing directory.
+Use this layout when the application can identify an item's block: a block
+key, fixed-size dense IDs, a record offset, or a persisted routing directory.
 For unrelated arbitrary keys, grouping alone does not provide a lookup index.
 Store and measure the routing/secondary index too; do not silently replace
 arbitrary-key lookup with a known block offset or an uncharged RAM map.
 Finite `key_domain`/`key_values` describes a bounded set of key values; it is
 not a switch that packs an unbounded number of individually framed records.
 
-A minimal declaration for application-owned packed bytes is:
+A minimal declaration for application-owned packed bytes, looked up by group
+through the resident keyed API, is:
 
 ```rust
 use varlit::varlit_format;
@@ -339,7 +279,7 @@ varlit_format! {
         version: 1;
         index: keyed_offset_chain;
         blocks {
-            variable ItemBlock(id = 1, key = [group], key_index = disk) {
+            variable ItemBlock(id = 1, key = [group]) {
                 group: u64,
                 data: Vec<u8>,
             }
@@ -393,149 +333,133 @@ in `BatchAppendInfo` counts those calls, not guaranteed kernel syscalls. A
 single valid record larger than `max_bytes` is written alone; per-record stored
 and logical payload limits still apply before allocation or I/O.
 
-`DiskIndexOptions::batch` independently bounds one native COW page-update batch.
-Native chunk boundaries no longer force an index transaction commit. Ordinary
-sidecar batches append working pages without a durability barrier; successful `sync()` / `immediate()`
-publishes the durable clean generation after syncing the native file. Blocks
-can require Immediate, and callers can declare automatic conditions; see
+`StreamOptions::state` is a `DiskIndexOptions`. Its `batch` field independently
+bounds one sidecar update batch; native chunk boundaries do not force a sidecar
+commit. `confirm` (a `DiskIndexConfirmPolicy`, default 64 MiB or 65,536
+records) decides how far the confirmed sidecar may trail the synced primary.
+`cache_bytes` bounds each reader's private sidecar page cache. Blocks can
+require Immediate, and callers can declare automatic conditions; see
 [Immediate policy](immediate-policy.md).
-`cache_bytes` bounds each reader's private index cache and `max_key_bytes` bounds an encoded key.
 None of these values is a total file-size, total record-count, or lifetime
 append limit.
 
-The paged `.vks`/`.vki` backing file is deliberately not rejected by
+The paged `.vks` backing file is deliberately not rejected by
 `ResourceLimits::max_sidecar_len`: opening it does not materialize its full
 length. That limit still applies to Varlit sidecar formats that are read into
-memory, such as matrix/adapter envelopes. Scalable sidecar safety instead
-comes from bounded native pages and private caches, fixed metadata rows, bounded key rows,
-and checked native extents.
+memory, such as matrix/adapter envelopes. Stream sidecar safety instead
+comes from bounded pages and private caches, fixed metadata rows, a fixed
+number of block-tail rows, and checked native extents.
 
 The runtime retains declared block tails and bounded buffers, not one RAM entry
-per record or key. Key cardinality grows `.vki`, not a Varlit `HashMap`.
+per record.
 
 ## Scalar Append And The Bounded Sidecar Transaction
 
 Single-record scalar `push_*` calls do not commit a sidecar transaction per
 record. A stream writer keeps one open sidecar transaction and commits it only
-at a chunk boundary — the configured transaction bound (`DiskIndexOptions::batch`
-/ `StreamOptions`, derived from `max_records` and `max_bytes`) — or on an
-explicit `flush()`/`sync()`. Several scalar appends therefore share one sidecar
-commit rather than forcing one durable index publication each.
+at a chunk boundary — the configured transaction bound (`StreamOptions::state`
+`.batch`, derived from `max_records` and `max_bytes`) — or on an explicit
+`flush()`/`sync()`. Several scalar appends therefore share one sidecar commit.
 
-This means the sidecar intentionally lags the native file between commits: the
-native records are the authority, and the sidecar carries only bounded resume
-state that is republished cleanly at `sync()`. `sync()` finishes the open sidecar
-chunk, `sync_all`s the native file, then durably publishes the clean sidecar root
-and replaces the rollback checkpoint with a confirmed checkpoint. A crash between
-commits does not advance the acknowledged generation. `restore_*` truncates
-the unsynced suffix back to the last successful durability boundary; a
-non-durable index commit is not an application acknowledgment. The first
-mutation of a generation still durably establishes its rollback checkpoint.
-Block-tail maintenance for `keyed_offset_chain`
-formats uses binary search over the sorted tail vector and collapses each chunk
-to one final tail per block, so tail upkeep is `O(log blocks)` per record rather
-than linear.
+The sidecar intentionally lags the native file: the native records are the
+authority, and the sidecar carries only bounded resume state. Block-tail
+maintenance for `keyed_offset_chain` formats uses binary search over the sorted
+tail vector and collapses each chunk to one final tail per block, so tail
+upkeep is `O(log blocks)` per record rather than linear.
 
-## Historical Distinct Keys And Reclaim
+## Explicit sidecar compaction
 
-`historical_distinct_keys()` is exposed on `DiskIndexStore`, `DiskIndexSnapshot`,
-`VarlitIndexedReader`, and `VarlitIndexedWriter`. It reports the sidecar capacity
-metric: the number of distinct keys the `.vki` has *ever* held (`K-ever`), not
-the current live-key count.
-
-A tombstone does not delete its native index entry; it replaces the latest-table value.
-Rebuild re-creates rows from the native log. So `K-ever` is monotonic across
-insert/delete cycles and rebuilds, and the sidecar's logical cardinality grows
-with distinct keys ever seen even when live keys return to zero. Deleting
-tombstone rows alone is unsound: a later rebuild would resurrect them, and
-without the tombstone row an older put earlier in the log could incorrectly win
-a latest-key lookup. Reclaiming space must therefore be a paired operation under
-the writer lock — compact the native log (drop dead put/tombstone records), then
-rebuild the sidecar from the compacted log, publishing native-first then sidecar
-and relying on the primary-identity change to fence stale readers. Use
-`historical_distinct_keys()` to decide when that reclaim is worth running.
-
-### Explicit sidecar compaction
-
-`writer.compact_index()` requires an already clean writer. Call `sync()` or
-`immediate()` explicitly beforehand; compaction refuses Dirty state and never
-inserts an automatic Immediate boundary. It copies current keys and tombstones
-into a bounded-memory temporary file, syncs it, atomically replaces the sidecar,
-and syncs the parent directory. `IndexCompaction` reports before/after logical
-bytes and historical distinct keys. Old reader file descriptors remain valid;
+`writer.compact_index()` refuses while records appended since the last `sync()`
+are pending (`DiskIndexError::CleanStateRequired`); call `sync()` or
+`immediate()` first. When synced records are not yet covered by a confirmed
+sidecar checkpoint, compaction confirms them first. It then copies the current
+state into a bounded-memory temporary file, syncs it, atomically replaces the
+sidecar, and syncs the parent directory. `IndexCompaction` reports the logical
+sidecar size before and after. Old reader file descriptors remain valid;
 `follow()` can adopt the replacement and subsequent writer generations.
 
-This reclaims obsolete *index pages*, not historical keys or native log records.
-Without explicit compaction, append-only index space grows with changed pages
-and checkpoints. Small scattered batches can amplify that growth. A filesystem
-may retain the old file's allocated space until the final old handle follows or closes;
-compaction requires enough free space for both files while it runs. A
-`PublishedButParentSyncPending` error means the replacement is visible but its
-name is not yet durably acknowledged. Compaction errors conservatively poison
-the writer; close and reopen/reconcile before more writes.
+This reclaims obsolete sidecar pages and checkpoints, not native log records.
+Outside compaction, the writer reuses a sidecar page once it has been
+unreferenced for `DiskIndexOptions::reclaim_after` confirmed generations
+(default 2). A reader that follows at least that often never meets a reused
+page; one that falls further behind gets a damaged-sidecar error and must
+reopen. Crash safety does not depend on this setting.
+
+A filesystem may retain the old file's allocated space until the final old
+handle follows or closes; compaction requires enough free space for both files
+while it runs. A `PublishedButParentSyncPending` error means the replacement is
+visible but its name is not yet durably acknowledged. Compaction errors
+conservatively poison the writer; close and reopen before more writes.
 
 ## Durability And Recovery
 
-`flush()` flushes the native file handle but does not publish a clean scalable
-generation. `sync()` is the clean publication boundary:
+`flush()` commits the open sidecar chunk and flushes the native file handle;
+it makes nothing durable and nothing visible to readers. `sync()` is the
+durability and visibility boundary. It runs through the Kani-verified `commit`
+driver in `crates/varlit-core/src/publication_protocol.rs`:
 
-1. finish the bounded sidecar update;
-2. flush and `sync_all` the authoritative native file;
-3. publish the clean sidecar root and delete its rollback checkpoint.
+1. append a sync marker that closes the records since the previous sync;
+2. `sync_all` the authoritative native file — the one storage barrier of an
+   ordinary sync;
+3. when the primary has grown past `StreamOptions::state.confirm` since the
+   last confirmed checkpoint, write and confirm a sidecar checkpoint. If that
+   publication fails after it may have become visible, the writer is poisoned.
 
-After any append, dropping the writer without a successful `sync()` leaves a
-dirty generation intentionally. Writer open requires explicit recovery. Reader
-open serves the saved confirmed root and EOF without recovering or scanning the
-unfinished suffix.
+A sync that does not confirm the sidecar is still durable and visible: readers
+and recovery take the confirmed checkpoint and then walk the verified chain of
+sync markers after it in the primary. `immediate()` is the same operation.
 
-Both mirrored confirmed companion heads being unreadable is a corruption
+After any append, dropping the writer without a successful `sync()` leaves an
+unsynced suffix. Reader open serves the confirmed checkpoint plus the synced
+records after it, and never reads the unsynced suffix.
+
+Both mirrored confirmed sidecar heads being unreadable is a corruption
 error, including during explicit restore. Working/dirty heads cannot replace
 the confirmed anchor: they may describe an older rollback point. Open/restore
-refuse without truncating the primary or rewriting the damaged companion.
+refuse without truncating the primary or rewriting the damaged sidecar.
 One valid confirmed copy still serves its snapshot, and already opened readers
 keep their pinned confirmed generation. Preserve damaged files for inspection;
 ordinary dirty-tail recovery does not repair lost confirmed anchors.
 
-Use the explicit generated operations:
-
 | Situation | Operation | Native scan |
 | --- | --- | --- |
-| dirty `.vks` | `restore_stream_writer` | no; restore checkpoint and truncate |
-| dirty `.vki` | `restore_indexed_writer` | no; restore checkpoint and truncate |
+| `.vks` trails the primary (unconfirmed tail, interrupted generation) | `open_stream_writer` (recovers automatically) or `restore_stream_writer` | no prefix scan; walks the synced records after the checkpoint, cuts the unsynced suffix |
 | native file has no `.vks` | `bootstrap_stream_checkpoint` | yes |
-| native file has no/stale `.vki` | `rebuild_disk_index` | yes |
+| `.vks` is stale or belongs to another primary generation | remove the `.vks`, then `bootstrap_stream_checkpoint` | yes |
 | eager integrity check | reader `verify_all` | yes |
 
-Bootstrap and rebuild use the runtime `ResourceLimits` carried by their
-options. They return scanned record/byte counts. Their `*_with_progress`
-variants expose synchronous progress and cooperative cancellation.
-`bootstrap_stream_checkpoint` refuses to overwrite any existing `.vks`.
-`rebuild_disk_index` may replace a missing or clean stale `.vki`, but refuses a
-dirty `.vki`; restore that generation first. Thus an unsynced physical tail
-cannot be promoted to clean merely by invoking a scan operation.
+Recovery keeps every acknowledged sync and nothing after the last one. It
+replays the kept records into the sidecar and confirms it.
+
+Bootstrap uses the runtime `ResourceLimits` carried by its options and returns
+scanned record/byte counts. `bootstrap_stream_checkpoint_with_progress` exposes
+synchronous progress and cooperative cancellation. Bootstrap refuses to
+overwrite any existing `.vks`, so an unsynced physical tail cannot be promoted
+to clean merely by invoking a scan operation; remove a `.vks` only after
+establishing that it is stale.
 
 Sidecar protocol failures retain their public `DiskIndexError` source inside
-`Error::DiskIndex`; backend lock contention is `Error::IndexBusy`. Callers can
-distinguish dirty, stale, identity, plan, metadata, and I/O failures without
-parsing error text.
+`Error::DiskIndex`; sidecar lock contention is `Error::IndexBusy`. Callers can
+distinguish dirty, stale, identity, metadata, and I/O failures without parsing
+error text.
 
 ### Primary Generation Binding
 
 A sidecar is bound to one logical *generation* of its primary, not merely to one
-pathname or one OS file object. Every `VarlitStreamWriter::create` /
-`VarlitIndexedWriter::create` stamps a 128-bit random nonce as the primary's
-first record, under the reserved internal block id `CREATION_NONCE_BLOCK_ID`.
-The sidecar records a primary-generation witness that folds that nonce together
-with the primary's length and a checksum over its bounded leading window (4 KiB;
-frozen once the primary has grown past it, so appends do no witness work).
+pathname or one OS file object. Every `VarlitStreamWriter::create` stamps a
+128-bit random nonce as the primary's first record, under the reserved internal
+block id `CREATION_NONCE_BLOCK_ID`. The sidecar records a primary-generation
+witness that folds that nonce together with the primary's length and a checksum
+over its bounded leading window (4 KiB; frozen once the primary has grown past
+it, so appends do no witness work).
 
-Every stream/indexed writer open, reader snapshot open, and checkpoint restore
+Every stream writer open, reader snapshot open, follow and checkpoint restore
 recomputes the witness and refuses a mismatch with
 `DiskIndexError::PrimaryGenerationMismatch`. This is what makes an in-place
 rewrite of a primary by another equal-length primary of the same format — same
 path, same OS object, same header bytes, same schema hash — a refusal rather
-than an accepted stale generation. The recovery is `rebuild_disk_index`, never
-"trust the sidecar".
+than an accepted stale generation. The recovery is to remove the `.vks` and run
+`bootstrap_stream_checkpoint`, never "trust the sidecar".
 
 One byte range of the primary is excluded from that window, and it is the only
 part of a file that may change without being a new generation: a format that
@@ -556,36 +480,24 @@ the sidecar.
 
 Sidecar metadata is at record version 3. A version 2 sidecar is 260 bytes where
 the v3 record is 300, so it is refused with the typed
-`DiskIndexError::MetadataLength` before the version field is read, and the
-disk-index plan digest domain was bumped alongside it, so plan digests published
-before this change are refused as stale. Both are rebuild-and-regenerate
-conditions under the pre-1.0 wire policy; neither is migrated in place.
-
-### Disk-Index Descriptor Identity
-
-A `DiskIndexDescriptor` records the block schema fingerprint of the concrete
-type whose decode and key-extraction function pointers it captured, and that
-fingerprint is folded into the plan digest. Plan construction and plan
-validation run the format's block-registration gate once per descriptor —
-before any primary bytes can reach a captured codec — so a descriptor that
-matches a declared block's id and version while being a different type is
-refused with `Error::BlockSchemaFingerprintMismatch` without a single decoder
-call. Descriptor validation stays off every per-record and per-lookup path: it
-runs at plan construction/validation only, and repeat validation short-circuits
-on the spec's block and identity table identity.
+`DiskIndexError::MetadataLength` before the version field is read. Under the
+pre-1.0 wire policy it is not migrated in place: remove it and run
+`bootstrap_stream_checkpoint`. The `.vks` file uses the `VARVEIX5` paged
+container; old redb-based sidecars likewise require bootstrap, and there is no
+compatibility decoder.
 
 Atomic sidecar publication syncs the parent directory after the
 `ReplaceFileW`/rename (the Windows directory handle is opened with the write
 access `FlushFileBuffers` requires). A parent-sync failure is never silently
-promoted to full durability: sidecar create, stream bootstrap, and disk-index
-rebuild surface `Error::PublishedButParentSyncPending` while keeping the
+promoted to full durability: sidecar create, stream bootstrap and sidecar
+compaction surface `Error::PublishedButParentSyncPending` while keeping the
 completed atomic replacement in place, so the published sidecar remains usable
 and the pending state is a durability warning, not a rollback.
 
 ### Long Scan Progress And Cancellation
 
-`verify_all_with_progress`, `bootstrap_stream_checkpoint_with_progress`, and
-`rebuild_disk_index_with_progress` use the same scan-control types:
+`verify_all_with_progress` and `bootstrap_stream_checkpoint_with_progress` use
+the same scan-control types:
 
 ```rust
 # fn scan(reader: &varlit::VarlitStreamReader) -> varlit::Result<()> {
@@ -631,9 +543,8 @@ cloning remain available; all clones share the same cancellation flag.
 Cancellation is checked before scanning, after every completed record, after
 every callback, and after the final `Complete` callback. It returns
 `Error::ScanCancelled { progress }`. A cancellation observed before that final
-check publishes no `.vks`/`.vki`; a request arriving afterward may race with a
-successful publication. A cancelled rebuild leaves the previous `.vki`
-byte-for-byte unchanged.
+check publishes no `.vks`; a request arriving afterward may race with a
+successful publication.
 
 ### Clearing A Stale Writer Lock
 
@@ -666,7 +577,7 @@ active or stale marker.
 
 ## Per-thread readers and private caches
 
-Each stream/indexed, resident and matrix reader belongs to one reading thread:
+Each stream, resident and matrix reader belongs to one reading thread:
 these handles and generated wrappers are `Send` but not `Sync`. Moving ownership to a worker is
 supported; sharing one reader through `Arc` or `&Reader` across threads fails to
 compile. Open a fresh reader on the same path for each reading thread. The
@@ -692,22 +603,25 @@ ring still holds. Ranges already in place after a checkpoint leave the overlay.
 Follow does not write and does not checkpoint. See
 [durability](durability-model.md#what-readers-see).
 
-
-Each handle opens the sidecar read-only and each snapshot owns its bounded page
-cache. A sole writer appends immutable COW tree pages and checkpoint records.
+Each stream reader opens the sidecar read-only and each snapshot owns its
+bounded page cache. A sole writer appends sidecar pages and checkpoint records.
 Two alternating confirmed heads are separate from the working heads and durable
 Dirty marker. Readers validate CRC-protected confirmed heads, then read only the
-root and native EOF they name. Unconfirmed pages never replace a reader's root.
+state and native EOF they name, plus the verified sync-marker chain after that
+EOF. Unconfirmed sidecar pages never replace a reader's state.
 Reader open performs no write, transaction creation, OS lock or writer admission.
 The same contract works across threads and processes on a coherent local filesystem.
 
-`follow(&mut self)` adopts the latest confirmed generation and returns the
-number of additional native records (including internal records and tombstones).
-It captures the index first, then validates EOF and the generation witness on
-the retained native file object before replacing the handle's state. When the
-writer is still Dirty, follow serves its last confirmed generation. A failed
-follow leaves the reader unchanged. A sidecar-only `compact_index()` replacement is followed after identity and
-frontier validation. Replacement of the native file itself is not followed.
+`follow(&mut self)` adopts the latest confirmed sidecar generation and the
+synced records after it, and returns the number of additional native records
+(including internal records and tombstones). It runs through the Kani-verified
+`follow` driver in `crates/varlit-core/src/publication_protocol.rs`: every
+fallible step — capturing the sidecar state, validating EOF and the generation
+witness on the retained native file object, walking the new sync markers —
+reads the handle without changing it, and only an infallible step installs the
+result. A failed follow therefore leaves the reader unchanged. A sidecar-only
+`compact_index()` replacement is followed after identity and frontier
+validation. Replacement of the native file itself is not followed.
 
 Existing iterators keep their captured view. `follow_events(&mut events)` and
 `follow_blocks(&mut blocks)` extend a cursor created by the same reader and
@@ -717,7 +631,7 @@ A cursor that returned an error cannot be resumed. A separately opened reader's
 cursor is rejected even if it names the same path.
 
 ```rust,ignore
-let mut reader = MyFormat::open_indexed_reader(path, options)?;
+let mut reader = MyFormat::open_stream_reader(path, options)?;
 let mut cursor = reader.items()?;
 loop {
     for item in cursor.by_ref() {
@@ -734,36 +648,32 @@ write batch and caches. Publication and restore require exclusive mutable
 access; no atomic admission gate or cache-transfer queue is involved. No reader is required to exit, release or acknowledge a
 checkpoint before the writer can append or publish.
 
-Confirmed roots carry the native EOF and immutable index offsets. Readers
-validate a published checkpoint and never read the writer's unconfirmed tail.
-Native data is synced before a durable confirmed root is published.
-Old redb sidecars require rebuild/bootstrap;
-there is deliberately no compatibility decoder.
+Native data is synced before any sync marker or confirmed checkpoint that
+covers it is relied on. Readers never read the writer's unsynced tail.
 
 ## Independent optional read checks
 
 Choose read checks explicitly when the application controls its input files:
 
 ```rust
-let options = varlit::DiskIndexOptions {
+let options = varlit::StreamOptions {
     limits: varlit::ReadLimits::MISSING.with_read_validation(varlit::ReadValidation::TRUSTED),
-    ..varlit::DiskIndexOptions::default()
+    ..varlit::StreamOptions::default()
 };
-// VarlitIndexedReader::open(spec, path, options, plan)?;
+// MyFormat::open_stream_reader(path, options)?;
 ```
 
 `FULL`, `CRC_ONLY`, `STRUCTURE_ONLY` and `TRUSTED` select the four combinations
 of additional structure checks and data CRC. Leaving the override unset retains
-existing behavior. `TRUSTED` uses confirmed metadata directly for uncompressed
-indexed payload reads; it does not reread the native frame or checksum the
-payload. Bounds, resource limits, decoder validity, traversal termination and
-publication guards remain. A well-formed wrong value need not produce an error
-when its detecting check is disabled. Stored checksum policy and write behavior
-remain unchanged, and CRC-on requires a format that stores CRCs.
+existing behavior. Bounds, resource limits, decoder validity, traversal
+termination and publication guards remain. A well-formed wrong value need not
+produce an error when its detecting check is disabled. Stored checksum policy
+and write behavior remain unchanged, and CRC-on requires a format that stores
+CRCs.
 
 This does not remove the initial framing needed by a stream/demand directory,
-compression metadata absent from an index, or protocol/generation checksums.
-There is no unbounded cache or larger resource allowance behind the option.
+or protocol/generation checksums. There is no unbounded cache or larger
+resource allowance behind the option.
 See the [complete contract and baseline review](design/read-validation-policy-review.md)
 for exact I/O scope, explicit verification, recovery and mmap restrictions.
 
@@ -795,26 +705,16 @@ types before positional I/O or allocation. Validation uses checked `u64`
 arithmetic and always rejects overflow and extents beyond the pinned EOF.
 Required parsing, traversal budgets and publication checks remain in every
 read mode. Additional framing/identity comparisons and data CRC verification
-follow the selected read policy described above. Index writers, recovery and
-reconstruction keep strict metadata admission.
+follow the selected read policy described above. Sidecar writers, recovery and
+bootstrap keep strict metadata admission.
 
 This prevents a malicious file from turning a claimed extent into an unchecked
 slice or claim-sized allocation. It does not authenticate a file. CRC is an
 integrity/error-detection policy, not a cryptographic authenticity mechanism.
 
-## Local regression probe
-
-Run the ignored probe locally to collect results for the current host:
-
-```powershell
-cargo test --release -p varlit `
-  --test high_cardinality million_unique_keys_keep_varlit_resident_maps_empty `
-  -- --ignored --nocapture
-```
-
 ## Snapshot retention management
 
-Stream/indexed readers expose `snapshot_status()` with the adopted and latest
+Stream readers expose `snapshot_status()` with the adopted and latest
 confirmed generations, record/byte lag, and whether their backend snapshot is
 pinned. Each reader owns its file snapshot; there is no process-global reader
 registry or `snapshot_retention()` API. Applications that need a reader count or
@@ -824,15 +724,14 @@ Old open files remain readable after compaction until their handles are dropped.
 
 Call `release_snapshot(&mut self)` on an idle reader to drop its backend page
 reference immediately. It returns true once and false if already released.
-Indexed key reads then return `Error::DiskIndex(DiskIndexError::SnapshotReleased)`.
-Native scans and existing cursors retain their confirmed EOF and remain usable;
+Native scans and existing cursors retain their EOF and remain usable;
 they do not pin sidecar pages. `follow()` reacquires the latest confirmed snapshot,
-even if its generation is unchanged or the writer is Dirty. On failure, the
-reader remains released and its previous native frontier is unchanged.
+even if its generation is unchanged. On failure, the reader remains released
+and its previous native frontier is unchanged.
 
 A typical policy is to report lag, ask the owning reader thread to `follow()`
-when it may advance, or release its snapshot while idle. The writer can observe
-all pins but cannot forcibly advance or invalidate another thread's snapshot.
+when it may advance, or release its snapshot while idle. The writer cannot
+forcibly advance or invalidate another thread's snapshot.
 Dropping or following a reader releases its old snapshot pin. Open reader
 handles can retain an old file descriptor even after releasing a snapshot. Follow or close
 the old handle to release its file descriptor after file-generation compaction.

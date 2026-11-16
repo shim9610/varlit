@@ -17,18 +17,11 @@ mod enabled {
     };
     use varlit::{
         BatchOptions, BlockDescriptor, BlockKind, Decoder, DiskIndexBatchOptions, DiskIndexOptions,
-        DiskIndexPlan, DiskIndexedBlock, Encoder, Endian, FormatSpec, IndexPolicy, IntegrityPolicy,
-        ManifestPolicy, ReadLimits, RecoveryPolicy, Result as VarlitResult, StreamOptions,
-        VarlitBlock, VarlitDecode, VarlitEmpty, VarlitEncode, VarlitIndexedReader,
-        VarlitIndexedWriter, VarlitKeyedBlock, VarlitStreamReader, VarlitStreamWriter, WireType,
+        Encoder, Endian, FormatSpec, IndexPolicy, IntegrityPolicy, ManifestPolicy, ReadLimits,
+        RecoveryPolicy, Result as VarlitResult, StreamOptions, VarlitBlock, VarlitDecode,
+        VarlitEmpty, VarlitEncode, VarlitStreamReader, VarlitStreamWriter, WireType,
         WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock,
-        rebuild_disk_index,
     };
-
-    mod histories {
-        use super::*;
-        include!("support/publication_histories.rs");
-    }
 
     const CHILD_ENV: &str = "VARLIT_SCALABLE_FAULT_CHILD";
     const SCENARIO_ENV: &str = "VARLIT_SCALABLE_FAULT_SCENARIO";
@@ -37,39 +30,27 @@ mod enabled {
     const BASE_EOF_FILE: &str = "base-eof";
 
     const SCENARIOS: &[Scenario] = &[
-        Scenario::CreateStream,
-        Scenario::CreateIndexed,
-        Scenario::AppendStream,
-        Scenario::AppendIndexed,
-        Scenario::RestoreStream,
-        Scenario::RestoreIndexed,
-        Scenario::BootstrapStream,
-        Scenario::ReplaceIndexed,
+        Scenario::Create,
+        Scenario::Append,
+        Scenario::Restore,
+        Scenario::Bootstrap,
     ];
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Scenario {
-        CreateStream,
-        CreateIndexed,
-        AppendStream,
-        AppendIndexed,
-        RestoreStream,
-        RestoreIndexed,
-        BootstrapStream,
-        ReplaceIndexed,
+        Create,
+        Append,
+        Restore,
+        Bootstrap,
     }
 
     impl Scenario {
         const fn name(self) -> &'static str {
             match self {
-                Self::CreateStream => "create-stream",
-                Self::CreateIndexed => "create-indexed",
-                Self::AppendStream => "append-stream",
-                Self::AppendIndexed => "append-indexed",
-                Self::RestoreStream => "restore-stream",
-                Self::RestoreIndexed => "restore-indexed",
-                Self::BootstrapStream => "bootstrap-stream",
-                Self::ReplaceIndexed => "replace-indexed",
+                Self::Create => "create-stream",
+                Self::Append => "append-stream",
+                Self::Restore => "restore-stream",
+                Self::Bootstrap => "bootstrap-stream",
             }
         }
 
@@ -122,65 +103,11 @@ mod enabled {
         const IS_KEYED: bool = false;
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct IndexedRecord {
-        key: u64,
-        value: u64,
-    }
-
-    impl VarlitEmpty for IndexedRecord {
-        fn empty() -> Self {
-            Self { key: 0, value: 0 }
-        }
-    }
-
-    impl VarlitEncode for IndexedRecord {
-        const WIRE_TYPE: WireType = <(u64, u64) as VarlitEncode>::WIRE_TYPE;
-
-        fn encode_varlit(&self, encoder: &mut Encoder) -> VarlitResult<()> {
-            (self.key, self.value).encode_varlit(encoder)
-        }
-    }
-
-    impl VarlitDecode for IndexedRecord {
-        const WIRE_TYPE: WireType = <(u64, u64) as VarlitDecode>::WIRE_TYPE;
-
-        fn decode_varlit(decoder: &mut Decoder<'_>) -> VarlitResult<Self> {
-            let (key, value) = <(u64, u64)>::decode_varlit(decoder)?;
-            Ok(Self { key, value })
-        }
-    }
-
-    impl VarlitBlock for IndexedRecord {
-        const ID: u32 = 42;
-        const VERSION: u16 = 1;
-        const KIND: BlockKind = BlockKind::Fixed;
-        const ENDIAN: Option<Endian> = None;
-        const SCHEMA_FINGERPRINT: u64 = 0x0F11DD4FBC969473;
-        const IS_KEYED: bool = true;
-    }
-
-    impl VarlitKeyedBlock for IndexedRecord {
-        type Key = u64;
-
-        fn key(&self) -> Self::Key {
-            self.key
-        }
-    }
-
     static STREAM_BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
         id: StreamRecord::ID,
         name: "ScalableCrashStreamRecord",
         version: StreamRecord::VERSION,
         kind: StreamRecord::KIND,
-        fields: &[],
-    }];
-
-    static INDEXED_BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
-        id: IndexedRecord::ID,
-        name: "ScalableCrashIndexedRecord",
-        version: IndexedRecord::VERSION,
-        kind: IndexedRecord::KIND,
         fields: &[],
     }];
 
@@ -426,25 +353,16 @@ mod enabled {
 
     fn run_scenario(scenario: Scenario, root: &Path) {
         match scenario {
-            Scenario::CreateStream => {
+            Scenario::Create => {
                 let _fault_guard = mark_ready_and_arm(root);
                 write_stream_generation(root, false);
             }
-            Scenario::CreateIndexed => {
-                let _fault_guard = mark_ready_and_arm(root);
-                write_indexed_generation(root, false);
-            }
-            Scenario::AppendStream => {
+            Scenario::Append => {
                 write_stream_base(root);
                 let _fault_guard = mark_ready_and_arm(root);
                 append_stream_generation(root);
             }
-            Scenario::AppendIndexed => {
-                write_indexed_base(root);
-                let _fault_guard = mark_ready_and_arm(root);
-                append_indexed_generation(root);
-            }
-            Scenario::RestoreStream => {
+            Scenario::Restore => {
                 write_dirty_stream(root);
                 let _fault_guard = mark_ready_and_arm(root);
                 let writer = VarlitStreamWriter::restore_checkpoint_and_open(
@@ -455,19 +373,7 @@ mod enabled {
                 .expect("restore stream checkpoint");
                 drop(writer);
             }
-            Scenario::RestoreIndexed => {
-                write_dirty_indexed(root);
-                let _fault_guard = mark_ready_and_arm(root);
-                let writer = VarlitIndexedWriter::restore_checkpoint_and_open(
-                    indexed_spec(),
-                    native_path(root),
-                    disk_options(),
-                    index_plan(),
-                )
-                .expect("restore indexed checkpoint");
-                drop(writer);
-            }
-            Scenario::BootstrapStream => {
+            Scenario::Bootstrap => {
                 write_stream_generation(root, false);
                 fs::remove_file(stream_sidecar_path(root))
                     .expect("remove bootstrap source sidecar");
@@ -475,17 +381,6 @@ mod enabled {
                 let _fault_guard = mark_ready_and_arm(root);
                 bootstrap_stream_checkpoint(stream_spec(), native_path(root), stream_options())
                     .expect("bootstrap stream sidecar");
-            }
-            Scenario::ReplaceIndexed => {
-                write_indexed_generation(root, true);
-                let _fault_guard = mark_ready_and_arm(root);
-                rebuild_disk_index(
-                    indexed_spec(),
-                    native_path(root),
-                    disk_options(),
-                    index_plan(),
-                )
-                .expect("rebuild indexed sidecar");
             }
         }
     }
@@ -545,52 +440,6 @@ mod enabled {
             .expect("append dirty stream tail");
     }
 
-    fn write_indexed_base(root: &Path) {
-        write_indexed_generation(root, true);
-        write_base_eof(root);
-    }
-
-    fn write_indexed_generation(root: &Path, include_base: bool) {
-        let path = native_path(root);
-        let mut writer =
-            VarlitIndexedWriter::create(indexed_spec(), &path, disk_options(), index_plan())
-                .expect("create indexed fixture");
-        let values = if include_base {
-            base_indexed_values()
-        } else {
-            full_indexed_values()
-        };
-        writer
-            .push_iter::<IndexedRecord, _>(values, batch_options())
-            .map_err(|error| error.source)
-            .expect("append deterministic indexed chunks");
-        writer.sync().expect("sync indexed fixture");
-    }
-
-    fn append_indexed_generation(root: &Path) {
-        let path = native_path(root);
-        let mut writer =
-            VarlitIndexedWriter::open(indexed_spec(), &path, disk_options(), index_plan())
-                .expect("open indexed base");
-        writer
-            .push_iter::<IndexedRecord, _>(new_indexed_values(), batch_options())
-            .map_err(|error| error.source)
-            .expect("append deterministic indexed chunks");
-        writer.sync().expect("publish indexed generation");
-    }
-
-    fn write_dirty_indexed(root: &Path) {
-        write_indexed_base(root);
-        let path = native_path(root);
-        let mut writer =
-            VarlitIndexedWriter::open(indexed_spec(), &path, disk_options(), index_plan())
-                .expect("open indexed fixture for dirty tail");
-        writer
-            .push_iter::<IndexedRecord, _>(new_indexed_values(), batch_options())
-            .map_err(|error| error.source)
-            .expect("append dirty indexed tail");
-    }
-
     fn assert_boundary_oracle(scenario: Scenario, root: &Path, event: &TraceEvent) {
         clear_stale_writer_lock(
             native_path(root),
@@ -600,14 +449,10 @@ mod enabled {
             panic!("explicit stale-lock recovery failed at {scenario:?} {event:?}: {error}")
         });
         match scenario {
-            Scenario::CreateStream => assert_interrupted_stream_creation(root, event),
-            Scenario::CreateIndexed => assert_interrupted_indexed_creation(root, event),
-            Scenario::AppendStream => assert_stream_append_outcome(root, event),
-            Scenario::AppendIndexed => assert_indexed_append_outcome(root, event),
-            Scenario::RestoreStream => assert_stream_restore_outcome(root, event),
-            Scenario::RestoreIndexed => assert_indexed_restore_outcome(root, event),
-            Scenario::BootstrapStream => assert_stream_bootstrap_outcome(root, event),
-            Scenario::ReplaceIndexed => assert_indexed_replacement_outcome(root, event),
+            Scenario::Create => assert_interrupted_stream_creation(root, event),
+            Scenario::Append => assert_stream_append_outcome(root, event),
+            Scenario::Restore => assert_stream_restore_outcome(root, event),
+            Scenario::Bootstrap => assert_stream_bootstrap_outcome(root, event),
         }
     }
 
@@ -616,15 +461,6 @@ mod enabled {
             assert!(
                 values.is_empty() || values == full_stream_values(),
                 "partial clean stream at {event:?}: {values:?}"
-            );
-        }
-    }
-
-    fn assert_interrupted_indexed_creation(root: &Path, event: &TraceEvent) {
-        if let Ok(values) = read_indexed(root, 0..7) {
-            assert!(
-                values.is_empty() || values == full_indexed_values(),
-                "partial clean index at {event:?}: {values:?}"
             );
         }
     }
@@ -641,26 +477,6 @@ mod enabled {
                 true
             }
             Err(error) => panic!("unexpected stream writer reopen failure: {error:?}"),
-        }
-    }
-
-    fn indexed_needs_restore(root: &Path) -> bool {
-        match VarlitIndexedWriter::open(
-            indexed_spec(),
-            native_path(root),
-            disk_options(),
-            index_plan(),
-        ) {
-            Ok(writer) => {
-                drop(writer);
-                false
-            }
-            Err(varlit::Error::DiskIndex(error))
-                if matches!(*error, varlit::DiskIndexError::CleanStateRequired) =>
-            {
-                true
-            }
-            Err(error) => panic!("unexpected indexed writer reopen failure: {error:?}"),
         }
     }
 
@@ -694,37 +510,6 @@ mod enabled {
         }
     }
 
-    fn assert_indexed_append_outcome(root: &Path, event: &TraceEvent) {
-        let base_eof = read_base_eof(root);
-        let values = read_indexed(root, 0..7)
-            .unwrap_or_else(|error| panic!("confirmed index unreadable at {event:?}: {error}"));
-        assert!(
-            values == base_indexed_values() || values == full_indexed_values(),
-            "partial index at {event:?}"
-        );
-        if indexed_needs_restore(root) {
-            assert_eq!(
-                values,
-                base_indexed_values(),
-                "Dirty index exposed unconfirmed keys at {event:?}"
-            );
-            assert!(fs::metadata(native_path(root)).unwrap().len() >= base_eof);
-            drop(
-                VarlitIndexedWriter::restore_checkpoint_and_open(
-                    indexed_spec(),
-                    native_path(root),
-                    disk_options(),
-                    index_plan(),
-                )
-                .unwrap(),
-            );
-            assert_eq!(fs::metadata(native_path(root)).unwrap().len(), base_eof);
-            assert_eq!(read_indexed(root, 0..7).unwrap(), base_indexed_values());
-        } else if values == base_indexed_values() {
-            assert_eq!(fs::metadata(native_path(root)).unwrap().len(), base_eof);
-        }
-    }
-
     fn assert_stream_restore_outcome(root: &Path, event: &TraceEvent) {
         assert_eq!(read_stream(root).unwrap(), base_stream_values());
         if stream_needs_restore(root) {
@@ -747,31 +532,6 @@ mod enabled {
         assert_eq!(read_stream(root).unwrap(), base_stream_values());
     }
 
-    fn assert_indexed_restore_outcome(root: &Path, event: &TraceEvent) {
-        assert_eq!(read_indexed(root, 0..2).unwrap(), base_indexed_values());
-        if indexed_needs_restore(root) {
-            assert!(
-                fs::metadata(native_path(root)).unwrap().len() >= read_base_eof(root),
-                "interrupted restore truncated below its base EOF at {event:?}"
-            );
-            let writer = VarlitIndexedWriter::restore_checkpoint_and_open(
-                indexed_spec(),
-                native_path(root),
-                disk_options(),
-                index_plan(),
-            )
-            .unwrap_or_else(|error| {
-                panic!("repeated indexed restore failed at {event:?}: {error}")
-            });
-            drop(writer);
-        }
-        assert_eq!(
-            fs::metadata(native_path(root)).unwrap().len(),
-            read_base_eof(root)
-        );
-        assert_eq!(read_indexed(root, 0..2).unwrap(), base_indexed_values());
-    }
-
     fn assert_stream_bootstrap_outcome(root: &Path, event: &TraceEvent) {
         assert_eq!(
             fs::metadata(native_path(root)).unwrap().len(),
@@ -786,15 +546,6 @@ mod enabled {
                 full_stream_values()
             );
         }
-    }
-
-    fn assert_indexed_replacement_outcome(root: &Path, event: &TraceEvent) {
-        assert_eq!(
-            read_indexed(root, 0..2).unwrap_or_else(|error| panic!(
-                "replacement left invalid target at {event:?}: {error}"
-            )),
-            base_indexed_values()
-        );
     }
 
     fn parse_trace(path: &Path) -> Vec<TraceEvent> {
@@ -867,26 +618,6 @@ mod enabled {
         Ok(records)
     }
 
-    fn read_indexed(
-        root: &Path,
-        keys: impl IntoIterator<Item = u64>,
-    ) -> VarlitResult<Vec<IndexedRecord>> {
-        let reader = VarlitIndexedReader::open(
-            indexed_spec(),
-            native_path(root),
-            disk_options(),
-            index_plan(),
-        )?;
-        let mut values = Vec::new();
-        let mut value = IndexedRecord::empty();
-        for key in keys {
-            if reader.get::<IndexedRecord>(&key, &mut value)? {
-                values.push(value.clone());
-            }
-        }
-        Ok(values)
-    }
-
     fn stream_spec() -> FormatSpec {
         FormatSpec::new(
             b"VFSTRM",
@@ -901,27 +632,6 @@ mod enabled {
         )
         .with_block_identities(&[StreamRecord::IDENTITY])
         .with_read_limits(ReadLimits::STANDARD)
-    }
-
-    fn indexed_spec() -> FormatSpec {
-        FormatSpec::new(
-            b"VFINDX",
-            1,
-            Endian::Little,
-            0,
-            IndexPolicy::KeyedOffsetChain,
-            IntegrityPolicy::None,
-            RecoveryPolicy::Strict,
-            ManifestPolicy::None,
-            INDEXED_BLOCKS,
-        )
-        .with_block_identities(&[IndexedRecord::IDENTITY])
-        .with_read_limits(ReadLimits::STANDARD)
-    }
-
-    fn index_plan() -> DiskIndexPlan {
-        const INDEXED: &[DiskIndexedBlock] = &[DiskIndexedBlock::of::<IndexedRecord>()];
-        DiskIndexPlan::canonical(indexed_spec(), INDEXED).expect("canonical crash-test index plan")
     }
 
     fn disk_options() -> DiskIndexOptions {
@@ -961,25 +671,6 @@ mod enabled {
             .into_iter()
             .chain(new_stream_values())
             .collect()
-    }
-
-    fn base_indexed_values() -> Vec<IndexedRecord> {
-        (0..2).map(indexed_value).collect()
-    }
-
-    fn new_indexed_values() -> Vec<IndexedRecord> {
-        (2..7).map(indexed_value).collect()
-    }
-
-    fn full_indexed_values() -> Vec<IndexedRecord> {
-        (0..7).map(indexed_value).collect()
-    }
-
-    const fn indexed_value(key: u64) -> IndexedRecord {
-        IndexedRecord {
-            key,
-            value: 10_000 + key * 17,
-        }
     }
 
     fn native_path(root: &Path) -> PathBuf {

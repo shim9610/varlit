@@ -26,7 +26,6 @@ mod pq;
 mod sq;
 mod vl_append;
 mod vl_grouped;
-mod vl_indexed;
 mod vl_packed;
 
 pub const TXNS: usize = 1000;
@@ -97,7 +96,7 @@ pub trait OltpRead {
 
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &["indexed", "grouped", "append", "packed-matrix"],
+        "varlit" => &["grouped", "append", "packed-matrix"],
         "sqlite" => sq::CANDIDATES,
         "hdf5" => h5::CANDIDATES,
         "parquet" => pq::CANDIDATES,
@@ -107,7 +106,6 @@ pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
 /// Effort accounting: every source file the (engine, candidate) adapter uses.
 pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
-        ("varlit", "indexed") => "src/oltp/vl_indexed.rs,src/oltp/csr.rs",
         ("varlit", "grouped") => "src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs",
         ("varlit", "append") => {
             "src/oltp/vl_append.rs,src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs"
@@ -121,7 +119,6 @@ pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
 }
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
     match (engine, cand) {
-        ("varlit", "indexed") => vl_indexed::create(p),
         ("varlit", "grouped") => vl_grouped::create(p),
         ("varlit", "append") => vl_append::create(p),
         ("varlit", "packed-matrix") => vl_packed::create(p),
@@ -133,7 +130,6 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
 }
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn OltpRead>> {
     match (engine, cand) {
-        ("varlit", "indexed") => vl_indexed::open(p),
         ("varlit", "grouped") => vl_grouped::open(p),
         ("varlit", "append") => vl_append::open(p),
         ("varlit", "packed-matrix") => vl_packed::open(p),

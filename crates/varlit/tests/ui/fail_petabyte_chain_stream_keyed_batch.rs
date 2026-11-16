@@ -6,7 +6,7 @@ varlit_format! {
         version: 1;
         index: keyed_offset_chain;
         blocks {
-            variable Frame(id = 1, key = [id], key_index = disk) {
+            variable Frame(id = 1, key = [id]) {
                 id: u64,
                 payload: Vec<u8>,
             }

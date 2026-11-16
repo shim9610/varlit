@@ -64,6 +64,7 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 <a id="21-varlitfile-scans-the-whole-file-at-open-and-holds-a-record-index"></a>
 <a id="23-keyed-merge-and-compact-are-resident-only-and-explicitly-not-petabyte-scale"></a>
 <a id="3-streamindexed-api-status"></a>
+<a id="3-stream-api-status"></a>
 
 ## Native scans and temporary storage
 
@@ -75,8 +76,15 @@ every native open or mark constant time.
 Native generated keyed writers may prime one tail map per keyed block, costing
 `Theta(block types * records)` at construction. Tail maps spill at their nominal
 budget, with a 2 MiB in-memory batch per block. `max_keyed_tail_bytes` is per
-block, not a global sum. Stream/indexed handles avoid those construction scans.
+block, not a global sum. Stream handles avoid those construction scans.
 Explicit requests for an owned full key map can still exceed admission limits.
+
+There is no disk-backed lookup by key. The indexed primary (`.vki` sidecar,
+`key_index`) was removed; keyed lookup is resident only, and every keyed update
+or delete appends a record, so the file grows with updates until an explicit
+keyed compaction. Stream readers have no lookup by key. The replacement is
+described in [bounded keyed storage](design/bounded-keyed-storage.md) and is
+not implemented.
 
 External merge and rewrites require scratch disk, a complete rewrite generation
 and per-record/key workspace. `VARLIT_SPILL_DIR` selects disposable spill storage;
@@ -119,7 +127,7 @@ open, or use a commit-marker policy.
 `flush()` alone does not publish a matrix generation; `sync()` or explicit
 Immediate does. See [durability](durability-model.md) for each storage policy.
 
-Indexed compaction retains old files until old owners close. On Windows,
+Stream sidecar compaction retains old files until old owners close. On Windows,
 companion replacement requires filesystem support for the native POSIX
 rename semantics used by the implementation. Failure returns an OS error and
 poisons the writer; reconcile and reopen. Lock files coordinate cooperating

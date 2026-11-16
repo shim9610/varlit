@@ -134,14 +134,12 @@ batch limits for the parent and patched implementations. Preserve the baseline
 binary before changing runtime code. Alternate before/after runs and report
 variability; a single timing is insufficient.
 
-The default concurrent load is a saturation study: readers run until the writer
+The concurrent stream load is a saturation study: readers run until the writer
 finishes, so a delayed writer causes additional reads. Its wall times do not
-compare equal work. For before/after regression checks, also use
-`--reader-checks-per-epoch` with the same count on both sides. Each reader then
-executes the same keys against the same pinned/published snapshots, without
-sleeping; the driver rejects a different operation count or snapshot trace.
-Record the writer's append/sync time separately from reader-completion waiting,
-along with total CPU and cgroup throttling. Run a same-binary control when the
+compare equal work; compare the writer's append/sync time, which the driver
+records separately from reader activity, and treat reader throughput as
+saturation behavior. `scripts/compare_load.py` rejects samples whose workload,
+reader trace or environment differ. Record total CPU and cgroup throttling. Run a same-binary control when the
 environment is noisy; unresolved differences block performance qualification.
 
 Include increasing real file sizes and key cardinalities, repeated mutations,

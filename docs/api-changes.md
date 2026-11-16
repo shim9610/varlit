@@ -12,8 +12,11 @@ supported version. This release has breaking changes:
   schema hash now includes its tile shape, so matrix files written by 0.12.x
   are refused (with `SchemaHashMismatch` when the format declares a schema
   hash); recreate them.
-- Stream/indexed sidecars written by 0.13.0 are not readable by earlier
-  versions.
+- Stream sidecars written by 0.13.0 are not readable by earlier versions.
+- The indexed primary is removed (see
+  [indexed primary removal](#indexed-primary-removal)). Indexed files are not
+  converted: read their data with the release that wrote them and rewrite it
+  as a native file, a stream or a matrix.
 
 VCHK and experimental STREUSE2 formats are unchanged. In a format with data
 checksums, a variable record longer than 64 KiB is now written with a CRC per
@@ -66,7 +69,6 @@ a fresh decode is charged and is refused at the same limit.
 | `decode_block_into::<T>(&entry, &mut scratch) -> Result<T>` | `decode_block_into::<T>(&entry, &mut scratch, &mut out) -> Result<()>` |
 | `read_header_block::<T>() -> Result<Option<T>>` | `read_header_block::<T>(&mut out) -> Result<bool>` |
 | `read_matrix_cell::<T>(key) -> Result<T>`, generated cell getters | `read_matrix_cell::<T>(key, &mut out) -> Result<()>` |
-| indexed `get::<T>(&key) -> Result<Option<T>>`, generated `get_<block>(&key)` | `get::<T>(&key, &mut out) -> Result<bool>`, `get_<block>(&key, &mut out)` |
 | experimental `MatrixReader::get::<T>(key) -> Result<T>` | `get::<T>(key, &mut out) -> Result<()>` |
 | `decode_blocks_into(&mut Vec<T>)` (cleared, then pushed) | same signature; existing elements are decoded into, the vector only grows past its old length |
 
@@ -79,7 +81,7 @@ unspecified contents.
 | Change | Effect |
 | --- | --- |
 | `transaction_marker(<mode>, single_barrier)` (`TransactionMarkerMode::{OnFlushSingleBarrier, ExplicitSingleBarrier}`, `CommitPolicy::single_barrier`) | `commit_durable` with one storage barrier instead of two; open verifies the newest transaction before committing it. Opt-in; requires `crc32_with_header`. See [durability model](durability-model.md#single-barrier-commit) |
-| Stream/indexed `sync()` | One storage barrier on the primary per sync, closed by a sync marker. The sidecar is written and synced only when the primary has grown past `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records) and at compaction; readers and recovery replay the rest from the primary. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
+| Stream `sync()` | One storage barrier on the primary per sync, closed by a sync marker. The sidecar is written and synced only when the primary has grown past `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records) and at compaction; readers and recovery replay the rest from the primary. A clean sidecar with a longer native file now means "restore", not `NativeLengthMismatch`. Sidecars written by this version are not readable by earlier versions |
 | `MmapPayloads::decode_block_into(&entry, &mut scratch, &mut out)` | Decode straight from a read-only mapping, with the same id/version, checksum, length and materialization checks as the copying read |
 | Tiled matrix storage | Cells live in tiles of the spec's `tile = [rows, cols]` shape and are overwritten in place through a write-ahead ring inside the file; overwrites do not grow the file (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`). A reader that falls behind the ring gets `MatrixSnapshotExpired`. The `VMAT` layout and its generation log are removed; 0.12.x matrix files are refused (with `SchemaHashMismatch` when the format declares a schema hash). `FormatSpec::with_matrix_ring_bytes` sets the ring size. See [durability model](durability-model.md#matrix-storage-and-publication) |
 | Matrix settings and errors left from `VMAT` | Removed: `MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits` matrix residency, verification, generation-cache and directory-cache fields, setters and accessors; `FormatSpec::matrix_fatal_forensics` and `with_matrix_fatal_forensics()`; `compact_matrix()`; `matrix_recovery_report()`; `matrix_storage_diagnostics()` and `MatrixStorageDiagnostics`; the zero-range and sparse-zeroing accessors of `MatrixRecoveryReport`; and the error variants `MatrixCommitQuarantined`, `MatrixFatalCorruption`, `MatrixChunkNotReopenable`, `MatrixChunkClosed`, `InvalidMatrixChunk` and `MatrixDimensionMismatch`. Open runs no matrix verification; `verify_matrix_metadata()` checks tiles on request and returns a `MatrixRecoveryReport`. `matrix_generation_path()` returns the primary path. See [migration guide](migration-guide.md#upgrading-from-0121-to-0130) and [recovery model](recovery-model.md) |
@@ -111,8 +113,36 @@ a writer scan can perform normal uncommitted-tail recovery.
 To retain the previous automatic behavior, use `open_readonly_lazy_or_scan` or
 `open_lazy_or_scan`, optionally suffixed `_with_report`. These opt-in APIs can
 report `LazyOpenSource::FullScan`. Normal native `open`/`open_readonly` scan APIs
-and stream/indexed constructors retain their existing selection and return types.
+and stream constructors retain their existing selection and return types.
 See the [API contract](api-reference.md#an-open-that-reads-no-record).
+
+### Indexed primary removal
+
+**Breaking.** The indexed primary — a native file plus a `.vki` sidecar holding
+a disk B-tree of the latest record per key — is removed. Updating keyed records
+grew its files without bound, and it could never reclaim superseded versions.
+The replacement design is [bounded keyed storage](design/bounded-keyed-storage.md);
+it is not implemented.
+
+| Removed | Use instead |
+| --- | --- |
+| `VarlitIndexedWriter`, `VarlitIndexedReader`; generated `create_indexed_writer`, `open_indexed_writer`, `restore_indexed_writer`, `open_indexed_reader` and the `<Format>IndexedWriter` / `<Format>IndexedReader` types | Stream handles (`create_stream_writer`, `open_stream_writer`, `restore_stream_writer`, `open_stream_reader`) for append and follow; resident handles (`create_writer`, `open_reader`, `keyed_blocks`) for lookup by key |
+| `rebuild_disk_index`, `rebuild_disk_index_with_progress`, `DiskIndexRebuildReport` and the generated `rebuild_disk_index` | `bootstrap_stream_checkpoint` for a stream file's `.vks` |
+| Lookup by key on a sidecar: generated `get_<block>`, `lookup_entry`, `historical_distinct_keys`, indexed `compact_index` | Resident `keyed_blocks::<T>()?.get(&key, &mut out)` or the generated `<blocks>()?.get(&key, &mut out)` |
+| `DiskIndexPlan`, `DiskIndexedBlock`, `DiskIndexEntry`, `DiskIndexKeyTag`, `VarlitDiskKey` | None |
+| `DiskIndexError::PageReclaimed`, `DiskIndexOptions::max_tail_records` | None |
+| Block attribute `key_index = disk` / `key_index = memory` | Delete it; it is now a compile error. Keyed blocks without it keep working |
+| `.vki` sidecar files | Delete them after rewriting the data |
+
+Stream handles, `StreamOptions`, `DiskIndexOptions`, `DiskIndexBatchOptions`,
+`DiskIndexConfirmPolicy`, `DiskIndexError` (without `PageReclaimed`),
+`DiskIndexMode`, `IndexCompaction`, `SnapshotStatus` and
+`bootstrap_stream_checkpoint` are unchanged. Stream `sync()` and stream reader
+`follow()` now run through the Kani-verified `commit` and `follow` drivers in
+`crates/varlit-core/src/publication_protocol.rs`. A stream writer's Immediate
+policy counters start at the first caller write; the creation nonce and
+embedded manifest records no longer count. Native and matrix files are
+unchanged. See the [migration guide](migration-guide.md#indexed-primary-removed).
 
 ### Composing custom decoders
 

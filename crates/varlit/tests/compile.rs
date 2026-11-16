@@ -125,17 +125,12 @@ fn high_cardinality_compile_contracts() {
     tests.pass("tests/ui/pass_high_cardinality_macro.rs");
     tests.compile_fail("tests/ui/fail_send_stream_cursors.rs");
     tests.compile_fail("tests/ui/fail_share_stream_reader.rs");
-    tests.compile_fail("tests/ui/fail_share_indexed_reader.rs");
     tests.compile_fail("tests/ui/fail_share_generated_readers.rs");
     tests.pass("tests/ui/pass_petabyte_plan_batch.rs");
-    tests.compile_fail("tests/ui/fail_key_index_matrix.rs");
-    tests.compile_fail("tests/ui/fail_key_index_value.rs");
-    tests.compile_fail("tests/ui/fail_key_index_without_key.rs");
+    tests.compile_fail("tests/ui/fail_key_index_removed.rs");
     tests.compile_fail("tests/ui/fail_petabyte_chain_stream_keyed_batch.rs");
-    tests.compile_fail("tests/ui/fail_petabyte_chain_unindexed_keyed_mutation.rs");
     tests.compile_fail("tests/ui/fail_manual_block_missing_keyedness.rs");
     tests.compile_fail("tests/ui/fail_keyed_contradiction_stream_delete.rs");
-    tests.compile_fail("tests/ui/fail_keyed_contradiction_indexed_delete.rs");
 }
 
 /// Round 12's enforcement pass: the proof that the two recurring defect shapes

@@ -15,12 +15,7 @@ mod storage;
 mod tree;
 use storage::{Checkpoint as IndexCheckpoint, Publication, Store as IndexStorage};
 
-use crate::collections::MaterializationBudget;
-use crate::native_layout::decode_native_internal_key_envelope;
-use crate::{
-    Endian, Error, FormatSpec, IntegrityPolicy, RecordIndexEntry, ResourceLimits, SnapshotFile,
-    TOMBSTONE_BLOCK_ID, VarlitDecode, VarlitEncode, VarlitKeyedBlock, codec::encode_to_vec_limited,
-};
+use crate::{Error, FormatSpec, ResourceLimits, TOMBSTONE_BLOCK_ID};
 
 const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const MIN_CACHE_BYTES: usize = 1024 * 1024;
@@ -50,45 +45,6 @@ pub struct DiskIndexKeyTag {
 
 impl DiskIndexKeyTag {
     pub const ENCODED_LEN: usize = 5;
-
-    pub const fn absent() -> Self {
-        Self { kind: None }
-    }
-    pub const fn keyed(kind: u32) -> Self {
-        Self { kind: Some(kind) }
-    }
-    pub const fn kind(self) -> Option<u32> {
-        self.kind
-    }
-    pub const fn has_key(self) -> bool {
-        self.kind.is_some()
-    }
-
-    /// `[has_key: u8][schema kind: u32 big-endian]`. Absent tags have code zero.
-    pub const fn encode(self) -> [u8; Self::ENCODED_LEN] {
-        let (present, kind) = match self.kind {
-            Some(kind) => (1, kind),
-            None => (0, 0),
-        };
-        let bytes = kind.to_be_bytes();
-        [present, bytes[0], bytes[1], bytes[2], bytes[3]]
-    }
-
-    pub fn decode(bytes: &[u8]) -> DiskIndexResult<Self> {
-        if bytes.len() != Self::ENCODED_LEN {
-            return Err(DiskIndexError::Storage(
-                "invalid schema key tag length".into(),
-            ));
-        }
-        let kind = u32::from_be_bytes(bytes[1..5].try_into().unwrap());
-        match bytes[0] {
-            0 if kind == 0 => Ok(Self::absent()),
-            1 => Ok(Self::keyed(kind)),
-            _ => Err(DiskIndexError::Storage(
-                "invalid schema key presence tag".into(),
-            )),
-        }
-    }
 }
 
 const SEQUENCE_COMMITTED_EXHAUSTED: u8 = 1 << 0;
@@ -164,14 +120,10 @@ pub struct DiskIndexOptions {
     pub limits: ResourceLimits,
     /// Writer only: when a sync also confirms the sidecar.
     pub confirm: DiskIndexConfirmPolicy,
-    /// Reader only: the most unconfirmed records a reader holds key pointers
-    /// for. A reader whose primary tail exceeds it refuses to follow rather
-    /// than grow without bound.
-    pub max_tail_records: u64,
     /// Writer only: how many further confirmed generations a page that a
     /// confirmed generation stopped referencing waits before it is reused.
     /// Readers that `follow` at least that often never meet a reclaimed page;
-    /// one that falls further behind gets `PageReclaimed` and must follow.
+    /// one that falls further behind would see a damaged-sidecar error.
     /// Crash safety does not depend on it: recovery only ever returns to the
     /// newest confirmed generation.
     pub reclaim_after: u64,
@@ -187,7 +139,6 @@ impl Default for DiskIndexOptions {
             // Callers can opt into a finite sidecar policy per open when required.
             limits: ResourceLimits::MISSING.with_max_sidecar_len(u64::MAX),
             confirm: DiskIndexConfirmPolicy::default(),
-            max_tail_records: 1 << 20,
             reclaim_after: 2,
         }
     }
@@ -237,37 +188,27 @@ impl DiskIndexOptions {
 
 pub type DiskIndexResult<T> = std::result::Result<T, DiskIndexError>;
 
-/// Observability counters for the scaling contracts the release gates pin
-/// (codec invocation and primary generation scans). Thread-local and only
-/// compiled under `scalable-fault-injection`; the release build keeps the
-/// call sites as empty inline functions.
+/// Observability counter for the scaling contract the release gates pin
+/// (primary generation scans). Thread-local and only compiled under
+/// `scalable-fault-injection`; the release build keeps the call site as an
+/// empty inline function.
 #[cfg(feature = "scalable-fault-injection")]
 pub(crate) mod scaling_counters {
     use std::cell::Cell;
 
     thread_local! {
-        static DESCRIPTOR_DECODER_CALLS: Cell<u64> = const { Cell::new(0) };
         static PRIMARY_GENERATION_SCANS: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(crate) fn add_descriptor_decoder_call() {
-        DESCRIPTOR_DECODER_CALLS.with(|value| value.set(value.get().saturating_add(1)));
     }
 
     pub(crate) fn add_primary_generation_scan() {
         PRIMARY_GENERATION_SCANS.with(|value| value.set(value.get().saturating_add(1)));
     }
 
-    pub fn primary_generation_scans() -> u64 {
+    pub(crate) fn primary_generation_scans() -> u64 {
         PRIMARY_GENERATION_SCANS.with(Cell::get)
     }
 
-    pub fn descriptor_decoder_calls() -> u64 {
-        DESCRIPTOR_DECODER_CALLS.with(Cell::get)
-    }
-
-    pub fn reset() {
-        DESCRIPTOR_DECODER_CALLS.with(|value| value.set(0));
+    pub(crate) fn reset() {
         PRIMARY_GENERATION_SCANS.with(|value| value.set(0));
     }
 }
@@ -278,12 +219,6 @@ pub(crate) fn primary_generation_scan() {
     scaling_counters::add_primary_generation_scan();
 }
 
-#[inline(always)]
-fn descriptor_decoder_call() {
-    #[cfg(feature = "scalable-fault-injection")]
-    scaling_counters::add_descriptor_decoder_call();
-}
-
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DiskIndexError {
@@ -292,9 +227,6 @@ pub enum DiskIndexError {
         minimum: usize,
     },
     InvalidBatchOptions(&'static str),
-    /// A page this snapshot reaches was reclaimed and rewritten by a later
-    /// generation; `follow` to a newer generation and retry.
-    PageReclaimed,
     KeyTooLong {
         actual: usize,
         limit: usize,
@@ -429,10 +361,6 @@ impl fmt::Display for DiskIndexError {
                 "canonical disk index key is too long: {actual} bytes exceeds {limit}"
             ),
             Self::MetadataMissing => write!(f, "disk index metadata row is missing"),
-            Self::PageReclaimed => write!(
-                f,
-                "a disk index page of this snapshot was reclaimed; follow to a newer generation"
-            ),
             Self::MetadataLength { actual, expected } => write!(
                 f,
                 "disk index metadata has length {actual}; expected {expected}"
@@ -752,6 +680,7 @@ impl DiskIndexFrontier {
         }
     }
 
+    #[cfg(test)]
     pub const fn empty(eof: u64) -> Self {
         Self::new(eof, 0, Some(0))
     }
@@ -789,20 +718,6 @@ impl DiskIndexMetadata {
         Self::new_with_mode(identity, DiskIndexMode::StateOnly, frontier, tail_limit)
     }
 
-    pub fn new_disk(
-        identity: DiskIndexIdentity,
-        plan_digest: DiskIndexDigest,
-        frontier: DiskIndexFrontier,
-        tail_limit: u32,
-    ) -> Self {
-        Self::new_with_mode(
-            identity,
-            DiskIndexMode::DiskPlan(plan_digest),
-            frontier,
-            tail_limit,
-        )
-    }
-
     fn new_with_mode(
         identity: DiskIndexIdentity,
         mode: DiskIndexMode,
@@ -832,286 +747,6 @@ impl DiskIndexMetadata {
         self.primary_generation = generation;
         self
     }
-}
-
-type ExtractPutUpdate =
-    fn(FormatSpec, &SnapshotFile, &RecordIndexEntry, usize) -> crate::Result<DiskIndexUpdate>;
-
-type ExtractTombstoneUpdate = fn(
-    FormatSpec,
-    &RecordIndexEntry,
-    &[u8],
-    crate::collections::DecodeBudget<'_>,
-    usize,
-) -> crate::Result<DiskIndexUpdate>;
-
-type RegisterDescriptorBlock = fn(FormatSpec) -> crate::Result<()>;
-
-type BlockIdentityTable = &'static [(u32, Option<crate::Endian>, bool, u64)];
-
-#[derive(Clone, Copy)]
-pub struct DiskIndexDescriptor {
-    pub block_id: u32,
-    pub block_version: u16,
-    pub key_wire_type: u16,
-    /// the block schema fingerprint of the concrete `T` whose decode
-    /// and key-extraction function pointers this descriptor captured. Without
-    /// it a descriptor built for one block type validated — and then decoded
-    /// primary bytes — against a format that declares a different schema for
-    /// the same block id.
-    pub schema_fingerprint: u64,
-    pub finite_key_count: u32,
-    key_codec_identity: fn() -> String,
-    register: RegisterDescriptorBlock,
-    extract_put: ExtractPutUpdate,
-    extract_tombstone: ExtractTombstoneUpdate,
-}
-
-impl DiskIndexDescriptor {
-    pub const fn key_tag(self) -> DiskIndexKeyTag {
-        DiskIndexKeyTag::keyed(self.block_id)
-    }
-    pub const fn of<T>() -> Self
-    where
-        T: VarlitKeyedBlock,
-        T::Key: VarlitDiskKey,
-    {
-        // compile-time keyedness contract at the descriptor root,
-        // covering the whole disk-index plan path for `T`.
-        let () = crate::traits::KeyedBlockContract::<T>::OK;
-        Self {
-            block_id: T::ID,
-            block_version: T::VERSION,
-            key_wire_type: <T::Key as VarlitEncode>::WIRE_TYPE as u16,
-            schema_fingerprint: T::SCHEMA_FINGERPRINT,
-            finite_key_count: T::Key::FINITE_COUNT,
-            key_codec_identity: disk_key_codec_identity::<T::Key>,
-            register: register_descriptor_block::<T>,
-            extract_put: extract_descriptor_put::<T>,
-            extract_tombstone: extract_descriptor_tombstone::<T>,
-        }
-    }
-
-    pub fn key_codec_identity(self) -> String {
-        (self.key_codec_identity)()
-    }
-
-    /// Runs the format's authoritative block-identity gate for the concrete
-    /// type this descriptor captured. Plan construction calls it once per
-    /// descriptor, before any captured codec can reach file bytes; the gate is
-    /// itself cached per (format, block), so it is allocation- and syscall-free
-    /// after the first call.
-    fn check_registered(self, spec: FormatSpec) -> crate::Result<()> {
-        (self.register)(spec)
-    }
-}
-
-fn register_descriptor_block<T>(spec: FormatSpec) -> crate::Result<()>
-where
-    T: VarlitKeyedBlock,
-    T::Key: VarlitDiskKey,
-{
-    crate::collections::ensure_registered_block::<T>(spec)
-}
-
-impl fmt::Debug for DiskIndexDescriptor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let key_codec_identity = self.key_codec_identity();
-        f.debug_struct("DiskIndexDescriptor")
-            .field("block_id", &self.block_id)
-            .field("block_version", &self.block_version)
-            .field("key_wire_type", &self.key_wire_type)
-            .field("schema_fingerprint", &self.schema_fingerprint)
-            .field("key_codec_identity", &key_codec_identity)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct DiskIndexPlan {
-    descriptors: &'static [DiskIndexDescriptor],
-    digest: DiskIndexDigest,
-    /// Witness that this exact plan value already passed [`Self::validate`]
-    /// against the referenced format tables. Block existence, version and
-    /// block-identity checks depend only on `FormatSpec::blocks` and
-    /// `FormatSpec::block_identities`, so matching slices (compared as fat
-    /// pointers) prove the earlier validation still holds and open paths do
-    /// not repeat the per-descriptor walk, the registration gate, or the
-    /// digest recomputation that canonicalization already performed. Both
-    /// tables are part of the witness: two specs that share a descriptor
-    /// table but declare different identities must not share it.
-    validated_blocks: Option<(&'static [crate::BlockDescriptor], BlockIdentityTable)>,
-}
-
-impl DiskIndexPlan {
-    pub fn canonical(
-        spec: FormatSpec,
-        descriptors: &'static [DiskIndexDescriptor],
-    ) -> DiskIndexResult<Self> {
-        validate_descriptors(spec, descriptors)?;
-        let digest = compute_plan_digest(descriptors)?;
-        Ok(Self {
-            descriptors,
-            digest,
-            validated_blocks: Some((spec.blocks, spec.block_identities)),
-        })
-    }
-
-    pub const fn from_generated(
-        descriptors: &'static [DiskIndexDescriptor],
-        digest: DiskIndexDigest,
-    ) -> Self {
-        Self {
-            descriptors,
-            digest,
-            validated_blocks: None,
-        }
-    }
-
-    pub fn validate(self, spec: FormatSpec) -> DiskIndexResult<Self> {
-        if self.digest.is_zero() {
-            return Err(DiskIndexError::PlanDigestIsZero);
-        }
-        if self.validated_blocks.is_some_and(|(blocks, identities)| {
-            std::ptr::eq(blocks, spec.blocks) && std::ptr::eq(identities, spec.block_identities)
-        }) {
-            return Ok(self);
-        }
-        validate_descriptors(spec, self.descriptors)?;
-        if compute_plan_digest(self.descriptors)? != self.digest {
-            return Err(DiskIndexError::PlanDigestMismatch);
-        }
-        Ok(Self {
-            validated_blocks: Some((spec.blocks, spec.block_identities)),
-            ..self
-        })
-    }
-
-    pub const fn descriptors(self) -> &'static [DiskIndexDescriptor] {
-        self.descriptors
-    }
-
-    pub const fn digest(self) -> DiskIndexDigest {
-        self.digest
-    }
-
-    pub const fn mode(self) -> DiskIndexMode {
-        DiskIndexMode::DiskPlan(self.digest)
-    }
-
-    pub fn descriptor(self, block_id: u32) -> Option<DiskIndexDescriptor> {
-        self.descriptors
-            .binary_search_by_key(&block_id, |descriptor| descriptor.block_id)
-            .ok()
-            .map(|index| self.descriptors[index])
-    }
-}
-
-fn validate_descriptors(
-    spec: FormatSpec,
-    descriptors: &[DiskIndexDescriptor],
-) -> DiskIndexResult<()> {
-    if descriptors.is_empty() {
-        return Err(DiskIndexError::PlanEmpty);
-    }
-    // Format blocks are not required to be sorted, so index them once by id
-    // and resolve each descriptor with a binary search: O((D + B) log B)
-    // instead of the previous per-descriptor linear scan (O(D * B)).
-    let mut blocks: Vec<(u32, u16)> = spec
-        .blocks
-        .iter()
-        .map(|block| (block.id, block.version))
-        .collect();
-    blocks.sort_unstable_by_key(|(id, _)| *id);
-    let mut previous = None;
-    for descriptor in descriptors {
-        if previous.is_some_and(|block_id| block_id >= descriptor.block_id) {
-            return Err(DiskIndexError::PlanNotCanonical);
-        }
-        previous = Some(descriptor.block_id);
-        if descriptor.key_codec_identity().is_empty() {
-            return Err(DiskIndexError::PlanCodecIdentityMissing {
-                block_id: descriptor.block_id,
-            });
-        }
-        let block = blocks
-            .binary_search_by_key(&descriptor.block_id, |(id, _)| *id)
-            .map(|index| blocks[index])
-            .map_err(|_| DiskIndexError::PlanBlockMissing {
-                block_id: descriptor.block_id,
-            })?;
-        if block.1 != descriptor.block_version {
-            return Err(DiskIndexError::PlanBlockVersionMismatch {
-                block_id: descriptor.block_id,
-                expected: descriptor.block_version,
-                actual: block.1,
-            });
-        }
-        if descriptor.finite_key_count > 4096
-            || (descriptor.finite_key_count != 0
-                && descriptor.key_wire_type != crate::WireType::U16 as u16)
-        {
-            return Err(DiskIndexError::PlanNotCanonical);
-        }
-        // the format's immutable block identity — keyedness and schema
-        // fingerprint included — is the authority for the concrete type whose
-        // decode and key-extraction pointers this descriptor captured. It runs
-        // here, at plan construction, so no captured codec can reach primary
-        // bytes through a plan the format never declared.
-        descriptor
-            .check_registered(spec)
-            .map_err(DiskIndexError::Primary)?;
-    }
-    Ok(())
-}
-
-fn compute_plan_digest(descriptors: &[DiskIndexDescriptor]) -> DiskIndexResult<DiskIndexDigest> {
-    let descriptor_count =
-        u32::try_from(descriptors.len()).map_err(|_| DiskIndexError::PlanNotCanonical)?;
-    // Materialize each codec identity once instead of re-allocating the
-    // string for every digest lane.
-    //
-    // Uncharged on purpose, and it is the exception invariant 1 names rather
-    // than an oversight: `descriptors` is the declared disk plan, so its length
-    // is the format's own block count, fixed by the program at compile time. No
-    // file content and no caller-supplied count reaches it. Anything sized from
-    // a *decoded* count belongs on the charged path instead.
-    let mut codecs = Vec::with_capacity(descriptors.len());
-    for descriptor in descriptors {
-        let codec = descriptor.key_codec_identity();
-        u32::try_from(codec.len()).map_err(|_| DiskIndexError::PlanCodecIdentityMissing {
-            block_id: descriptor.block_id,
-        })?;
-        codecs.push(codec);
-    }
-    let mut digest = [0u8; 32];
-    for lane in 0..8u32 {
-        let mut hasher = crc32fast::Hasher::new();
-        // v2 folds the block schema fingerprint into the plan digest ,
-        // so a sidecar published for one block schema is refused as stale for
-        // a plan whose descriptors decode a different one.
-        hasher.update(b"varve-disk-index-plan-v3");
-        hasher.update(&lane.to_le_bytes());
-        hasher.update(&descriptor_count.to_le_bytes());
-        for (descriptor, codec) in descriptors.iter().zip(&codecs) {
-            let codec = codec.as_bytes();
-            let codec_len = crate::width::field32(codec.len())?;
-            hasher.update(&descriptor.block_id.to_le_bytes());
-            hasher.update(&descriptor.block_version.to_le_bytes());
-            hasher.update(&descriptor.key_wire_type.to_le_bytes());
-            hasher.update(&descriptor.schema_fingerprint.to_le_bytes());
-            hasher.update(&descriptor.finite_key_count.to_le_bytes());
-            hasher.update(&codec_len.to_le_bytes());
-            hasher.update(codec);
-        }
-        digest[(lane as usize) * 4..(lane as usize + 1) * 4]
-            .copy_from_slice(&hasher.finalize().to_le_bytes());
-    }
-    let digest = DiskIndexDigest(digest);
-    if digest.is_zero() {
-        return Err(DiskIndexError::PlanDigestIsZero);
-    }
-    Ok(digest)
 }
 
 pub fn tail_limit_for_spec(spec: FormatSpec) -> DiskIndexResult<u32> {
@@ -1168,13 +803,6 @@ impl TailLimitPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiskIndexEntry {
-    Missing,
-    Put { record_offset: u64, sequence: u64 },
-    Tombstone { record_offset: u64, sequence: u64 },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiskIndexPhysicalRecord {
     pub physical_len: u64,
     pub block_id: u32,
@@ -1183,166 +811,9 @@ pub struct DiskIndexPhysicalRecord {
     pub native_crc: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DiskIndexRecordPointer {
-    pub entry: DiskIndexEntry,
-    pub target_block_id: u32,
-    pub physical: Option<DiskIndexPhysicalRecord>,
-}
-
-/// Marker for keys whose Varlit encoding is deterministic and equal for `Eq` values.
-///
-/// Implementations must preserve that contract across all values and versions. The
-/// sidecar always encodes these values little-endian, independently of file endian.
-pub trait VarlitDiskKey:
-    VarlitEncode + VarlitDecode + Eq + Hash + Clone + Send + Sync + 'static
-{
-    /// Nonzero only for dense u16 codes 0..FINITE_COUNT, encoded little-endian.
-    const FINITE_COUNT: u32 = 0;
-    fn disk_codec_identity() -> String;
-}
-
-macro_rules! disk_scalar_keys {
-    ($($ty:ty => $id:literal),+ $(,)?) => {
-        $(
-            impl VarlitDiskKey for $ty {
-                fn disk_codec_identity() -> String {
-                    $id.into()
-                }
-            }
-        )+
-    };
-}
-
-disk_scalar_keys!(
-    // Persisted codec identities retain their original versioned domain.
-    () => "varve-key/unit/v1",
-    bool => "varve-key/bool/v1",
-    u8 => "varve-key/u8/v1",
-    i8 => "varve-key/i8/v1",
-    u16 => "varve-key/u16/v1",
-    i16 => "varve-key/i16/v1",
-    u32 => "varve-key/u32/v1",
-    i32 => "varve-key/i32/v1",
-    u64 => "varve-key/u64/v1",
-    i64 => "varve-key/i64/v1",
-    u128 => "varve-key/u128/v1",
-    i128 => "varve-key/i128/v1",
-    String => "varve-key/string/v1"
-);
-
-impl<A: VarlitDiskKey, B: VarlitDiskKey> VarlitDiskKey for (A, B) {
-    fn disk_codec_identity() -> String {
-        format!(
-            "varve-key/tuple2/v1({},{})",
-            A::disk_codec_identity(),
-            B::disk_codec_identity()
-        )
-    }
-}
-
-impl<A: VarlitDiskKey, B: VarlitDiskKey, C: VarlitDiskKey> VarlitDiskKey for (A, B, C) {
-    fn disk_codec_identity() -> String {
-        format!(
-            "varve-key/tuple3/v1({},{},{})",
-            A::disk_codec_identity(),
-            B::disk_codec_identity(),
-            C::disk_codec_identity()
-        )
-    }
-}
-
-impl<A: VarlitDiskKey, B: VarlitDiskKey, C: VarlitDiskKey, D: VarlitDiskKey> VarlitDiskKey
-    for (A, B, C, D)
-{
-    fn disk_codec_identity() -> String {
-        format!(
-            "varve-key/tuple4/v1({},{},{},{})",
-            A::disk_codec_identity(),
-            B::disk_codec_identity(),
-            C::disk_codec_identity(),
-            D::disk_codec_identity()
-        )
-    }
-}
-
-fn disk_key_codec_identity<K: VarlitDiskKey>() -> String {
-    K::disk_codec_identity()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DiskIndexUpdate {
-    pub block_id: u32,
-    pub canonical_key: Vec<u8>,
-    pub entry: DiskIndexEntry,
-    pub physical: Option<DiskIndexPhysicalRecord>,
-}
-
-impl DiskIndexUpdate {
-    pub(crate) fn encode_key<K: VarlitDiskKey>(
-        key: &K,
-        max_key_bytes: usize,
-    ) -> DiskIndexResult<Vec<u8>> {
-        encode_disk_key(key, max_key_bytes)
-    }
-
-    pub(crate) fn from_canonical_with_record(
-        block_id: u32,
-        canonical_key: Vec<u8>,
-        entry: DiskIndexEntry,
-        physical: DiskIndexPhysicalRecord,
-        max_key_bytes: usize,
-    ) -> DiskIndexResult<Self> {
-        ensure_key_limit(canonical_key.len(), max_key_bytes)?;
-        Ok(Self {
-            block_id,
-            canonical_key,
-            entry,
-            physical: Some(physical),
-        })
-    }
-
-    pub fn from_key_with_record<K: VarlitDiskKey>(
-        block_id: u32,
-        key: &K,
-        entry: DiskIndexEntry,
-        physical: DiskIndexPhysicalRecord,
-        max_key_bytes: usize,
-    ) -> DiskIndexResult<Self> {
-        Self::from_canonical_with_record(
-            block_id,
-            Self::encode_key(key, max_key_bytes)?,
-            entry,
-            physical,
-            max_key_bytes,
-        )
-    }
-}
-
-fn encode_disk_key<K: VarlitDiskKey>(key: &K, max_key_bytes: usize) -> DiskIndexResult<Vec<u8>> {
-    #[cfg(test)]
-    DISK_KEY_ENCODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-    Ok(encode_to_vec_limited(
-        key,
-        Endian::Little,
-        u64::try_from(max_key_bytes).unwrap_or(u64::MAX),
-        "disk index key",
-    )?)
-}
-
 #[cfg(test)]
 std::thread_local! {
     static DISK_KEY_ENCODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_disk_key_encode_calls() {
-    DISK_KEY_ENCODE_CALLS.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn disk_key_encode_calls() -> usize {
-    DISK_KEY_ENCODE_CALLS.get()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1358,182 +829,10 @@ pub struct DiskIndexPersistentState {
     pub tails: Vec<DiskIndexTail>,
 }
 
-/// Mirror of the private `file::RECORD_FLAG_INTERNAL` flag. Tombstone records
-/// are always written with block version 1 and exactly this flag set; the
-/// mirror is pinned against the real writer by
-/// `indexed::tests::tombstone_records_use_the_mirrored_internal_flag`.
-pub(crate) const TOMBSTONE_RECORD_FLAGS: u16 = 0x8000;
-
 #[cfg(test)]
 std::thread_local! {
     static TOMBSTONE_KEY_DECODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PLAN_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_tombstone_key_decode_calls() {
-    TOMBSTONE_KEY_DECODE_CALLS.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn tombstone_key_decode_calls() -> usize {
-    TOMBSTONE_KEY_DECODE_CALLS.get()
-}
-
-/// Test hook: number of native record payloads materialized by plan
-/// extraction. Rebuild must read each indexed payload exactly once. The
-/// asserting test requires a CRC policy, so the accessors are unused in
-/// integrity-less builds.
-#[cfg(test)]
-#[cfg_attr(not(feature = "integrity"), allow(dead_code))]
-pub(crate) fn reset_plan_payload_reads() {
-    PLAN_PAYLOAD_READS.set(0);
-}
-
-#[cfg(test)]
-#[cfg_attr(not(feature = "integrity"), allow(dead_code))]
-pub(crate) fn plan_payload_reads() -> usize {
-    PLAN_PAYLOAD_READS.get()
-}
-
-/// Extracts the sidecar update for one scanned native record.
-///
-/// Resolves the record's descriptor once through the plan's binary search and
-/// decodes each tombstone key exactly once, instead of iterating every
-/// descriptor and re-decoding the tombstone payload per descriptor.
-pub(crate) fn extract_plan_update(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    plan: DiskIndexPlan,
-    entry: &RecordIndexEntry,
-    max_key_bytes: usize,
-) -> crate::Result<Option<DiskIndexUpdate>> {
-    let spec = spec.with_strict_read_validation();
-    if entry.block_id == TOMBSTONE_BLOCK_ID {
-        // Same shape gate as `file::decode_stream_tombstone_key`: reject any
-        // tombstone that does not carry version 1 and exactly the internal flag.
-        if entry.block_version != 1 || entry.flags != TOMBSTONE_RECORD_FLAGS {
-            return Err(Error::CorruptTail {
-                offset: entry.record_offset,
-            });
-        }
-        let logical_len = entry.logical_payload_len_snapshot(spec, snapshot)?;
-        let mut budget = MaterializationBudget::new(spec);
-        budget.consume(logical_len)?;
-        #[cfg(test)]
-        PLAN_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
-        let payload = entry.read_logical_payload_snapshot(spec, snapshot)?;
-        // Envelope prefix: target block id (u32 LE) followed by the key length.
-        let target = payload
-            .get(0..4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("fixed slice")))
-            .ok_or(Error::UnexpectedEof)?;
-        // Validates the full envelope shape (length accounting and trailing
-        // bytes) even when the target block is not part of this plan.
-        let Some(key_payload) = decode_native_internal_key_envelope(&payload, target)? else {
-            return Ok(None);
-        };
-        let Some(descriptor) = plan.descriptor(target) else {
-            return Ok(None);
-        };
-        Ok(Some((descriptor.extract_tombstone)(
-            spec,
-            entry,
-            key_payload,
-            budget.decode_view(),
-            max_key_bytes,
-        )?))
-    } else {
-        let Some(descriptor) = plan.descriptor(entry.block_id) else {
-            return Ok(None);
-        };
-        Ok(Some((descriptor.extract_put)(
-            spec,
-            snapshot,
-            entry,
-            max_key_bytes,
-        )?))
-    }
-}
-
-fn extract_descriptor_put<T>(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    entry: &RecordIndexEntry,
-    max_key_bytes: usize,
-) -> crate::Result<DiskIndexUpdate>
-where
-    T: VarlitKeyedBlock,
-    T::Key: VarlitDiskKey,
-{
-    debug_assert_eq!(entry.block_id, T::ID);
-    descriptor_decoder_call();
-    if entry.block_version != T::VERSION {
-        return Err(Error::BlockVersionMismatch {
-            block_id: T::ID,
-            expected: T::VERSION,
-            actual: entry.block_version,
-        });
-    }
-    let logical_len = entry.logical_payload_len_snapshot(spec, snapshot)?;
-    let mut budget = MaterializationBudget::new(spec);
-    budget.consume(logical_len)?;
-    #[cfg(test)]
-    PLAN_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
-    let payload = entry.read_logical_payload_snapshot(spec, snapshot)?;
-    let value: T = budget.decode(&payload, T::ENDIAN.unwrap_or(spec.endian))?;
-    let indexed = DiskIndexEntry::Put {
-        record_offset: entry.record_offset,
-        sequence: entry.sequence,
-    };
-    let physical = record_physical_descriptor(spec, entry)?;
-    DiskIndexUpdate::from_key_with_record(T::ID, &value.key(), indexed, physical, max_key_bytes)
-        .map_err(index_error)
-}
-
-fn extract_descriptor_tombstone<T>(
-    spec: FormatSpec,
-    entry: &RecordIndexEntry,
-    key_payload: &[u8],
-    mut budget: crate::collections::DecodeBudget<'_>,
-    max_key_bytes: usize,
-) -> crate::Result<DiskIndexUpdate>
-where
-    T: VarlitKeyedBlock,
-    T::Key: VarlitDiskKey,
-{
-    #[cfg(test)]
-    TOMBSTONE_KEY_DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-    descriptor_decoder_call();
-    // Tombstone keys are decoded with the file endianness, matching
-    // `file::decode_stream_tombstone_key`.
-    let key: T::Key = budget.decode(key_payload, spec.endian)?;
-    let indexed = DiskIndexEntry::Tombstone {
-        record_offset: entry.record_offset,
-        sequence: entry.sequence,
-    };
-    let physical = record_physical_descriptor(spec, entry)?;
-    DiskIndexUpdate::from_key_with_record(T::ID, &key, indexed, physical, max_key_bytes)
-        .map_err(index_error)
-}
-
-fn record_physical_descriptor(
-    spec: FormatSpec,
-    entry: &RecordIndexEntry,
-) -> crate::Result<DiskIndexPhysicalRecord> {
-    let physical_end = entry.checked_physical_end()?;
-    let physical_len = physical_end
-        .checked_sub(entry.record_offset)
-        .ok_or(Error::CorruptTail {
-            offset: entry.record_offset,
-        })?;
-    Ok(DiskIndexPhysicalRecord {
-        physical_len,
-        block_id: entry.block_id,
-        block_version: entry.block_version,
-        flags: entry.flags,
-        native_crc: (spec.integrity_policy != IntegrityPolicy::None).then_some(entry.checksum),
-    })
 }
 
 /// Physical sidecar sizes around an explicit compaction. Old open readers may
@@ -1558,8 +857,10 @@ pub struct SnapshotStatus {
 // Each snapshot owns its read-only file description and bounded private caches.
 // No process-wide reader registration is needed to retain an old file generation.
 struct SnapshotPin {
-    reader: storage::Reader,
-    root: storage::Root,
+    // Held, not read: they keep the confirmed generation's file description
+    // and root alive for as long as the snapshot.
+    _reader: storage::Reader,
+    _root: storage::Root,
 }
 
 // Mirrors the private `stream::opened_file_identity` helper; the sidecar
@@ -1642,13 +943,6 @@ pub struct DiskIndexStore {
 }
 
 impl DiskIndexStore {
-    pub fn create(
-        path: impl AsRef<Path>,
-        options: DiskIndexOptions,
-        metadata: DiskIndexMetadata,
-    ) -> DiskIndexResult<Self> {
-        Self::create_with_tails(path, options, metadata, &[])
-    }
     pub fn create_with_tails(
         path: impl AsRef<Path>,
         options: DiskIndexOptions,
@@ -1674,42 +968,6 @@ impl DiskIndexStore {
             write_tail_limit: None,
             batch: None,
         })
-    }
-    pub(crate) fn configure_finite(&mut self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
-        let mut layout = Vec::new();
-        let descriptors = plan.descriptors();
-        layout
-            .try_reserve_exact(
-                descriptors
-                    .iter()
-                    .filter(|d| d.finite_key_count != 0)
-                    .count(),
-            )
-            .map_err(|_| {
-                DiskIndexError::Io(std::io::Error::from(std::io::ErrorKind::OutOfMemory))
-            })?;
-        layout.extend(
-            descriptors
-                .iter()
-                .filter(|d| d.finite_key_count != 0)
-                .map(|d| (d.block_id, d.finite_key_count)),
-        );
-        let checkpoint = self.storage.current()?;
-        self.storage
-            .reader(&checkpoint)
-            .slots
-            .validate_layout(plan)?;
-        if layout.is_empty() {
-            return Ok(());
-        }
-        let working = slots::Working::load(
-            &self.storage.reader(&checkpoint).slots,
-            &layout,
-            self.options.batch.max_bytes.max(self.options.cache_bytes),
-        )?;
-        self.finite_layout = layout;
-        self.slots_cache = Some(working);
-        Ok(())
     }
     /// Opens only read-only file descriptions. Each snapshot has its own bounded cache.
     pub fn open(path: impl AsRef<Path>, options: DiskIndexOptions) -> DiskIndexResult<Self> {
@@ -1752,37 +1010,12 @@ impl DiskIndexStore {
     pub fn read_metadata(&self) -> DiskIndexResult<DiskIndexMetadata> {
         Ok(self.storage.current()?.metadata)
     }
-    pub(crate) const fn max_key_bytes(&self) -> usize {
-        self.options.max_key_bytes
-    }
-    #[cfg(test)]
-    pub fn read_state(&self) -> DiskIndexResult<DiskIndexPersistentState> {
-        self.storage.state(&self.storage.current()?, None)
-    }
-    pub fn historical_distinct_keys(&self) -> DiskIndexResult<u64> {
-        let current = self.storage.current()?;
-        if !matches!(current.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        if let Some(slots) = self.slots_cache.as_ref() {
-            let count = current.root.tree.count + slots.count();
-            Ok(count)
-        } else {
-            Ok(current.root.count())
-        }
-    }
     fn validate_checkpoint(&self, current: &IndexCheckpoint) -> DiskIndexResult<()> {
         if let Some(checkpoint) = current.metadata.checkpoint {
             let base = self.storage.at(checkpoint.checkpoint_offset)?;
             validate_checkpoint_metadata(&current.metadata, base.metadata)?;
         }
         Ok(())
-    }
-    #[cfg(test)]
-    pub fn validate_protocol(&self) -> DiskIndexResult<DiskIndexPersistentState> {
-        let current = self.storage.current()?;
-        self.validate_checkpoint(&current)?;
-        self.storage.state(&current, None)
     }
     fn validate_envelope(&self) -> DiskIndexResult<DiskIndexMetadata> {
         let current = self.storage.current()?;
@@ -1797,26 +1030,6 @@ impl DiskIndexStore {
         self.validate_checkpoint(&current)?;
         self.storage.state(&current, Some(expected_tail_limit))
     }
-    #[cfg(test)]
-    pub fn begin_snapshot_with_plan(
-        &self,
-        identity: DiskIndexIdentity,
-        plan: DiskIndexPlan,
-        physical_native_eof: u64,
-    ) -> DiskIndexResult<DiskIndexSnapshot> {
-        self.begin_snapshot_with_mode(identity, plan.mode(), physical_native_eof)
-    }
-    #[cfg(test)]
-    pub fn begin_snapshot_with_mode(
-        &self,
-        identity: DiskIndexIdentity,
-        mode: DiskIndexMode,
-        physical_native_eof: u64,
-    ) -> DiskIndexResult<DiskIndexSnapshot> {
-        let snapshot = self.begin_committed_snapshot(identity, mode)?;
-        validate_reader_metadata(snapshot.metadata, identity, mode, physical_native_eof)?;
-        Ok(snapshot)
-    }
     pub(crate) fn begin_committed_snapshot(
         &self,
         identity: DiskIndexIdentity,
@@ -1827,11 +1040,10 @@ impl DiskIndexStore {
         validate_identity_mode(metadata, identity, mode)?;
         Ok(DiskIndexSnapshot {
             pin: Some(SnapshotPin {
-                reader: self.storage.reader(&confirmed),
-                root: confirmed.root,
+                _reader: self.storage.reader(&confirmed),
+                _root: confirmed.root,
             }),
             metadata,
-            max_key_bytes: self.options.max_key_bytes,
         })
     }
     pub(crate) fn follow_snapshot(
@@ -2042,21 +1254,6 @@ impl DiskIndexStore {
         result?;
         Ok(dirty)
     }
-    pub fn mark_dirty(&mut self) -> DiskIndexResult<DiskIndexMetadata> {
-        self.begin_generation()
-    }
-    #[cfg(test)]
-    pub fn apply_update(
-        &mut self,
-        expected_covered_eof: u64,
-        new_covered_eof: u64,
-        update: &DiskIndexUpdate,
-    ) -> DiskIndexResult<DiskIndexMetadata> {
-        let batch = self.begin_write_batch()?;
-        let metadata = batch.apply_update(expected_covered_eof, new_covered_eof, update)?;
-        self.commit_batch()?;
-        Ok(metadata)
-    }
     pub(crate) fn begin_write_batch(&mut self) -> DiskIndexResult<&mut DiskIndexWriteBatch> {
         // The store owns the only staged batch. It never lends a writable file
         // capability to that batch; publication requires exclusive store access.
@@ -2082,7 +1279,6 @@ impl DiskIndexStore {
                     .collect(),
             };
             self.batch = Some(DiskIndexWriteBatch {
-                reader: self.storage.reader(&base),
                 base,
                 metadata,
                 tails,
@@ -2159,38 +1355,6 @@ impl DiskIndexStore {
         crate::scalable_fault_point("publish.clean_commit");
         result?;
         Ok(clean)
-    }
-    #[cfg(test)]
-    pub fn mark_clean(&mut self, expected_covered_eof: u64) -> DiskIndexResult<DiskIndexMetadata> {
-        let metadata = self.read_metadata()?;
-        if metadata.working.eof != expected_covered_eof {
-            return Err(DiskIndexError::CoverageMismatch {
-                expected: expected_covered_eof,
-                actual: metadata.working.eof,
-            });
-        }
-        if metadata.state == DiskIndexState::Clean {
-            return Ok(metadata);
-        }
-        self.publish_clean(metadata.working)
-    }
-    #[cfg(test)]
-    pub fn stage_restore(
-        &mut self,
-        expected_identity: DiskIndexIdentity,
-        expected_mode: DiskIndexMode,
-        physical_native_eof: u64,
-        expected_tail_limit: u32,
-    ) -> DiskIndexResult<DiskIndexRestoreGuard<'_>> {
-        self.stage_restore_bounded(
-            expected_identity,
-            expected_mode,
-            physical_native_eof,
-            TailLimitPolicy {
-                current: expected_tail_limit,
-                legacy: None,
-            },
-        )
     }
 
     pub(crate) fn stage_restore_for_spec(
@@ -2291,7 +1455,6 @@ impl DiskIndexStore {
 
 pub(crate) struct DiskIndexWriteBatch {
     base: IndexCheckpoint,
-    reader: storage::Reader,
     metadata: DiskIndexMetadata,
     tails: BTreeMap<u32, DiskIndexTail>,
     changed_tails: BTreeSet<u32>,
@@ -2308,211 +1471,6 @@ pub(crate) struct DiskIndexWriteBatch {
 }
 
 impl DiskIndexWriteBatch {
-    pub(crate) fn can_accept_update(
-        &self,
-        update: &DiskIndexUpdate,
-        has_tail: bool,
-    ) -> DiskIndexResult<bool> {
-        self.can_accept_item(checked_item_bytes(update.canonical_key.len(), has_tail)?)
-    }
-
-    pub(crate) fn can_accept_coverage(&self, has_tail: bool) -> DiskIndexResult<bool> {
-        self.can_accept_item(checked_item_bytes(0, has_tail)?)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn lookup<K: VarlitDiskKey>(
-        &self,
-        block_id: u32,
-        key: &K,
-    ) -> DiskIndexResult<DiskIndexEntry> {
-        Ok(self.lookup_pointer(block_id, key)?.entry)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn lookup_pointer<K: VarlitDiskKey>(
-        &self,
-        block_id: u32,
-        key: &K,
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        let canonical = encode_disk_key(key, self.options.max_key_bytes)?;
-        self.lookup_pointer_canonical(block_id, &canonical)
-    }
-
-    /// Builds the composite key this batch stores a row under.
-    ///
-    /// The only constructor of [`CompositeKey`], and the reason that type has a
-    /// private field: a caller who has one has it from here, with this batch's
-    /// `max_key_bytes`, so a canonical key cannot be passed where a composite is
-    /// required.
-    pub(crate) fn composite_key_for(
-        &self,
-        block_id: u32,
-        canonical_key: &[u8],
-    ) -> DiskIndexResult<CompositeKey> {
-        Ok(CompositeKey(composite_key(
-            block_id,
-            canonical_key,
-            self.options.max_key_bytes,
-        )?))
-    }
-
-    /// Kept as the single-call form the batch's own tests use. The append path
-    /// goes through [`Self::composite_key_for`] and
-    /// [`Self::lookup_pointer_composite`] instead, because it needs the
-    /// composite key afterwards and this would throw it away.
-    #[cfg(test)]
-    pub(crate) fn lookup_pointer_canonical(
-        &self,
-        block_id: u32,
-        canonical_key: &[u8],
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        ensure_key_limit(canonical_key.len(), self.options.max_key_bytes)?;
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        let composite = self.composite_key_for(block_id, canonical_key)?;
-        self.lookup_pointer_composite(block_id, &composite)
-    }
-
-    /// The lookup, given a composite key that has already been built.
-    ///
-    /// Split out so that a caller which must build the composite anyway — the
-    /// keyed-offset-chain path, which looks the previous record up and then
-    /// stages a row under the same key — builds it once and hands the same
-    /// value on to [`Self::apply_update_with_tail`].
-    pub(crate) fn lookup_pointer_composite(
-        &self,
-        block_id: u32,
-        composite: &CompositeKey,
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        if let Some(slots) = &self.slots
-            && let Some(row) = slots.get(composite.as_slice())?
-        {
-            return match row {
-                Some(value) => latest_pointer(block_id, decode_latest(&value)?),
-                None => Ok(DiskIndexRecordPointer {
-                    entry: DiskIndexEntry::Missing,
-                    target_block_id: block_id,
-                    physical: None,
-                }),
-            };
-        }
-        // Rows staged by this batch shadow the last committed table row.
-        if let Some(value) = self.pending_latest.get(composite.as_slice()) {
-            return latest_pointer(block_id, decode_latest(value)?);
-        }
-        let Some(value) = self.reader.get(self.base.root, composite.as_slice())? else {
-            return Ok(DiskIndexRecordPointer {
-                entry: DiskIndexEntry::Missing,
-                target_block_id: block_id,
-                physical: None,
-            });
-        };
-        latest_pointer(block_id, decode_latest(&value)?)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_update(
-        &mut self,
-        expected_covered_eof: u64,
-        new_covered_eof: u64,
-        update: &DiskIndexUpdate,
-    ) -> DiskIndexResult<DiskIndexMetadata> {
-        self.apply_update_with_tail(expected_covered_eof, new_covered_eof, update, None, None)
-    }
-
-    /// `composite` is the row's key when the caller already built it — the
-    /// keyed-offset-chain path does, to look the previous record up — and
-    /// `None` when it did not, which is the default policy. Either way exactly
-    /// one composite key is built per staged row, and it is *moved* into
-    /// `pending_latest` rather than copied.
-    pub(crate) fn apply_update_with_tail(
-        &mut self,
-        expected_covered_eof: u64,
-        new_covered_eof: u64,
-        update: &DiskIndexUpdate,
-        tail: Option<DiskIndexTail>,
-        composite: Option<CompositeKey>,
-    ) -> DiskIndexResult<DiskIndexMetadata> {
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        ensure_key_limit(update.canonical_key.len(), self.options.max_key_bytes)?;
-        let (record_offset, sequence, kind) = entry_parts(update.entry)?;
-        let next = self.next_frontier(expected_covered_eof, new_covered_eof, sequence)?;
-        validate_physical_update(update, kind, record_offset, new_covered_eof)?;
-        if let Some(tail) = tail {
-            validate_tail(tail, next)?;
-            self.validate_tail_capacity(tail.block_id)?;
-        }
-        let item_bytes = checked_item_bytes(update.canonical_key.len(), tail.is_some())?;
-        self.ensure_batch_capacity(item_bytes)?;
-
-        let key = match composite {
-            Some(key) => {
-                // Checked by inspection rather than by rebuilding: rebuilding
-                // would allocate the very key this parameter exists to avoid
-                // allocating, and `debug_assert` is live in every test run, so
-                // the measurement would report no improvement. Reading the
-                // three fields back out of the bytes tests the same claim for
-                // no allocation at all.
-                debug_assert!(
-                    composite_key_matches(key.as_slice(), update.block_id, &update.canonical_key),
-                    "a composite key built by the caller does not encode this update's \
-                     block id and canonical key"
-                );
-                key.into_vec()
-            }
-            None => composite_key(
-                update.block_id,
-                &update.canonical_key,
-                self.options.max_key_bytes,
-            )?,
-        };
-        let value = encode_latest(
-            kind,
-            record_offset,
-            sequence,
-            update.block_id,
-            update.physical,
-        );
-        // Stage the row in memory; commit opens the latest table once for
-        // the whole batch instead of once per record. A later update of the
-        // same key within the batch overwrites the staged row, exactly like
-        // the disk tree update it replaces.
-        if !self
-            .slots
-            .as_mut()
-            .map(|slots| slots.put(&key, value))
-            .transpose()?
-            .unwrap_or(false)
-        {
-            self.pending_latest.insert(key, value);
-        }
-        self.metadata.working = next;
-        if let Some(tail) = tail {
-            self.tails.insert(tail.block_id, tail);
-            self.changed_tails.insert(tail.block_id);
-        }
-        self.records += 1;
-        self.bytes += item_bytes;
-        Ok(self.metadata)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn advance_coverage(
-        &mut self,
-        expected_covered_eof: u64,
-        new_covered_eof: u64,
-        sequence: u64,
-    ) -> DiskIndexResult<DiskIndexMetadata> {
-        self.advance_coverage_with_tail(expected_covered_eof, new_covered_eof, sequence, None)
-    }
-
     pub(crate) fn advance_coverage_with_tail(
         &mut self,
         expected_covered_eof: u64,
@@ -2556,16 +1514,6 @@ impl DiskIndexWriteBatch {
 
     pub(crate) const fn working_frontier(&self) -> DiskIndexFrontier {
         self.metadata.working
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn records(&self) -> usize {
-        self.records
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn bytes(&self) -> usize {
-        self.bytes
     }
 
     fn commit(mut self, store: &mut DiskIndexStore) -> DiskIndexResult<()> {
@@ -2684,12 +1632,6 @@ impl DiskIndexWriteBatch {
         }
         Ok(())
     }
-
-    fn can_accept_item(&self, item_bytes: usize) -> DiskIndexResult<bool> {
-        let records = self.records.saturating_add(1);
-        let bytes = self.bytes.saturating_add(item_bytes);
-        Ok(records <= self.options.batch.max_records && bytes <= self.options.batch.max_bytes)
-    }
 }
 
 pub struct DiskIndexRestoreGuard<'a> {
@@ -2709,14 +1651,6 @@ impl DiskIndexRestoreGuard<'_> {
     }
     pub const fn primary_generation(&self) -> DiskIndexPrimaryGeneration {
         self.staged.metadata.primary_generation
-    }
-    #[cfg(test)]
-    pub(crate) fn commit_after_native_sync(
-        self,
-        observed_native_eof: u64,
-    ) -> DiskIndexResult<DiskIndexMetadata> {
-        let base = self.base_eof();
-        self.commit_after_native_sync_at(observed_native_eof, base)
     }
 
     /// Publishes the restored base once the primary has been cut back and
@@ -2744,26 +1678,14 @@ impl DiskIndexRestoreGuard<'_> {
         result?;
         Ok(self.staged.metadata)
     }
-    #[cfg(test)]
-    pub fn abort(self) -> DiskIndexResult<()> {
-        Ok(())
-    }
 }
 
 pub struct DiskIndexSnapshot {
     pin: Option<SnapshotPin>,
     metadata: DiskIndexMetadata,
-    max_key_bytes: usize,
 }
 
 impl DiskIndexSnapshot {
-    pub(crate) fn validate_finite_layout(&self, plan: DiskIndexPlan) -> DiskIndexResult<()> {
-        self.pinned()?.reader.slots.validate_layout(plan)
-    }
-    fn pinned(&self) -> DiskIndexResult<&SnapshotPin> {
-        self.pin.as_ref().ok_or(DiskIndexError::SnapshotReleased)
-    }
-
     pub(crate) fn is_pinned(&self) -> bool {
         self.pin.is_some()
     }
@@ -2798,156 +1720,6 @@ impl DiskIndexSnapshot {
     pub const fn primary_generation(&self) -> DiskIndexPrimaryGeneration {
         self.metadata.primary_generation
     }
-
-    /// Historical distinct key cardinality of this snapshot's latest-key
-    /// table: distinct `(block, key)` pairs ever indexed, including keys whose
-    /// latest entry is a tombstone. See
-    /// [`DiskIndexStore::historical_distinct_keys`] for reclaim semantics.
-    pub fn historical_distinct_keys(&self) -> DiskIndexResult<u64> {
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        Ok(self.pinned()?.root.count())
-    }
-
-    #[cfg(test)]
-    pub fn lookup<K: VarlitDiskKey>(
-        &self,
-        block_id: u32,
-        key: &K,
-    ) -> DiskIndexResult<DiskIndexEntry> {
-        Ok(self.lookup_pointer(block_id, key)?.entry)
-    }
-
-    #[cfg(test)]
-    pub fn lookup_pointer<K: VarlitDiskKey>(
-        &self,
-        block_id: u32,
-        key: &K,
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        let encoded = encode_disk_key(key, self.max_key_bytes)?;
-        self.lookup_pointer_canonical(block_id, &encoded)
-    }
-
-    /// [`Self::lookup_pointer`] building the key it looks up in `scratch`,
-    /// a buffer the caller keeps between lookups: the tag and the encoded
-    /// key are written there once, with nothing allocated for a key that
-    /// fits what the buffer already holds.
-    pub(crate) fn lookup_pointer_through<K: VarlitDiskKey>(
-        &self,
-        block_id: u32,
-        key: &K,
-        scratch: &mut Vec<u8>,
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        #[cfg(test)]
-        DISK_KEY_ENCODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-        let mut composite = std::mem::take(scratch);
-        composite.clear();
-        composite
-            .try_reserve(DiskIndexKeyTag::ENCODED_LEN)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
-        composite.extend_from_slice(&DiskIndexKeyTag::keyed(block_id).encode());
-        let mut encoder = crate::codec::Encoder::new_limited_appending(
-            Endian::Little,
-            u64::try_from(self.max_key_bytes).unwrap_or(u64::MAX),
-            "disk index key",
-            composite,
-        );
-        let encoded = key.encode_varlit(&mut encoder);
-        let composite = encoder.try_into_inner();
-        encoded?;
-        *scratch = composite?;
-        ensure_key_limit(
-            scratch.len() - DiskIndexKeyTag::ENCODED_LEN,
-            self.max_key_bytes,
-        )?;
-        self.lookup_composite(block_id, scratch)
-    }
-
-    #[cfg(test)]
-    pub fn lookup_pointer_canonical(
-        &self,
-        block_id: u32,
-        canonical_key: &[u8],
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        ensure_key_limit(canonical_key.len(), self.max_key_bytes)?;
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        let key = composite_key(block_id, canonical_key, self.max_key_bytes)?;
-        self.lookup_composite(block_id, &key)
-    }
-
-    /// Looks up a composite key (tag, then canonical key).
-    fn lookup_composite(
-        &self,
-        block_id: u32,
-        key: &[u8],
-    ) -> DiskIndexResult<DiskIndexRecordPointer> {
-        if !matches!(self.metadata.mode, DiskIndexMode::DiskPlan(_)) {
-            return Err(DiskIndexError::KeyTableUnavailable);
-        }
-        let pin = self.pinned()?;
-        let Some(value) = pin.reader.get(pin.root, key)? else {
-            return Ok(DiskIndexRecordPointer {
-                entry: DiskIndexEntry::Missing,
-                target_block_id: block_id,
-                physical: None,
-            });
-        };
-        latest_pointer(block_id, decode_latest(&value)?)
-    }
-}
-
-/// Bounded source used by authoritative native scanners during sidecar rebuild.
-#[cfg(test)]
-pub trait DiskIndexRebuildSource {
-    fn next_update(&mut self) -> crate::Result<Option<DiskIndexRebuildEntry>>;
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DiskIndexRebuildEntry {
-    pub update: DiskIndexUpdate,
-    pub covered_eof: u64,
-}
-
-/// Builds a clean replacement from a bounded native scanner. Publication and
-/// directory sync are deliberately left to the writer-lock/fault-injection owner.
-#[cfg(test)]
-pub fn build_replacement(
-    directory: &Path,
-    options: DiskIndexOptions,
-    metadata: DiskIndexMetadata,
-    source: &mut impl DiskIndexRebuildSource,
-) -> DiskIndexResult<PreparedDiskIndex> {
-    let temporary = tempfile::Builder::new()
-        .prefix(".varlit-index-")
-        .suffix(".vki.tmp")
-        .tempfile_in(directory)?;
-    let temp_path = temporary.into_temp_path();
-    let mut store = DiskIndexStore::create(&temp_path, options, metadata)?;
-    store.begin_generation()?;
-    let mut covered_eof = metadata.committed.eof;
-    while let Some(entry) = source.next_update()? {
-        store.apply_update(covered_eof, entry.covered_eof, &entry.update)?;
-        covered_eof = entry.covered_eof;
-    }
-    store.mark_clean(covered_eof)?;
-    drop(store);
-    Ok(PreparedDiskIndex { path: temp_path })
-}
-
-#[cfg(test)]
-pub struct PreparedDiskIndex {
-    path: tempfile::TempPath,
-}
-
-#[cfg(test)]
-impl PreparedDiskIndex {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 fn validate_identity_mode(
@@ -2962,26 +1734,6 @@ fn validate_identity_mode(
         return Err(DiskIndexError::ModeMismatch {
             expected: mode,
             actual: metadata.mode,
-        });
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_reader_metadata(
-    metadata: DiskIndexMetadata,
-    identity: DiskIndexIdentity,
-    mode: DiskIndexMode,
-    physical_native_eof: u64,
-) -> DiskIndexResult<()> {
-    validate_identity_mode(metadata, identity, mode)?;
-    if metadata.state != DiskIndexState::Clean {
-        return Err(DiskIndexError::CleanStateRequired);
-    }
-    if physical_native_eof < metadata.committed.eof {
-        return Err(DiskIndexError::NativeTooShort {
-            required: metadata.committed.eof,
-            actual: physical_native_eof,
         });
     }
     Ok(())
@@ -3053,19 +1805,8 @@ fn canonical_sidecar_path(path: &Path) -> DiskIndexResult<PathBuf> {
     Ok(parent.join(name))
 }
 
-pub fn sidecar_path(native_path: impl AsRef<Path>) -> PathBuf {
-    append_sidecar_extension(native_path.as_ref(), ".vki")
-}
-
 pub fn state_sidecar_path(native_path: impl AsRef<Path>) -> PathBuf {
     append_sidecar_extension(native_path.as_ref(), ".vks")
-}
-
-pub(crate) fn read_metadata_read_only(
-    path: impl AsRef<Path>,
-    options: DiskIndexOptions,
-) -> DiskIndexResult<DiskIndexMetadata> {
-    DiskIndexStore::open(path, options)?.read_metadata()
 }
 
 fn append_sidecar_extension(path: &Path, extension: &str) -> PathBuf {
@@ -3240,66 +1981,6 @@ fn validate_metadata(metadata: DiskIndexMetadata) -> DiskIndexResult<()> {
     Ok(())
 }
 
-/// The bytes a row is stored under: key presence, fixed schema kind code,
-/// and the canonical key value. There is no runtime value-to-ID dictionary.
-///
-/// A newtype rather than a `Vec<u8>` because the hazard this fix introduces is
-/// passing the *canonical* key where a composite is required, which would
-/// silently remap every row instead of failing. One private field and one
-/// constructor ([`DiskIndexBatch::composite_key_for`]) make that
-/// unrepresentable; [`DiskIndexBatch::apply_update_with_tail`] additionally
-/// `debug_assert`s any caller-supplied value against the one it would have
-/// built itself.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CompositeKey(Vec<u8>);
-
-impl CompositeKey {
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// Consumes the key. The `Vec` moves on into the staged row, so building it
-    /// once and handing it over costs one allocation in total rather than two.
-    pub(crate) fn into_vec(self) -> Vec<u8> {
-        self.0
-    }
-}
-
-/// Whether `composite` is exactly what [`composite_key`] would have produced
-/// for `block_id` and `canonical_key`, decided by reading the encoding back
-/// rather than by building it again. Allocates nothing.
-fn composite_key_matches(composite: &[u8], block_id: u32, canonical_key: &[u8]) -> bool {
-    let Some((tag, key)) = composite.split_at_checked(DiskIndexKeyTag::ENCODED_LEN) else {
-        return false;
-    };
-    tag == DiskIndexKeyTag::keyed(block_id).encode() && key == canonical_key
-}
-
-fn composite_key(block_id: u32, canonical_key: &[u8], limit: usize) -> DiskIndexResult<Vec<u8>> {
-    ensure_key_limit(canonical_key.len(), limit)?;
-    let capacity = DiskIndexKeyTag::ENCODED_LEN
-        .checked_add(canonical_key.len())
-        .ok_or(DiskIndexError::KeyTooLong {
-            actual: canonical_key.len(),
-            limit,
-        })?;
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(capacity)
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
-    output.extend_from_slice(&DiskIndexKeyTag::keyed(block_id).encode());
-    output.extend_from_slice(canonical_key);
-    Ok(output)
-}
-
-fn ensure_key_limit(actual: usize, limit: usize) -> DiskIndexResult<()> {
-    if actual > limit {
-        Err(DiskIndexError::KeyTooLong { actual, limit })
-    } else {
-        Ok(())
-    }
-}
-
 fn checked_item_bytes(key_len: usize, has_tail: bool) -> DiskIndexResult<usize> {
     BATCH_UPDATE_FIXED_BYTES
         .checked_add(key_len)
@@ -3321,44 +2002,6 @@ pub(crate) const fn batch_item_fixed_bytes(has_tail: bool) -> usize {
     } else {
         BATCH_UPDATE_FIXED_BYTES
     }
-}
-
-fn validate_physical_update(
-    update: &DiskIndexUpdate,
-    kind: LatestKind,
-    record_offset: u64,
-    new_eof: u64,
-) -> DiskIndexResult<()> {
-    let Some(physical) = update.physical else {
-        return Ok(());
-    };
-    if physical.physical_len == 0 || physical.block_version == 0 {
-        return Err(DiskIndexError::LatestInvariant(
-            "physical descriptor has zero length or version",
-        ));
-    }
-    let actual_end =
-        record_offset
-            .checked_add(physical.physical_len)
-            .ok_or(DiskIndexError::LatestInvariant(
-                "physical record extent overflows",
-            ))?;
-    if actual_end != new_eof {
-        return Err(DiskIndexError::RecordExtentMismatch {
-            expected_end: new_eof,
-            actual_end,
-        });
-    }
-    let expected_block = match kind {
-        LatestKind::Put => update.block_id,
-        LatestKind::Tombstone => TOMBSTONE_BLOCK_ID,
-    };
-    if physical.block_id != expected_block {
-        return Err(DiskIndexError::LatestInvariant(
-            "physical record block does not match entry kind",
-        ));
-    }
-    Ok(())
 }
 
 fn encode_metadata(metadata: DiskIndexMetadata) -> [u8; META_LEN] {
@@ -3544,53 +2187,6 @@ struct LatestValue {
     physical: Option<DiskIndexPhysicalRecord>,
 }
 
-fn entry_parts(entry: DiskIndexEntry) -> DiskIndexResult<(u64, u64, LatestKind)> {
-    match entry {
-        DiskIndexEntry::Missing => Err(DiskIndexError::LatestInvariant(
-            "missing cannot be stored as a latest value",
-        )),
-        DiskIndexEntry::Put {
-            record_offset,
-            sequence,
-        } => Ok((record_offset, sequence, LatestKind::Put)),
-        DiskIndexEntry::Tombstone {
-            record_offset,
-            sequence,
-        } => Ok((record_offset, sequence, LatestKind::Tombstone)),
-    }
-}
-
-fn encode_latest(
-    kind: LatestKind,
-    record_offset: u64,
-    sequence: u64,
-    target_block_id: u32,
-    physical: Option<DiskIndexPhysicalRecord>,
-) -> [u8; LATEST_LEN] {
-    let mut bytes = [0u8; LATEST_LEN];
-    bytes[0] = match kind {
-        LatestKind::Put => 0,
-        LatestKind::Tombstone => 1,
-    };
-    bytes[8..16].copy_from_slice(&record_offset.to_le_bytes());
-    bytes[24..32].copy_from_slice(&sequence.to_le_bytes());
-    bytes[32..36].copy_from_slice(&target_block_id.to_le_bytes());
-    if let Some(physical) = physical {
-        bytes[1] |= LATEST_HAS_PHYSICAL;
-        bytes[2..4].copy_from_slice(&physical.block_version.to_le_bytes());
-        bytes[4..6].copy_from_slice(&physical.flags.to_le_bytes());
-        bytes[16..24].copy_from_slice(&physical.physical_len.to_le_bytes());
-        bytes[36..40].copy_from_slice(&physical.block_id.to_le_bytes());
-        if let Some(native_crc) = physical.native_crc {
-            bytes[1] |= LATEST_HAS_NATIVE_CRC;
-            bytes[40..44].copy_from_slice(&native_crc.to_le_bytes());
-        }
-    }
-    let crc = crc32fast::hash(&bytes[..48]);
-    bytes[48..52].copy_from_slice(&crc.to_le_bytes());
-    bytes
-}
-
 fn decode_latest(bytes: &[u8]) -> DiskIndexResult<LatestValue> {
     if bytes.len() != LATEST_LEN {
         return Err(DiskIndexError::LatestLength {
@@ -3646,30 +2242,6 @@ fn decode_latest(bytes: &[u8]) -> DiskIndexResult<LatestValue> {
         sequence: read_u64(bytes, 24),
         target_block_id: read_u32(bytes, 32),
         physical,
-    })
-}
-
-fn latest_pointer(
-    expected_block_id: u32,
-    latest: LatestValue,
-) -> DiskIndexResult<DiskIndexRecordPointer> {
-    if latest.target_block_id != expected_block_id {
-        return Err(DiskIndexError::LatestInvariant("target block id mismatch"));
-    }
-    let entry = match latest.kind {
-        LatestKind::Put => DiskIndexEntry::Put {
-            record_offset: latest.record_offset,
-            sequence: latest.sequence,
-        },
-        LatestKind::Tombstone => DiskIndexEntry::Tombstone {
-            record_offset: latest.record_offset,
-            sequence: latest.sequence,
-        },
-    };
-    Ok(DiskIndexRecordPointer {
-        entry,
-        target_block_id: latest.target_block_id,
-        physical: latest.physical,
     })
 }
 
@@ -3889,12 +2461,8 @@ impl ScratchIndex {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
 
-    use crate::{
-        BlockDescriptor, BlockKind, Decoder, Encoder, IndexPolicy, ManifestPolicy, ReadLimits,
-        RecoveryPolicy, Result, VarlitBlock, WireType,
-    };
+    use crate::Result;
 
     use super::*;
 
@@ -3927,305 +2495,6 @@ mod tests {
         Ok(())
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct PlanItem(u64);
-
-    impl VarlitEncode for PlanItem {
-        const WIRE_TYPE: WireType = WireType::U64;
-
-        fn encode_varlit(&self, encoder: &mut Encoder) -> Result<()> {
-            self.0.encode_varlit(encoder)
-        }
-    }
-
-    impl VarlitDecode for PlanItem {
-        const WIRE_TYPE: WireType = WireType::U64;
-
-        fn decode_varlit(decoder: &mut Decoder<'_>) -> Result<Self> {
-            Ok(Self(u64::decode_varlit(decoder)?))
-        }
-    }
-
-    impl VarlitBlock for PlanItem {
-        const ID: u32 = 10;
-        const VERSION: u16 = 1;
-        const KIND: BlockKind = BlockKind::Fixed;
-        const ENDIAN: Option<Endian> = None;
-        const SCHEMA_FINGERPRINT: u64 = 0x795638FD38DC1901;
-        const IS_KEYED: bool = true;
-    }
-
-    impl VarlitKeyedBlock for PlanItem {
-        type Key = u64;
-
-        fn key(&self) -> Self::Key {
-            self.0
-        }
-    }
-
-    static BLOCKS: &[BlockDescriptor] = &[BlockDescriptor {
-        id: PlanItem::ID,
-        name: "PlanItem",
-        version: PlanItem::VERSION,
-        kind: PlanItem::KIND,
-        fields: &[],
-    }];
-    static DESCRIPTORS: &[DiskIndexDescriptor] = &[DiskIndexDescriptor::of::<PlanItem>()];
-
-    fn spec() -> FormatSpec {
-        FormatSpec::new(
-            b"VDIX",
-            1,
-            Endian::Little,
-            42,
-            IndexPolicy::KeyedOffsetChain,
-            IntegrityPolicy::None,
-            RecoveryPolicy::Strict,
-            ManifestPolicy::None,
-            BLOCKS,
-        )
-        .with_block_identities(&[PlanItem::IDENTITY])
-        .with_read_limits(ReadLimits::STANDARD)
-    }
-
-    fn identity() -> DiskIndexIdentity {
-        DiskIndexIdentity {
-            schema_hash: 42,
-            primary_fingerprint: [7; 32],
-        }
-    }
-
-    fn plan() -> DiskIndexPlan {
-        DiskIndexPlan::canonical(spec(), DESCRIPTORS).unwrap()
-    }
-
-    #[test]
-    fn a_finite_directory_cannot_shadow_a_nonfinite_schema() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut store = DiskIndexStore::create(
-            dir.path().join("index"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        let checkpoint = store.storage.current().unwrap();
-        let reader = store.storage.reader(&checkpoint);
-        let mut slots =
-            slots::Working::load(&reader.slots, &[(PlanItem::ID, 2)], 1024 * 1024).unwrap();
-        let file = store.storage.writer().unwrap().try_clone().unwrap();
-        let root = storage::Root {
-            tree: tree::Root::default(),
-            slots: slots
-                .publish(
-                    &file,
-                    true,
-                    store.storage.alloc().unwrap(),
-                    slots::Root::default(),
-                )
-                .unwrap(),
-        };
-        store
-            .storage
-            .publish(metadata(64), &[], root, storage::Publication::Confirmed)
-            .unwrap();
-        let snapshot = store
-            .begin_committed_snapshot(identity(), plan().mode())
-            .unwrap();
-        assert!(snapshot.validate_finite_layout(plan()).is_err());
-        assert!(store.configure_finite(plan()).is_err());
-    }
-
-    fn metadata(eof: u64) -> DiskIndexMetadata {
-        DiskIndexMetadata::new_disk(
-            identity(),
-            plan().digest(),
-            DiskIndexFrontier::empty(eof),
-            4,
-        )
-    }
-
-    fn physical(block_id: u32, physical_len: u64) -> DiskIndexPhysicalRecord {
-        DiskIndexPhysicalRecord {
-            physical_len,
-            block_id,
-            block_version: 1,
-            flags: 0,
-            native_crc: Some(0x1234_5678),
-        }
-    }
-
-    fn update(
-        key: u64,
-        entry: DiskIndexEntry,
-        physical: DiskIndexPhysicalRecord,
-    ) -> DiskIndexUpdate {
-        DiskIndexUpdate::from_key_with_record(
-            10,
-            &key,
-            entry,
-            physical,
-            DiskIndexOptions::default().max_key_bytes,
-        )
-        .unwrap()
-    }
-
-    fn rollback_checkpoints(store: &DiskIndexStore) -> Vec<u64> {
-        store
-            .read_metadata()
-            .unwrap()
-            .checkpoint
-            .into_iter()
-            .map(|c| c.checkpoint_offset)
-            .collect()
-    }
-
-    fn rewrite_crc(bytes: &mut [u8; META_LEN]) {
-        let crc = crc32fast::hash(&bytes[..296]);
-        bytes[296..300].copy_from_slice(&crc.to_le_bytes());
-    }
-
-    #[test]
-    fn canonical_plan_is_deterministic_and_validates_generated_digest() {
-        let plan = plan();
-        assert_eq!(plan.descriptor(10).unwrap().block_version, 1);
-        assert!(!plan.digest().is_zero());
-        assert_eq!(
-            DiskIndexPlan::canonical(spec(), DESCRIPTORS)
-                .unwrap()
-                .digest(),
-            plan.digest()
-        );
-
-        let wrong =
-            DiskIndexPlan::from_generated(DESCRIPTORS, DiskIndexDigest::from_bytes([9; 32]));
-        assert!(matches!(
-            wrong.validate(spec()),
-            Err(DiskIndexError::PlanDigestMismatch)
-        ));
-    }
-
-    #[test]
-    fn canonical_witness_does_not_skip_validation_against_another_spec() {
-        static BLOCKS_V2: &[BlockDescriptor] = &[BlockDescriptor {
-            id: PlanItem::ID,
-            name: "PlanItem",
-            version: 2,
-            kind: PlanItem::KIND,
-            fields: &[],
-        }];
-        let other = FormatSpec::new(
-            b"VDIX",
-            1,
-            Endian::Little,
-            42,
-            IndexPolicy::KeyedOffsetChain,
-            IntegrityPolicy::None,
-            RecoveryPolicy::Strict,
-            ManifestPolicy::None,
-            BLOCKS_V2,
-        )
-        .with_block_identities(&[PlanItem::IDENTITY])
-        .with_read_limits(ReadLimits::STANDARD);
-
-        // The canonical witness only elides revalidation for the exact block
-        // slice it was canonicalized against; a spec with different blocks
-        // still runs the full descriptor check.
-        let plan = plan();
-        assert!(plan.validate(spec()).is_ok());
-        assert!(matches!(
-            plan.validate(other),
-            Err(DiskIndexError::PlanBlockVersionMismatch {
-                block_id: 10,
-                expected: 1,
-                actual: 2,
-            })
-        ));
-    }
-
-    #[test]
-    fn batch_options_reject_less_than_one_checkpoint_item() {
-        let options = DiskIndexOptions {
-            max_key_bytes: 1,
-            batch: DiskIndexBatchOptions {
-                max_records: 1,
-                max_bytes: batch_item_fixed_bytes(true) - 1,
-            },
-            ..DiskIndexOptions::default()
-        };
-        assert!(matches!(
-            options.validate(),
-            Err(DiskIndexError::InvalidBatchOptions(
-                "max_bytes is too small for one checkpoint item"
-            ))
-        ));
-    }
-
-    #[test]
-    fn metadata_v2_codec_rejects_specific_corruption() {
-        let metadata = metadata(64);
-        let encoded = encode_metadata(metadata);
-        assert_eq!(decode_metadata(&encoded).unwrap(), metadata);
-
-        assert!(matches!(
-            decode_metadata(&encoded[..META_LEN - 1]),
-            Err(DiskIndexError::MetadataLength { .. })
-        ));
-        let mut magic = encoded;
-        magic[0] ^= 1;
-        assert!(matches!(
-            decode_metadata(&magic),
-            Err(DiskIndexError::MetadataMagic)
-        ));
-        let mut version = encoded;
-        version[8..10].copy_from_slice(&1u16.to_le_bytes());
-        assert!(matches!(
-            decode_metadata(&version),
-            Err(DiskIndexError::MetadataVersion { actual: 1 })
-        ));
-        let mut checksum = encoded;
-        checksum[96] ^= 1;
-        assert!(matches!(
-            decode_metadata(&checksum),
-            Err(DiskIndexError::MetadataChecksum)
-        ));
-        let mut reserved = encoded;
-        reserved[13] = 1;
-        rewrite_crc(&mut reserved);
-        assert!(matches!(
-            decode_metadata(&reserved),
-            Err(DiskIndexError::MetadataReserved)
-        ));
-        let mut bad_mode = encoded;
-        bad_mode[11] = 0;
-        rewrite_crc(&mut bad_mode);
-        assert!(matches!(
-            decode_metadata(&bad_mode),
-            Err(DiskIndexError::MetadataInvariant(_))
-        ));
-    }
-
-    #[test]
-    fn latest_codec_carries_physical_extent_and_crc() {
-        let physical = physical(10, 36);
-        let encoded = encode_latest(LatestKind::Put, 64, 0, 10, Some(physical));
-        assert_eq!(
-            decode_latest(&encoded).unwrap(),
-            LatestValue {
-                kind: LatestKind::Put,
-                record_offset: 64,
-                sequence: 0,
-                target_block_id: 10,
-                physical: Some(physical),
-            }
-        );
-        let mut corrupt = encoded;
-        corrupt[16] ^= 1;
-        assert!(matches!(
-            decode_latest(&corrupt),
-            Err(DiskIndexError::LatestChecksum)
-        ));
-    }
-
     #[test]
     fn arbitrary_sidecar_codec_bytes_never_panic() {
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
@@ -4248,612 +2517,5 @@ mod tests {
             });
             assert!(result.is_ok(), "sidecar codec panicked for case {case}");
         }
-    }
-
-    #[test]
-    fn begin_batch_and_clean_use_one_rollback_checkpoint() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        let mut store =
-            DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata(64)).unwrap();
-
-        let dirty = store.begin_generation().unwrap();
-        let checkpoint_offset = dirty.checkpoint.unwrap().checkpoint_offset;
-        assert_eq!(rollback_checkpoints(&store), [checkpoint_offset]);
-
-        let batch = store.begin_write_batch().unwrap();
-        batch
-            .apply_update_with_tail(
-                64,
-                100,
-                &update(
-                    9,
-                    DiskIndexEntry::Put {
-                        record_offset: 64,
-                        sequence: 0,
-                    },
-                    physical(10, 36),
-                ),
-                Some(DiskIndexTail {
-                    block_id: 10,
-                    record_offset: 64,
-                    sequence: 0,
-                }),
-                None,
-            )
-            .unwrap();
-        assert_eq!(batch.records(), 1);
-        assert!(batch.bytes() > 0);
-        store.commit_batch().unwrap();
-
-        let working = DiskIndexFrontier::new(100, 1, Some(1));
-        let dirty = store.read_state().unwrap();
-        assert_eq!(dirty.metadata.working, working);
-        assert_eq!(dirty.metadata.working_tail_count, 1);
-        let clean = store.publish_clean(working).unwrap();
-        assert_eq!(clean.state, DiskIndexState::Clean);
-        assert_eq!(clean.generation, 1);
-        assert_eq!(clean.committed, working);
-        assert!(clean.checkpoint.is_none());
-        assert!(rollback_checkpoints(&store).is_empty());
-
-        let pointer = store
-            .begin_snapshot_with_plan(identity(), plan(), 100)
-            .unwrap()
-            .lookup_pointer(10, &9u64)
-            .unwrap();
-        assert_eq!(pointer.physical, Some(physical(10, 36)));
-    }
-
-    #[test]
-    fn staged_restore_aborts_without_mutation_then_commits_after_native_sync() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        let mut store =
-            DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata(64)).unwrap();
-        store.begin_generation().unwrap();
-        let batch = store.begin_write_batch().unwrap();
-        batch
-            .apply_update(
-                64,
-                100,
-                &update(
-                    9,
-                    DiskIndexEntry::Put {
-                        record_offset: 64,
-                        sequence: 0,
-                    },
-                    physical(10, 36),
-                ),
-            )
-            .unwrap();
-        store.commit_batch().unwrap();
-
-        let guard = store
-            .stage_restore(identity(), plan().mode(), 100, 4)
-            .unwrap();
-        assert_eq!(guard.base_eof(), 64);
-        assert_eq!(guard.frontier(), DiskIndexFrontier::empty(64));
-        guard.abort().unwrap();
-        assert_eq!(store.read_metadata().unwrap().state, DiskIndexState::Dirty);
-        assert_eq!(rollback_checkpoints(&store).len(), 1);
-
-        assert!(matches!(
-            store.stage_restore(identity(), plan().mode(), 63, 4),
-            Err(DiskIndexError::NativeTooShort { .. })
-        ));
-        let guard = store
-            .stage_restore(identity(), plan().mode(), 100, 4)
-            .unwrap();
-        assert!(matches!(
-            guard.commit_after_native_sync(65),
-            Err(DiskIndexError::NativeLengthMismatch { .. })
-        ));
-        assert_eq!(store.read_metadata().unwrap().state, DiskIndexState::Dirty);
-
-        let guard = store
-            .stage_restore(identity(), plan().mode(), 100, 4)
-            .unwrap();
-        let clean = guard.commit_after_native_sync(64).unwrap();
-        assert_eq!(clean.state, DiskIndexState::Clean);
-        assert_eq!(clean.generation, 0);
-        assert!(rollback_checkpoints(&store).is_empty());
-        assert_eq!(
-            store
-                .begin_snapshot_with_plan(identity(), plan(), 64)
-                .unwrap()
-                .lookup(10, &9u64)
-                .unwrap(),
-            DiskIndexEntry::Missing
-        );
-    }
-
-    #[test]
-    fn dirty_checkpoint_survives_reopen_and_restores() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        {
-            let mut store =
-                DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata(64)).unwrap();
-            store.begin_generation().unwrap();
-            let batch = store.begin_write_batch().unwrap();
-            batch.advance_coverage(64, 90, 0).unwrap();
-            store.commit_batch().unwrap();
-        }
-
-        let mut store = DiskIndexStore::open_writer(&path, DiskIndexOptions::default()).unwrap();
-        assert_eq!(store.read_metadata().unwrap().working.eof, 90);
-        store
-            .stage_restore(identity(), plan().mode(), 90, 4)
-            .unwrap()
-            .commit_after_native_sync(64)
-            .unwrap();
-        assert_eq!(store.read_metadata().unwrap().committed.eof, 64);
-    }
-
-    #[test]
-    fn reader_validation_is_independent_of_a_pending_batch() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("read-validation.vki");
-        let options = DiskIndexOptions::default();
-        let mut store = DiskIndexStore::create(&path, options, metadata(64)).unwrap();
-        store.begin_write_batch().unwrap();
-        // Readers must finish while the writer keeps an uncommitted batch.
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..8)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let reader = DiskIndexStore::open(&path, options).unwrap();
-                        reader.validate_protocol().unwrap();
-                        reader
-                            .begin_snapshot_with_plan(identity(), plan(), 64)
-                            .unwrap();
-                    })
-                })
-                .collect();
-            for handle in handles {
-                handle.join().unwrap();
-            }
-        });
-    }
-
-    #[test]
-    fn composite_rows_store_schema_tags_and_values_without_interning() {
-        let kind = 11;
-        for value in 0..10000u64 {
-            let bytes = value.to_le_bytes();
-            let key = composite_key(kind, &bytes, 8).unwrap();
-            assert_eq!(key.len(), 13);
-            assert_eq!(
-                DiskIndexKeyTag::decode(&key[..5]).unwrap().kind(),
-                Some(kind)
-            );
-            assert_eq!(&key[5..], &bytes);
-            assert!(composite_key_matches(&key, kind, &bytes));
-            assert!(!composite_key_matches(&key, kind + 1, &bytes));
-        }
-        // Empty/unit key is present; it must not become an absent-key marker.
-        let unit = composite_key(kind, &[], 8).unwrap();
-        assert!(DiskIndexKeyTag::decode(&unit).unwrap().has_key());
-        assert_ne!(unit, DiskIndexKeyTag::absent().encode());
-    }
-
-    fn corrupt_metadata(store: &DiskIndexStore, edit: impl FnOnce(&mut [u8])) -> u64 {
-        // The metadata sits at the same place in both record versions; only
-        // the record checksum that covers it moves.
-        let checkpoint = store.storage.current().unwrap();
-        let mut header = [0; 416];
-        tree::read_at(&store.storage.file, checkpoint.offset, &mut header).unwrap();
-        edit(&mut header[32..332]);
-        let (covered, at) = if &header[..8] == b"VIXROOT5" {
-            (412, 412)
-        } else {
-            (348, 348)
-        };
-        let crc = crc32fast::hash(&header[..covered]);
-        header[at..at + 4].copy_from_slice(&crc.to_le_bytes());
-        let len = if covered == 412 { 416 } else { 352 };
-        tree::write_at(
-            store.storage.writer().unwrap(),
-            checkpoint.offset,
-            &header[..len],
-        )
-        .unwrap();
-        checkpoint.offset
-    }
-
-    #[test]
-    fn rollback_checkpoint_must_point_backwards() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut store = DiskIndexStore::create(
-            directory.path().join("data.vki"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        store.begin_generation().unwrap();
-        let offset = store.storage.current().unwrap().offset;
-        corrupt_metadata(&store, |bytes| {
-            bytes[144..152].copy_from_slice(&offset.to_le_bytes());
-            let crc = crc32fast::hash(&bytes[..296]);
-            bytes[296..300].copy_from_slice(&crc.to_le_bytes());
-        });
-        assert!(store.storage.at(offset).is_err());
-        // The separately published confirmed checkpoint still opens.
-        assert_eq!(
-            store.storage.confirmed().unwrap().metadata.committed.eof,
-            64
-        );
-    }
-
-    #[test]
-    fn torn_working_head_preserves_confirmed_checkpoint() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut store = DiskIndexStore::create(
-            directory.path().join("data.vki"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        store.begin_generation().unwrap();
-        let batch = store.begin_write_batch().unwrap();
-        batch.advance_coverage(64, 80, 0).unwrap();
-        store.commit_batch().unwrap();
-        for slot in storage::WORKING {
-            tree::write_at(store.storage.writer().unwrap(), slot, &[0xA5; 64]).unwrap();
-        }
-        assert_eq!(
-            store.storage.confirmed().unwrap().metadata.committed.eof,
-            64
-        );
-        assert_eq!(store.read_metadata().unwrap().state, DiskIndexState::Dirty);
-        store
-            .stage_restore(identity(), plan().mode(), 80, 4)
-            .unwrap()
-            .commit_after_native_sync(64)
-            .unwrap();
-    }
-
-    #[test]
-    fn completed_generation_survives_one_head_loss_without_regressing() {
-        for damaged in storage::CONFIRMED {
-            let directory = tempfile::tempdir().unwrap();
-            let mut store = DiskIndexStore::create(
-                directory.path().join("data.vki"),
-                DiskIndexOptions::default(),
-                metadata(64),
-            )
-            .unwrap();
-            let batch = store.begin_write_batch().unwrap();
-            batch.advance_coverage(64, 80, 0).unwrap();
-            store.commit_batch().unwrap();
-            store
-                .publish_clean(DiskIndexFrontier::new(80, 1, Some(1)))
-                .unwrap();
-            tree::write_at(store.storage.writer().unwrap(), damaged, &[0xA5; 64]).unwrap();
-            let clean = store.storage.confirmed().unwrap();
-            assert_eq!(clean.metadata.generation, 1);
-            assert_eq!(clean.metadata.committed.eof, 80);
-        }
-    }
-
-    #[test]
-    fn corrupt_durable_checkpoint_never_silently_rolls_back_acknowledged_data() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut store = DiskIndexStore::create(
-            directory.path().join("data.vki"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        let batch = store.begin_write_batch().unwrap();
-        batch.advance_coverage(64, 80, 0).unwrap();
-        store.commit_batch().unwrap();
-        store
-            .publish_clean(DiskIndexFrontier::new(80, 1, Some(1)))
-            .unwrap();
-        corrupt_metadata(&store, |bytes| bytes[96] ^= 1);
-        assert!(matches!(
-            store.storage.confirmed(),
-            Err(DiskIndexError::MetadataChecksum)
-        ));
-        assert!(matches!(
-            store.read_metadata(),
-            Err(DiskIndexError::MetadataChecksum)
-        ));
-        assert!(
-            store
-                .stage_restore(identity(), plan().mode(), 80, 4)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn on_disk_metadata_corruption_is_specific() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = DiskIndexStore::create(
-            directory.path().join("data.vki"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        let offset = corrupt_metadata(&store, |bytes| bytes[96] ^= 1);
-        assert!(matches!(
-            store.storage.at(offset),
-            Err(DiskIndexError::MetadataChecksum)
-        ));
-    }
-
-    #[test]
-    fn writer_rejects_untrusted_tail_bound_before_tail_allocation() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = DiskIndexStore::create(
-            directory.path().join("data.vki"),
-            DiskIndexOptions::default(),
-            metadata(64),
-        )
-        .unwrap();
-        corrupt_metadata(&store, |bytes| {
-            bytes[176..180].copy_from_slice(&u32::MAX.to_le_bytes());
-            let crc = crc32fast::hash(&bytes[..296]);
-            bytes[296..300].copy_from_slice(&crc.to_le_bytes());
-        });
-        assert!(matches!(
-            store.validate_clean_writer(identity(), plan().mode(), 64, 4),
-            Err(DiskIndexError::TailLimitMismatch {
-                expected: 4,
-                actual: u32::MAX
-            })
-        ));
-    }
-
-    #[test]
-    fn legacy_tail_capacity_upgrades_without_a_scan_or_extra_open_write() {
-        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
-        let current_limit = tail_limit_for_spec(spec).unwrap();
-        assert_eq!(current_limit, 4);
-        for legacy_dirty in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("legacy.vki");
-            let options = DiskIndexOptions::default();
-            let mut legacy = metadata(64);
-            legacy.tail_limit = 3;
-            let mut store = DiskIndexStore::create(&path, options, legacy).unwrap();
-            if legacy_dirty {
-                store.begin_generation().unwrap();
-            }
-            drop(store);
-            let mut store = DiskIndexStore::open_writer(&path, options).unwrap();
-            if legacy_dirty {
-                // An interrupted write made entirely by the old version.
-                store
-                    .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
-                    .unwrap()
-                    .commit_after_native_sync(64)
-                    .unwrap();
-            }
-            let before = fs::read(&path).unwrap();
-            store
-                .validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec)
-                .unwrap();
-            assert_eq!(fs::read(&path).unwrap(), before);
-            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
-
-            // The first ordinary write upgrades the dirty root. Its rollback
-            // checkpoint still has the old bound, and must remain restorable.
-            assert_eq!(store.begin_generation().unwrap().tail_limit, current_limit);
-            store
-                .stage_restore_for_spec(identity(), plan().mode(), 64, spec)
-                .unwrap()
-                .commit_after_native_sync(64)
-                .unwrap();
-            assert_eq!(store.read_metadata().unwrap().tail_limit, 3);
-
-            let mut eof = 64;
-            let batch = store.begin_write_batch().unwrap();
-            for (sequence, id) in [
-                PlanItem::ID,
-                crate::MANIFEST_BLOCK_ID,
-                crate::CREATION_NONCE_BLOCK_ID,
-                crate::TOMBSTONE_BLOCK_ID,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                batch
-                    .advance_coverage_with_tail(
-                        eof,
-                        eof + 64,
-                        sequence as u64,
-                        Some(DiskIndexTail {
-                            block_id: id,
-                            record_offset: eof,
-                            sequence: sequence as u64,
-                        }),
-                    )
-                    .unwrap();
-                eof += 64;
-            }
-            store.commit_batch().unwrap();
-            store.mark_clean(eof).unwrap();
-            drop(store);
-            let mut reopened = DiskIndexStore::open_writer(&path, options).unwrap();
-            let state = reopened
-                .validate_clean_writer_for_spec(identity(), plan().mode(), eof, spec)
-                .unwrap();
-            assert_eq!(state.metadata.tail_limit, current_limit);
-            assert_eq!(state.tails.len(), 4);
-        }
-    }
-
-    #[test]
-    fn legacy_tail_compatibility_refuses_other_bounds() {
-        let spec = spec().with_manifest_policy(ManifestPolicy::Embedded);
-        for actual in [0, 1, 2, 5, u32::MAX] {
-            let directory = tempfile::tempdir().unwrap();
-            let mut bad = metadata(64);
-            bad.tail_limit = actual;
-            let mut store = DiskIndexStore::create(
-                directory.path().join("bad.vki"),
-                DiskIndexOptions::default(),
-                bad,
-            )
-            .unwrap();
-            assert!(
-                matches!(store.validate_clean_writer_for_spec(identity(), plan().mode(), 64, spec),
-                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
-            );
-            store.begin_generation().unwrap();
-            assert!(
-                matches!(store.stage_restore_for_spec(identity(), plan().mode(), 64, spec),
-                Err(DiskIndexError::TailLimitMismatch { expected: 4, actual: found }) if found == actual)
-            );
-        }
-    }
-
-    #[test]
-    fn state_only_mode_rejects_key_tables_but_tracks_coverage() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vks");
-        let metadata = DiskIndexMetadata::new_state(identity(), DiskIndexFrontier::empty(64), 0);
-        let mut store =
-            DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata).unwrap();
-        store.begin_generation().unwrap();
-        let batch = store.begin_write_batch().unwrap();
-        assert!(matches!(
-            batch.lookup(10, &9u64),
-            Err(DiskIndexError::KeyTableUnavailable)
-        ));
-        batch.advance_coverage(64, 80, 0).unwrap();
-        store.commit_batch().unwrap();
-        store
-            .publish_clean(DiskIndexFrontier::new(80, 1, Some(1)))
-            .unwrap();
-        assert!(matches!(
-            store
-                .begin_snapshot_with_mode(identity(), DiskIndexMode::StateOnly, 80)
-                .unwrap()
-                .lookup(10, &9u64),
-            Err(DiskIndexError::KeyTableUnavailable)
-        ));
-    }
-
-    #[test]
-    fn bounded_batch_rejects_the_next_record_without_advancing() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        let options = DiskIndexOptions {
-            batch: DiskIndexBatchOptions {
-                max_records: 1,
-                max_bytes: 4096,
-            },
-            max_key_bytes: 1024,
-            ..DiskIndexOptions::default()
-        };
-        let mut store = DiskIndexStore::create(&path, options, metadata(64)).unwrap();
-        store.begin_generation().unwrap();
-        let batch = store.begin_write_batch().unwrap();
-        batch.advance_coverage(64, 80, 0).unwrap();
-        assert!(matches!(
-            batch.advance_coverage(80, 96, 1),
-            Err(DiskIndexError::BatchFull { .. })
-        ));
-        assert_eq!(
-            batch.working_frontier(),
-            DiskIndexFrontier::new(80, 1, Some(1))
-        );
-        store.commit_batch().unwrap();
-    }
-
-    #[test]
-    fn reader_allows_physical_tail_but_writer_requires_exact_eof() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        let store =
-            DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata(64)).unwrap();
-        assert_eq!(
-            store
-                .begin_snapshot_with_plan(identity(), plan(), 100)
-                .unwrap()
-                .committed_eof(),
-            64
-        );
-        // Longer than the clean commit is an interrupted generation (its
-        // dirty checkpoint is not a barrier): restore, not a mismatch.
-        assert!(matches!(
-            store.validate_clean_writer(identity(), plan().mode(), 100, 4),
-            Err(DiskIndexError::CleanStateRequired)
-        ));
-        assert!(matches!(
-            store.validate_clean_writer(identity(), plan().mode(), 63, 4),
-            Err(DiskIndexError::NativeLengthMismatch { .. })
-        ));
-        assert!(matches!(
-            store.begin_snapshot_with_plan(identity(), plan(), 63),
-            Err(DiskIndexError::NativeTooShort { .. })
-        ));
-    }
-
-    #[test]
-    fn rebuild_streams_into_a_clean_prepared_sidecar() {
-        struct Source(VecDeque<DiskIndexRebuildEntry>);
-
-        impl DiskIndexRebuildSource for Source {
-            fn next_update(&mut self) -> crate::Result<Option<DiskIndexRebuildEntry>> {
-                Ok(self.0.pop_front())
-            }
-        }
-
-        let directory = tempfile::tempdir().unwrap();
-        let update = update(
-            9,
-            DiskIndexEntry::Put {
-                record_offset: 64,
-                sequence: 0,
-            },
-            physical(10, 36),
-        );
-        let mut source = Source(VecDeque::from([DiskIndexRebuildEntry {
-            update,
-            covered_eof: 100,
-        }]));
-        let prepared = build_replacement(
-            directory.path(),
-            DiskIndexOptions::default(),
-            metadata(64),
-            &mut source,
-        )
-        .unwrap();
-        let store = DiskIndexStore::open(prepared.path(), DiskIndexOptions::default()).unwrap();
-        assert_eq!(
-            store
-                .begin_snapshot_with_plan(identity(), plan(), 100)
-                .unwrap()
-                .lookup(10, &9u64)
-                .unwrap(),
-            DiskIndexEntry::Put {
-                record_offset: 64,
-                sequence: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn generation_exhaustion_is_typed_without_deleting_checkpoint() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("data.vki");
-        let metadata = DiskIndexMetadata {
-            generation: u64::MAX,
-            ..metadata(64)
-        };
-        let mut store =
-            DiskIndexStore::create(&path, DiskIndexOptions::default(), metadata).unwrap();
-        store.begin_generation().unwrap();
-        assert!(matches!(
-            store.mark_clean(64),
-            Err(DiskIndexError::GenerationExhausted)
-        ));
-        assert_eq!(store.read_metadata().unwrap().state, DiskIndexState::Dirty);
-        assert_eq!(rollback_checkpoints(&store).len(), 1);
     }
 }

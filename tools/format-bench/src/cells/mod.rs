@@ -22,7 +22,6 @@ use std::time::Duration;
 mod h5;
 mod sq;
 pub mod tile_proto;
-mod varlit_indexed;
 mod varlit_matrix;
 
 pub const CELL: usize = 1024;
@@ -126,7 +125,7 @@ pub trait CellReader {
 /// Storage configurations each engine offers for this situation.
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &["matrix", "indexed"],
+        "varlit" => &["matrix"],
         "sqlite" => sq::CANDIDATES,
         "hdf5" => h5::CANDIDATES,
         "parquet" => &["-"],
@@ -141,7 +140,6 @@ fn target(engine: &str, dir: &Path) -> PathBuf {
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellWriter>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::create(p),
-        ("varlit", "indexed") => varlit_indexed::create(p),
         ("sqlite", c) => sq::create(p, c),
         ("tile", c) => tile_proto::create(p, c),
         ("hdf5", c) => h5::create(p, c),
@@ -154,7 +152,6 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellWriter>> {
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellReader>> {
     match (engine, cand) {
         ("varlit", "matrix") => varlit_matrix::open(p),
-        ("varlit", "indexed") => varlit_indexed::open(p),
         ("sqlite", c) => sq::open(p, c),
         ("tile", c) => tile_proto::open(p, c),
         ("hdf5", c) => h5::open(p, c),
@@ -166,7 +163,6 @@ fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn CellReader>> {
 pub fn adapter_file(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
         ("varlit", "matrix") => "src/cells/varlit_matrix.rs",
-        ("varlit", "indexed") => "src/cells/varlit_indexed.rs",
         ("sqlite", _) => "src/cells/sq.rs",
         ("hdf5", _) => "src/cells/h5.rs",
         ("tile", _) => "src/cells/tile_proto.rs",

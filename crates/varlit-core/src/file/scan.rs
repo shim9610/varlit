@@ -439,6 +439,10 @@ impl NativeStreamScanner {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the lookup path of bounded keyed storage; its indexed caller was removed"
+)]
 pub(crate) fn read_stream_entry_at(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
@@ -495,9 +499,7 @@ pub(crate) fn read_stream_entry_at_file(
 pub(crate) struct PreparedStreamRecord {
     pub(crate) bytes: Vec<u8>,
     pub(crate) info: AppendInfo,
-    pub(crate) block_id: u32,
-    pub(crate) block_version: u16,
-    pub(crate) flags: u16,
+    #[cfg(test)]
     pub(crate) checksum: u32,
 }
 
@@ -510,25 +512,8 @@ pub(crate) struct PreparedStreamRecord {
 pub(crate) struct PreparedRecordParts {
     pub(crate) len: usize,
     pub(crate) info: AppendInfo,
-    pub(crate) block_id: u32,
-    pub(crate) block_version: u16,
-    pub(crate) flags: u16,
+    #[cfg(test)]
     pub(crate) checksum: u32,
-}
-
-impl PreparedStreamRecord {
-    /// The same record described as [`PreparedRecordParts`], for the callers
-    /// that still take the owning form.
-    pub(crate) fn parts(&self) -> PreparedRecordParts {
-        PreparedRecordParts {
-            len: self.bytes.len(),
-            info: self.info,
-            block_id: self.block_id,
-            block_version: self.block_version,
-            flags: self.flags,
-            checksum: self.checksum,
-        }
-    }
 }
 
 /// The owning form, for the callers that want a record and nothing else: the
@@ -565,9 +550,7 @@ pub(super) fn prepare_stream_record(
     Ok(PreparedStreamRecord {
         bytes,
         info: parts.info,
-        block_id: parts.block_id,
-        block_version: parts.block_version,
-        flags: parts.flags,
+        #[cfg(test)]
         checksum: parts.checksum,
     })
 }
@@ -758,7 +741,7 @@ pub(crate) fn prepare_stream_manifest_record(
     )
 }
 
-/// Produces a fresh 128-bit creation nonce for a stream/indexed primary.
+/// Produces a fresh 128-bit creation nonce for a stream primary.
 ///
 /// Same uniqueness-not-secrecy contract as the matrix creation nonce: it only
 /// has to differ between two `create` calls, including two that reuse the same
@@ -800,77 +783,6 @@ pub(crate) fn prepare_stream_sync_record(
     )
 }
 
-/// The header and footer of an in-place matrix record of `len` payload bytes
-/// at `record_offset`, for an append that writes the payload itself: its
-/// checksum leaves the payload out, so none of it is needed here.
-pub(crate) fn stream_matrix_record_frame(
-    spec: FormatSpec,
-    version: u16,
-    len: u64,
-    sequence: u64,
-    record_offset: u64,
-) -> Result<(
-    [u8; crate::width::small(RECORD_HEADER_LEN)],
-    Option<[u8; crate::width::small(RECORD_FOOTER_LEN)]>,
-    AppendInfo,
-)> {
-    let flags = RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE;
-    spec.read_limits
-        .check(ReadLimitKey::RecordPayloadLen, len)?;
-    spec.read_limits
-        .check(ReadLimitKey::LogicalPayloadLen, len)?;
-    let overflow = Error::ResourceArithmeticOverflow {
-        resource: "file length",
-    };
-    let payload_offset = record_offset
-        .checked_add(RECORD_HEADER_LEN)
-        .ok_or(overflow)?;
-    let payload_end = payload_offset
-        .checked_add(len)
-        .ok_or(Error::ResourceArithmeticOverflow {
-            resource: "file length",
-        })?;
-    let footer = if spec.spec_needs_record_footer() {
-        Some(encode_record_footer(RecordFooterFields {
-            prev_same_block_offset: None,
-            prev_same_key_offset: None,
-            mutable_flags: 0,
-        })?)
-    } else {
-        None
-    };
-    let footer_bytes = footer.as_ref().map_or(&[][..], |bytes| &bytes[..]);
-    let header = RecordHeaderFields {
-        block_id: MATRIX_TILE_BLOCK_ID,
-        block_version: version,
-        flags,
-        sequence,
-        payload_len: len,
-        checksum: 0,
-        uncompressed_len_hint: 0,
-    };
-    let checksum = checksum_record_fields(spec, record_offset, header, &[], footer_bytes)?;
-    let header = encode_native_record_header(
-        RecordHeaderFields { checksum, ..header },
-        record_offset,
-        record_footer_len(spec),
-    )?;
-    Ok((
-        header,
-        footer,
-        AppendInfo {
-            sequence,
-            record_offset,
-            payload_offset,
-            payload_len: len,
-            footer_offset: footer.is_some().then_some(payload_end),
-            prev_same_block_offset: None,
-            prev_same_key_offset: None,
-            committed: true,
-        },
-    ))
-}
-
 pub(crate) fn prepare_stream_creation_nonce_record(
     spec: FormatSpec,
     creation_id: [u8; MATRIX_CREATION_NONCE_LEN],
@@ -891,7 +803,7 @@ pub(crate) fn prepare_stream_creation_nonce_record(
     )
 }
 
-/// Recovers the creation nonce of a stream/indexed primary, or `None` when the
+/// Recovers the creation nonce of a stream primary, or `None` when the
 /// primary carries none (a legacy primary, or one bootstrapped from a resident
 /// `VarlitFile`).
 ///
@@ -1074,9 +986,7 @@ fn finish_stream_record_in_place(
     out.extend_from_slice(footer);
     Ok(PreparedRecordParts {
         len: total_len,
-        block_id,
-        block_version,
-        flags,
+        #[cfg(test)]
         checksum,
         info: AppendInfo {
             sequence,

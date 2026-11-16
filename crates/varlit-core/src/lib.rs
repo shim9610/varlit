@@ -33,7 +33,6 @@ mod immediate;
 
 #[cfg(feature = "experimental-matrix-reuse")]
 pub mod experimental_matrix;
-mod indexed;
 mod layout;
 mod matrix;
 mod matrix_tiles;
@@ -118,10 +117,8 @@ pub use diagnostics::{
 
 pub use anchor::{Anchor, AnchorLayout, AnchorPolicy};
 pub use disk_index::{
-    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDescriptor as DiskIndexedBlock,
-    DiskIndexDigest, DiskIndexEntry, DiskIndexError, DiskIndexKeyTag, DiskIndexMode,
-    DiskIndexOptions, DiskIndexPlan, IndexCompaction, SnapshotStatus, VarlitDiskKey,
-    sidecar_path as disk_index_sidecar_path,
+    DiskIndexBatchOptions, DiskIndexConfirmPolicy, DiskIndexDigest, DiskIndexError, DiskIndexMode,
+    DiskIndexOptions, IndexCompaction, SnapshotStatus,
 };
 pub use error::{AllocationFailureContext, Error, Result};
 pub use fallible::{TryClone, try_box};
@@ -161,10 +158,6 @@ pub use format::{
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 pub use sync_marker::SYNC_BLOCK_ID;
 
-pub use indexed::{
-    DiskIndexRebuildReport, VarlitIndexedReader, VarlitIndexedWriter, rebuild_disk_index,
-    rebuild_disk_index_with_progress,
-};
 pub use layout::{
     LayoutFieldValue, LayoutFileInfo, LayoutReader, LayoutScanReport, LayoutSegmentInfo,
     LayoutTailInfo, LayoutTailKind, LayoutValue, LayoutWriter, SegmentWrite, SegmentWriteStream,

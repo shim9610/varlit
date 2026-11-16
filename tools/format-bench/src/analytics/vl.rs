@@ -1,10 +1,17 @@
-//! Varlit: column chunks as keyed records (`key = [col, rg]`, disk key index),
-//! raw little-endian values, plus a per-chunk ts zone map record and the
-//! category dictionary. The writer buffers arriving rows up to its chunk size.
-//! Candidates: rows per chunk, zstd or no compression.
-//! app-built: columnar chunking, value encoding, zone map, row buffering
+//! Varlit: column chunks as keyed records (`key = [col, rg]`) in a native
+//! append file, raw little-endian values, plus a per-chunk ts zone map record
+//! and the category dictionary. The writer buffers arriving rows up to its
+//! chunk size. Candidates: rows per chunk, zstd or no compression.
+//!
+//! The native file has no on-disk key index. Each chunk is written once, row
+//! group by row group and column by column, so the reader lists the chunk
+//! record entries in file order (the resident directory, nothing decoded) and
+//! finds chunk `(col, rg)` at entry `rg * 12 + col`; every decoded chunk is
+//! checked against the key it was looked up by. Zones and the dictionary are
+//! small and are read once at open.
+//! app-built: columnar chunking, value encoding, zone map, row buffering,
+//! (col, rg) -> record lookup (write order)
 use super::*;
-use varlit::{BatchOptions, DiskIndexOptions};
 
 pub const CANDIDATES: &[&str] = &[
     "c131072-zstd",
@@ -33,17 +40,17 @@ macro_rules! sales_format {
                     index: keyed_offset_chain;
                     $($comp)*
                     blocks {
-                        variable Chunk(id = 1, key = [col, rg], key_index = disk) {
+                        variable Chunk(id = 1, key = [col, rg]) {
                             col: u8,
                             rg: u16,
                             data: Vec<u8>,
                         }
-                        fixed Zone(id = 2, key = [rg], key_index = disk, key_domain = [rg = 0..4096]) {
+                        fixed Zone(id = 2, key = [rg], key_domain = [rg = 0..4096]) {
                             rg: u16,
                             ts_min: i64,
                             ts_max: i64,
                         }
-                        variable Dict(id = 3, key = [col], key_index = disk, key_domain = [col = 0..12]) {
+                        variable Dict(id = 3, key = [col], key_domain = [col = 0..12]) {
                             col: u8,
                             names: Vec<String>,
                         }
@@ -82,12 +89,13 @@ fn columns(t: &Batch) -> [Vec<u8>; 12] {
 
 // The two candidate formats share the adapter through this macro.
 macro_rules! adapter {
-    ($m:ident, $fm:ident, $F:ident, $W:ident, $R:ident) => {
+    ($m:ident, $fm:ident, $F:ident, $W:ident) => {
         pub mod $m {
             use super::super::*;
+            use super::columns;
             use super::$fm as f;
-            use super::{BatchOptions, DiskIndexOptions, columns};
             use f::{Chunk, Dict, DictKey, Zone, ZoneKey, $F};
+            use varlit::{RecordIndexEntry, VarlitReader};
             pub struct W {
                 w: f::$W,
                 buf: Batch,
@@ -96,7 +104,7 @@ macro_rules! adapter {
             }
             pub fn create(p: &Path, chunk: usize) -> Result<Box<dyn Writer>> {
                 Ok(Box::new(W {
-                    w: $F::create_indexed_writer(p, DiskIndexOptions::default())?,
+                    w: $F::create_writer(p)?,
                     buf: Batch::default(),
                     chunk,
                     rg: 0,
@@ -109,16 +117,13 @@ macro_rules! adapter {
                     }
                     let rg = self.rg as u16;
                     let cols = columns(&self.buf);
-                    self.w
-                        .push_chunks(
-                            cols.into_iter().enumerate().map(|(c, data)| Chunk {
-                                col: c as u8,
-                                rg,
-                                data,
-                            }),
-                            BatchOptions::default(),
-                        )
-                        .map_err(|f| f.source)?;
+                    for (c, data) in cols.into_iter().enumerate() {
+                        self.w.push_chunk(&Chunk {
+                            col: c as u8,
+                            rg,
+                            data,
+                        })?;
+                    }
                     self.w.push_zone(&Zone {
                         key: ZoneKey::from_values(rg)?,
                         ts_min: self.buf.ts[0],
@@ -157,30 +162,58 @@ macro_rules! adapter {
                 }
             }
             pub struct R {
-                r: f::$R,
+                r: VarlitReader,
+                /// Chunk record entries in file order: `(col, rg)` is entry
+                /// `rg * 12 + col`.
+                chunks: Vec<RecordIndexEntry>,
                 zones: Vec<(i64, i64)>,
+                scratch: Vec<u8>,
             }
             pub fn open(p: &Path) -> Result<Box<dyn Analytics>> {
-                let r = $F::open_indexed_reader(p, vl_dio(DiskIndexOptions::default()))?;
-                let mut zones = Vec::new();
-                let mut z = <Zone as varlit::VarlitEmpty>::empty();
-                while r.get_zone(&ZoneKey::from_values(zones.len() as u16)?, &mut z)? {
-                    zones.push((z.ts_min, z.ts_max));
+                let r = vl_spec($F::spec()).open_reader(p)?;
+                let mut decoded = Vec::new();
+                r.file().decode_blocks_into::<Zone>(&mut decoded)?;
+                let mut zones = vec![None; decoded.len()];
+                for z in decoded {
+                    let rg = z.key.values() as usize;
+                    *zones.get_mut(rg).ok_or("zone out of range")? = Some((z.ts_min, z.ts_max));
                 }
-                Ok(Box::new(R { r, zones }))
+                let zones = zones
+                    .into_iter()
+                    .map(|z| z.ok_or("missing zone"))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut chunks = Vec::new();
+                r.file().block_entries_into::<Chunk>(&mut chunks)?;
+                if chunks.len() != zones.len() * 12 {
+                    return Err("chunk count does not match the zones".into());
+                }
+                Ok(Box::new(R {
+                    r,
+                    chunks,
+                    zones,
+                    scratch: Vec::new(),
+                }))
             }
             impl R {
-                fn col(&self, c: u8, rg: usize, out: &mut Chunk) -> Result<()> {
-                    if !self.r.get_chunk(&(c, rg as u16), out)? {
-                        return Err("missing chunk".into());
+                fn col(&mut self, c: u8, rg: usize, out: &mut Chunk) -> Result<()> {
+                    let e = self
+                        .chunks
+                        .get(rg * 12 + c as usize)
+                        .ok_or("missing chunk")?;
+                    self.r.file().decode_block_into(e, &mut self.scratch, out)?;
+                    if (out.col, out.rg as usize) != (c, rg) {
+                        return Err("chunk entry names another chunk".into());
                     }
                     Ok(())
+                }
+                fn dict(&self, col: u8) -> Result<Dict> {
+                    let dicts = self.r.file().keyed_blocks::<Dict>()?;
+                    got(|o| dicts.get(&DictKey::from_values(col)?, o), "dict")
                 }
             }
             impl Analytics for R {
                 fn q1(&mut self) -> Result<Q1> {
-                    let names =
-                        got(|o| self.r.get_dict(&DictKey::from_values(2)?, o), "dict")?.names;
+                    let names = self.dict(2)?.names;
                     let map: Vec<usize> = names.iter().map(|n| n[9..].parse().unwrap()).collect();
                     let mut out = [0.0; NCAT];
                     let (mut c, mut q, mut p) = (
@@ -235,8 +268,8 @@ macro_rules! adapter {
         }
     };
 }
-adapter!(za, zstd, SalesZ, SalesZIndexedWriter, SalesZIndexedReader);
-adapter!(ra, raw, SalesR, SalesRIndexedWriter, SalesRIndexedReader);
+adapter!(za, zstd, SalesZ, SalesZWriter);
+adapter!(ra, raw, SalesR, SalesRWriter);
 
 fn chunk_of(cand: &str) -> usize {
     cand.trim_start_matches('c')

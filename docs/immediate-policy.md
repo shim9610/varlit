@@ -1,9 +1,18 @@
 # Immediate policy for append writers
 
 An Immediate boundary makes all preceding writes, including its triggering
-record, durable before returning success. On scalable writers it also confirms
-the clean sidecar root when the writer's `DiskIndexConfirmPolicy` is due. There
-are three ways to request one.
+record, durable before returning success. What it means for readers depends on
+the writer:
+
+- A native writer (`VarlitFile`, `VarlitWriter` and the generated native
+  wrappers) makes each write visible to readers at once. Its Immediate
+  boundaries decide only what is synced.
+- A stream writer (`VarlitStreamWriter` and the generated stream wrapper)
+  makes records visible to readers only at a durability boundary, so each
+  Immediate boundary is also a publication. It also confirms the sidecar
+  checkpoint when the writer's `DiskIndexConfirmPolicy` is due.
+
+There are three ways to request one.
 
 ## Block declarations
 
@@ -15,7 +24,7 @@ varlit_format! {
         schema_hash: computed;
         index: keyed_offset_chain;
         blocks {
-            variable Sample(id = 1, key = [id], key_index = disk) {
+            variable Sample(id = 1, key = [id]) {
                 id: u64,
                 bytes: Vec<u8>,
             }
@@ -33,6 +42,9 @@ fn final_status(status: &Status) -> bool { status.complete }
 ```
 
 Each `Checkpoint` append immediately persists itself and preceding samples.
+In this `keyed_offset_chain` format the stream writer generates no method for
+the keyed `Sample` block (it keeps no previous-key chain), so `Sample` is written
+through a native writer; the unkeyed blocks work on both.
 The same rule applies to deletions of an Immediate keyed block. `immediate_if`
 receives an appended value; it does not run on a deletion, which has only a key.
 Both declarations are OR-combined with any runtime policy; runtime settings
@@ -66,8 +78,11 @@ record headers and footers. Thresholds include the triggering record; a large
 record can exceed a byte threshold. Zero thresholds fail installation without
 replacing the existing policy.
 
-Counters cover appends/deletions on this handle and reset only after successful
-`sync()` or `immediate()` (`commit_durable()` also resets native-writer counters).
+Counters cover the caller's appends/deletions on this handle and reset only
+after successful `sync()` or `immediate()` (`commit_durable()` also resets
+native-writer counters). A stream writer's counters start at the first caller
+write: the creation nonce and embedded manifest records that `create` writes do
+not count.
 Changing policy neither resets counters nor performs I/O. The next mutation
 evaluates the new policy. `ImmediatePolicy::default()` removes runtime conditions.
 There is no background timer and no I/O from a condition declaration itself.
@@ -79,8 +94,8 @@ even when passed through a plural/batch API. Use a separate checkpoint block or
 a record/byte condition to select a larger durability interval.
 
 The APIs are available on `VarlitFile`, `VarlitWriter`, `VarlitStreamWriter`,
-`VarlitIndexedWriter`, and their generated native append writer wrappers.
-Stream/indexed writers are included by default. Conditions govern typed
+and their generated append writer wrappers. Stream writers are included by
+default. Conditions govern typed
 user appends and deletions; matrix cells, in-place replacement, metadata and
 merge-op APIs retain their existing contracts. Matrix block declarations reject
 these attributes: use the matrix ordered-barrier API.
@@ -89,7 +104,7 @@ On a native format with transaction markers, `immediate()` syncs bytes but does
 not implicitly create a logical commit marker. Use `commit_durable()` when the
 transaction itself must become committed and durable.
 
-## Scalable commit and recovery order
+## Stream commit and recovery order
 
 1. Before the first mutation after a clean boundary, save the clean rollback
    checkpoint and mark the generation Dirty. This marker is not a barrier: a
@@ -97,14 +112,15 @@ transaction itself must become committed and durable.
    file longer than it covers, which is recovered by restore exactly as a
    surviving Dirty checkpoint is.
 2. Write native chunks and append bounded sidecar working checkpoints without
-   a durability barrier. A native chunk does not force an index commit; index
+   a durability barrier. A native chunk does not force a sidecar commit; sidecar
    record/byte bounds, API-end publication and explicit boundaries do.
 3. At `immediate()` / `sync()`, append a sync marker to the native file and
-   sync it. The sidecar is confirmed in the same call only when the native file
+   sync it. This runs through the Kani-verified `commit` driver in
+   `crates/varlit-core/src/publication_protocol.rs`. The sidecar is confirmed in the same call only when the native file
    has grown past the last confirmed EOF by the writer's
    `DiskIndexConfirmPolicy` (default 64 MiB or 65,536 records; `EVERY_SYNC`
    confirms on every sync). Until then readers and recovery take the unconfirmed
-   tail from the native file. A confirmation finishes the pending index batch,
+   tail from the native file. A confirmation finishes the pending sidecar batch,
    writes the clean checkpoint and syncs it, writes one confirmed head into the
    slot that does not hold the newest durable head, and syncs again. The head is
    then copied into the other slot without a barrier of its own; the next
@@ -119,15 +135,17 @@ A `sync()` therefore costs one storage barrier on the native file, plus two on
 the sidecar when it confirms (one for a version 5 sidecar). A writer open adds
 one sidecar sync when the two confirmed heads differ.
 
-`flush()` does not request a new durable clean generation. Creating/rebuilding
-a sidecar and establishing a rollback checkpoint still perform required safety
-I/O. This is not a promise of zero fsync calls before the first application
+`flush()` does not request a new durable clean generation. Creating or
+bootstrapping a sidecar and establishing a rollback checkpoint still perform
+required safety I/O. This is not a promise of zero fsync calls before the first application
 boundary. Neither Drop nor a working checkpoint is an application durability
 acknowledgment.
 
-Recovery restores the last acknowledged generation and discards its unsynced
-suffix. Fresh readers open Dirty state using its saved confirmed root and EOF.
-Existing readers adopt new confirmed generations with `follow()`; use
+Recovery restores the newest confirmed checkpoint, keeps every synced record
+after it, and discards the unsynced suffix. Fresh readers open the confirmed
+checkpoint plus the synced records after it. Existing readers adopt new
+generations and synced records with `follow()`, which runs through the
+Kani-verified `follow` driver; use
 `follow_events` or `follow_blocks` to resume a parser without replaying its prefix.
 Independent readers can run in separate processes. These paths add no mutex or
 reader write-admission gate.
@@ -137,18 +155,17 @@ If an automatic boundary fails after append, the call returns
 record again. The batch error's `written` prefix includes records already in the
 native file, including the triggering record. If the writer remains usable,
 retry `immediate`; a poisoned writer requires recovery. A direct `immediate()`
-returns its original sync/index error because it appends no new user record.
+returns its original sync/sidecar error because it appends no new user record.
 
-The batch and private-cache limits bound index residency, not on-disk history.
-Append-only pages grow until explicit `compact_index()` after a clean boundary.
-Old open readers can retain the replaced file. Select record/byte conditions for
-a finite durability interval and manage disk space explicitly; the million-key
-heap gate remains a measured budget, not a proof for every workload.
+The batch and private-cache limits bound sidecar residency, not on-disk history.
+Explicit `compact_index()` after a sync rewrites the sidecar to its current
+state. Old open readers can retain the replaced file. Select record/byte
+conditions for a finite durability interval and manage disk space explicitly.
 
 ## Validation
 
-`immediate_policy` covers exact in-batch boundaries, scalar appends and deletes,
-unindexed records, threshold/predicate behavior, failed-boundary prefix reporting,
+`immediate_policy` covers exact in-batch boundaries on stream writers, scalar
+appends, native-writer deletes, threshold/predicate behavior, failed-boundary prefix reporting,
 pinned readers, and subprocess exits without running writer destructors.
 `immediate_native` exercises the public native wrappers without scalable features.
 The existing crash matrix, reader-open churn, seeded histories and memory gate

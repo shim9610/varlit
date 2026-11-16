@@ -82,7 +82,7 @@ transactions, each applying the net balance deltas of 10 random transfers
 
 | format | layout |
 |---|---|
-| varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per indexed record (finite key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends one delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
+| varlit-append | append-native, LSM style. Base snapshot written once: 256 accounts per keyed record (key `g`, 11 KiB), plus a branch -> ids record. Each transaction appends one delta record (~350 B) to a native log with `commit_durable()`. Readers follow the log incrementally and keep folded deltas in memory |
 | varlit-matrix-packed | update-in-place alternative: 256 accounts per 11 KiB matrix cell, read-modify-write of touched cells, `sync()` per transaction; branch index packed 1024 ids per cell |
 | sqlite | INTEGER PRIMARY KEY, index on branch built after load, `UPDATE ... SET balance = balance + ?`, WAL + FULL |
 | hdf5 | one dataset per column, CSR branch index; point-selection read + write per transaction, flush + fsync (no transactional atomicity) |
@@ -333,7 +333,7 @@ three repeats. Growth = file growth during the 2000 batches (logical updates:
 - Integrity: Varlit stores CRC32 over header+payload (verified unless `+trusted`);
   the others store no data checksums here.
 - Publication: SQLite WAL and Varlit transaction markers commit atomically.
-  Varlit stream/indexed `sync()` also publishes a crash-recoverable sidecar
+  Varlit stream `sync()` also publishes a crash-recoverable sidecar
   generation (two fsync-class calls per publication). HDF5 flush + fsync is
   not transactional across datasets. Parquet relies on rename.
 - Loss bound: with a non-zero bound, SQLite (`synchronous=NORMAL`), Varlit

@@ -426,7 +426,7 @@ varlit_format! {
         magic: b"DISK-CHECK"; version: 1; endian: little; schema_hash: computed;
         index: keyed_offset_chain;
         blocks {
-            variable DiskReading(id = 4, key = [station], key_index = disk) {
+            variable DiskReading(id = 4, key = [station]) {
                 station: u64, value: u64,
             }
         }

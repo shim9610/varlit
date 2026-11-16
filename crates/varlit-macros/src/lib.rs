@@ -608,115 +608,14 @@ mod tests {
     }
 
     #[test]
-    fn inline_key_index_defaults_to_memory() {
-        let block = parse_inline_test_block(quote! {
-            variable Item(id = 1, key = [id]) { id: u64 }
-        })
-        .expect("keyed inline block should parse");
-
-        assert!(block.key_index == KeyIndexChoice::Memory);
-    }
-
-    #[test]
-    fn inline_key_index_rejects_unkeyed_blocks() {
+    fn key_index_is_refused_with_a_pointer_to_the_design() {
         let error = parse_inline_test_block(quote! {
-            fixed Item(id = 1, key_index = memory) { id: u64 }
-        })
-        .err()
-        .expect("unkeyed key_index should fail");
-
-        assert!(error.to_string().contains("key_index requires a keyed"));
-    }
-
-    #[test]
-    fn inline_key_index_rejects_matrix_blocks() {
-        let error = parse_inline_test_block(quote! {
-            matrix Cell(
-                id = 1,
-                dims = [row, column],
-                category = data,
-                key_index = disk,
-            ) { value: u64 }
-        })
-        .err()
-        .expect("matrix key_index should fail");
-
-        assert!(error.to_string().contains("matrix blocks"));
-    }
-
-    #[test]
-    fn inline_key_index_rejects_unknown_value() {
-        let error = parse_inline_test_block(quote! {
-            variable Item(id = 1, key = [id], key_index = cached) { id: u64 }
-        })
-        .err()
-        .expect("unknown key_index should fail");
-
-        assert_eq!(error.to_string(), "expected memory or disk");
-    }
-
-    #[test]
-    fn disk_key_index_generates_indexed_api() {
-        let block = parse_inline_test_block(quote! {
             variable Item(id = 1, key = [id], key_index = disk) { id: u64 }
         })
-        .expect("disk key_index should parse without a feature");
-        let (constructors, api) = high_cardinality_api_tokens(
-            &syn::parse_quote!(pub),
-            &format_ident!("Test"),
-            &[block],
-            false,
-        );
-        let tokens = format!("{constructors} {api}");
+        .err()
+        .expect("key_index should be refused");
 
-        assert!(tokens.contains("TestStreamReader"));
-        assert!(tokens.contains("TestIndexedReader"));
-        assert!(tokens.contains("get_item"));
-        assert!(tokens.contains("push_item"));
-        assert!(tokens.contains("push_items"));
-        assert!(tokens.contains("delete_item"));
-        assert!(tokens.contains("DiskIndexPlan"));
-        assert!(tokens.contains("disk_index_plan"));
-        assert!(tokens.contains("BatchAppendInfo"));
-        assert!(tokens.contains("BatchAppendError"));
-        assert!(
-            !tokens.contains("high-cardinality-dev"),
-            "dependency features must not become downstream cfg predicates"
-        );
-    }
-
-    #[test]
-    fn disk_index_plan_is_sorted_by_block_id() {
-        let later = parse_inline_test_block(quote! {
-            variable Later(id = 9, key = [id], key_index = disk) { id: u64 }
-        })
-        .expect("later disk block should parse");
-        let earlier = parse_inline_test_block(quote! {
-            variable Earlier(id = 2, key = [id], key_index = disk) { id: u64 }
-        })
-        .expect("earlier disk block should parse");
-        let (constructors, _) = high_cardinality_api_tokens(
-            &syn::parse_quote!(pub),
-            &format_ident!("Test"),
-            &[later, earlier],
-            false,
-        );
-        let tokens = constructors.to_string();
-        let plan_start = tokens
-            .find("pub fn disk_index_plan")
-            .expect("generated plan function");
-        let plan_end = tokens[plan_start..]
-            .find("pub fn open_indexed_reader")
-            .expect("reader constructor after plan")
-            + plan_start;
-        let plan = &tokens[plan_start..plan_end];
-
-        assert!(plan.contains("DiskIndexPlan :: canonical"));
-        assert!(
-            plan.find("Earlier").expect("earlier descriptor")
-                < plan.find("Later").expect("later descriptor")
-        );
-        assert!(tokens.contains("Self :: disk_index_plan ()"));
+        assert!(error.to_string().contains("key_index was removed"));
     }
 
     #[test]
@@ -742,58 +641,11 @@ mod tests {
     }
 
     #[test]
-    fn keyed_chain_exposes_only_plan_backed_keyed_mutations() {
-        let account = parse_inline_test_block(quote! {
-            variable Account(id = 1, key = [id]) { id: u64 }
-        })
-        .expect("memory-keyed block should parse");
-        let frame = parse_inline_test_block(quote! {
-            variable Frame(id = 2, key = [id], key_index = disk) { id: u64 }
-        })
-        .expect("disk-keyed block should parse");
-        let metadata = parse_inline_test_block(quote! {
-            fixed Metadata(id = 3) { value: u64 }
-        })
-        .expect("unkeyed block should parse");
-        let (_, api) = high_cardinality_api_tokens(
-            &syn::parse_quote!(pub),
-            &format_ident!("Test"),
-            &[account, frame, metadata],
-            true,
-        );
-        let tokens = api.to_string();
-        let stream_start = tokens
-            .find("impl TestStreamWriter")
-            .expect("stream writer impl");
-        let stream_end = tokens[stream_start..]
-            .find("pub struct TestIndexedReader")
-            .expect("indexed reader after stream writer")
-            + stream_start;
-        let stream_writer = &tokens[stream_start..stream_end];
-        let indexed_start = tokens
-            .find("impl TestIndexedWriter")
-            .expect("indexed writer impl");
-        let indexed_writer = &tokens[indexed_start..];
-
-        assert!(!stream_writer.contains("push_account"));
-        assert!(!stream_writer.contains("delete_account"));
-        assert!(!stream_writer.contains("push_frame"));
-        assert!(!stream_writer.contains("delete_frame"));
-        assert!(stream_writer.contains("push_metadata"));
-        assert!(indexed_writer.contains("push_frame"));
-        assert!(indexed_writer.contains("push_frames"));
-        assert!(indexed_writer.contains("delete_frame"));
-        assert!(!indexed_writer.contains("push_account"));
-        assert!(!indexed_writer.contains("delete_account"));
-        assert!(indexed_writer.contains("push_metadata"));
-    }
-
-    #[test]
-    fn memory_key_index_generates_only_stream_api() {
+    fn keyed_blocks_generate_only_stream_api() {
         let block = parse_inline_test_block(quote! {
             variable Item(id = 1, key = [id]) { id: u64 }
         })
-        .expect("default key index should parse");
+        .expect("a keyed block should parse");
         let (constructors, api) = high_cardinality_api_tokens(
             &syn::parse_quote!(pub),
             &format_ident!("Test"),

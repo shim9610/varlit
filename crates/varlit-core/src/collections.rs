@@ -41,17 +41,6 @@ pub(crate) struct MaterializationBudget {
     remaining: u64,
 }
 
-/// A callback may charge/decode against this ledger, but cannot reset, clone
-/// or replace the underlying budget. The borrow remains private to this module.
-pub(crate) struct DecodeBudget<'a> {
-    budget: &'a mut MaterializationBudget,
-}
-impl DecodeBudget<'_> {
-    pub(crate) fn decode<T: VarlitDecode>(&mut self, bytes: &[u8], endian: Endian) -> Result<T> {
-        self.budget.decode(bytes, endian)
-    }
-}
-
 impl MaterializationBudget {
     pub(crate) fn new(spec: FormatSpec) -> Self {
         let limit = match spec.read_limits.resolve().max_materialized_bytes {
@@ -95,10 +84,6 @@ impl MaterializationBudget {
             actual,
             limit: self.limit,
         })
-    }
-
-    pub(crate) fn decode_view(&mut self) -> DecodeBudget<'_> {
-        DecodeBudget { budget: self }
     }
 
     pub(crate) fn remaining(&self) -> u64 {

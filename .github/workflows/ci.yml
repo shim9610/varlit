@@ -79,9 +79,7 @@ jobs:
       - name: Build load example
         run: cargo build --locked --release -p varlit --features integrity --example scalable_load
       - name: Execute real-byte load smoke with eight readers
-        run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --read-seconds 1 --output "$VARLIT_STORAGE_RUN/load-smoke" --data-root "$VARLIT_STORAGE_RUN/load-smoke-data"
-      - name: Verify fixed reader work and snapshot traces
-        run: python3 scripts/load_scalable.py --suite large --only indexed-r8-20g --total-gib 0.0625 --epoch-mib 8 --reader-checks-per-epoch 32 --read-seconds 1 --output "$VARLIT_STORAGE_RUN/load-fixed-smoke" --data-root "$VARLIT_STORAGE_RUN/load-fixed-smoke-data"
+        run: python3 scripts/load_scalable.py --suite large --only stream-r8-20g --total-gib 0.0625 --epoch-mib 8 --output "$VARLIT_STORAGE_RUN/load-smoke" --data-root "$VARLIT_STORAGE_RUN/load-smoke-data"
       - name: Preserve contract evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -90,7 +88,6 @@ jobs:
           path: |
             ${{ env.VARLIT_STORAGE_RUN }}/contracts/
             ${{ env.VARLIT_STORAGE_RUN }}/load-smoke/
-            ${{ env.VARLIT_STORAGE_RUN }}/load-fixed-smoke/
           if-no-files-found: error
           retention-days: 14
 
@@ -162,8 +159,6 @@ jobs:
       - run: cargo fmt --manifest-path tools/storage-bench/Cargo.toml -- --check
       - name: Format native implementation files included in their owning module
         run: rustfmt --edition 2024 --check crates/varlit-core/src/file/*.rs
-      # cargo fmt does not traverse include! source files.
-      - run: rustfmt --edition 2024 --check crates/varlit/tests/support/publication_histories.rs
 
   # Discover configurations from Cargo metadata. Adding a feature adds both
   # Clippy and a native singleton test job without editing this workflow.

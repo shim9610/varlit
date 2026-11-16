@@ -81,13 +81,6 @@ impl SyncChain {
         self.hasher.update(&bytes[at..]);
     }
 
-    /// Adds one appended in-place record whose payload the chain leaves out:
-    /// only its header and footer are hashed.
-    pub(crate) fn extend_in_place_record(&mut self, header: &[u8], footer: &[u8]) {
-        self.hasher.update(header);
-        self.hasher.update(footer);
-    }
-
     /// The payload of a marker written at `marker_offset`, which must be the
     /// end of every byte this link has seen.
     pub(crate) fn payload(&self, marker_offset: u64) -> Result<[u8; SYNC_PAYLOAD_LEN]> {

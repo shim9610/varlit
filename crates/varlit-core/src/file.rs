@@ -41,7 +41,7 @@ pub const METADATA_BLOCK_ID: u32 = 0xFFFF_FFFC;
 pub const INDEX_BLOCK_ID: u32 = 0xFFFF_FFFB;
 pub const MANIFEST_BLOCK_ID: u32 = 0xFFFF_FFFA;
 pub const COMMIT_BLOCK_ID: u32 = 0xFFFF_FFF9;
-/// Carries the per-create nonce of a stream/indexed primary.
+/// Carries the per-create nonce of a stream primary.
 pub const CREATION_NONCE_BLOCK_ID: u32 = 0xFFFF_FFF8;
 /// Carries one internal segment: the records a single commit point added.
 ///
@@ -4812,65 +4812,6 @@ impl KeyedChain<'_> {
     }
 }
 
-/// Frames one record through the snapshot, without touching the resident index.
-pub(crate) fn read_index_entry_from_descriptor(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    record_offset: u64,
-    sequence: u64,
-    physical: crate::disk_index::DiskIndexPhysicalRecord,
-) -> Result<RecordIndexEntry> {
-    // The sidecar lacks the compression-length hint. Read the native frame once
-    // for compressed records; payload access still avoids a second frame read.
-    if physical.flags & RECORD_FLAG_COMPRESSED != 0 {
-        return read_record_entry_positional(spec, snapshot, record_offset);
-    }
-    let pointer = snapshot.validate(
-        crate::scalable_extent::UntrustedRecordPointer::new(record_offset, physical.physical_len),
-        spec.spec_needs_record_footer(),
-    )?;
-    let span = pointer.span();
-    let mut entry = RecordIndexEntry {
-        block_id: physical.block_id,
-        block_version: physical.block_version,
-        flags: physical.flags,
-        sequence,
-        record_offset,
-        payload_offset: span.payload_offset().get(),
-        payload_len: span.payload_len().get(),
-        checksum: physical.native_crc.unwrap_or(0),
-        uncompressed_len_hint: 0,
-        footer_offset: spec
-            .spec_needs_record_footer()
-            .then_some(span.footer_offset().get()),
-        prev_same_block_offset: None,
-        prev_same_key_offset: None,
-        mutable_flags: 0,
-        committed: true,
-    };
-    validate_record_entry(&spec, &entry)?;
-    spec.read_limits
-        .check(ReadLimitKey::RecordPayloadLen, entry.payload_len)?;
-    spec.read_limits
-        .check(ReadLimitKey::LogicalPayloadLen, entry.payload_len)?;
-    if spec.read_validation().data_crc {
-        if physical.native_crc.is_none() {
-            return Err(Error::InvalidIndexCheckpoint);
-        }
-        // Footer bytes participate in data CRC. The sidecar does not store
-        // chain links, so CRC-only mode still needs this one footer read.
-        if let Some(at) = entry.footer_offset {
-            let mut bytes = [0; crate::width::small(RECORD_FOOTER_LEN)];
-            snapshot.read_exact_at(at, &mut bytes)?;
-            let footer = decode_record_footer(spec, &bytes, at, record_offset)?;
-            entry.prev_same_block_offset = footer.prev_same_block_offset;
-            entry.prev_same_key_offset = footer.prev_same_key_offset;
-            entry.mutable_flags = footer.mutable_flags;
-        }
-    }
-    Ok(entry)
-}
-
 pub(crate) fn read_record_entry_positional(
     spec: FormatSpec,
     snapshot: &SnapshotFile,
@@ -6402,26 +6343,6 @@ where
     Ok(Some(budget.decode(key, endian)?))
 }
 
-pub(crate) fn decode_stream_tombstone_key<T: VarlitKeyedBlock>(
-    spec: FormatSpec,
-    snapshot: &SnapshotFile,
-    entry: &RecordIndexEntry,
-) -> Result<Option<T::Key>> {
-    if entry.block_id != TOMBSTONE_BLOCK_ID {
-        return Ok(None);
-    }
-    if entry.block_version != 1 || entry.flags != RECORD_FLAG_INTERNAL {
-        return Err(Error::CorruptTail {
-            offset: entry.record_offset,
-        });
-    }
-    let logical_len = entry.logical_payload_len_snapshot(spec, snapshot)?;
-    let mut budget = MaterializationBudget::new(spec);
-    budget.consume(logical_len)?;
-    let payload = entry.read_logical_payload_snapshot(spec, snapshot)?;
-    decode_internal_key_payload::<T>(spec.endian, &payload, &mut budget)
-}
-
 fn encode_internal_op_payload<T>(spec: FormatSpec, key: &T::Key, op: &T::Op) -> Result<Vec<u8>>
 where
     T: VarlitMerge,
@@ -7773,14 +7694,12 @@ pub(crate) use record_fields::decode_record_into;
 #[doc(hidden)]
 pub use record_fields::{FieldsCodec, RecordField, RecordFields};
 pub(crate) use record_read::{
-    ChunkCache, ScratchLoan, fill_range, fill_record, lend_scratch, lend_window, return_scratch,
-    return_window,
+    ChunkCache, ScratchLoan, fill_record, lend_scratch, lend_window, return_scratch, return_window,
 };
 pub use record_read::{RecordCursor, RecordPage};
 pub use record_view::{
     FIELD_INLINE, FieldSpan, FieldWalk, VarlitView, view_set, view_wire_mismatch,
 };
-pub(crate) use record_view::{decode_field, read_span, view_block};
 
 pub(crate) use header_codec::file_header_extensions;
 
@@ -7810,11 +7729,12 @@ pub(crate) use scan::reset_stream_io_counters;
 #[cfg(test)]
 pub(crate) use scan::stream_io_counters;
 
+// Reads a record a pointer names, validated against the snapshot: the
+// lookup path of bounded keyed storage (docs/design/bounded-keyed-storage.md).
+#[allow(unused_imports)]
 pub(crate) use scan::read_stream_entry_at;
 
 pub(crate) use scan::PreparedStreamRecord;
-
-pub(crate) use scan::PreparedRecordParts;
 
 #[cfg(test)]
 pub(crate) use scan::prepare_stream_user_record;
@@ -7828,7 +7748,6 @@ pub(crate) use scan::fresh_stream_creation_nonce;
 
 pub(crate) use scan::prepare_stream_creation_nonce_record;
 pub(crate) use scan::prepare_stream_sync_record;
-pub(crate) use scan::stream_matrix_record_frame;
 
 pub(crate) use scan::read_stream_creation_nonce;
 

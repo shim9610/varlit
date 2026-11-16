@@ -191,8 +191,8 @@ parent directory with write access, and no open or flush failure is ever
 promoted to a `Durable` result. On filesystems that refuse a directory
 write-open or flush, every publication surfaces
 `PublishedButParentSyncPending` rather than a false durability claim; the same
-honesty applies to the native sidecar publication sites (stream/indexed sidecar
-create, stream bootstrap, disk-index rebuild and compaction), which surface the pending state
+honesty applies to the native sidecar publication sites (stream sidecar
+create, stream bootstrap and sidecar compaction), which surface the pending state
 while preserving the already-published sidecar instead of silently discarding
 it.
 
@@ -243,11 +243,9 @@ than half the ring adds overflow records once, which later large publications
 of the same writer reuse (see below). There is no companion file:
 `matrix_generation_path()` returns the primary path, and copying the primary
 copies the whole matrix. Primary-file replacement, rewrite and defragmentation
-are refused for matrix files with `InvalidFormatSpec`. An indexed
-(high-cardinality) primary can carry a matrix the same way; its sync markers
-leave the in-place matrix payloads out of their checksums
-(`keyed_records_and_a_matrix_share_an_indexed_primary`,
-`recovery_keeps_links_whose_tiles_were_rewritten_since`).
+are refused for matrix files with `InvalidFormatSpec`. Stream handles refuse
+a format that declares a matrix block with `StreamingUnsupported`; the indexed
+primary that could carry a matrix was removed.
 
 Readers trust only commit bits. A clear commit bit means `NotCommitted`
 regardless of slot bytes. A slot holds the payload followed by its CRC32;
@@ -589,7 +587,7 @@ If detailed source/path storage cannot be allocated, they return
 append/commit sequence, published index, replacement rebind (including pending
 parent sync), published replacement, or experimental reuse generation and its
 uncertainty. Details can be lost; the completed/uncertain outcome is retained.
-A caller must inspect that outcome before retrying. Disk-index wrapping preserves
+A caller must inspect that outcome before retrying. Stream sidecar wrapping preserves
 a primary publication error even when an additional wrapper cannot be allocated.
 
 This replaces the earlier abort-on-error-box policy. Preallocation of a scalar

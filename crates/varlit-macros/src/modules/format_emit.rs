@@ -125,17 +125,9 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
             )
         }
     });
-    let record_validators = blocks.iter().map(|block| {
-        let requires_disk = inline_blocks.iter().any(|inline| {
-            matches!(inline.key_index, KeyIndexChoice::Disk)
-                && matches!(block, Type::Path(path) if path.qself.is_none() && path.path.get_ident() == Some(&inline.name))
-        });
-        if requires_disk {
-            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR.requiring_disk_index())
-        } else {
-            quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR)
-        }
-    });
+    let record_validators = blocks
+        .iter()
+        .map(|block| quote!(<#block as ::varlit::__core::VarlitBlock>::__VARLIT_RECORD_VALIDATOR));
 
     let duplicate_asserts = pairwise(&blocks).into_iter().map(|(left, right)| {
         quote! {
@@ -2298,18 +2290,10 @@ pub(super) fn high_cardinality_api_tokens(
 ) -> (TokenStream2, TokenStream2) {
     let stream_reader_name = format_ident!("{}StreamReader", format_name);
     let stream_writer_name = format_ident!("{}StreamWriter", format_name);
-    let indexed_reader_name = format_ident!("{}IndexedReader", format_name);
-    let indexed_writer_name = format_ident!("{}IndexedWriter", format_name);
     let append_blocks: Vec<_> = blocks
         .iter()
         .filter(|block| !matches!(&block.kind, InlineBlockKind::Matrix(_)))
         .collect();
-    let mut disk_blocks: Vec<_> = append_blocks
-        .iter()
-        .copied()
-        .filter(|block| block.key_index == KeyIndexChoice::Disk)
-        .collect();
-    disk_blocks.sort_by_key(|block| block.id);
 
     let stream_reader_methods = append_blocks.iter().map(|block| {
         let ty = &block.name;
@@ -2541,389 +2525,7 @@ pub(super) fn high_cardinality_api_tokens(
         }
     };
 
-    if disk_blocks.is_empty() {
-        return (stream_constructors, quote!(#stream_api));
-    }
-
-    let indexed_reader_methods = disk_blocks.iter().map(|block| {
-        let ty = &block.name;
-        let get = format_ident!("get_{}", singular_method_name(ty));
-        quote! {
-            pub fn #get(
-                &self,
-                key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
-                out: &mut #ty,
-            ) -> ::varlit::__core::Result<bool> {
-                self.inner.get::<#ty>(key, out)
-            }
-        }
-    });
-    let indexed_scan_methods = append_blocks.iter().map(|block| {
-        let ty = &block.name;
-        let plural = plural_method_ident(ty);
-        quote! {
-            pub fn #plural(
-                &self,
-            ) -> ::varlit::__core::Result<::varlit::__core::StreamingBlocks<#ty>> {
-                self.inner.blocks::<#ty>()
-            }
-        }
-    });
-    let indexed_writer_methods = append_blocks.iter().flat_map(|block| {
-        if keyed_offset_chain
-            && !block.key_fields.is_empty()
-            && block.key_index != KeyIndexChoice::Disk
-        {
-            return Vec::new();
-        }
-        let ty = &block.name;
-        let push = format_ident!("push_{}", singular_method_name(ty));
-        let push_many = format_ident!("push_{}", plural_method_name(ty));
-        let mut methods = if block.key_index == KeyIndexChoice::Disk {
-            vec![
-                quote! {
-                    pub fn #push(
-                        &mut self,
-                        value: &#ty,
-                    ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                        self.inner.push_info(value)
-                    }
-                },
-                quote! {
-                    pub fn #push_many<I>(
-                        &mut self,
-                        values: I,
-                        options: ::varlit::__core::BatchOptions,
-                    ) -> ::core::result::Result<
-                        ::varlit::__core::BatchAppendInfo,
-                        ::varlit::__core::BatchAppendError,
-                    >
-                    where
-                        I: ::core::iter::IntoIterator,
-                        I::Item: ::core::borrow::Borrow<#ty>,
-                    {
-                        self.inner.push_iter::<#ty, _>(values, options)
-                    }
-                },
-            ]
-        } else {
-            vec![
-                quote! {
-                    pub fn #push(
-                        &mut self,
-                        value: &#ty,
-                    ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                        self.inner.push_unindexed_info(value)
-                    }
-                },
-                quote! {
-                    pub fn #push_many<I>(
-                        &mut self,
-                        values: I,
-                        options: ::varlit::__core::BatchOptions,
-                    ) -> ::core::result::Result<
-                        ::varlit::__core::BatchAppendInfo,
-                        ::varlit::__core::BatchAppendError,
-                    >
-                    where
-                        I: ::core::iter::IntoIterator,
-                        I::Item: ::core::borrow::Borrow<#ty>,
-                    {
-                        self.inner
-                            .push_unindexed_iter::<#ty, _>(values, options)
-                    }
-                },
-            ]
-        };
-        if !block.key_fields.is_empty() {
-            let delete = format_ident!("delete_{}", singular_method_name(ty));
-            methods.push(if block.key_index == KeyIndexChoice::Disk {
-                quote! {
-                    pub fn #delete(
-                        &mut self,
-                        key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
-                    ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                        self.inner.delete_info::<#ty>(key)
-                    }
-                }
-            } else {
-                quote! {
-                pub fn #delete(
-                    &mut self,
-                    key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
-                ) -> ::varlit::__core::Result<::varlit::__core::AppendInfo> {
-                    self.inner.delete_unindexed_info::<#ty>(key)
-                }
-                }
-            });
-        }
-        methods
-    });
-    let indexed_block_descriptors = disk_blocks.iter().map(|block| {
-        let ty = &block.name;
-        quote!(::varlit::__core::DiskIndexedBlock::of::<#ty>())
-    });
-    let indexed_block_descriptors: Vec<_> = indexed_block_descriptors.collect();
-    let indexed_constructors = quote! {
-        pub fn disk_index_plan() -> ::varlit::__core::Result<::varlit::__core::DiskIndexPlan> {
-            const BLOCKS: &[::varlit::__core::DiskIndexedBlock] = &[
-                #(#indexed_block_descriptors),*
-            ];
-            ::varlit::__core::DiskIndexPlan::canonical(Self::spec(), BLOCKS)
-                .map_err(::varlit::__core::Error::from)
-        }
-
-        pub fn open_indexed_reader<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-        ) -> ::varlit::__core::Result<#indexed_reader_name> {
-            ::core::result::Result::Ok(#indexed_reader_name::from_inner(
-                ::varlit::__core::VarlitIndexedReader::open(
-                    Self::spec(),
-                    path,
-                    options,
-                    Self::disk_index_plan()?,
-                )?,
-            ))
-        }
-
-        pub fn create_indexed_writer<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-        ) -> ::varlit::__core::Result<#indexed_writer_name> {
-            ::core::result::Result::Ok(#indexed_writer_name::from_inner(
-                ::varlit::__core::VarlitIndexedWriter::create(
-                    Self::spec(),
-                    path,
-                    options,
-                    Self::disk_index_plan()?,
-                )?,
-            ))
-        }
-
-        pub fn open_indexed_writer<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-        ) -> ::varlit::__core::Result<#indexed_writer_name> {
-            ::core::result::Result::Ok(#indexed_writer_name::from_inner(
-                ::varlit::__core::VarlitIndexedWriter::open(
-                    Self::spec(),
-                    path,
-                    options,
-                    Self::disk_index_plan()?,
-                )?,
-            ))
-        }
-
-
-        pub fn restore_indexed_writer<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-        ) -> ::varlit::__core::Result<#indexed_writer_name> {
-            ::core::result::Result::Ok(#indexed_writer_name::from_inner(
-                ::varlit::__core::VarlitIndexedWriter::restore_checkpoint_and_open(
-                    Self::spec(),
-                    path,
-                    options,
-                    Self::disk_index_plan()?,
-                )?,
-            ))
-        }
-
-        pub fn rebuild_disk_index<P: AsRef<::std::path::Path>>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-        ) -> ::varlit::__core::Result<::varlit::__core::DiskIndexRebuildReport> {
-            ::varlit::__core::rebuild_disk_index(
-                Self::spec(),
-                path,
-                options,
-                Self::disk_index_plan()?,
-            )
-        }
-
-        pub fn rebuild_disk_index_with_progress<P, F>(
-            path: P,
-            options: ::varlit::__core::DiskIndexOptions,
-            scan: ::varlit::__core::ScanOptions<'_>,
-            observer: F,
-        ) -> ::varlit::__core::Result<::varlit::__core::DiskIndexRebuildReport>
-        where
-            P: AsRef<::std::path::Path>,
-            F: ::core::ops::FnMut(::varlit::__core::ScanProgress),
-        {
-            ::varlit::__core::rebuild_disk_index_with_progress(
-                Self::spec(),
-                path,
-                options,
-                Self::disk_index_plan()?,
-                scan,
-                observer,
-            )
-        }
-    };
-    let indexed_api = quote! {
-        #vis struct #indexed_reader_name {
-            inner: ::varlit::__core::VarlitIndexedReader,
-        }
-
-        impl #indexed_reader_name {
-            pub fn from_inner(inner: ::varlit::__core::VarlitIndexedReader) -> Self {
-                Self { inner }
-            }
-
-            pub fn into_inner(self) -> ::varlit::__core::VarlitIndexedReader {
-                self.inner
-            }
-
-
-            pub fn resident_state(&self) -> ::varlit::__core::StreamResidentState {
-                self.inner.resident_state()
-            }
-
-            pub fn follow(&mut self) -> ::varlit::__core::Result<u64> {
-                self.inner.follow()
-            }
-
-            pub fn committed_len(&self) -> u64 { self.inner.committed_len() }
-
-            pub fn release_snapshot(&mut self) -> bool { self.inner.release_snapshot() }
-
-            pub fn snapshot_status(&self) -> ::varlit::__core::Result<::varlit::__core::SnapshotStatus> {
-                self.inner.snapshot_status()
-            }
-
-
-            pub fn follow_events(&mut self, events: &mut ::varlit::__core::StreamEvents) -> ::varlit::__core::Result<u64> {
-                self.inner.follow_events(events)
-            }
-
-            pub fn follow_blocks<T: ::varlit::__core::VarlitBlock>(&mut self, blocks: &mut ::varlit::__core::StreamingBlocks<T>) -> ::varlit::__core::Result<u64> {
-                self.inner.follow_blocks(blocks)
-            }
-
-
-            pub fn events(&self) -> ::varlit::__core::Result<::varlit::__core::StreamEvents> {
-                self.inner.events()
-            }
-
-            pub fn verify_all(&self) -> ::varlit::__core::Result<u64> {
-                self.inner.verify_all()
-            }
-
-            pub fn verify_all_with_progress<F>(
-                &self,
-                scan: ::varlit::__core::ScanOptions<'_>,
-                observer: F,
-            ) -> ::varlit::__core::Result<u64>
-            where
-                F: ::core::ops::FnMut(::varlit::__core::ScanProgress),
-            {
-                self.inner.verify_all_with_progress(scan, observer)
-            }
-
-            pub fn lookup_entry<T>(
-                &self,
-                key: &T::Key,
-            ) -> ::varlit::__core::Result<::core::option::Option<::varlit::__core::RecordIndexEntry>>
-            where
-                T: ::varlit::__core::VarlitKeyedBlock,
-                T::Key: ::varlit::__core::VarlitDiskKey,
-            {
-                self.inner.lookup_entry::<T>(key)
-            }
-
-            pub fn read_record_into(
-                &self,
-                entry: &::varlit::__core::RecordIndexEntry,
-                out: &mut [u8],
-            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
-                self.inner.read_record_into(entry, out)
-            }
-
-            pub fn read_record_from(
-                &self,
-                cursor: ::varlit::__core::RecordCursor,
-                out: &mut [u8],
-            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
-                self.inner.read_record_from(cursor, out)
-            }
-
-            pub fn view_block<T: ::varlit::__core::VarlitView>(
-                &self,
-                entry: &::varlit::__core::RecordIndexEntry,
-            ) -> ::varlit::__core::Result<T::View> {
-                self.inner.view_block::<T>(entry)
-            }
-
-            pub fn read_span_into(
-                &self,
-                entry: &::varlit::__core::RecordIndexEntry,
-                span: ::varlit::__core::FieldSpan,
-                out: &mut [u8],
-            ) -> ::varlit::__core::Result<::varlit::__core::RecordPage> {
-                self.inner.read_span_into(entry, span, out)
-            }
-
-            pub fn decode_field<F: ::varlit::__core::VarlitDecode>(
-                &self,
-                entry: &::varlit::__core::RecordIndexEntry,
-                span: ::varlit::__core::FieldSpan,
-            ) -> ::varlit::__core::Result<F> {
-                self.inner.decode_field::<F>(entry, span)
-            }
-
-            #(#indexed_scan_methods)*
-            #(#indexed_reader_methods)*
-        }
-
-        #vis struct #indexed_writer_name {
-            inner: ::varlit::__core::VarlitIndexedWriter,
-        }
-
-        impl #indexed_writer_name {
-            pub fn from_inner(inner: ::varlit::__core::VarlitIndexedWriter) -> Self {
-                Self { inner }
-            }
-
-            pub fn into_inner(self) -> ::varlit::__core::VarlitIndexedWriter {
-                self.inner
-            }
-
-            pub fn flush(&mut self) -> ::varlit::__core::Result<()> {
-                self.inner.flush()
-            }
-
-            pub fn sync(&mut self) -> ::varlit::__core::Result<()> {
-                self.inner.sync()
-            }
-
-            pub fn immediate(&mut self) -> ::varlit::__core::Result<()> {
-                self.inner.immediate()
-            }
-
-            pub fn set_immediate_policy(&mut self, policy: ::varlit::__core::ImmediatePolicy) -> ::varlit::__core::Result<()> {
-                self.inner.set_immediate_policy(policy)
-            }
-
-            /// Reclaim sidecar pages after an explicit sync; readers do not block it.
-            pub fn compact_index(&mut self) -> ::varlit::__core::Result<::varlit::__core::IndexCompaction> {
-                self.inner.compact_index()
-            }
-
-
-            pub fn resident_state(&self) -> ::varlit::__core::StreamResidentState {
-                self.inner.resident_state()
-            }
-
-            #(#indexed_writer_methods)*
-        }
-    };
-
-    (
-        quote!(#stream_constructors #indexed_constructors),
-        quote!(#stream_api #indexed_api),
-    )
+    (stream_constructors, quote!(#stream_api))
 }
 
 /// Rustdoc for a generated typed writer.
@@ -2939,10 +2541,11 @@ pub(super) fn generated_writer_doc(format_name: &Ident, keyed_blocks: &[&InlineB
             "Typed resident writer for the `{format_name}` format.\n\
              \n\
              This format declares no keyed block, so construction primes no \
-             keyed-tail cache. The writer holds the whole record index in \
-             memory, which is the resident (non-petabyte) path: for a file \
-             whose record count is chosen by an untrusted producer, bound it \
-             with `ReadLimits` or use the streaming/indexed APIs."
+             keyed-tail cache. The writer holds the record index in memory, \
+             one entry per record: for a file whose record count is chosen by \
+             an untrusted producer, bound it with `ReadLimits`, or append \
+             through the stream handles (`create_stream_writer`), which keep \
+             no record index."
         );
     }
     let names: Vec<String> = keyed_blocks
@@ -2967,17 +2570,14 @@ pub(super) fn generated_writer_doc(format_name: &Ident, keyed_blocks: &[&InlineB
          that ceiling. Both facts are the documented behaviour of the resident \
          path, not a limit violation.\n\
          \n\
-         # High-cardinality formats should not use this writer\n\
+         # Key state grows with distinct keys\n\
          \n\
-         If the number of distinct keys is large, unbounded, or chosen by an \
-         untrusted producer, declare `key_index = disk` on the keyed blocks and \
-         use the generated disk-indexed API (`{format_name}IndexedWriter` \
-         through `create_indexed_writer` / `open_indexed_writer`, and \
-         `{format_name}IndexedReader` through `open_indexed_reader`) instead. \
-         Those keep key state in the native sidecar rather than in this process, \
-         they perform no per-construction index walk, and they are the APIs the \
-         petabyte-scale contract covers. The resident writer is explicitly not \
-         that path.",
+         The keyed-tail maps hold one entry per distinct key, and every \
+         update or delete appends a record, so memory follows the number of \
+         keys and the file follows the number of updates. This writer is not \
+         the path for a large, unbounded or untrusted number of keys or \
+         updates; docs/design/bounded-keyed-storage.md describes the keyed \
+         storage that replaces it.",
         names = names.join(", "),
     )
 }
@@ -2994,12 +2594,14 @@ pub(super) fn generated_writer_construction_doc(keyed_blocks: &[&InlineBlock]) -
         "Wraps an open `VarlitWriter`, priming the resident keyed-tail map of \
          each of this format's {count} keyed block types.\n\
          \n\
-         The priming is fallible and happens **before** any mutation: a file \
-         whose distinct key count exceeds `ReadLimits::max_keyed_tail_bytes` \
-         for one of those blocks is refused here, not at a later append. Each \
-         pass walks the resident record index, so this is the `Theta(M*N)` step \
-         described on the type; a format with high key cardinality should use \
-         the disk-indexed API instead.",
+         The priming is fallible and happens **before** any mutation: it \
+         reads every record of those blocks, so a record that cannot be read \
+         or exceeds the materialization limit is refused here, not at a later \
+         append. Tails beyond `ReadLimits::max_keyed_tail_bytes` spill to a \
+         private temporary index rather than refusing the open. Each pass \
+         walks the resident record index, so this is the `Theta(M*N)` step \
+         described on the type; docs/design/bounded-keyed-storage.md \
+         describes the keyed storage that replaces it.",
         count = keyed_blocks.len(),
     )
 }
@@ -3057,7 +2659,7 @@ pub(super) fn typed_api_tokens(
     // M * `keyed_tail` because that ceiling is per block id, not per file.
     // That is the documented behaviour of the resident (non-PB) path rather
     // than a contract violation, so the generated pages say it out loud and
-    // name the disk-indexed API a high-cardinality format should use instead.
+    // point high-cardinality formats at the bounded keyed storage design.
     let writer_doc = generated_writer_doc(format_name, &keyed_blocks);
     let writer_construction_doc = generated_writer_construction_doc(&keyed_blocks);
 

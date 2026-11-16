@@ -8,7 +8,7 @@
 //! generation that wrote it (its *birth*), every pointer to it records that
 //! birth too, and a reader that follows a pointer to a page born later than
 //! the pointer says knows the page was reclaimed and rewritten:
-//! [`DiskIndexError::PageReclaimed`]. When a freed page may be reused is the
+//! a damaged-sidecar error. When a freed page may be reused is the
 //! allocator owner's decision; see `storage`.
 use super::{DiskIndexError, DiskIndexResult, LATEST_LEN};
 use crate::fallible::Arc;
@@ -102,6 +102,13 @@ impl PageAlloc {
 
 fn corrupt(message: &'static str) -> DiskIndexError {
     DiskIndexError::CheckpointMismatch(message)
+}
+
+/// A page reached through an older root was reused by a later generation.
+/// No reader reaches a page through an older root (a stream reader reads its
+/// state once, at open), so this is a damaged sidecar.
+pub(super) fn reclaimed_page() -> DiskIndexError {
+    corrupt("index page was reused by a later generation")
 }
 
 // Test-only syscall seam: production continues to call the native positional
@@ -423,7 +430,7 @@ impl Reader {
     fn node(&self, root: Root) -> DiskIndexResult<Lease<'_, Node>> {
         if let Some(node) = self.cached::<Node>(root.offset) {
             if node.birth != root.birth {
-                return Err(DiskIndexError::PageReclaimed);
+                return Err(reclaimed_page());
             }
             if node.count != root.count {
                 return Err(corrupt("index subtree count mismatch"));
@@ -458,7 +465,7 @@ impl Reader {
                     // A reclaimed page may hold anything, including bytes that
                     // are not a page at all; the pointer's birth decides below
                     // once the page is at least shaped like one.
-                    return Err(DiskIndexError::PageReclaimed);
+                    return Err(reclaimed_page());
                 }
                 u64::from_le_bytes(bytes[20..28].try_into().unwrap())
             }
@@ -472,11 +479,11 @@ impl Reader {
         {
             return Err(match format {
                 PageFormat::Append => corrupt("index page checksum mismatch"),
-                PageFormat::Reuse => DiskIndexError::PageReclaimed,
+                PageFormat::Reuse => reclaimed_page(),
             });
         }
         if birth != root.birth {
-            return Err(DiskIndexError::PageReclaimed);
+            return Err(reclaimed_page());
         }
         if format == PageFormat::Reuse && birth == 0 {
             return Err(corrupt("index page has no birth generation"));
@@ -872,7 +879,7 @@ impl Reader {
         loop {
             let validate = |node: &Node| -> DiskIndexResult<()> {
                 if node.birth != root.birth {
-                    return Err(DiskIndexError::PageReclaimed);
+                    return Err(reclaimed_page());
                 }
                 if node.count != root.count {
                     return Err(corrupt("index subtree count mismatch"));
@@ -1351,7 +1358,12 @@ mod tests {
         let outcome = keys
             .iter()
             .try_for_each(|key| stale.get(first, key).map(|_| ()));
-        assert!(matches!(outcome, Err(DiskIndexError::PageReclaimed)));
+        assert!(matches!(
+            outcome,
+            Err(DiskIndexError::CheckpointMismatch(
+                "index page was reused by a later generation"
+            ))
+        ));
     }
 
     #[test]

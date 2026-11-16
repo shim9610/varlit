@@ -356,16 +356,6 @@ impl FiniteKey {
             .fold(0xcbf2_9ce4_8422_2325u64, |acc, byte| {
                 (acc ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
             });
-        let disk_impl = {
-            quote! {
-                impl ::varlit::__core::VarlitDiskKey for #name {
-                    const FINITE_COUNT: u32 = #count as u32;
-                    fn disk_codec_identity() -> ::std::string::String {
-                        ::std::format!("varve/finite-key/u16/v1/{:016x}", #schema_id)
-                    }
-                }
-            }
-        };
         quote! {
             /// A schema-declared value combination, encoded as two bytes.
             #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -410,7 +400,6 @@ impl FiniteKey {
                     Self::from_code(decoder.decode_value::<u16>()?)
                 }
             }
-            #disk_impl
         }
     }
 }

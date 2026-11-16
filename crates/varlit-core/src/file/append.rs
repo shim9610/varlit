@@ -32,7 +32,7 @@ impl VarlitFile {
     /// key. Such calls are rejected with
     /// [`Error::KeyedChainRequiresKeyedApi`]; use the generated keyed writer
     /// method or [`VarlitFile::push_keyed_info`], both of which maintain the
-    /// chain. The bounded streaming and indexed writers already reject the
+    /// chain. The bounded streaming writer already rejects the
     /// same combination.
     pub fn push_info<T: VarlitBlock>(&mut self, block: &T) -> Result<AppendInfo> {
         if self.spec.index_policy.keyed_offset_chain && T::IS_KEYED {

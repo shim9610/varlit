@@ -75,12 +75,12 @@
       "callers": {
         "default": [
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bac081e424599e47]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bac081e424599e47]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -175,11 +175,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::replay_tail(_1: &mut indexed::VarlitIndexedWriter, _2: u64, _3: disk_index::DiskIndexPlan) -> std::result::Result<(), error::Error> [body:17740ee44e3d84d8]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "native_record_to_layout_segment(_1: &file::RecordIndexEntry) -> std::result::Result<LayoutSegmentInfo, error::Error> [body:1cbfd5f7ae31d6ff]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
@@ -195,27 +190,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "rebuild_index(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: format::FormatSpec, _4: &snapshot::SnapshotFile, _5: disk_index::DiskIndexPlan, _6: ScanOptions<'_>, _7: F) -> std::result::Result<DiskIndexRebuildReport, error::Error> [body:7588e9e4afe845ae]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "record_physical_descriptor(_1: format::FormatSpec, _2: &file::RecordIndexEntry) -> std::result::Result<DiskIndexPhysicalRecord, error::Error> [body:1ca0a1403a7ea2b4]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::commit_boundary_applied(_1: &mut scan::ScannedIndex, _2: &[file::RecordIndexEntry]) -> std::result::Result<(), error::Error> [body:b14b7bf7658e3864]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "registered-function-item"
           },
           {
-            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut scan::NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -245,7 +225,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:740df7887574a41e]",
+            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:c8f6080b0fa45ad9]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -277,12 +257,12 @@
         ],
         "all": [
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bac081e424599e47]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
           {
-            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bacf00a96b1b6989]",
+            "caller": "check_file(_1: format::FormatSpec, _2: P, _3: &[RecordValidator]) -> std::result::Result<FileCheckReport, error::Error> [body:bac081e424599e47]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -387,11 +367,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::replay_tail(_1: &mut indexed::VarlitIndexedWriter, _2: u64, _3: disk_index::DiskIndexPlan) -> std::result::Result<(), error::Error> [body:17740ee44e3d84d8]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "mmap_views::validate_mmap_index_entry(_1: &file::RecordIndexEntry, _2: u64) -> std::result::Result<(), error::Error> [body:5d14b010fde88de9]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
@@ -412,27 +387,12 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "read_stream_entry_frame(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: u64, _4: u64) -> std::result::Result<file::RecordIndexEntry, error::Error> [body:125c8a2f5e27ee2d]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "rebuild_index(_1: &std::path::Path, _2: disk_index::DiskIndexOptions, _3: format::FormatSpec, _4: &snapshot::SnapshotFile, _5: disk_index::DiskIndexPlan, _6: ScanOptions<'_>, _7: F) -> std::result::Result<DiskIndexRebuildReport, error::Error> [body:7588e9e4afe845ae]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "record_physical_descriptor(_1: format::FormatSpec, _2: &file::RecordIndexEntry) -> std::result::Result<DiskIndexPhysicalRecord, error::Error> [body:1ca0a1403a7ea2b4]",
-            "target": "file::RecordIndexEntry::checked_physical_end",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::commit_boundary_applied(_1: &mut scan::ScannedIndex, _2: &[file::RecordIndexEntry]) -> std::result::Result<(), error::Error> [body:b14b7bf7658e3864]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "registered-function-item"
           },
           {
-            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut scan::NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
+            "caller": "scan::<impl at crates/varlit-core/src/file/scan.rs>::next_entry(_1: &mut NativeStreamScanner) -> std::result::Result<Option<file::RecordIndexEntry>, error::Error> [body:b44fbdb1962c7163]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -462,7 +422,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:740df7887574a41e]",
+            "caller": "sync_marker::<impl at crates/varlit-core/src/sync_marker.rs>::advance(_1: &mut MarkedTail, _2: format::FormatSpec, _3: &snapshot::SnapshotFile) -> std::result::Result<bool, error::Error> [body:c8f6080b0fa45ad9]",
             "target": "file::RecordIndexEntry::checked_physical_end",
             "result": "model/caller-specific"
           },
@@ -592,7 +552,7 @@
       "callers": {
         "default": [
           {
-            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:530b83c3abfa246f]",
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:36ca81ca99e613a7]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -627,7 +587,7 @@
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:9b4b203d395f860d]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:3a8269f9b11d10e2]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -639,7 +599,7 @@
         ],
         "all": [
           {
-            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:530b83c3abfa246f]",
+            "caller": "disk_index::<impl at crates/varlit-core/src/disk_index.rs>::commit(_1: DiskIndexWriteBatch, _2: &mut DiskIndexStore) -> std::result::Result<(), disk_index::DiskIndexError> [body:36ca81ca99e613a7]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -674,7 +634,7 @@
             "result": "checked"
           },
           {
-            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:f9d2bb900b39cdf6]",
+            "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish_reuse(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:6c6a16e34dd1c484]",
             "target": "disk_index::validate_metadata",
             "result": "checked"
           },
@@ -706,16 +666,6 @@
       "callers": {
         "default": [
           {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::follow_records(_1: &mut indexed::VarlitIndexedReader) -> std::result::Result<u64, error::Error> [body:ac1f19008b06752b]",
-            "target": "follow",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::sync_with(_1: &mut indexed::VarlitIndexedWriter, _2: bool) -> std::result::Result<(), error::Error> [body:ab7954cd38946829]",
-            "target": "commit",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:c5cf681a3183748d]",
             "target": "checkpoint",
             "result": "model/caller-specific"
@@ -736,22 +686,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(stream::VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:d0ee18b13b26c092]",
-            "target": "restore",
-            "result": "model/caller-specific"
-          }
-        ],
-        "all": [
-          {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::follow_records(_1: &mut indexed::VarlitIndexedReader) -> std::result::Result<u64, error::Error> [body:ac1f19008b06752b]",
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::follow_records(_1: &mut VarlitStreamReader) -> std::result::Result<u64, error::Error> [body:f42a4e44c93a4ceb]",
             "target": "follow",
             "result": "model/caller-specific"
           },
           {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::sync_with(_1: &mut indexed::VarlitIndexedWriter, _2: bool) -> std::result::Result<(), error::Error> [body:ab7954cd38946829]",
-            "target": "commit",
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:baeb0862d3152a0c]",
+            "target": "restore",
             "result": "model/caller-specific"
           },
+          {
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::sync_with(_1: &mut VarlitStreamWriter, _2: bool) -> std::result::Result<(), error::Error> [body:b1607e747f1553e0]",
+            "target": "commit",
+            "result": "model/caller-specific"
+          }
+        ],
+        "all": [
           {
             "caller": "storage::<impl at crates/varlit-core/src/disk_index/storage.rs>::publish(_1: &mut Store, _2: disk_index::DiskIndexMetadata, _3: &[disk_index::DiskIndexTail], _4: storage::Root, _5: CheckpointKind) -> std::result::Result<Checkpoint, disk_index::DiskIndexError> [body:1d071c05f06ece42]",
             "target": "checkpoint",
@@ -773,8 +723,18 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(stream::VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:d0ee18b13b26c092]",
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::follow_records(_1: &mut VarlitStreamReader) -> std::result::Result<u64, error::Error> [body:f42a4e44c93a4ceb]",
+            "target": "follow",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::restore_checkpointed(_1: format::FormatSpec, _2: impl AsRef<Path>, _3: StreamOptions, _4: disk_index::DiskIndexOptions, _5: impl AsRef<Path>, _6: DiskIndexMode) -> std::result::Result<(VarlitStreamWriter, DiskIndexStore, u64), error::Error> [body:baeb0862d3152a0c]",
             "target": "restore",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "stream::<impl at crates/varlit-core/src/stream.rs>::sync_with(_1: &mut VarlitStreamWriter, _2: bool) -> std::result::Result<(), error::Error> [body:b1607e747f1553e0]",
+            "target": "commit",
             "result": "model/caller-specific"
           }
         ]
@@ -1077,11 +1037,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_stream_tombstone_key(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry) -> std::result::Result<Option<<T as traits::VarlitKeyedBlock>::Key>, error::Error> [body:9767037a6a4f3734]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "diagnose_file::{closure#0}(_1: &{closure@crates/varlit-core/src/diagnostics.rs}) -> std::result::Result<(), error::Error> [body:7bdcb6d4b997718c]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1093,16 +1048,6 @@
           },
           {
             "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "extract_descriptor_put(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: usize) -> std::result::Result<DiskIndexUpdate, error::Error> [body:c4406ac3876ae27b]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "extract_plan_update(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: disk_index::DiskIndexPlan, _4: &file::RecordIndexEntry, _5: usize) -> std::result::Result<Option<DiskIndexUpdate>, error::Error> [body:3d845c3a442d6d04]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1218,11 +1163,6 @@
           },
           {
             "caller": "file::header_codec::<impl at crates/varlit-core/src/file/header_codec.rs>::read_string(_1: &mut ManifestCursor<'_>, _2: usize, _3: &mut collections::MaterializationBudget) -> std::result::Result<String, error::Error> [body:5296854e89288f8a]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::read_put_payload(_1: &indexed::VarlitIndexedReader, _2: &file::RecordIndexEntry, _3: &mut collections::MaterializationBudget) -> std::result::Result<Vec<u8>, error::Error> [body:d41db82c81bcf06f]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1284,11 +1224,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "decode_stream_tombstone_key(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry) -> std::result::Result<Option<<T as traits::VarlitKeyedBlock>::Key>, error::Error> [body:9767037a6a4f3734]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "diagnose_file::{closure#0}(_1: &{closure@crates/varlit-core/src/diagnostics.rs}) -> std::result::Result<(), error::Error> [body:7bdcb6d4b997718c]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1300,16 +1235,6 @@
           },
           {
             "caller": "external_merge::<impl at crates/varlit-core/src/external_merge.rs>::collect(_1: format::FormatSpec, _2: P, _3: &[P], _4: u64) -> std::result::Result<ExternalMerge<T>, error::Error> [body:929696dda7866412]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "extract_descriptor_put(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: &file::RecordIndexEntry, _4: usize) -> std::result::Result<DiskIndexUpdate, error::Error> [body:c4406ac3876ae27b]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "extract_plan_update(_1: format::FormatSpec, _2: &snapshot::SnapshotFile, _3: disk_index::DiskIndexPlan, _4: &file::RecordIndexEntry, _5: usize) -> std::result::Result<Option<DiskIndexUpdate>, error::Error> [body:3d845c3a442d6d04]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
           },
@@ -1429,11 +1354,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "indexed::<impl at crates/varlit-core/src/indexed.rs>::read_put_payload(_1: &indexed::VarlitIndexedReader, _2: &file::RecordIndexEntry, _3: &mut collections::MaterializationBudget) -> std::result::Result<Vec<u8>, error::Error> [body:d41db82c81bcf06f]",
-            "target": "collections::MaterializationBudget::consume",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "load_value(_1: format::FormatSpec, _2: &mut SpillBytes, _3: &[u8; 52], _4: &mut collections::MaterializationBudget) -> std::result::Result<T, error::Error> [body:779bf7419d001509]",
             "target": "collections::MaterializationBudget::consume",
             "result": "model/caller-specific"
@@ -1456,8 +1376,7 @@
         ]
       },
       "required_harnesses": [
-        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes",
-        "collections::resource_proofs::decode_retry_contract_shares_the_remaining_budget_after_errors"
+        "collections::resource_proofs::cumulative_materialization_never_wraps_or_replenishes"
       ]
     },
     "index-visits": {
@@ -1472,7 +1391,7 @@
       "callers": {
         "default": [
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:4c660229f374ae77]",
             "target": "height_matches",
             "result": "checked"
           },
@@ -1489,7 +1408,7 @@
         ],
         "all": [
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:4c660229f374ae77]",
             "target": "height_matches",
             "result": "checked"
           },
@@ -2050,11 +1969,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:78f07e5e6a9c5ab9]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:435c3f27bcadf272]",
             "target": "try_box",
             "result": "model/caller-specific"
@@ -2086,6 +2000,11 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "index_error(_1: disk_index::DiskIndexError) -> error::Error [body:59b174ebbdedc695]",
             "target": "try_box",
             "result": "model/caller-specific"
           },
@@ -2147,11 +2066,6 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "disk_index::index_error(_1: disk_index::DiskIndexError) -> error::Error [body:78f07e5e6a9c5ab9]",
-            "target": "try_box",
-            "result": "model/caller-specific"
-          },
-          {
             "caller": "error::<impl at crates/varlit-core/src/error.rs>::with_pending_parent_sync(_1: error::Error, _2: error::Error) -> error::Error [body:435c3f27bcadf272]",
             "target": "try_box",
             "result": "model/caller-specific"
@@ -2233,6 +2147,11 @@
           },
           {
             "caller": "file::<impl at crates/varlit-core/src/file/matrix_access.rs>::write_matrix_cell_durable_with_barrier(_1: &mut file::VarlitFile, _2: matrix::MatrixKey, _3: &T, _4: &mut B, _5: F) -> std::result::Result<(), error::Error> [body:da3e5db1a69864ee]",
+            "target": "try_box",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "index_error(_1: disk_index::DiskIndexError) -> error::Error [body:59b174ebbdedc695]",
             "target": "try_box",
             "result": "model/caller-specific"
           },

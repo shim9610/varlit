@@ -36,7 +36,6 @@ varlit-core = { path = "../varlit-core", version = "0.13.0-alpha.1" }
 varlit-macros = { path = "../varlit-macros", version = "0.13.0-alpha.1" }
 
 [dev-dependencies]
-redb = { version = "4.4.0", path = "../../vendor/redb" }
 proptest.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
@@ -61,10 +60,6 @@ required-features = ["integrity"]
 [[example]]
 name = "oom_maintenance_load"
 required-features = ["integrity", "compression-zstd"]
-
-[[example]]
-name = "index_validation_load"
-required-features = ["integrity"]
 
 [[example]]
 name = "matrix_mmap_load"

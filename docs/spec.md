@@ -104,13 +104,10 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
   missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
   flag disagrees with block id")`, and a block version outside `1..=5` with
-  `InvalidCanonicalEncoding("unsupported internal record version")`. The
-  sync-marker chain of an indexed primary also leaves these payloads out of
-  its checksums.
+  `InvalidCanonicalEncoding("unsupported internal record version")`.
 - Creation appends the metadata record, then the ring record, and syncs. In a
   native file the metadata record is the first record of the append log: its
-  payload is read at `append_log_start + 32`. In an indexed primary it is
-  located among the first 8 records of the log. Tiles and directory pages are
+  payload is read at `append_log_start + 32`. Tiles and directory pages are
   appended later, the first time a cell in them is written, so a tile that was
   never written does not exist in the file. A new tile or directory page is
   placed in the free space of an overflow region instead of a record of its

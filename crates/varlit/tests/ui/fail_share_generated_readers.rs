@@ -6,7 +6,7 @@ varlit_format! {
         magic: b"THRD";
         version: 1;
         blocks {
-            fixed Item(id = 1, key = [key], key_index = disk) { key: u64 }
+            fixed Item(id = 1, key = [key]) { key: u64 }
         }
     }
 }
@@ -14,13 +14,6 @@ varlit_format! {
 fn stream(reader: Arc<ThreadOwnedStreamReader>) {
     std::thread::spawn(move || {
         let _ = reader.events();
-    });
-}
-
-fn indexed(reader: Arc<ThreadOwnedIndexedReader>) {
-    std::thread::spawn(move || {
-        let mut out = Item { key: 0 };
-        let _ = reader.get_item(&0, &mut out);
     });
 }
 

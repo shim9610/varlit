@@ -17,7 +17,7 @@
 //!   referencing are reused only once `DiskIndexOptions::reclaim_after` further
 //!   generations are confirmed: crash recovery returns to the newest confirmed
 //!   generation, never an older one, and a reader still holding an older
-//!   generation by then sees [`DiskIndexError::PageReclaimed`] rather than
+//!   generation by then sees a damaged-sidecar error rather than
 //!   rewritten bytes. A writer that opens truncates the file back to the
 //!   confirmed generation's high-water mark: whatever lies past it was written
 //!   by a generation that never confirmed.
@@ -97,14 +97,7 @@ pub(super) struct Reader {
     pub tree: tree::Reader,
     pub slots: slots::Reader,
 }
-impl Reader {
-    pub fn get(&self, root: Root, key: &[u8]) -> DiskIndexResult<Option<[u8; LATEST_LEN]>> {
-        if let Some(value) = self.slots.get(key)? {
-            return Ok(value);
-        }
-        self.tree.get(root.tree, key)
-    }
-}
+impl Reader {}
 
 #[derive(Clone)]
 pub(super) struct Checkpoint {

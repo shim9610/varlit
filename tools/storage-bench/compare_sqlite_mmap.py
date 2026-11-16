@@ -45,11 +45,6 @@ def profiles(smoke=False):
                       group_items=group, per_tx=publication // group, variable=False,
                       producers=producers, readers=readers, lookups=True, telemetry=True,
                       page=65536)
-        for policy in ("full", "crc-only"):
-            variant = f"varlit-indexed-{policy}"
-            grid.append(dict(name=f"{workload}--{variant}", kind="mixed", workload=workload,
-                             variant=variant, engine="varlit-indexed", config=dict(config),
-                             read_validation=policy))
         for limit in (0, 1 << 30, 2 << 30):
             variant = f"sqlite-m{limit}"
             grid.append(dict(name=f"{workload}--{variant}", kind="mixed", workload=workload,

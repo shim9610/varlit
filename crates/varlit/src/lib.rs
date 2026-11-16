@@ -89,9 +89,9 @@
 //! # Cargo features
 //!
 //! All features are off by default; the default build is the pure-Rust core
-//! with no optional dependencies. Streaming, indexed lookup, disk-index plans,
-//! finite keys and scan control are part of this default API; no Cargo feature
-//! is required. The former `high-cardinality-dev` feature has been removed.
+//! with no optional dependencies. Stream handles, finite keys and scan control
+//! are part of this default API; no Cargo feature is required. The former
+//! `high-cardinality-dev` feature has been removed.
 //!
 //! | Feature | Adds | Stability |
 //! | --- | --- | --- |
@@ -122,7 +122,7 @@
 //! | `custom-codec-guide.md` | writing a codec, and the mandatory `SCHEMA_ID` identity contract |
 //! | `durability-model.md` | what `flush`, `sync`, and `commit_durable` promise |
 //! | `recovery-model.md` | how damaged files are classified and what may be rebuilt |
-//! | `scalable-io.md` | the default streaming and disk-index path |
+//! | `scalable-io.md` | stream handles: append and follow without rescanning the file |
 //! | `known-limitations.md` | the scale contracts, resource budgets, and what is not verified |
 //! | `migration-guide.md` | version-to-version behaviour changes |
 //!

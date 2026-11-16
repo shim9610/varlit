@@ -1,20 +1,20 @@
 #![cfg(feature = "integrity")]
 
-//! Stabilization gates: strict model histories, pinned concurrent snapshots,
-//! and repeated external process termination. No operation error is discarded.
+//! Stabilization gates for stream handles: strict model histories, pinned
+//! concurrent snapshots, and repeated external process termination with a
+//! live reader across each crash. No operation error is discarded.
 //! Reproduce a campaign with VARLIT_QUAL_SEED and VARLIT_QUAL_EPOCHS.
 
-use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use varlit::{
-    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, VarlitEmpty, WriterLockBreakPolicy,
-    clear_stale_writer_lock, varlit_format,
+    BatchOptions, DiskIndexBatchOptions, DiskIndexOptions, StreamOptions, VarlitEmpty,
+    WriterLockBreakPolicy, bootstrap_stream_checkpoint, clear_stale_writer_lock, varlit_format,
 };
 
 varlit_format! {
@@ -22,10 +22,10 @@ varlit_format! {
         magic: b"QUAL";
         version: 1;
         schema_hash: computed;
-        index: keyed_offset_chain;
+        index: block_offset_chain;
         integrity: crc32;
         blocks {
-            variable Item(id = 1, key = [tenant, key], key_index = disk) {
+            variable Item(id = 1) {
                 tenant: u32,
                 key: u64,
                 payload: Vec<u8>,
@@ -39,32 +39,35 @@ varlit_format! {
 
 const KEYS: u64 = 257;
 const WAIT: Duration = Duration::from_secs(60);
-type Model = BTreeMap<(u32, u64), Vec<u8>>;
 
-fn options() -> DiskIndexOptions {
-    DiskIndexOptions {
-        cache_bytes: 1024 * 1024,
-        max_key_bytes: 1024,
-        // Cross sidecar transaction boundaries much more often than native
-        // chunks; neither boundary is a durable application checkpoint.
-        batch: DiskIndexBatchOptions {
-            max_records: 7,
-            max_bytes: 2048,
+/// What a reader of the committed generation must see, in file order.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Model {
+    items: Vec<Item>,
+    markers: Vec<u64>,
+}
+
+fn options() -> StreamOptions {
+    StreamOptions {
+        state: DiskIndexOptions {
+            cache_bytes: 1024 * 1024,
+            max_key_bytes: 1024,
+            // Cross sidecar transaction boundaries much more often than native
+            // chunks; neither boundary is a durable application checkpoint.
+            batch: DiskIndexBatchOptions {
+                max_records: 7,
+                max_bytes: 2048,
+            },
+            ..DiskIndexOptions::default()
         },
-        ..DiskIndexOptions::default()
+        ..StreamOptions::default()
     }
 }
 
-fn key(number: u64) -> (u32, u64) {
-    // Composite keys include large integers and the zero boundary.
-    (
-        (number % 5) as u32,
-        number.wrapping_mul(0x0100_0000_0000_0001),
-    )
-}
-
 fn item(number: u64, value: u64) -> Item {
-    let (tenant, key) = key(number);
+    // Composite identities include large integers and the zero boundary.
+    let tenant = (number % 5) as u32;
+    let key = number.wrapping_mul(0x0100_0000_0000_0001);
     let mut payload = vec![(value ^ number) as u8; [0, 1, 31, 255, 4097][value as usize % 5]];
     payload.extend_from_slice(&value.to_le_bytes());
     Item {
@@ -74,27 +77,37 @@ fn item(number: u64, value: u64) -> Item {
     }
 }
 
-fn check(reader: &QualificationIndexedReader, model: &Model) -> varlit::Result<()> {
-    let mut found = Item::empty();
-    for number in 0..=KEYS {
-        let key = key(number);
-        let payload = reader
-            .get_item(&key, &mut found)?
-            .then(|| found.payload.clone());
-        assert_eq!(
-            payload,
-            model.get(&key).cloned(),
-            "lookup mismatch at {key:?}"
-        );
+fn state_sidecar(path: &Path) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(".vks");
+    PathBuf::from(sidecar)
+}
+
+/// Reads everything `reader` sees through fresh walks.
+fn snapshot(reader: &QualificationStreamReader) -> varlit::Result<Model> {
+    let mut model = Model::default();
+    let mut items = reader.items()?;
+    let mut item = Item::empty();
+    while items.next_into(&mut item)? {
+        model.items.push(item.clone());
     }
-    let state = reader.resident_state();
-    assert_eq!(state.retained_key_entries, 0);
-    assert_eq!(state.retained_record_entries, 0);
+    let mut markers = reader.markers()?;
+    let mut marker = Marker::empty();
+    while markers.next_into(&mut marker)? {
+        model.markers.push(marker.value);
+    }
+    Ok(model)
+}
+
+fn check(reader: &QualificationStreamReader, model: &Model) -> varlit::Result<()> {
+    let seen = snapshot(reader)?;
+    assert_eq!(seen.items.len(), model.items.len(), "item count");
+    assert_eq!(seen, *model, "reader disagrees with the committed model");
     Ok(())
 }
 
 // SplitMix64 is specified here, so seed replay is independent of dependency
-// PRNG changes. The oracle is an ordinary map, not another Varlit read path.
+// PRNG changes. The oracle is an ordinary vector, not another Varlit read path.
 fn random(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
     let mut value = *state;
@@ -113,6 +126,14 @@ fn configured(name: &str, default: u64) -> u64 {
     }
 }
 
+fn check_dirty_reader(path: &Path, committed: &Model) {
+    // Reader access does not recover or publish the unfinished generation.
+    let mut reader = Qualification::open_stream_reader(path, options()).unwrap();
+    check(&reader, committed).unwrap();
+    reader.verify_all().unwrap();
+    assert_eq!(reader.follow().unwrap(), 0);
+}
+
 fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
     assert!(
         epochs >= 4,
@@ -120,25 +141,23 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
     );
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("history.varlit");
-    let mut writer = Qualification::create_indexed_writer(&path, options())?;
+    let mut writer = Qualification::create_stream_writer(&path, options())?;
     writer.sync()?;
-    let mut committed = Model::new();
-    let mut markers = Vec::new();
+    let mut committed = Model::default();
     let mut state = seed;
-    let mut operations = [0u64; 6];
+    let mut operations = [0u64; 5];
 
     for epoch in 0..epochs {
         eprintln!("qualification-history seed={seed} epoch={epoch}/{epochs}");
-        let old = Qualification::open_indexed_reader(&path, options())?;
+        let old = Qualification::open_stream_reader(&path, options())?;
         let old_eof = fs::metadata(&path)?.len();
         let mut pending = committed.clone();
-        let mut pending_markers = markers.clone();
         for step in 0..128 {
             // Each epoch necessarily covers every operation, then randomizes.
-            let operation = if step < 6 {
+            let operation = if step < 5 {
                 step
             } else {
-                random(&mut state) % 6
+                random(&mut state) % 5
             };
             operations[operation as usize] += 1;
             let number = random(&mut state) % KEYS;
@@ -147,14 +166,10 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
                 0 | 1 => {
                     let item = item(number, value);
                     writer.push_item(&item)?;
-                    pending.insert(key(number), item.payload);
+                    pending.items.push(item);
                 }
                 2 => {
-                    writer.delete_item(&key(number))?;
-                    pending.remove(&key(number));
-                }
-                3 => {
-                    // Includes repeated keys within the same native chunk.
+                    // Many records split across small native chunks.
                     let items: Vec<_> = (0..19)
                         .map(|offset| {
                             item((number + offset % 11) % KEYS, value.wrapping_add(offset))
@@ -170,27 +185,25 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
                         )
                         .map_err(|error| error.source)?;
                     assert_eq!(report.records, items.len() as u64);
-                    for item in items {
-                        pending.insert((item.tenant, item.key), item.payload);
-                    }
+                    pending.items.extend(items);
                 }
-                4 => {
+                3 => {
                     writer.push_marker(&Marker { value })?;
-                    pending_markers.push(value);
+                    pending.markers.push(value);
                 }
-                5 => writer.flush()?,
+                4 => writer.flush()?,
                 _ => unreachable!(),
             }
         }
-        // Readers opened before the mutation must still see the old roots,
-        // including deletes and updates whose physical bytes now exist.
+        // Readers opened before the mutation must still see the old
+        // generation, although the new bytes are already in the file.
         check(&old, &committed)?;
         drop(old);
         if epoch % 3 == 2 {
             writer.flush()?;
             drop(writer);
             check_dirty_reader(&path, &committed);
-            writer = Qualification::restore_indexed_writer(&path, options())?;
+            writer = Qualification::restore_stream_writer(&path, options())?;
             assert_eq!(
                 fs::metadata(&path)?.len(),
                 old_eof,
@@ -199,42 +212,31 @@ fn history(seed: u64, epochs: u64) -> varlit::Result<()> {
         } else {
             writer.sync()?;
             committed = pending;
-            markers = pending_markers;
+            if epoch % 5 == 4 {
+                writer.compact_index()?;
+            }
             drop(writer);
-            writer = Qualification::open_indexed_writer(&path, options())?;
+            writer = Qualification::open_stream_writer(&path, options())?;
         }
-        let reader = Qualification::open_indexed_reader(&path, options())?;
+        let reader = Qualification::open_stream_reader(&path, options())?;
         check(&reader, &committed)?;
-        let mut seen_markers = Vec::new();
-        let mut walk = reader.markers()?;
-        let mut marker = Marker::empty();
-        while walk.next_into(&mut marker)? {
-            seen_markers.push(marker.value);
-        }
-        assert_eq!(seen_markers, markers);
         reader.verify_all()?;
         drop(reader);
         if epoch % 4 == 3 {
+            // A lost state sidecar is rebuilt from the primary alone.
             drop(writer);
-            Qualification::rebuild_disk_index(&path, options())?;
+            fs::remove_file(state_sidecar(&path))?;
+            bootstrap_stream_checkpoint(Qualification::spec(), &path, options())?;
             check(
-                &Qualification::open_indexed_reader(&path, options())?,
+                &Qualification::open_stream_reader(&path, options())?,
                 &committed,
             )?;
-            writer = Qualification::open_indexed_writer(&path, options())?;
+            writer = Qualification::open_stream_writer(&path, options())?;
         }
     }
     assert!(operations.into_iter().all(|count| count > 0));
     eprintln!("QUAL_HISTORY seed={seed} epochs={epochs} operations={operations:?}");
     Ok(())
-}
-
-fn check_dirty_reader(path: &Path, committed: &Model) {
-    // Reader access does not recover or publish the unfinished generation.
-    let mut reader = Qualification::open_indexed_reader(path, options()).unwrap();
-    check(&reader, committed).unwrap();
-    reader.verify_all().unwrap();
-    assert_eq!(reader.follow().unwrap(), 0);
 }
 
 #[test]
@@ -258,21 +260,22 @@ fn model_history_stress() -> varlit::Result<()> {
 fn concurrent_snapshots_survive_many_publications() -> varlit::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("concurrent.varlit");
-    let mut writer = Qualification::create_indexed_writer(&path, options())?;
+    let mut writer = Qualification::create_stream_writer(&path, options())?;
     let initial: Vec<_> = (0..KEYS).map(|number| item(number, 0)).collect();
     writer
         .push_items(&initial, BatchOptions::default())
         .map_err(|e| e.source)?;
     writer.sync()?;
-    let original: Model = initial
-        .into_iter()
-        .map(|i| ((i.tenant, i.key), i.payload))
-        .collect();
+    let original = Model {
+        items: initial,
+        markers: Vec::new(),
+    };
+    let mut current = original.clone();
     std::thread::scope(|scope| -> varlit::Result<()> {
         let mut workers = Vec::new();
         let mut channels = Vec::new();
         for _ in 0..4 {
-            let reader = Qualification::open_indexed_reader(&path, options())?;
+            let reader = Qualification::open_stream_reader(&path, options())?;
             let model = &original;
             let (start, receive) = mpsc::channel();
             let (done, ack) = mpsc::channel();
@@ -295,13 +298,10 @@ fn concurrent_snapshots_survive_many_publications() -> varlit::Result<()> {
                 .push_items(&next, BatchOptions::default())
                 .map_err(|e| e.source)?;
             writer.sync()?;
-            let expected: Model = next
-                .into_iter()
-                .map(|i| ((i.tenant, i.key), i.payload))
-                .collect();
+            current.items.extend(next);
             check(
-                &Qualification::open_indexed_reader(&path, options())?,
-                &expected,
+                &Qualification::open_stream_reader(&path, options())?,
+                &current,
             )?;
             for (_, ack) in &channels {
                 ack.recv_timeout(WAIT)
@@ -318,7 +318,7 @@ fn concurrent_snapshots_survive_many_publications() -> varlit::Result<()> {
 
 // External kill deliberately bypasses Drop and fault hooks. The ready file is
 // written and fsynced only AFTER flush/sync returned. Its contents distinguish
-// acknowledged durable generations from deliberately unacknowledged updates.
+// acknowledged durable generations from deliberately unacknowledged appends.
 #[test]
 #[ignore = "subprocess entry point, only invoked by kill/recovery tests"]
 fn qualification_kill_child() -> varlit::Result<()> {
@@ -326,14 +326,12 @@ fn qualification_kill_child() -> varlit::Result<()> {
     let root = Path::new(&root);
     let epoch = configured("VARLIT_QUAL_CHILD_EPOCH", 0);
     assert!(epoch > 0);
-    let mut writer = Qualification::open_indexed_writer(root.join("killed.varlit"), options())?;
+    let mut writer = Qualification::open_stream_writer(root.join("killed.varlit"), options())?;
     let items: Vec<_> = (0..KEYS).map(|number| item(number, epoch)).collect();
     writer
         .push_items(&items, BatchOptions::default())
         .map_err(|e| e.source)?;
-    for number in (0..KEYS).step_by(3) {
-        writer.delete_item(&key(number))?;
-    }
+    writer.push_marker(&Marker { value: epoch })?;
     if epoch.is_multiple_of(2) {
         writer.sync()?;
     } else {
@@ -360,10 +358,14 @@ fn kill_cycles(cycles: u64) -> varlit::Result<()> {
     let directory = tempfile::tempdir()?;
     let root = directory.path();
     let path = root.join("killed.varlit");
-    Qualification::create_indexed_writer(&path, options())?.sync()?;
-    let mut expected = Model::new();
+    Qualification::create_stream_writer(&path, options())?.sync()?;
+    let mut expected = Model::default();
     for epoch in 1..=cycles {
         let old_eof = fs::metadata(&path)?.len();
+        // A reader that lives across the crash, the recovery and the next
+        // publication: it keeps its snapshot, then follows to the new one.
+        let mut live = Qualification::open_stream_reader(&path, options())?;
+        check(&live, &expected)?;
         let log = File::create(root.join(format!("child-{epoch}.log")))?;
         let mut child = KillOnDrop(
             Command::new(std::env::current_exe()?)
@@ -399,18 +401,27 @@ fn kill_cycles(cycles: u64) -> varlit::Result<()> {
             !child.0.wait()?.success(),
             "child must be terminated externally"
         );
+        check(&live, &expected)?;
         clear_stale_writer_lock(&path, WriterLockBreakPolicy::BreakIfProcessAbsent)?;
+        let before = expected.clone();
         if epoch.is_multiple_of(2) {
-            expected = (0..KEYS)
-                .filter(|n| n % 3 != 0)
-                .map(|n| (key(n), item(n, epoch).payload))
-                .collect();
+            expected
+                .items
+                .extend((0..KEYS).map(|number| item(number, epoch)));
+            expected.markers.push(epoch);
         } else {
             check_dirty_reader(&path, &expected);
-            drop(Qualification::restore_indexed_writer(&path, options())?);
+            drop(Qualification::restore_stream_writer(&path, options())?);
             assert_eq!(fs::metadata(&path)?.len(), old_eof);
         }
-        let reader = Qualification::open_indexed_reader(&path, options())?;
+        // The live reader still holds the generation it opened, and following
+        // adopts exactly the acknowledged one.
+        check(&live, &before)?;
+        live.follow()?;
+        check(&live, &expected)?;
+        live.verify_all()?;
+        drop(live);
+        let reader = Qualification::open_stream_reader(&path, options())?;
         check(&reader, &expected)?;
         reader.verify_all()?;
         drop(reader);
@@ -439,7 +450,7 @@ fn opening_readers_does_not_interrupt_the_single_writer() -> varlit::Result<()> 
     use std::sync::atomic::{AtomicBool, Ordering};
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("reader-churn.varlit");
-    let mut writer = Qualification::create_indexed_writer(&path, options())?;
+    let mut writer = Qualification::create_stream_writer(&path, options())?;
     writer.push_item(&item(0, 0))?;
     writer.sync()?;
     let stop = AtomicBool::new(false);
@@ -451,15 +462,16 @@ fn opening_readers_does_not_interrupt_the_single_writer() -> varlit::Result<()> 
                 scope.spawn(move || {
                     let mut opens = 0;
                     while !stop.load(Ordering::Acquire) {
-                        match Qualification::open_indexed_reader(path, options()) {
+                        match Qualification::open_stream_reader(path, options()) {
                             Ok(reader) => {
                                 let mut found = Item::empty();
                                 assert!(
                                     reader
-                                        .get_item(&key(0), &mut found)
+                                        .items()
+                                        .and_then(|mut items| items.next_into(&mut found))
                                         .expect("opened snapshot must remain readable"),
                                 );
-                                assert_eq!(found.payload, item(0, 0).payload);
+                                assert_eq!(found, item(0, 0));
                                 opens += 1;
                             }
                             Err(error) => panic!("unexpected reader-open failure: {error:?}"),

@@ -93,13 +93,7 @@ varlit_format! {
                 value: u64,
             }
 
-            variable StreamItem(id = 21, key = [key], key_index = memory) {
-                key: u64,
-                value: u64,
-                payload: Vec<u8>,
-            }
-
-            variable DiskItem(id = 22, key = [key], key_index = disk) {
+            variable StreamItem(id = 21, key = [key]) {
                 key: u64,
                 value: u64,
                 payload: Vec<u8>,

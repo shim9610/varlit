@@ -104,7 +104,6 @@ pub struct RecordValidator {
     definition: fn(FormatSpec) -> Result<()>,
     decode: fn(&VarlitFile, &RecordIndexEntry, &mut Vec<u8>) -> Result<()>,
     keyed_links: bool,
-    disk_index: bool,
 }
 
 impl RecordValidator {
@@ -114,7 +113,6 @@ impl RecordValidator {
             definition: crate::collections::ensure_registered_block::<T>,
             decode: decode_record::<T>,
             keyed_links: !T::IS_KEYED,
-            disk_index: false,
         }
     }
 
@@ -125,14 +123,7 @@ impl RecordValidator {
             definition: crate::collections::ensure_registered_block::<T>,
             decode: decode_keyed_record::<T>,
             keyed_links: true,
-            disk_index: false,
         }
-    }
-
-    /// Marks a companion requirement; it cannot be waived by the file checker.
-    pub const fn requiring_disk_index(mut self) -> Self {
-        self.disk_index = true;
-        self
     }
 }
 
@@ -260,12 +251,8 @@ pub fn check_file<P: AsRef<Path>>(
             "This inspection does not establish fsync success or future crash durability.",
         ],
     };
-    if validators.iter().any(|v| v.disk_index) {
-        report.checks[7].message = "the declared disk-index companion has not been checked";
-    } else {
-        report.checks[7].status = FileCheckStatus::NotApplicable;
-        report.checks[7].message = "no disk-index companion is declared by this checker registry";
-    }
+    report.checks[7].status = FileCheckStatus::NotApplicable;
+    report.checks[7].message = "no disk-index companion is declared by this checker registry";
     if let Err(e) = spec.validate() {
         report.checks[0].fail(e);
         return Ok(report);
