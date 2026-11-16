@@ -14,6 +14,8 @@ pub(super) struct FormatInput {
     pub(super) integrity: IntegrityChoice,
     pub(super) liveness: LivenessChoice,
     pub(super) header_slots: Option<HeaderSlotsChoice>,
+    /// `keyed_storage: in_place(free_space = N%)`: the free-space percent.
+    pub(super) keyed_storage: Option<u16>,
     pub(super) recovery: RecoveryChoice,
     pub(super) manifest: ManifestChoice,
     pub(super) compression: CompressionChoice,
@@ -340,6 +342,7 @@ impl Parse for FormatInput {
         let mut integrity = IntegrityChoice::None;
         let mut liveness = LivenessChoice::None;
         let mut header_slots: Option<HeaderSlotsChoice> = None;
+        let mut keyed_storage: Option<u16> = None;
         let mut recovery = RecoveryChoice::Strict;
         let mut manifest = ManifestChoice::None;
         let mut compression = CompressionChoice::None;
@@ -452,6 +455,8 @@ impl Parse for FormatInput {
                         ));
                     }
                 }
+            } else if key == "keyed_storage" {
+                keyed_storage = Some(parse_keyed_storage(&content)?);
             } else if key == "extension" {
                 extension = Some(content.parse()?);
             } else if key == "index" {
@@ -606,6 +611,7 @@ impl Parse for FormatInput {
             integrity,
             liveness,
             header_slots,
+            keyed_storage,
             recovery,
             manifest,
             compression,
@@ -1805,4 +1811,36 @@ pub(super) fn parse_variable_compression_choice(
         only_if_smaller,
         max_len,
     })
+}
+
+/// `in_place` or `in_place(free_space = N%)`, N from 1 to 5: the free-space
+/// percent, 5 when not given.
+pub(super) fn parse_keyed_storage(input: ParseStream<'_>) -> Result<u16> {
+    let kind: Ident = input.parse()?;
+    if kind != "in_place" {
+        return Err(syn::Error::new_spanned(
+            kind,
+            "expected in_place: keyed blocks stored once per key and updated in place",
+        ));
+    }
+    if !input.peek(syn::token::Paren) {
+        return Ok(5);
+    }
+    let inner;
+    parenthesized!(inner in input);
+    let name: Ident = inner.parse()?;
+    if name != "free_space" {
+        return Err(syn::Error::new_spanned(name, "expected free_space = N%"));
+    }
+    inner.parse::<Token![=]>()?;
+    let value: LitInt = inner.parse()?;
+    inner.parse::<Token![%]>()?;
+    let percent = value.base10_parse::<u16>()?;
+    if !(1..=5).contains(&percent) {
+        return Err(syn::Error::new_spanned(
+            value,
+            "free_space must be 1% to 5%",
+        ));
+    }
+    Ok(percent)
 }

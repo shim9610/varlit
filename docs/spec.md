@@ -95,6 +95,9 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   | 3 | directory | one 4096-byte directory page |
   | 4 | tile | one `VTIL` tile |
   | 5 | overflow | one `VOVF` overflow region (see Overflow Regions) |
+  | 6 | keyed metadata | the `VKMT` record (see Keyed Storage Wire Contract) |
+  | 7 | heap region | one `VHRG` region of keyed records |
+  | 8 | bucket page | one `VBKT` slot bucket page |
 
 - Each record is appended once and its payload is then rewritten in place. For
   a record with `RECORD_FLAG_IN_PLACE` the record checksum leaves the payload
@@ -103,7 +106,7 @@ of the file's append log. The code is in `crates/varlit-core/src/matrix_tiles`
   (`checksum_record_fields` in `file.rs`). The record validator refuses
   `RECORD_FLAG_IN_PLACE` on any other block id, and `RECORD_FLAG_IN_PLACE`
   missing on `0xFFFF_FFF3`, with `InvalidCanonicalEncoding("in-place record
-  flag disagrees with block id")`, and a block version outside `1..=5` with
+  flag disagrees with block id")`, and a block version outside `1..=8` with
   `InvalidCanonicalEncoding("unsupported internal record version")`.
 - Creation appends the metadata record, then the ring record, and syncs. In a
   native file the metadata record is the first record of the append log: its
@@ -414,6 +417,83 @@ circularly.
   ring has a fixed size. Only a first write into a tile appends the tile and
   any directory pages it needs
   (`overwrites_keep_the_file_size_and_new_tiles_add_one_tile`).
+
+## Keyed Storage Wire Contract
+
+A format that declares keyed storage (`keyed_storage: in_place` in
+`varlit_format!`, `FormatSpec::with_keyed_storage`) stores its keyed blocks
+once per key in a record heap inside the file instead of appending them to
+the log. The engine is `crates/varlit-core/src/keyed_heap`; it shares the
+write-ahead ring, publication indexes, overflow regions and snapshots of the
+matrix engine (`matrix_tiles/ring_store.rs`, `matrix_tiles/view.rs`), so
+everything under Write-Ahead Ring, Overflow Regions, Publication Indexes and
+Snapshots And Overlay applies unchanged. All integers are little-endian.
+Its records have block id `0xFFFF_FFF3` and block versions 6 to 8 (see the
+table under Records). The schema hash folds `keyed-storage-v1` and the
+free-space ratio. A format cannot declare both keyed storage and matrix
+blocks, nor keyed storage and `keyed_offset_chain`.
+
+### Metadata Record (`VKMT`)
+
+- The first record of the log, appended at create; its payload is read at
+  `append_log_start + 32`. 184 bytes:
+
+  | Bytes | Field |
+  | --- | --- |
+  | 0..4 | magic `b"VKMT"` |
+  | 4..6 | version, 1 |
+  | 6..8 | free-space ratio in thousandths of live bytes, 10 to 50 |
+  | 8..24 | the SipHash-1-3 key: two `u64`, random per file |
+  | 24..40 | ring payload offset and length |
+  | 40..56 | zero |
+  | 56..60 | CRC32 of bytes 0..56 |
+  | 60..64 | zero |
+  | 64..72 | overflow region list head (as the matrix metadata's bytes 72..80) |
+  | 72..184 | the state: 14 `u64` fields, changed through the ring |
+
+- The state fields, in order: bucket directory root page and height; linear
+  hashing level and split pointer; live keys; live chunk bytes; heap region
+  bytes; current region and its used bytes; newest heap region; first free
+  region; first free bucket page; free region bytes; last free region.
+
+### Heap Regions (`VHRG`)
+
+- A 48-byte header (`magic | 0 | len | live | next_all | next_free |
+  freed`) then `len` bytes of chunks. `next_all` links every region, newest
+  first. A region on the free list has a nonzero `next_free` (the last links
+  to itself) and `freed`, the generation that emptied it.
+- A chunk is a 16-byte header (`payload_len u32 | block_id u32 | key_len u32
+  | crc32`), the key's canonical encoding, the block's encoded payload, then
+  zero padding to a multiple of 16. The CRC32 covers the header's first 12
+  bytes, the key and the payload. A free chunk has block id `0xFFFF_FFFF`
+  and its payload length is its length less 16. Chunks tile a region, so a
+  region can be walked header to header.
+- A record longer than half a region (1 MiB) gets a region of its own.
+
+### Slot Buckets (`VBKT`)
+
+- A key's route is the low 32 bits of SipHash-1-3, keyed with the metadata's
+  seed, of `block_id (u32) || key`. With `level` and `split` from the state
+  the table has `2^level + split` buckets and the key's bucket is
+  `route mod 2^level`, or `route mod 2^(level+1)` when that is below `split`.
+- A bucket page is 4096 bytes: `magic b"VBKT" | count u32 | next page u64`
+  then 255 slots of 16 bytes (`route u32 | offset in region u32 | region
+  u64`). Slots `0..count` are in use; a bucket's pages chain through `next`.
+- Bucket numbers map to first pages through a radix directory of 4096-byte
+  pages (512 entries, 9 bits per level), as matrix tiles map to theirs.
+- A chunk is live exactly when a slot points at it.
+
+### Writing
+
+- Every byte is staged in the same units each time: a page's 16-byte header
+  and slots, a chunk's header, key and payload, a region's header. A hole, or
+  a free region, whose units may change is taken only once the generation
+  that freed it is in place (at or below the ring's `checkpointed`).
+- When holes exceed the declared ratio of live bytes (and one region), the
+  writer puts what is published in place and empties the sparsest regions
+  into the free list, moving their live chunks.
+- `sync` publishes the staged changes as one generation; a writer that stops
+  without one publishes nothing.
 
 ## Runtime Policy
 

@@ -321,6 +321,12 @@ pub enum Error {
     )]
     KeyedChainRequiresKeyedApi { block_id: u32 },
 
+    #[error(
+        "block {block_id} is keyed and this format stores keyed blocks in place: write it with \
+         put_keyed and remove it with remove_keyed, not by appending to the log"
+    )]
+    KeyedStorageRequiresPut { block_id: u32 },
+
     #[error("the requested operation is unsupported by bounded streaming handles")]
     StreamingUnsupported,
 

@@ -424,6 +424,33 @@
         "frame": "Pure functions of their arguments; nothing is read or written.",
         "progress": "No loops; each computation is constant work."
       }
+    },
+    {
+      "id": "keyed-heap",
+      "harnesses": [
+        "keyed_heap::heap_proofs::every_route_lands_in_a_bucket_of_the_table",
+        "keyed_heap::heap_proofs::a_split_moves_exactly_the_keys_whose_routing_bit_is_set",
+        "keyed_heap::heap_proofs::chunk_lengths_are_aligned_and_hold_the_record",
+        "keyed_heap::heap_proofs::a_free_chunk_reads_back_as_its_length",
+        "keyed_heap::heap_proofs::slots_and_region_headers_round_trip",
+        "keyed_heap::heap_proofs::holes_are_never_more_than_the_heap",
+        "keyed_heap::heap::hole_proofs::a_taken_hole_is_one_the_request_may_take"
+      ],
+      "sources": [
+        "crates/varlit-core/src/verification/keyed_heap.rs",
+        "crates/varlit-core/src/verification/keyed_heap_holes.rs",
+        "crates/varlit-core/src/keyed_heap/mod.rs",
+        "crates/varlit-core/src/keyed_heap/heap.rs"
+      ],
+      "scope": "linear-hashing routing for every table of up to 2^31 primary buckets and every 32-bit route, including the table one split later; chunk lengths for every 32-bit key and payload length; slot, region header and chunk header layouts for arbitrary fields; hole accounting for arbitrary counters; and the hole cache for a capacity of three with four arbitrary holes and an arbitrary request",
+      "limits": "Pure arithmetic, layouts and the in-memory hole cache. Bucket pages, the directory, chunk placement, compaction, crash atomicity and reader snapshots go through the write-ahead ring and are covered by native tests (keyed_heap::tests: a model over splits and reopens, every crash prefix of a generation, bounded growth under rewrites, reader expiry) and the keyed_storage integration and fuzz targets, not proofs. The hole cache is proved at capacity three; its code does not depend on the capacity.",
+      "specification": {
+        "requires": "level < 32 and split < 2^level; key and payload lengths up to 2^32 - 1; a free chunk of a whole number of 16-byte units whose payload length fits 32 bits; region live bytes no more than its length.",
+        "ensures": "A key routes to a bucket below 2^level + split. After a split the table has one more bucket, a key outside the split bucket keeps its bucket, and a key of the split bucket goes to split + 2^level exactly when its routing bit `level` is set, which is the test heap::split applies to each slot. A chunk is a whole number of 16-byte units, holds its 16-byte header, key and payload, and wastes less than one unit; headers, slots and region headers decode to what was encoded. Holes are never counted as more than the heap. A hole the cache hands out is at least the requested length, outside the avoided region and freed by a generation in place; the cache hands one out whenever it holds such a hole.",
+        "on_error": "A region header whose live bytes exceed its length is refused. A cache asked for a hole none of its entries satisfies hands out nothing and keeps all of them.",
+        "frame": "Pure functions of their arguments; the hole cache changes only its own entries.",
+        "progress": "No loops but the hole cache's, bounded by its capacity."
+      }
     }
   ],
   "executable_contracts": [

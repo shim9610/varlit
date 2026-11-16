@@ -25,6 +25,11 @@
 //! whole region is reused.
 
 pub(crate) mod heap;
+#[cfg(kani)]
+#[path = "../verification/keyed_heap.rs"]
+mod heap_proofs;
+pub(crate) mod lookup;
+pub(crate) mod reader;
 pub(crate) mod sip;
 #[cfg(test)]
 mod tests;
@@ -214,6 +219,18 @@ impl State {
             .saturating_sub(self.live)
             .saturating_sub(self.free)
             .saturating_sub(cur_tail)
+    }
+
+    /// The table after the bucket at the split pointer is split: its slots
+    /// with routing bit `level` set go to bucket `split + 2^level`.
+    pub(crate) const fn after_split(&self) -> Self {
+        let mut next = *self;
+        next.split += 1;
+        if next.split == 1u64 << next.level {
+            next.level += 1;
+            next.split = 0;
+        }
+        next
     }
 
     /// The bucket a key whose hash has these low bits belongs to.

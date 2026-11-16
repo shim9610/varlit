@@ -15,7 +15,8 @@
 //! once the generation that freed it is in place, so no overlay still holds
 //! a range in its old units.
 
-use super::sip::{self, Sip};
+use super::lookup::{self, Located, StoreView, slot_at};
+use super::sip::Sip;
 use super::{
     BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, FREE_BLOCK, Fixed, META_FIXED_LEN, META_LEN,
     META_OVERFLOW_HEAD_AT, META_STATE_AT, REGION_BYTES, REGION_HEADER, Region, SLOT_LEN,
@@ -49,23 +50,6 @@ pub(crate) struct HeapStats {
     pub checkpoints: u64,
 }
 
-/// Where a key's record is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Located {
-    pub slot: Slot,
-    /// The bucket page holding the slot, and its index there.
-    pub page: u64,
-    pub index: usize,
-    pub chunk: Chunk,
-}
-
-impl Located {
-    /// Where the payload starts.
-    pub(crate) const fn payload_at(&self) -> u64 {
-        self.slot.at() + CHUNK_HEADER + self.chunk.key_len as u64
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct Hole {
     region: u64,
@@ -82,14 +66,18 @@ struct Holes {
 
 impl Holes {
     fn new() -> Result<Self> {
+        Self::with_capacity(HOLE_CACHE)
+    }
+
+    fn with_capacity(capacity: usize) -> Result<Self> {
         let mut entries = Vec::new();
         entries
-            .try_reserve_exact(HOLE_CACHE)
+            .try_reserve_exact(capacity)
             .map_err(|_| Error::AllocationFailed {
                 resource: "keyed heap hole cache",
-                requested: (HOLE_CACHE * std::mem::size_of::<Hole>()) as u64,
+                requested: (capacity * std::mem::size_of::<Hole>()) as u64,
             })?;
-        entries.resize(HOLE_CACHE, Hole::default());
+        entries.resize(capacity, Hole::default());
         Ok(Self {
             entries: entries.into_boxed_slice(),
             len: 0,
@@ -115,7 +103,7 @@ impl Holes {
 
     /// The smallest hole of at least `len` bytes outside `avoid` that a
     /// generation up to `in_place` freed.
-    fn take(&mut self, len: u64, avoid: u64, in_place: u64) -> Option<Hole> {
+    fn take_fitting(&mut self, len: u64, avoid: u64, in_place: u64) -> Option<Hole> {
         let index = self.entries[..self.len]
             .iter()
             .enumerate()
@@ -204,6 +192,10 @@ impl Sparse {
 fn fill(entry: (u64, u64, u64)) -> f64 {
     entry.1 as f64 / entry.2.max(1) as f64
 }
+
+#[cfg(kani)]
+#[path = "../verification/keyed_heap_holes.rs"]
+mod hole_proofs;
 
 pub(crate) struct KeyedHeap {
     pub(crate) meta: u64,
@@ -317,103 +309,38 @@ impl KeyedHeap {
     // ---- lookups ----
 
     fn route(&self, block_id: u32, key: &[u8]) -> u32 {
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "the low 32 bits route and fingerprint"
-        )]
-        let route = sip::hash(self.fixed.seed, &[&block_id.to_le_bytes(), key]) as u32;
-        route
+        lookup::route(self.fixed.seed, block_id, key)
     }
 
-    /// Finds `key` of `block_id`.
+    /// Finds `key` of `block_id` as this writer sees it.
     pub(crate) fn find(
         &self,
         store: &dyn TileSource,
         block_id: u32,
         key: &[u8],
     ) -> Result<Option<Located>> {
-        let route = self.route(block_id, key);
-        let mut at = self.bucket(store, self.state.bucket_of(route))?;
-        let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
-        while at != 0 {
-            self.ring.read(store, at, &mut page)?;
-            let (count, next) = page_header(&page)?;
-            for index in 0..count {
-                let slot = slot_at(&page, index);
-                if slot.route != route {
-                    continue;
-                }
-                let chunk = self.chunk(store, slot.at())?;
-                if chunk.block_id == block_id
-                    && chunk.key_len as usize == key.len()
-                    && self.key_equals(store, slot.at() + CHUNK_HEADER, key)?
-                {
-                    return Ok(Some(Located {
-                        slot,
-                        page: at,
-                        index,
-                        chunk,
-                    }));
-                }
-            }
-            at = next;
-        }
-        Ok(None)
+        lookup::find(
+            &mut StoreView(&self.ring),
+            store,
+            self.fixed.seed,
+            &self.state,
+            block_id,
+            key,
+        )
     }
 
-    /// Reads a located record's payload into `out`, which must be its
-    /// length, and checks the chunk's checksum.
+    /// Reads a located record's payload into `out`; see [`lookup::read_payload`].
     pub(crate) fn read_payload(
         &self,
         store: &dyn TileSource,
         found: &Located,
         out: &mut [u8],
     ) -> Result<()> {
-        if out.len() != found.chunk.payload_len as usize {
-            return Err(Error::BufferTooSmall {
-                resource: "keyed record payload",
-                required: found.chunk.payload_len as usize,
-                provided: out.len(),
-            });
-        }
-        self.ring.read(store, found.payload_at(), out)?;
-        let mut crc = crc32fast::Hasher::new();
-        crc.update(&found.chunk.encode()[..12]);
-        let mut step = [0u8; STEP];
-        let mut done = 0u64;
-        let key_len = u64::from(found.chunk.key_len);
-        while done < key_len {
-            let n = crate::width::bounded(key_len - done, STEP);
-            self.ring
-                .read(store, found.slot.at() + CHUNK_HEADER + done, &mut step[..n])?;
-            crc.update(&step[..n]);
-            done += n as u64;
-        }
-        crc.update(out);
-        if crc.finalize() != found.chunk.crc {
-            return Err(Error::ChecksumMismatch {
-                offset: found.slot.at(),
-            });
-        }
-        Ok(())
+        lookup::read_payload(&mut StoreView(&self.ring), store, found, out)
     }
 
     fn chunk(&self, store: &dyn TileSource, at: u64) -> Result<Chunk> {
-        let mut header = [0u8; crate::width::small(CHUNK_HEADER)];
-        self.ring.read(store, at, &mut header)?;
-        Ok(Chunk::decode(&header))
-    }
-
-    fn key_equals(&self, store: &dyn TileSource, at: u64, key: &[u8]) -> Result<bool> {
-        let mut step = [0u8; STEP];
-        for (index, piece) in key.chunks(STEP).enumerate() {
-            let read = &mut step[..piece.len()];
-            self.ring.read(store, at + (index * STEP) as u64, read)?;
-            if read != piece {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        lookup::chunk(&mut StoreView(&self.ring), store, at)
     }
 
     fn region(&self, store: &dyn TileSource, at: u64) -> Result<Region> {
@@ -611,7 +538,10 @@ impl KeyedHeap {
         len: u64,
         avoid: u64,
     ) -> Result<Option<(u64, u64)>> {
-        if let Some(hole) = self.holes.take(len, avoid, self.ring.checkpointed()) {
+        if let Some(hole) = self
+            .holes
+            .take_fitting(len, avoid, self.ring.checkpointed())
+        {
             self.stats.holes_reused += 1;
             if hole.len > len {
                 // The rest was in place too: never staged in other units.
@@ -1034,11 +964,7 @@ impl KeyedHeap {
             self.free_page(store, spare)?;
             spare = next;
         }
-        self.state.split += 1;
-        if self.state.split == bit {
-            self.state.level += 1;
-            self.state.split = 0;
-        }
+        self.state = self.state.after_split();
         self.stats.splits += 1;
         Ok(())
     }
@@ -1075,20 +1001,7 @@ impl KeyedHeap {
 
     /// The first page of bucket `bucket`.
     fn bucket(&self, store: &dyn TileSource, bucket: u64) -> Result<u64> {
-        let (mut page, height) = self.state.dir;
-        if height < 8 && bucket >> (u64::from(DIR_LEVEL_BITS) * height) != 0 {
-            return Err(corrupt("keyed bucket directory"));
-        }
-        for level in (0..height).rev() {
-            let index = (bucket >> (u64::from(DIR_LEVEL_BITS) * level)) & (DIR_FANOUT - 1);
-            let mut entry = [0u8; 8];
-            self.ring.read(store, page + index * 8, &mut entry)?;
-            page = directory_offset(u64::from_le_bytes(entry))?;
-            if page == 0 {
-                return Err(corrupt("keyed bucket directory"));
-            }
-        }
-        Ok(page)
+        lookup::bucket(&mut StoreView(&self.ring), store, &self.state, bucket)
     }
 
     fn set_bucket(&mut self, store: &mut dyn TileStore, bucket: u64, first: u64) -> Result<()> {
@@ -1126,11 +1039,6 @@ impl KeyedHeap {
         self.ring
             .place_record(store, RecordKind::Directory, &[], DIR_PAGE_BYTES)
     }
-}
-
-fn slot_at(page: &[u8], index: usize) -> Slot {
-    let start = HEADER_BYTES + index * SLOT_BYTES;
-    Slot::decode(&page[start..start + crate::width::small(SLOT_LEN)])
 }
 
 fn put_slot(page: &mut [u8], index: usize, bytes: &[u8]) {

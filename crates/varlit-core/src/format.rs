@@ -1797,6 +1797,11 @@ pub struct FormatSpec {
     /// the default (16 MiB). A reader may fall behind by as many
     /// publications as fit in it before its snapshot expires.
     pub matrix_ring_bytes: Option<u64>,
+    /// Bounded keyed storage: keyed blocks are stored once per key in a
+    /// record heap inside the file and updated in place, so the file follows
+    /// its live data (see `docs/design/bounded-keyed-storage.md`). `None`:
+    /// keyed records are appended to the log, as before.
+    pub keyed_storage: Option<KeyedStorage>,
     /// Per-block schema identity of the implementations backing
     /// [`FormatSpec::blocks`], as `(block_id, declared endian override,
     /// keyedness, generated schema fingerprint)` tuples.
@@ -1829,6 +1834,67 @@ pub struct FormatSpec {
     /// the schema: a file's own header says whether it is anchored, and that is
     /// how it is read and appended to. See [`crate::AnchorPolicy`].
     pub anchors: crate::AnchorPolicy,
+}
+
+/// How a format stores its keyed blocks when it declares bounded keyed
+/// storage: once per key, in a record heap inside the file, changed in place
+/// through the file's write-ahead ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct KeyedStorage {
+    /// Free space allowed in the heap before the writer compacts, in
+    /// thousandths of live bytes: 10 to 50 (1 to 5 %).
+    pub free_space_permille: u16,
+    /// Bytes of write-ahead ring a new file reserves; `None` for the default
+    /// (16 MiB). A reader may fall behind by as many publications as fit.
+    pub ring_bytes: Option<u64>,
+}
+
+impl KeyedStorage {
+    /// The default: 5 % free space, the default ring.
+    pub const IN_PLACE: Self = Self {
+        free_space_permille: 50,
+        ring_bytes: None,
+    };
+
+    /// Allows `percent` (1 to 5) of free space before compaction.
+    pub const fn with_free_space_percent(mut self, percent: u16) -> Self {
+        self.free_space_permille = percent.saturating_mul(10);
+        self
+    }
+
+    /// Reserves `bytes` of write-ahead ring in new files.
+    pub const fn with_ring_bytes(mut self, bytes: u64) -> Self {
+        self.ring_bytes = Some(bytes);
+        self
+    }
+
+    pub(crate) const fn validate(self) -> Result<()> {
+        if self.free_space_permille < 10 || self.free_space_permille > 50 {
+            return Err(Error::InvalidFormatSpec(
+                "keyed storage free space must be 1 to 5 %",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What a file's keyed storage holds (see
+/// [`VarlitFile::keyed_storage_stats`](crate::VarlitFile::keyed_storage_stats)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeyedStorageStats {
+    /// The published generation the handle shows (a writer: its last).
+    pub generation: u64,
+    pub keys: u64,
+    /// Bytes of the records stored, headers and padding included.
+    pub live_bytes: u64,
+    /// Bytes of every heap region: live records, holes, free regions and the
+    /// unused end of the region being filled.
+    pub heap_bytes: u64,
+    /// Bytes of whole regions emptied and waiting for reuse.
+    pub free_region_bytes: u64,
+    /// Slot buckets of the key table.
+    pub buckets: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1913,6 +1979,7 @@ impl FormatSpec {
             growing_matrix: None,
             chunk_compression: None,
             matrix_ring_bytes: None,
+            keyed_storage: None,
             block_identities: &[],
             layout: LayoutSpec::varlit_native(),
             read_limits: ReadLimits::MISSING,
@@ -2095,6 +2162,12 @@ impl FormatSpec {
     /// The ring size new matrix files get, when declared.
     pub const fn matrix_ring_bytes(&self) -> Option<u64> {
         self.matrix_ring_bytes
+    }
+
+    /// Stores keyed blocks in place (see [`KeyedStorage`]).
+    pub const fn with_keyed_storage(mut self, storage: KeyedStorage) -> Self {
+        self.keyed_storage = Some(storage);
+        self
     }
 
     /// Rows each chunk covers, or `None` when no dimension grows.
@@ -2781,6 +2854,12 @@ impl FormatSpec {
             hash.write_str(growing.name);
             hash.write_bytes(&growing.rows_per_chunk.to_le_bytes());
         }
+        // Folded only when declared: keyed records then live in the heap,
+        // not in the log, and a reader of the other kind finds none.
+        if let Some(keyed) = self.keyed_storage {
+            hash.write_bytes(b"keyed-storage-v1");
+            hash.write_bytes(&keyed.free_space_permille.to_le_bytes());
+        }
         if let Some(compression) = self.chunk_compression {
             hash.write_bytes(b"chunk-compression-v1");
             hash.write_u8(compression_algorithm_hash_byte(compression.algorithm));
@@ -3108,6 +3187,19 @@ impl FormatSpec {
             return Err(Error::InvalidFormatSpec(
                 "header_tails requires a transaction_marker commit policy",
             ));
+        }
+        if let Some(keyed) = self.keyed_storage {
+            keyed.validate()?;
+            if self.index_policy.keyed_offset_chain {
+                return Err(Error::InvalidFormatSpec(
+                    "keyed storage keeps one version per key: it cannot keep a keyed_offset_chain",
+                ));
+            }
+            if self.has_matrix_blocks() {
+                return Err(Error::InvalidFormatSpec(
+                    "keyed storage and matrix blocks in one format are not supported yet",
+                ));
+            }
         }
         for (index, block) in self.blocks.iter().enumerate() {
             if block.id >= RESERVED_BLOCK_ID_START {

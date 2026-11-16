@@ -30,10 +30,6 @@ mod fallible;
 mod file;
 mod format;
 mod immediate;
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "wired into the native writer in the next step")
-)]
 mod keyed_heap;
 
 #[cfg(feature = "experimental-matrix-reuse")]
@@ -149,16 +145,17 @@ pub use format::{
     CompressionAlgorithm, CompressionHeaderMode, CompressionLevel, CompressionPolicy, Endian,
     FieldDescriptor, FieldPresence, FileHeaderDescriptor, FooterDescriptor, FormatSpec,
     FormatSpecBuilder, GrowingMatrixDimension, HeaderSlotIntegrity, HeaderSlots, IndexPolicy,
-    IntegrityPolicy, IntegrityVerification, LayoutAnchor, LayoutBytesSource, LayoutFieldDescriptor,
-    LayoutFieldSource, LayoutFieldType, LayoutFinalize, LayoutPartDescriptor, LayoutPartKind,
-    LayoutPlan, LayoutPlanField, LayoutPlanFieldGroup, LayoutPlanFieldSource, LayoutPlanFieldType,
-    LayoutPlanLen, LayoutPlanPartDescriptor, LayoutPlanPartKind, LayoutPlanRegion,
-    LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset, LayoutSpec, LeadInDescriptor,
-    LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES, MATRIX_MAX_TILE_CELLS,
-    ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor, MatrixCommitDescriptor,
-    MatrixCommitKind, MatrixDimensionDescriptor, MetadataDescriptor, RawRegionDescriptor,
-    ReadLimit, ReadLimits, ReadValidation, RecoveryPolicy, ResourceLimits, SegmentDescriptor,
-    SegmentRepeat, TransactionMarkerMode, VariableCompression, matrix_default_tile,
+    IntegrityPolicy, IntegrityVerification, KeyedStorage, KeyedStorageStats, LayoutAnchor,
+    LayoutBytesSource, LayoutFieldDescriptor, LayoutFieldSource, LayoutFieldType, LayoutFinalize,
+    LayoutPartDescriptor, LayoutPartKind, LayoutPlan, LayoutPlanField, LayoutPlanFieldGroup,
+    LayoutPlanFieldSource, LayoutPlanFieldType, LayoutPlanLen, LayoutPlanPartDescriptor,
+    LayoutPlanPartKind, LayoutPlanRegion, LayoutPlanRegionSource, LayoutPlanSegment, LayoutPreset,
+    LayoutSpec, LeadInDescriptor, LivenessPolicy, MATRIX_DEFAULT_TILE_BYTES, MATRIX_MAX_TILE_BYTES,
+    MATRIX_MAX_TILE_CELLS, ManifestPolicy, MatrixAuxDescriptor, MatrixBlockDescriptor,
+    MatrixCommitDescriptor, MatrixCommitKind, MatrixDimensionDescriptor, MetadataDescriptor,
+    RawRegionDescriptor, ReadLimit, ReadLimits, ReadValidation, RecoveryPolicy, ResourceLimits,
+    SegmentDescriptor, SegmentRepeat, TransactionMarkerMode, VariableCompression,
+    matrix_default_tile,
 };
 pub use immediate::{ImmediateEvent, ImmediateOperation, ImmediatePolicy};
 pub use sync_marker::SYNC_BLOCK_ID;

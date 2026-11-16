@@ -255,6 +255,11 @@ impl VarlitFile {
         prev_same_key_offset: Option<u64>,
     ) -> Result<AppendInfo> {
         self.check_write()?;
+        // A keyed block of an in-place format lives in the heap: a log copy
+        // would be a second, stale version no keyed read sees.
+        if T::IS_KEYED && self.spec.keyed_storage.is_some() {
+            return Err(Error::KeyedStorageRequiresPut { block_id: T::ID });
+        }
         let mandatory = T::IMMEDIATE || block.immediate_if();
         self.ensure_user_block::<T>()?;
         if T::KIND == BlockKind::Matrix {
@@ -394,6 +399,9 @@ impl VarlitFile {
         // stays as the runtime backstop. This terminal site also covers the
         // VarlitFile::delete and VarlitReader/VarlitWriter delete wrappers.
         let () = crate::traits::KeyedBlockContract::<T>::OK;
+        if self.spec.keyed_storage.is_some() {
+            return Err(Error::KeyedStorageRequiresPut { block_id: T::ID });
+        }
         let _permit = self.ensure_write()?;
         self.ensure_user_block::<T>()?;
         crate::collections::ensure_registered_block::<T>(self.spec)?;
@@ -601,9 +609,21 @@ impl VarlitFile {
         Ok(())
     }
 
-    /// Publishes this writer's staged matrix changes, if any.
+    /// Publishes this writer's staged matrix or keyed storage changes, if
+    /// any. A format has one or the other.
     fn publish_matrix_generation(&mut self) -> Result<()> {
-        self.publish_tiles()
+        self.publish_tiles()?;
+        self.publish_keyed().map(drop)
+    }
+
+    /// Whether this writer holds matrix or keyed storage changes not yet
+    /// published.
+    fn in_place_is_dirty(&self) -> bool {
+        self.matrix_is_dirty()
+            || matches!(
+                self.keyed.get(),
+                Some(keyed_access::KeyedEngine::Writer(heap)) if heap.ring.is_dirty()
+            )
     }
 
     /// Requests durable persistence of everything written so far.
@@ -651,7 +671,7 @@ impl VarlitFile {
         // A matrix publication ends in a full barrier of this same file, which
         // makes every record appended before it durable too: one barrier, not
         // a second one for the records alone.
-        if self.mode == OpenMode::ReadWrite && self.matrix_is_dirty() {
+        if self.mode == OpenMode::ReadWrite && self.in_place_is_dirty() {
             if let Err(error) = self.publish_matrix_generation() {
                 self.poison.poison();
                 return Err(error);

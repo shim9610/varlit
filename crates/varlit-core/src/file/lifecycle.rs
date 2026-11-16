@@ -114,12 +114,16 @@ impl VarlitFile {
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
             poison: PoisonFlag::healthy(),
             _lock: None,
         };
+        // Keyed storage's metadata is the first record of the log, where an
+        // open looks for it.
+        file.create_keyed_storage()?;
         file.write_embedded_manifest_if_needed()?;
         file.mark_writer_open()?;
         Ok(file)
@@ -239,6 +243,7 @@ impl VarlitFile {
             // directory entry is not durable until the first durability
             // request syncs the parent directory.
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             pending_pathname_parent_sync: true,
             opened_after_crash: false,
@@ -393,6 +398,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,
@@ -555,6 +561,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,
@@ -828,6 +835,7 @@ impl VarlitFile {
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -891,6 +899,7 @@ impl VarlitFile {
             segment_cursor: SegmentCursor::new_empty(),
             block_tails: digest.block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             uncommitted_since_commit: false,
             commit_scope: CommitScope::FRESH,
@@ -997,6 +1006,7 @@ impl VarlitFile {
             sequence_state,
             block_tails,
             tiles: std::cell::OnceCell::new(),
+            keyed: std::cell::OnceCell::new(),
             record_cache: std::cell::RefCell::new(ChunkCache::for_spec(spec)?),
             segment_cursor,
             uncommitted_since_commit: false,

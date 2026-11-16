@@ -54,6 +54,19 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `.vks` state sidecar, native keyed files and matrices are unchanged; read
   indexed data with 0.12.1 and rewrite it (see the
   [migration guide](docs/migration-guide.md)).
+- Add bounded keyed storage (opt-in). A format that declares
+  `keyed_storage: in_place(free_space = N%)` (or
+  `FormatSpec::with_keyed_storage`) stores each keyed block once per key in a
+  record heap inside the file, updated in place through the write-ahead ring,
+  found through linear-hashed slot buckets keyed by a per-file SipHash seed,
+  and compacted when free space passes the declared 1 to 5 % of live data.
+  Repeated updates no longer grow the file (the growth the security advisory
+  describes). Generated `put_<block>`, `get_<block>` and `remove_<block>`;
+  `VarlitFile::put_keyed`, `get_keyed`, `remove_keyed`, `keyed_storage_stats`;
+  `KeyedStorage`, `KeyedStorageStats` and
+  `Error::KeyedStorageRequiresPut`. Kani proofs cover routing, splits, chunk
+  lengths, layouts and the hole cache; the layouts and hash are checked under
+  Miri on a big-endian target; `keyed_storage_model` fuzzes it against a model.
 - Stream `sync` and stream reader `follow` now run through the verified
   publication drivers that the indexed writer used, so the commit and follow
   protocols checked by Kani are the ones stream handles execute.

@@ -17,6 +17,16 @@ pub(super) struct FileTiles<'a> {
     pub(super) appended: bool,
 }
 
+impl<'a> FileTiles<'a> {
+    /// The in-place storage engines' store over `file`.
+    pub(super) const fn new(file: &'a mut VarlitFile) -> Self {
+        Self {
+            file,
+            appended: false,
+        }
+    }
+}
+
 impl TileSource for FileTiles<'_> {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
         self.file.file.read_logical_exact(offset, buf)

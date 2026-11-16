@@ -412,6 +412,36 @@ varlit::varlit_format! {
     }
 }
 
+varlit::varlit_format! {
+    pub format KeyedStore {
+        magic: b"VCKEYED"; version: 1; schema_hash: computed; integrity: crc32;
+        keyed_storage: in_place(free_space = 2%);
+        blocks { variable KeyedValue(id = 83, key = [id]) { id: u64, bytes: Vec<u8>, } }
+    }
+}
+
+/// A keyed-storage file holding ids 1..=3, synced.
+fn keyed_fixture() -> Result<(tempfile::TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
+    let directory = private_tempdir::private_tempdir()?;
+    let path = directory.path().join("keyed.varlit");
+    let mut writer = KeyedStore::create_writer(&path)?;
+    for id in 1..=3u64 {
+        writer.put_keyed_value(&KeyedValue {
+            id,
+            bytes: vec![id as u8; 10 * id as usize],
+        })?;
+    }
+    writer.sync()?;
+    Ok((directory, path))
+}
+
+fn keyed_out() -> KeyedValue {
+    KeyedValue {
+        id: 0,
+        bytes: Vec::new(),
+    }
+}
+
 /// A file with one chunked record (id 1, 200 000 bytes) and one short one
 /// (id 2, no bytes).
 fn chunk_fixture() -> Result<(tempfile::TempDir, std::path::PathBuf), Box<dyn std::error::Error>> {
@@ -1025,7 +1055,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let dir = private_tempdir::private_tempdir()?; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[<Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR])?; assert!(r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let v = <Probe as varlit::VarlitBlock>::__VARLIT_RECORD_VALIDATOR; let r = varlit::__core::check_file(QualificationProbe::spec(), dir.path().join("missing"), &[v, v])?; assert!(!r.passed()); assert!(!r.checks().iter().any(|c| c.code == "registry.complete" && c.status == varlit::FileCheckStatus::Passed)); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@31d84b4bb760462d", generated "check_file",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:expand_format@8108588aa455b952", generated "check_file",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let r = QualificationProbe::check_file_with_resource_limits(&path, varlit::ReadLimits::STANDARD)?; assert!(r.passed(), "{r:#?}"); let r = QualificationProbe::check_file(&path)?; assert!(r.passed()); let file = QualificationProbe::open_readonly(&path)?; let entry = crate::pages::all_entries!(file)[0].clone(); let mut stored = Vec::new(); file.read_payload_into(&entry, &mut stored)?; assert_eq!(QualificationProbe::read_payload(&entry, &path)?, stored); assert_eq!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len)?, stored); let mut logical = Vec::new(); file.read_logical_payload_into(&entry, &mut logical)?; assert_eq!(QualificationProbe::read_logical_payload(&entry, &path)?, logical); assert_eq!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, logical.len() as u64)?, logical); assert_eq!(QualificationProbe::read_logical_payload_with_resource_limits(&entry, &path, varlit::ReadLimits::STANDARD)?, logical); Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let r = QualificationProbe::check_file(dir.path().join("missing"))?; assert!(!r.passed()); let r = QualificationProbe::check_file_with_resource_limits(dir.path().join("missing"), varlit::ReadLimits::STANDARD)?; assert!(!r.passed()); let path = dir.path().join("ok"); { let mut w = QualificationProbe::create(&path)?; w.push(&Probe { value: 1 })?; w.sync()?; } let entry = crate::pages::all_entries!(QualificationProbe::open_readonly(&path)?)[0].clone(); assert!(entry.payload_len > 0); assert!(matches!(QualificationProbe::read_payload_limited(&entry, &path, entry.payload_len - 1), Err(varlit::Error::LimitExceeded { .. }))); assert!(matches!(QualificationProbe::read_logical_payload_limited(&entry, &path, entry.payload_len, 0), Err(varlit::Error::LimitExceeded { .. }))); assert!(QualificationProbe::read_payload(&entry, dir.path().join("missing")).is_err()); assert!(QualificationProbe::read_logical_payload(&entry, dir.path().join("missing")).is_err()); Ok(()) }
     ),
@@ -1175,6 +1205,118 @@ const CONTRACTS: &[Contract] = &[
     contract!("macros/modules/format_emit.rs::format_emit::generator:generated_writer_construction_doc@6ef995cc7ffde12e", generated "from_inner",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("primed.varlit"); { let mut w = OwnershipIndex::spec().create_writer(&path)?; for id in 0..3 { w.push_keyed(&OwnedEntry { id, value: id })?; } w.sync()?; } let inner = OwnershipIndex::spec().open_writer(&path)?; let mut w: OwnershipIndexWriter = OwnershipIndexWriter::from_inner(inner)?; let info = w.inner_mut().push_keyed_info(&OwnedEntry { id: 1, value: 10 })?; assert!(info.prev_same_key_offset.is_some(), "priming must find the key written before open"); w.inner_mut().sync()?; Ok(()) },
         invalid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("primed.varlit"); { let mut w = OwnershipIndex::spec().create_writer(&path)?; for id in 0..64 { w.push_keyed(&OwnedEntry { id, value: id })?; } w.sync()?; } let spec = OwnershipIndex::spec().with_read_limits(varlit::ReadLimits::STANDARD.with_max_materialized_bytes(1)); let inner = spec.open_writer(&path)?; assert!(OwnershipIndexWriter::from_inner(inner).is_err(), "priming must refuse a record over the materialization limit"); Ok(()) }
+    ),
+    contract!("core/error.rs::error::Error::variant:KeyedStorageRequiresPut@5bc555a630a8d4da",
+        valid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; assert!(matches!(file.push_info(&KeyedValue { id: 9, bytes: vec![] }), Err(varlit::Error::KeyedStorageRequiresPut { block_id: 83 }))); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let mut file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; assert!(!matches!(file.push_info(&Probe { value: 1 }), Err(varlit::Error::KeyedStorageRequiresPut { .. }))); Ok(()) }
+    ),
+    contract!("core/file.rs::file::VarlitReader::fn:get_keyed@79d6a72c58d33a5f",
+        valid { let (_d, path) = keyed_fixture()?; let reader = KeyedStore::open_reader(&path)?.into_inner(); let mut out = keyed_out(); assert!(reader.get_keyed::<KeyedValue>(&2, &mut Vec::new(), &mut out)?); assert_eq!(out.bytes, vec![2u8; 20]); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let reader = KeyedStore::open_reader(&path)?.into_inner(); let mut out = keyed_out(); assert!(!reader.get_keyed::<KeyedValue>(&7, &mut Vec::new(), &mut out)?); assert_eq!(out, keyed_out()); Ok(()) }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:get_keyed@79d6a72c58d33a5f",
+        valid { let (_d, path) = keyed_fixture()?; let writer = KeyedStore::open_writer(&path)?.into_inner(); let mut out = keyed_out(); assert!(writer.get_keyed::<KeyedValue>(&3, &mut Vec::new(), &mut out)?); assert_eq!(out.bytes.len(), 30); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let writer = KeyedStore::open_writer(&path)?.into_inner(); let mut out = keyed_out(); assert!(!writer.get_keyed::<KeyedValue>(&0, &mut Vec::new(), &mut out)?); Ok(()) }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:put_keyed@8fee0c0f8e088665",
+        valid { let (_d, path) = keyed_fixture()?; let mut writer = KeyedStore::open_writer(&path)?.into_inner(); writer.put_keyed(&KeyedValue { id: 2, bytes: vec![9; 3] })?; let mut out = keyed_out(); assert!(writer.get_keyed::<KeyedValue>(&2, &mut Vec::new(), &mut out)?); assert_eq!(out.bytes, vec![9u8; 3]); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let mut writer = ProbeFormat::create_writer(dir.path().join("plain"))?.into_inner(); assert!(matches!(writer.put_keyed(&KeyedValue { id: 1, bytes: vec![] }), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file.rs::file::VarlitWriter::fn:remove_keyed@f51defbd18bfc542",
+        valid { let (_d, path) = keyed_fixture()?; let mut writer = KeyedStore::open_writer(&path)?.into_inner(); assert!(writer.remove_keyed::<KeyedValue>(&1)?); assert!(!writer.get_keyed::<KeyedValue>(&1, &mut Vec::new(), &mut keyed_out())?); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let mut writer = KeyedStore::open_writer(&path)?.into_inner(); assert!(!writer.remove_keyed::<KeyedValue>(&99)?); Ok(()) }
+    ),
+    contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:get_keyed@3407731f4e73886e",
+        valid { let (_d, path) = keyed_fixture()?; let file = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?; let mut out = keyed_out(); assert!(file.get_keyed::<KeyedValue>(&1, &mut Vec::new(), &mut out)?); assert_eq!(out, KeyedValue { id: 1, bytes: vec![1; 10] }); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let file = varlit::VarlitFile::open_readonly(ProbeFormat::spec(), &path); assert!(file.is_err() || file?.get_keyed::<KeyedValue>(&1, &mut Vec::new(), &mut keyed_out()).is_err()); Ok(()) }
+    ),
+    contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:keyed_storage_stats@ec0841772d12ce91",
+        valid { let (_d, path) = keyed_fixture()?; let stats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert_eq!(stats.keys, 3); assert!(stats.live_bytes > 60 && stats.live_bytes <= stats.heap_bytes); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; assert!(matches!(file.keyed_storage_stats(), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:put_keyed@9d20a00aeffa4b66",
+        valid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; let before = std::fs::metadata(&path)?.len(); for round in 0..50u8 { file.put_keyed(&KeyedValue { id: 1, bytes: vec![round; 10] })?; file.sync()?; } assert!(std::fs::metadata(&path)?.len() <= before + 4096, "same-size rewrites stay in place"); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let mut file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; assert!(matches!(file.put_keyed(&KeyedValue { id: 1, bytes: vec![] }), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
+    ),
+    contract!("core/file/keyed_access.rs::file::keyed_access::VarlitFile::fn:remove_keyed@d29cf813a54a44e3",
+        valid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; assert!(file.remove_keyed::<KeyedValue>(&3)?); file.sync()?; assert_eq!(file.keyed_storage_stats()?.keys, 2); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let mut file = varlit::VarlitFile::open(KeyedStore::spec(), &path)?; assert!(!file.remove_keyed::<KeyedValue>(&4)?); assert_eq!(file.keyed_storage_stats()?.keys, 3); Ok(()) }
+    ),
+    contract!("core/format.rs::format::FormatSpec::field:keyed_storage@f2bf0098728ba23d",
+        valid { assert_eq!(KeyedStore::spec().keyed_storage, Some(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(2))); Ok(()) },
+        invalid { assert_eq!(ProbeFormat::spec().keyed_storage, None); Ok(()) }
+    ),
+    contract!("core/format.rs::format::FormatSpec::fn:with_keyed_storage@e177eedbd102b7cd",
+        valid { let spec = ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE); spec.validate()?; assert_ne!(spec.computed_schema_hash(), ProbeFormat::spec().computed_schema_hash()); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(6)).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::const:IN_PLACE@ebd1f455ad036e67",
+        valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.free_space_permille, 50); assert_eq!(varlit::KeyedStorage::IN_PLACE.ring_bytes, None); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { free_space_permille: 0, ..varlit::KeyedStorage::IN_PLACE }).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::field:free_space_permille@4d24d3193e7ef3bf",
+        valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(1).free_space_permille, 10); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage { free_space_permille: 51, ring_bytes: None }).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::field:ring_bytes@0504e5cb6c5993db",
+        valid { assert_eq!(varlit::KeyedStorage::IN_PLACE.with_ring_bytes(1 << 20).ring_bytes, Some(1 << 20)); Ok(()) },
+        invalid { assert_eq!(varlit::KeyedStorage::IN_PLACE.ring_bytes, None); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::fn:with_free_space_percent@20e89ce17cfcf759",
+        valid { let storage = varlit::KeyedStorage::IN_PLACE.with_free_space_percent(3); assert_eq!(storage.free_space_permille, 30); ProbeFormat::spec().with_keyed_storage(storage).validate()?; Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(0)).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorage::fn:with_ring_bytes@f349802c043a5e01",
+        valid { let dir = private_tempdir::private_tempdir()?; let spec = KeyedStore::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_ring_bytes(1 << 20)); let mut file = varlit::VarlitFile::create(spec, dir.path().join("small-ring"))?; file.put_keyed(&KeyedValue { id: 1, bytes: vec![1] })?; file.sync()?; assert!(std::fs::metadata(dir.path().join("small-ring"))?.len() < 4 << 20); Ok(()) },
+        invalid { assert_ne!(varlit::KeyedStorage::IN_PLACE.with_ring_bytes(1 << 20), varlit::KeyedStorage::IN_PLACE); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:buckets@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:free_region_bytes@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:generation@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:heap_bytes@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:keys@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::KeyedStorageStats::field:live_bytes@4d35d3193e8d66f2",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::struct:KeyedStorage@cbf29ce484222325",
+        valid { let storage: varlit::KeyedStorage = varlit::KeyedStorage::IN_PLACE; assert!(ProbeFormat::spec().with_keyed_storage(storage).validate().is_ok()); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().with_index_policy(varlit::IndexPolicy::KeyedOffsetChain).with_keyed_storage(varlit::KeyedStorage::IN_PLACE).validate().is_err()); Ok(()) }
+    ),
+    contract!("core/format.rs::format::struct:KeyedStorageStats@cbf29ce484222325",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:KeyedStorage@c78528c0feb2a047",
+        valid { let storage: varlit::KeyedStorage = varlit::KeyedStorage::IN_PLACE.with_free_space_percent(5); assert_eq!(storage, varlit::KeyedStorage::IN_PLACE); Ok(()) },
+        invalid { assert_ne!(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(4), varlit::KeyedStorage::IN_PLACE); Ok(()) }
+    ),
+    contract!("core/lib.rs::::export:KeyedStorageStats@d1e1ece46c094fea",
+        valid { let (_d, path) = keyed_fixture()?; let stats: varlit::KeyedStorageStats = varlit::VarlitFile::open_readonly(KeyedStore::spec(), &path)?.keyed_storage_stats()?; assert!(stats.generation >= 1 && stats.buckets >= 1 && stats.free_region_bytes <= stats.heap_bytes && stats.keys == 3 && stats.live_bytes > 0); Ok(()) },
+        invalid { let dir = private_tempdir::private_tempdir()?; let file = varlit::VarlitFile::create(ProbeFormat::spec(), dir.path().join("plain"))?; let stats: varlit::Result<varlit::KeyedStorageStats> = file.keyed_storage_stats(); assert!(stats.map(|s| s.buckets + s.free_region_bytes + s.generation + s.heap_bytes + s.keys + s.live_bytes).is_err()); Ok(()) }
+    ),
+    contract!("macros/modules/format_emit.rs::format_emit::generator:keyed_storage_methods@5dca09b142759a32", generated "put_keyed_value",
+        valid { let (_d, path) = keyed_fixture()?; let mut writer = KeyedStore::open_writer(&path)?; writer.put_keyed_value(&KeyedValue { id: 5, bytes: vec![5] })?; assert!(writer.remove_keyed_value(&1)?); let mut out = keyed_out(); assert!(writer.get_keyed_value(&5, &mut Vec::new(), &mut out)?); assert_eq!(out.bytes, vec![5]); Ok(()) },
+        invalid { let (_d, path) = keyed_fixture()?; let mut writer = KeyedStore::open_writer(&path)?; writer.put_keyed_value(&KeyedValue { id: 6, bytes: vec![] })?; let mut out = keyed_out(); assert!(!writer.get_keyed_value(&5, &mut Vec::new(), &mut out)?); assert!(!writer.remove_keyed_value(&5)?); Ok(()) }
+    ),
+    contract!("macros/modules/format_parse.rs::format_parse::generator:parse_keyed_storage@a965c1c8dea9a22e", generated "spec",
+        valid { let declared = KeyedStore::spec().keyed_storage; assert_eq!(declared.map(|storage| storage.free_space_permille), Some(20)); Ok(()) },
+        invalid { assert!(ProbeFormat::spec().keyed_storage.is_none()); assert!(ProbeFormat::spec().with_keyed_storage(varlit::KeyedStorage::IN_PLACE.with_free_space_percent(9)).validate().is_err()); Ok(()) }
     ),
     contract!("macros/modules/format_emit.rs::format_emit::generator:high_cardinality_api_tokens@a9b8fbc451734f72", generated "push_stream_entry",
         valid { let dir = private_tempdir::private_tempdir()?; let path = dir.path().join("generated.varlit"); let mut w = IntoStream::create_stream_writer(&path, varlit::StreamOptions::default())?; let info = w.push_stream_entry(&StreamEntry { id: 7, value: 70 })?; w.sync()?; drop(w); assert!(info.payload_len > 0); let reader = IntoStream::open_stream_reader(&path, varlit::StreamOptions::default())?.into_inner(); let mut blocks = reader.blocks::<StreamEntry>()?; let mut out = <StreamEntry as varlit::VarlitEmpty>::empty(); assert!(blocks.next_into(&mut out)?); assert_eq!(out, StreamEntry { id: 7, value: 70 }); Ok(()) },
@@ -1896,7 +2038,7 @@ const CONTRACTS: &[Contract] = &[
         valid { let (_directory, path) = slots_fixture()?; let writer = IntoSlots::spec().open_writer(&path)?; let mut out = <SlotMark as varlit::VarlitEmpty>::empty(); assert!(writer.read_header_block::<SlotMark>(&mut out)?); assert_eq!(out, SlotMark { at: 5 }); Ok(()) },
         invalid { let (_directory, path) = slots_fixture()?; let writer = IntoSlots::spec().open_writer(&path)?; let mut out = <SlotOther as varlit::VarlitEmpty>::empty(); assert!(matches!(writer.read_header_block::<SlotOther>(&mut out), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),
-    contract!("macros/modules/format_emit.rs::format_emit::generator:typed_api_tokens@708cd20e764e83da", generated "read_header_block",
+    contract!("macros/modules/format_emit.rs::format_emit::generator:typed_api_tokens@5b6baf877858da94", generated "read_header_block",
         valid { let directory = private_tempdir::private_tempdir()?; let mut writer = IntoSlots::create_writer(directory.path().join("typed.varlit"))?; let mut out = <SlotMark as varlit::VarlitEmpty>::empty(); assert!(!writer.read_header_block::<SlotMark>(&mut out)?); writer.write_header_block(&SlotMark { at: 9 })?; assert!(writer.read_header_block::<SlotMark>(&mut out)?); assert_eq!(out, SlotMark { at: 9 }); Ok(()) },
         invalid { let directory = private_tempdir::private_tempdir()?; let writer = IntoSlots::create_writer(directory.path().join("typed.varlit"))?; let mut out = <SlotOther as varlit::VarlitEmpty>::empty(); assert!(matches!(writer.read_header_block::<SlotOther>(&mut out), Err(varlit::Error::InvalidFormatSpec(_)))); Ok(()) }
     ),

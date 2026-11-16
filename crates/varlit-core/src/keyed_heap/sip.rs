@@ -105,6 +105,24 @@ impl State {
 mod tests {
     use super::hash;
 
+    /// The reference SipHash-1-3 vectors (key `00..0f`, message `00..n`):
+    /// a file's buckets must be found the same on every platform.
+    #[test]
+    fn matches_the_reference_vectors_on_every_byte_order() {
+        let seed = [0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908];
+        for (len, expected) in [
+            (0usize, 0xabac_0158_050f_c4dc_u64),
+            (1, 0xc9f4_9bf3_7d57_ca93),
+            (7, 0xd392_7d98_9bb1_1140),
+            (8, 0x3690_9511_8d29_9a8e),
+            (15, 0xd320_d86d_2a51_9956),
+            (63, 0x9d19_9062_b7bb_b3a8),
+        ] {
+            let message: Vec<u8> = (0..len as u8).collect();
+            assert_eq!(hash(seed, &[&message]), expected, "length {len}");
+        }
+    }
+
     #[test]
     fn splitting_a_message_does_not_change_its_hash() {
         let seed = [0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908];

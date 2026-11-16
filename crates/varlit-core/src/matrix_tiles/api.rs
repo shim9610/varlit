@@ -477,7 +477,7 @@ impl TiledMatrix {
     pub(crate) fn generation(&self) -> u64 {
         match &self.engine {
             Engine::Writer(writer) => writer.engine.published(),
-            Engine::Reader(reader) => reader.lock().map_or(0, |reader| reader.snapshot()),
+            Engine::Reader(reader) => reader.lock().map_or(0, |reader| reader.reader.snapshot()),
         }
     }
 
@@ -507,6 +507,7 @@ impl TiledMatrix {
             Engine::Reader(reader) => reader
                 .lock()
                 .map_err(|_| Error::InvalidMatrixLayout)?
+                .reader
                 .read(source, at, buf),
         }
     }
@@ -814,12 +815,12 @@ impl TiledMatrix {
                     let oldest = access.oldest;
                     // Settle even after an error: a damaged-looking cell read
                     // while the ring moved is read again, not reported.
-                    if reader.settle(source, oldest)? {
+                    if reader.reader.settle(source, oldest)? {
                         return result;
                     }
                 }
                 Err(Error::MatrixSnapshotExpired {
-                    snapshot: reader.snapshot(),
+                    snapshot: reader.reader.snapshot(),
                     checkpointed: 0,
                 })
             }
@@ -1538,6 +1539,7 @@ impl TiledMatrix {
             Engine::Reader(reader) => reader
                 .lock()
                 .map_err(|_| Error::InvalidMatrixLayout)?
+                .reader
                 .for_each_overlay(source, &mut push),
         }
     }
@@ -1555,6 +1557,7 @@ impl TiledMatrix {
             Engine::Reader(reader) => reader
                 .get_mut()
                 .map_err(|_| Error::InvalidMatrixLayout)?
+                .reader
                 .follow(source),
         }
     }
@@ -1608,7 +1611,7 @@ impl RegionAccess for ReaderAccess<'_> {
         self.reader.tile(self.source, self.block, coord)
     }
     fn read(&mut self, at: u64, buf: &mut [u8]) -> Result<()> {
-        let laid = self.reader.read_unsettled(self.source, at, buf)?;
+        let laid = self.reader.reader.read_unsettled(self.source, at, buf)?;
         self.oldest = self.oldest.min(laid);
         Ok(())
     }

@@ -10,6 +10,13 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
         SchemaHashChoice::Literal(value) => (value, quote!()),
         SchemaHashChoice::Computed => (0u64, quote!(.with_computed_schema_hash())),
     };
+    // Before the computed schema hash, which covers it.
+    let keyed_storage_step = match input.keyed_storage {
+        Some(percent) => quote!(.with_keyed_storage(
+            ::varlit::__core::KeyedStorage::IN_PLACE.with_free_space_percent(#percent)
+        )),
+        None => quote!(),
+    };
     let extension = input
         .extension
         .map(|extension| quote!(::core::option::Option::Some(#extension)))
@@ -144,6 +151,7 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
             &inline_blocks,
             matrix_commit.as_ref(),
             &matrix_aux,
+            input.keyed_storage.is_some(),
         )
     } else {
         quote!()
@@ -473,6 +481,7 @@ pub(super) fn expand_format(input: FormatInput) -> TokenStream2 {
                 #matrix_spec_step
                 .with_block_identities(BLOCK_IDENTITIES)
                 .with_layout(#layout)
+                #keyed_storage_step
                 #schema_hash_step
             }
 
@@ -2612,6 +2621,7 @@ pub(super) fn typed_api_tokens(
     blocks: &[InlineBlock],
     matrix_commit: Option<&MatrixCommit>,
     matrix_aux: &[MatrixAux],
+    keyed_storage: bool,
 ) -> TokenStream2 {
     let reader_name = format_ident!("{}Reader", format_name);
     let writer_name = format_ident!("{}Writer", format_name);
@@ -2627,11 +2637,37 @@ pub(super) fn typed_api_tokens(
         .filter(|block| matches!(&block.kind, InlineBlockKind::Matrix(_)))
         .collect();
 
-    let keyed_blocks: Vec<_> = append_blocks
+    let stored_keyed: Vec<_> = append_blocks
         .iter()
         .filter(|block| !block.key_fields.is_empty())
         .copied()
         .collect();
+    // With keyed storage, keyed blocks live in the record heap: they get
+    // put/get/remove methods and none of the log's append, scan or tail-map
+    // machinery. Without it they are log blocks like any other.
+    let (keyed_blocks, append_blocks): (Vec<&InlineBlock>, Vec<&InlineBlock>) = if keyed_storage {
+        (
+            Vec::new(),
+            append_blocks
+                .iter()
+                .filter(|block| block.key_fields.is_empty())
+                .copied()
+                .collect(),
+        )
+    } else {
+        (stored_keyed.clone(), append_blocks)
+    };
+    let stored_keyed = if keyed_storage {
+        stored_keyed
+    } else {
+        Vec::new()
+    };
+    let keyed_storage_writer_methods = stored_keyed
+        .iter()
+        .flat_map(|block| keyed_storage_methods(block, true));
+    let keyed_storage_reader_methods = stored_keyed
+        .iter()
+        .flat_map(|block| keyed_storage_methods(block, false));
     // the writer owns no keyed tail state of its own. Every keyed
     // mutation routes through the byte-keyed resident cache inside
     // `VarlitFile`, so the only step after an authoritative append is an
@@ -2748,6 +2784,7 @@ pub(super) fn typed_api_tokens(
             }
 
             #(#reader_inherent_methods)*
+            #(#keyed_storage_reader_methods)*
             #matrix_reader_inherent_methods
             #matrix_reader_aux_inherent_methods
         }
@@ -2877,6 +2914,7 @@ pub(super) fn typed_api_tokens(
             }
 
             #(#writer_inherent_methods)*
+            #(#keyed_storage_writer_methods)*
             #matrix_writer_inherent_methods
             #matrix_writer_aux_inherent_methods
         }
@@ -3528,6 +3566,49 @@ pub(super) fn reader_trait_methods(block: &InlineBlock) -> Vec<TokenStream2> {
 
 pub(super) fn reader_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2> {
     reader_block_methods(block, ReaderMethodTarget::TraitImpl)
+}
+
+/// The methods a keyed block of a keyed-storage format gets: `put_`,
+/// `remove_` and `get_` on the writer, `get_` on the reader.
+pub(super) fn keyed_storage_methods(block: &InlineBlock, writer: bool) -> Vec<TokenStream2> {
+    let ty = &block.name;
+    let name = singular_method_name(ty);
+    let put = format_ident!("put_{}", name);
+    let remove = format_ident!("remove_{}", name);
+    let get = format_ident!("get_{}", name);
+    let get_method = quote! {
+        /// Decodes the record of `key` into `out`; `false` when there is
+        /// none. `scratch` holds the encoded key and then the payload.
+        pub fn #get(
+            &self,
+            key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
+            scratch: &mut ::std::vec::Vec<u8>,
+            out: &mut #ty,
+        ) -> ::varlit::__core::Result<bool> {
+            self.inner.get_keyed::<#ty>(key, scratch, out)
+        }
+    };
+    if !writer {
+        return vec![get_method];
+    }
+    vec![
+        quote! {
+            /// Stores `value` as the one record of its key, in place.
+            pub fn #put(&mut self, value: &#ty) -> ::varlit::__core::Result<()> {
+                self.inner.put_keyed(value)
+            }
+        },
+        quote! {
+            /// Removes the record of `key`; `false` when there is none.
+            pub fn #remove(
+                &mut self,
+                key: &<#ty as ::varlit::__core::VarlitKeyedBlock>::Key,
+            ) -> ::varlit::__core::Result<bool> {
+                self.inner.remove_keyed::<#ty>(key)
+            }
+        },
+        get_method,
+    ]
 }
 
 pub(super) fn writer_methods(block: &InlineBlock) -> Vec<TokenStream2> {

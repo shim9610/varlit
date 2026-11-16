@@ -1,7 +1,8 @@
 # Bounded keyed storage
 
-Status: design, agreed in discussion; not implemented. The indexed primary
-(the first item under "What goes away") has been removed; the rest is pending.
+Status: in progress. The indexed primary is removed; in-place keyed storage
+(step 2 below: record heap, slot buckets, compaction) is implemented as an
+opt-in declaration; sorted runs and the removal of keyed history are pending.
 
 ## Problem
 

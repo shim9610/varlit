@@ -985,6 +985,68 @@ indeterminate, everything else = pre-publication).
 `varlit::Error` is `#[non_exhaustive]`. Downstream exhaustive matches must keep a
 wildcard arm so new diagnostics can be added without another enum-shape break.
 
+## Keyed Storage
+
+A format that declares keyed storage keeps one record per key, updated in
+place, so the file follows its live data rather than the number of updates.
+See [`design/bounded-keyed-storage.md`](design/bounded-keyed-storage.md) and,
+for the layout, [`spec.md`](spec.md#keyed-storage-wire-contract).
+
+```rust,ignore
+varlit_format! {
+    pub format Profiles {
+        magic: b"PROFILES";
+        version: 1;
+        schema_hash: computed;
+        integrity: crc32;
+        keyed_storage: in_place(free_space = 3%); // 1% to 5%; `in_place` alone is 5%
+        blocks {
+            variable Profile(id = 1, key = [user]) { user: String, bio: String, }
+            fixed Visit(id = 2) { at: u64, }
+        }
+    }
+}
+
+let mut writer = Profiles::create_writer(&path)?;
+writer.put_profile(&profile)?;                 // insert or replace, in place
+writer.remove_profile(&"ada".to_string())?;    // true when it was there
+writer.push_visit(&Visit { at: 1 })?;          // unkeyed blocks still append
+writer.sync()?;                                // publishes one generation
+
+let reader = Profiles::open_reader(&path)?;
+let mut scratch = Vec::new();
+let mut out = Profile::empty();
+if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
+```
+
+- **Generated methods.** For each keyed block of such a format the writer has
+  `put_<block>`, `remove_<block>` and `get_<block>`, the reader `get_<block>`.
+  No `push_`, `delete_`, `replace_` or listing methods are generated for those
+  blocks. The untyped equivalents are `VarlitFile::put_keyed`,
+  `remove_keyed` and `get_keyed` (also on `VarlitWriter` and `VarlitReader`).
+- **Reads.** `get_keyed(key, scratch, out)` encodes the key into `scratch`,
+  then reads the payload into it and decodes into `out`; it allocates nothing
+  else. A lookup reads a bucket page and the record: usually two reads.
+- **Visibility.** A writer sees its own puts and removes at once. Readers see
+  them after `sync`, which publishes them as one generation through the
+  file's write-ahead ring; a writer dropped without `sync` publishes nothing.
+  A reader keeps its generation until `follow`; one the ring has moved past
+  gets `MatrixSnapshotExpired` and must `follow`.
+- **Space.** An update that fits is written where the old value was; one that
+  does not moves, and the old place is reused. Deletes leave no tombstone.
+  When free space exceeds the declared ratio of live bytes the writer moves
+  records out of the sparsest regions. Beyond the live data a file holds
+  whole-region slack (1 MiB regions), the ring (`KeyedStorage::ring_bytes`,
+  16 MiB by default) and room to stage the largest publication atomically;
+  none of these grows with the number of updates.
+- **Refusals.** In a keyed-storage format, appending a keyed block to the log
+  (`push_info`, `push_keyed`, `delete`) fails with
+  `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed
+  storage fail with `Error::InvalidFormatSpec`.
+- **Stats.** `VarlitFile::keyed_storage_stats()` returns `KeyedStorageStats`:
+  the generation shown, keys, live bytes, heap bytes, free region bytes and
+  slot buckets.
+
 ## Collections
 
 | Type | Meaning |

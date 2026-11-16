@@ -66,6 +66,26 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 <a id="3-streamindexed-api-status"></a>
 <a id="3-stream-api-status"></a>
 
+## Keyed storage
+
+- **Opt-in for now.** Formats keep appending keyed blocks to the log unless
+  they declare `keyed_storage: in_place`. Keyed history
+  (`keyed_offset_chain`, `keyed_chain`, tombstones) is removed in one later
+  change with a converter; until then both exist
+  ([design](design/bounded-keyed-storage.md#implementation-order)).
+- **No listing yet.** A keyed-storage block is read by key; there is no
+  iteration over its keys, and `key_order = increasing` (sorted runs) is not
+  implemented.
+- **Not with matrices.** A format cannot declare both keyed storage and
+  matrix blocks yet: each keeps its metadata as the first record.
+- **Constant slack.** Beyond the live data a file holds whole-region slack
+  (1 MiB regions), the ring (16 MiB by default) and room to stage its largest
+  publication atomically. These do not grow with updates, but they dominate
+  a small file.
+- **The hole cache is in memory.** A reopened writer starts with an empty
+  cache; holes it does not know are reclaimed by compaction when they pass
+  the ratio, not reused at once.
+
 ## Native scans and temporary storage
 
 Native reader/writer open may scan every record. An ordinary private directory

@@ -51,7 +51,8 @@ fn seen(r: &mut TileReader, store: &MemStore, key: MatrixKey) -> crate::Result<O
         return Ok(None);
     };
     let mut bytes = [0u8; 12];
-    r.read(store, tile + BLOCK.slot_at(index), &mut bytes)?;
+    r.reader
+        .read(store, tile + BLOCK.slot_at(index), &mut bytes)?;
     if bytes == [0; 12] {
         return Ok(None);
     }
@@ -155,7 +156,7 @@ fn a_reader_keeps_its_snapshot_across_publications_and_checkpoints() {
         put(&mut w, &mut store.clone(), key, generation);
         put(&mut w, &mut store.clone(), MatrixKey::new(0, 0), generation);
         w.engine.publish(&mut store.clone()).unwrap();
-        follower.follow(&store).unwrap();
+        follower.reader.follow(&store).unwrap();
         assert_eq!(
             seen(&mut follower, &store, MatrixKey::new(0, 0)).unwrap(),
             Some(generation)
@@ -173,7 +174,7 @@ fn a_reader_keeps_its_snapshot_across_publications_and_checkpoints() {
     assert!(w.engine.stats.checkpoints > 0, "the ring never filled");
     assert!(expired, "a snapshot older than the ring never expired");
     // Following brings it back.
-    old.follow(&store).unwrap();
+    old.reader.follow(&store).unwrap();
     assert_eq!(
         seen(&mut old, &store, MatrixKey::new(0, 0)).unwrap(),
         Some(2999)
@@ -261,7 +262,8 @@ fn a_publication_larger_than_a_frame_spills_and_commits_whole() {
         let (coord, index) = WIDE.locate(key);
         let tile = r.tile(&store, 0, coord).unwrap()?;
         let mut bytes = vec![0u8; 1028];
-        r.read(&store, tile + WIDE.slot_at(index), &mut bytes)
+        r.reader
+            .read(&store, tile + WIDE.slot_at(index), &mut bytes)
             .unwrap();
         Some(bytes[0])
     };
@@ -271,7 +273,7 @@ fn a_publication_larger_than_a_frame_spills_and_commits_whole() {
         "spilled frames are not published"
     );
     w.engine.publish(&mut store.clone()).unwrap();
-    r.follow(&store).unwrap();
+    r.reader.follow(&store).unwrap();
     for key in keys() {
         assert_eq!(read(&mut r, key), Some(5), "{key:?}");
     }
@@ -797,7 +799,8 @@ fn wide_seen(r: &mut TileReader, store: &MemStore, key: MatrixKey) -> crate::Res
         return Ok(None);
     };
     let mut bytes = vec![0u8; 1028];
-    r.read(store, tile + WIDE_CELLS.slot_at(index), &mut bytes)?;
+    r.reader
+        .read(store, tile + WIDE_CELLS.slot_at(index), &mut bytes)?;
     assert!(
         bytes[..1024].iter().all(|b| *b == bytes[0]),
         "{key:?} mixes two publications"
@@ -845,7 +848,7 @@ fn a_publication_larger_than_the_ring_streams_through_overflow_and_commits_whole
             "{key:?}"
         );
     }
-    before.follow(&store).unwrap();
+    before.reader.follow(&store).unwrap();
     for key in wide_keys() {
         assert_eq!(
             wide_seen(&mut before, &store, key).unwrap(),
@@ -920,7 +923,7 @@ fn overflow_regions_are_reused_once_no_reader_can_need_them() {
             Err(error) => panic!("{error}"),
         }
     }
-    held.follow(&store).unwrap();
+    held.reader.follow(&store).unwrap();
     for key in wide_keys() {
         assert_eq!(
             wide_seen(&mut held, &store, key).unwrap(),
@@ -1066,7 +1069,7 @@ fn new_tiles_fill_free_overflow_space_and_the_space_survives_a_reopen() {
         again.engine.stats
     );
     assert_eq!(store.len(), len, "the reopened writer grew the file");
-    r.follow(&store).unwrap();
+    r.reader.follow(&store).unwrap();
     for key in wide_keys() {
         let want = match key.scan {
             0..8 => 4,

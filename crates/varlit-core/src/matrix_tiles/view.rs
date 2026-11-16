@@ -424,9 +424,10 @@ pub(crate) fn for_each_tile(
 
 /// A read-only snapshot of a tiled matrix. Everything it holds was
 /// allocated at open; following, reading and walking allocate nothing.
-pub(crate) struct TileReader {
-    pub(crate) geom: Geometry,
-    pub(crate) meta: u64,
+/// A reader's snapshot of a ring: the ranges published after the last
+/// checkpoint it saw, laid over the file. It knows nothing of what the bytes
+/// mean; a matrix ([`TileReader`]) and keyed storage both read through one.
+pub(crate) struct RingReader {
     pub(crate) ring: Ring,
     snapshot: u64,
     /// Ring offset just past the snapshot's last frame.
@@ -436,22 +437,13 @@ pub(crate) struct TileReader {
     scratch: Box<[u8]>,
     /// The last header a read validated against.
     seen: RingHeader,
-    /// Tiles never move once allocated, so a resolved one stays resolved.
-    tiles: TileCache,
 }
-
-impl TileReader {
-    /// Opens the newest published snapshot of the matrix whose metadata
-    /// record payload is at `meta`.
-    pub(crate) fn open(source: &dyn TileSource, geom: Geometry, meta: u64) -> Result<Self> {
-        let mut fixed = [0u8; crate::width::small(super::geometry::META_FIXED_LEN)];
-        source.read_at(meta, &mut fixed)?;
-        let (base, len) = geom.decode_meta(&fixed)?;
-        let ring = Ring::within(base, len, source)?;
-        let tiles = TileCache::for_geometry(&geom)?;
+impl RingReader {
+    /// Opens the newest published snapshot of the ring at `ring`
+    /// (payload offset, length).
+    pub(crate) fn open(source: &dyn TileSource, ring: (u64, u64)) -> Result<Self> {
+        let ring = Ring::within(ring.0, ring.1, source)?;
         let mut reader = Self {
-            geom,
-            meta,
             ring,
             snapshot: 0,
             scanned_head: 0,
@@ -459,7 +451,6 @@ impl TileReader {
             cache: PageCache::with_pages(index::DEFAULT_CACHE_PAGES)?,
             scratch: scan_buffer()?,
             seen: RingHeader::default(),
-            tiles,
         };
         reader.rebuild(source)?;
         Ok(reader)
@@ -626,50 +617,6 @@ impl TileReader {
             Err(error) => Err(error),
         }
     }
-
-    /// Validates every [`Self::read_unsettled`] since the last settle, whose
-    /// oldest laid generation is `laid_oldest`: `Ok(true)` when they all
-    /// show this snapshot, `Ok(false)` when the ring moved under them and
-    /// the batch must be read again, an error when the snapshot expired.
-    pub(crate) fn settle(&mut self, source: &dyn TileSource, laid_oldest: u64) -> Result<bool> {
-        let after = self.ring.read_header(source)?;
-        let before = self.seen;
-        self.seen = after;
-        if after.mark > self.snapshot {
-            return Err(Error::MatrixSnapshotExpired {
-                snapshot: self.snapshot,
-                checkpointed: after.mark,
-            });
-        }
-        // A reclaim the reads did not know about may have skipped a range
-        // they should have laid, or laid one being overwritten.
-        Ok(laid_oldest > after.reclaimed && after.reclaimed == before.reclaimed)
-    }
-
-    /// A resolved tile from the cache, without reading anything.
-    pub(crate) fn cached_tile(&self, block: usize, coord: TileCoord) -> Result<Option<u64>> {
-        Ok(self.tiles.get(block, coord.morton()?))
-    }
-
-    /// The payload offset of `block`'s tile `coord`, if it exists.
-    pub(crate) fn tile(
-        &mut self,
-        source: &dyn TileSource,
-        block: usize,
-        coord: TileCoord,
-    ) -> Result<Option<u64>> {
-        let key = coord.morton()?;
-        if let Some(found) = self.tiles.get(block, key) {
-            return Ok(Some(found));
-        }
-        let root_at = self.meta + self.geom.root_at(block);
-        let found = find_tile(root_at, coord, &mut |at, buf| self.read(source, at, buf))?;
-        if let Some(found) = found {
-            self.tiles.insert(block, key, found);
-        }
-        Ok(found)
-    }
-
     /// Calls `visit` with every range this snapshot reads from the ring or
     /// an index, in the order they must be laid.
     #[cfg(feature = "mmap")]
@@ -691,6 +638,77 @@ impl TileReader {
         )
     }
 
+    /// Validates every [`Self::read_unsettled`] since the last settle, whose
+    /// oldest laid generation is `laid_oldest`: `Ok(true)` when they all
+    /// show this snapshot, `Ok(false)` when the ring moved under them and
+    /// the batch must be read again, an error when the snapshot expired.
+    pub(crate) fn settle(&mut self, source: &dyn TileSource, laid_oldest: u64) -> Result<bool> {
+        let after = self.ring.read_header(source)?;
+        let before = self.seen;
+        self.seen = after;
+        if after.mark > self.snapshot {
+            return Err(Error::MatrixSnapshotExpired {
+                snapshot: self.snapshot,
+                checkpointed: after.mark,
+            });
+        }
+        // A reclaim the reads did not know about may have skipped a range
+        // they should have laid, or laid one being overwritten.
+        Ok(laid_oldest > after.reclaimed && after.reclaimed == before.reclaimed)
+    }
+}
+
+/// A matrix reader: tiles and directories over a [`RingReader`] snapshot.
+pub(crate) struct TileReader {
+    pub(crate) geom: Geometry,
+    pub(crate) meta: u64,
+    /// Tiles never move once allocated, so a resolved one stays resolved.
+    tiles: TileCache,
+    pub(crate) reader: RingReader,
+}
+
+impl TileReader {
+    /// Opens the newest published snapshot of the matrix whose metadata
+    /// record payload is at `meta`.
+    pub(crate) fn open(source: &dyn TileSource, geom: Geometry, meta: u64) -> Result<Self> {
+        let mut fixed = [0u8; crate::width::small(super::geometry::META_FIXED_LEN)];
+        source.read_at(meta, &mut fixed)?;
+        let ring = geom.decode_meta(&fixed)?;
+        let reader = RingReader::open(source, ring)?;
+        Ok(Self {
+            tiles: TileCache::for_geometry(&geom)?,
+            geom,
+            meta,
+            reader,
+        })
+    }
+
+    /// A resolved tile from the cache, without reading anything.
+    pub(crate) fn cached_tile(&self, block: usize, coord: TileCoord) -> Result<Option<u64>> {
+        Ok(self.tiles.get(block, coord.morton()?))
+    }
+
+    /// The payload offset of `block`'s tile `coord`, if it exists.
+    pub(crate) fn tile(
+        &mut self,
+        source: &dyn TileSource,
+        block: usize,
+        coord: TileCoord,
+    ) -> Result<Option<u64>> {
+        let key = coord.morton()?;
+        if let Some(found) = self.tiles.get(block, key) {
+            return Ok(Some(found));
+        }
+        let root_at = self.meta + self.geom.root_at(block);
+        let found = find_tile(root_at, coord, &mut |at, buf| {
+            self.reader.read(source, at, buf)
+        })?;
+        if let Some(found) = found {
+            self.tiles.insert(block, key, found);
+        }
+        Ok(found)
+    }
+
     /// Calls `visit` with every allocated tile of `block`.
     pub(crate) fn for_each_tile(
         &mut self,
@@ -699,7 +717,11 @@ impl TileReader {
         visit: &mut dyn FnMut(u64) -> Result<()>,
     ) -> Result<()> {
         let root_at = self.meta + self.geom.root_at(block);
-        for_each_tile(root_at, &mut |at, buf| self.read(source, at, buf), visit)
+        for_each_tile(
+            root_at,
+            &mut |at, buf| self.reader.read(source, at, buf),
+            visit,
+        )
     }
 }
 

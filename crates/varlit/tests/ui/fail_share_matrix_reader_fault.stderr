@@ -27,6 +27,35 @@ note: required because it's used within this closure
 note: required by a bound in `spawn`
  --> $RUST/std/src/thread/functions.rs
 
+error[E0277]: `OnceCell<varlit_core::file::keyed_access::KeyedEngine>` cannot be shared between threads safely
+ --> tests/ui/fail_share_matrix_reader.rs
+  |
+  |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OnceCell<varlit_core::file::keyed_access::KeyedEngine>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `VarlitReader`, the trait `Sync` is not implemented for `OnceCell<varlit_core::file::keyed_access::KeyedEngine>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::OnceLock` instead
+note: required because it appears within the type `VarlitFile`
+ --> $WORKSPACE/crates/varlit-core/src/file.rs
+  |
+  | pub struct VarlitFile {
+  |            ^^^^^^^^^^
+note: required because it appears within the type `VarlitReader`
+ --> $WORKSPACE/crates/varlit-core/src/file.rs
+  |
+  | pub struct VarlitReader {
+  |            ^^^^^^^^^^^^
+  = note: required for `Arc<VarlitReader>` to implement `Send`
+note: required because it's used within this closure
+ --> tests/ui/fail_share_matrix_reader.rs
+  |
+  |     std::thread::spawn(move || reader.matrix_aux_len("thumbnail"));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+
 error[E0277]: `RefCell<varlit_core::file::record_read::ChunkCache>` cannot be shared between threads safely
  --> tests/ui/fail_share_matrix_reader.rs
   |

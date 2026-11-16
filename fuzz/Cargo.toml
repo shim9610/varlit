@@ -105,3 +105,10 @@ path = "fuzz_targets/matrix_reuse_publication.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "keyed_storage_model"
+path = "fuzz_targets/keyed_storage_model.rs"
+test = false
+doc = false
+bench = false

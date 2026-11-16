@@ -128,6 +128,7 @@ fn high_cardinality_compile_contracts() {
     tests.compile_fail("tests/ui/fail_share_generated_readers.rs");
     tests.pass("tests/ui/pass_petabyte_plan_batch.rs");
     tests.compile_fail("tests/ui/fail_key_index_removed.rs");
+    tests.compile_fail("tests/ui/fail_keyed_storage_free_space.rs");
     tests.compile_fail("tests/ui/fail_petabyte_chain_stream_keyed_batch.rs");
     tests.compile_fail("tests/ui/fail_manual_block_missing_keyedness.rs");
     tests.compile_fail("tests/ui/fail_keyed_contradiction_stream_delete.rs");

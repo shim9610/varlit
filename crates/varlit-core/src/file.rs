@@ -650,6 +650,8 @@ pub(crate) mod replacement_target;
 
 use replacement_target::{RecordOverwrite, ReplacementTarget};
 
+#[path = "file/keyed_access.rs"]
+mod keyed_access;
 #[path = "file/matrix_tiles_io.rs"]
 mod matrix_tiles_io;
 /// Mechanical enforcement for shape A/B on the primary file handle: the record
@@ -2980,6 +2982,8 @@ pub struct VarlitFile {
     // handle (a writer's open finds what its ring holds; a reader's captures
     // its snapshot).
     tiles: std::cell::OnceCell<crate::matrix_tiles::api::TiledMatrix>,
+    /// Keyed storage, when the format declares it: opened on first use.
+    keyed: std::cell::OnceCell<keyed_access::KeyedEngine>,
     /// The last chunk a record read checked (`record_read`).
     record_cache: std::cell::RefCell<record_read::ChunkCache>,
     // O(1) commit-point state for the internal segment chain; must equal
@@ -3132,6 +3136,16 @@ impl VarlitReader {
     /// The open file this reader holds, borrowed rather than consumed.
     pub fn file(&self) -> &VarlitFile {
         &self.file
+    }
+
+    /// See [`VarlitFile::get_keyed`].
+    pub fn get_keyed<T: VarlitKeyedBlock>(
+        &self,
+        key: &T::Key,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+    ) -> Result<bool> {
+        self.file.get_keyed(key, scratch, out)
     }
 
     /// Reads a block out of the editable header region.
@@ -3883,6 +3897,26 @@ impl VarlitWriter {
     /// The open file this writer holds, borrowed for reading.
     pub fn file(&self) -> &VarlitFile {
         &self.file
+    }
+
+    /// See [`VarlitFile::put_keyed`].
+    pub fn put_keyed<T: VarlitKeyedBlock>(&mut self, block: &T) -> Result<()> {
+        self.file.put_keyed(block)
+    }
+
+    /// See [`VarlitFile::remove_keyed`].
+    pub fn remove_keyed<T: VarlitKeyedBlock>(&mut self, key: &T::Key) -> Result<bool> {
+        self.file.remove_keyed::<T>(key)
+    }
+
+    /// See [`VarlitFile::get_keyed`].
+    pub fn get_keyed<T: VarlitKeyedBlock>(
+        &self,
+        key: &T::Key,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+    ) -> Result<bool> {
+        self.file.get_keyed(key, scratch, out)
     }
 
     /// Reads a block out of the editable header region.
