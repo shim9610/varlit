@@ -89,23 +89,6 @@ includes recursively and reports dynamic, missing or out-of-crate include paths
 as errors. Preserve public signatures
 and the frozen API inventory when reorganizing implementations.
 
-### Heap allocation
-
-A new `Vec` in library code (`crates/varlit-core/src`, `crates/varlit/src`)
-needs the maintainer's approval before it is written; say in the pull request
-or change description where it is, why a caller-provided buffer or a buffer
-allocated once at open cannot do, and what bounds its size. The same applies to
-other growing heap containers (`String`, `Box<[T]>`, maps, sets) used in its
-place. Tests, benches, fuzz targets and tools are exempt.
-
-Data paths (staging and writing, publication, follow, checkpoint, reads) work
-from the caller's buffers and from buffers allocated once when the handle is
-opened, sized by declared limits. After open they allocate nothing, so they
-cannot fail for lack of memory unless the host takes memory away, and they
-flush to the file without allocating. Work larger than those buffers is
-streamed through them; it is never refused for its size and never grows
-memory with it.
-
 Extend a shared fixture or parameter table when a regression adds a case to an
 existing contract. Separate tests are appropriate for different failure oracles,
 platform behavior, ownership lifetimes and feature selections. Empty placeholder
