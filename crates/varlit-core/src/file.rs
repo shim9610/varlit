@@ -686,7 +686,7 @@ mod matrix_tiles_io;
 #[path = "file/record_file.rs"]
 mod record_file;
 
-use record_file::RecordFile;
+use record_file::{AppendPayload, RecordFile};
 
 /// Owner-local record directory with a bounded buffer and private spill file.
 /// Reservation performs allocation and spill I/O before the authoritative
@@ -7394,19 +7394,69 @@ impl FileMutationPermit<'_> {
         payload: &[u8],
         prev_same_key_offset: Option<u64>,
     ) -> Result<AppendInfo> {
+        self.write_record_payload(
+            block_id,
+            block_version,
+            flags,
+            uncompressed_len_hint,
+            AppendPayload::Bytes(payload),
+            prev_same_key_offset,
+        )
+    }
+
+    /// Appends an in-place matrix record whose payload is `prefix` followed
+    /// by zeros up to `len` bytes, written without a buffer of that size.
+    pub(super) fn append_zeroed_matrix_record(
+        &mut self,
+        block_version: u16,
+        prefix: &[u8],
+        len: u64,
+    ) -> Result<AppendInfo> {
+        self.write_record_payload(
+            MATRIX_TILE_BLOCK_ID,
+            block_version,
+            RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE,
+            0,
+            AppendPayload::Zeroed { prefix, len },
+            None,
+        )
+    }
+
+    fn write_record_payload(
+        &mut self,
+        block_id: u32,
+        block_version: u16,
+        flags: u16,
+        uncompressed_len_hint: u32,
+        payload: AppendPayload<'_>,
+        prev_same_key_offset: Option<u64>,
+    ) -> Result<AppendInfo> {
         self.check()?;
-        let payload_len =
-            u64::try_from(payload.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
+        let payload_len = payload.len()?;
         self.spec
             .read_limits
             .check(ReadLimitKey::RecordPayloadLen, payload_len)?;
-        let logical_len = record_logical_len_from_parts(
-            self.spec,
-            block_id,
-            flags,
-            uncompressed_len_hint,
-            payload,
-        )?;
+        let logical_len = match payload {
+            AppendPayload::Bytes(bytes) => record_logical_len_from_parts(
+                self.spec,
+                block_id,
+                flags,
+                uncompressed_len_hint,
+                bytes,
+            )?,
+            // Only in-place records, never compressed or chunked, are
+            // appended zeroed: their logical length is their length.
+            AppendPayload::Zeroed { .. } => {
+                if flags & RECORD_FLAG_IN_PLACE == 0
+                    || flags & (RECORD_FLAG_COMPRESSED | RECORD_FLAG_CHUNKED) != 0
+                {
+                    return Err(Error::InvalidCanonicalEncoding(
+                        "zeroed append of a record that is not in place",
+                    ));
+                }
+                payload_len
+            }
+        };
         self.spec
             .read_limits
             .check(ReadLimitKey::LogicalPayloadLen, logical_len)?;
@@ -7523,8 +7573,14 @@ impl FileMutationPermit<'_> {
             uncompressed_len_hint,
         };
         let footer_bytes = footer.as_ref().map_or(&[][..], |bytes| &bytes[..]);
-        let checksum =
-            checksum_record_fields(self.spec, record_offset, header, payload, footer_bytes)?;
+        // An in-place record's checksum leaves its payload out.
+        let checksum = checksum_record_fields(
+            self.spec,
+            record_offset,
+            header,
+            payload.bytes(),
+            footer_bytes,
+        )?;
         let header_bytes = encode_native_record_header(
             RecordHeaderFields { checksum, ..header },
             record_offset,
@@ -7771,8 +7827,8 @@ pub(crate) use scan::prepare_stream_manifest_record;
 pub(crate) use scan::fresh_stream_creation_nonce;
 
 pub(crate) use scan::prepare_stream_creation_nonce_record;
-pub(crate) use scan::prepare_stream_matrix_record;
 pub(crate) use scan::prepare_stream_sync_record;
+pub(crate) use scan::stream_matrix_record_frame;
 
 pub(crate) use scan::read_stream_creation_nonce;
 

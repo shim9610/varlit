@@ -238,23 +238,20 @@ impl BlockGeom {
         row * cols + col
     }
 
-    /// A tile record's initial payload: header, an empty bitmap with its
-    /// checksum, zeroed slots.
+    /// An empty tile's 40-byte header. Every other byte of an empty tile is
+    /// zero but its bitmap's checksum, at [`Self::bitmap_at`] plus
+    /// [`Self::bitmap_len`].
     #[cfg_attr(verus_keep_ghost, verifier::external)]
-    pub(crate) fn encode_empty_tile(&self, at: TileCoord, out: &mut [u8]) {
-        debug_assert_eq!(out.len() as u64, self.tile_bytes());
-        out.fill(0);
-        out[0..4].copy_from_slice(TILE_MAGIC);
-        out[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
-        out[8..12].copy_from_slice(&self.block_id.to_le_bytes());
-        out[16..24].copy_from_slice(&at.row.to_le_bytes());
-        out[24..32].copy_from_slice(&at.col.to_le_bytes());
-        let crc = crc32fast::hash(&out[..32]);
-        out[32..36].copy_from_slice(&crc.to_le_bytes());
-        let bitmap = crate::width::bounded(self.bitmap_at(), out.len());
-        let len = crate::width::bounded(self.bitmap_len(), out.len());
-        let crc = crc32fast::hash(&out[bitmap..bitmap + len]);
-        out[bitmap + len..bitmap + len + 4].copy_from_slice(&crc.to_le_bytes());
+    pub(crate) fn empty_tile_header(&self, at: TileCoord) -> [u8; 40] {
+        let mut header = [0u8; 40];
+        header[0..4].copy_from_slice(TILE_MAGIC);
+        header[4..6].copy_from_slice(&LAYOUT_VERSION.to_le_bytes());
+        header[8..12].copy_from_slice(&self.block_id.to_le_bytes());
+        header[16..24].copy_from_slice(&at.row.to_le_bytes());
+        header[24..32].copy_from_slice(&at.col.to_le_bytes());
+        let crc = crc32fast::hash(&header[..32]);
+        header[32..36].copy_from_slice(&crc.to_le_bytes());
+        header
     }
 
     /// Checks a tile header read back from `offset` is this block's tile `at`.

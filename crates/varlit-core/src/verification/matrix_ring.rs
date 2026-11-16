@@ -4,7 +4,7 @@
 //! are outside these harnesses.
 use super::{
     ENTRY_HEADER, FRAME_HEADER, FRAMES_AT, FramePlan, HEADER_SLOT, MAX_RING_BYTES, MIN_RING, Ring,
-    RingHeader, frame_entry,
+    RingHeader, stream_entry,
 };
 
 fn any_ring() -> Ring {
@@ -200,37 +200,24 @@ fn room_promised_by_a_checkpoint_is_room_placement_finds() {
     }
 }
 
-/// An entry is taken from a frame body only when its header and all its
-/// bytes lie inside the body, and the next entry starts after it: parsing
-/// any bytes reads nothing outside the body and always advances.
+/// An entry is taken from a frame body only when all its bytes lie inside
+/// what is left of the body after its header: a scan streaming the entries
+/// reads nothing outside the frame and always advances.
 #[kani::proof]
-fn a_frame_entry_lies_inside_the_frame_body() {
-    let body: [u8; 40] = kani::any();
-    let len: usize = kani::any();
-    let cursor: usize = kani::any();
-    kani::assume(len <= body.len());
-    let body = &body[..len];
-    match frame_entry(body, cursor) {
-        Some(entry) => {
-            assert!(cursor <= body.len());
-            assert_eq!(entry.bytes_at, cursor + ENTRY_HEADER as usize);
-            assert!(entry.bytes_at <= entry.next);
-            assert_eq!(entry.next, entry.bytes_at + entry.len as usize);
-            assert!(entry.next <= body.len());
-            assert!(entry.next > cursor);
+fn a_streamed_entry_lies_inside_the_frame_body() {
+    let header: [u8; ENTRY_HEADER as usize] = kani::any();
+    let remaining: u64 = kani::any();
+    let len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+    match stream_entry(&header, remaining) {
+        Some((target, n)) => {
+            assert_eq!(n, len);
+            assert!(u64::from(n) <= remaining);
+            let stored = u64::from_le_bytes([
+                header[0], header[1], header[2], header[3], header[4], header[5], header[6],
+                header[7],
+            ]);
+            assert_eq!(target, stored);
         }
-        None => {
-            // Refused exactly when the header or the bytes would not fit.
-            let fits = cursor <= body.len() && body.len() - cursor >= ENTRY_HEADER as usize && {
-                let n = u32::from_le_bytes([
-                    body[cursor + 8],
-                    body[cursor + 9],
-                    body[cursor + 10],
-                    body[cursor + 11],
-                ]);
-                (n as usize) <= body.len() - cursor - ENTRY_HEADER as usize
-            };
-            assert!(!fits);
-        }
+        None => assert!(u64::from(len) > remaining),
     }
 }

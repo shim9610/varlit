@@ -5,6 +5,36 @@ use crate::snapshot::WrittenThrough;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 
+/// What an appended record's payload is: bytes in memory, or `prefix`
+/// followed by zeros up to `len` bytes, written without a buffer that size.
+#[derive(Clone, Copy)]
+pub(crate) enum AppendPayload<'a> {
+    Bytes(&'a [u8]),
+    Zeroed { prefix: &'a [u8], len: u64 },
+}
+
+impl AppendPayload<'_> {
+    pub(crate) fn len(&self) -> super::Result<u64> {
+        match self {
+            Self::Bytes(bytes) => Ok(bytes.len() as u64),
+            Self::Zeroed { prefix, len } if prefix.len() as u64 <= *len => Ok(*len),
+            Self::Zeroed { .. } => Err(super::Error::InvalidCanonicalEncoding(
+                "zeroed record prefix longer than the record",
+            )),
+        }
+    }
+
+    /// The payload bytes a checksum covers: none past the prefix of a zeroed
+    /// payload, which only in-place records (whose checksum leaves the
+    /// payload out) use.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::Zeroed { prefix, .. } => prefix,
+        }
+    }
+}
+
 #[cfg(any(test, feature = "scalable-fault-injection"))]
 std::thread_local! {
     /// `fstat`s this thread has issued through [`RecordFile::metadata`].
@@ -210,7 +240,7 @@ impl RecordFile {
         _reserved: &ReservedIndexSlot,
         expected_offset: u64,
         header_bytes: &[u8],
-        payload: &[u8],
+        payload: AppendPayload<'_>,
         footer: Option<&[u8]>,
         summary: Option<&dyn crate::anchor::SummarySource>,
         after_header: impl FnOnce() -> Result<()>,
@@ -220,17 +250,14 @@ impl RecordFile {
         // the kernel for the length on every record (an `fstat` each) checked
         // nothing the lock does not already guarantee.
         let offset = expected_offset;
+        let payload_len = payload.len()?;
         let end = [
-            header_bytes.len(),
-            payload.len(),
-            footer.map_or(0, <[u8]>::len),
+            header_bytes.len() as u64,
+            payload_len,
+            footer.map_or(0, <[u8]>::len) as u64,
         ]
         .into_iter()
-        .try_fold(offset, |end, part| {
-            u64::try_from(part)
-                .ok()
-                .and_then(|part| end.checked_add(part))
-        })
+        .try_fold(offset, u64::checked_add)
         .ok_or(Error::ResourceArithmeticOverflow {
             resource: "appended record extent",
         })?;
@@ -246,46 +273,53 @@ impl RecordFile {
         };
         let header_end = offset + header_bytes.len() as u64;
         let footer_bytes = footer.unwrap_or(&[]);
-        let total = header_bytes.len() + payload.len() + footer_bytes.len();
         // A record that fits one page goes down in one write: header, payload
         // and footer staged on the stack, no allocation. A larger one is
-        // written in its three parts, where the copy would cost more than the
-        // two system calls it saves.
+        // written in its parts, where the copy would cost more than the
+        // system calls it saves.
         const STAGED: usize = 4096;
-        if total <= STAGED {
-            let mut staged = [0u8; STAGED];
-            staged[..header_bytes.len()].copy_from_slice(header_bytes);
-            staged[header_bytes.len()..header_bytes.len() + payload.len()].copy_from_slice(payload);
-            staged[header_bytes.len() + payload.len()..total].copy_from_slice(footer_bytes);
-            self.file
-                .write_all_at(offset, &staged[..total], &mut anchors)?;
-            after_header()?;
-        } else {
-            self.file.write_all_at(offset, header_bytes, &mut anchors)?;
-            after_header()?;
-            self.file.write_all_at(header_end, payload, &mut anchors)?;
-            if !footer_bytes.is_empty() {
-                self.file.write_all_at(
-                    header_end + payload.len() as u64,
-                    footer_bytes,
-                    &mut anchors,
-                )?;
+        match payload {
+            AppendPayload::Bytes(bytes)
+                if header_bytes.len() + bytes.len() + footer_bytes.len() <= STAGED =>
+            {
+                let total = header_bytes.len() + bytes.len() + footer_bytes.len();
+                let mut staged = [0u8; STAGED];
+                staged[..header_bytes.len()].copy_from_slice(header_bytes);
+                staged[header_bytes.len()..header_bytes.len() + bytes.len()].copy_from_slice(bytes);
+                staged[header_bytes.len() + bytes.len()..total].copy_from_slice(footer_bytes);
+                self.file
+                    .write_all_at(offset, &staged[..total], &mut anchors)?;
+                after_header()?;
+            }
+            AppendPayload::Bytes(bytes) => {
+                self.file.write_all_at(offset, header_bytes, &mut anchors)?;
+                after_header()?;
+                self.file.write_all_at(header_end, bytes, &mut anchors)?;
+            }
+            AppendPayload::Zeroed { prefix, len } => {
+                self.file.write_all_at(offset, header_bytes, &mut anchors)?;
+                after_header()?;
+                self.file.write_all_at(header_end, prefix, &mut anchors)?;
+                // The rest is zeros, written from one static page.
+                static ZEROS: [u8; 64 * 1024] = [0; 64 * 1024];
+                let mut at = header_end + prefix.len() as u64;
+                let payload_end = header_end + len;
+                while at < payload_end {
+                    let n = crate::width::bounded(payload_end - at, ZEROS.len());
+                    self.file.write_all_at(at, &ZEROS[..n], &mut anchors)?;
+                    at += n as u64;
+                }
             }
         }
-        let written = [
-            header_bytes.len(),
-            payload.len(),
-            footer.map_or(0, <[u8]>::len),
-        ]
-        .into_iter()
-        .try_fold(offset, |end, part| {
-            u64::try_from(part)
-                .ok()
-                .and_then(|part| end.checked_add(part))
-        })
-        .ok_or(Error::ResourceArithmeticOverflow {
-            resource: "appended record extent",
-        })?;
+        let footer_at = header_end + payload_len;
+        if !footer_bytes.is_empty()
+            && !matches!(payload, AppendPayload::Bytes(bytes)
+                if header_bytes.len() + bytes.len() + footer_bytes.len() <= STAGED)
+        {
+            self.file
+                .write_all_at(footer_at, footer_bytes, &mut anchors)?;
+        }
+        let written = end;
         Ok(WrittenThrough::after_write(written))
     }
 

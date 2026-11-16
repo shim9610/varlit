@@ -17,26 +17,21 @@ impl VarlitFile {
         self.finish_matrix_mutation(result)
     }
 
-    /// Encodes `value` into exactly `T::SLOT_STRIDE` bytes.
-    fn encode_matrix_slot<T: VarlitMatrixBlock>(&mut self, value: &T) -> Result<Vec<u8>> {
-        let mut encoded = std::mem::take(&mut self.record_buffer);
-        let result = match crate::codec::encode_into_limited(
+    /// Encodes `value` into exactly `T::SLOT_STRIDE` bytes of `encoded`,
+    /// the handle's record buffer lent for the call.
+    fn encode_matrix_slot<T: VarlitMatrixBlock>(
+        &self,
+        value: &T,
+        encoded: &mut Vec<u8>,
+    ) -> Result<()> {
+        match crate::codec::encode_into_limited(
             value,
             T::ENDIAN.unwrap_or(self.spec.endian),
             T::SLOT_STRIDE.saturating_add(1),
             "matrix slot payload",
-            &mut encoded,
+            encoded,
         ) {
-            Ok(()) if encoded.len() as u64 == T::SLOT_STRIDE => {
-                let mut out = Vec::new();
-                out.try_reserve_exact(encoded.len())
-                    .map_err(|_| Error::AllocationFailed {
-                        resource: "matrix slot payload",
-                        requested: encoded.len() as u64,
-                    })?;
-                out.extend_from_slice(&encoded);
-                Ok(out)
-            }
+            Ok(()) if encoded.len() as u64 == T::SLOT_STRIDE => Ok(()),
             Ok(()) => Err(Error::MatrixSizeMismatch {
                 expected: T::SLOT_STRIDE,
                 actual: encoded.len() as u64,
@@ -46,9 +41,7 @@ impl VarlitFile {
                 actual,
             }),
             Err(error) => Err(error),
-        };
-        self.record_buffer = encoded;
-        result
+        }
     }
 
     pub fn write_matrix_cell<T: VarlitMatrixBlock>(
@@ -58,8 +51,16 @@ impl VarlitFile {
     ) -> Result<()> {
         crate::matrix::ensure_matrix_block::<T>(self.spec)?;
         self.check_write()?;
-        let payload = self.encode_matrix_slot(value)?;
-        self.matrix_mutation(|tiles, store| tiles.write_cell(store, T::ID, key, &payload))
+        // Encoded into the handle's record buffer and staged from it: no
+        // buffer is made for the call.
+        let mut encoded = std::mem::take(&mut self.record_buffer);
+        let result = self
+            .encode_matrix_slot(value, &mut encoded)
+            .and_then(|()| {
+                self.matrix_mutation(|tiles, store| tiles.write_cell(store, T::ID, key, &encoded))
+            });
+        self.record_buffer = encoded;
+        result
     }
 
     pub fn write_matrix_cell_payload<T: VarlitMatrixBlock>(

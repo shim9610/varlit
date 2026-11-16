@@ -800,25 +800,75 @@ pub(crate) fn prepare_stream_sync_record(
     )
 }
 
-pub(crate) fn prepare_stream_matrix_record(
+/// The header and footer of an in-place matrix record of `len` payload bytes
+/// at `record_offset`, for an append that writes the payload itself: its
+/// checksum leaves the payload out, so none of it is needed here.
+pub(crate) fn stream_matrix_record_frame(
     spec: FormatSpec,
     version: u16,
-    payload: &[u8],
+    len: u64,
     sequence: u64,
     record_offset: u64,
-) -> Result<PreparedStreamRecord> {
-    prepare_stream_record(
-        spec,
-        MATRIX_TILE_BLOCK_ID,
-        version,
-        RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE,
-        0,
-        payload,
+) -> Result<(
+    [u8; crate::width::small(RECORD_HEADER_LEN)],
+    Option<[u8; crate::width::small(RECORD_FOOTER_LEN)]>,
+    AppendInfo,
+)> {
+    let flags = RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE;
+    spec.read_limits
+        .check(ReadLimitKey::RecordPayloadLen, len)?;
+    spec.read_limits
+        .check(ReadLimitKey::LogicalPayloadLen, len)?;
+    let overflow = Error::ResourceArithmeticOverflow {
+        resource: "file length",
+    };
+    let payload_offset = record_offset
+        .checked_add(RECORD_HEADER_LEN)
+        .ok_or(overflow)?;
+    let payload_end = payload_offset
+        .checked_add(len)
+        .ok_or(Error::ResourceArithmeticOverflow {
+            resource: "file length",
+        })?;
+    let footer = if spec.spec_needs_record_footer() {
+        Some(encode_record_footer(RecordFooterFields {
+            prev_same_block_offset: None,
+            prev_same_key_offset: None,
+            mutable_flags: 0,
+        })?)
+    } else {
+        None
+    };
+    let footer_bytes = footer.as_ref().map_or(&[][..], |bytes| &bytes[..]);
+    let header = RecordHeaderFields {
+        block_id: MATRIX_TILE_BLOCK_ID,
+        block_version: version,
+        flags,
         sequence,
+        payload_len: len,
+        checksum: 0,
+        uncompressed_len_hint: 0,
+    };
+    let checksum = checksum_record_fields(spec, record_offset, header, &[], footer_bytes)?;
+    let header = encode_native_record_header(
+        RecordHeaderFields { checksum, ..header },
         record_offset,
-        None,
-        None,
-    )
+        record_footer_len(spec),
+    )?;
+    Ok((
+        header,
+        footer,
+        AppendInfo {
+            sequence,
+            record_offset,
+            payload_offset,
+            payload_len: len,
+            footer_offset: footer.is_some().then_some(payload_end),
+            prev_same_block_offset: None,
+            prev_same_key_offset: None,
+            committed: true,
+        },
+    ))
 }
 
 pub(crate) fn prepare_stream_creation_nonce_record(

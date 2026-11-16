@@ -1472,34 +1472,34 @@
       "callers": {
         "default": [
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
             "target": "height_matches",
             "result": "checked"
           },
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:faf803579067a182]",
             "target": "height_matches",
             "result": "checked"
           },
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:faf803579067a182]",
             "target": "take_visit",
             "result": "checked"
           }
         ],
         "all": [
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::get::{closure#1}(_1: &{closure@crates/varlit-core/src/disk_index/tree.rs}, _2: &disk_index::tree::Node) -> std::result::Result<(), disk_index::DiskIndexError> [body:3b17a201e40188af]",
             "target": "height_matches",
             "result": "checked"
           },
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:faf803579067a182]",
             "target": "height_matches",
             "result": "checked"
           },
           {
-            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:cc302fb318972f25]",
+            "caller": "disk_index::tree::<impl at crates/varlit-core/src/disk_index/tree.rs>::visit_at(_1: &disk_index::tree::Reader, _2: disk_index::tree::Root, _3: Option<u8>, _4: Option<&Key>, _5: Option<(&Key, &[u8])>, _6: &mut u64, _7: &mut impl FnMut(Vec<u8>, [u8; LATEST_LEN]) -> DiskIndexResult<()>) -> std::result::Result<(), disk_index::DiskIndexError> [body:faf803579067a182]",
             "target": "take_visit",
             "result": "checked"
           }
@@ -2553,18 +2553,23 @@
         "Ring::after_frame",
         "Ring::room",
         "Ring::plan_frame",
-        "frame_entry"
+        "stream_entry"
       ],
       "result_policy": {},
       "callers": {
         "default": [
           {
-            "caller": "inline_entries(_1: &[u8], _2: u32, _3: u64, _4: &mut Vec<ScannedEntry>) -> std::result::Result<bool, error::Error> [body:cbfcb4a48c866563]",
-            "target": "frame_entry",
+            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:2ecd34900e26051b]",
+            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "target": "stream_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:736fe706c6f8cf02]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2589,18 +2594,18 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:b7ccc897c52c3fe0]",
-            "target": "Ring::after_frame",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#1}(_1: &{closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: u64) -> u64 [body:7af059b16ef5a318]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: &mut dyn TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:8597f8bde7edffe6]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:8add086441125c8a]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:2230461e674879ac]",
             "target": "Ring::within",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open_frame(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:5484639ee436d9b0]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
@@ -2611,12 +2616,17 @@
         ],
         "all": [
           {
-            "caller": "inline_entries(_1: &[u8], _2: u32, _3: u64, _4: &mut Vec<ScannedEntry>) -> std::result::Result<bool, error::Error> [body:cbfcb4a48c866563]",
-            "target": "frame_entry",
+            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "target": "Ring::after_frame",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:455be6eb90eaddb8]",
+            "caller": "check_frame(_1: &mut S, _2: Ring, _3: u64, _4: u64, _5: u64, _6: u64, _7: &mut [u8], _8: Option<&mut dyn for<'a> FnMut(&'a mut S, ScanEvent) -> std::result::Result<(), error::Error>>) -> std::result::Result<Option<Checked>, error::Error> [body:fd0f856912dea37d]",
+            "target": "stream_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::open(_1: &dyn TileSource, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileReader, error::Error> [body:d279d9cfbdef932f]",
             "target": "Ring::within",
             "result": "model/caller-specific"
           },
@@ -2641,18 +2651,18 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "wal::scan(_1: &dyn TileSource, _2: Ring, _3: u64, _4: u64, _5: u64, _6: &mut dyn FnMut(ScanEvent) -> std::result::Result<(), error::Error>) -> std::result::Result<ScanEnd, error::Error> [body:b7ccc897c52c3fe0]",
-            "target": "Ring::after_frame",
-            "result": "model/caller-specific"
-          },
-          {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#1}(_1: &{closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: u64) -> u64 [body:7af059b16ef5a318]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::checkpoint::{closure#0}(_1: &mut {closure@crates/varlit-core/src/matrix_tiles/writer.rs}, _2: &mut dyn TileStore, _3: ScanEvent) -> std::result::Result<(), error::Error> [body:8597f8bde7edffe6]",
             "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:c222ddc88260ff84]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open(_1: &mut dyn TileStore, _2: geometry::Geometry, _3: u64) -> std::result::Result<TileWriter, error::Error> [body:bfeec2e8dd8cda0e]",
             "target": "Ring::within",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::open_frame(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: u64) -> std::result::Result<(), error::Error> [body:5484639ee436d9b0]",
+            "target": "Ring::room",
             "result": "model/caller-specific"
           },
           {
@@ -2668,7 +2678,7 @@
         "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
         "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
         "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
-        "matrix_tiles::wal::ring_proofs::a_frame_entry_lies_inside_the_frame_body"
+        "matrix_tiles::wal::ring_proofs::a_streamed_entry_lies_inside_the_frame_body"
       ]
     },
     "matrix-tile-geometry": {
@@ -2706,22 +2716,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::cached_tile(_1: &TileReader, _2: usize, _3: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:65bc692b22444b53]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::cached_tile(_1: &TileReader, _2: usize, _3: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:9fcd346358bcedf1]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:e6753d7d67307769]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:2fcb28249da8c99a]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:d8daacefc4c1f989]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:74c2324c91682668]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:6c77efb2ec48f890]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:6d094c129df2cd91]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           }
@@ -2753,22 +2763,22 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::cached_tile(_1: &TileReader, _2: usize, _3: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:65bc692b22444b53]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::cached_tile(_1: &TileReader, _2: usize, _3: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:9fcd346358bcedf1]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:7b99f7e85c15423f]",
+            "caller": "view::<impl at crates/varlit-core/src/matrix_tiles/view.rs>::tile(_1: &mut TileReader, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:599fae3d865db83e]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:bd01522777101a84]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::find(_1: &TileWriter, _2: &dyn TileSource, _3: usize, _4: TileCoord) -> std::result::Result<Option<u64>, error::Error> [body:2027332f704a91ae]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           },
           {
-            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:affa7a211afc6217]",
+            "caller": "writer::<impl at crates/varlit-core/src/matrix_tiles/writer.rs>::tile(_1: &mut TileWriter, _2: &mut dyn TileStore, _3: usize, _4: TileCoord, _5: bool) -> std::result::Result<Option<u64>, error::Error> [body:5e13fd7d05ee82ce]",
             "target": "TileCoord::morton",
             "result": "model/caller-specific"
           }

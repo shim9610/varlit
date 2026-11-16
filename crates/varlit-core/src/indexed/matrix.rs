@@ -87,8 +87,15 @@ impl TileStore for IndexedTiles<'_> {
         self.writer.stream.overwrite_matrix_bytes(offset, bytes)
     }
 
-    fn append(&mut self, kind: RecordKind, payload: &[u8]) -> Result<u64> {
-        self.writer.append_matrix_record(kind, payload)
+    fn append_zeroed(&mut self, kind: RecordKind, prefix: &[u8], len: u64) -> Result<u64> {
+        self.writer.append_zeroed_matrix_record(kind, prefix, len)
+    }
+
+    fn record_limit(&self) -> u64 {
+        match self.writer.stream.spec().read_limits.max_record_payload_len {
+            crate::format::ReadLimit::Finite(limit) => limit,
+            _ => u64::MAX,
+        }
     }
 
     fn sync(&mut self) -> Result<()> {
@@ -148,18 +155,24 @@ impl VarlitIndexedWriter {
 
     /// Appends a matrix storage record, covered in the pending sidecar batch
     /// like an unindexed record. Returns its payload offset.
-    fn append_matrix_record(&mut self, kind: RecordKind, payload: &[u8]) -> Result<u64> {
+    /// Appends a matrix storage record covered by the index: `prefix` and
+    /// zeros up to `len` bytes, written without a buffer of its size.
+    fn append_zeroed_matrix_record(
+        &mut self,
+        kind: RecordKind,
+        prefix: &[u8],
+        len: u64,
+    ) -> Result<u64> {
         self.ensure_not_poisoned()?;
         let spec = self.stream.spec();
-        spec.read_limits.check(
-            crate::format::ReadLimitKey::RecordPayloadLen,
-            payload.len() as u64,
-        )?;
+        spec.read_limits
+            .check(crate::format::ReadLimitKey::RecordPayloadLen, len)?;
         self.ensure_batch()?;
         self.ensure_coverage_capacity(spec.index_policy.block_offset_chain)?;
         let old_eof = self.stream.snapshot().len();
-        let record = self.stream.prepare_matrix_record(kind.version(), payload)?;
-        let info = self.stream.append_matrix_record(record)?;
+        let info = self
+            .stream
+            .append_zeroed_matrix_record(kind.version(), prefix, len)?;
         self.publish_record_coverage(old_eof, info, crate::file::MATRIX_TILE_BLOCK_ID)?;
         Ok(info.payload_offset)
     }

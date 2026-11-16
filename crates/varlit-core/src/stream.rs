@@ -1960,31 +1960,38 @@ impl VarlitStreamWriter {
         self.record_count
     }
 
-    /// Prepares a matrix storage record for the next append: internal, and
-    /// rewritten in place after it lands (its payload is outside the record
-    /// checksum and the sync-marker link).
-    pub(crate) fn prepare_matrix_record(
-        &self,
-        version: u16,
-        payload: &[u8],
-    ) -> Result<PreparedStreamRecord> {
-        crate::file::prepare_stream_matrix_record(
-            self.spec,
-            version,
-            payload,
-            self.next_sequence()?,
-            self.snapshot.len(),
-        )
-    }
-
-    /// Appends a record prepared by [`Self::prepare_matrix_record`].
-    pub(crate) fn append_matrix_record(
+    /// Appends an in-place matrix record whose payload is `prefix` followed
+    /// by zeros up to `len` bytes, written in parts: no buffer holds it.
+    pub(crate) fn append_zeroed_matrix_record(
         &mut self,
-        record: PreparedStreamRecord,
+        version: u16,
+        prefix: &[u8],
+        len: u64,
     ) -> Result<AppendInfo> {
         self.check_mutation(STREAM_WRITER_POISON_CONTEXT)?;
-        self.ensure_writable()?
-            .append_prepared(crate::file::MATRIX_TILE_BLOCK_ID, record)
+        if prefix.len() as u64 > len {
+            return Err(Error::InvalidCanonicalEncoding(
+                "zeroed record prefix longer than the record",
+            ));
+        }
+        let (header, footer, info) = crate::file::stream_matrix_record_frame(
+            self.spec,
+            version,
+            len,
+            self.next_sequence()?,
+            self.snapshot.len(),
+        )?;
+        let footer = footer.as_ref().map_or(&[][..], |bytes| &bytes[..]);
+        self.ensure_writable()?.append_chunk_parts(
+            ChunkParts::Zeroed {
+                header: &header,
+                prefix,
+                payload_len: len,
+                footer,
+            },
+            &[(crate::file::MATRIX_TILE_BLOCK_ID, info)],
+        )?;
+        Ok(info)
     }
 
     /// Overwrites bytes inside a matrix storage record, around anchors.
@@ -2303,6 +2310,69 @@ fn advance_reader_tail(
 
 /// The anchor a prepared chunk reaches: the record in it that spans the
 /// anchor's logical offset.
+/// What a chunk append writes: prepared bytes, or one in-place record whose
+/// payload is a prefix and zeros, written in parts from a static page.
+#[derive(Clone, Copy)]
+enum ChunkParts<'a> {
+    Bytes(&'a [u8]),
+    Zeroed {
+        header: &'a [u8],
+        prefix: &'a [u8],
+        payload_len: u64,
+        footer: &'a [u8],
+    },
+}
+
+impl ChunkParts<'_> {
+    fn len(&self) -> Result<u64> {
+        let overflow = || Error::ResourceArithmeticOverflow {
+            resource: "file length",
+        };
+        match self {
+            Self::Bytes(bytes) => Ok(bytes.len() as u64),
+            Self::Zeroed {
+                header,
+                payload_len,
+                footer,
+                ..
+            } => (header.len() as u64)
+                .checked_add(*payload_len)
+                .and_then(|len| len.checked_add(footer.len() as u64))
+                .ok_or_else(overflow),
+        }
+    }
+
+    fn write(
+        &self,
+        file: &crate::primary_file::PrimaryFile,
+        at: u64,
+        anchors: &mut dyn crate::primary_file::AnchorSource,
+    ) -> Result<()> {
+        match self {
+            Self::Bytes(bytes) => file.write_all_at(at, bytes, anchors),
+            Self::Zeroed {
+                header,
+                prefix,
+                payload_len,
+                footer,
+            } => {
+                static ZEROS: [u8; 64 * 1024] = [0; 64 * 1024];
+                file.write_all_at(at, header, anchors)?;
+                let payload_at = at + header.len() as u64;
+                file.write_all_at(payload_at, prefix, anchors)?;
+                let end = payload_at + payload_len;
+                let mut cursor = payload_at + prefix.len() as u64;
+                while cursor < end {
+                    let n = crate::width::bounded(end - cursor, ZEROS.len());
+                    file.write_all_at(cursor, &ZEROS[..n], anchors)?;
+                    cursor += n as u64;
+                }
+                file.write_all_at(end, footer, anchors)
+            }
+        }
+    }
+}
+
 struct ChunkAnchors<'a> {
     records: &'a [(u32, AppendInfo)],
     end: u64,
@@ -2709,6 +2779,14 @@ impl StreamMutationPermit<'_> {
         bytes: &[u8],
         records: &[(u32, AppendInfo)],
     ) -> Result<()> {
+        self.append_chunk_parts(ChunkParts::Bytes(bytes), records)
+    }
+
+    fn append_chunk_parts(
+        &mut self,
+        parts: ChunkParts<'_>,
+        records: &[(u32, AppendInfo)],
+    ) -> Result<()> {
         self.check()?;
         if records.is_empty() {
             return Ok(());
@@ -2728,8 +2806,7 @@ impl StreamMutationPermit<'_> {
                 "prepared batch does not begin at native eof",
             ));
         }
-        let byte_len =
-            u64::try_from(bytes.len()).map_err(|_| Error::LengthOverflow { value: u64::MAX })?;
+        let byte_len = parts.len()?;
         let new_eof = eof
             .checked_add(byte_len)
             .ok_or(Error::ResourceArithmeticOverflow {
@@ -2755,11 +2832,10 @@ impl StreamMutationPermit<'_> {
             crate::scalable_fault_point("append.native_chunk_write");
             // Positional and logical: an anchor the chunk reaches is written
             // around it, describing the record that spans it.
-            let write = self
-                .file
-                .write_all_at(
+            let write = parts
+                .write(
+                    &self.file,
                     eof,
-                    bytes,
                     &mut ChunkAnchors {
                         records,
                         end: new_eof,
@@ -2813,7 +2889,12 @@ impl StreamMutationPermit<'_> {
             }
         };
         if let Some(chain) = self.sync_chain.as_mut() {
-            chain.extend_chunk(eof, bytes, records);
+            match parts {
+                ChunkParts::Bytes(bytes) => chain.extend_chunk(eof, bytes, records),
+                ChunkParts::Zeroed { header, footer, .. } => {
+                    chain.extend_in_place_record(header, footer);
+                }
+            }
         }
         let last_sequence = records.last().expect("non-empty prepared chunk").1.sequence;
         self.sequence = last_sequence.checked_add(1);
@@ -2826,8 +2907,7 @@ impl StreamMutationPermit<'_> {
                 info.sequence,
             );
         }
-        self.immediate_state
-            .advance(records.len() as u64, bytes.len() as u64);
+        self.immediate_state.advance(records.len() as u64, byte_len);
         // The records are published in the native file, so any sidecar failure
         // from here on must poison the writer.
         if let Err(error) = self.stage_state_records(records, new_eof) {

@@ -32,21 +32,20 @@ impl TileStore for FileTiles<'_> {
         self.file.file.overwrite_matrix_bytes(offset, bytes)
     }
 
-    fn append(&mut self, kind: RecordKind, payload: &[u8]) -> Result<u64> {
-        self.file
-            .spec
-            .read_limits
-            .check(ReadLimitKey::RecordPayloadLen, payload.len() as u64)?;
-        let info = self.file.ensure_write()?.write_record_with_prev_key(
-            MATRIX_TILE_BLOCK_ID,
-            kind.version(),
-            RECORD_FLAG_INTERNAL | RECORD_FLAG_IN_PLACE,
-            0,
-            payload,
-            None,
-        )?;
+    fn append_zeroed(&mut self, kind: RecordKind, prefix: &[u8], len: u64) -> Result<u64> {
+        let info =
+            self.file
+                .ensure_write()?
+                .append_zeroed_matrix_record(kind.version(), prefix, len)?;
         self.appended = true;
         Ok(info.payload_offset)
+    }
+
+    fn record_limit(&self) -> u64 {
+        match self.file.spec.read_limits.max_record_payload_len {
+            crate::format::ReadLimit::Finite(limit) => limit,
+            _ => u64::MAX,
+        }
     }
 
     fn sync(&mut self) -> Result<()> {

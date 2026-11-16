@@ -22,6 +22,12 @@
 //!   [`Error::MatrixSnapshotExpired`](crate::Error::MatrixSnapshotExpired)
 //!   instead of a mixed answer. Nothing is locked.
 //!
+//! A publication too large for the ring streams its bytes to overflow space
+//! and an on-disk index of them ([`index`]); its commit frame names the
+//! index root. Every buffer the engine uses is allocated when a matrix is
+//! opened ([`arena`] holds the overlay): staging, publishing, following,
+//! reading and checkpointing allocate nothing.
+//!
 //! Tile directories (a radix table per block keyed by the Morton code of the
 //! tile coordinates) and the matrix metadata are byte ranges like any other,
 //! so they take the same path.
@@ -30,9 +36,10 @@
 //! `file/` maps keys, commit bits and checksums onto it.
 
 pub(crate) mod api;
+pub(crate) mod arena;
 pub(crate) mod geometry;
 pub(crate) mod host;
-pub(crate) mod ranges;
+pub(crate) mod index;
 mod reader_lock;
 pub(crate) mod store;
 pub(crate) mod view;

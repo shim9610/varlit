@@ -127,7 +127,7 @@ fn every_direction_grows_without_moving_a_tile() {
         );
     }
     let mut count = 0;
-    w.for_each_tile(&store, 0, &mut |_| {
+    w.for_each_tile_ref(&store, 0, &mut |_| {
         count += 1;
         Ok(())
     })
@@ -243,9 +243,12 @@ fn a_publication_larger_than_a_frame_spills_and_commits_whole() {
     w.publish(&mut store.clone()).unwrap();
     let frames = w.stats.frames;
     put_all(&mut w, 5);
+    // Staged bytes reach the file as they are staged: ring frames, then an
+    // index once the publication outgrows the ring.
     assert!(
-        w.stats.frames > frames + 1,
-        "nothing spilled before the publication"
+        w.stats.frames > frames || w.stats.indexed > 0,
+        "nothing reached the file before the publication: {:?}",
+        w.stats
     );
     let mut r = TileReader::open(&store, geom.clone(), w.meta).unwrap();
     let read = |r: &mut TileReader, key: MatrixKey| {

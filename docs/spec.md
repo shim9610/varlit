@@ -268,43 +268,50 @@ circularly.
   | Bytes | Field |
   | --- | --- |
   | 0..4 | magic `b"VWFR"` |
-  | 4..8 | flags `u32`: `1` commit, `2` wrap, `4` external |
+  | 4..8 | flags `u32`: `1` commit, `2` wrap, `4` index |
   | 8..16 | generation `u64` |
   | 16..20 | frame length `u32`, CRC32 included |
   | 20..24 | entry count `u32` |
   | 24..32 | `requires` `u64`: the file length the frame's targets lie within |
 
   Each entry is a target offset `u64`, a length `u32`, and that many bytes to
-  be written at the target. An external frame (flag `4`) is 64 bytes and
-  holds, instead of entries, a 24-byte descriptor of bytes in an overflow
-  region: base offset `u64`, data length `u64`, CRC32 of the table `u32`,
-  table length `u32`, then 4 zero bytes before the frame CRC32. Its entry
-  count is the number of table entries. The table follows the data at
-  `base + data length`; each 24-byte entry is a target `u64`, a length `u32`,
-  four zero bytes, and the offset of the bytes from `base` `u64`. A scan
-  refuses an external frame whose table length is not `count * 24`, whose
-  table lies past `requires` or the file, whose table CRC32 does not match,
-  or whose entry bytes run past the data length. A wrap marker is a 40-byte frame with the wrap
+  be written at the target. An index frame (flag `4`) is 64 bytes, has an
+  entry count of 0 and holds, instead of entries, the root of the
+  generation's on-disk index (see Publication Indexes): root page offset
+  `u64`, height `u32` (at most 16), four zero bytes, range count `u64`, then
+  four zero bytes before the frame CRC32. A wrap marker is a 40-byte frame with the wrap
   flag and no entries; it sends the scan to ring offset 0. With fewer than 40
   bytes left before the end of the ring, the scan wraps without a marker.
 - A publication is one generation: one or more frames carrying the same
   generation number, the last with the commit flag. The writer keeps each frame
   at most a quarter of the ring. Once a publication's frames would take more
-  than half the ring, or a staged range does not fit in a frame, the writer
-  writes its staged ranges to an overflow region in batches of up to 4 MiB and
-  names each batch with an external frame.
+  than half the ring, a staged range does not fit in a frame, or a reader's
+  overlay (`ring length / 256` ranges, at least 256) could not hold its ring
+  ranges, the rest of the publication goes to an index, and its commit frame
+  is the index frame. Before it starts an index the writer puts every
+  published generation in place, so at most one published generation has an
+  index at a time.
+- Staged bytes reach the file as they are staged: into a record appended
+  since the last publication directly, else into the open ring frame (whose
+  header and CRC32 are written when it closes), else into overflow space for
+  the index. Nothing staged is held in memory.
 - A scan reads frames from `tail` and stops at the first frame with a wrong
-  magic, a `requires` past the file's current length, a length under 36,
-  not a multiple of 8 or past the end of the ring, a generation other than the
-  expected next one, a CRC32 mismatch, or entries that overrun the frame.
+  magic, unknown flags, a `requires` past the file's current length, a length
+  under 36, not a multiple of 8 or past the end of the ring, a generation
+  other than the expected next one, a CRC32 mismatch, entries that overrun the
+  frame, or an index frame whose length, count or descriptor is wrong.
   Entries of a generation count only once its commit frame is read; frames of
   a generation that never committed are ignored
-  (`unpublished_and_torn_publications_never_reach_a_reopen`).
+  (`unpublished_and_torn_publications_never_reach_a_reopen`). A scan streams
+  each frame through a 64 KiB buffer: it checks a generation's frames, and
+  reads them again to report their entries once its commit frame is found.
+  Within a generation, ranges of its index win over its ring entries.
 - Publishing (`sync()`, `immediate()`, `commit_durable()`, the durable cell
   writes) writes the staged ranges as frames. When the generation appended
   records, the file is synced before its frames are written. The frames are
   then synced, and the ring header is rewritten with the new `published` and
-  `head`. `flush()` does not publish. Bytes staged into a record appended
+  `head`. A generation with an index writes its index pages and its overflow
+  data before that first sync. `flush()` does not publish. Bytes staged into a record appended
   since the last publication are written to it directly, not through the ring,
   since nothing published points at it yet.
 - Staged ranges are whole units: a slot, a bitmap unit, a directory entry, a
@@ -312,10 +319,12 @@ circularly.
 - Checkpoint: when a frame does not fit, the writer puts the oldest committed
   generations in place until the frame fits and at least half the ring is
   free. It first writes a header raising `mark` to the last generation being
-  applied, then writes the newest bytes of each target in place, syncs, writes
+  applied, then writes the ranges of those generations in place in ring
+  order (each generation's ring entries, then its index in key order, so the
+  newest bytes of each target land last), syncs, writes
   a header with `checkpointed`, `reclaimed`, `tail` and `tail_gen` advanced,
-  and syncs again. A frame the ring cannot make room for, or a single staged
-  range too large for a frame, is `LimitExceeded`.
+  and syncs again. No publication is refused for its size: a range too large
+  for a frame, like a publication too large for the ring, goes to an index.
 - Ring size: `FormatSpec::with_matrix_ring_bytes`, or by default twice the
   slot bytes of the create-time extents over all blocks, clamped to
   `[256 KiB, 16 MiB]` and to the record payload limit. A declared size over
@@ -339,24 +348,48 @@ circularly.
 
 - Regions form a list from the metadata record's bytes 72..80, newest first;
   each region's offset is lower than the one before it in the list. A new
-  region is appended whole (header, data and tables, padded to a whole MiB,
-  and at least as long as what the publication streamed before it) before
-  the frame naming it, and the new head is
-  staged through the ring in the same publication.
-- Between the header and `len - carved` is staged data: the batches of one
-  publication, each followed by its table, 8-byte aligned. The writer writes
-  over it only when every generation it holds is at or below `reclaimed`.
+  region (a whole number of MiB, at least as long as what the publication put
+  in overflow space before it, at most the record payload limit) is appended
+  zeroed but for its header, and the new head is staged in the same
+  publication.
+- Between the header and `len - carved` are the staged bytes and the index
+  pages of one generation, 8-byte aligned. The writer writes over them only
+  when that generation is at or below `reclaimed`; a reopened writer treats
+  every region as holding the newest published generation.
 - New tiles and directory pages are placed at the end of the free space of
   such a region: `carved` grows by their 8-byte-rounded length and the
   header, CRC32 included, is staged through the ring with the publication
   whose directory first points at them. Until that publication commits
   nothing points into the space, and a crash leaves the header as it was.
-- A reopened writer walks the list through its overlay. It stops at a header
-  whose magic, CRC32 or `carved` (a multiple of 8, at most `len - 40`) does
-  not check out, at a region past the file's length, or at an offset not
-  lower than the previous one; the regions past that point are never reused.
-  A region with ranges of a generation still in the ring is in use until that
-  generation is reclaimed.
+- A reopened writer walks the list as its snapshot shows it. It stops at a
+  header whose magic, CRC32 or `carved` (a multiple of 8, at most `len - 40`)
+  does not check out, at a region past the file's length, at an offset not
+  lower than the previous one, or after 64 regions; the regions past that
+  point are never reused.
+
+### Publication Indexes
+
+- A generation's index is a B+tree of 4096-byte pages in overflow space,
+  keyed by target offset; each range it holds is the newest staged bytes of
+  one unit. The writer builds it as it stages and never changes it once the
+  generation commits.
+- Page: magic `b"VIDX"` (0..4), kind `u16` (4..6: `1` leaf, `2` inner),
+  entry count `u16` (6..8), the next leaf's offset `u64` (8..16, leaves only;
+  `0` for the last, zero in inner pages), CRC32 of the page with bytes 16..20
+  zero (16..20), zero (20..24), entries from byte 24.
+- A leaf entry (24 bytes) is target `u64`, offset of the bytes `u64`,
+  length `u32`, zero `u32`, in ascending target order; a leaf holds at most
+  169. An inner entry (16 bytes) is key `u64`, child page offset `u64`;
+  child `i` holds the targets from key `i` up to key `i + 1`, key 0 of the
+  leftmost path is zero, and an inner page holds 1 to 254 entries.
+- A lookup of `[at, at + len)` descends to the leaf the largest key not
+  above `at` routes to and walks leaves from there: units never overlap and
+  are restaged whole, so no entry before that leaf reaches into the range.
+  A page whose magic, kind, count or CRC32 does not check out, a child or
+  next-leaf offset outside the file, or a walk longer than the range count is
+  `InvalidMatrixLayout`.
+- Readers and the writer reach index pages through a cache of 256 pages
+  allocated at open, keyed by page offset and generation.
 
 ### Snapshots And Overlay
 

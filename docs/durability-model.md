@@ -304,38 +304,52 @@ with `LimitExceeded`. A frame holds at most a quarter of the ring.
 
 ### Publications larger than the ring
 
-A publication is not limited by the ring. Once its frames would take more
-than half the ring, or a single staged unit does not fit in a frame, the rest
-streams outside it: each early write of staged changes (at most an eighth of
-the ring, then 4 MiB once streaming) goes to an overflow record, the changes'
-bytes followed by a checksummed table of where each belongs, and the ring
-takes one 64-byte frame naming them. Later batches of the same publication
-fill the region the first one opened. Memory stays bounded by that
-early-write size whatever the publication's total. The commit is unchanged: the file is synced before the
-commit frame is written, so the overflow records a commit frame names are
-durable first, and readers see the whole publication or none of it
+A publication is not limited by the ring, and its size never grows the
+writer's memory. Every staged byte goes from the caller's buffer to the file
+when it is staged: into a ring frame while the publication is small, and once
+its frames would take more than half the ring (or a reader's overlay could
+not hold its ranges, or one range does not fit a frame), into overflow space,
+with an on-disk index (a B+tree keyed by target) recording where each range's
+newest bytes are. The commit frame then names the index root: one 64-byte
+frame whatever the publication's size. The commit is unchanged: the file,
+index pages and overflow data included, is synced before the commit frame is
+written, so readers see the whole publication or none of it
 (`a_sync_larger_than_the_ring_publishes_whole_and_reuses_its_overflow`,
 `a_crash_inside_a_streamed_publication_recovers_all_or_nothing`).
 
-A checkpoint writes overflowed changes in place like ring frames. An overflow
-record is written over by a later publication only after every generation in
-it is checkpointed and the ring header records that no reader may still read
-it (`reclaimed`); a reader that was behind gets `MatrixSnapshotExpired`, never
-the newer bytes. When a large publication finds no free region, the writer
-checkpoints first if that frees one, so repeating a large rewrite reuses the
-same regions instead of growing the file. Records are allocated in whole
-mebibytes, each at least as long as what its publication streamed before
-it, so a long publication takes a few regions of doubling size. The metadata record points at a list of the
-regions, so a reopened writer finds and reuses them too.
+Readers look ranges up in the index through a fixed page cache; a checkpoint
+walks the index in key order and writes each range in place through a fixed
+copy buffer. Before a publication starts an index the writer puts every
+published generation in place, so the overflow space earlier indexes used is
+free again: repeating a large rewrite reuses the same regions instead of
+growing the file. Overflow data is written over only after its generation is
+checkpointed and the ring header records that no reader may still read it
+(`reclaimed`); a reader that was behind gets `MatrixSnapshotExpired`, never
+the newer bytes. Regions are whole mebibytes, each at least as long as what
+its publication put in overflow space before it (so a long publication takes
+a few regions of doubling size) and at most the record payload limit. The
+metadata record points at a list of the regions, so a reopened writer finds
+and reuses them too.
 
 Free overflow space also takes new tiles and directory pages: one that fits
 is placed at the end of a free region instead of being appended, and the
-region's header records the space as taken through the ring, with the
-publication that first points at it. Rewriting a large part of the matrix
-and then extending it therefore fills the space the rewrite used before the
-file grows
+region's header records the space as taken with the publication that first
+points at it. Rewriting a large part of the matrix and then extending it
+therefore fills the space the rewrite used before the file grows
 (`new_tiles_fill_free_overflow_space_and_the_space_survives_a_reopen`,
 `a_crash_while_tiles_fill_overflow_space_recovers_all_or_nothing`).
+
+### Memory
+
+A matrix handle allocates what it needs when it is opened: the ring overlay
+(`ring length / 256` ranges), a 256-page index cache, 64 KiB scan and copy
+buffers, and cell, bitmap and key-order buffers sized by the format. After
+that, writing and committing cells, publishing (through the ring or an
+index), following, reading and checkpointing allocate nothing
+(`matrix_data_paths_allocate_nothing_after_open`). New tiles, directory
+pages and overflow regions are appended as records of zeros written from a
+static page, without a buffer of their size; the file's in-memory record
+index still grows by one entry for each such record.
 
 When a frame does not fit, the writer runs a checkpoint inside that call. It
 chooses the oldest published generations whose removal leaves room for the

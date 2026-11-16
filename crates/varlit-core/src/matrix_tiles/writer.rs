@@ -1,17 +1,25 @@
 //! The single writer: stages byte ranges, publishes them through the ring,
 //! and checkpoints them into place when the ring needs room.
+//!
+//! Every byte staged goes from the caller's buffer straight to the file: into
+//! a record nothing published points at yet, into a ring frame, or, for a
+//! publication too large for the ring, into overflow space recorded by an
+//! on-disk index. The writer's memory is allocated when it is opened (the
+//! overlay, the index page cache, two scan and copy buffers) and never grows:
+//! staging, publishing and checkpointing allocate nothing.
 
-use super::ranges::Ranges;
+use std::sync::Mutex;
 
 use super::geometry::{Geometry, META_FIXED_LEN, META_OVERFLOW_HEAD_AT, TileCache, TileCoord};
+use super::index::{self, Building, Io, PAGE, PageCache};
 use super::store::{TileSource, TileStore};
 use super::view::{
-    Overlay, OverlayEntry, directory_offset, directory_root, find_tile, for_each_tile, lay_over,
+    Layers, MAX_INDEXES, OverlayEntry, directory_offset, directory_root, find_tile, for_each_tile,
+    scan_buffer,
 };
 use super::wal::{
-    self, ENTRY_HEADER, EXTERNAL_ENTRY, EXTERNAL_FRAME_LEN, ExternalDescriptor, FRAME_COMMIT,
-    FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan, MIN_RING, Ring, RingHeader,
-    ScanEvent, frame_header,
+    self, ENTRY_HEADER, FRAME_COMMIT, FRAME_HEADER, FRAME_MIN, FRAME_WRAP, FRAMES_AT, FramePlan,
+    INDEX_FRAME_LEN, MIN_RING, Ring, RingHeader, ScanEvent, frame_header,
 };
 use super::{DIR_FANOUT, DIR_LEVEL_BITS, DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
@@ -26,12 +34,14 @@ pub(crate) struct WriterStats {
     pub checkpoints: u64,
     pub frames: u64,
     pub in_place_writes: u64,
-    /// Overflow regions written: reused ones and appended ones.
+    /// Overflow regions taken: reused ones and appended ones.
     pub overflow_reused: u64,
     pub overflow_appended: u64,
     /// Tiles and directory pages placed in free overflow space instead of
     /// appended.
     pub carved: u64,
+    /// Publications that streamed past the ring into an index.
+    pub indexed: u64,
 }
 
 /// The header at the start of every overflow region's payload.
@@ -49,10 +59,12 @@ pub(crate) struct WriterStats {
 /// The first two fields never change. The carved count changes through the
 /// ring, with the publication whose directory first points into the space.
 pub(crate) const OVERFLOW_HEADER: u64 = 40;
-/// The staged bytes a streaming publication holds in memory before writing
-/// them to its overflow region.
-const STREAM_SPILL_BYTES: u64 = 4 << 20;
 const OVERFLOW_MAGIC: &[u8; 4] = b"VOVF";
+/// Overflow regions a writer keeps track of; regions past this are left
+/// alone (they cost space, never correctness).
+const MAX_REGIONS: usize = 64;
+/// Regions are whole multiples of this, and at least this long.
+const REGION_UNIT: u64 = 1 << 20;
 
 fn encode_overflow_header(next: u64, len: u64, carved: u64) -> [u8; 40] {
     let mut out = [0u8; 40];
@@ -77,19 +89,23 @@ fn decode_overflow_header(bytes: &[u8; 40]) -> Option<(u64, u64, u64)> {
         .then_some((next, len, carved))
 }
 
+/// Zeros, written from here instead of from a buffer.
+static ZEROS: [u8; 64 * 1024] = [0; 64 * 1024];
+
 /// An overflow record: where its payload is, how long it is, the newest
-/// generation whose ranges it holds, and how many bytes at its end hold
+/// generation whose index data it holds, and how many bytes at its end hold
 /// tiles and directory pages. Once that generation is checkpointed and
-/// reclaimed no reader can need its staged bytes: the next large publication
-/// writes over them instead of growing the file, and a new tile or directory
-/// page that fits is placed at the end of the free space instead of being
-/// appended.
-#[derive(Clone, Copy, Debug)]
+/// reclaimed no reader can need its data: a later large publication writes
+/// over it, and a new tile or directory page that fits is placed at the end
+/// of the free space instead of being appended.
+#[derive(Clone, Copy, Debug, Default)]
 struct OverflowRegion {
     at: u64,
     len: u64,
     generation: u64,
     carved: u64,
+    /// `carved` as of the last publication: space carved since is fresh.
+    carved_published: u64,
     /// The region appended before this one, as its header records.
     next: u64,
 }
@@ -101,6 +117,210 @@ impl OverflowRegion {
     }
 }
 
+/// Overflow space: the regions, newest first, and where the open
+/// generation writes next.
+struct Space {
+    regions: [OverflowRegion; MAX_REGIONS],
+    count: usize,
+    /// The newest region as this writer sees it: the head of the list the
+    /// metadata record points at, staged or published.
+    head: u64,
+    /// A region was appended whose place at the head is not staged yet.
+    head_moved: bool,
+    /// The region the open generation fills and the bytes it has used.
+    filling: Option<(u64, u64)>,
+    /// Bytes the open generation has put in overflow space.
+    streamed: u64,
+    /// The end of the furthest matrix record appended: what a frame the
+    /// writer writes may point into.
+    requires: u64,
+    reused: u64,
+    appended: u64,
+}
+
+impl Space {
+    fn new() -> Self {
+        Self {
+            regions: [OverflowRegion::default(); MAX_REGIONS],
+            count: 0,
+            head: 0,
+            head_moved: false,
+            filling: None,
+            streamed: 0,
+            requires: 0,
+            reused: 0,
+            appended: 0,
+        }
+    }
+
+    fn regions(&self) -> &[OverflowRegion] {
+        &self.regions[..self.count]
+    }
+
+    fn find(&self, at: u64) -> Option<usize> {
+        self.regions().iter().position(|region| region.at == at)
+    }
+
+    /// Keeps track of `region` as the newest; past [`MAX_REGIONS`] the oldest
+    /// is forgotten.
+    fn track_newest(&mut self, region: OverflowRegion) {
+        let keep = self.count.min(MAX_REGIONS - 1);
+        self.regions.copy_within(..keep, 1);
+        self.regions[0] = region;
+        self.count = keep + 1;
+    }
+
+    /// Keeps track of `region` as older than every region tracked so far.
+    fn track_oldest(&mut self, region: OverflowRegion) -> bool {
+        if self.count == MAX_REGIONS {
+            return false;
+        }
+        self.regions[self.count] = region;
+        self.count += 1;
+        true
+    }
+
+    /// `len` bytes of overflow space for `generation`'s index: next in the
+    /// region it is filling, else in a reclaimed region with room, else in a
+    /// new region appended at least as long as what the generation has
+    /// streamed so far (regions of a long publication double), within the
+    /// store's record limit.
+    fn reserve(
+        &mut self,
+        store: &mut dyn TileStore,
+        len: u64,
+        generation: u64,
+        reclaimed: u64,
+    ) -> Result<u64> {
+        let taken = len.next_multiple_of(8);
+        if let Some((region_at, used)) = self.filling
+            && let Some(index) = self.find(region_at)
+            && self.regions[index].free_room() - used >= taken
+        {
+            self.filling = Some((region_at, used + taken));
+            self.streamed += taken;
+            return Ok(region_at + OVERFLOW_HEADER + used);
+        }
+        let reusable = self
+            .regions()
+            .iter()
+            .enumerate()
+            .filter(|(_, region)| region.generation <= reclaimed && region.free_room() >= taken)
+            .min_by_key(|(_, region)| region.free_room())
+            .map(|(index, _)| index);
+        if let Some(index) = reusable {
+            let region = &mut self.regions[index];
+            region.generation = generation;
+            self.filling = Some((region.at, taken));
+            self.streamed += taken;
+            self.reused += 1;
+            return Ok(region.at + OVERFLOW_HEADER);
+        }
+        let least = OVERFLOW_HEADER + taken;
+        let limit = store.record_limit() / REGION_UNIT * REGION_UNIT;
+        let capacity = least
+            .max(self.streamed)
+            .next_multiple_of(REGION_UNIT)
+            .min(limit)
+            .max(least);
+        let next = self.head;
+        let at = store.append_zeroed(
+            RecordKind::Overflow,
+            &encode_overflow_header(next, capacity, 0),
+            capacity,
+        )?;
+        self.requires = self.requires.max(at + capacity);
+        self.track_newest(OverflowRegion {
+            at,
+            len: capacity,
+            generation,
+            carved: 0,
+            carved_published: 0,
+            next,
+        });
+        self.head = at;
+        self.head_moved = true;
+        self.filling = Some((at, taken));
+        self.streamed += taken;
+        self.appended += 1;
+        Ok(at + OVERFLOW_HEADER)
+    }
+
+    /// Whether `[target, target + len)` lies in space carved since the last
+    /// publication.
+    fn is_carved_fresh(&self, target: u64, len: u64) -> bool {
+        self.regions().iter().any(|region| {
+            let end = region.at + region.len;
+            target >= end - region.carved && target + len <= end - region.carved_published
+        })
+    }
+
+    fn published(&mut self) {
+        for region in &mut self.regions[..self.count] {
+            region.carved_published = region.carved;
+        }
+        self.filling = None;
+        self.streamed = 0;
+    }
+}
+
+/// A ring frame being filled: its entries are written as they are staged,
+/// its header and checksum when it is closed.
+struct OpenFrame {
+    /// Ring offset of the frame.
+    at: u64,
+    /// Bytes so far, header included.
+    len: u64,
+    /// Contiguous ring bytes it may take.
+    reserved: u64,
+    count: u32,
+    /// Checksum of everything after the header so far.
+    hasher: crc32fast::Hasher,
+}
+
+/// Ranges written in place go out through one buffer: adjacent ones become
+/// one write.
+struct Coalescer<'b> {
+    buf: &'b mut [u8],
+    at: u64,
+    len: usize,
+    writes: u64,
+}
+
+impl Coalescer<'_> {
+    /// Copies `len` bytes at `from` to `target`.
+    fn copy(&mut self, store: &mut dyn TileStore, target: u64, from: u64, len: u64) -> Result<()> {
+        let mut done = 0u64;
+        while done < len {
+            if self.len > 0 && self.at + self.len as u64 != target + done {
+                self.flush(store)?;
+            }
+            if self.len == 0 {
+                self.at = target + done;
+            }
+            let room = self.buf.len() - self.len;
+            let n = crate::width::bounded(len - done, room);
+            store.read_at(from + done, &mut self.buf[self.len..self.len + n])?;
+            self.len += n;
+            done += n as u64;
+            if self.len == self.buf.len() {
+                self.flush(store)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        if self.len > 0 {
+            store.write_at(self.at, &self.buf[..self.len])?;
+            self.writes += 1;
+            self.at += self.len as u64;
+            self.len = 0;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct TileWriter {
     pub(crate) geom: Geometry,
     pub(crate) meta: u64,
@@ -109,42 +329,32 @@ pub(crate) struct TileWriter {
     /// Ring offset where the next frame goes (past any frames of the open
     /// generation already written).
     cursor: u64,
-    /// Published ranges not yet in place, and spilled ranges of the open
-    /// generation (whose `generation` is `header.published + 1`).
-    overlay: Overlay,
-    /// Ranges staged since the last frame.
-    pending: Ranges<Vec<u8>>,
-    pending_bytes: u64,
-    /// Whether the open generation has frames in the ring already.
+    /// Ranges in the ring not yet in place (published and open), and the
+    /// published indexes.
+    layers: Layers,
+    /// Index pages; behind a lock so `&self` reads can use it.
+    cache: Mutex<PageCache>,
+    scratch: Box<[u8]>,
+    copy: Box<[u8]>,
+    frame: Option<OpenFrame>,
+    /// The open generation's index, once it streams past the ring.
+    building: Option<Building>,
+    /// Whether the open generation staged anything through the ring or an
+    /// index.
     spilled: bool,
     /// Records appended, or written directly, since the last barrier: they
     /// must be durable before a frame that points at them.
     appended: bool,
-    /// Records appended since the last publication, `start -> end`. Nothing
-    /// published points at them, so no reader can reach them: bytes staged
-    /// into them are written in place at once instead of through the ring,
-    /// which is what lets a publication of any size, such as an initial
-    /// load, never fill the ring.
-    fresh: Vec<(u64, u64)>,
-    /// The end of the furthest matrix record this writer appended: what a
-    /// frame it writes may point into, so what the frame `requires`.
-    requires: u64,
+    /// The file's logical length at the last publication: records appended
+    /// since lie at or past it. Nothing published points at them, so no
+    /// reader can reach them, and bytes staged into them are written in place
+    /// at once instead of through the ring.
+    fresh_floor: u64,
     tiles: TileCache,
     /// Ring bytes the open generation's frames take: past half the ring the
-    /// rest of the publication streams into overflow regions.
+    /// rest of the publication streams into an index.
     open_ring_bytes: u64,
-    /// Every overflow record of the matrix, newest first, reusable once
-    /// reclaimed.
-    overflow: Vec<OverflowRegion>,
-    /// The newest overflow region as this writer sees it: the head of the
-    /// list the metadata record points at, staged or published.
-    overflow_head: u64,
-    /// The region the open generation is streaming into and the data bytes
-    /// it has put there: later spills of the same publication fill it before
-    /// another region is taken.
-    filling: Option<(u64, u64)>,
-    /// Bytes the open generation has streamed to overflow regions.
-    streamed: u64,
+    space: Space,
     pub(crate) stats: WriterStats,
 }
 
@@ -158,34 +368,28 @@ impl TileWriter {
         creation_id: [u8; 16],
     ) -> Result<Self> {
         let ring_len = ring_len.max(MIN_RING).next_multiple_of(8);
-        let meta_len = geom.meta_len();
-        let mut meta_bytes = zeroed(meta_len, "matrix metadata")?;
+        let mut fixed = [0u8; crate::width::small(META_FIXED_LEN)];
         // The ring record follows the metadata record; its payload offset is
         // only known once appended, so the metadata is appended with a
         // placeholder and its fixed part rewritten.
-        geom.encode_meta((0, ring_len), creation_id, &mut meta_bytes);
-        let meta = store.append(RecordKind::Meta, &meta_bytes)?;
-        let mut ring_bytes = zeroed(ring_len, "matrix ring")?;
+        geom.encode_meta((0, ring_len), creation_id, &mut fixed);
+        let meta = store.append_zeroed(RecordKind::Meta, &fixed, geom.meta_len())?;
         let header = RingHeader {
             seq: 1,
             ..RingHeader::default()
         };
-        ring_bytes
-            [HEADER_SLOT_FOR_SEQ1..HEADER_SLOT_FOR_SEQ1 + crate::width::small(wal::HEADER_SLOT)]
+        let mut slots = [0u8; 2 * crate::width::small(wal::HEADER_SLOT)];
+        slots[HEADER_SLOT_FOR_SEQ1..HEADER_SLOT_FOR_SEQ1 + crate::width::small(wal::HEADER_SLOT)]
             .copy_from_slice(&header.encode());
-        let base = store.append(RecordKind::Ring, &ring_bytes)?;
-        geom.encode_meta((base, ring_len), creation_id, &mut meta_bytes);
-        store.write_at(meta, &meta_bytes[..crate::width::small(META_FIXED_LEN)])?;
+        let base = store.append_zeroed(RecordKind::Ring, &slots, ring_len)?;
+        geom.encode_meta((base, ring_len), creation_id, &mut fixed);
+        store.write_at(meta, &fixed)?;
         store.sync()?;
-        Self::with_parts(
-            geom,
-            meta,
-            Ring {
-                base,
-                len: ring_len,
-            },
-            header,
-        )
+        let ring = Ring {
+            base,
+            len: ring_len,
+        };
+        Self::with_parts(store, geom, meta, ring, header)
     }
 
     /// Opens an existing matrix for writing. Publications the ring still
@@ -199,33 +403,45 @@ impl TileWriter {
         let (base, len) = geom.decode_meta(&fixed)?;
         let ring = Ring::within(base, len, store)?;
         let header = ring.read_header(store)?;
-        let mut writer = Self::with_parts(geom, meta, ring, header)?;
+        let mut writer = Self::with_parts(store, geom, meta, ring, header)?;
         writer.recover(store)?;
         writer.adopt_overflow(store)?;
         Ok(writer)
     }
 
-    fn with_parts(geom: Geometry, meta: u64, ring: Ring, header: RingHeader) -> Result<Self> {
+    fn with_parts(
+        store: &dyn TileSource,
+        geom: Geometry,
+        meta: u64,
+        ring: Ring,
+        header: RingHeader,
+    ) -> Result<Self> {
         let tiles = TileCache::for_geometry(&geom)?;
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(COALESCE_BYTES)
+            .map_err(|_| Error::AllocationFailed {
+                resource: "matrix copy buffer",
+                requested: COALESCE_BYTES as u64,
+            })?;
+        copy.resize(COALESCE_BYTES, 0);
         Ok(Self {
             geom,
             meta,
             ring,
             cursor: header.head,
             header,
-            overlay: Overlay::default(),
-            pending: Ranges::new("matrix staged ranges"),
-            pending_bytes: 0,
+            layers: Layers::new(ring)?,
+            cache: Mutex::new(PageCache::with_pages(index::DEFAULT_CACHE_PAGES)?),
+            scratch: scan_buffer()?,
+            copy: copy.into_boxed_slice(),
+            frame: None,
+            building: None,
             spilled: false,
             appended: false,
-            fresh: Vec::new(),
-            requires: 0,
+            fresh_floor: store.len()?,
             tiles,
             open_ring_bytes: 0,
-            overflow: Vec::new(),
-            overflow_head: 0,
-            filling: None,
-            streamed: 0,
+            space: Space::new(),
             stats: WriterStats::default(),
         })
     }
@@ -234,7 +450,8 @@ impl TileWriter {
     /// `(payload offset, length, carved bytes)`.
     #[cfg(test)]
     pub(crate) fn overflow_regions(&self) -> Vec<(u64, u64, u64)> {
-        self.overflow
+        self.space
+            .regions()
             .iter()
             .map(|region| (region.at, region.len, region.carved))
             .collect()
@@ -245,23 +462,32 @@ impl TileWriter {
         self.header.published
     }
 
-    /// Whether anything is staged or spilled and not yet published.
+    /// Whether anything is staged and not yet published.
     pub(crate) fn is_dirty(&self) -> bool {
-        !self.pending.is_empty() || self.spilled
+        self.spilled
+    }
+
+    fn cache(&self) -> Result<std::sync::MutexGuard<'_, PageCache>> {
+        self.cache.lock().map_err(|_| Error::InvalidMatrixLayout)
     }
 
     // ---- reading this writer's own state ----
 
-    /// Reads `buf.len()` bytes at `offset` as this writer sees them: staged
-    /// ranges over published ones over the file.
+    /// Reads `buf.len()` bytes at `offset` as this writer sees them: what it
+    /// staged over what it published over the file.
     pub(crate) fn read(&self, store: &dyn TileSource, offset: u64, buf: &mut [u8]) -> Result<()> {
-        store.read_at(offset, buf)?;
-        self.overlay.lay(store, offset, buf, &|_| false)?;
-        self.pending
-            .for_each_overlapping(offset, buf.len() as u64, &mut |target, bytes| {
-                lay_over(offset, buf, target, bytes);
-                Ok(())
-            })
+        let open = self.building.map(|b| (b.generation, b.root));
+        let mut cache = self.cache()?;
+        self.layers
+            .fill(
+                &mut cache,
+                store,
+                offset,
+                buf,
+                self.header.checkpointed,
+                open,
+            )
+            .map(drop)
     }
 
     // ---- staging ----
@@ -274,27 +500,18 @@ impl TileWriter {
         target: u64,
         bytes: &[u8],
     ) -> Result<()> {
-        if self.is_fresh(target, bytes.len() as u64) {
+        let len = bytes.len() as u64;
+        if self.is_fresh(target, len) {
             store.write_at(target, bytes)?;
             self.appended = true;
             return Ok(());
         }
-        let mut owned = Vec::new();
-        owned
-            .try_reserve_exact(bytes.len())
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix staged range",
-                requested: bytes.len() as u64,
-            })?;
-        owned.extend_from_slice(bytes);
-        if let Some(old) = self.pending.insert(target, owned)? {
-            self.pending_bytes -= old.len() as u64;
+        self.spilled = true;
+        if self.building.is_none() && !self.stage_in_ring(store, target, bytes)? {
+            self.start_index(store)?;
         }
-        self.pending_bytes += bytes.len() as u64;
-        // A publication bigger than this goes to the ring in several frames
-        // instead of growing in memory.
-        if self.pending_bytes > self.spill_threshold() {
-            self.spill(store, false)?;
+        if self.building.is_some() {
+            self.stage_in_index(store, target, bytes)?;
         }
         Ok(())
     }
@@ -302,54 +519,221 @@ impl TileWriter {
     /// Whether `[target, target + len)` lies inside a record appended, or
     /// space carved, since the last publication.
     fn is_fresh(&self, target: u64, len: u64) -> bool {
-        // Kept sorted by start.
-        let at = self.fresh.partition_point(|(start, _)| *start <= target);
-        at > 0 && target + len <= self.fresh[at - 1].1
+        target >= self.fresh_floor || self.space.is_carved_fresh(target, len)
     }
 
-    fn note_fresh(&mut self, start: u64, end: u64) -> Result<()> {
-        self.fresh
-            .try_reserve(1)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix fresh records",
-                requested: 16,
-            })?;
-        // Appended records come in order; space carved from an overflow
-        // region lies before them.
-        let at = self.fresh.partition_point(|(other, _)| *other < start);
-        self.fresh.insert(at, (start, end));
-        self.requires = self.requires.max(end);
+    /// The largest frame: a quarter of the ring, so a checkpoint can always
+    /// make room for the next one.
+    fn frame_limit(&self) -> u64 {
+        (self.ring.area() / 4).max(FRAME_MIN * 2)
+    }
+
+    /// Writes the range into the open ring frame. `false` when it belongs in
+    /// an index instead: it does not fit a frame, the open generation would
+    /// take more than half the ring, or the overlay has no room for it.
+    fn stage_in_ring(
+        &mut self,
+        store: &mut dyn TileStore,
+        target: u64,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        let len = bytes.len() as u64;
+        let need = ENTRY_HEADER + len;
+        // Room for the entry, a header, padding and the checksum.
+        let whole = FRAME_HEADER + need + 12;
+        if whole > self.frame_limit() || self.open_ring_bytes + whole > self.ring.area() / 2 {
+            return Ok(false);
+        }
+        let overlay = &mut self.layers.overlay;
+        if overlay.len() == overlay.capacity() && overlay.get(target).is_none() {
+            let in_place = self.header.checkpointed;
+            overlay.retain(|_, entry| entry.generation > in_place);
+            if overlay.len() == overlay.capacity() {
+                return Ok(false);
+            }
+        }
+        if let Some(frame) = &self.frame
+            && frame.len + need + 12 > frame.reserved
+        {
+            self.close_frame(store, false)?;
+        }
+        if self.frame.is_none() {
+            self.open_frame(store, whole)?;
+        }
+        let frame = self.frame.as_mut().expect("opened above");
+        let at = self.ring.at(frame.at + frame.len);
+        let mut entry = [0u8; crate::width::small(ENTRY_HEADER)];
+        entry[..8].copy_from_slice(&target.to_le_bytes());
+        entry[8..].copy_from_slice(&crate::width::field32(bytes.len())?.to_le_bytes());
+        let header_len = entry.len();
+        if header_len + bytes.len() <= self.copy.len() {
+            self.copy[..header_len].copy_from_slice(&entry);
+            self.copy[header_len..header_len + bytes.len()].copy_from_slice(bytes);
+            store.write_at(at, &self.copy[..header_len + bytes.len()])?;
+        } else {
+            store.write_at(at, &entry)?;
+            store.write_at(at + ENTRY_HEADER, bytes)?;
+        }
+        frame.hasher.update(&entry);
+        frame.hasher.update(bytes);
+        frame.len += need;
+        frame.count += 1;
+        self.open_ring_bytes += need;
+        let inserted = self.layers.overlay.insert(
+            target,
+            OverlayEntry {
+                generation: self.header.published + 1,
+                at: at + ENTRY_HEADER,
+                len: crate::width::field32(bytes.len())?,
+            },
+        );
+        debug_assert!(inserted, "room was made above");
+        Ok(true)
+    }
+
+    /// Opens a frame of at least `least` bytes at the next ring room.
+    fn open_frame(&mut self, store: &mut dyn TileStore, least: u64) -> Result<()> {
+        let at = self.place(store, least)?;
+        let (room, _) = self.ring.room(self.header.tail, at);
+        let reserved = room.min(self.frame_limit()).max(least);
+        self.frame = Some(OpenFrame {
+            at,
+            len: FRAME_HEADER,
+            reserved,
+            count: 0,
+            hasher: crc32fast::Hasher::new(),
+        });
+        self.open_ring_bytes += FRAME_HEADER;
         Ok(())
     }
 
-    fn spill_threshold(&self) -> u64 {
-        if self.filling.is_some() {
-            // Streaming: each spill costs one small frame whatever its size,
-            // so spills are as large as the memory bound allows.
-            STREAM_SPILL_BYTES
-        } else {
-            (self.ring.area() / 8).clamp(FRAME_MIN, STREAM_SPILL_BYTES)
+    /// Seals the open frame: padding, header and checksum. The commit frame
+    /// when `commit`.
+    fn close_frame(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<()> {
+        let Some(mut frame) = self.frame.take() else {
+            return Ok(());
+        };
+        let len = (frame.len + 4).next_multiple_of(8);
+        let pad = crate::width::small(len - 4 - frame.len);
+        frame.hasher.update(&ZEROS[..pad]);
+        let header = frame_header(
+            if commit { FRAME_COMMIT } else { 0 },
+            self.header.published + 1,
+            len,
+            frame.count,
+            self.space.requires,
+        );
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(&header);
+        crc.combine(&frame.hasher);
+        let mut tail = [0u8; 12];
+        tail[pad..pad + 4].copy_from_slice(&crc.finalize().to_le_bytes());
+        store.write_at(self.ring.at(frame.at + frame.len), &tail[..pad + 4])?;
+        store.write_at(self.ring.at(frame.at), &header)?;
+        self.stats.frames += 1;
+        self.open_ring_bytes += len - frame.len;
+        self.cursor = frame.at + len;
+        if self.cursor == self.ring.area() {
+            self.cursor = 0;
         }
+        Ok(())
     }
 
-    /// Forgets everything staged or spilled since the last publication.
+    /// Streams the rest of the open generation into an index. Everything
+    /// published is put in place first: the open generation's index is then
+    /// the only one a writer adds, and the regions earlier ones used are free.
+    fn start_index(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        self.close_frame(store, false)?;
+        if self.header.published > self.header.checkpointed {
+            self.checkpoint(store, u64::MAX)?;
+        }
+        debug_assert!(self.layers.indexes().len() < MAX_INDEXES);
+        let generation = self.header.published + 1;
+        let reclaimed = self.header.reclaimed;
+        let space = &mut self.space;
+        let cache = self
+            .cache
+            .get_mut()
+            .map_err(|_| Error::InvalidMatrixLayout)?;
+        let building = Building::new(cache, store, generation, &mut |store, len| {
+            space.reserve(store, len, generation, reclaimed)
+        })?;
+        self.building = Some(building);
+        self.stats.indexed += 1;
+        self.note_space();
+        Ok(())
+    }
+
+    /// Writes the range to overflow space and records it in the open index.
+    fn stage_in_index(
+        &mut self,
+        store: &mut dyn TileStore,
+        target: u64,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let generation = self.header.published + 1;
+        let reclaimed = self.header.reclaimed;
+        let mut pending = Some((target, bytes));
+        let mut head: [u8; 8];
+        while let Some((target, bytes)) = pending.take() {
+            let len = bytes.len() as u64;
+            let at = self.space.reserve(store, len, generation, reclaimed)?;
+            store.write_at(at, bytes)?;
+            self.appended = true;
+            let space = &mut self.space;
+            let cache = self
+                .cache
+                .get_mut()
+                .map_err(|_| Error::InvalidMatrixLayout)?;
+            let building = self.building.as_mut().ok_or(Error::InvalidMatrixLayout)?;
+            building.insert(
+                cache,
+                store,
+                &mut |store, len| space.reserve(store, len, generation, reclaimed),
+                target,
+                at,
+                crate::width::field32(bytes.len())?,
+            )?;
+            // Pages written back now keep room for clean pages a read can
+            // evict.
+            if cache.dirty() > cache.pages() / 2 {
+                cache.flush(store)?;
+            }
+            // A new region becomes the head of the list in the same
+            // publication.
+            if self.space.head_moved {
+                self.space.head_moved = false;
+                head = self.space.head.to_le_bytes();
+                pending = Some((self.meta + META_OVERFLOW_HEAD_AT, &head[..]));
+            }
+        }
+        self.note_space();
+        Ok(())
+    }
+
+    fn note_space(&mut self) {
+        self.stats.overflow_appended = self.space.appended;
+        self.stats.overflow_reused = self.space.reused;
+    }
+
+    /// Forgets everything staged since the last publication.
     #[cfg(test)]
     pub(crate) fn discard(&mut self) {
-        self.pending.clear();
-        self.pending_bytes = 0;
-        if self.spilled {
-            let open = self.header.published + 1;
-            self.overlay
-                .ranges
-                .retain(|_, entry| entry.generation != open);
-            self.spilled = false;
+        let open = self.header.published + 1;
+        self.layers
+            .overlay
+            .retain(|_, entry| entry.generation != open);
+        if let Ok(cache) = self.cache.get_mut() {
+            cache.forget(open);
         }
+        self.frame = None;
+        self.building = None;
+        self.spilled = false;
         self.cursor = self.header.head;
         self.open_ring_bytes = 0;
-        self.filling = None;
-        self.streamed = 0;
         self.tiles.clear();
-        self.fresh.clear();
+        self.space.filling = None;
+        self.space.streamed = 0;
     }
 
     // ---- tiles ----
@@ -421,39 +805,60 @@ impl TileWriter {
             page = child;
         }
         let geom = self.geom.blocks[block];
-        let mut tile = zeroed(geom.tile_bytes(), "matrix tile")?;
-        geom.encode_empty_tile(coord, &mut tile);
-        let tile_at = self.place_record(store, RecordKind::Tile, &tile)?;
+        let header = geom.empty_tile_header(coord);
+        let tile_at = self.place_record(store, RecordKind::Tile, &header, geom.tile_bytes())?;
+        // The empty bitmap's checksum: of zeros, hashed from the zero page.
+        let mut hasher = crc32fast::Hasher::new();
+        let mut left = geom.bitmap_len();
+        while left > 0 {
+            let n = crate::width::bounded(left, ZEROS.len());
+            hasher.update(&ZEROS[..n]);
+            left -= n as u64;
+        }
+        store.write_at(
+            tile_at + geom.bitmap_at() + geom.bitmap_len(),
+            &hasher.finalize().to_le_bytes(),
+        )?;
         let at = page + (key & (DIR_FANOUT - 1)) * 8;
         self.stage(store, at, &tile_at.to_le_bytes())?;
         Ok(tile_at)
     }
 
     fn append_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
-        let page = zeroed(DIR_PAGE_BYTES, "matrix directory page")?;
-        self.place_record(store, RecordKind::Directory, &page)
+        self.place_record(store, RecordKind::Directory, &[], DIR_PAGE_BYTES)
     }
 
-    /// Writes a new tile or directory page: into free overflow space when a
-    /// region has room, else as a new record. Either way nothing published
-    /// points at it yet, so it is fresh until the next publication.
+    /// Writes a new tile or directory page of `len` bytes, `prefix` and then
+    /// zeros: into free overflow space when a region has room, else as a new
+    /// record. Either way nothing published points at it yet, so it is
+    /// fresh until the next publication.
     fn place_record(
         &mut self,
         store: &mut dyn TileStore,
         kind: RecordKind,
-        bytes: &[u8],
+        prefix: &[u8],
+        len: u64,
     ) -> Result<u64> {
-        let len = bytes.len() as u64;
         let at = match self.carve(store, len)? {
             Some(at) => {
-                store.write_at(at, bytes)?;
+                // The space held older data: zero all of it first.
+                let mut done = 0u64;
+                while done < len {
+                    let n = crate::width::bounded(len - done, ZEROS.len());
+                    store.write_at(at + done, &ZEROS[..n])?;
+                    done += n as u64;
+                }
+                store.write_at(at, prefix)?;
                 self.stats.carved += 1;
                 at
             }
-            None => store.append(kind, bytes)?,
+            None => {
+                let at = store.append_zeroed(kind, prefix, len)?;
+                self.space.requires = self.space.requires.max(at + len);
+                at
+            }
         };
         self.appended = true;
-        self.note_fresh(at, at + len)?;
         Ok(at)
     }
 
@@ -464,7 +869,8 @@ impl TileWriter {
         let len = len.next_multiple_of(8);
         let reclaimed = self.header.reclaimed;
         let Some(index) = self
-            .overflow
+            .space
+            .regions()
             .iter()
             .enumerate()
             .filter(|(_, region)| region.generation <= reclaimed && region.free_room() >= len)
@@ -473,7 +879,7 @@ impl TileWriter {
         else {
             return Ok(None);
         };
-        let region = &mut self.overflow[index];
+        let region = &mut self.space.regions[index];
         region.carved += len;
         let (region_at, next, region_len, carved) =
             (region.at, region.next, region.len, region.carved);
@@ -517,31 +923,24 @@ impl TileWriter {
         )
     }
 
-    /// Calls `visit` with every allocated tile of `block`, as this writer
-    /// sees the directory.
-    pub(crate) fn for_each_tile(
-        &mut self,
-        store: &dyn TileSource,
-        block: usize,
-        visit: &mut dyn FnMut(u64) -> Result<()>,
-    ) -> Result<()> {
-        let root_at = self.meta + self.geom.root_at(block);
-        for_each_tile(root_at, &mut |at, buf| self.read(store, at, buf), visit)
-    }
-
-    /// Calls `visit` with every published range not yet in place.
+    /// Calls `visit` with every published range not yet in place, in the
+    /// order they are laid.
     #[cfg(feature = "mmap")]
     pub(crate) fn for_each_overlay(
         &self,
+        store: &dyn TileSource,
         visit: &mut dyn FnMut(u64, OverlayEntry) -> Result<()>,
     ) -> Result<()> {
-        let open = self.header.published + 1;
-        for (target, entry) in self.overlay.ranges.iter() {
-            if entry.generation != open {
-                visit(target, *entry)?;
-            }
-        }
-        Ok(())
+        let mut cache = self.cache()?;
+        super::view::for_each_layered(
+            &self.layers,
+            &mut cache,
+            store,
+            self.header.checkpointed,
+            self.header.published,
+            None,
+            visit,
+        )
     }
 
     // ---- publication ----
@@ -553,407 +952,53 @@ impl TileWriter {
         if !self.is_dirty() {
             return Ok(self.header.published);
         }
-        self.spill(store, true)?;
+        let generation = self.header.published + 1;
+        if self.building.is_some() {
+            self.cache
+                .get_mut()
+                .map_err(|_| Error::InvalidMatrixLayout)?
+                .flush(store)?;
+        }
+        // Everything a commit frame points at, appended records, overflow
+        // data and index pages alike, is durable before it is written.
+        if self.appended {
+            store.sync()?;
+            self.stats.barriers += 1;
+            self.appended = false;
+        }
+        if let Some(building) = self.building.take() {
+            let frame = wal::index_frame(
+                FRAME_COMMIT,
+                generation,
+                self.space.requires,
+                &building.root,
+            );
+            let at = self.place(store, INDEX_FRAME_LEN)?;
+            store.write_at(self.ring.at(at), &frame)?;
+            self.stats.frames += 1;
+            self.cursor = at + INDEX_FRAME_LEN;
+            if self.cursor == self.ring.area() {
+                self.cursor = 0;
+            }
+            self.layers.push_index(generation, building.root)?;
+        } else {
+            if self.frame.is_none() {
+                self.open_frame(store, FRAME_MIN)?;
+            }
+            self.close_frame(store, true)?;
+        }
         store.sync()?;
         self.stats.barriers += 1;
-        let generation = self.header.published + 1;
         let mut header = self.header;
         header.published = generation;
         header.head = self.cursor;
         self.write_header(store, header)?;
         self.spilled = false;
         self.open_ring_bytes = 0;
-        self.filling = None;
-        self.streamed = 0;
         // Published now: later changes to them must not reach a reader early.
-        self.fresh.clear();
+        self.fresh_floor = store.len()?;
+        self.space.published();
         Ok(generation)
-    }
-
-    /// Writes the staged ranges to the ring as a frame of the open
-    /// generation, the commit frame when `commit`.
-    fn spill(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<()> {
-        // A publication that would take more than half the ring, or a range
-        // no frame can hold, streams the rest of its ranges outside the ring.
-        let largest = self
-            .pending
-            .iter()
-            .map(|(_, bytes)| bytes.len() as u64)
-            .max();
-        let frame_room =
-            (self.ring.area() / 4).max(FRAME_MIN * 2) - FRAME_HEADER - ENTRY_HEADER - 12;
-        let ring_need =
-            self.pending_bytes + self.pending.len() as u64 * ENTRY_HEADER + FRAME_HEADER;
-        if self.open_ring_bytes + ring_need > self.ring.area() / 2
-            || largest.is_some_and(|len| len > frame_room)
-        {
-            // A new overflow region leaves the list head staged: it goes out
-            // in a small frame after, the commit frame when this is one.
-            if self.spill_external(store, commit)? || !commit {
-                return Ok(());
-            }
-        }
-        // Everything a commit frame points at, appended records and overflow
-        // regions alike, is durable before the commit frame is written. A
-        // frame that is not the commit needs no barrier: if a crash leaves
-        // it without its commit, the generation never happened.
-        if self.appended && commit {
-            store.sync()?;
-            self.stats.barriers += 1;
-            self.appended = false;
-        }
-        let generation = self.header.published + 1;
-        // The matrix records these frames may point into: a recovery that
-        // cuts the file short of them drops the generation. Records that are
-        // not the matrix's own (a user record left uncommitted) do not count.
-        let requires = self.requires;
-        let refused = |requested: u64| Error::AllocationFailed {
-            resource: "matrix ring frame",
-            requested,
-        };
-        // The staged ranges stay staged until every frame holding them is
-        // written: a refusal part way leaves them all still staged, and the
-        // frames already written belong to a generation nothing committed.
-        let mut targets: Vec<u64> = Vec::new();
-        targets
-            .try_reserve_exact(self.pending.len())
-            .map_err(|_| refused(self.pending.len() as u64 * 8))?;
-        targets.extend(self.pending.iter().map(|(target, _)| target));
-        targets.sort_unstable();
-        // Entries go out in frames no larger than a quarter of the ring, so
-        // a checkpoint can always make room for the next one.
-        let limit = (self.ring.area() / 4).max(FRAME_MIN * 2);
-        let mut frame: Vec<u8> = Vec::new();
-        frame
-            .try_reserve(crate::width::small(FRAME_HEADER) + 12)
-            .map_err(|_| refused(FRAME_HEADER + 12))?;
-        let mut entries: Vec<(u64, u64, u32)> = Vec::new();
-        let mut next = 0usize;
-        loop {
-            frame.clear();
-            entries.clear();
-            frame.extend_from_slice(&[0u8; crate::width::small(FRAME_HEADER)]);
-            while let Some(target) = targets.get(next).copied() {
-                let bytes = self.pending.get(target).expect("listed above");
-                let need = ENTRY_HEADER + bytes.len() as u64;
-                if frame.len() as u64 + need + 4 + 8 > limit && !entries.is_empty() {
-                    break;
-                }
-                if FRAME_HEADER + need + 4 + 8 > limit {
-                    return Err(Error::LimitExceeded {
-                        resource: "matrix ring frame",
-                        actual: need,
-                        limit,
-                    });
-                }
-                // Room for this entry, and for the padding and checksum
-                // that close the frame.
-                frame
-                    .try_reserve(crate::width::index(need)? + 12)
-                    .map_err(|_| refused(need + 12))?;
-                entries.try_reserve(1).map_err(|_| refused(24))?;
-                let bytes_at = frame.len() as u64 + ENTRY_HEADER;
-                frame.extend_from_slice(&target.to_le_bytes());
-                let bytes_len = crate::width::field32(bytes.len())?;
-                frame.extend_from_slice(&bytes_len.to_le_bytes());
-                frame.extend_from_slice(bytes);
-                entries.push((target, bytes_at, bytes_len));
-                next += 1;
-            }
-            let last = next == targets.len();
-            if entries.is_empty() && !(last && commit) {
-                break;
-            }
-            let len = (frame.len() as u64 + 4).next_multiple_of(8);
-            frame.resize(crate::width::index(len)? - 4, 0);
-            let flags = if last && commit { FRAME_COMMIT } else { 0 };
-            frame[..crate::width::small(FRAME_HEADER)].copy_from_slice(&frame_header(
-                flags,
-                generation,
-                len,
-                crate::width::field32(entries.len())?,
-                requires,
-            ));
-            let crc = crc32fast::hash(&frame);
-            frame.extend_from_slice(&crc.to_le_bytes());
-            let at = self.place(store, len)?;
-            store.write_at(self.ring.at(at), &frame)?;
-            self.stats.frames += 1;
-            self.open_ring_bytes += len;
-            for (target, bytes_at, n) in entries.drain(..) {
-                self.overlay.insert(
-                    target,
-                    OverlayEntry {
-                        generation,
-                        at: self.ring.at(at) + bytes_at,
-                        len: n,
-                    },
-                )?;
-            }
-            self.cursor = at + len;
-            if self.cursor == self.ring.area() {
-                self.cursor = 0;
-            }
-            self.spilled = true;
-            if last {
-                break;
-            }
-        }
-        self.pending.clear();
-        self.pending_bytes = 0;
-        Ok(())
-    }
-
-    /// Writes every staged range to an overflow region, the bytes followed
-    /// by a table of them, and one external frame pointing at it: the commit
-    /// frame when `commit`, unless the region is new. The ring takes one
-    /// small frame however much is staged, so a publication of any size
-    /// streams through it. A new region's place in the overflow list is
-    /// staged after the frame; returns whether the frame was the commit.
-    fn spill_external(&mut self, store: &mut dyn TileStore, commit: bool) -> Result<bool> {
-        let generation = self.header.published + 1;
-        let refused = |requested: u64| Error::AllocationFailed {
-            resource: "matrix overflow region",
-            requested,
-        };
-        let mut targets: Vec<u64> = Vec::new();
-        targets
-            .try_reserve_exact(self.pending.len())
-            .map_err(|_| refused(self.pending.len() as u64 * 8))?;
-        targets.extend(self.pending.iter().map(|(target, _)| target));
-        targets.sort_unstable();
-        let count = crate::width::field32(targets.len())?;
-        let data_len = self.pending_bytes;
-        let table_len = u64::from(count) * EXTERNAL_ENTRY;
-        let table_len_field = u32::try_from(table_len).map_err(|_| Error::LimitExceeded {
-            resource: "matrix overflow table",
-            actual: table_len,
-            limit: u64::from(u32::MAX),
-        })?;
-        // Room for the region header first: a new region is appended whole.
-        let total = OVERFLOW_HEADER + data_len + table_len;
-        let mut region: Vec<u8> = Vec::new();
-        region
-            .try_reserve_exact(crate::width::index(total)?)
-            .map_err(|_| refused(total))?;
-        region.resize(crate::width::small(OVERFLOW_HEADER), 0);
-        let mut table: Vec<u8> = Vec::new();
-        table
-            .try_reserve_exact(crate::width::index(table_len)?)
-            .map_err(|_| refused(table_len))?;
-        let mut entries: Vec<(u64, u64, u32)> = Vec::new();
-        entries
-            .try_reserve_exact(targets.len())
-            .map_err(|_| refused(targets.len() as u64 * 24))?;
-        for target in targets {
-            let bytes = self.pending.get(target).expect("listed above");
-            let len = crate::width::field32(bytes.len())?;
-            let offset = region.len() as u64 - OVERFLOW_HEADER;
-            table.extend_from_slice(&wal::encode_external_entry(target, len, offset));
-            region.extend_from_slice(bytes);
-            entries.push((target, offset, len));
-        }
-        region.extend_from_slice(&table);
-        let table_crc = crc32fast::hash(&table);
-        let (base, new_region) = self.overflow_write(store, &mut region, generation)?;
-        self.appended = true;
-        let commit = commit && !new_region;
-        // The region is complete on disk before a commit frame names it.
-        if commit {
-            store.sync()?;
-            self.stats.barriers += 1;
-            self.appended = false;
-        }
-        let descriptor = ExternalDescriptor {
-            base,
-            data_len,
-            table_crc,
-            table_len: table_len_field,
-        };
-        let flags = if commit { FRAME_COMMIT } else { 0 };
-        let frame = wal::external_frame(flags, generation, count, self.requires, &descriptor);
-        let at = self.place(store, EXTERNAL_FRAME_LEN)?;
-        store.write_at(self.ring.at(at), &frame)?;
-        self.stats.frames += 1;
-        self.open_ring_bytes += EXTERNAL_FRAME_LEN;
-        for (target, offset, len) in entries {
-            self.overlay.insert(
-                target,
-                OverlayEntry {
-                    generation,
-                    at: base + offset,
-                    len,
-                },
-            )?;
-        }
-        self.cursor = at + EXTERNAL_FRAME_LEN;
-        if self.cursor == self.ring.area() {
-            self.cursor = 0;
-        }
-        self.spilled = true;
-        self.pending.clear();
-        self.pending_bytes = 0;
-        if new_region {
-            let head = self.overflow_head;
-            self.stage(
-                store,
-                self.meta + META_OVERFLOW_HEAD_AT,
-                &head.to_le_bytes(),
-            )?;
-        }
-        Ok(commit)
-    }
-
-    /// Writes `bytes` (an unfilled region header, then the data) as the
-    /// overflow region of `generation`. Returns the logical offset of the
-    /// data and whether the region is new: over the free space of an
-    /// existing region, when one is large enough and every generation in it
-    /// is reclaimed (no reader can still read it), else as a new overflow
-    /// record, the head of the list. A region waiting only for a checkpoint
-    /// is freed by one when it would avoid growing the file.
-    fn overflow_write(
-        &mut self,
-        store: &mut dyn TileStore,
-        bytes: &mut Vec<u8>,
-        generation: u64,
-    ) -> Result<(u64, bool)> {
-        let header = crate::width::small(OVERFLOW_HEADER);
-        let len = bytes.len() as u64 - OVERFLOW_HEADER;
-        let taken = len.next_multiple_of(8);
-        let streamed = self.streamed;
-        self.streamed += taken;
-        // The region this publication is already streaming into, when what
-        // is left of it holds these bytes.
-        if let Some((region_at, used)) = self.filling
-            && let Some(region) = self.overflow.iter().find(|region| region.at == region_at)
-            && region.free_room() - used >= len
-        {
-            let at = region_at + OVERFLOW_HEADER + used;
-            store.write_at(at, &bytes[header..])?;
-            self.filling = Some((region_at, used + taken));
-            return Ok((at, false));
-        }
-        let mut reusable = self.reusable_overflow(len);
-        if reusable.is_none()
-            && self.overflow.iter().any(|region| {
-                region.free_room() >= len
-                    && region.generation <= self.header.published
-                    && region.generation > self.header.reclaimed
-            })
-        {
-            self.checkpoint(store, u64::MAX)?;
-            reusable = self.reusable_overflow(len);
-        }
-        if let Some(index) = reusable {
-            let region = &mut self.overflow[index];
-            region.generation = generation;
-            let at = region.at + OVERFLOW_HEADER;
-            store.write_at(at, &bytes[header..])?;
-            self.filling = Some((region.at, taken));
-            self.stats.overflow_reused += 1;
-            return Ok((at, false));
-        }
-        self.overflow
-            .try_reserve(1)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix overflow regions",
-                requested: (self.overflow.len() as u64 + 1) * 24,
-            })?;
-        // Whole mebibytes, so the slightly different sizes of later spills
-        // fit the same regions; and at least what this publication streamed
-        // so far, so a long one takes a few regions of doubling size, not
-        // one per spill.
-        let whole = bytes.len() as u64;
-        let capacity = whole.max(streamed).next_multiple_of(1 << 20);
-        bytes
-            .try_reserve_exact(crate::width::index(capacity - whole)?)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix overflow region",
-                requested: capacity,
-            })?;
-        bytes.resize(crate::width::index(capacity)?, 0);
-        let next = self.overflow_head;
-        bytes[..header].copy_from_slice(&encode_overflow_header(next, capacity, 0));
-        let at = store.append(RecordKind::Overflow, bytes)?;
-        self.requires = self.requires.max(at + capacity);
-        self.overflow.insert(
-            0,
-            OverflowRegion {
-                at,
-                len: capacity,
-                generation,
-                carved: 0,
-                next,
-            },
-        );
-        self.overflow_head = at;
-        self.filling = Some((at, taken));
-        self.stats.overflow_appended += 1;
-        Ok((at + OVERFLOW_HEADER, true))
-    }
-
-    /// Finds the overflow regions a reopened matrix already has, walking the
-    /// list from the head the metadata record points at. A region holding
-    /// ranges of a publication still in the ring is in use until that
-    /// generation is reclaimed; any other is free once what was checkpointed
-    /// before this open is reclaimed. A header that does not check out ends
-    /// the walk: the regions past it are left alone, never reused.
-    fn adopt_overflow(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let mut head = [0u8; 8];
-        self.read(store, self.meta + META_OVERFLOW_HEAD_AT, &mut head)?;
-        self.overflow_head = u64::from_le_bytes(head);
-        let end = store.len()?;
-        let mut at = self.overflow_head;
-        // Each region points at an older, earlier one, so the walk ends.
-        let mut before = u64::MAX;
-        while at != 0 && at < before && at.checked_add(OVERFLOW_HEADER).is_some_and(|e| e <= end) {
-            let mut bytes = [0u8; crate::width::small(OVERFLOW_HEADER)];
-            self.read(store, at, &mut bytes)?;
-            let Some((next, len, carved)) = decode_overflow_header(&bytes) else {
-                break;
-            };
-            if at.checked_add(len).is_none_or(|e| e > end) {
-                break;
-            }
-            let generation = self
-                .overlay
-                .ranges
-                .iter()
-                .filter(|(_, entry)| entry.at >= at && entry.at < at + len)
-                .map(|(_, entry)| entry.generation)
-                .max()
-                .unwrap_or(0)
-                .max(self.header.checkpointed);
-            self.overflow
-                .try_reserve(1)
-                .map_err(|_| Error::AllocationFailed {
-                    resource: "matrix overflow regions",
-                    requested: (self.overflow.len() as u64 + 1) * 40,
-                })?;
-            self.overflow.push(OverflowRegion {
-                at,
-                len,
-                generation,
-                carved,
-                next,
-            });
-            before = at;
-            at = next;
-        }
-        Ok(())
-    }
-
-    /// The reclaimed overflow region with the least room that holds `len`
-    /// bytes.
-    fn reusable_overflow(&self, len: u64) -> Option<usize> {
-        self.overflow
-            .iter()
-            .enumerate()
-            .filter(|(_, region)| {
-                region.free_room() >= len && region.generation <= self.header.reclaimed
-            })
-            .min_by_key(|(_, region)| region.free_room())
-            .map(|(index, _)| index)
     }
 
     /// Finds ring room for a frame of `len` bytes at the cursor, writing a
@@ -1003,7 +1048,8 @@ impl TileWriter {
 
     /// Puts the oldest published generations in place until at least `need`
     /// contiguous ring bytes and half the ring are free, or all of them when
-    /// `need` is `u64::MAX`.
+    /// `need` is `u64::MAX`. Ranges stream from the ring and from indexes
+    /// through the copy buffer.
     pub(crate) fn checkpoint(&mut self, store: &mut dyn TileStore, need: u64) -> Result<()> {
         let header = self.header;
         if header.published == header.checkpointed {
@@ -1011,99 +1057,91 @@ impl TileWriter {
         }
         // Which generations to put in place: the fewest, oldest ones that
         // leave room. Readers whose snapshots are newer keep reading them.
-        let mut ends: Vec<(u64, u64)> = Vec::new();
+        let area = self.ring.area();
+        let ring = self.ring;
+        let cursor = self.cursor;
+        let mut chosen: Option<(u64, u64)> = None;
+        let mut last: Option<(u64, u64)> = None;
         wal::scan(
             store,
-            self.ring,
+            ring,
             header.tail,
             header.checkpointed + 1,
             header.published,
-            &mut |event| {
+            &mut self.scratch,
+            &mut |_, event| {
                 if let ScanEvent::Committed(generation, end) = event {
-                    ends.try_reserve(1).map_err(|_| Error::AllocationFailed {
-                        resource: "matrix checkpoint plan",
-                        requested: (ends.len() as u64 + 1) * 16,
-                    })?;
-                    ends.push((generation, end));
+                    last = Some((generation, end));
+                    if need != u64::MAX && chosen.is_none() {
+                        // The largest frame that fits once frames before
+                        // `end` are gone, by the rule `place` then applies.
+                        // Free half the ring at least, not just this frame's
+                        // room: a ring kept just full would checkpoint (two
+                        // more syncs) on every publish.
+                        let (at_cursor, at_start) = ring.room(end, cursor);
+                        let free_total = area - ring.used(end, cursor);
+                        if (at_cursor.max(at_start) >= need && free_total >= area / 2)
+                            || end == cursor
+                        {
+                            chosen = Some((generation, end));
+                        }
+                    }
                 }
                 Ok(())
             },
         )?;
-        let Some(&(last_gen, _)) = ends.last() else {
+        let Some(last) = last else {
             return Err(Error::InvalidMatrixLayout);
         };
-        if last_gen != header.published {
+        if last.0 != header.published {
             return Err(Error::InvalidMatrixLayout);
         }
-        let area = self.ring.area();
-        let target = if need == u64::MAX {
-            header.published
-        } else {
-            // The largest frame that fits once frames before `tail` are gone,
-            // by the same rule `place` then applies.
-            let after_cursor = |tail: u64| -> u64 {
-                let (at_cursor, at_start) = self.ring.room(tail, self.cursor);
-                at_cursor.max(at_start)
-            };
-            // Free half the ring at least, not just this frame's room: a
-            // ring kept just full would checkpoint (two more syncs) on
-            // every publish. Half spreads that cost over many publishes
-            // while keeping the newer half for readers behind.
-            let free_total = |tail: u64| area - self.ring.used(tail, self.cursor);
-            ends.iter()
-                .find(|(_, end)| {
-                    (after_cursor(*end) >= need && free_total(*end) >= area / 2)
-                        || *end == self.cursor
-                })
-                .map_or(header.published, |(generation, _)| *generation)
-        };
-        let new_tail = ends
-            .iter()
-            .find(|(generation, _)| *generation == target)
-            .map(|(_, end)| *end)
-            .expect("target is a scanned generation");
-
-        // The newest bytes of each range among the generations being put in
-        // place.
-        // `(target, order, ring offset, len)`; the newest of each target wins.
-        let mut latest: Vec<(u64, u64, u64, u32)> = Vec::new();
-        wal::scan(
-            store,
-            self.ring,
-            header.tail,
-            header.checkpointed + 1,
-            target,
-            &mut |event| {
-                if let ScanEvent::Entry(_, entry) = event {
-                    latest.try_reserve(1).map_err(|_| Error::AllocationFailed {
-                        resource: "matrix checkpoint ranges",
-                        requested: (latest.len() as u64 + 1) * 32,
-                    })?;
-                    let order = latest.len() as u64;
-                    latest.push((entry.target, order, entry.at, entry.len));
-                }
-                Ok(())
-            },
-        )?;
+        let (target, new_tail) = chosen.unwrap_or(last);
 
         // Readers must see the mark before anything in place changes.
         let mut marked = self.header;
         marked.mark = target;
         self.write_header(store, marked)?;
-        latest.sort_unstable_by_key(|(target, order, ..)| (*target, *order));
-        // Keep the last of each target's run.
-        let mut kept = 0;
-        for index in 0..latest.len() {
-            let is_last = latest
-                .get(index + 1)
-                .is_none_or(|next| next.0 != latest[index].0);
-            if is_last {
-                latest[kept] = latest[index];
-                kept += 1;
-            }
+        {
+            let cache = self
+                .cache
+                .get_mut()
+                .map_err(|_| Error::InvalidMatrixLayout)?;
+            let mut out = Coalescer {
+                buf: &mut self.copy,
+                at: 0,
+                len: 0,
+                writes: 0,
+            };
+            // In ring order: generation after generation, and within one its
+            // ring ranges before its index, so the newest bytes land last.
+            wal::scan(
+                store,
+                ring,
+                header.tail,
+                header.checkpointed + 1,
+                target,
+                &mut self.scratch,
+                &mut |store, event| match event {
+                    ScanEvent::Entry(_, entry) => {
+                        out.copy(store, entry.target, entry.at, u64::from(entry.len))
+                    }
+                    ScanEvent::Index(generation, root) => index::for_each(
+                        cache,
+                        Io::Write(store),
+                        generation,
+                        root,
+                        &mut |io, target, at, len| match io {
+                            Io::Write(store) => out.copy(&mut **store, target, at, u64::from(len)),
+                            Io::Read(_) => Err(Error::InvalidMatrixLayout),
+                        },
+                    ),
+                    ScanEvent::Committed(..) => Ok(()),
+                },
+            )?;
+            out.flush(store)?;
+            self.stats.in_place_writes += out.writes;
         }
-        latest.truncate(kept);
-        self.apply(store, &latest)?;
         store.sync()?;
         self.stats.barriers += 1;
 
@@ -1118,57 +1156,11 @@ impl TileWriter {
         store.sync()?;
         self.stats.barriers += 1;
         self.stats.checkpoints += 1;
-        self.overlay
-            .ranges
-            .retain(|_, entry| entry.generation > target);
-        Ok(())
-    }
-
-    /// Writes ranges into place through the coalescing buffer.
-    fn apply(&mut self, store: &mut dyn TileStore, ranges: &[(u64, u64, u64, u32)]) -> Result<()> {
-        let mut buffer: Vec<u8> = Vec::new();
-        buffer
-            .try_reserve_exact(COALESCE_BYTES)
-            .map_err(|_| Error::AllocationFailed {
-                resource: "matrix checkpoint buffer",
-                requested: COALESCE_BYTES as u64,
-            })?;
-        let mut buffer_at = 0u64;
-        let mut chunk = [0u8; 4096];
-        for (target, _, at, len) in ranges {
-            let len = u64::from(*len);
-            if !buffer.is_empty() && buffer_at + buffer.len() as u64 != *target {
-                store.write_at(buffer_at, &buffer)?;
-                self.stats.in_place_writes += 1;
-                buffer.clear();
-            }
-            if buffer.is_empty() {
-                buffer_at = *target;
-            }
-            let mut done = 0u64;
-            while done < len {
-                let n = crate::width::index((len - done).min(chunk.len() as u64))?;
-                store.read_at(at + done, &mut chunk[..n])?;
-                let mut piece = &chunk[..n];
-                while !piece.is_empty() {
-                    let room = COALESCE_BYTES - buffer.len();
-                    let take = room.min(piece.len());
-                    buffer.extend_from_slice(&piece[..take]);
-                    piece = &piece[take..];
-                    if buffer.len() == COALESCE_BYTES {
-                        store.write_at(buffer_at, &buffer)?;
-                        self.stats.in_place_writes += 1;
-                        buffer_at += buffer.len() as u64;
-                        buffer.clear();
-                    }
-                }
-                done += n as u64;
-            }
-        }
-        if !buffer.is_empty() {
-            store.write_at(buffer_at, &buffer)?;
-            self.stats.in_place_writes += 1;
-        }
+        let cache = self
+            .cache
+            .get_mut()
+            .map_err(|_| Error::InvalidMatrixLayout)?;
+        self.layers.drop_in_place(target, cache);
         Ok(())
     }
 
@@ -1185,26 +1177,36 @@ impl TileWriter {
     /// are simply overwritten by the next one.
     fn recover(&mut self, store: &mut dyn TileStore) -> Result<()> {
         let header = self.header;
-        let mut overlay = Overlay::default();
+        self.layers.clear();
+        let layers = &mut self.layers;
         let end = wal::scan(
             store,
             self.ring,
             header.tail,
             header.checkpointed + 1,
             u64::MAX,
-            &mut |event| match event {
-                ScanEvent::Entry(generation, entry) => overlay.insert(
-                    entry.target,
-                    OverlayEntry {
-                        generation,
-                        at: entry.at,
-                        len: entry.len,
-                    },
-                ),
+            &mut self.scratch,
+            &mut |_, event| match event {
+                ScanEvent::Entry(generation, entry) => {
+                    let kept = layers.insert(
+                        entry.target,
+                        OverlayEntry {
+                            generation,
+                            at: entry.at,
+                            len: entry.len,
+                        },
+                        header.checkpointed,
+                    );
+                    if kept {
+                        Ok(())
+                    } else {
+                        Err(Error::InvalidMatrixLayout)
+                    }
+                }
+                ScanEvent::Index(generation, root) => layers.push_index(generation, root),
                 ScanEvent::Committed(..) => Ok(()),
             },
         )?;
-        self.overlay = overlay;
         // The frames are the authority on what was published; a header
         // written after them may not have reached the disk.
         let mut found = header;
@@ -1217,6 +1219,45 @@ impl TileWriter {
         self.cursor = found.head;
         if found != header {
             self.write_header(store, found)?;
+        }
+        Ok(())
+    }
+
+    /// Finds the overflow regions a reopened matrix already has, walking the
+    /// list from the head the metadata record points at. Their data may
+    /// belong to a publication not yet in place, so each is in use until
+    /// everything published now is reclaimed. A header that does not check
+    /// out ends the walk: the regions past it are left alone, never reused.
+    fn adopt_overflow(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        let mut head = [0u8; 8];
+        self.read(store, self.meta + META_OVERFLOW_HEAD_AT, &mut head)?;
+        self.space.head = u64::from_le_bytes(head);
+        let end = store.len()?;
+        let mut at = self.space.head;
+        // Each region points at an older, earlier one, so the walk ends.
+        let mut before = u64::MAX;
+        while at != 0 && at < before && at.checked_add(OVERFLOW_HEADER).is_some_and(|e| e <= end) {
+            let mut bytes = [0u8; crate::width::small(OVERFLOW_HEADER)];
+            self.read(store, at, &mut bytes)?;
+            let Some((next, len, carved)) = decode_overflow_header(&bytes) else {
+                break;
+            };
+            if at.checked_add(len).is_none_or(|e| e > end) {
+                break;
+            }
+            let tracked = self.space.track_oldest(OverflowRegion {
+                at,
+                len,
+                generation: self.header.published,
+                carved,
+                carved_published: carved,
+                next,
+            });
+            if !tracked {
+                break;
+            }
+            before = at;
+            at = next;
         }
         Ok(())
     }
@@ -1238,17 +1279,7 @@ fn levels_for(key: u64) -> u64 {
     u64::from(bits.div_ceil(DIR_LEVEL_BITS).max(1))
 }
 
-fn zeroed(len: u64, resource: &'static str) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(crate::width::index(len)?)
-        .map_err(|_| Error::AllocationFailed {
-            resource,
-            requested: len,
-        })?;
-    bytes.resize(crate::width::index(len)?, 0);
-    Ok(bytes)
-}
-
 #[allow(dead_code)]
 const _: () = assert!(FRAMES_AT >= 2 * wal::HEADER_SLOT);
+#[allow(dead_code)]
+const _: () = assert!(PAGE.is_multiple_of(8));

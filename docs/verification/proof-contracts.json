@@ -388,14 +388,14 @@
         "matrix_tiles::wal::ring_proofs::a_stepped_frame_lies_inside_the_ring_and_the_next_offset_is_valid",
         "matrix_tiles::wal::ring_proofs::a_placed_frame_never_overwrites_a_kept_frame",
         "matrix_tiles::wal::ring_proofs::room_promised_by_a_checkpoint_is_room_placement_finds",
-        "matrix_tiles::wal::ring_proofs::a_frame_entry_lies_inside_the_frame_body"
+        "matrix_tiles::wal::ring_proofs::a_streamed_entry_lies_inside_the_frame_body"
       ],
       "sources": [
         "crates/varlit-core/src/verification/matrix_ring.rs",
         "crates/varlit-core/src/matrix_tiles/wal.rs"
       ],
-      "scope": "which stored write-ahead ring headers a tiled matrix believes; the offset arithmetic of a believed header and of each frame a scan steps over; where a writer places its next frame relative to the frames it keeps; and the bounds of each entry parsed from a frame body, for arbitrary field values, ring placements admitted by Ring::within, ring offsets and frame lengths",
-      "limits": "Checksums, I/O, checkpoint ordering, which generations a checkpoint applies and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. Frame stepping and frame placement are single steps; the induction over a whole scan or a sequence of publications is argued in the harness comments, not mechanised. Entry parsing is proved on bodies of up to 40 bytes.",
+      "scope": "which stored write-ahead ring headers a tiled matrix believes; the offset arithmetic of a believed header and of each frame a scan steps over; where a writer places its next frame relative to the frames it keeps; and the bounds of each entry a scan streams from a frame body, for arbitrary field values, ring placements admitted by Ring::within, ring offsets and frame lengths",
+      "limits": "Checksums, I/O, checkpoint ordering, which generations a checkpoint applies and crash atomicity are covered by native tests (in-memory write-prefix models and a killed writer process), not proofs. Frame stepping and frame placement are single steps; the induction over a whole scan or a sequence of publications is argued in the harness comments, not mechanised. Entry parsing is proved for any entry header and any count of bytes left in the body; the stream reading frames through a fixed buffer is covered by native tests.",
       "specification": {
         "requires": "Eight arbitrary u64 header fields; a ring whose length is within the format bounds and whose end offset fits u64; arbitrary ring offsets and frame lengths.",
         "ensures": "A header is believed exactly when reclaimed <= checkpointed <= mark <= published and published and seq are below u64::MAX, so the next generation and sequence are representable. Offsets of a header that fits the frame area are word-aligned, map to logical offsets inside the ring record, and are less than the area apart. A stepped frame lies wholly inside the frame area and the next offset is inside it and word-aligned. A placed frame lies inside the frame area, covers no byte of a kept frame and leaves the cursor different from the tail; a frame is refused as too large only when an empty ring could not hold it; room a checkpoint plans for is room placement then finds. A parsed entry's header and bytes lie inside the frame body and the next entry starts after it.",
