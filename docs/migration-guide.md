@@ -120,8 +120,8 @@ there is no automatic migration path for these surfaces:
   0.12.x) is replaced by tiled matrix storage. The schema hash of a matrix spec
   includes its tile shape, so files written with any `VMAT` layout version are
   refused (with `SchemaHashMismatch` when the format declares a schema hash);
-  recreate those files.
-  There is no automatic matrix migration tool.
+  recreate those files, or convert them as described in
+  [converting 0.12 matrix files](#converting-012-matrix-files).
 - `PackedBitmap::new`/`get`/`set` and its decode now report
   `Error::InvalidCanonicalEncoding` / `Error::LengthOverflow` and a
   non-matrix allocation resource instead of `Error::InvalidMatrixLayout`, since
@@ -371,3 +371,70 @@ cargo test -p varlit --features mmap,zero-copy --test perf_smoke -- --ignored --
 
 For expensive semantic conversions, add a local migration-sized case and compare
 small, medium, and large data before integrating.
+
+## Converting 0.12 matrix files
+
+0.13 cannot open a matrix file written by 0.12.x, and ships no converter. A
+file can be converted by reading it with 0.12.1 and writing a new file with
+0.13: an application program that depends on both versions at once, under
+different names, and copies what the format declares.
+
+```toml
+[dependencies]
+varlit_012 = { package = "varlit", version = "=0.12.1" }
+varlit = { git = "https://github.com/shim9610/varlit", tag = "<0.13 tag>" }
+```
+
+Each version's derive macros implement only that version's traits, so every
+block type is declared twice, once per crate, with the same ids, versions and
+fields. The two format declarations differ only in which crate they come
+from. Keep the declarations in two modules, `old` and `new`, so the names do
+not clash.
+
+Then, for one file:
+
+1. Open the source with `varlit_012`, read-only.
+2. Create the destination with `varlit` and the same dimensions
+   (`create_with_dims` for a growing matrix).
+3. Copy the ordinary records: for each block type, read every record with the
+   0.12 reader (`blocks::<old::T>()`, `keyed_blocks::<old::T>()`) and push the
+   matching `new::T` in the same order. Keyed operations and deletes are
+   already applied in what 0.12 returns, so only the resulting values are
+   written.
+4. Copy each matrix block: for every key in the dimensions, ask
+   `matrix_cell_status::<old::T>(key)`. For a committed cell, read it with
+   `read_matrix_cell::<old::T>(key)`, write the matching value with
+   `write_matrix_cell(key, &new_value)` and `commit_matrix_cell::<new::T>(key)`.
+   Skip cells that were never committed; 0.13 starts them uncommitted too.
+5. Copy each aux region with `matrix_aux_len` and `read_matrix_aux` on the
+   source and `write_matrix_aux` on the destination.
+6. `sync()` the destination, verify it (`verify_matrix_metadata()`, and the
+   generated `check_file` if the application uses it), then rename it over
+   the source. Keep the source until the new file has been checked.
+
+```rust,ignore
+// Matrix cells of one block, for a two-dimensional matrix of `scans` x `channels`.
+let source = old::Format::spec().open_readonly(&path)?;
+let mut target = new::Format::spec().create_with_dims(&staging, dims)?;
+for scan in 0..scans {
+    for ch in 0..channels {
+        let key_old = varlit_012::MatrixKey::new(scan, ch);
+        if source.matrix_cell_status::<old::Cell>(key_old)?
+            != varlit_012::MatrixCellStatus::Committed
+        {
+            continue;
+        }
+        let value: old::Cell = source.read_matrix_cell(key_old)?;
+        let key = varlit::MatrixKey::new(scan, ch);
+        target.write_matrix_cell(key, &new::Cell::from(value))?;
+        target.commit_matrix_cell::<new::Cell>(key)?;
+    }
+}
+target.sync()?;
+```
+
+`new::Cell::from(old::Cell)` is a field-by-field conversion the application
+writes; the two types hold the same fields. Matrix sidecars are resume state
+and are not converted: delete them and let the application write new ones.
+Cell-by-cell copying reads and writes every committed cell once; for a large
+matrix, copy a row at a time with `read_matrix_row_into` instead.

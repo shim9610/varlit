@@ -21,7 +21,8 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   place through a write-ahead ring; the `VMAT` layout and the `.vmg` companion
   file are gone. A matrix spec's schema hash now includes its tile shape, so
   matrix files written by 0.12.x are refused (with `SchemaHashMismatch` when the
-  format declares a schema hash); recreate them. A reader that falls behind the
+  format declares a schema hash); recreate them, or convert them by reading
+  with 0.12.1 and writing with 0.13 (see the migration guide). A reader that falls behind the
   ring gets `MatrixSnapshotExpired` and must `follow()`.
 - Breaking: remove matrix APIs that tiled storage never used:
   `MatrixMetadataResidency`, `MatrixMetadataVerification` and the `ReadLimits`
