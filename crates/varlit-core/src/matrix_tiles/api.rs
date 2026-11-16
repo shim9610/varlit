@@ -476,7 +476,7 @@ impl TiledMatrix {
     /// The published generation this handle shows.
     pub(crate) fn generation(&self) -> u64 {
         match &self.engine {
-            Engine::Writer(writer) => writer.published(),
+            Engine::Writer(writer) => writer.engine.published(),
             Engine::Reader(reader) => reader.lock().map_or(0, |reader| reader.snapshot()),
         }
     }
@@ -496,14 +496,14 @@ impl TiledMatrix {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        matches!(&self.engine, Engine::Writer(writer) if writer.is_dirty())
+        matches!(&self.engine, Engine::Writer(writer) if writer.engine.is_dirty())
     }
 
     // ---- reading ----
 
     fn read(&self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
         match &self.engine {
-            Engine::Writer(writer) => writer.read(source, at, buf),
+            Engine::Writer(writer) => writer.engine.read(source, at, buf),
             Engine::Reader(reader) => reader
                 .lock()
                 .map_err(|_| Error::InvalidMatrixLayout)?
@@ -1036,6 +1036,7 @@ impl TiledMatrix {
             let crc = crc32fast::hash(payload);
             bytes[payload.len()..].copy_from_slice(&crc.to_le_bytes());
             this.writer()?
+                .engine
                 .stage(store, tile + geom.slot_at(slot), bytes)?;
             this.set_bit(store, geom, tile, slot, false, &mut scratch.bitmap)
         })
@@ -1062,7 +1063,9 @@ impl TiledMatrix {
             unit[byte] &= !mask;
         }
         seal_bitmap(unit);
-        self.writer()?.stage(store, tile + geom.bitmap_at(), unit)
+        self.writer()?
+            .engine
+            .stage(store, tile + geom.bitmap_at(), unit)
     }
 
     /// Sets `key`'s commit bit. The cell must hold a written slot.
@@ -1146,7 +1149,9 @@ impl TiledMatrix {
                     cleared += set;
                     unit[..bits].fill(0);
                     seal_bitmap(unit);
-                    this.writer()?.stage(store, tile + geom.bitmap_at(), unit)?;
+                    this.writer()?
+                        .engine
+                        .stage(store, tile + geom.bitmap_at(), unit)?;
                 }
                 let Some(next) = key.checked_add(1) else {
                     break;
@@ -1198,7 +1203,9 @@ impl TiledMatrix {
                     first += count;
                 }
                 seal_bitmap(unit);
-                this.writer()?.stage(store, tile + geom.bitmap_at(), unit)?;
+                this.writer()?
+                    .engine
+                    .stage(store, tile + geom.bitmap_at(), unit)?;
                 let Some(next) = key.checked_add(1) else {
                     break;
                 };
@@ -1317,7 +1324,7 @@ impl TiledMatrix {
         let at = self.single_at(name)?;
         let mut unit = [0u8; 8];
         unit[0] = u8::from(value);
-        self.writer()?.stage(store, at, &unit)
+        self.writer()?.engine.stage(store, at, &unit)
     }
 
     fn channel_at(&self, name: &str, channel: u64) -> Result<(u64, u8)> {
@@ -1440,7 +1447,7 @@ impl TiledMatrix {
                 &mut page[crate::width::index(from - page_at)?..crate::width::index(to - page_at)?],
                 crate::width::index(from - at)?,
             );
-            self.writer()?.stage(store, page_at, &page)?;
+            self.writer()?.engine.stage(store, page_at, &page)?;
             page_at += EXTRA_PAGE;
         }
         Ok(())
@@ -1527,7 +1534,7 @@ impl TiledMatrix {
             visit(target, entry.at, entry.len)
         };
         match &self.engine {
-            Engine::Writer(writer) => writer.for_each_overlay(source, &mut push),
+            Engine::Writer(writer) => writer.engine.for_each_overlay(source, &mut push),
             Engine::Reader(reader) => reader
                 .lock()
                 .map_err(|_| Error::InvalidMatrixLayout)?
@@ -1538,7 +1545,7 @@ impl TiledMatrix {
     // ---- publication ----
 
     pub(crate) fn publish(&mut self, store: &mut dyn TileStore) -> Result<u64> {
-        self.writer()?.publish(store)
+        self.writer()?.engine.publish(store)
     }
 
     /// Moves a reader to the newest publication. `true` when it changed.
@@ -1582,7 +1589,7 @@ impl RegionAccess for WriterAccess<'_> {
         self.writer.find(self.source, self.block, coord)
     }
     fn read(&mut self, at: u64, buf: &mut [u8]) -> Result<()> {
-        self.writer.read(self.source, at, buf)
+        self.writer.engine.read(self.source, at, buf)
     }
 }
 

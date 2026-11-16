@@ -41,6 +41,7 @@ pub(crate) mod geometry;
 pub(crate) mod host;
 pub(crate) mod index;
 mod reader_lock;
+pub(crate) mod ring_store;
 pub(crate) mod store;
 pub(crate) mod view;
 pub(crate) mod wal;

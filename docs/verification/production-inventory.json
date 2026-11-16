@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "fbab60565a139738",
-    "count": 3322
+    "catalogue": "c77f467152ee79cf",
+    "count": 3325
   },
   "schema": 1,
   "sources": {
@@ -421,18 +421,19 @@
     "crates/varlit-core/src/lib.rs": "15ee2a41fb355482",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
     "crates/varlit-core/src/matrix_bulk.rs": "4f76e0dce341bd34",
-    "crates/varlit-core/src/matrix_tiles/api.rs": "c3b4e9c13e29f7ce",
+    "crates/varlit-core/src/matrix_tiles/api.rs": "91636dac281e430a",
     "crates/varlit-core/src/matrix_tiles/arena.rs": "b9cb4762859d403c",
     "crates/varlit-core/src/matrix_tiles/geometry.rs": "f04e9aab0bf55417",
     "crates/varlit-core/src/matrix_tiles/host.rs": "9145ae6000d3c2d2",
     "crates/varlit-core/src/matrix_tiles/index.rs": "268b9b9a99b656b5",
-    "crates/varlit-core/src/matrix_tiles/mod.rs": "01e9d84eaef99d8d",
+    "crates/varlit-core/src/matrix_tiles/mod.rs": "b9a17aad5c4ccadd",
     "crates/varlit-core/src/matrix_tiles/reader_lock.rs": "36114c9e65832fc9",
+    "crates/varlit-core/src/matrix_tiles/ring_store.rs": "c7ba60d330a14b69",
     "crates/varlit-core/src/matrix_tiles/store.rs": "72dada412e0d476e",
-    "crates/varlit-core/src/matrix_tiles/tests.rs": "a4edc4f704c07c9e",
+    "crates/varlit-core/src/matrix_tiles/tests.rs": "6fa566507327fb6a",
     "crates/varlit-core/src/matrix_tiles/view.rs": "9e5189079c2ec9b0",
     "crates/varlit-core/src/matrix_tiles/wal.rs": "a6f004a764eaab27",
-    "crates/varlit-core/src/matrix_tiles/writer.rs": "b9b26600f8266707",
+    "crates/varlit-core/src/matrix_tiles/writer.rs": "7b841f0bd8d3c7b1",
     "crates/varlit-core/src/merge.rs": "fff6cea04e233a49",
     "crates/varlit-core/src/native_directory.rs": "4b1b7482d8d27b35",
     "crates/varlit-core/src/native_layout.rs": "41634ca2a58cd3f8",
