@@ -213,7 +213,7 @@ impl VarlitFile {
     /// Publishes the keyed storage writer's changes, if any: one generation
     /// that readers adopt when they follow. Part of [`Self::sync`].
     pub(super) fn publish_keyed(&mut self) -> Result<bool> {
-        if !matches!(self.keyed.get(), Some(KeyedEngine::Writer(heap)) if heap.ring.is_dirty()) {
+        if !matches!(self.keyed.get(), Some(KeyedEngine::Writer(heap)) if heap.is_dirty()) {
             return Ok(false);
         }
         self.with_keyed_writer(|heap, store| heap.publish(store).map(drop))?;

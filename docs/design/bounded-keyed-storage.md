@@ -159,12 +159,28 @@ occupied is reused only after its generation is reclaimed.
 
 1. Separate the write-ahead ring and the region space from the matrix, so a
    keyed format owns them too.
-2. Keyed records in the record heap: update and delete in place, slot
-   buckets, free list, ratio compaction, a per-key `get`.
+2. Keyed records in the record heap: update and delete (new values to new
+   space, see below), slot buckets, free list, ratio compaction, a per-key
+   `get`.
 3. Sorted runs for `key_order = increasing`.
 4. Remove keyed history (`keyed_offset_chain`, `keyed_chain`, tombstone
    accumulation, `merge_keyed_files` and `compact_keyed_files`) in one change,
    with a one-time converter for existing files. Until then both paths exist.
+
+## Placement within the heap
+
+The first implementation overwrote a value in place when the new one fit,
+through the write-ahead ring. Benchmarks (`tools/format-bench`, oltp and grid)
+showed the cost: every update was written twice, once into the ring and once
+into place, and a 16 MiB ring filled every few dozen transactions, so one in
+about 37 stalled for a 27 ms checkpoint. Values now go to new space instead
+(copy on write within the heap): space freed by a generation already in
+place, written straight to the file; only slots, bucket pages (staged whole,
+once per publication, from 64 page buffers) and region headers (also once per
+publication) go through the ring. The file still keeps one copy of each key
+plus the values the latest publications replaced, which updates take after
+the next checkpoint. Measured on the same oltp run: p99 27 ms to 4.2 ms,
+p50 0.9 ms to 1.5 ms (a second barrier per publication), file size unchanged.
 
 ## Open questions
 

@@ -622,7 +622,7 @@ impl VarlitFile {
         self.matrix_is_dirty()
             || matches!(
                 self.keyed.get(),
-                Some(keyed_access::KeyedEngine::Writer(heap)) if heap.ring.is_dirty()
+                Some(keyed_access::KeyedEngine::Writer(heap)) if heap.is_dirty()
             )
     }
 

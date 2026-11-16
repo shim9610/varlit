@@ -101,18 +101,25 @@ fn repeated_updates_keep_the_file_within_the_ratio() {
         if round == 0 {
             live_target = heap.state().live;
         }
-        let holes = heap.holes();
+        // Every round replaces every value, so the heap holds the live
+        // values, the ones they replaced (retaken after a checkpoint), holes
+        // within the ratio and a few regions of slack, round after round.
+        let state = heap.state();
         assert!(
-            holes <= (heap.state().live / 1000 * 50).max(REGION_BYTES) + REGION_BYTES,
-            "round {round}: holes {holes} for live {}",
-            heap.state().live
+            state.heap <= 2 * state.live + state.live / 10 + 4 * REGION_BYTES,
+            "round {round}: heap {} for live {}: {:?}",
+            state.heap,
+            state.live,
+            heap.stats
         );
     }
     let state = heap.state();
     // Everything allocated is live data, holes within the ratio, free
-    // regions waiting for reuse and the current region's tail.
+    // regions waiting for reuse, the current region's tail, and the space
+    // of the values one publication replaced, retaken after the next
+    // checkpoint: here every round replaces all of them.
     assert!(
-        state.heap <= state.live + state.live / 10 + 4 * REGION_BYTES,
+        state.heap <= 2 * state.live + state.live / 10 + 4 * REGION_BYTES,
         "heap {} for live {} after 40 rounds: {:?}",
         state.heap,
         state.live,
@@ -192,6 +199,72 @@ fn a_crash_after_any_write_keeps_the_last_publication() {
             );
         }
     }
+}
+
+/// Whether `heap` shows exactly `model`.
+fn shows(heap: &KeyedHeap, store: &MemStore, model: &Model) -> bool {
+    heap.state().keys == model.len() as u64
+        && model.iter().all(|((block, key), value)| {
+            let Ok(Some(found)) = heap.find(store, *block, key) else {
+                return false;
+            };
+            let mut out = vec![0u8; found.chunk.payload_len as usize];
+            heap.read_payload(store, &found, &mut out).is_ok() && out == *value
+        })
+}
+
+/// New values written straight into space freed by generations already in
+/// place, never through the ring: a crash before their publication keeps
+/// the last one, and a crash during or after it shows one of the two
+/// generations whole.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn values_written_straight_into_reused_space_survive_a_crash() {
+    let mut store = MemStore::new();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    let meta = heap.meta;
+    let mut model = Model::new();
+    for round in 0..3u64 {
+        for key in 0..200u64 {
+            let bytes = value(300, key ^ (round << 8));
+            heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
+            model.insert((1, key.to_le_bytes().to_vec()), bytes);
+        }
+        heap.publish(&mut store).unwrap();
+        heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
+    }
+    let (direct, reused) = (heap.stats.direct_writes, heap.stats.holes_reused);
+    let mut next = model.clone();
+    for key in 0..200u64 {
+        let bytes = value(300, key ^ 0xabcd);
+        heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
+        next.insert((1, key.to_le_bytes().to_vec()), bytes);
+    }
+    assert!(heap.stats.holes_reused > reused, "{:?}", heap.stats);
+    assert!(heap.stats.direct_writes > direct, "{:?}", heap.stats);
+    let pending = store.writes_since_sync();
+    for keep in (0..pending).step_by((pending / 40).max(1)) {
+        for torn in [0usize, 5] {
+            let mut crashed = store.crashed(keep, torn);
+            let reopened = KeyedHeap::open(&mut crashed, meta).unwrap();
+            assert!(shows(&reopened, &crashed, &model), "crash at write {keep}");
+        }
+    }
+    heap.publish(&mut store).unwrap();
+    let pending = store.writes_since_sync();
+    for keep in 0..=pending {
+        for torn in [0usize, 5] {
+            let mut crashed = store.crashed(keep, torn);
+            let reopened = KeyedHeap::open(&mut crashed, meta).unwrap();
+            assert!(
+                shows(&reopened, &crashed, &model) || shows(&reopened, &crashed, &next),
+                "crash at publication write {keep}"
+            );
+        }
+    }
+    let mut reopened = store.clone();
+    let heap = KeyedHeap::open(&mut reopened, meta).unwrap();
+    check(&heap, &reopened, &next);
 }
 
 #[test]
@@ -289,6 +362,42 @@ fn a_reader_the_ring_moved_past_expires_instead_of_mixing_generations() {
         read(&mut reader, &store, b"k").unwrap().as_deref(),
         Some(&value(100, 199)[..])
     );
+}
+
+/// A reader whose snapshot points at space the writer has since freed,
+/// put in place and written new values into straight, never reads those
+/// values as its own: it reads its own values or expires.
+#[test]
+fn a_reader_never_sees_values_written_into_space_it_points_at() {
+    let mut store = MemStore::new();
+    let mut heap = KeyedHeap::create(&mut store, RING, 50, SEED).unwrap();
+    for key in 0..50u64 {
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(200, key))
+            .unwrap();
+    }
+    heap.publish(&mut store).unwrap();
+    let mut reader = super::reader::KeyedReader::open(&store, heap.meta).unwrap();
+    for round in 1..4u64 {
+        for key in 0..50u64 {
+            heap.put(
+                &mut store,
+                1,
+                &key.to_le_bytes(),
+                &value(200, key ^ (round << 8)),
+            )
+            .unwrap();
+        }
+        heap.publish(&mut store).unwrap();
+        heap.ring.checkpoint(&mut store, u64::MAX).unwrap();
+    }
+    assert!(heap.stats.holes_reused > 0, "{:?}", heap.stats);
+    for key in 0..50u64 {
+        match read(&mut reader, &store, &key.to_le_bytes()) {
+            Ok(Some(found)) => assert_eq!(found, value(200, key)),
+            Err(crate::Error::MatrixSnapshotExpired { .. }) => {}
+            other => panic!("key {key}: {other:?}"),
+        }
+    }
 }
 
 /// The layouts are little-endian whatever the platform: these bytes are what

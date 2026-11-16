@@ -68,6 +68,12 @@ impl GridWrite for Wr {
         Ok(())
     }
     fn finish(self: Box<Self>) -> Result<()> {
+        if std::env::var_os("FB_KEYED_STATS").is_some() {
+            eprintln!(
+                "keyed stats {:?}",
+                self.w.inner().file().keyed_storage_stats()?
+            );
+        }
         Ok(())
     }
 }

@@ -467,7 +467,8 @@ blocks, nor keyed storage and `keyed_offset_chain`.
   zero padding to a multiple of 16. The CRC32 covers the header's first 12
   bytes, the key and the payload. A free chunk has block id `0xFFFF_FFFF`
   and its payload length is its length less 16. Chunks tile a region, so a
-  region can be walked header to header.
+  region can be walked header to header. A replaced or deleted chunk keeps
+  its header: no slot points at it any more.
 - A record longer than half a region (1 MiB) gets a region of its own.
 
 ### Slot Buckets (`VBKT`)
@@ -485,13 +486,27 @@ blocks, nor keyed storage and `keyed_offset_chain`.
 
 ### Writing
 
-- Every byte is staged in the same units each time: a page's 16-byte header
-  and slots, a chunk's header, key and payload, a region's header. A hole, or
-  a free region, whose units may change is taken only once the generation
-  that freed it is in place (at or below the ring's `checkpointed`).
-- When holes exceed the declared ratio of live bytes (and one region), the
-  writer puts what is published in place and empties the sparsest regions
-  into the free list, moving their live chunks.
+- A put never writes over the value it replaces. It takes space no
+  generation since the last checkpoint points at: a hole or a free region
+  freed by a generation in place (at or below the ring's `checkpointed`),
+  the current region's tail, or a new region. Its chunk goes straight to the
+  file when no range staged since the last checkpoint (in the ring or an
+  index) covers it, else through the ring; the slot that points at it always
+  goes through the ring, in its bucket page. A publication makes such chunks
+  durable before its commit frame, as it does appended records. A reader
+  whose snapshot is older than that checkpoint has expired (the checkpoint
+  raised the mark past it), so no reader sees these bytes as its own.
+- Staged bytes are staged in the same units each time: a bucket page whole,
+  a chunk's header, key and payload, a region's header. Bucket pages and
+  region headers are staged once per publication from buffers allocated at
+  open.
+- Space freed by a generation is retaken after the next checkpoint. The
+  writer checkpoints once more such space waits than half the allowance (the
+  declared ratio of live bytes, at least one region), rather than grow the
+  file.
+- When holes other than those the last two generations freed exceed the
+  allowance, the writer empties the sparsest regions into the free list,
+  moving their live chunks.
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 

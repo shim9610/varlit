@@ -5,7 +5,6 @@ use super::{
     BUCKET_HEADER, BUCKET_PAGE, CHUNK_HEADER, Chunk, SLOT_LEN, Slot, State, corrupt, page_header,
     sip,
 };
-use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::{RingReader, directory_offset};
 use crate::matrix_tiles::{DIR_FANOUT, DIR_LEVEL_BITS};
@@ -17,15 +16,6 @@ const STEP: usize = 4096;
 /// Reads the file as one snapshot shows it.
 pub(crate) trait View {
     fn read(&mut self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()>;
-}
-
-/// The writer's view: what it staged over what it published.
-pub(crate) struct StoreView<'a>(pub(crate) &'a RingStore);
-
-impl View for StoreView<'_> {
-    fn read(&mut self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
-        self.0.read(source, at, buf)
-    }
 }
 
 /// A reader's view: its snapshot, checked on every read against the ring

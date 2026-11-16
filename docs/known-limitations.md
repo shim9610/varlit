@@ -79,9 +79,15 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
 - **Constant slack.** Beyond the live data a file holds whole-region slack
-  (1 MiB regions), the ring (16 MiB by default) and room to stage its largest
-  publication atomically. These do not grow with updates, but they dominate
-  a small file.
+  (1 MiB regions), the ring (16 MiB by default) and the values the latest
+  publications replaced until a checkpoint frees their space: up to one
+  publication's worth, so a publication that rewrites every value needs
+  about twice the live data. These do not grow with updates, but they
+  dominate a small file.
+- **Two barriers per publication with updates.** New values written straight
+  to the file are made durable before the commit frame, so a `sync` that
+  wrote any costs two barriers instead of one, and every few publications a
+  checkpoint adds two more.
 - **The hole cache is in memory.** A reopened writer starts with an empty
   cache; holes it does not know are reclaimed by compaction when they pass
   the ratio, not reused at once.

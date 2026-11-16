@@ -1026,19 +1026,22 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   `remove_keyed` and `get_keyed` (also on `VarlitWriter` and `VarlitReader`).
 - **Reads.** `get_keyed(key, scratch, out)` encodes the key into `scratch`,
   then reads the payload into it and decodes into `out`; it allocates nothing
-  else. A lookup reads a bucket page and the record: usually two reads.
+  else. A lookup checks the ring header once and reads the bucket directory,
+  a bucket page, the record's header and key, and its payload.
 - **Visibility.** A writer sees its own puts and removes at once. Readers see
   them after `sync`, which publishes them as one generation through the
   file's write-ahead ring; a writer dropped without `sync` publishes nothing.
   A reader keeps its generation until `follow`; one the ring has moved past
   gets `MatrixSnapshotExpired` and must `follow`.
-- **Space.** An update that fits is written where the old value was; one that
-  does not moves, and the old place is reused. Deletes leave no tombstone.
-  When free space exceeds the declared ratio of live bytes the writer moves
-  records out of the sparsest regions. Beyond the live data a file holds
-  whole-region slack (1 MiB regions), the ring (`KeyedStorage::ring_bytes`,
-  16 MiB by default) and room to stage the largest publication atomically;
-  none of these grows with the number of updates.
+- **Space.** An update writes the new value to new space and frees the old
+  one, which later updates take once it is in place; deletes leave no
+  tombstone. When free space the next updates will not take exceeds the
+  declared ratio of live bytes the writer moves records out of the sparsest
+  regions. Beyond the live data a file holds whole-region slack (1 MiB
+  regions), the ring (`KeyedStorage::ring_bytes`, 16 MiB by default) and the
+  values the latest publications replaced, until a checkpoint lets updates
+  take their space (as much as one publication's worth); none of these grows
+  with the number of updates.
 - **Refusals.** In a keyed-storage format, appending a keyed block to the log
   (`push_info`, `push_keyed`, `delete`) fails with
   `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed
