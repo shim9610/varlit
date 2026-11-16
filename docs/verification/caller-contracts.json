@@ -2811,7 +2811,8 @@
         "keyed_heap::heap_proofs::a_split_moves_exactly_the_keys_whose_routing_bit_is_set",
         "keyed_heap::heap_proofs::chunk_lengths_are_aligned_and_hold_the_record",
         "keyed_heap::heap_proofs::a_free_chunk_reads_back_as_its_length",
-        "keyed_heap::heap_proofs::slots_and_region_headers_round_trip",
+        "keyed_heap::heap_proofs::slots_round_trip",
+        "keyed_heap::heap_proofs::region_headers_round_trip",
         "keyed_heap::heap_proofs::holes_are_never_more_than_the_heap",
         "keyed_heap::heap::hole_proofs::a_taken_hole_is_one_the_request_may_take"
       ]

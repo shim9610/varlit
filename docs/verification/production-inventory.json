@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "0fe73d69faeed917",
-    "count": 3467
+    "catalogue": "071baff140a5415e",
+    "count": 3468
   },
   "schema": 1,
   "sources": {
@@ -470,7 +470,7 @@
     "crates/varlit-core/src/verification/decoder.rs": "2f270ad2081b9bcf",
     "crates/varlit-core/src/verification/decoder_callers.rs": "1c05936c6d09808e",
     "crates/varlit-core/src/verification/generated_file.rs": "738fb17577782e4d",
-    "crates/varlit-core/src/verification/keyed_heap.rs": "0c4976b711472a72",
+    "crates/varlit-core/src/verification/keyed_heap.rs": "c6112ba569cdb75d",
     "crates/varlit-core/src/verification/keyed_heap_holes.rs": "cddc9d6bc9bd4101",
     "crates/varlit-core/src/verification/materialization.rs": "20d0bf780a6414a7",
     "crates/varlit-core/src/verification/matrix_geometry.rs": "f9a30bfaf1a27993",

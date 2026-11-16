@@ -88,9 +88,9 @@ fn a_free_chunk_reads_back_as_its_length() {
     assert_eq!(read.len(), len);
 }
 
-/// Slots and region headers decode to what was encoded.
+/// Slots decode to what was encoded.
 #[kani::proof]
-fn slots_and_region_headers_round_trip() {
+fn slots_round_trip() {
     let slot = Slot {
         route: kani::any(),
         offset: kani::any(),
@@ -99,6 +99,15 @@ fn slots_and_region_headers_round_trip() {
     let bytes = slot.encode();
     assert_eq!(bytes.len() as u64, SLOT_LEN);
     assert_eq!(Slot::decode(&bytes), slot);
+}
+
+/// Region headers decode to what was encoded.
+///
+/// The result is forgotten, not dropped: dropping a `Result` whose variant
+/// the verifier cannot fix makes it model the drop of every `Error` variant,
+/// which takes more than 14 GB. Decoding itself takes seconds.
+#[kani::proof]
+fn region_headers_round_trip() {
     let region = Region {
         len: kani::any(),
         live: kani::any(),
@@ -107,7 +116,9 @@ fn slots_and_region_headers_round_trip() {
         freed: kani::any(),
     };
     kani::assume(region.live <= region.len);
-    assert_eq!(Region::decode(&region.encode()).ok(), Some(region));
+    let read = Region::decode(&region.encode());
+    assert!(matches!(&read, Ok(read) if *read == region));
+    core::mem::forget(read);
 }
 
 /// Hole accounting never wraps: the holes are never more than the heap.
