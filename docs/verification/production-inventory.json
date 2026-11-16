@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "0d9719bc65642707",
-    "count": 3454
+    "catalogue": "a0d6f35b2558ef4a",
+    "count": 3455
   },
   "schema": 1,
   "sources": {
@@ -368,7 +368,7 @@
     "crates/varlit-core/Cargo.toml": "c356bb13d056741e",
     "crates/varlit-core/src/adapter.rs": "39aa1f5b6f00b4bf",
     "crates/varlit-core/src/anchor.rs": "fcc6a606c5e8516e",
-    "crates/varlit-core/src/chunks.rs": "e5357902d5c733e3",
+    "crates/varlit-core/src/chunks.rs": "f7d825ebfd3f6ed0",
     "crates/varlit-core/src/codec.rs": "34ce9e247b546b00",
     "crates/varlit-core/src/codec/raw_fill.rs": "af9087198c42bcd2",
     "crates/varlit-core/src/collections.rs": "692f5de82ab9b60b",

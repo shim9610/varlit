@@ -1653,6 +1653,25 @@ const CONTRACTS: &[Contract] = &[
             Ok(())
         }
     ),
+    contract!("core/chunks.rs::chunks::ChunkedBytes::fn:decode_into@3762cc05f5b25692",
+        valid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let mut out = Vec::new();
+            assert_eq!(chunks.decode_into(&mut out, 33)?, 33);
+            assert_eq!(out, [3; 33]);
+            Ok(())
+        },
+        invalid {
+            let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;
+            let mut out = Vec::new();
+            assert!(matches!(chunks.decode_into(&mut out, 32), Err(varlit::Error::DecompressedLengthLimitExceeded { .. })));
+            let mut bytes = chunks.into_encoded(); bytes[56] ^= 1; // second chunk's CRC
+            let damaged = varlit::ChunkedBytes::from_encoded(bytes)?;
+            assert!(matches!(damaged.decode_into(&mut out, 33), Err(varlit::Error::ChunkChecksumMismatch { chunk_index: 1, .. })));
+            assert_eq!(out, [3; 16]); // only the verified first chunk
+            Ok(())
+        }
+    ),
     contract!("core/error.rs::error::Error::variant:BufferTooSmall@fd4e892a42401b1a",
         valid {
             let chunks = varlit::ChunkedBytes::from_zstd_chunks(&[3; 33], 16, varlit::CompressionLevel::Fast)?;

@@ -145,6 +145,99 @@ mod enabled {
     }
 
     #[test]
+    fn verified_decoding_matches_the_whole_output_path() -> Result<()> {
+        for (length, chunk_len) in [
+            (0usize, 1usize),
+            (1, 1),
+            (129, 1),
+            (1025, 64),
+            (8193, 1024),
+            (65536, 65536),
+        ] {
+            let data: Vec<_> = (0..length).map(|i| (i % 251) as u8).collect();
+            let chunks = ChunkedBytes::from_zstd_chunks(&data, chunk_len, CompressionLevel::Fast)?;
+            let mut out = Vec::new();
+            assert_eq!(chunks.decode_into(&mut out, length as u64)?, length as u64);
+            assert_eq!(out, chunks.decode_to_vec_limited(length as u64)?);
+            assert_eq!(out, data);
+            if length > 0 {
+                let mut out = Vec::new();
+                assert!(matches!(
+                    chunks.decode_into(&mut out, length as u64 - 1),
+                    Err(Error::DecompressedLengthLimitExceeded { .. })
+                ));
+                assert!(out.is_empty(), "a refused total wrote output");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn verified_decoding_never_writes_a_failed_chunk() -> Result<()> {
+        let data: Vec<_> = (0..4096).map(|i| (i % 251) as u8).collect();
+        let pristine = ChunkedBytes::from_zstd_chunks(&data, 1024, CompressionLevel::Fast)?;
+        for (chunk, written) in [(0usize, 0usize), (2, 2048), (3, 3072)] {
+            let mut encoded = pristine.encoded().to_vec();
+            encoded[32 + chunk * 16 + 8] ^= 1; // that chunk's container CRC
+            let damaged = ChunkedBytes::from_encoded(encoded)?;
+            let mut out = Vec::new();
+            let result = damaged.decode_into(&mut out, 4096);
+            assert!(matches!(
+                result,
+                Err(Error::ChunkChecksumMismatch { chunk_index, .. }) if chunk_index as usize == chunk
+            ));
+            assert_eq!(out, &data[..written], "only the verified chunks before it");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn verified_decoding_survives_short_writes_and_reports_writer_errors() -> Result<()> {
+        use std::io::{self, Write};
+        struct Trickle {
+            out: Vec<u8>,
+            fail_after: usize,
+            interrupted: bool,
+        }
+        impl Write for Trickle {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                if self.out.len() >= self.fail_after {
+                    return Err(io::Error::other("disk full"));
+                }
+                let n = bytes.len().min(7);
+                self.out.extend_from_slice(&bytes[..n]);
+                Ok(n)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let data: Vec<_> = (0..3000).map(|i| (i % 251) as u8).collect();
+        let chunks = ChunkedBytes::from_zstd_chunks(&data, 1000, CompressionLevel::Fast)?;
+        let mut whole = Trickle {
+            out: Vec::new(),
+            fail_after: usize::MAX,
+            interrupted: false,
+        };
+        assert_eq!(chunks.decode_into(&mut whole, 3000)?, 3000);
+        assert_eq!(whole.out, data);
+        let mut failing = Trickle {
+            out: Vec::new(),
+            fail_after: 1500,
+            interrupted: false,
+        };
+        let error = chunks.decode_into(&mut failing, 3000).unwrap_err();
+        assert!(matches!(&error, Error::Io(e) if e.to_string() == "disk full"));
+        assert!(failing.out.len() >= 1500 && failing.out.len() < 1507);
+        assert_eq!(failing.out, &data[..failing.out.len()]);
+        Ok(())
+    }
+
+    #[test]
     fn validates_entire_selected_chunk_including_suffix_outside_range() -> Result<()> {
         let data = vec![3; 4096];
         let chunks = ChunkedBytes::from_zstd_chunks(&data, 2048, CompressionLevel::Fast)?;

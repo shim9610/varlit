@@ -61,6 +61,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
 - Add `ChunkedBytes::decoded_len` and `stream_range` for selected decoded ranges
   through caller-owned scratch. The scratch never grows; overlapping chunks
   are checked completely, and callback output is provisional until success.
+- Add `ChunkedBytes::decode_into` to write a whole payload to an `io::Write`.
+  It buffers one chunk, refuses a declared total above the limit before any
+  output, and writes a chunk only after its length and CRC check; a failure
+  leaves the earlier verified chunks in the writer.
 - Add `Decoder::decode_value` and use it for library-owned codec composition.
   Reject whole-decoder replacement, retain completed charges on errors and
   exhaust callback authority on unwind. Add exact scalar transition contracts

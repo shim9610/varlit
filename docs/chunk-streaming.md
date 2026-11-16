@@ -1,4 +1,4 @@
-# Reading a range from ChunkedBytes
+# Streaming ChunkedBytes output
 
 This API is available in Varlit 0.13.0. See [API changes](api-changes.md#0130).
 
@@ -92,3 +92,45 @@ size cap is silently lifted: this separate API uses an explicit range and window
 policy, and never requests the whole decoded size as a heap allocation. This
 policy does not change the limits applied when acquiring/decoding the enclosing
 record into a `ChunkedBytes` value.
+
+## Writing the whole payload, verified chunk by chunk
+
+`ChunkedBytes::decode_into` writes the complete decoded payload to any
+`std::io::Write` without holding it in memory. Each chunk is decompressed into
+one reusable buffer of the container's chunk length, its length and CRC are
+checked, and only then is it written. Unlike `stream_range`, nothing reaches
+the writer before its chunk has passed those checks.
+
+```rust,no_run
+# fn copy(chunks: &varlit::ChunkedBytes) -> varlit::Result<()> {
+let pending = std::path::Path::new("payload.pending");
+let mut staged = std::io::BufWriter::new(std::fs::File::create(pending)?);
+match chunks.decode_into(&mut staged, 64 * 1024 * 1024 * 1024) {
+    Ok(written) => {
+        assert_eq!(written, chunks.decoded_len());
+        std::io::Write::flush(&mut staged)?;
+        drop(staged);
+        std::fs::rename(pending, "payload")?;
+    }
+    Err(error) => {
+        drop(staged);
+        std::fs::remove_file(pending)?;
+        return Err(error);
+    }
+}
+# Ok(()) }
+```
+
+The limit is checked against the declared total before any output, as in
+`decode_to_vec_limited`, and refuses with `DecompressedLengthLimitExceeded`.
+The return value is the number of bytes written, which equals `decoded_len()`.
+
+A corrupt chunk is never written, and nothing after it is. The chunks before it
+have each passed their own checks and remain in the writer, so the payload as a
+whole is incomplete: stage the output and publish it only after `Ok`. Writer
+errors stop decoding and are returned as `Error::Io`; `write_all` retries short
+writes and `Interrupted`. The writer is not flushed.
+
+Decoded-output buffering is one chunk. zstd additionally allocates its context,
+and the encoded container stays resident in `ChunkedBytes`. Nonempty payloads
+require `compression-zstd` and `integrity`.

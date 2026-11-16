@@ -911,6 +911,21 @@
       "callers": {
         "default": [
           {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:175528a7463c6b7e]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:175528a7463c6b7e]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:175528a7463c6b7e]",
+            "target": "table_extent",
+            "result": "checked"
+          },
+          {
             "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited(_1: &ChunkedBytes, _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:704c504b0539238a]",
             "target": "parse_header",
             "result": "model/caller-specific"
@@ -942,6 +957,21 @@
           }
         ],
         "all": [
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:5f97d2ab9434fbf9]",
+            "target": "parse_entry",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:5f97d2ab9434fbf9]",
+            "target": "parse_header",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_into(_1: &ChunkedBytes, _2: &mut W, _3: u64) -> std::result::Result<u64, error::Error> [body:5f97d2ab9434fbf9]",
+            "target": "table_extent",
+            "result": "checked"
+          },
           {
             "caller": "chunks::<impl at crates/varlit-core/src/chunks.rs>::decode_to_vec_limited(_1: &ChunkedBytes, _2: u64) -> std::result::Result<Vec<u8>, error::Error> [body:704c504b0539238a]",
             "target": "parse_header",

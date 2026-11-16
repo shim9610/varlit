@@ -28,6 +28,7 @@ older reader accepted.
 | `ReadValidation` and `ReadLimits::with_read_validation` | Select data CRC and additional structure checks independently; leave unset to retain existing behavior |
 | `ReadLimits::read_validation` and `effective_read_validation` | Inspect the optional override and resolve record-payload checks against the stored integrity policy |
 | `ChunkedBytes::decoded_len` and `stream_range` | Read a selected decoded range with a fixed caller buffer after whole-output admission/refusal |
+| `ChunkedBytes::decode_into` | Write the whole payload to an `io::Write`, buffering one chunk and writing only chunks that passed their length and CRC checks |
 | `Decoder::decode_value` | Compose custom codecs with checked decoder identity and retained input/budget authority |
 | `TryClone::{try_clone, try_clone_slice}` | Clone supported owned values with allocation refusal and partial-output cleanup |
 | `try_box`, `try_box_uninit`, `try_box_with` | Return Box allocation refusal; optionally reserve before initialization |
