@@ -215,33 +215,50 @@ the new bytes at once, so a record larger than `B` follows the format's
   and incomplete records can be counted, listed and discarded.
 - `Refuse`: a record larger than `B` fails with `LimitExceeded`.
 
-**Uniform space.** Every record is a chain of extents of at most half a
-region; every heap region is 1 MiB. Space freed by any record fits any other,
-so sizes that change or grow without bound leave no space only larger
-records could use. A chunk header (48 bytes) carries the record's total
-length, the next extent, the bytes written (for streamed replacement), flags
-and a checksum of the header.
+**Free space only at the tails (size classes).** Searching for a hole that
+fits cannot be complete with fixed memory, so the heap never has holes to
+search for. Items are kept in size classes, spaced 1/16 apart from 32 bytes
+to 64 KiB (16-byte steps below 256 bytes): about 130 classes. Each class is a
+dense array of fixed-size items with all its free space at its tail; a new
+item is appended at the tail, and an item freed in the middle is filled by
+moving the class's last item into it and repointing whoever pointed at the
+moved item. No search, no fragmentation, no compaction.
 
-**Free space is found on disk.** A region whose last live byte is freed goes
-on the free list at once. The hole cache only speeds reuse: when it runs dry
-and the accounting shows reusable space it does not hold, the writer walks
-regions (through fixed buffers, from a cursor) right after a checkpoint, when
-every dead chunk is reusable, and refills it. When holes too small to use
-exceed the ratio and an allocation would grow the file, the writer empties
-the sparsest regions and ends the round, so the emptied regions are reused
-instead of growing the file.
+- A record is a chain of items: full 64 KiB items, then one item of the
+  class its remainder fits. Rounding to a class wastes at most 1/16 of a
+  record (and 16-byte alignment below 256 bytes).
+- An item header (32 bytes) holds its payload length, the record's total
+  length (head item), the next item of the chain, the previous one (or, for
+  a head, the key's route) so a moved item's referrer can be found, flags
+  (streamed replacement in progress) and a checksum.
+- A slot points at a head item by class and index. A class maps indexes to
+  pages through a radix directory like the bucket directory. Pages are
+  64 KiB records, all the same size: a page left empty at a class's tail
+  goes on a free page list shared by every class.
+- **Atomicity.** An item freed in a round may still be read through a
+  published generation, so its place is filled only after that generation
+  is in place. Each class keeps `count` (its dense prefix) and `high` (the
+  end of what the published state may use). Freed indexes go to a pending
+  log (16 bytes each, appended to log pages, at most the change budget's
+  worth per round). At the start of the next round, after the checkpoint,
+  each pending index is filled from the tail; new items of a round are
+  appended at `max(count, high)`, so nothing a published generation uses is
+  written before it is in place. The gap this leaves is filled the round
+  after.
 
 **Shrinking.** Deletes merge buckets (linear hashing in reverse, with a gap
 between the split and merge thresholds so alternating inserts and deletes do
-not thrash) and compaction keeps holes within the ratio. Returning space at
-the end of the file to the filesystem needs the native log to cut trailing
-records safely (commit markers, anchors and digests); it is designed
-separately.
+not thrash); class tails shrink page by page onto the free page list.
+Returning space at the end of the file to the filesystem needs the native log
+to cut trailing records safely (commit markers, anchors and digests); it is
+designed separately.
 
-**The bound.** Apart from the end-of-file question above, at every point:
-heap space not holding live data is at most the ratio's allowance, `2B`,
-whole-region slack, the ring and the bucket and directory pages the live keys
-need.
+**The bound.** Apart from the end-of-file question above, at every point the
+heap space not holding live data is at most: rounding (1/16 of live), one
+partial page per class (about 130 × 64 KiB), the pending holes and the gap of
+at most two rounds (`2B`), and free pages left by deletes (reused before the
+file grows; returned to the filesystem by the end-of-file work). The ring and
+the bucket and directory pages the live keys need come on top.
 
 ## Open questions
 
