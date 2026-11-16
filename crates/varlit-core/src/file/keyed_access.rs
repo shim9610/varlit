@@ -167,13 +167,22 @@ impl VarlitFile {
                 })?;
             }
             KeyedEngine::Reader(reader) => {
-                let mut reader = reader.borrow_mut();
-                let Some(found) = reader.find(&source, T::ID, &scratch[KEY_ENVELOPE..])? else {
-                    return Ok(false);
+                let max_payload = match self.spec.read_limits.max_record_payload_len {
+                    crate::format::ReadLimit::Finite(limit) => limit,
+                    _ => u64::MAX,
                 };
-                read_into(scratch, found.chunk.payload_len, |buf| {
-                    reader.read_payload(&source, &found, buf)
-                })?;
+                let spec = self.spec;
+                let found = reader.borrow_mut().get(
+                    &source,
+                    T::ID,
+                    scratch,
+                    KEY_ENVELOPE,
+                    max_payload,
+                    &mut |buf| encode_internal_key_payload_into::<T>(spec, key, buf),
+                )?;
+                if !found {
+                    return Ok(false);
+                }
             }
         }
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);

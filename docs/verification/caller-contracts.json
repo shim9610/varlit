@@ -2758,7 +2758,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:f9d6a1ac25384d13]",
+            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:df870b112f114493]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }
@@ -2800,7 +2800,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:f9d6a1ac25384d13]",
+            "caller": "lookup::find(_1: &mut dyn View, _2: &dyn TileSource, _3: [u64; 2], _4: &keyed_heap::State, _5: u32, _6: &[u8]) -> std::result::Result<Option<Located>, error::Error> [body:df870b112f114493]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
           }

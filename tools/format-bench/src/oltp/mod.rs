@@ -26,6 +26,7 @@ mod pq;
 mod sq;
 mod vl_append;
 mod vl_grouped;
+mod vl_heap;
 mod vl_packed;
 
 pub const TXNS: usize = 1000;
@@ -96,7 +97,7 @@ pub trait OltpRead {
 
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
     Ok(match engine {
-        "varlit" => &["grouped", "append", "packed-matrix"],
+        "varlit" => &["grouped", "heap", "append", "packed-matrix"],
         "sqlite" => sq::CANDIDATES,
         "hdf5" => h5::CANDIDATES,
         "parquet" => pq::CANDIDATES,
@@ -107,6 +108,7 @@ pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
 pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
         ("varlit", "grouped") => "src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs",
+        ("varlit", "heap") => "src/oltp/vl_heap.rs,src/oltp/pack.rs,src/oltp/csr.rs",
         ("varlit", "append") => {
             "src/oltp/vl_append.rs,src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs"
         }
@@ -120,6 +122,7 @@ pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
     match (engine, cand) {
         ("varlit", "grouped") => vl_grouped::create(p),
+        ("varlit", "heap") => vl_heap::create(p),
         ("varlit", "append") => vl_append::create(p),
         ("varlit", "packed-matrix") => vl_packed::create(p),
         ("sqlite", c) => sq::create(p, c),
@@ -131,6 +134,7 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn OltpRead>> {
     match (engine, cand) {
         ("varlit", "grouped") => vl_grouped::open(p),
+        ("varlit", "heap") => vl_heap::open(p),
         ("varlit", "append") => vl_append::open(p),
         ("varlit", "packed-matrix") => vl_packed::open(p),
         ("sqlite", c) => sq::open(p, c),
@@ -228,6 +232,15 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     }
     let txn_s = t.secs();
     m.set("txn_s", txn_s);
+    if std::env::var_os("FB_TXN_TRACE").is_some() {
+        let slow: Vec<String> = lat
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| **l > 5.0)
+            .map(|(i, l)| format!("{i}:{l:.1}"))
+            .collect();
+        eprintln!("slow txns {}: {}", slow.len(), slow.join(" "));
+    }
     lat.sort_by(f64::total_cmp);
     m.set("txn_p50_ms", percentile(&lat, 0.5));
     m.set("txn_p99_ms", percentile(&lat, 0.99));
@@ -257,6 +270,17 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     let br_s = t.secs();
     m.set("cold_branch_s", br_s);
     m.set("total_s", txn_s + pts_s + br_s);
+    // The same queries again on the open handle, OS cache warm.
+    let t = Timer::start();
+    for &id in &pts {
+        std::hint::black_box(r.point(id)?);
+    }
+    m.set("warm_points_s", t.secs());
+    let t = Timer::start();
+    for &b in &brs {
+        std::hint::black_box(r.branch(b)?);
+    }
+    m.set("warm_branch_s", t.secs());
     drop(r);
 
     // Verify (untimed).

@@ -3,11 +3,11 @@
 //! moved past gets `MatrixSnapshotExpired` and must follow, never a mixed
 //! answer.
 
-use super::lookup::{self, Located};
+use super::lookup::{self, View};
 use super::{Fixed, META_FIXED_LEN, META_STATE_AT, State};
-use crate::Result;
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::RingReader;
+use crate::{Error, Result};
 
 pub(crate) struct KeyedReader {
     meta: u64,
@@ -59,30 +59,103 @@ impl KeyedReader {
         Ok(true)
     }
 
-    /// Finds `key` of `block_id` in this snapshot.
-    pub(crate) fn find(
+    /// Finds `key` of `block_id` and reads its payload into `buf`, checking
+    /// the ring once for the whole lookup instead of on every read; runs it
+    /// again (up to eight times) when the ring moved under it.
+    ///
+    /// `encode` writes the key into `buf` at `key_at..` before each attempt:
+    /// the payload overwrites it. A payload longer than `max_payload` is
+    /// refused. Returns whether the key was found.
+    pub(crate) fn get(
         &mut self,
         source: &dyn TileSource,
         block_id: u32,
-        key: &[u8],
-    ) -> Result<Option<Located>> {
-        lookup::find(
-            &mut self.reader,
-            source,
-            self.seed,
-            &self.state,
-            block_id,
-            key,
-        )
+        buf: &mut Vec<u8>,
+        key_at: usize,
+        max_payload: u64,
+        encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<bool> {
+        for _ in 0..8 {
+            let mut view = Unsettled {
+                reader: &mut self.reader,
+                oldest: u64::MAX,
+            };
+            let result = attempt(
+                &mut view,
+                source,
+                self.seed,
+                &self.state,
+                block_id,
+                buf,
+                key_at,
+                max_payload,
+                encode,
+            );
+            let oldest = view.oldest;
+            // Settle even after an error: a damaged-looking record read
+            // while the ring moved is read again, not reported.
+            if self.reader.settle(source, oldest)? {
+                return result;
+            }
+        }
+        Err(Error::MatrixSnapshotExpired {
+            snapshot: self.reader.snapshot(),
+            checkpointed: 0,
+        })
     }
+}
 
-    /// Reads a located record's payload into `out` and checks it.
-    pub(crate) fn read_payload(
-        &mut self,
-        source: &dyn TileSource,
-        found: &Located,
-        out: &mut [u8],
-    ) -> Result<()> {
-        lookup::read_payload(&mut self.reader, source, found, out)
+/// One unvalidated lookup of [`KeyedReader::get`].
+#[allow(clippy::too_many_arguments, reason = "one lookup's inputs")]
+fn attempt(
+    view: &mut Unsettled<'_>,
+    source: &dyn TileSource,
+    seed: [u64; 2],
+    state: &State,
+    block_id: u32,
+    buf: &mut Vec<u8>,
+    key_at: usize,
+    max_payload: u64,
+    encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
+) -> Result<bool> {
+    encode(buf)?;
+    let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
+        "keyed lookup key starts past its buffer",
+    ))?;
+    let Some(found) = lookup::find(view, source, seed, state, block_id, key)? else {
+        return Ok(false);
+    };
+    let len = u64::from(found.chunk.payload_len);
+    if len > max_payload {
+        return Err(Error::LimitExceeded {
+            resource: "keyed record payload",
+            actual: len,
+            limit: max_payload,
+        });
+    }
+    let len = crate::width::index(len)?;
+    buf.clear();
+    buf.try_reserve(len).map_err(|_| Error::AllocationFailed {
+        resource: "keyed record payload",
+        requested: len as u64,
+    })?;
+    buf.resize(len, 0);
+    lookup::read_payload(view, source, &found, buf)?;
+    Ok(true)
+}
+
+/// Reads of one lookup that do not check the ring; [`RingReader::settle`]
+/// checks them together at its end.
+struct Unsettled<'a> {
+    reader: &'a mut RingReader,
+    /// The oldest generation any read laid.
+    oldest: u64,
+}
+
+impl View for Unsettled<'_> {
+    fn read(&mut self, source: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
+        let laid = self.reader.read_unsettled(source, at, buf)?;
+        self.oldest = self.oldest.min(laid);
+        Ok(())
     }
 }

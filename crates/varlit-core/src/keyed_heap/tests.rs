@@ -223,12 +223,13 @@ fn read(
     store: &MemStore,
     key: &[u8],
 ) -> crate::Result<Option<Vec<u8>>> {
-    let Some(found) = reader.find(store, 1, key)? else {
-        return Ok(None);
-    };
-    let mut out = vec![0u8; found.chunk.payload_len as usize];
-    reader.read_payload(store, &found, &mut out)?;
-    Ok(Some(out))
+    let mut out = Vec::new();
+    let found = reader.get(store, 1, &mut out, 0, u64::MAX, &mut |buf| {
+        buf.clear();
+        buf.extend_from_slice(key);
+        Ok(())
+    })?;
+    Ok(found.then_some(out))
 }
 
 #[test]

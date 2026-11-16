@@ -44,6 +44,9 @@ pub(crate) struct Located {
     pub page: u64,
     pub index: usize,
     pub chunk: Chunk,
+    /// The checksum of the chunk's header fields and key, which the payload
+    /// continues.
+    pub prefix_crc: u32,
 }
 
 impl Located {
@@ -83,16 +86,13 @@ pub(crate) fn find(
             if slot.route != route {
                 continue;
             }
-            let chunk = chunk(view, source, slot.at())?;
-            if chunk.block_id == block_id
-                && chunk.key_len as usize == key.len()
-                && key_equals(view, source, slot.at() + CHUNK_HEADER, key)?
-            {
+            if let Some((chunk, prefix_crc)) = record_at(view, source, slot.at(), block_id, key)? {
                 return Ok(Some(Located {
                     slot,
                     page: at,
                     index,
                     chunk,
+                    prefix_crc,
                 }));
             }
         }
@@ -117,21 +117,7 @@ pub(crate) fn read_payload(
         });
     }
     view.read(source, found.payload_at(), out)?;
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(&found.chunk.encode()[..12]);
-    let mut step = [0u8; STEP];
-    let mut done = 0u64;
-    let key_len = u64::from(found.chunk.key_len);
-    while done < key_len {
-        let n = crate::width::bounded(key_len - done, STEP);
-        view.read(
-            source,
-            found.slot.at() + CHUNK_HEADER + done,
-            &mut step[..n],
-        )?;
-        crc.update(&step[..n]);
-        done += n as u64;
-    }
+    let mut crc = crc32fast::Hasher::new_with_initial(found.prefix_crc);
     crc.update(out);
     if crc.finalize() != found.chunk.crc {
         return Err(Error::ChecksumMismatch {
@@ -139,6 +125,44 @@ pub(crate) fn read_payload(
         });
     }
     Ok(())
+}
+
+/// The chunk at `at` when it holds `key` of `block_id`, with the checksum
+/// of its header fields and key. A key that fits one step is read with the
+/// header in one read.
+fn record_at(
+    view: &mut dyn View,
+    source: &dyn TileSource,
+    at: u64,
+    block_id: u32,
+    key: &[u8],
+) -> Result<Option<(Chunk, u32)>> {
+    let header_len = crate::width::small(CHUNK_HEADER);
+    let mut step = [0u8; STEP];
+    let end = header_len + key.len();
+    // A chunk shorter than the combined read (another key's, under a
+    // colliding route) can end at the end of the file: when that read
+    // fails, the header and the key are read on their own.
+    let together = end <= STEP && view.read(source, at, &mut step[..end]).is_ok();
+    if !together {
+        view.read(source, at, &mut step[..header_len])?;
+    }
+    let chunk = Chunk::decode(step[..header_len].try_into().expect("header"));
+    if chunk.block_id != block_id || chunk.key_len as usize != key.len() {
+        return Ok(None);
+    }
+    let matches = if together {
+        step[header_len..end] == *key
+    } else {
+        key_equals(view, source, at + CHUNK_HEADER, key)?
+    };
+    if !matches {
+        return Ok(None);
+    }
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(&chunk.encode()[..12]);
+    crc.update(key);
+    Ok(Some((chunk, crc.finalize())))
 }
 
 pub(crate) fn chunk(view: &mut dyn View, source: &dyn TileSource, at: u64) -> Result<Chunk> {

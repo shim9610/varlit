@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "071baff140a5415e",
-    "count": 3468
+    "catalogue": "1dcc35b99c69e493",
+    "count": 3470
   },
   "schema": 1,
   "sources": {
@@ -396,7 +396,7 @@
     "crates/varlit-core/src/file/follow.rs": "881c849233661229",
     "crates/varlit-core/src/file/header_codec.rs": "e986c6eff534a2d0",
     "crates/varlit-core/src/file/header_slots.rs": "9d9bf42f2143300b",
-    "crates/varlit-core/src/file/keyed_access.rs": "36a32f10c09e52e0",
+    "crates/varlit-core/src/file/keyed_access.rs": "7281b827054c36fb",
     "crates/varlit-core/src/file/lifecycle.rs": "bc0e4fb8c3fb4807",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
     "crates/varlit-core/src/file/mapped_access.rs": "4cc708e2eb033758",
@@ -419,11 +419,11 @@
     "crates/varlit-core/src/format.rs": "cff367f00d071c48",
     "crates/varlit-core/src/immediate.rs": "b456cf1a1fdc28f6",
     "crates/varlit-core/src/keyed_heap/heap.rs": "c18a8bb763246835",
-    "crates/varlit-core/src/keyed_heap/lookup.rs": "1b7c9f1ce4df69b7",
+    "crates/varlit-core/src/keyed_heap/lookup.rs": "06ced53a42e5692b",
     "crates/varlit-core/src/keyed_heap/mod.rs": "39eb539f281257ad",
-    "crates/varlit-core/src/keyed_heap/reader.rs": "9134b976f2757316",
+    "crates/varlit-core/src/keyed_heap/reader.rs": "905150cf9d29ef6e",
     "crates/varlit-core/src/keyed_heap/sip.rs": "20816b0c53b27770",
-    "crates/varlit-core/src/keyed_heap/tests.rs": "5d0fa3218ada7826",
+    "crates/varlit-core/src/keyed_heap/tests.rs": "6c9ec3919cd365f5",
     "crates/varlit-core/src/layout.rs": "22e1b983bacd6e22",
     "crates/varlit-core/src/lib.rs": "5a45a88ae381b759",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
