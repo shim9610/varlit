@@ -20,90 +20,8 @@ BASE = dict(scenario="mixed", records=256, payload=65536, variable=True,
             cache=8 << 20, page=4096, mmap=0, fletcher=True, compact_bytes=512 << 20, hdf_chunk=0)
 
 
-SQLITE_TUNING = [(page, mmap) for page in [4096, 16384, 65536] for mmap in [0, 1 << 30]]
-HDF5_CHUNK_TUNING = [0, 65536, 262144, 1 << 20]
-
-
-def compare_profiles():
-    """Scenarios defined by what the application needs, not by how one engine stores it.
-
-    Each engine implements every scenario its own best way: Varlit groups the
-    items a commit publishes into one record or writes matrix cells, SQLite
-    uses one transaction per commit with typed tables or BLOBs, HDF5 appends a
-    commit's items to chunked datasets and flushes. The scenario says which
-    engine its workload is expected to favour.
-    """
-    out = []
-    # Varlit-favoured: one log with fixed metadata and variable 64 KiB / 1 MiB
-    # frames, 16 MiB publications, followed by 1 or 8 readers.
-    for payload, records, per_tx in [(65536, 4096, 256), (1 << 20, 256, 16)]:
-        for readers in [1, 8]:
-            c = dict(BASE, records=records, payload=payload, per_tx=per_tx, readers=readers, telemetry=True)
-            for e in ["varlit-stream", "varlit-indexed", "sqlite", "hdf5"]:
-                out.append(dict(name=f"mixed-p{payload}-r{readers}-{e}", kind="mixed", engine=e,
-                                config=c, favours="varlit"))
-    # Neutral, defined by a requirement: 128-byte units must be committed to the
-    # file and shared with readers every `unit` items. A commit is one record,
-    # one transaction or one flush; how the engine lays out the unit is its own.
-    for unit, items in [(1, 16384), (512, 1 << 20), (8192, 1 << 20)]:
-        for readers in [1, 8]:
-            c = dict(BASE, records=items // unit, payload=unit * 128, group_items=unit, per_tx=1,
-                     variable=False, readers=readers, lookups=False, telemetry=True)
-            for e in ["varlit-stream", "sqlite", "hdf5"]:
-                out.append(dict(name=f"commit-u{unit}-n{items}-r{readers}-{e}", kind="mixed", engine=e,
-                                config=c, favours="none"))
-    # Grouped items with group-local lookups, one or four producers, 8 readers.
-    for producers in [1, 4]:
-        for group in [512, 8192]:
-            c = dict(BASE, records=(1 << 20) // group, payload=group * 128, group_items=group,
-                     per_tx=131072 // group, variable=False, producers=producers, readers=8,
-                     lookups=True, telemetry=True)
-            for e in ["varlit-indexed", "sqlite", "hdf5"]:
-                out.append(dict(name=f"grouped-n{1 << 20}-g{group}-w{producers}-r8-{e}", kind="mixed",
-                                engine=e, config=c, favours="varlit"))
-    # SQLite-favoured: 100,000 rows of 64 bytes, 100 per transaction, 8 readers
-    # with keyed lookups. Varlit keeps rows in matrix cells, one row per cell or
-    # a transaction's rows packed into one cell.
-    for producers in [1, 4]:
-        c = dict(BASE, scenario="table", records=100000, payload=64, variable=False, per_tx=100,
-                 producers=producers, readers=8, lookups=True, telemetry=True)
-        for e in ["varlit-matrix", "varlit-matrix-packed", "sqlite", "hdf5"]:
-            out.append(dict(name=f"table-w{producers}-{e}", kind="mixed", engine=e, config=c,
-                            favours="sqlite"))
-    # HDF5-favoured: 256 MiB of 16-channel f64 samples in 1 MiB groups.
-    for mode in ["native-view", "stream", "indexed", "matrix-mmap", "matrix-owned", "sql-columns",
-                 "sql-chunks", "hdf-contiguous-bulk", "hdf-chunked-bulk", "hdf-chunked-fletcher-bulk"]:
-        out.append(dict(name=f"array-n{256 << 20}-g{1 << 20}-{mode}", kind="array", mode=mode,
-                        total=256 << 20, group=1 << 20, page=4096, mmap=0, points=4096, ranges=128,
-                        readers=0, favours="hdf5"))
-    return out
-
-
-def compare_tuning_profiles():
-    """Every SQLite and HDF5 candidate of the comparison, before it is frozen."""
-    out = []
-    for p in compare_profiles():
-        if p.get("engine") == "sqlite":
-            for page, mmap in SQLITE_TUNING:
-                out.append(dict(p, name=p["name"] + f"-p{page}-m{mmap}", tuning_family=p["name"],
-                                config=dict(p["config"], page=page, mmap=mmap)))
-        elif p.get("engine") == "hdf5" and p["config"]["scenario"] == "mixed":
-            for chunk in HDF5_CHUNK_TUNING:
-                out.append(dict(p, name=p["name"] + f"-c{chunk}", tuning_family=p["name"],
-                                config=dict(p["config"], hdf_chunk=chunk)))
-        elif p.get("mode", "").startswith("sql-"):
-            for page, mmap in SQLITE_TUNING:
-                out.append(dict(p, name=p["name"] + f"-p{page}-m{mmap}", tuning_family=p["name"],
-                                page=page, mmap=mmap))
-    return out
-
-
 def profiles(suite):
     """Return complete configurations; never splice unindexed writes into indexed reads."""
-    if suite == "compare":
-        return compare_profiles()
-    if suite == "compare-tuning":
-        return compare_tuning_profiles()
     if suite.startswith("grouped"):
         out = []
         shapes = [(1 << 20, 1, 1), (1 << 20, 1, 8), (1 << 20, 4, 8),
@@ -142,6 +60,14 @@ def profiles(suite):
                        per_tx=8192//group,variable=False,producers=4,readers=8,lookups=True,telemetry=True)
                 for engine in ["varlit-indexed","sqlite","hdf5"]:
                     out.append(dict(name=f"grouped-n{8<<20}-g{group}-t8192-w4-r8-{engine}",kind="mixed",engine=engine,config=c))
+        if suite == "grouped-control":
+            out=[]
+            for engine, lookups in [("varlit-indexed",True),("sqlite",True),
+                                    ("varlit-stream",False),("sqlite",False),("hdf5",False)]:
+                c=dict(BASE,records=1<<20,payload=128,variable=False,per_tx=131072,
+                       readers=8,lookups=lookups,telemetry=True)
+                out.append(dict(name=f"individual-n{1<<20}-t131072-q{int(lookups)}-{engine}",
+                                kind="mixed",engine=engine,config=c))
         return out
     if suite == "mapped-arrays":
         return [dict(name=f"array-mapped-n{total}-g{group}-{mode}",kind="array",mode=mode,total=total,
@@ -184,7 +110,7 @@ def profiles(suite):
     small = suite == "smoke"
     full = suite == "full"
     mixed_engines = ["varlit-stream", "varlit-indexed", "sqlite", "hdf5"]
-    table_engines = ["varlit-matrix", "varlit-matrix-packed", "sqlite", "hdf5"]
+    table_engines = ["varlit-indexed", "varlit-matrix", "sqlite", "hdf5"]
     out = []
     for readers in ([1, 8] if not small else [2]):
         for payload in ([65536, 1 << 20] if full else [65536]):
@@ -194,6 +120,15 @@ def profiles(suite):
                      readers=readers)
             for e in mixed_engines:
                 out.append(dict(name=f"mixed-p{payload}-r{readers}-{e}", kind="mixed", engine=e, config=c))
+    # Small independent business objects, not individual samples from a numeric array.
+    c = dict(BASE, records=1000000 if full else (128 if small else 100000),
+             payload=128, per_tx=16 if small else 1000, variable=False,
+             readers=2 if small else 8)
+    for e in mixed_engines:
+        out.append(dict(name=f"objects-follow-{e}", kind="mixed", engine=e, config=c))
+    keyed = dict(c, lookups=True)
+    for e in ["varlit-indexed", "sqlite"]:
+        out.append(dict(name=f"objects-keyed-{e}", kind="mixed", engine=e, config=keyed))
     for producers in ([1, 4] if not small else [4]):
         c = dict(BASE, scenario="table", records=1000000 if full else (1024 if small else 100000),
                  payload=64, variable=False, per_tx=32 if small else 100,
@@ -480,7 +415,7 @@ def invoke(profile, output, stem, probe=False, gate=False, keep=False, timeout=1
             row["final_storage"] = final_storage
             row["sampled_peaks"] = peaks
             expected = profile["config"]["readers"] + 2 if profile["kind"] == "mixed" else (profile["readers"]+2 if profile.get("live") else 2)
-            if profile["name"].startswith(("grouped-", "commit-")) or profile.get("live"):
+            if profile["name"].startswith(("grouped-", "individual-")) or profile.get("live"):
                 assert peaks.get("sampled_processes", 0) >= expected, "incomplete process-tree coverage"
                 assert peaks.get("visible_allocated", 0) >= result["allocated_bytes"], "data files missing from probe"
         if not keep:
@@ -516,7 +451,7 @@ def summarize(rows, output):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--suite", choices=["smoke", "pilot", "full", "tuning", "packed", "hdf-mixed", "mapped-arrays", "grouped-smoke", "grouped-tuning", "grouped", "compare-tuning", "compare"], default="smoke")
+    ap.add_argument("--suite", choices=["smoke", "pilot", "full", "tuning", "packed", "hdf-mixed", "mapped-arrays", "grouped-smoke", "grouped-tuning", "grouped-control", "grouped"], default="smoke")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--resume",action="store_true",help="Continue an interrupted frozen run with identical benchmark binaries")
     ap.add_argument("--repeats", type=int, default=3)
@@ -554,17 +489,6 @@ def main():
             assert len(winner) >= 3, "tuning requires at least three observations per selected candidate"
             winners[family] = winner[0]["profile"]
         for p in selected:
-            if args.suite == "compare":
-                winner = winners.get(p["name"])
-                if winner is None:
-                    continue
-                if p.get("engine") == "sqlite":
-                    p["config"] = dict(p["config"], **{k: winner["config"][k] for k in ["page", "mmap"]})
-                elif p.get("engine") == "hdf5":
-                    p["config"] = dict(p["config"], hdf_chunk=winner["config"]["hdf_chunk"])
-                elif p.get("mode", "").startswith("sql-"):
-                    p.update(page=winner["page"], mmap=winner["mmap"])
-                continue
             if p.get("engine") == "sqlite":
                 family = (f"grouped-g{p['config']['group_items']}" if args.suite == "grouped" else p["name"])
                 if p["config"]["scenario"] == "mixed" and p["name"].startswith("mixed-"):
@@ -579,11 +503,6 @@ def main():
                     family = f"array-{p['mode']}-g1048576"
                 winner = winners[family]
                 p.update(page=winner["page"], mmap=winner["mmap"])
-        if args.suite == "compare":
-            missing = [p["name"] for p in selected
-                       if (p.get("engine") in ("sqlite",) or (p.get("engine") == "hdf5" and p["config"]["scenario"] == "mixed")
-                           or p.get("mode", "").startswith("sql-")) and p["name"] not in winners]
-            assert not missing, f"untuned comparison candidates: {missing}"
         save(output / "frozen-sqlite-winners.json", winners)
     resume_id=str(time.time_ns())
     source = output / ("source-resume-"+resume_id if args.resume else "source")

@@ -16,24 +16,10 @@ class GroupedContracts(unittest.TestCase):
             self.assertEqual(work, shapes.setdefault(shape, work))
             self.assertIn(work[1], [8192,131072])
             self.assertEqual(c["records"] % (c["producers"] * c["per_tx"]), 0)
-
-    def test_no_suite_stores_small_items_one_at_a_time_without_cause(self):
-        # A commit of several small items is stored as one record, transaction
-        # or flush. Only a requirement to commit every single item (unit 1)
-        # puts one item in each.
-        suites = ["smoke", "pilot", "full", "grouped", "grouped-tuning", "grouped-smoke",
-                  "packed", "compare", "compare-tuning"]
-        for suite in suites:
-            for p in run.profiles(suite):
-                c = p.get("config")
-                if not c or c["scenario"] != "mixed" or c["payload"] > 1024:
-                    continue
-                self.assertEqual(c["per_tx"], 1, p["name"])
-                self.assertEqual(c["group_items"] * 128, c["payload"], p["name"])
-
-    def test_every_compare_profile_states_the_engine_it_favours(self):
-        for p in run.profiles("compare"):
-            self.assertIn(p["favours"], ["varlit", "sqlite", "hdf5", "none"], p["name"])
+        for p in run.profiles("grouped-control"):
+            c = p["config"]
+            self.assertEqual(c["records"] * c["payload"], 128 << 20)
+            self.assertEqual(c["per_tx"], 131072)
 
     def test_overlap_does_not_count_crossing_or_after_writer_bytes(self):
         r = dict(writer_active_start_ns=100, writer_active_end_ns=300,

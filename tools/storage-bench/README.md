@@ -2,42 +2,10 @@
 
 This standalone diagnostic crate compares Varlit, SQLite and HDF5 using matched
 logical work. It is outside the Cargo workspace; native SQLite and HDF5 are not
-requirements for library users. Measurement reports are not kept in the
-repository. A comparison asks whether Varlit can reach performance comparable
-with similar formats, not whether it is better; its SQLite and HDF5 code
-follows the patterns the author knows to be efficient and does not mark those
-libraries' limits, and a report states the machine it ran on. This directory
-holds the harness, analysis tools and a report template.
-
-## Scenarios
-
-A scenario is defined by what the application needs: how much data, in what
-units it must be committed to the file and shared with readers, and what it is
-queried by. It never prescribes how an engine stores it. Each engine implements
-every scenario its own best way, and each scenario states which engine its
-workload is expected to favour. The `compare` suite holds them:
-
-| Scenario | Requirement | Favours |
-| --- | --- | --- |
-| `mixed` | Fixed metadata and variable 64 KiB or 1 MiB frames in one log, 16 MiB publications, 1 or 8 followers | Varlit |
-| `commit` | 128-byte units committed to the file and shared with readers every 1, 512 or 8,192 units, 1 or 8 followers | none |
-| `grouped` | 1,048,576 items in groups of 512 or 8,192, one or four producers, 8 readers with group-local lookups | Varlit |
-| `table` | 100,000 rows of 64 bytes, 100 per transaction, one or four producers, 8 readers with keyed lookups | SQLite |
-| `array` | 256 MiB of 16-channel f64 samples in 1 MiB groups: write, scan, points, ranges | HDF5 |
-
-How each engine meets a commit: Varlit publishes the commit's items as one
-record (stream/indexed) or writes them into matrix cells; SQLite runs one
-transaction per commit with typed tables or BLOBs; HDF5 appends the commit to
-chunked datasets and flushes. No engine stores small items one record, row or
-dataset at a time when the requirement lets it group them.
-
-`compare-tuning` tries every SQLite candidate (page size 4/16/64 KiB, mmap off
-or 1 GiB) and every HDF5 mixed/commit/grouped candidate (payload chunk automatic,
-64 KiB, 256 KiB, 1 MiB) three times; `compare --tuning-results` freezes the
-fastest complete configuration per profile and refuses to start if one is
-missing. `analyze_compare.py` reports, per scenario and engine, medians with
-min–max, CPU, memory and storage from the probe run, and for logged scenarios
-commit latency and the time until readers see a commit.
+requirements for library users. Published cloud measurements and their generated
+reports have been removed. Performance conclusions are pending a controlled
+local rerun. This directory retains harness code, analysis tools and a report
+template, without recorded timing or resource results.
 
 ## Workloads and representation
 
@@ -53,9 +21,10 @@ commit latency and the time until readers see a commit.
   typed datasets; SQLite offers typed columns and BLOB layouts; Varlit offers
   native, stream, indexed and matrix candidates.
 - The SQLite-oriented table case uses independent 64-byte rows, multirow
-  transactions and primary-key queries. Varlit keeps them in matrix cells, one
-  row per cell or a transaction's rows packed into one cell. This case is
-  distinct from grouped acquisition.
+  transactions and primary-key queries. Varlit includes row-cell and packed
+  transaction-cell candidates. This case is distinct from grouped acquisition.
+- Individual-record profiles remain explicit stress controls. Do not use them
+  as the recommended encoding or sole comparison for grouped logging.
 
 Varlit and HDF5 use a bounded multi-producer, single-consumer queue and one writer.
 SQLite uses independent writer connections with `SQLITE_OPEN_FULLMUTEX`, while
@@ -100,12 +69,15 @@ These example commands collect new observations; they do not supply a performanc
 claim or a completed qualification:
 
 ```sh
-python3 tools/storage-bench/run.py --suite compare-tuning --repeats 3 --output /absolute/fresh/tuning
-python3 tools/storage-bench/run.py --suite compare --repeats 5 --probe --tuning-results /absolute/fresh/tuning --output /absolute/fresh/compare
-python3 tools/storage-bench/analyze_compare.py /absolute/fresh/compare --output /absolute/fresh/report
+python3 tools/storage-bench/run.py --suite grouped --repeats 7 --probe --output /absolute/fresh/grouped
+python3 tools/storage-bench/run.py --suite tuning --repeats 7 --output /absolute/fresh/tuning
+python3 tools/storage-bench/run.py --suite full --repeats 7 --probe --tuning-results /absolute/fresh/tuning --output /absolute/fresh/full
+python3 tools/storage-bench/analyze.py /absolute/fresh/full --output /absolute/fresh/report
 ```
 
-Keep each scenario's favoured engine stated next to its results. Compare write/read phases separately with equal query
+The `full` grid includes individual-record controls; its standalone output is not
+an adequate grouped-item comparison. Keep grouped workloads and table-oriented
+adverse cases explicit. Compare write/read phases separately with equal query
 work, reader counts and publication sizes. Do not combine the fastest phase from
 several engine configurations into one result.
 
