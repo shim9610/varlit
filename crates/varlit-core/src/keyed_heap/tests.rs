@@ -663,3 +663,24 @@ fn scans_visit_records_in_key_order_from_any_start() {
     .unwrap();
     assert_eq!(visited, 5);
 }
+
+/// A round is charged what it writes, not a page per change: putting keys in
+/// order fills each leaf with many records before it is written, so 100 000
+/// small puts (about 6 MB of pages) under a 1 MiB budget publish a handful
+/// of rounds, not one per 256 puts.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn rounds_are_charged_the_pages_they_write() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, MIN_BUDGET, Tuning::DEFAULT);
+    for key in 0..100_000u64 {
+        heap.put(&mut store, 1, &key.to_be_bytes(), &value(44, key))
+            .unwrap();
+    }
+    assert!((3..=20).contains(&heap.stats.rounds), "{:?}", heap.stats);
+    heap.publish(&mut store).unwrap();
+    assert_eq!(
+        get(&heap, &store, 1, &77_777u64.to_be_bytes()),
+        Some(value(44, 77_777))
+    );
+}

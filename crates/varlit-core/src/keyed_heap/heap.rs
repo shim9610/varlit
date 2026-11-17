@@ -101,7 +101,8 @@ pub(crate) struct KeyedHeap {
     slot: usize,
     nodes: Nodes,
     tuning: Tuning,
-    /// Bytes the open round changed, against the change budget.
+    /// Bytes the open round wrote, against the change budget: what it wrote
+    /// back, not what each change might touch.
     round_bytes: u64,
     /// Pages freed by the open generation, and by published generations the
     /// mark has not reached: not to be taken yet.
@@ -269,6 +270,7 @@ impl KeyedHeap {
         }
         let generation = self.ring.publish(store)?;
         self.round_bytes = 0;
+        self.nodes.take_written();
         self.freed_waiting += core::mem::take(&mut self.freed_open);
         // Once publications fill half the ring, put all of them in place in
         // one pass, before a frame finds no room and checkpoints a few of
@@ -320,10 +322,12 @@ impl KeyedHeap {
         buffers.min(self.ring.ring_area() / 4)
     }
 
-    /// Ends the round when it has changed the budget's worth or filled the
-    /// ring but the reserve, and raises the mark when freed pages have
-    /// waited past the patience.
+    /// Ends the round when it has written the budget's worth (tree pages
+    /// written back, overflow pages, free-list links) or filled the ring but
+    /// the reserve, and raises the mark when freed pages have waited past
+    /// the patience.
     fn after_change(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        self.round_bytes += self.nodes.take_written();
         if self.round_bytes >= self.fixed.budget || self.ring.ring_room() < self.ring_reserve() {
             return self.end_round(store);
         }
@@ -485,7 +489,6 @@ impl KeyedHeap {
             at += 8;
         }
         self.leaf_set(store, &path, &cell[..at], old.is_some())?;
-        self.round_bytes += total + PAGE_BYTES;
         self.after_change(store)
     }
 
@@ -517,7 +520,6 @@ impl KeyedHeap {
                 self.merge_leaf(store, &path)?;
             }
         }
-        self.round_bytes += PAGE_BYTES;
         self.after_change(store)?;
         Ok(true)
     }
@@ -601,6 +603,7 @@ impl KeyedHeap {
             {
                 self.ring.stage(store, page_at, &page)?;
             }
+            self.round_bytes += PAGE_BYTES;
             at += n;
             if next == NO_PAGE {
                 return Ok(head);
@@ -716,6 +719,7 @@ impl KeyedHeap {
         let mut link = [0u8; 16];
         link[8..].copy_from_slice(&freeing.to_le_bytes());
         self.ring.stage(store, page, &link)?;
+        self.round_bytes += 32;
         let tail = self.state.free_tail;
         if tail == NO_PAGE {
             self.state.free_head = page;

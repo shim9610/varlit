@@ -32,6 +32,8 @@ pub(crate) struct Nodes {
     scratch: Box<[u8]>,
     tags: [Tag; SLOTS],
     clock: u64,
+    /// Page bytes written back since [`Self::take_written`] last ran.
+    written: u64,
 }
 
 impl Nodes {
@@ -52,6 +54,7 @@ impl Nodes {
             scratch: buffer(NODE_BYTES)?,
             tags: [Tag::default(); SLOTS],
             clock: 0,
+            written: 0,
         })
     }
 
@@ -217,10 +220,17 @@ impl Nodes {
         let now = crc32fast::hash(page);
         if tag.shown != Some(now) {
             ring.stage(store, tag.at, page)?;
+            self.written += NODE_BYTES as u64;
         }
         self.tags[slot].dirty = false;
         self.tags[slot].shown = Some(now);
         Ok(())
+    }
+
+    /// Page bytes written back since the last call, and starts counting
+    /// again.
+    pub(crate) fn take_written(&mut self) -> u64 {
+        core::mem::take(&mut self.written)
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
