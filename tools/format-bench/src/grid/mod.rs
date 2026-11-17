@@ -49,7 +49,7 @@ pub fn shape() -> Ix {
         _ => {
             let step = 8 * 4 * 16 * 256 * 512 * 4;
             let time =
-                data_gb().map_or(64, |gb| ((gb * 1e9 / step as f64).round() as usize).max(1));
+                data_gb().map_or(64, |gb| ((gb * 1e9 / step as f64).round() as usize).max(8));
             [time, 8, 4, 16, 256, 512]
         }
     })

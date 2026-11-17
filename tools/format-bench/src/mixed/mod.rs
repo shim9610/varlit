@@ -39,8 +39,13 @@ const POLL: Duration = Duration::from_micros(100);
 fn env_u64(k: &str, d: u64) -> u64 {
     std::env::var(k).ok().map_or(d, |v| v.parse().unwrap())
 }
+/// 10 ms windows to emit: `FB_WINDOWS`, else as many as `FB_DATA_GB` of
+/// records (about 1.04 MB per window), else 100.
 pub fn windows() -> u64 {
-    env_u64("FB_WINDOWS", 100)
+    if std::env::var_os("FB_WINDOWS").is_some() {
+        return env_u64("FB_WINDOWS", 100);
+    }
+    data_gb().map_or(100, |gb| ((gb * 1e9 / 1.04e6) as u64).max(1))
 }
 /// Freshness requirement in ms (multiple of the 10 ms window).
 pub fn fresh_ms() -> u64 {

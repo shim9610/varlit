@@ -1,63 +1,70 @@
 #!/usr/bin/env python3
-"""Render the README results tables from a run.py summary.json.
+"""Render one Markdown table per scenario from a run.py summary.json, with
+the metrics that decide that scenario (the objective first).
 
-usage: report.py RUN_DIR   (prints Markdown)
+usage: report.py RUN_DIR
 """
 import json, sys
 from pathlib import Path
 
 S = json.loads((Path(sys.argv[1]) / "summary.json").read_text())
 
+# label -> (title, [(column, metric, scale, digits)]). Times are seconds
+# unless the column says ms; MB is allocated disk space.
+KEY = {
+    "grid": ("grid: 6-D f32 array, growing time axis, 4 GiB memory cap (HDF5's case)", [
+        ("all reads s", "reads_s", 1, 2), ("time series ms", "line0_s", 1e3, 0),
+        ("16 sub-cubes ms", "cubes_s", 1e3, 0), ("ensemble means ms", "ensmean_s", 1e3, 0),
+        ("write s", "write_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+    "oltp": ("oltp: accounts with dense ids, durable transfers (SQLite's case)", [
+        ("1000 txn s", "txn_s", 1, 2), ("txn p99 ms", "txn_p99_ms", 1, 2),
+        ("20k cold points s", "cold_points_s", 1, 2), ("20k warm points s", "warm_points_s", 1, 3),
+        ("200 branch sums s", "warm_branch_s", 1, 3), ("load s", "load_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+    "oltp-sparse": ("oltp-sparse: the same accounts with sparse 64-bit keys", [
+        ("1000 txn s", "txn_s", 1, 2), ("txn p99 ms", "txn_p99_ms", 1, 2),
+        ("20k cold points s", "cold_points_s", 1, 2), ("20k warm points s", "warm_points_s", 1, 3),
+        ("200 branch sums s", "warm_branch_s", 1, 3), ("load s", "load_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+    "analytics": ("analytics: append-only 12-column table, cold queries (Parquet's case)", [
+        ("Q1 group-by s", "cold_q1_s", 1, 3), ("Q2 20 ranges s", "cold_q2_s", 1, 3),
+        ("write s", "write_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+    "mixed": ("mixed: three typed streams flat out, four live followers (Varlit's case)", [
+        ("x real time", "realtime_factor", 1, 2), ("publish p99 ms", "publish_p99_ms", 1, 2),
+        ("inconsistent views", "all_inconsistent", 1, 0), ("late reader catch-up s", "catchup_s", 1, 2),
+        ("write s", "write_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+    "mixed-live": ("mixed-live: the same in real time, 10 ms freshness, every window durable", [
+        ("late windows %", "all_late_frac", 100, 2), ("B-only follower late %", "b_late_frac", 100, 2),
+        ("inconsistent views", "all_inconsistent", 1, 0), ("publish p99 ms", "publish_p99_ms", 1, 2),
+        ("MB", "bytes", 1e-6, 0)]),
+    "cells": ("cells: fixed 1 KiB cells updated in place, 64 per atomic update, four followers", [
+        ("updates/s", "batches_per_s", 1, 0), ("follower lag p99 ms", "lag_p99_ms", 1, 2),
+        ("torn + corrupt reads", None, 1, 0), ("growth MB", "growth_bytes", 1e-6, 0),
+        ("initial load s", "init_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
+}
 
-def g(scen, fmt, key):
-    return S[f"{scen}/{fmt}"][key]
+
+def cell(m, metric, scale, digits):
+    if metric is None:
+        v = m.get("torn", 0) + m.get("corrupt", 0)
+    elif metric not in m:
+        return "-"
+    else:
+        v = m[metric] * scale
+    return f"{v:.{digits}f}"
 
 
-def ms(v):
-    return f"{v * 1e3:.1f}"
-
-
-def mb(v):
-    return f"{v / 1e6:.0f}"
-
-
-def table(head, rows):
-    out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    out += ["| " + " | ".join(r) + " |" for r in rows]
-    return "\n".join(out) + "\n"
-
-
-def fmts(scen):
-    return [k.split("/", 1)[1] for k in S if k.startswith(scen + "/")]
-
-
-parts = []
-AX = ["time", "ens", "var", "level", "lat", "lon"]
-gf = fmts("grid")
-sel = [("write s", "write_s", 1)] + [("all reads ms", "reads_s", 1e3)]
-sel += [(f"8 lines along {AX[d]} ms", f"line{d}_s", 1e3) for d in range(6)]
-sel += [(f"4 planes {AX[a]} x {AX[b]} ms", f"plane{a}{b}_s", 1e3) for a in range(6) for b in range(a + 1, 6)]
-sel += [("16 cubes ms", "cubes_s", 1e3), ("4 ensemble means ms", "ensmean_s", 1e3)]
-parts.append("### grid: 6-D f32 array larger than memory (HDF5-favored)\n")
-parts.append(table(["selection"] + gf, [[n] + [f"{g('grid', f, k) * sc:.1f}" for f in gf] for n, k, sc in sel]))
-parts.append("\n### oltp: 1M accounts, durable transactions (SQLite-favored)\n")
-parts.append(table(
-    ["format", "load s", "1000 txn s", "txn p50 ms", "txn p99 ms", "20k points ms", "200 branch aggregates ms", "MB"],
-    [[f, f"{g('oltp', f, 'load_s') + g('oltp', f, 'maint_s'):.2f}", f"{g('oltp', f, 'txn_s'):.2f}",
-      f"{g('oltp', f, 'txn_p50_ms'):.2f}", f"{g('oltp', f, 'txn_p99_ms'):.2f}",
-      ms(g('oltp', f, 'warm_points_s')), ms(g('oltp', f, 'warm_branch_s')), mb(g('oltp', f, 'bytes'))]
-     for f in fmts("oltp")]))
-if fmts("oltp-sparse"):
-    parts.append("\n### oltp-sparse: 1M accounts with sparse keys\n")
-    parts.append(table(
-        ["format", "load s", "1000 txn s", "txn p50 ms", "txn p99 ms", "20k points ms", "200 branch aggregates ms", "MB"],
-        [[f, f"{g('oltp-sparse', f, 'load_s') + g('oltp-sparse', f, 'maint_s'):.2f}", f"{g('oltp-sparse', f, 'txn_s'):.2f}",
-          f"{g('oltp-sparse', f, 'txn_p50_ms'):.2f}", f"{g('oltp-sparse', f, 'txn_p99_ms'):.2f}",
-          ms(g('oltp-sparse', f, 'warm_points_s')), ms(g('oltp-sparse', f, 'warm_branch_s')), mb(g('oltp-sparse', f, 'bytes'))]
-         for f in fmts("oltp-sparse")]))
-parts.append("\n### analytics: 4M rows x 12 columns (Parquet-favored)\n")
-parts.append(table(
-    ["format", "write s", "Q1 group-by ms", "Q2 20 ranges ms", "MB"],
-    [[f, f"{g('analytics', f, 'write_s'):.2f}", ms(g('analytics', f, 'warm_q1_s')),
-      ms(g('analytics', f, 'warm_q2_s')), mb(g('analytics', f, 'bytes'))] for f in fmts("analytics")]))
-print("\n".join(parts))
+out = []
+for label, (title, cols) in KEY.items():
+    rows = [(k.split("/", 1)[1], m) for k, m in S.items() if k.split("/", 1)[0] == label]
+    if not rows:
+        continue
+    gb = next((m.get("data_gb") for _, m in rows if "data_gb" in m), None)
+    out.append(f"### {title}" + (f" ({gb:g} GB)" if gb else "") + "\n")
+    out.append("| engine | " + " | ".join(c for c, *_ in cols) + " |")
+    out.append("|---|" + "---|" * len(cols))
+    for fmt, m in rows:
+        if "failed" in m:
+            out.append(f"| {fmt} | failed: {m['failed']} |" + " |" * (len(cols) - 1))
+            continue
+        out.append(f"| {fmt} | " + " | ".join(cell(m, *c[1:]) for c in cols) + " |")
+    out.append("")
+print("\n".join(out))
