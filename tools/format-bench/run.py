@@ -9,11 +9,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BIN = HERE / "target/release/varlit-format-bench"
-# Final plan: per scenario, the recommended Varlit configuration(s) for that
-# workload (see README) and the three other formats.
+# Final plan: per scenario, each engine's layout for that data (the first of
+# its candidates; see README), Varlit also with trusted reads.
 PLAN = {
     "grid": ["varlit", "varlit+trusted", "sqlite", "hdf5", "parquet"],
-    "oltp": ["varlit-append", "varlit-append+trusted", "varlit-matrix-packed+trusted", "sqlite", "hdf5", "parquet"],
+    "oltp": ["varlit", "varlit+trusted", "sqlite", "hdf5", "parquet"],
+    "oltp-sparse": ["varlit", "varlit+trusted", "sqlite", "hdf5"],
     "analytics": ["varlit", "varlit+trusted", "sqlite", "hdf5", "parquet"],
 }
 

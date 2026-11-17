@@ -4,6 +4,6 @@
 #   systemd-run --user --unit=fb-sweep-all --working-directory=$PWD sh sweep_all.sh OUT_ROOT
 set -e
 OUT=${1:?OUT_ROOT}
-for s in cells grid analytics oltp mixed; do
+for s in cells grid analytics oltp oltp-sparse mixed; do
   python3 sweep.py "$s" "$OUT/sweep-$s" --repeats 3
 done

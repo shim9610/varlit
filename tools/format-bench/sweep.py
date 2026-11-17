@@ -27,7 +27,8 @@ HERE = Path(__file__).resolve().parent
 BIN = HERE / "target/release/varlit-format-bench"
 MEMCAP = "4G"
 GATE = 0.7  # probe seconds; healthy disk ~0.48 s
-OBJECTIVE = {"cells": ("batches_per_s", "max"), "oltp": ("total_s", "min"), "analytics": ("query_s", "min"),
+OBJECTIVE = {"cells": ("batches_per_s", "max"), "oltp": ("total_s", "min"), "oltp-sparse": ("total_s", "min"),
+             "analytics": ("query_s", "min"),
              "mixed": ("realtime_factor", "max"), "grid": ("reads_s", "min")}
 # Requirement checks on measured rows: a violated requirement is a FAIL even
 # when the run completed (the numbers stay for reference).
@@ -43,11 +44,13 @@ TUNE_ENV = {"mixed": {"FB_WINDOWS": "3000", "FB_ALL_READERS": "4"}}
 MEASURE_ENV = {"mixed": {"FB_WINDOWS": "60000", "FB_PACE": "1", "FB_ALL_READERS": "4"}}
 VARIANTS = {"cells": [{"FB_LOSS_MS": "0"}, {"FB_LOSS_MS": "1000"}],
             "oltp": [{"FB_DIST": "uniform"}, {"FB_DIST": "zipf"}],
+            "oltp-sparse": [{"FB_DIST": "uniform"}, {"FB_DIST": "zipf"}],
             "analytics": [{}],
             "mixed": [{"FB_FRESH_MS": "10", "FB_LOSS_MS": "0"}, {"FB_FRESH_MS": "100", "FB_LOSS_MS": "1000"}],
             "grid": [{}]}
 ENGINES = {"cells": ["varlit", "sqlite", "hdf5", "parquet"],
            "oltp": ["varlit", "sqlite", "hdf5", "parquet"],
+           "oltp-sparse": ["varlit", "sqlite", "hdf5"],
            "analytics": ["varlit", "sqlite", "hdf5", "parquet"],
            "mixed": ["varlit", "sqlite", "hdf5", "parquet"],
            "grid": ["varlit", "sqlite", "hdf5", "parquet"]}

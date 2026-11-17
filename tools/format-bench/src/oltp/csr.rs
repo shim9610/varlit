@@ -7,8 +7,9 @@ use std::io::{BufReader, BufWriter, Read, Write};
 
 const BUCKETS: u64 = 64;
 
-/// Calls `each(branch, ids)` for every branch in order (ids ascending; empty
-/// branches included). Memory: one bucket (~1/64 of the pairs).
+/// Calls `each(branch, positions)` for every branch in order: the positions
+/// (0..accounts(), see `key_of`) of its accounts, ascending; empty branches
+/// included. Memory: one bucket (~1/64 of the pairs).
 pub fn by_branch(tmp: &Path, mut each: impl FnMut(u32, &[u64]) -> Result<()>) -> Result<()> {
     std::fs::create_dir_all(tmp)?;
     let nb = branches() as u64;
@@ -23,7 +24,7 @@ pub fn by_branch(tmp: &Path, mut each: impl FnMut(u32, &[u64]) -> Result<()>) ->
             })
             .collect::<Result<Vec<_>>>()?;
         for id in 0..accounts() {
-            let b = branch_of(id) as u64;
+            let b = branch_of(key_of(id)) as u64;
             let w = &mut ws[(b * BUCKETS / nb) as usize];
             w.write_all(&(b as u32).to_le_bytes())?;
             w.write_all(&id.to_le_bytes())?;

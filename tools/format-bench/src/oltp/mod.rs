@@ -1,7 +1,10 @@
-//! Scenario `oltp`: bank accounts with durable read-modify-write transfers.
+//! Scenarios `oltp` and `oltp-sparse`: bank accounts with durable
+//! read-modify-write transfers. `oltp` numbers the accounts 0..n (dense
+//! ids); `oltp-sparse` gives them keys spread over the 64-bit space
+//! (`key_of`), everything else equal.
 //!
 //! Situation (the only thing this module decides):
-//! - 200,000,000 accounts (`FB_SMALL=1`: 1,000,000) arrive in id order:
+//! - 200,000,000 accounts (`FB_SMALL=1`: 1,000,000) arrive in key order:
 //!   `id u64, branch u32, balance i64, name [u8; 24], created u64`; branch is
 //!   a random attribute (one branch per ~100 accounts).
 //! - Then 1000 transactions, each 10 transfers between accounts chosen by the
@@ -21,15 +24,10 @@ use std::path::{Path, PathBuf};
 
 pub mod csr;
 mod h5;
-pub mod pack;
 mod pq;
 mod sq;
-mod vl_append;
-mod vl_grouped;
-mod vl_heap;
-mod vl_rows;
 mod vl_matrix;
-mod vl_packed;
+mod vl_keyed;
 
 pub const TXNS: usize = 1000;
 pub const TRANSFERS: usize = 10;
@@ -50,6 +48,26 @@ pub fn accounts() -> u64 {
             200_000_000
         }
     })
+}
+static SPARSE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether this run is `oltp-sparse`: account keys spread over the 64-bit
+/// space instead of dense ids.
+pub fn sparse() -> bool {
+    SPARSE.get().copied().unwrap_or(false)
+}
+
+/// The key of the account at position `i` (0..accounts(), the order the
+/// accounts are loaded in). Dense: `i`. Sparse: increasing keys about 2^24
+/// apart with a random low part, so a keyspace as wide as the keys is about
+/// sixteen million times the number of accounts: a structure addressed by
+/// key (a matrix) cannot hold it, and every engine needs a key lookup.
+pub fn key_of(i: u64) -> u64 {
+    if sparse() {
+        (i << 24) | (splitmix(i ^ 0x5EA) & 0xFF_FFFF)
+    } else {
+        i
+    }
 }
 pub fn branches() -> u32 {
     (accounts() / 100) as u32
@@ -85,10 +103,11 @@ pub fn initial_row(id: u64) -> Row {
 }
 
 pub trait Oltp {
-    /// Load every account (`initial_row(id)` for id in 0..accounts()) and
+    /// Load every account (`initial_row(key_of(i))` for i in 0..accounts(), in
+    /// that order) and
     /// build whatever the adapter needs; durable when it returns.
     fn load(&mut self) -> Result<()>;
-    /// Apply `(id, delta)` (distinct ids) as one atomic, durable transaction
+    /// Apply `(key, delta)` (distinct keys) as one atomic, durable transaction
     /// that reads the current balances from storage.
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()>;
     /// Optional maintenance after the workload (timed separately).
@@ -102,26 +121,27 @@ pub trait OltpRead {
     fn branch(&mut self, b: u32) -> Result<(i64, u64)>;
 }
 
+/// The storage each engine is measured with: the one a user of that engine
+/// would choose for this data. Dense ids map straight to positions (a
+/// Varlit matrix, HDF5 datasets, Parquet); sparse keys need a key lookup
+/// (Varlit keyed storage, HDF5 with a sorted key dataset; Parquet and the
+/// matrix do not apply). SQLite stores rows by key either way. Several
+/// entries are tuning knobs of the same layout.
 pub fn candidates(engine: &str) -> Result<&'static [&'static str]> {
-    Ok(match engine {
-        "varlit" => &["grouped", "heap", "rows", "matrix", "append", "packed-matrix"],
-        "sqlite" => sq::CANDIDATES,
-        "hdf5" => h5::CANDIDATES,
-        "parquet" => pq::CANDIDATES,
-        _ => return Err(format!("unknown engine {engine}").into()),
+    Ok(match (engine, sparse()) {
+        ("varlit", false) => &["matrix"],
+        ("varlit", true) => &["keyed"],
+        ("sqlite", _) => sq::CANDIDATES,
+        ("hdf5", _) => h5::CANDIDATES,
+        ("parquet", false) => pq::CANDIDATES,
+        _ => return Err(format!("{engine} has no layout for this scenario").into()),
     })
 }
 /// Effort accounting: every source file the (engine, candidate) adapter uses.
 pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
     match (engine, cand) {
-        ("varlit", "grouped") => "src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs",
-        ("varlit", "heap") => "src/oltp/vl_heap.rs,src/oltp/pack.rs,src/oltp/csr.rs",
-        ("varlit", "rows") => "src/oltp/vl_rows.rs,src/oltp/csr.rs",
-        ("varlit", "append") => {
-            "src/oltp/vl_append.rs,src/oltp/vl_grouped.rs,src/oltp/pack.rs,src/oltp/csr.rs"
-        }
         ("varlit", "matrix") => "src/oltp/vl_matrix.rs,src/oltp/csr.rs",
-        ("varlit", _) => "src/oltp/vl_packed.rs,src/oltp/pack.rs,src/oltp/csr.rs",
+        ("varlit", "keyed") => "src/oltp/vl_keyed.rs,src/oltp/csr.rs",
         ("sqlite", _) => "src/oltp/sq.rs",
         ("hdf5", _) => "src/oltp/h5.rs,src/oltp/csr.rs",
         ("parquet", _) => "src/oltp/pq.rs,src/oltp/csr.rs",
@@ -130,12 +150,8 @@ pub fn adapter_files(engine: &str, cand: &str) -> &'static str {
 }
 fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
     match (engine, cand) {
-        ("varlit", "grouped") => vl_grouped::create(p),
-        ("varlit", "heap") => vl_heap::create(p),
-        ("varlit", "rows") => vl_rows::create(p),
-        ("varlit", "append") => vl_append::create(p),
         ("varlit", "matrix") => vl_matrix::create(p),
-        ("varlit", "packed-matrix") => vl_packed::create(p),
+        ("varlit", "keyed") => vl_keyed::create(p),
         ("sqlite", c) => sq::create(p, c),
         ("hdf5", c) => h5::create(p, c),
         ("parquet", c) => pq::create(p, c),
@@ -144,12 +160,8 @@ fn create(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn Oltp>> {
 }
 fn open(engine: &str, cand: &str, p: &Path) -> Result<Box<dyn OltpRead>> {
     match (engine, cand) {
-        ("varlit", "grouped") => vl_grouped::open(p),
-        ("varlit", "heap") => vl_heap::open(p),
-        ("varlit", "rows") => vl_rows::open(p),
-        ("varlit", "append") => vl_append::open(p),
         ("varlit", "matrix") => vl_matrix::open(p),
-        ("varlit", "packed-matrix") => vl_packed::open(p),
+        ("varlit", "keyed") => vl_keyed::open(p),
         ("sqlite", c) => sq::open(p, c),
         ("hdf5", c) => h5::open(p, c),
         ("parquet", c) => pq::open(p, c),
@@ -194,7 +206,13 @@ impl Dist {
     }
 }
 
-pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
+/// Chooses dense ids or sparse keys for this process.
+pub fn select(sparse_keys: bool) {
+    SPARSE.get_or_init(|| sparse_keys);
+}
+
+pub fn run(engine: &str, dir: &Path, sparse_keys: bool) -> Result<Metrics> {
+    select(sparse_keys);
     let cand = cand();
     let cand = if cand.is_empty() {
         candidates(engine)?[0].to_string()
@@ -212,7 +230,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     for _ in 0..TXNS {
         let mut net: std::collections::BTreeMap<u64, i64> = Default::default();
         for _ in 0..TRANSFERS {
-            let (a, b) = (d.id(), d.id());
+            let (a, b) = (key_of(d.id()), key_of(d.id()));
             amt = splitmix(amt);
             let x = (amt % 500) as i64 + 1;
             *net.entry(a).or_default() -= x;
@@ -224,7 +242,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
         }
         plan.push(net.into_iter().collect());
     }
-    let pts: Vec<u64> = (0..POINTS).map(|_| d.id()).collect();
+    let pts: Vec<u64> = (0..POINTS).map(|_| key_of(d.id())).collect();
     let brs: Vec<u32> = (0..BRANCH_Q)
         .map(|_| (d.raw() % branches() as u64) as u32)
         .collect();
@@ -306,7 +324,7 @@ pub fn run(engine: &str, dir: &Path) -> Result<Metrics> {
     }
     let q: HashMap<u32, usize> = brs.iter().enumerate().map(|(i, &b)| (b, i)).collect();
     let mut want = vec![(0i64, 0u64); BRANCH_Q];
-    for id in 0..n {
+    for id in (0..n).map(key_of) {
         if let Some(&i) = q.get(&branch_of(id)) {
             want[i].0 += START;
             want[i].1 += 1;

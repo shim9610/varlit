@@ -47,6 +47,14 @@ parts.append(table(
       f"{g('oltp', f, 'txn_p50_ms'):.2f}", f"{g('oltp', f, 'txn_p99_ms'):.2f}",
       ms(g('oltp', f, 'warm_points_s')), ms(g('oltp', f, 'warm_branch_s')), mb(g('oltp', f, 'bytes'))]
      for f in fmts("oltp")]))
+if fmts("oltp-sparse"):
+    parts.append("\n### oltp-sparse: 1M accounts with sparse keys\n")
+    parts.append(table(
+        ["format", "load s", "1000 txn s", "txn p50 ms", "txn p99 ms", "20k points ms", "200 branch aggregates ms", "MB"],
+        [[f, f"{g('oltp-sparse', f, 'load_s') + g('oltp-sparse', f, 'maint_s'):.2f}", f"{g('oltp-sparse', f, 'txn_s'):.2f}",
+          f"{g('oltp-sparse', f, 'txn_p50_ms'):.2f}", f"{g('oltp-sparse', f, 'txn_p99_ms'):.2f}",
+          ms(g('oltp-sparse', f, 'warm_points_s')), ms(g('oltp-sparse', f, 'warm_branch_s')), mb(g('oltp-sparse', f, 'bytes'))]
+         for f in fmts("oltp-sparse")]))
 parts.append("\n### analytics: 4M rows x 12 columns (Parquet-favored)\n")
 parts.append(table(
     ["format", "write s", "Q1 group-by ms", "Q2 20 ranges ms", "MB"],

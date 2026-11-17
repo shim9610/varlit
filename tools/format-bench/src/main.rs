@@ -27,7 +27,8 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&dir)?;
             let mut m = match a[2].as_str() {
                 "grid" => grid::run(&a[3], &dir)?,
-                "oltp" => oltp::run(&a[3], &dir)?,
+                "oltp" => oltp::run(&a[3], &dir, false)?,
+                "oltp-sparse" => oltp::run(&a[3], &dir, true)?,
                 "analytics" => analytics::run(&a[3], &dir)?,
                 "mixed" => mixed::run(&a[3], &dir)?,
                 "cells" => cells::run(&a[3], &dir)?,
@@ -42,6 +43,10 @@ fn main() -> Result<()> {
             let c: &[&str] = match a[2].as_str() {
                 "cells" => cells::candidates(&a[3])?,
                 "oltp" => oltp::candidates(&a[3])?,
+                "oltp-sparse" => {
+                    oltp::select(true);
+                    oltp::candidates(&a[3])?
+                }
                 "analytics" => analytics::candidates(&a[3])?,
                 "mixed" => mixed::candidates(&a[3])?,
                 "grid" => grid::candidates(&a[3])?,
@@ -53,7 +58,7 @@ fn main() -> Result<()> {
         Some("adapter") => {
             let f = match a[2].as_str() {
                 "cells" => cells::adapter_file(&a[3], &a[4]),
-                "oltp" => oltp::adapter_files(&a[3], &a[4]),
+                "oltp" | "oltp-sparse" => oltp::adapter_files(&a[3], &a[4]),
                 "analytics" => analytics::adapter_files(&a[3], &a[4]),
                 "mixed" => mixed::adapter_files(&a[3], &a[4]),
                 "grid" => grid::adapter_files(&a[3], &a[4]),

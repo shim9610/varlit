@@ -37,7 +37,7 @@ impl Oltp for W {
         let tx = self.0.transaction()?;
         {
             let mut st = tx.prepare("INSERT INTO accounts VALUES (?1, ?2, ?3, ?4, ?5)")?;
-            for id in 0..accounts() {
+            for id in (0..accounts()).map(key_of) {
                 let r = initial_row(id);
                 st.execute(params![
                     id as i64,

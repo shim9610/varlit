@@ -4,13 +4,23 @@
 //! fills; account `id` is row `id / COLS`, column `id % COLS`, and runs
 //! cross rows in that order. A transaction reads each touched account,
 //! writes its cell back and `sync()`s. The branch index is CSR in two more
-//! matrix blocks (ids and offsets, 1024 per cell), as in `vl_packed`.
+//! matrix blocks (ids and offsets, 1024 per cell).
 //! app-built: CSR branch index in matrix cells (csr.rs)
 use super::*;
 use varlit::{MatrixDimensions, MatrixKey, VarlitFile, varlit_format};
 
 const COLS: u64 = 1024;
 const IDS: usize = 1024;
+/// A cell's payload: the block's fields in order, little-endian.
+const AB: usize = 44;
+
+fn enc(id: u64, out: &mut [u8]) {
+    let r = initial_row(id);
+    out[0..4].copy_from_slice(&r.branch.to_le_bytes());
+    out[4..12].copy_from_slice(&r.balance.to_le_bytes());
+    out[12..36].copy_from_slice(&r.name);
+    out[36..44].copy_from_slice(&r.created.to_le_bytes());
+}
 
 varlit_format! {
     pub format BankMatrix {
@@ -81,21 +91,19 @@ pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
 }
 impl Oltp for W {
     fn load(&mut self) -> Result<()> {
-        // Whole rows of the keyspace at a time, as one run each: a cell's
-        // payload is the account's packed 44 bytes (`pack::enc`, the
-        // block's field order).
-        let mut run = vec![0u8; COLS as usize * super::pack::AB];
+        // Whole rows of the keyspace at a time, as one run each.
+        let mut run = vec![0u8; COLS as usize * AB];
         let mut id = 0;
         while id < accounts() {
             let n = (accounts() - id).min(COLS) as usize;
-            for (i, cell) in run[..n * super::pack::AB]
-                .chunks_exact_mut(super::pack::AB)
+            for (i, cell) in run[..n * AB]
+                .chunks_exact_mut(AB)
                 .enumerate()
             {
-                super::pack::enc(id + i as u64, START, cell);
+                enc(id + i as u64, cell);
             }
             self.f
-                .write_matrix_run_bytes::<Acct>(k(id), &run[..n * super::pack::AB])?;
+                .write_matrix_run_bytes::<Acct>(k(id), &run[..n * AB])?;
             id += n as u64;
         }
         // The CSR: ids in branch order, then the offset of each branch.
