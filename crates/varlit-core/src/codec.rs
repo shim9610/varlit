@@ -792,6 +792,32 @@ impl<'o, T: VarlitDecode> DecoderCallback for IntoCallback<'o, T> {
     }
 }
 
+/// Which part of a keyed-storage record a decode fills: its key fields from
+/// the stored key, the other fields from the stored value, or the other
+/// fields with the key fields taken from a key the caller holds.
+#[derive(Clone, Copy)]
+pub(crate) enum KeyedPart<'k, K> {
+    Key,
+    ValueFields,
+    Value(&'k K),
+}
+struct KeyedCallback<'o, 'k, T: crate::VarlitKeyedBlock>(
+    std::marker::PhantomData<(&'o mut T, &'k T::Key)>,
+);
+impl<'o, 'k, T: crate::VarlitKeyedBlock> DecoderCallback for KeyedCallback<'o, 'k, T> {
+    type Input = (&'o mut T, KeyedPart<'k, T::Key>);
+    type Output = ();
+    const BUILTIN: bool = false;
+    const CALLBACK_FREE: bool = false;
+    fn call((out, part): Self::Input, decoder: &mut Decoder<'_>) -> Result<()> {
+        match part {
+            KeyedPart::Key => T::__varlit_decode_key_into(out, decoder),
+            KeyedPart::ValueFields => T::__varlit_decode_value_fields_into(out, decoder),
+            KeyedPart::Value(key) => T::__varlit_decode_value_into(key, out, decoder),
+        }
+    }
+}
+
 // Nested checked calls already have a short-lived, unforgeable frame borrow.
 // Reuse that decoder instead of moving its field-id set at every scalar call.
 struct CallbackGuard<'d, 'i> {
@@ -889,40 +915,28 @@ impl<'a> Decoder<'a> {
         result
     }
 
-    /// [`Self::decode_from_slice_accounted_into`] for a keyed-storage
-    /// value: the record's fields but its key fields, which come from `key`.
-    pub(crate) fn decode_keyed_value_accounted_into<T: crate::VarlitKeyedBlock>(
+    /// [`Self::decode_from_slice_accounted_into`] for a part of a
+    /// keyed-storage record (see [`KeyedPart`]): all of `input` decodes into
+    /// `out` through the checked callback boundary.
+    pub(crate) fn decode_keyed_accounted_into<T: crate::VarlitKeyedBlock>(
         input: &'a [u8],
         endian: Endian,
         materialization_remaining: &mut u64,
-        key: &T::Key,
         out: &mut T,
-    ) -> Result<()> {
-        Self::decode_accounted_with(input, endian, materialization_remaining, &mut |decoder| {
-            T::__varlit_decode_value_into(key, out, decoder)
-        })
-    }
-
-    /// Runs `decode` over all of `input`, charged to
-    /// `materialization_remaining`; bytes it leaves are an error.
-    pub(crate) fn decode_accounted_with(
-        input: &'a [u8],
-        endian: Endian,
-        materialization_remaining: &mut u64,
-        decode: &mut dyn FnMut(&mut Decoder<'a>) -> Result<()>,
+        part: KeyedPart<'_, T::Key>,
     ) -> Result<()> {
         let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
+        // A panicking callback cannot refund previously charged work.
         *materialization_remaining = 0;
-        let result = decode(&mut decoder).and_then(|()| {
-            if decoder.remaining() != 0 {
-                return Err(Error::TrailingBytes {
-                    remaining: decoder.remaining(),
-                });
-            }
-            Ok(())
-        });
+        let result = decoder.with_callback::<KeyedCallback<'_, '_, T>>((out, part));
         *materialization_remaining = decoder.materialization_remaining;
-        result
+        result?;
+        if decoder.remaining() != 0 {
+            return Err(Error::TrailingBytes {
+                remaining: decoder.remaining(),
+            });
+        }
+        Ok(())
     }
 
     pub fn endian(&self) -> Endian {

@@ -319,6 +319,18 @@
       "target": "codec::Decoder::decode_from_slice_accounted_into",
       "owner": "materialization",
       "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_keyed_into",
+      "target": "Decoder::decode_keyed_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
+    },
+    {
+      "caller": "collections::<impl at crates/varlit-core/src/collections.rs>::decode_keyed_into",
+      "target": "codec::Decoder::decode_keyed_accounted_into",
+      "owner": "materialization",
+      "field": "remaining"
     }
   ],
   "callback_boundaries": [
@@ -328,6 +340,6 @@
   "callback_adapters": [
     "codec::<impl at crates/varlit-core/src/codec.rs>::call"
   ],
-  "adapter_count": 3,
+  "adapter_count": 6,
   "builtin_evidence": true
 }

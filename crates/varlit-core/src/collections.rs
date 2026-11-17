@@ -103,25 +103,16 @@ impl MaterializationBudget {
         Decoder::decode_from_slice_accounted_into(bytes, endian, &mut self.remaining, out)
     }
 
-    /// Runs `decode` over all of `bytes`, charged to this budget.
-    pub(crate) fn decode_with<'a>(
-        &mut self,
-        bytes: &'a [u8],
-        endian: Endian,
-        decode: &mut dyn FnMut(&mut Decoder<'a>) -> Result<()>,
-    ) -> Result<()> {
-        Decoder::decode_accounted_with(bytes, endian, &mut self.remaining, decode)
-    }
-
-    /// Decodes a keyed-storage value, its key fields taken from `key`.
-    pub(crate) fn decode_keyed_value_into<T: crate::VarlitKeyedBlock>(
+    /// Decodes a part of a keyed-storage record from all of `bytes` into
+    /// `out`, charged to this budget.
+    pub(crate) fn decode_keyed_into<T: crate::VarlitKeyedBlock>(
         &mut self,
         bytes: &[u8],
         endian: Endian,
-        key: &T::Key,
         out: &mut T,
+        part: crate::codec::KeyedPart<'_, T::Key>,
     ) -> Result<()> {
-        Decoder::decode_keyed_value_accounted_into(bytes, endian, &mut self.remaining, key, out)
+        Decoder::decode_keyed_accounted_into(bytes, endian, &mut self.remaining, out, part)
     }
 }
 

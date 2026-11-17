@@ -62,6 +62,8 @@ pub(crate) struct HeapStats {
     pub marks: u64,
     /// Rounds the writer published by itself: the change budget was spent.
     pub rounds: u64,
+    /// Checkpoints of every publication, run when they filled half the ring.
+    pub checkpoints: u64,
 }
 
 /// Knobs of the writer, chosen at open. Tests shrink the bytes a page may
@@ -268,6 +270,15 @@ impl KeyedHeap {
         let generation = self.ring.publish(store)?;
         self.round_bytes = 0;
         self.freed_waiting += core::mem::take(&mut self.freed_open);
+        // Once publications fill half the ring, put all of them in place in
+        // one pass, before a frame finds no room and checkpoints a few of
+        // them: one read of the ring and two barriers per half ring, and a
+        // page changed by several publications copied once.
+        if self.ring.published_ring_bytes() * 2 >= self.ring.ring_area() {
+            self.ring.checkpoint(store, u64::MAX)?;
+            self.stats.checkpoints += 1;
+            self.raise(store)?;
+        }
         Ok(generation)
     }
 

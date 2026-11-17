@@ -327,6 +327,11 @@ table, inside varlit blocks.
   round ends before its publication would outgrow half the ring and stream
   into an index appended to the file, so bulk loads publish more often
   instead of growing the file.
+- **Checkpoints are whole.** When publications take half the ring the
+  writer puts all of them in place in one pass: the ring is read once,
+  straight from the frames to their places, and a page rewritten by several
+  publications is copied once. Readers keep 512 pages of their generation
+  in memory, so a lookup on hot pages reads nothing.
 - **Space.** Pages are kept at least half full (splits halve a page;
   merges join neighbours that fit one page), and freed pages are reused
   before the file grows. The strict free-space ratio of the earlier designs

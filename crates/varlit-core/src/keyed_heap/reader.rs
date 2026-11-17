@@ -3,6 +3,7 @@
 //! moved past gets `MatrixSnapshotExpired` and must follow, never a mixed
 //! answer.
 
+use super::cache::{Cached, PageCache};
 use super::lookup::{Ctx, View};
 use super::node::NODE_BYTES;
 use super::tree::{self, KeySrc};
@@ -16,6 +17,8 @@ pub(crate) struct KeyedReader {
     reader: RingReader,
     state: State,
     roots: Roots,
+    /// Tree pages of this snapshot, kept in memory taken at open.
+    cache: PageCache,
 }
 
 impl KeyedReader {
@@ -30,6 +33,7 @@ impl KeyedReader {
             reader: RingReader::open(source, fixed.ring)?,
             state: State::default(),
             roots: Roots::default(),
+            cache: PageCache::new()?,
         };
         reader.load_state(source)?;
         Ok(reader)
@@ -62,6 +66,7 @@ impl KeyedReader {
         if !self.reader.follow(source)? {
             return Ok(false);
         }
+        self.cache.clear();
         self.load_state(source)?;
         Ok(true)
     }
@@ -80,7 +85,12 @@ impl KeyedReader {
             return Ok(None);
         };
         let mut page = [0u8; NODE_BYTES];
-        let mut ctx = Ctx::new(&mut self.reader, source);
+        let mut view = Cached {
+            inner: &mut self.reader,
+            cache: &mut self.cache,
+            missed: false,
+        };
+        let mut ctx = Ctx::new(&mut view, source);
         tree::seek(&mut ctx, self.roots.slots[slot].root(), from, &mut page).map(Some)
     }
 
@@ -92,7 +102,12 @@ impl KeyedReader {
         visit: &mut tree::Visit<'_>,
     ) -> Result<()> {
         let mut page = [0u8; NODE_BYTES];
-        let mut ctx = Ctx::new(&mut self.reader, source);
+        let mut view = Cached {
+            inner: &mut self.reader,
+            cache: &mut self.cache,
+            missed: false,
+        };
+        let mut ctx = Ctx::new(&mut view, source);
         tree::scan(&mut ctx, cursor, &mut page, visit)
     }
 
@@ -113,9 +128,14 @@ impl KeyedReader {
         encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
     ) -> Result<bool> {
         for _ in 0..8 {
-            let mut view = Unsettled {
+            let mut unsettled = Unsettled {
                 reader: &mut self.reader,
                 oldest: u64::MAX,
+            };
+            let mut view = Cached {
+                inner: &mut unsettled,
+                cache: &mut self.cache,
+                missed: false,
             };
             let result = attempt(
                 &mut view,
@@ -127,12 +147,26 @@ impl KeyedReader {
                 max_payload,
                 encode,
             );
-            let oldest = view.oldest;
-            // Settle even after an error: a damaged-looking record read
-            // while the ring moved is read again, not reported.
-            if self.reader.settle(source, oldest)? {
+            let missed = view.missed;
+            let oldest = unsettled.oldest;
+            // Nothing came from the file: every page was this snapshot's,
+            // kept from reads that settled, so the answer is the snapshot's.
+            if !missed && result.is_ok() {
                 return result;
             }
+            // Settle even after an error: a damaged-looking record read
+            // while the ring moved is read again, not reported.
+            match self.reader.settle(source, oldest) {
+                Ok(true) => return result,
+                Ok(false) => {}
+                Err(error) => {
+                    self.cache.clear();
+                    return Err(error);
+                }
+            }
+            // Pages this attempt kept may have been read while the ring
+            // moved under them.
+            self.cache.clear();
         }
         Err(Error::MatrixSnapshotExpired {
             snapshot: self.reader.snapshot(),
@@ -144,7 +178,7 @@ impl KeyedReader {
 /// One unvalidated lookup of [`KeyedReader::get`].
 #[allow(clippy::too_many_arguments, reason = "one lookup's inputs")]
 fn attempt(
-    view: &mut Unsettled<'_>,
+    view: &mut dyn View,
     source: &dyn TileSource,
     roots: &Roots,
     block_id: u32,
@@ -163,7 +197,7 @@ fn attempt(
     let mut page = [0u8; NODE_BYTES];
     let mut ctx = Ctx::new(view, source);
     let key = KeySrc::Parts(key);
-    let (_, found) = tree::find(&mut ctx, roots.slots[slot].root(), &key, &mut page)?;
+    let (path, found) = tree::find(&mut ctx, roots.slots[slot].root(), &key, &mut page)?;
     let Some(body) = found else {
         return Ok(false);
     };
@@ -182,7 +216,8 @@ fn attempt(
         requested: len as u64,
     })?;
     buf.resize(len, 0);
-    tree::read_value(&mut ctx, &body, buf)?;
+    // The leaf is still in `page`: what the cell keeps comes from it.
+    tree::read_held(&mut ctx, &page, path.pages[0], &body, body.key.len, buf)?;
     Ok(true)
 }
 

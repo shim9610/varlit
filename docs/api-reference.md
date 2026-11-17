@@ -1028,7 +1028,8 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
 - **Reads.** `get_keyed(key, scratch, out)` encodes the key into `scratch`,
   then reads the payload into it and decodes into `out`; it allocates nothing
   else. A lookup reads one 4 KiB page per tree level and, for a record over
-  1 KiB, its overflow pages.
+  1 KiB, its overflow pages. A reader keeps 512 pages (2 MiB, taken when
+  it opens) of its generation in memory and reads them from there.
 - **Range reads.** `range_keyed(range, scratch, out, visit)` visits the
   records whose keys lie in `range` (any `RangeBounds` of the key) in key
   order, decoding each into `out` before `visit(&out)` runs; `visit` returns

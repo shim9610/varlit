@@ -21,6 +21,7 @@
 //!   the next and the generation that freed it. A page is taken again once
 //!   no reader or recovery can show a generation that used it.
 
+mod cache;
 pub(crate) mod heap;
 #[cfg(kani)]
 #[path = "../verification/keyed_heap.rs"]

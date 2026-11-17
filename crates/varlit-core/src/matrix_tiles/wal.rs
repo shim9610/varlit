@@ -739,3 +739,84 @@ pub(crate) fn index_frame(
 #[cfg(kani)]
 #[path = "../verification/matrix_ring.rs"]
 mod ring_proofs;
+
+/// What [`copy_committed`] passes each piece of an entry to: the source, the
+/// piece's target offset and its bytes.
+pub(crate) type CopyPiece<'c, S> = dyn FnMut(&mut S, u64, &[u8]) -> Result<()> + 'c;
+
+/// Reads the frames from ring offset `from` up to `end` once, in ring
+/// order, and passes every entry's bytes to `copy` in pieces as they stream
+/// through `scratch` (`copy(source, target, bytes)`), unless `skip(
+/// generation, target, len)` says another entry rewrites them.
+///
+/// Nothing is checked: only the writer that published these frames, or
+/// checked them when it opened, reads them this way, and nothing else
+/// writes the ring between its tail and head. Index frames are refused:
+/// their entries are not in the ring.
+pub(crate) fn copy_committed<S: TileSource + ?Sized>(
+    source: &mut S,
+    ring: Ring,
+    from: u64,
+    end: u64,
+    scratch: &mut [u8],
+    skip: &mut dyn FnMut(u64, u64, u32) -> bool,
+    copy: &mut CopyPiece<'_, S>,
+) -> Result<()> {
+    let bad = || crate::Error::InvalidMatrixLayout;
+    let mut at = from;
+    for _ in 0..=ring.area() / FRAME_MIN {
+        if at == end {
+            return Ok(());
+        }
+        if ring.area() - at < FRAME_MIN {
+            at = 0;
+            continue;
+        }
+        let mut header = [0u8; crate::width::small(FRAME_HEADER)];
+        source.read_at(ring.at(at), &mut header)?;
+        if &header[0..4] != FRAME_MAGIC {
+            return Err(bad());
+        }
+        let flags = u32::from_le_bytes(header[4..8].try_into().expect("four"));
+        let generation = u64::from_le_bytes(header[8..16].try_into().expect("eight"));
+        let len = u64::from(u32::from_le_bytes(header[16..20].try_into().expect("four")));
+        let count = u32::from_le_bytes(header[20..24].try_into().expect("four"));
+        if flags & FRAME_WRAP != 0 {
+            at = 0;
+            continue;
+        }
+        if flags & FRAME_INDEX != 0 {
+            return Err(bad());
+        }
+        let next = ring.after_frame(at, len).ok_or_else(bad)?;
+        let start = ring.at(at);
+        let mut stream = Stream::new(start + FRAME_HEADER, start + len - 4, scratch);
+        for _ in 0..count {
+            let mut entry = [0u8; crate::width::small(ENTRY_HEADER)];
+            if !stream.take(&*source, &mut entry) {
+                return Err(bad());
+            }
+            let (target, n) = stream_entry(&entry, stream.end - stream.pos).ok_or_else(bad)?;
+            if skip(generation, target, n) {
+                if !stream.advance(&*source, u64::from(n), None) {
+                    return Err(bad());
+                }
+                continue;
+            }
+            let mut done = 0u64;
+            while done < u64::from(n) {
+                if stream.lo == stream.hi && !stream.fill(&*source) {
+                    return Err(bad());
+                }
+                let take = crate::width::bounded(u64::from(n) - done, stream.hi - stream.lo);
+                let piece = &stream.buf[stream.lo..stream.lo + take];
+                copy(source, target + done, piece)?;
+                stream.lo += take;
+                stream.pos += take as u64;
+                done += take as u64;
+            }
+        }
+        at = next;
+    }
+    Err(bad())
+}

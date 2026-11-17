@@ -72,7 +72,12 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   record stores its key fields once (in the key, not again in the value).
   `range_keyed` (and generated `range_<block>`) visits a type's records in
   key order over any range, on writers and readers, decoding each into the
-  caller's value; it allocates nothing beyond the caller's buffer. The keyed ring is 2 MiB and blocks grow to 1 MiB, so a
+  caller's value; it allocates nothing beyond the caller's buffer.
+  Once publications take half its ring the writer checkpoints all of them:
+  one read of the ring, without re-checking frames it published, and a
+  range a later publication rewrites whole is not copied (matrix
+  checkpoints of every generation skip it too). A reader keeps 512 tree
+  pages (2 MiB, allocated at open) of its generation in memory. The keyed ring is 2 MiB and blocks grow to 1 MiB, so a
   file carries little space it does not use.
   Repeated updates no longer grow the file (the growth the security advisory
   describes). `KeyedStorage::with_change_budget` (64 MiB by default) bounds

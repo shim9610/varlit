@@ -309,6 +309,28 @@ impl Coalescer<'_> {
         Ok(())
     }
 
+    /// Writes `bytes` to `target`, after what is buffered when it follows on.
+    fn write(&mut self, store: &mut dyn TileStore, target: u64, bytes: &[u8]) -> Result<()> {
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let at = target + done as u64;
+            if self.len > 0 && self.at + self.len as u64 != at {
+                self.flush(store)?;
+            }
+            if self.len == 0 {
+                self.at = at;
+            }
+            let n = (bytes.len() - done).min(self.buf.len() - self.len);
+            self.buf[self.len..self.len + n].copy_from_slice(&bytes[done..done + n]);
+            self.len += n;
+            done += n;
+            if self.len == self.buf.len() {
+                self.flush(store)?;
+            }
+        }
+        Ok(())
+    }
+
     fn flush(&mut self, store: &mut dyn TileStore) -> Result<()> {
         if self.len > 0 {
             store.write_at(self.at, &self.buf[..self.len])?;
@@ -538,6 +560,11 @@ impl RingStore {
     /// The bytes of the ring's frame area.
     pub(crate) const fn ring_area(&self) -> u64 {
         self.ring.area()
+    }
+
+    /// Ring bytes the published generations not yet in place take.
+    pub(crate) fn published_ring_bytes(&self) -> u64 {
+        self.ring.used(self.header.tail, self.header.head)
     }
 
     /// The newest generation in place: ranges staged in it or before are no
@@ -1039,15 +1066,11 @@ impl RingStore {
 
     // ---- checkpoint ----
 
-    /// Puts the oldest published generations in place until at least `need`
-    /// contiguous ring bytes and half the ring are free, or all of them when
-    /// `need` is `u64::MAX`. Ranges stream from the ring and from indexes
-    /// through the copy buffer.
-    pub(crate) fn checkpoint(&mut self, store: &mut dyn TileStore, need: u64) -> Result<()> {
+    /// The fewest, oldest published generations whose checkpoint leaves
+    /// room for a frame of `need` bytes and half the ring: the newest of
+    /// them and where its frames end.
+    fn checkpoint_choice(&mut self, store: &mut dyn TileStore, need: u64) -> Result<(u64, u64)> {
         let header = self.header;
-        if header.published == header.checkpointed {
-            return Ok(());
-        }
         // Which generations to put in place: the fewest, oldest ones that
         // leave room. Readers whose snapshots are newer keep reading them.
         let area = self.ring.area();
@@ -1065,7 +1088,7 @@ impl RingStore {
             &mut |_, event| {
                 if let ScanEvent::Committed(generation, end) = event {
                     last = Some((generation, end));
-                    if need != u64::MAX && chosen.is_none() {
+                    if chosen.is_none() {
                         // The largest frame that fits once frames before
                         // `end` are gone, by the rule `place` then applies.
                         // Free half the ring at least, not just this frame's
@@ -1089,7 +1112,27 @@ impl RingStore {
         if last.0 != header.published {
             return Err(Error::InvalidMatrixLayout);
         }
-        let (target, new_tail) = chosen.unwrap_or(last);
+        Ok(chosen.unwrap_or(last))
+    }
+
+    /// Puts the oldest published generations in place until at least `need`
+    /// contiguous ring bytes and half the ring are free, or all of them when
+    /// `need` is `u64::MAX`. Ranges stream from the ring and from indexes
+    /// through the copy buffer; a range a newer generation of the same
+    /// checkpoint rewrites whole is skipped.
+    pub(crate) fn checkpoint(&mut self, store: &mut dyn TileStore, need: u64) -> Result<()> {
+        let header = self.header;
+        let ring = self.ring;
+        if header.published == header.checkpointed {
+            return Ok(());
+        }
+        // Everything published: the header says where it ends, so the ring
+        // is read once, to copy it.
+        let (target, new_tail) = if need == u64::MAX {
+            (header.published, header.head)
+        } else {
+            self.checkpoint_choice(store, need)?
+        };
 
         // Readers must see the mark before anything in place changes.
         let mut marked = self.header;
@@ -1100,38 +1143,71 @@ impl RingStore {
                 .cache
                 .get_mut()
                 .map_err(|_| Error::InvalidMatrixLayout)?;
+            // Only ring ranges, newest per target in the overlay: with an
+            // index layer the overlay is not the whole story, and every
+            // range is copied, checked, in order.
+            let dedup = self.layers.indexes().is_empty();
+            let overlay = &self.layers.overlay;
             let mut out = Coalescer {
                 buf: &mut self.copy,
                 at: 0,
                 len: 0,
                 writes: 0,
             };
-            // In ring order: generation after generation, and within one its
-            // ring ranges before its index, so the newest bytes land last.
-            wal::scan(
-                store,
-                ring,
-                header.tail,
-                header.checkpointed + 1,
-                target,
-                &mut self.scratch,
-                &mut |store, event| match event {
-                    ScanEvent::Entry(_, entry) => {
-                        out.copy(store, entry.target, entry.at, u64::from(entry.len))
-                    }
-                    ScanEvent::Index(generation, root) => index::for_each(
-                        cache,
-                        Io::Write(store),
-                        generation,
-                        root,
-                        &mut |io, target, at, len| match io {
-                            Io::Write(store) => out.copy(&mut **store, target, at, u64::from(len)),
-                            Io::Read(_) => Err(Error::InvalidMatrixLayout),
-                        },
-                    ),
-                    ScanEvent::Committed(..) => Ok(()),
-                },
-            )?;
+            let superseded = |generation: u64, at: u64, len: u32| {
+                // A newer generation put in place by this same checkpoint
+                // rewrites all of these bytes: copying them would be
+                // overwritten in the same pass.
+                overlay.get(at).is_some_and(|newest| {
+                    newest.generation > generation
+                        && newest.generation <= target
+                        && newest.len >= len
+                })
+            };
+            if dedup {
+                // Only ring ranges, all published by this writer or checked
+                // when it opened: one pass over the ring, in ring order
+                // (generation after generation, so the newest bytes land
+                // last), straight from the frames to their places.
+                wal::copy_committed(
+                    store,
+                    ring,
+                    header.tail,
+                    new_tail,
+                    &mut self.scratch,
+                    &mut |generation, at, len| superseded(generation, at, len),
+                    &mut |store, at, bytes| out.write(store, at, bytes),
+                )?;
+            } else {
+                // In ring order: generation after generation, and within one its
+                // ring ranges before its index, so the newest bytes land last.
+                wal::scan(
+                    store,
+                    ring,
+                    header.tail,
+                    header.checkpointed + 1,
+                    target,
+                    &mut self.scratch,
+                    &mut |store, event| match event {
+                        ScanEvent::Entry(_, entry) => {
+                            out.copy(store, entry.target, entry.at, u64::from(entry.len))
+                        }
+                        ScanEvent::Index(generation, root) => index::for_each(
+                            cache,
+                            Io::Write(store),
+                            generation,
+                            root,
+                            &mut |io, target, at, len| match io {
+                                Io::Write(store) => {
+                                    out.copy(&mut **store, target, at, u64::from(len))
+                                }
+                                Io::Read(_) => Err(Error::InvalidMatrixLayout),
+                            },
+                        ),
+                        ScanEvent::Committed(..) => Ok(()),
+                    },
+                )?;
+            }
             out.flush(store)?;
             self.stats.in_place_writes += out.writes;
         }

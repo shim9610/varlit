@@ -322,7 +322,10 @@ circularly.
   order (each generation's ring entries, then its index in key order, so the
   newest bytes of each target land last), syncs, writes
   a header with `checkpointed`, `reclaimed`, `tail` and `tail_gen` advanced,
-  and syncs again. No publication is refused for its size: a range too large
+  and syncs again. A checkpoint of every published generation without an
+  index reads the ring once, from `tail` to `head`, without checking the
+  frames again (the writer published or checked them), and skips a range
+  whose target a later range of the same checkpoint rewrites whole. No publication is refused for its size: a range too large
   for a frame, like a publication too large for the ring, goes to an index.
 - Ring size: `FormatSpec::with_matrix_ring_bytes`, or by default twice the
   slot bytes of the create-time extents over all blocks, clamped to
@@ -537,6 +540,13 @@ and `keyed_offset_chain`.
   page buffers: past either, the writer publishes the round and raises the
   mark to it, so a `sync` that changes more is several publications, each
   atomic. The ring is 2 MiB unless the format declares another size.
+- After a publication that leaves half the ring or more taken by
+  publications, the writer puts all of them in place (raising `mark` to the
+  last), so a frame rarely finds no room and checkpoints only some.
+- A reader keeps up to 512 tree pages (2 MiB, allocated when it opens) of
+  its generation in memory and empties them when it follows. A lookup whose
+  pages all come from there does not read the ring header: its answer is
+  its generation's.
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 - Pages freed by deleting most keys stay in the file for new keys to take;

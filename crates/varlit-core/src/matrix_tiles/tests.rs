@@ -1145,3 +1145,27 @@ fn a_crash_while_tiles_fill_overflow_space_recovers_all_or_nothing() {
     }
     assert!(outcomes[0] > 0 && outcomes[1] > 0, "{outcomes:?}");
 }
+
+/// A checkpoint of every publication copies a range once when later
+/// publications of the same checkpoint rewrite it whole: the newest value
+/// lands, and the older copies are not written at all.
+#[test]
+fn a_checkpoint_copies_a_rewritten_range_once() {
+    let mut store = MemStore::new();
+    let mut w = TileWriter::create(&mut store, geometry(false), 1 << 20, [7; 16]).unwrap();
+    let key = MatrixKey::new(3, 5);
+    // The tile and its directory entry first, in place.
+    put(&mut w, &mut store, key, 1);
+    w.engine.publish(&mut store).unwrap();
+    w.engine.checkpoint_all(&mut store).unwrap();
+    for generation in 2..=20u64 {
+        put(&mut w, &mut store, key, generation);
+        w.engine.publish(&mut store).unwrap();
+    }
+    let before = w.engine.stats.in_place_writes;
+    w.engine.checkpoint_all(&mut store).unwrap();
+    assert_eq!(w.engine.stats.in_place_writes - before, 1);
+    assert_eq!(mine(&mut w, &mut store, key), Some(20));
+    let mut r = TileReader::open(&store, geometry(false), w.meta).unwrap();
+    assert_eq!(seen(&mut r, &store, key).unwrap(), Some(20));
+}

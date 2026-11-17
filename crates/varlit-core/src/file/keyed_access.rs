@@ -201,8 +201,12 @@ impl VarlitFile {
             }
         }
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);
-        crate::collections::MaterializationBudget::new(self.spec)
-            .decode_keyed_value_into(scratch, endian, key, out)?;
+        crate::collections::MaterializationBudget::new(self.spec).decode_keyed_into(
+            scratch,
+            endian,
+            out,
+            crate::codec::KeyedPart::Value(key),
+        )?;
         Ok(true)
     }
 
@@ -332,12 +336,8 @@ impl VarlitFile {
                 }
             }
             let mut budget = crate::collections::MaterializationBudget::new(spec);
-            budget.decode_with(key, Endian::Big, &mut |decoder| {
-                T::__varlit_decode_key_into(out, decoder)
-            })?;
-            budget.decode_with(value, endian, &mut |decoder| {
-                T::__varlit_decode_value_fields_into(out, decoder)
-            })?;
+            budget.decode_keyed_into(key, Endian::Big, out, crate::codec::KeyedPart::Key)?;
+            budget.decode_keyed_into(value, endian, out, crate::codec::KeyedPart::ValueFields)?;
             visited += 1;
             visit(out)
         };
