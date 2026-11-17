@@ -279,6 +279,23 @@ impl VarlitFile {
         tiles.cell_status(&source, T::ID, key)
     }
 
+    /// Writes and commits a run of cells: `payloads` holds the encoded
+    /// payloads (`T::SLOT_STRIDE` bytes each, as
+    /// [`Self::read_matrix_run_bytes_into`] returns them) of consecutive
+    /// cells in storage order from `start`, crossing rows. The same as
+    /// [`Self::write_matrix_cell_payload`] then [`Self::commit_matrix_cell`]
+    /// on each cell, visible to readers at the next publication; a run is
+    /// staged a tile row at a time and each tile's commit bitmap once, so
+    /// loading many cells costs per tile, not per cell.
+    pub fn write_matrix_run_bytes<T: VarlitMatrixBlock>(
+        &mut self,
+        start: MatrixKey,
+        payloads: &[u8],
+    ) -> Result<()> {
+        crate::matrix::ensure_matrix_block::<T>(self.spec)?;
+        self.matrix_mutation(|tiles, store| tiles.write_run(store, T::ID, start, payloads))
+    }
+
     pub fn commit_matrix_cell<T: VarlitMatrixBlock>(&mut self, key: MatrixKey) -> Result<()> {
         crate::matrix::ensure_matrix_block::<T>(self.spec)?;
         self.matrix_mutation(|tiles, store| tiles.commit_cell(store, T::ID, key))

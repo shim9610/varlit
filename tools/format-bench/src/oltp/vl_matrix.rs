@@ -81,9 +81,22 @@ pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
 }
 impl Oltp for W {
     fn load(&mut self) -> Result<()> {
-        for id in 0..accounts() {
-            self.f.write_matrix_cell(k(id), &acct(id))?;
-            self.f.commit_matrix_cell::<Acct>(k(id))?;
+        // Whole rows of the keyspace at a time, as one run each: a cell's
+        // payload is the account's packed 44 bytes (`pack::enc`, the
+        // block's field order).
+        let mut run = vec![0u8; COLS as usize * super::pack::AB];
+        let mut id = 0;
+        while id < accounts() {
+            let n = (accounts() - id).min(COLS) as usize;
+            for (i, cell) in run[..n * super::pack::AB]
+                .chunks_exact_mut(super::pack::AB)
+                .enumerate()
+            {
+                super::pack::enc(id + i as u64, START, cell);
+            }
+            self.f
+                .write_matrix_run_bytes::<Acct>(k(id), &run[..n * super::pack::AB])?;
+            id += n as u64;
         }
         // The CSR: ids in branch order, then the offset of each branch.
         let (mut ids, mut offs) = (BrIds { ids: [0; IDS] }, BrOffs { off: [0; IDS] });

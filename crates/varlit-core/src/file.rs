@@ -4588,6 +4588,15 @@ impl VarlitWriter {
         self.file.matrix_cell_status::<T>(key)
     }
 
+    /// See [`VarlitFile::write_matrix_run_bytes`].
+    pub fn write_matrix_run_bytes<T: VarlitMatrixBlock>(
+        &mut self,
+        start: MatrixKey,
+        payloads: &[u8],
+    ) -> Result<()> {
+        self.file.write_matrix_run_bytes::<T>(start, payloads)
+    }
+
     pub fn commit_matrix_cell<T: VarlitMatrixBlock>(&mut self, key: MatrixKey) -> Result<()> {
         self.file.commit_matrix_cell::<T>(key)
     }

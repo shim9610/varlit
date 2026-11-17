@@ -73,6 +73,10 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   `range_keyed` (and generated `range_<block>`) visits a type's records in
   key order over any range, on writers and readers, decoding each into the
   caller's value; it allocates nothing beyond the caller's buffer.
+  `write_matrix_run_bytes` writes and commits a run of matrix cells in
+  storage order in one call, staging a tile row at a time and each tile's
+  commit bitmap once: loading 1M 44-byte cells takes 0.24 s instead of
+  2.3 s cell by cell.
   Once publications take half its ring the writer checkpoints all of them:
   one read of the ring, without re-checking frames it published, and a
   range a later publication rewrites whole is not copied (matrix

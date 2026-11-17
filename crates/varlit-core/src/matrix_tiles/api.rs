@@ -154,6 +154,9 @@ impl MatrixScratch {
 
 /// The first `len` bytes of a scratch buffer. It was sized for the matrix,
 /// so this grows it only if an earlier call lost it to an error.
+/// The most slot bytes [`TiledMatrix::write_run`] stages at once.
+pub(crate) const RUN_PIECE_BYTES: usize = 64 * 1024;
+
 fn sized(buffer: &mut Vec<u8>, len: u64) -> Result<&mut [u8]> {
     let len = crate::width::index(len)?;
     if buffer.len() < len {
@@ -1040,6 +1043,110 @@ impl TiledMatrix {
                 .engine
                 .stage(store, tile + geom.slot_at(slot), bytes)?;
             this.set_bit(store, geom, tile, slot, false, &mut scratch.bitmap)
+        })
+    }
+
+    /// Writes and commits a run of cells: `payloads` holds consecutive
+    /// cells' payloads in storage order (row after row of the keyspace) from
+    /// `start`. Equivalent to [`Self::write_cell`] then [`Self::commit_cell`]
+    /// on each cell, but each stretch of the run that lies in one tile row is
+    /// staged as one range, and each tile's commit bitmap is read and staged
+    /// once for the stretches it holds. Slots stream through the handle's
+    /// cell buffer in pieces of at most [`RUN_PIECE_BYTES`].
+    pub(crate) fn write_run(
+        &mut self,
+        store: &mut dyn TileStore,
+        block_id: u32,
+        start: MatrixKey,
+        payloads: &[u8],
+    ) -> Result<()> {
+        let block = self.block_index(block_id)?;
+        let geom = self.geom.blocks[block];
+        let stride = crate::width::index(geom.stride)?;
+        if stride == 0 || !payloads.len().is_multiple_of(stride) {
+            return Err(Error::MatrixSizeMismatch {
+                expected: geom.stride,
+                actual: payloads.len() as u64,
+            });
+        }
+        let cells = (payloads.len() / stride) as u64;
+        if cells == 0 {
+            return Ok(());
+        }
+        let width = self.geom.dims[1];
+        let first = start
+            .scan
+            .checked_mul(width)
+            .and_then(|at| at.checked_add(start.ch))
+            .ok_or(Error::InvalidMatrixLayout)?;
+        let last = first + cells - 1;
+        self.geom.check_key(start)?;
+        self.geom
+            .check_key(MatrixKey::new(last / width, last % width))?;
+        let slot_len = crate::width::index(geom.slot_len())?;
+        let piece_cells = (RUN_PIECE_BYTES / slot_len).max(1);
+        self.with_scratch(|this, scratch| {
+            // The tile whose bitmap is held in `scratch.bitmap`, changed and
+            // not staged yet.
+            let mut held: Option<u64> = None;
+            let mut done = 0u64;
+            while done < cells {
+                let at = first + done;
+                let key = MatrixKey::new(at / width, at % width);
+                let (coord, slot) = geom.locate(key);
+                // This stretch: the rest of the cell's tile row, of the
+                // keyspace row and of the run.
+                let in_tile_row = geom.tile[1] - key.ch % geom.tile[1];
+                let in_row = width - key.ch;
+                let stretch = in_tile_row.min(in_row).min(cells - done);
+                let tile = this
+                    .writer()?
+                    .tile(store, block, coord, true)?
+                    .ok_or(Error::InvalidMatrixLayout)?;
+                if held.is_some_and(|held| held != tile) {
+                    let previous = held.take().expect("held");
+                    this.writer()?.engine.stage(
+                        store,
+                        previous + geom.bitmap_at(),
+                        &scratch.bitmap[..crate::width::index(geom.bitmap_unit_len())?],
+                    )?;
+                }
+                if held.is_none() {
+                    this.bitmap_unit(store, geom, tile, &mut scratch.bitmap)?;
+                    held = Some(tile);
+                }
+                let mut put = 0u64;
+                while put < stretch {
+                    let n = crate::width::index((stretch - put).min(piece_cells as u64))?;
+                    let bytes = sized(&mut scratch.slot, (n * slot_len) as u64)?;
+                    for (i, slot_bytes) in bytes.chunks_exact_mut(slot_len).enumerate() {
+                        let cell = crate::width::index(done + put)? + i;
+                        let payload = &payloads[cell * stride..(cell + 1) * stride];
+                        slot_bytes[..stride].copy_from_slice(payload);
+                        slot_bytes[stride..]
+                            .copy_from_slice(&crc32fast::hash(payload).to_le_bytes());
+                    }
+                    this.writer()?
+                        .engine
+                        .stage(store, tile + geom.slot_at(slot + put), bytes)?;
+                    put += n as u64;
+                }
+                let unit = &mut scratch.bitmap;
+                for i in 0..stretch {
+                    let bit_at = slot + i;
+                    unit[(bit_at / 8) as usize] |= 1u8 << (bit_at % 8);
+                }
+                seal_bitmap(&mut unit[..crate::width::index(geom.bitmap_unit_len())?]);
+                done += stretch;
+            }
+            if let Some(tile) = held {
+                this.writer()?.engine.stage(
+                    store,
+                    tile + geom.bitmap_at(),
+                    &scratch.bitmap[..crate::width::index(geom.bitmap_unit_len())?],
+                )?;
+            }
+            Ok(())
         })
     }
 

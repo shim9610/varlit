@@ -358,8 +358,8 @@
     }
   },
   "functions": {
-    "catalogue": "1bab602b7e73a62c",
-    "count": 3530
+    "catalogue": "be905936293ee959",
+    "count": 3533
   },
   "schema": 1,
   "sources": {
@@ -390,7 +390,7 @@
     "crates/varlit-core/src/fallible.rs": "050087ba220aee11",
     "crates/varlit-core/src/fallible/memory_proofs.rs": "4eea1dc71b1748cf",
     "crates/varlit-core/src/fallible/proofs.rs": "ce2f7f38c0326c02",
-    "crates/varlit-core/src/file.rs": "bd4caab692bb5cf0",
+    "crates/varlit-core/src/file.rs": "02be563c4f29834a",
     "crates/varlit-core/src/file/append.rs": "26ae3705bb601016",
     "crates/varlit-core/src/file/directory.rs": "d7fabed364d3e3c9",
     "crates/varlit-core/src/file/follow.rs": "881c849233661229",
@@ -400,7 +400,7 @@
     "crates/varlit-core/src/file/lifecycle.rs": "bc0e4fb8c3fb4807",
     "crates/varlit-core/src/file/locks.rs": "da4f9fe3196bff8a",
     "crates/varlit-core/src/file/mapped_access.rs": "4cc708e2eb033758",
-    "crates/varlit-core/src/file/matrix_access.rs": "ccf400dbbb47624a",
+    "crates/varlit-core/src/file/matrix_access.rs": "9c13058a9170a698",
     "crates/varlit-core/src/file/matrix_sidecar.rs": "22f6ff7b5f0002b6",
     "crates/varlit-core/src/file/matrix_tiles_io.rs": "3470a73e671c3920",
     "crates/varlit-core/src/file/mmap_views.rs": "d7ed8d2814342371",
@@ -423,7 +423,7 @@
     "crates/varlit-core/src/keyed_heap/lookup.rs": "f12ba0b35fca620e",
     "crates/varlit-core/src/keyed_heap/mod.rs": "bee855e10ac16f44",
     "crates/varlit-core/src/keyed_heap/node.rs": "8c4962c7b5b90eb6",
-    "crates/varlit-core/src/keyed_heap/nodes.rs": "9014d317f011497a",
+    "crates/varlit-core/src/keyed_heap/nodes.rs": "6f1644db0c9b0b16",
     "crates/varlit-core/src/keyed_heap/reader.rs": "5aa37eca7a8324a0",
     "crates/varlit-core/src/keyed_heap/tests.rs": "8c641b83a2a9601c",
     "crates/varlit-core/src/keyed_heap/tree.rs": "d17d13bc398fea58",
@@ -431,7 +431,7 @@
     "crates/varlit-core/src/lib.rs": "5a45a88ae381b759",
     "crates/varlit-core/src/matrix.rs": "ae1e08c7d3e5f3fa",
     "crates/varlit-core/src/matrix_bulk.rs": "4f76e0dce341bd34",
-    "crates/varlit-core/src/matrix_tiles/api.rs": "171e4cd14ec9f87b",
+    "crates/varlit-core/src/matrix_tiles/api.rs": "78143a54ede5607c",
     "crates/varlit-core/src/matrix_tiles/arena.rs": "b9cb4762859d403c",
     "crates/varlit-core/src/matrix_tiles/geometry.rs": "f04e9aab0bf55417",
     "crates/varlit-core/src/matrix_tiles/host.rs": "9145ae6000d3c2d2",

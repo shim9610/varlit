@@ -2743,17 +2743,17 @@
       "callers": {
         "default": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
@@ -2763,6 +2763,16 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
             "target": "local_len",
             "result": "model/caller-specific"
@@ -2778,24 +2788,24 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:d94ca0072803b707]",
+            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:f00c0070da4dd9cf]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }
         ],
         "all": [
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "local_len",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
           {
-            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:899a00dc608f6613]",
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:17ded99ad2de4078]",
             "target": "write_varint",
             "result": "model/caller-specific"
           },
@@ -2805,6 +2815,16 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "inline_key(_1: &[u8], _2: usize, _3: bool) -> Option<&[u8]> [body:9c12ddd87ad87f7a]",
+            "target": "read_varint",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "parse(_1: &[u8], _2: u64, _3: bool) -> std::result::Result<Body, error::Error> [body:a17d192217f5eb87]",
             "target": "local_len",
             "result": "model/caller-specific"
@@ -2820,7 +2840,7 @@
             "result": "model/caller-specific"
           },
           {
-            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:d94ca0072803b707]",
+            "caller": "search_held(_1: &mut Ctx<'_>, _2: &[u8], _3: u64, _4: &KeySrc<'_>, _5: bool) -> std::result::Result<(usize, bool), error::Error> [body:f00c0070da4dd9cf]",
             "target": "search_entries",
             "result": "model/caller-specific"
           }

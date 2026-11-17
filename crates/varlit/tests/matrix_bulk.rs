@@ -435,3 +435,89 @@ fn filled<T: varlit::VarlitEmpty>(
     let mut out = T::empty();
     Ok(read(&mut out)?.then_some(out))
 }
+
+/// A run written in one call reads back like cells written and committed one
+/// by one: from a start inside a row, across rows, tile rows and tiles
+/// (8-byte cells: 64 x 128 default tiles over a 200-wide keyspace), over
+/// cells already written, on a fixed and a growing keyspace, before and
+/// after publication.
+#[test]
+fn a_written_run_matches_cells_written_one_by_one() -> varlit::Result<()> {
+    for growing in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let width = 200u64;
+        let rows = 300u64;
+        let dims =
+            MatrixDimensions::from_pairs([("row", if growing { 7 } else { rows }), ("col", width)]);
+        let spec = spec(IntegrityPolicy::None, growing);
+        let mut by_run = spec.create_writer_with_dims(dir.path().join("run"), dims.clone())?;
+        let mut by_cell = spec.create_writer_with_dims(dir.path().join("cell"), dims)?;
+        // Some cells first, which the run then overwrites.
+        for i in [5u64, 250, 9_999] {
+            for w in [&mut by_run, &mut by_cell] {
+                w.write_matrix_cell(key(i, width), &Cell { value: 1 })?;
+                w.commit_matrix_cell::<Cell>(key(i, width))?;
+            }
+        }
+        let (first, count) = (37u64, 40_000u64);
+        let mut payloads = Vec::new();
+        for i in first..first + count {
+            payloads.extend_from_slice(&(i * 3).to_le_bytes());
+            by_cell.write_matrix_cell(key(i, width), &Cell { value: i * 3 })?;
+            by_cell.commit_matrix_cell::<Cell>(key(i, width))?;
+        }
+        by_run.write_matrix_run_bytes::<Cell>(key(first, width), &payloads)?;
+        let check = |w: &varlit::VarlitWriter| -> varlit::Result<()> {
+            let mut run = vec![0u8; count as usize * 8];
+            w.read_matrix_run_bytes_into::<Cell>(key(first, width), &mut run)?;
+            assert_eq!(run, payloads);
+            let mut one = Cell { value: 0 };
+            w.read_matrix_cell(key(5, width), &mut one)?;
+            assert_eq!(one.value, 1);
+            Ok(())
+        };
+        check(&by_run)?;
+        by_run.sync()?;
+        by_cell.sync()?;
+        check(&by_run)?;
+        drop(by_run);
+        drop(by_cell);
+        let run = spec.open_reader(dir.path().join("run"))?;
+        let cell = spec.open_reader(dir.path().join("cell"))?;
+        let total = first + count + 100;
+        // Uncommitted cells read as errors: compare cell by cell.
+        for i in 0..total {
+            let (mut x, mut y) = (Cell { value: 0 }, Cell { value: 0 });
+            let rx = run
+                .read_matrix_cell(key(i, width), &mut x)
+                .map(|()| x.value);
+            let ry = cell
+                .read_matrix_cell(key(i, width), &mut y)
+                .map(|()| y.value);
+            assert_eq!(rx.ok(), ry.ok(), "cell {i}");
+        }
+    }
+    Ok(())
+}
+
+/// A run that does not hold whole cells, or that runs past the keyspace, is
+/// refused before anything is written.
+#[test]
+fn a_run_must_hold_whole_cells_inside_the_keyspace() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut w = spec(IntegrityPolicy::None, false).create_writer_with_dims(
+        dir.path().join("run"),
+        MatrixDimensions::from_pairs([("row", 4), ("col", 10)]),
+    )?;
+    assert!(matches!(
+        w.write_matrix_run_bytes::<Cell>(key(0, 10), &[0u8; 12]),
+        Err(Error::MatrixSizeMismatch { .. })
+    ));
+    assert!(
+        w.write_matrix_run_bytes::<Cell>(key(35, 10), &[0u8; 8 * 6])
+            .is_err()
+    );
+    let mut one = Cell { value: 0 };
+    assert!(w.read_matrix_cell(key(35, 10), &mut one).is_err());
+    Ok(())
+}

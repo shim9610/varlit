@@ -1180,6 +1180,7 @@ do not grow the file, so there is nothing to reclaim. See [durability](durabilit
 | `create_writer_with_dims(path, dims)` | create matrix file with runtime dimensions |
 | `write_matrix_cell::<T>(key, &value)` | encode and write a slot, clearing commit first |
 | `commit_matrix_cell::<T>(key)` | mark a written cell visible |
+| `write_matrix_run_bytes::<T>(start, payloads)` | write and commit consecutive cells in storage order from encoded payloads (slot stride each); staged a tile row at a time, each tile's bitmap once |
 | `read_matrix_cell::<T>(key, &mut out)` | decode committed cell into `out` or return `MatrixNotCommitted` |
 | `read_matrix_run_into::<T>(start, out)` | read consecutive cells into a caller-owned typed slice |
 | `read_matrix_run_bytes_into::<T>(start, out)` | read verified encoded cells into a byte slice, length divisible by slot stride |
