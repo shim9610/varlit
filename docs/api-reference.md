@@ -1020,32 +1020,38 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
 ```
 
 - **Generated methods.** For each keyed block of such a format the writer has
-  `put_<block>`, `remove_<block>` and `get_<block>`, the reader `get_<block>`.
-  No `push_`, `delete_`, `replace_` or listing methods are generated for those
-  blocks. The untyped equivalents are `VarlitFile::put_keyed`,
-  `remove_keyed` and `get_keyed` (also on `VarlitWriter` and `VarlitReader`).
+  `put_<block>`, `remove_<block>`, `get_<block>` and `range_<block>`, the
+  reader `get_<block>` and `range_<block>`. No `push_`, `delete_` or
+  `replace_` methods are generated for those blocks. The untyped equivalents
+  are `VarlitFile::put_keyed`, `remove_keyed`, `get_keyed` and `range_keyed`
+  (also on `VarlitWriter` and `VarlitReader`).
 - **Reads.** `get_keyed(key, scratch, out)` encodes the key into `scratch`,
   then reads the payload into it and decodes into `out`; it allocates nothing
-  else. A lookup checks the ring header once and reads the bucket directory,
-  a bucket page, the record's header and key, and its payload.
+  else. A lookup reads one 4 KiB page per tree level and, for a record over
+  1 KiB, its overflow pages.
+- **Range reads.** `range_keyed(range, scratch, out, visit)` visits the
+  records whose keys lie in `range` (any `RangeBounds` of the key) in key
+  order, decoding each into `out` before `visit(&out)` runs; `visit` returns
+  `false` to stop, and the call returns the records visited. Key order is
+  the stored bytes' order: the key fields encoded big-endian, so unsigned
+  integers and tuples of them are in numeric order (a signed field orders
+  negative values after positive ones; a string, by length first). A
+  reader's range is one snapshot; `visit` must not read the same handle's
+  keyed storage (`Error::KeyedStorageBusy`).
 - **Visibility.** A writer sees its own puts and removes at once. Readers see
   them after `sync`, which publishes them as one generation through the
   file's write-ahead ring; a writer dropped without `sync` publishes nothing.
   A reader keeps its generation until `follow`; one the ring has moved past
   gets `MatrixSnapshotExpired` and must `follow`.
-- **Space.** Records are kept in about a hundred size classes, each a dense
-  array of fixed-size items (records longer than 64 KiB are chains of
-  items). An update writes the new value into a reusable hole of its class
-  or at the class's end and frees the old one, reusable once the update is
-  in place; deletes leave no tombstone; classes whose last items are free
-  shrink and give their pages to other classes. When reusable holes exceed
-  the declared ratio of live bytes the writer moves classes' last items into
-  them. Beyond the live data a file holds rounding to a class (at most a
-  sixteenth), one partial 64 KiB page per class in use and its bitmaps, the
-  ring (`KeyedStorage::ring_bytes`, 16 MiB by default) and the values freed
-  but not yet reusable (at most about two change budgets); none of these
-  grows with the number of updates or with how sizes change. After deletes,
-  pages wait in a pool for new records; the file does not shrink yet.
+- **Space.** Records live in a B-tree of 4 KiB pages, one tree per keyed
+  block type: a record keeps its key fields once (in the key) and its other
+  fields as the value, whole in its leaf up to 1 KiB, else its first bytes
+  there and the rest in overflow pages. Pages are kept at least half full
+  and freed pages are reused once no reader can still show them. Beyond the
+  records a file holds the tree's free space, the ring
+  (`KeyedStorage::ring_bytes`, 2 MiB by default) and at most 1 MiB of pages
+  not yet used; none of these grows with the number of updates. After
+  deletes, freed pages wait for new keys; the file does not shrink.
 - **Change budget.** `KeyedStorage::with_change_budget(bytes)` (1 MiB to
   1 TiB, 64 MiB by default) bounds what one round of changes allocates. Past
   it the writer publishes the round by itself: changes before a `sync` may
@@ -1055,8 +1061,8 @@ if reader.get_profile(&"bob".to_string(), &mut scratch, &mut out)? { /* ... */ }
   `Error::KeyedStorageRequiresPut`; keyed calls on a format without keyed
   storage fail with `Error::InvalidFormatSpec`.
 - **Stats.** `VarlitFile::keyed_storage_stats()` returns `KeyedStorageStats`:
-  the generation shown, keys, live bytes, heap bytes, free region bytes and
-  slot buckets.
+  the generation shown, keys, live bytes, heap bytes, free region bytes,
+  leaf pages and index pages.
 
 ## Collections
 

@@ -357,6 +357,37 @@ impl KeyedHeap {
         Ok(body.map(|body| Found { body }))
     }
 
+    /// Positions a scan of `block_id`'s records at the first key at or past
+    /// `from` (past it when not inclusive), or at the first key; `None`
+    /// when the type has no records.
+    pub(crate) fn seek(
+        &self,
+        store: &dyn TileSource,
+        block_id: u32,
+        from: Option<(&[u8], bool)>,
+    ) -> Result<Option<tree::Cursor>> {
+        let Some(slot) = self.roots.find(block_id) else {
+            return Ok(None);
+        };
+        let mut page = [0u8; PAGE];
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        tree::seek(&mut ctx, self.roots.slots[slot].root(), from, &mut page).map(Some)
+    }
+
+    /// Visits records in key order from `cursor` (see [`tree::scan`]).
+    pub(crate) fn scan(
+        &self,
+        store: &dyn TileSource,
+        cursor: tree::Cursor,
+        visit: &mut tree::Visit<'_>,
+    ) -> Result<()> {
+        let mut page = [0u8; PAGE];
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        tree::scan(&mut ctx, cursor, &mut page, visit)
+    }
+
     /// Reads a found record's payload into `out`, which must be its length.
     pub(crate) fn read_payload(
         &self,

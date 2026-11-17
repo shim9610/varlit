@@ -3148,6 +3148,21 @@ impl VarlitReader {
         self.file.get_keyed(key, scratch, out)
     }
 
+    /// See [`VarlitFile::range_keyed`].
+    pub fn range_keyed<T, R>(
+        &self,
+        range: R,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+        visit: &mut dyn FnMut(&T) -> Result<bool>,
+    ) -> Result<u64>
+    where
+        T: VarlitKeyedBlock,
+        R: core::ops::RangeBounds<T::Key>,
+    {
+        self.file.range_keyed(range, scratch, out, visit)
+    }
+
     /// Reads a block out of the editable header region.
     /// See [`VarlitFile::read_header_block`].
     ///
@@ -3917,6 +3932,21 @@ impl VarlitWriter {
         out: &mut T,
     ) -> Result<bool> {
         self.file.get_keyed(key, scratch, out)
+    }
+
+    /// See [`VarlitFile::range_keyed`].
+    pub fn range_keyed<T, R>(
+        &self,
+        range: R,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+        visit: &mut dyn FnMut(&T) -> Result<bool>,
+    ) -> Result<u64>
+    where
+        T: VarlitKeyedBlock,
+        R: core::ops::RangeBounds<T::Key>,
+    {
+        self.file.range_keyed(range, scratch, out, visit)
     }
 
     /// Reads a block out of the editable header region.

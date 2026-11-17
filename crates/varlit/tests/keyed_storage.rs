@@ -326,3 +326,99 @@ fn key_fields_are_stored_once_and_come_back_from_the_key() -> varlit::Result<()>
     assert!(!reader.get_cell(&(100, 0), &mut scratch, &mut out)?);
     Ok(())
 }
+
+fn collect(rows: &mut Vec<(u32, u16, u64)>) -> impl FnMut(&Cell) -> varlit::Result<bool> + '_ {
+    move |cell| {
+        rows.push((cell.row, cell.col, cell.value));
+        Ok(true)
+    }
+}
+
+#[test]
+fn range_reads_visit_keys_in_order_on_writers_and_readers() -> varlit::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("cells.varlit");
+    let mut writer = Cells::create_writer(&path)?;
+    // Put out of order: the tree keeps key order.
+    for row in (0..300u32).rev() {
+        for col in [3u16, 0, 2, 1] {
+            writer.put_cell(&Cell {
+                row,
+                value: u64::from(row) * 10 + u64::from(col),
+                col,
+            })?;
+        }
+    }
+    assert!(writer.remove_cell(&(150, 2))?);
+    let mut scratch = Vec::new();
+    let mut out = Cell::empty();
+    let mut rows = Vec::new();
+    let visited = writer.range_cell(
+        (7, 0)..=(7, 3),
+        &mut scratch,
+        &mut out,
+        &mut collect(&mut rows),
+    )?;
+    assert_eq!(visited, 4);
+    assert_eq!(
+        rows,
+        (0..4u16)
+            .map(|c| (7, c, 70 + u64::from(c)))
+            .collect::<Vec<_>>()
+    );
+    writer.sync()?;
+    drop(writer);
+
+    let reader = Cells::open_reader(&path)?;
+    let mut rows = Vec::new();
+    reader.range_cell(
+        (149, 3)..(151, 0),
+        &mut scratch,
+        &mut out,
+        &mut collect(&mut rows),
+    )?;
+    assert_eq!(
+        rows,
+        [
+            (149, 3, 1493),
+            (150, 0, 1500),
+            (150, 1, 1501),
+            (150, 3, 1503)
+        ]
+    );
+    let mut rows = Vec::new();
+    let all = reader.range_cell(.., &mut scratch, &mut out, &mut collect(&mut rows))?;
+    assert_eq!(all, 300 * 4 - 1);
+    assert!(
+        rows.windows(2)
+            .all(|pair| (pair[0].0, pair[0].1) < (pair[1].0, pair[1].1))
+    );
+    let mut rows = Vec::new();
+    reader.range_cell(
+        (
+            std::ops::Bound::Excluded((298, 3)),
+            std::ops::Bound::Unbounded,
+        ),
+        &mut scratch,
+        &mut out,
+        &mut collect(&mut rows),
+    )?;
+    assert_eq!(rows.first(), Some(&(299, 0, 2990)));
+    assert_eq!(rows.len(), 4);
+    // Stopping early.
+    let mut seen = 0;
+    let visited = reader.range_cell(.., &mut scratch, &mut out, &mut |_| {
+        seen += 1;
+        Ok(seen < 3)
+    })?;
+    assert_eq!((visited, seen), (3, 3));
+    // Reading the same handle's keyed storage from the callback is refused.
+    let mut inner = Cell::empty();
+    let mut inner_scratch = Vec::new();
+    let refused = reader.range_cell(.., &mut scratch, &mut out, &mut |_| {
+        reader.get_cell(&(1, 1), &mut inner_scratch, &mut inner)?;
+        Ok(false)
+    });
+    assert!(matches!(refused, Err(varlit::Error::KeyedStorageBusy)));
+    Ok(())
+}

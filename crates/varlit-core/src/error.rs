@@ -327,6 +327,12 @@ pub enum Error {
     )]
     KeyedStorageRequiresPut { block_id: u32 },
 
+    #[error(
+        "keyed storage of this handle is in use by a range read: read it from the range \
+         read's callback only through the record it is given"
+    )]
+    KeyedStorageBusy,
+
     #[error("the requested operation is unsupported by bounded streaming handles")]
     StreamingUnsupported,
 

@@ -3569,7 +3569,8 @@ pub(super) fn reader_trait_impl_methods(block: &InlineBlock) -> Vec<TokenStream2
 }
 
 /// The methods a keyed block of a keyed-storage format gets: `put_`,
-/// `remove_` and `get_` on the writer, `get_` on the reader.
+/// `remove_`, `get_` and `range_` on the writer, `get_` and `range_` on the
+/// reader.
 pub(super) fn keyed_storage_methods(block: &InlineBlock, writer: bool) -> Vec<TokenStream2> {
     let ty = &block.name;
     let name = singular_method_name(ty);
@@ -3588,8 +3589,26 @@ pub(super) fn keyed_storage_methods(block: &InlineBlock, writer: bool) -> Vec<To
             self.inner.get_keyed::<#ty>(key, scratch, out)
         }
     };
+    let range = format_ident!("range_{}", name);
+    let range_method = quote! {
+        /// Visits the records whose keys lie in `range`, in key order,
+        /// decoding each into `out` before `visit` sees it; `visit` returns
+        /// `false` to stop. Returns the records visited.
+        pub fn #range<R>(
+            &self,
+            range: R,
+            scratch: &mut ::std::vec::Vec<u8>,
+            out: &mut #ty,
+            visit: &mut dyn FnMut(&#ty) -> ::varlit::__core::Result<bool>,
+        ) -> ::varlit::__core::Result<u64>
+        where
+            R: ::core::ops::RangeBounds<<#ty as ::varlit::__core::VarlitKeyedBlock>::Key>,
+        {
+            self.inner.range_keyed::<#ty, R>(range, scratch, out, visit)
+        }
+    };
     if !writer {
-        return vec![get_method];
+        return vec![get_method, range_method];
     }
     vec![
         quote! {
@@ -3608,6 +3627,7 @@ pub(super) fn keyed_storage_methods(block: &InlineBlock, writer: bool) -> Vec<To
             }
         },
         get_method,
+        range_method,
     ]
 }
 

@@ -184,14 +184,17 @@ impl VarlitFile {
                     _ => u64::MAX,
                 };
                 let spec = self.spec;
-                let found = reader.borrow_mut().get(
-                    &source,
-                    T::ID,
-                    scratch,
-                    KEY_ENVELOPE,
-                    max_payload,
-                    &mut |buf| encode_keyed_storage_key_into::<T>(spec, key, buf),
-                )?;
+                let found = reader
+                    .try_borrow_mut()
+                    .map_err(|_| Error::KeyedStorageBusy)?
+                    .get(
+                        &source,
+                        T::ID,
+                        scratch,
+                        KEY_ENVELOPE,
+                        max_payload,
+                        &mut |buf| encode_keyed_storage_key_into::<T>(spec, key, buf),
+                    )?;
                 if !found {
                     return Ok(false);
                 }
@@ -223,6 +226,129 @@ impl VarlitFile {
         })
     }
 
+    /// Visits the records of `T` whose keys lie in `range`, in key order,
+    /// decoding each into `out` before `visit` sees it; `visit` returns
+    /// `false` to stop. Returns the records visited.
+    ///
+    /// Key order is the order of the stored key bytes: the declared key
+    /// fields encoded big-endian, so unsigned integer fields (and tuples of
+    /// them) are in numeric order; a signed field orders negative values
+    /// after positive ones, and a string field by its length first.
+    ///
+    /// `scratch` holds the bounds' keys and then each record; the read
+    /// allocates nothing else. A reader's range is one snapshot: a reader
+    /// the writer's ring moves past during the read gets
+    /// [`Error::MatrixSnapshotExpired`] and must `follow`. `visit` must not
+    /// read this handle's keyed storage ([`Error::KeyedStorageBusy`]).
+    pub fn range_keyed<T, R>(
+        &self,
+        range: R,
+        scratch: &mut Vec<u8>,
+        out: &mut T,
+        visit: &mut dyn FnMut(&T) -> Result<bool>,
+    ) -> Result<u64>
+    where
+        T: VarlitKeyedBlock,
+        R: core::ops::RangeBounds<T::Key>,
+    {
+        use core::ops::Bound;
+        let () = crate::traits::KeyedBlockContract::<T>::OK;
+        self.require_keyed_storage()?;
+        crate::collections::ensure_registered_block::<T>(self.spec)?;
+        let spec = self.spec;
+        let source = FileTilesRead(&self.file);
+        let engine = self.keyed_engine()?;
+        let from = match range.start_bound() {
+            Bound::Included(key) | Bound::Excluded(key) => {
+                encode_keyed_storage_key_into::<T>(spec, key, scratch)?;
+                Some((
+                    &scratch[KEY_ENVELOPE..],
+                    matches!(range.start_bound(), Bound::Included(_)),
+                ))
+            }
+            Bound::Unbounded => None,
+        };
+        let mut reader = match engine {
+            KeyedEngine::Reader(reader) => Some(
+                reader
+                    .try_borrow_mut()
+                    .map_err(|_| Error::KeyedStorageBusy)?,
+            ),
+            KeyedEngine::Writer(_) => None,
+        };
+        let cursor = match (engine, reader.as_deref_mut()) {
+            (KeyedEngine::Writer(heap), _) => heap.seek(&source, T::ID, from)?,
+            (_, Some(reader)) => reader.seek(&source, T::ID, from)?,
+            _ => return Err(Error::InvalidMatrixLayout),
+        };
+        let Some(cursor) = cursor else {
+            return Ok(0);
+        };
+        let (to, to_inclusive) = match range.end_bound() {
+            Bound::Included(key) => (Some(key), true),
+            Bound::Excluded(key) => (Some(key), false),
+            Bound::Unbounded => (None, false),
+        };
+        match to {
+            Some(key) => encode_keyed_storage_key_into::<T>(spec, key, scratch)?,
+            None => scratch.clear(),
+        }
+        let to_end = scratch.len();
+        let max_payload = match spec.read_limits.max_record_payload_len {
+            crate::format::ReadLimit::Finite(limit) => limit,
+            _ => u64::MAX,
+        };
+        let endian = T::ENDIAN.unwrap_or(spec.endian);
+        let mut visited = 0u64;
+        let mut each = |ctx: &mut crate::keyed_heap::lookup::Ctx<'_>,
+                        page: &[u8],
+                        at: u64,
+                        body: &crate::keyed_heap::tree::Body|
+         -> Result<bool> {
+            if body.value_len > max_payload {
+                return Err(Error::LimitExceeded {
+                    resource: "keyed record payload",
+                    actual: body.value_len,
+                    limit: max_payload,
+                });
+            }
+            let key_len = crate::width::index(body.key.len)?;
+            let total = key_len + crate::width::index(body.value_len)?;
+            scratch.truncate(to_end);
+            scratch
+                .try_reserve(total)
+                .map_err(|_| Error::AllocationFailed {
+                    resource: "keyed record payload",
+                    requested: total as u64,
+                })?;
+            scratch.resize(to_end + total, 0);
+            crate::keyed_heap::tree::read_held(ctx, page, at, body, 0, &mut scratch[to_end..])?;
+            let (bound, record) = scratch.split_at(to_end);
+            let (key, value) = record.split_at(key_len);
+            if to.is_some() {
+                let order = key.cmp(&bound[KEY_ENVELOPE..]);
+                if order.is_gt() || (order.is_eq() && !to_inclusive) {
+                    return Ok(false);
+                }
+            }
+            let mut budget = crate::collections::MaterializationBudget::new(spec);
+            budget.decode_with(key, Endian::Big, &mut |decoder| {
+                T::__varlit_decode_key_into(out, decoder)
+            })?;
+            budget.decode_with(value, endian, &mut |decoder| {
+                T::__varlit_decode_value_fields_into(out, decoder)
+            })?;
+            visited += 1;
+            visit(out)
+        };
+        match (engine, reader.as_deref_mut()) {
+            (KeyedEngine::Writer(heap), _) => heap.scan(&source, cursor, &mut each)?,
+            (_, Some(reader)) => reader.scan(&source, cursor, &mut each)?,
+            _ => return Err(Error::InvalidMatrixLayout),
+        }
+        Ok(visited)
+    }
+
     /// Publishes the keyed storage writer's changes, if any: one generation
     /// that readers adopt when they follow. Part of [`Self::sync`].
     pub(super) fn publish_keyed(&mut self) -> Result<bool> {
@@ -237,7 +363,10 @@ impl VarlitFile {
     /// read-only handle's follow.
     pub(super) fn follow_keyed(&self) -> Result<()> {
         if let Some(KeyedEngine::Reader(reader)) = self.keyed.get() {
-            reader.borrow_mut().follow(&FileTilesRead(&self.file))?;
+            reader
+                .try_borrow_mut()
+                .map_err(|_| Error::KeyedStorageBusy)?
+                .follow(&FileTilesRead(&self.file))?;
         }
         Ok(())
     }

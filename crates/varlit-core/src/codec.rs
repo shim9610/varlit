@@ -898,9 +898,22 @@ impl<'a> Decoder<'a> {
         key: &T::Key,
         out: &mut T,
     ) -> Result<()> {
+        Self::decode_accounted_with(input, endian, materialization_remaining, &mut |decoder| {
+            T::__varlit_decode_value_into(key, out, decoder)
+        })
+    }
+
+    /// Runs `decode` over all of `input`, charged to
+    /// `materialization_remaining`; bytes it leaves are an error.
+    pub(crate) fn decode_accounted_with(
+        input: &'a [u8],
+        endian: Endian,
+        materialization_remaining: &mut u64,
+        decode: &mut dyn FnMut(&mut Decoder<'a>) -> Result<()>,
+    ) -> Result<()> {
         let mut decoder = Self::new_limited(input, endian, *materialization_remaining);
         *materialization_remaining = 0;
-        let result = T::__varlit_decode_value_into(key, out, &mut decoder).and_then(|()| {
+        let result = decode(&mut decoder).and_then(|()| {
             if decoder.remaining() != 0 {
                 return Err(Error::TrailingBytes {
                     remaining: decoder.remaining(),

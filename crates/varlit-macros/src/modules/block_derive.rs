@@ -484,6 +484,9 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                 quote!(::core::clone::Clone::clone_from(&mut out.#name, &key.#index);)
             }
         });
+        let key_decode = key_fields
+            .iter()
+            .map(|name| quote!(decoder.decode_value_into(&mut out.#name)?;));
         let value_fixed_decode = value_fields.iter().map(|field| {
             let name = &field.name;
             quote!(decoder.decode_value_into(&mut out.#name)?;)
@@ -567,6 +570,25 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                     out: &mut Self,
                     decoder: &mut ::varlit::__core::Decoder<'_>,
                 ) -> ::varlit::__core::Result<()> {
+                    <Self as ::varlit::__core::VarlitKeyedBlock>::__varlit_decode_value_fields_into(
+                        out, decoder,
+                    )?;
+                    #(#key_assign)*
+                    ::core::result::Result::Ok(())
+                }
+
+                fn __varlit_decode_key_into(
+                    out: &mut Self,
+                    decoder: &mut ::varlit::__core::Decoder<'_>,
+                ) -> ::varlit::__core::Result<()> {
+                    #(#key_decode)*
+                    ::core::result::Result::Ok(())
+                }
+
+                fn __varlit_decode_value_fields_into(
+                    out: &mut Self,
+                    decoder: &mut ::varlit::__core::Decoder<'_>,
+                ) -> ::varlit::__core::Result<()> {
                     let _ = &decoder;
                     match <Self as ::varlit::__core::VarlitBlock>::KIND {
                         ::varlit::__core::BlockKind::Variable => {
@@ -585,7 +607,6 @@ pub(super) fn expand_varlit_block(input: DeriveInput) -> Result<TokenStream2> {
                             #(#value_fixed_decode)*
                         }
                     }
-                    #(#key_assign)*
                     ::core::result::Result::Ok(())
                 }
             }

@@ -73,9 +73,10 @@ flags and aux bytes carry no checksum. See [recovery](recovery-model.md).
   (`keyed_offset_chain`, `keyed_chain`, tombstones) is removed in one later
   change with a converter; until then both exist
   ([design](design/bounded-keyed-storage.md#implementation-order)).
-- **No listing yet.** A keyed-storage block is read by key; there is no
-  iteration over its keys, and `key_order = increasing` (sorted runs) is not
-  implemented.
+- **Range reads follow byte order.** `range_keyed` visits keys in the order
+  of their big-endian bytes: numeric for unsigned integer key fields, not
+  for signed ones (negatives come after positives) or strings (shorter
+  first). There are no secondary indexes: an application keeps its own.
 - **Not with matrices.** A format cannot declare both keyed storage and
   matrix blocks yet: each keeps its metadata as the first record.
 - **Pages are at least half full.** The B-tree splits a full page in half

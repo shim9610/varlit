@@ -66,6 +66,36 @@ impl KeyedReader {
         Ok(true)
     }
 
+    /// Positions a scan of `block_id`'s records (see
+    /// [`super::heap::KeyedHeap::seek`]). Its reads, and the scan's, are
+    /// checked against the ring one by one: a reader the ring moves past
+    /// gets `MatrixSnapshotExpired`.
+    pub(crate) fn seek(
+        &mut self,
+        source: &dyn TileSource,
+        block_id: u32,
+        from: Option<(&[u8], bool)>,
+    ) -> Result<Option<tree::Cursor>> {
+        let Some(slot) = self.roots.find(block_id) else {
+            return Ok(None);
+        };
+        let mut page = [0u8; NODE_BYTES];
+        let mut ctx = Ctx::new(&mut self.reader, source);
+        tree::seek(&mut ctx, self.roots.slots[slot].root(), from, &mut page).map(Some)
+    }
+
+    /// Visits records in key order from `cursor` (see [`tree::scan`]).
+    pub(crate) fn scan(
+        &mut self,
+        source: &dyn TileSource,
+        cursor: tree::Cursor,
+        visit: &mut tree::Visit<'_>,
+    ) -> Result<()> {
+        let mut page = [0u8; NODE_BYTES];
+        let mut ctx = Ctx::new(&mut self.reader, source);
+        tree::scan(&mut ctx, cursor, &mut page, visit)
+    }
+
     /// Finds `key` of `block_id` and reads its payload into `buf`, checking
     /// the ring once for the whole lookup instead of on every read; runs it
     /// again (up to eight times) when the ring moved under it.

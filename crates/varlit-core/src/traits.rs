@@ -131,6 +131,26 @@ pub trait VarlitKeyedBlock: VarlitBlock {
         let _ = key;
         decoder.decode_value_into(out)
     }
+
+    /// Decodes a stored key (its fields encoded big-endian, in key order)
+    /// into the key fields of `out`. Range reads use it with
+    /// [`Self::__varlit_decode_value_fields_into`]. The default decodes
+    /// nothing: its value is the whole block.
+    #[doc(hidden)]
+    fn __varlit_decode_key_into(out: &mut Self, decoder: &mut crate::Decoder<'_>) -> Result<()> {
+        let _ = (out, decoder);
+        Ok(())
+    }
+
+    /// Decodes a value written by [`Self::__varlit_encode_value`] into the
+    /// fields of `out` that are not key fields.
+    #[doc(hidden)]
+    fn __varlit_decode_value_fields_into(
+        out: &mut Self,
+        decoder: &mut crate::Decoder<'_>,
+    ) -> Result<()> {
+        decoder.decode_value_into(out)
+    }
 }
 
 pub trait VarlitMatrixBlock: VarlitBlock {

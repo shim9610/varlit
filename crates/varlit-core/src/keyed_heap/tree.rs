@@ -427,3 +427,160 @@ pub(crate) fn read_value(ctx: &mut Ctx<'_>, body: &Body, out: &mut [u8]) -> Resu
         out,
     )
 }
+
+// ---- range scans ----
+
+/// What a scan calls with each record: its leaf page, the page's file
+/// offset and the record's cell; `false` stops the scan.
+pub(crate) type Visit<'v> = dyn FnMut(&mut Ctx<'_>, &[u8], u64, &Body) -> Result<bool> + 'v;
+
+/// Where a scan stands: the path to its leaf and the next entry there.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cursor {
+    path: Path,
+}
+
+/// Positions a scan of the tree with root `root` at the first key at or
+/// past `from` (past it when `inclusive` is false), or at the first key.
+pub(crate) fn seek(
+    ctx: &mut Ctx<'_>,
+    root: (u64, u64),
+    from: Option<(&[u8], bool)>,
+    page: &mut [u8],
+) -> Result<Cursor> {
+    let height = crate::width::index(root.1)?;
+    if root.0 == NO_PAGE || height == 0 || height > MAX_HEIGHT {
+        return Err(corrupt("keyed tree root"));
+    }
+    let page = page
+        .get_mut(..NODE_BYTES)
+        .ok_or(corrupt("keyed tree page buffer"))?;
+    let mut path = Path::new(height);
+    let mut at = root.0;
+    for level in (0..height).rev() {
+        ctx.read(at, page)?;
+        match from {
+            Some((key, _)) => {
+                step(ctx, page, at, &KeySrc::Parts(key), level, &mut path)?;
+            }
+            None => leftmost(page, at, level, &mut path)?,
+        }
+        if level == 0 {
+            break;
+        }
+        at = path.pages[level - 1];
+    }
+    if let Some((_, false)) = from
+        && path.found
+    {
+        path.index[0] += 1;
+    }
+    Ok(Cursor { path })
+}
+
+/// Records the page held in `page` at `level` of `path` and takes its first
+/// entry.
+fn leftmost(page: &[u8], at: u64, level: usize, path: &mut Path) -> Result<()> {
+    let kind = node::kind(page)?;
+    let interior = level > 0;
+    let count = node::count(page);
+    if (kind == node::Kind::Interior) != interior || (interior && count == 0) {
+        return Err(corrupt("keyed tree page"));
+    }
+    path.pages[level] = at;
+    path.counts[level] = count;
+    path.index[level] = 0;
+    if interior {
+        let child = held_body(page, at, 0, true)?.child;
+        if child == NO_PAGE {
+            return Err(corrupt("keyed tree child"));
+        }
+        path.pages[level - 1] = child;
+    }
+    Ok(())
+}
+
+/// Visits records in key order from `cursor`, each as its leaf page (held
+/// in `page`, at file offset `at`) and cell, until `visit` returns `false`
+/// or the tree ends. Pages are read one at a time into `page`.
+pub(crate) fn scan(
+    ctx: &mut Ctx<'_>,
+    mut cursor: Cursor,
+    page: &mut [u8],
+    visit: &mut Visit<'_>,
+) -> Result<()> {
+    let page = page
+        .get_mut(..NODE_BYTES)
+        .ok_or(corrupt("keyed tree page buffer"))?;
+    let path = &mut cursor.path;
+    let height = path.height;
+    let mut at = path.pages[0];
+    ctx.read(at, page)?;
+    leaf_check(page, path)?;
+    loop {
+        while path.index[0] < node::count(page) {
+            let body = held_body(page, at, path.index[0], false)?;
+            if !visit(ctx, page, at, &body)? {
+                return Ok(());
+            }
+            path.index[0] += 1;
+        }
+        // The next leaf: up to the lowest level with an entry to the
+        // right, then down its leftmost edge.
+        let Some(mut level) = (1..height).find(|&level| path.index[level] + 1 < path.counts[level])
+        else {
+            return Ok(());
+        };
+        path.index[level] += 1;
+        loop {
+            let parent = path.pages[level];
+            ctx.read(parent, page)?;
+            if node::kind(page)? != node::Kind::Interior || node::count(page) != path.counts[level]
+            {
+                return Err(corrupt("keyed tree page"));
+            }
+            let child = held_body(page, parent, path.index[level], true)?.child;
+            if child == NO_PAGE {
+                return Err(corrupt("keyed tree child"));
+            }
+            level -= 1;
+            ctx.read(child, page)?;
+            leftmost(page, child, level, path)?;
+            if level == 0 {
+                break;
+            }
+        }
+        at = path.pages[0];
+        leaf_check(page, path)?;
+    }
+}
+
+fn leaf_check(page: &[u8], path: &Path) -> Result<()> {
+    if node::kind(page)? != node::Kind::Leaf || path.index[0] > node::count(page) {
+        return Err(corrupt("keyed tree page"));
+    }
+    Ok(())
+}
+
+/// Reads record bytes `[from, from + buf.len())` of the cell `body` of the
+/// page held in `page` at file offset `at`: what the cell keeps from the
+/// page, the rest from its overflow chain.
+pub(crate) fn read_held(
+    ctx: &mut Ctx<'_>,
+    page: &[u8],
+    at: u64,
+    body: &Body,
+    from: u64,
+    buf: &mut [u8],
+) -> Result<()> {
+    let start = crate::width::index(body.key.at - at)?;
+    let local = crate::width::index(body.key.local.min(body.key.len + body.value_len))?;
+    let held = KeySrc::Held {
+        local: page
+            .get(start..start + local)
+            .ok_or(corrupt("keyed tree cell"))?,
+        len: body.key.len + body.value_len,
+        overflow: body.key.overflow,
+    };
+    held.read(ctx, from, buf)
+}

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::heap::{KeyedHeap, Tuning};
-use super::{MIN_BUDGET, PAGE_BYTES, State};
+use super::{MAX_BUDGET, MIN_BUDGET, PAGE_BYTES, State};
 use crate::matrix_tiles::store::memory::MemStore;
 
 const RING: u64 = 1 << 20;
@@ -568,4 +568,98 @@ fn block_types_have_their_own_trees() {
     assert_eq!(get(&heap, &store, 3, b"same key"), None);
     assert_eq!(heap.state().keys, u64::from(types));
     consistent(&heap, &store, "64 types");
+}
+
+/// Every record of `block` from `from` on, in the order a scan visits them.
+fn scan_all(
+    heap: &KeyedHeap,
+    store: &MemStore,
+    block: u32,
+    from: Option<(&[u8], bool)>,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut seen = Vec::new();
+    let Some(cursor) = heap.seek(store, block, from).unwrap() else {
+        return seen;
+    };
+    heap.scan(store, cursor, &mut |ctx, page, at, body| {
+        let key_len = body.key.len as usize;
+        let mut record = vec![0u8; key_len + body.value_len as usize];
+        super::tree::read_held(ctx, page, at, body, 0, &mut record)?;
+        let value = record.split_off(key_len);
+        seen.push((record, value));
+        Ok(true)
+    })
+    .unwrap();
+    seen
+}
+
+/// Scans visit a type's records in key order from any start, across leaves
+/// of deep trees, overflowing keys and values, and other types' records.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn scans_visit_records_in_key_order_from_any_start() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, MAX_BUDGET, SMALL_PAGES);
+    let mut model = Model::new();
+    let mut state = 5u64;
+    for step in 0..8000u64 {
+        let block = 1 + (random(&mut state) % 3) as u32;
+        let mut key = (random(&mut state) % 5000).to_be_bytes().to_vec();
+        if step % 97 == 0 {
+            key.extend(std::iter::repeat_n(b'k', 3000));
+        }
+        if random(&mut state).is_multiple_of(4) {
+            heap.delete(&mut store, block, &key).unwrap();
+            model.remove(&(block, key));
+        } else {
+            let len = if step % 89 == 0 {
+                9000
+            } else {
+                (random(&mut state) % 200) as usize
+            };
+            let bytes = value(len, step);
+            heap.put(&mut store, block, &key, &bytes).unwrap();
+            model.insert((block, key), bytes);
+        }
+    }
+    assert!(heap.height(1).unwrap() >= 3, "{:?}", heap.height(1));
+    let records = |block: u32, from: Option<(&[u8], bool)>| -> Vec<(Vec<u8>, Vec<u8>)> {
+        model
+            .range((block, Vec::new())..(block + 1, Vec::new()))
+            .filter(|((_, key), _)| match from {
+                None => true,
+                Some((from, true)) => key.as_slice() >= from,
+                Some((from, false)) => key.as_slice() > from,
+            })
+            .map(|((_, key), value)| (key.clone(), value.clone()))
+            .collect()
+    };
+    for round in 0..2 {
+        for block in 1..=3u32 {
+            assert_eq!(scan_all(&heap, &store, block, None), records(block, None));
+            for probe in [0u64, 1, 777, 2500, 4999, 5000] {
+                let start = probe.to_be_bytes();
+                for inclusive in [true, false] {
+                    let from = Some((&start[..], inclusive));
+                    assert_eq!(
+                        scan_all(&heap, &store, block, from),
+                        records(block, from),
+                        "round {round} block {block} from {probe} inclusive {inclusive}"
+                    );
+                }
+            }
+        }
+        assert!(scan_all(&heap, &store, 9, None).is_empty());
+        heap.publish(&mut store).unwrap();
+        heap = KeyedHeap::open(&mut store, heap.meta, SMALL_PAGES).unwrap();
+    }
+    // A scan stops when its visitor says so.
+    let cursor = heap.seek(&store, 1, None).unwrap().unwrap();
+    let mut visited = 0;
+    heap.scan(&store, cursor, &mut |_, _, _, _| {
+        visited += 1;
+        Ok(visited < 5)
+    })
+    .unwrap();
+    assert_eq!(visited, 5);
 }

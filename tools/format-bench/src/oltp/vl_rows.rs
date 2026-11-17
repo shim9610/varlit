@@ -44,6 +44,10 @@ fn row(a: &Account) -> Row {
     }
 }
 
+thread_local! {
+    static SPLIT: std::cell::RefCell<(f64, f64, f64, u64)> = const { std::cell::RefCell::new((0.0, 0.0, 0.0, 0)) };
+}
+
 pub struct W {
     w: BankRowsWriter,
     scratch: Vec<u8>,
@@ -90,14 +94,36 @@ impl Oltp for W {
         Ok(())
     }
     fn txn(&mut self, deltas: &[(u64, i64)]) -> Result<()> {
+        let (mut get, mut put) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
         for &(id, d) in deltas {
+            let t = std::time::Instant::now();
             if !self.w.get_account(&id, &mut self.scratch, &mut self.acc)? {
                 return Err("missing account".into());
             }
+            get += t.elapsed();
             self.acc.balance += d;
+            let t = std::time::Instant::now();
             self.w.put_account(&self.acc)?;
+            put += t.elapsed();
         }
+        let t = std::time::Instant::now();
         self.w.sync()?;
+        let sync = t.elapsed();
+        if std::env::var_os("FB_TXN_SPLIT").is_some() {
+            SPLIT.with(|c| {
+                let mut c = c.borrow_mut();
+                c.0 += get.as_secs_f64();
+                c.1 += put.as_secs_f64();
+                c.2 += sync.as_secs_f64();
+                c.3 += 1;
+                if c.3 % 1000 == 0 {
+                    eprintln!(
+                        "txn split over {} txns: get {:.3}s put {:.3}s sync {:.3}s",
+                        c.3, c.0, c.1, c.2
+                    );
+                }
+            });
+        }
         Ok(())
     }
     fn finish(&mut self) -> Result<()> {

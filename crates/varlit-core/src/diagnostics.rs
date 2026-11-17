@@ -945,6 +945,7 @@ pub fn classify_error(error: &Error) -> DiagnosticDomain {
         | Error::ZeroCopyAlignmentMismatch { .. }
         | Error::KeyedChainRequiresKeyedApi { .. }
         | Error::KeyedStorageRequiresPut { .. }
+        | Error::KeyedStorageBusy
         | Error::NoResidentDirectory { .. }
         // Caller usage rather than file data: the file is fine, and so is the
         // directory — they just belong to different generations of it.
