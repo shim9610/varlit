@@ -175,6 +175,11 @@ wrong version or a corrupt cell is **torn**. Loss bound (`FB_LOSS_MS`) as in
 
 ## Results
 
+The latest results, at 10 GB per scenario with the current harness and the
+hardware stated, are in
+[results-10gb-20261117.md](results-10gb-20261117.md).
+The tables below are older runs on other hosts and smaller data.
+
 2026-11-11, Linux 7.0, 24 cores, NVMe ext4, rustc 1.98.1, release build, branch
 `perf/bulk-primitive-codec` (Varlit 0.13.0 plus the bulk codec, single-barrier
 commit and caller-buffer API). Disk-gated (disk probe 0.50 to 0.51 s). All
