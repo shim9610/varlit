@@ -212,10 +212,9 @@ impl VarlitFile {
         Ok(crate::KeyedStorageStats {
             generation,
             keys: state.keys,
-            live_bytes: state.live + state.leaves * crate::keyed_heap::node::CAPACITY as u64
-                - state.leaf_free,
+            live_bytes: state.record_bytes,
             heap_bytes: state.pages * crate::keyed_heap::PAGE_BYTES,
-            free_region_bytes: state.pooled * crate::keyed_heap::PAGE_BYTES,
+            free_region_bytes: state.free * crate::keyed_heap::PAGE_BYTES,
             leaf_pages: state.leaves,
             index_pages: state.interiors,
         })

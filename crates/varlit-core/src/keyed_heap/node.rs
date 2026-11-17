@@ -1,5 +1,5 @@
 //! Tree pages: leaves of records in key order and interior pages of
-//! separators, each a 64 KiB pool page (see `docs/spec.md`, Keyed Storage).
+//! separators, each a 4 KiB page (see `docs/spec.md`, Keyed Storage).
 //!
 //! A page is `link (16 bytes) | header (16 bytes) | entries | free | bodies`:
 //! `count` four-byte entries (`offset u16 | length u16`, sorted by key) grow
@@ -13,7 +13,7 @@ use crate::Result;
 use core::cmp::Ordering;
 
 /// The page size: a pool page.
-pub(crate) const NODE_BYTES: usize = 64 << 10;
+pub(crate) const NODE_BYTES: usize = 4096;
 /// Where the header starts: past the pool link.
 const HEADER_AT: usize = 16;
 pub(crate) const ENTRIES_AT: usize = 32;
@@ -135,6 +135,7 @@ pub(crate) fn entry(page: &[u8], index: usize) -> Result<(usize, usize)> {
     Ok((offset, len))
 }
 
+#[cfg(test)]
 pub(crate) fn body(page: &[u8], index: usize) -> Result<&[u8]> {
     let (offset, len) = entry(page, index)?;
     Ok(&page[offset..offset + len])

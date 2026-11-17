@@ -83,7 +83,6 @@ impl KeyedReader {
             let result = attempt(
                 &mut view,
                 source,
-                self.meta,
                 &self.state,
                 block_id,
                 buf,
@@ -110,7 +109,6 @@ impl KeyedReader {
 fn attempt(
     view: &mut Unsettled<'_>,
     source: &dyn TileSource,
-    meta: u64,
     state: &State,
     block_id: u32,
     buf: &mut Vec<u8>,
@@ -118,30 +116,18 @@ fn attempt(
     max_payload: u64,
     encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
 ) -> Result<bool> {
-    // The tree key is the block id, big-endian, then the key: it goes
-    // into `buf` before the key the caller encodes, and a page-sized
-    // buffer after it, where each page of the path is read whole.
-    buf.clear();
     encode(buf)?;
-    let key_at = key_at.min(buf.len());
-    buf.splice(key_at..key_at, block_id.to_be_bytes());
-    let key_end = buf.len();
-    buf.try_reserve(NODE_BYTES)
-        .map_err(|_| Error::AllocationFailed {
-            resource: "keyed lookup page",
-            requested: NODE_BYTES as u64,
-        })?;
-    buf.resize(key_end + NODE_BYTES, 0);
-    let (head, page) = buf.split_at_mut(key_end);
-    let key = head.get(key_at..).ok_or(Error::InvalidFormatSpec(
+    let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
-    let mut ctx = Ctx::new(view, source, meta, None);
-    let (_, found) = tree::find_held(&mut ctx, state.root, &KeySrc::Mem(key), page)?;
+    let mut page = [0u8; NODE_BYTES];
+    let mut ctx = Ctx::new(view, source);
+    let key = KeySrc::Parts(block_id.to_be_bytes(), key);
+    let (_, found) = tree::find(&mut ctx, state.root, &key, &mut page)?;
     let Some(body) = found else {
         return Ok(false);
     };
-    let len = tree::value_len(&body);
+    let len = body.value_len;
     if len > max_payload {
         return Err(Error::LimitExceeded {
             resource: "keyed record payload",

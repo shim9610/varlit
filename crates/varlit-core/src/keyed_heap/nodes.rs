@@ -1,13 +1,11 @@
-//! The writer's tree pages: three page buffers and a scratch page, allocated
-//! once when the writer is opened (the same 256 KiB the bucket page buffers
-//! took), through which every tree page is changed.
+//! The writer's tree pages: 64 page buffers and a scratch page, allocated
+//! once when the writer is opened (the 256 KiB the bucket page buffers took
+//! before), through which every tree page is read and changed.
 //!
-//! A changed page is written back in 4 KiB segments, only those whose bytes
-//! differ from what the file and the ring show: through the ring when a
-//! generation from the mark on may read the page, in place when the page
-//! was appended or taken from the pool in this generation (except its first
-//! segment, whose pool link the published state may still follow). Every
-//! segment is staged whole, so a reader lays one range per segment.
+//! A changed page is staged whole through the ring when it is written back
+//! (when its buffer is needed for another page, or at publication), and
+//! only when its bytes changed since they were read: a reader lays one
+//! range over a page, whatever changed in it.
 
 use super::lookup::View;
 use super::node::NODE_BYTES;
@@ -15,47 +13,22 @@ use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::{TileSource, TileStore};
 use crate::{Error, Result};
 
-/// Page buffers; the scratch page comes after them.
-pub(crate) const SLOTS: usize = 3;
-/// The unit a page is written back in.
-pub(crate) const SEGMENT: usize = 4096;
-const SEGMENTS: usize = NODE_BYTES / SEGMENT;
-
-/// How a buffered page may be written back.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Mode {
-    /// A generation a reader or a recovery may show uses the page.
-    #[default]
-    Staged,
-    /// No such generation uses the page: written in place, but for its
-    /// first segment when it came from the pool.
-    Unused { pooled: bool },
-}
+/// Page buffers.
+pub(crate) const SLOTS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Tag {
     /// The page's offset; `0` for an empty buffer.
     at: u64,
     dirty: bool,
-    mode: Mode,
     used: u64,
-    /// Checksums of the segments as the file and the ring show them; a
-    /// segment whose bytes no longer match is written back. `None` for a
-    /// new page: every segment is written.
-    shown: Option<[u32; SEGMENTS]>,
-}
-
-fn sums(page: &[u8]) -> [u32; SEGMENTS] {
-    let mut sums = [0u32; SEGMENTS];
-    for (segment, sum) in sums.iter_mut().enumerate() {
-        *sum = crc32fast::hash(&page[segment * SEGMENT..(segment + 1) * SEGMENT]);
-    }
-    sums
+    /// The checksum of the page as the file and the ring show it; `None`
+    /// for a new page, which is always written.
+    shown: Option<u32>,
 }
 
 pub(crate) struct Nodes {
     bytes: Box<[u8]>,
-    /// A page-sized scratch buffer.
     scratch: Box<[u8]>,
     tags: [Tag; SLOTS],
     clock: u64,
@@ -140,7 +113,6 @@ impl Nodes {
         self.tags[slot] = Tag {
             at,
             dirty: false,
-            mode: Mode::Staged,
             used: self.clock,
             shown: None,
         };
@@ -162,24 +134,22 @@ impl Nodes {
                 self.tags[slot] = Tag::default();
                 return Err(error);
             }
-            self.tags[slot].shown = Some(sums(&self.bytes[Self::range(slot)]));
+            self.tags[slot].shown = Some(crc32fast::hash(&self.bytes[Self::range(slot)]));
         }
         Ok(slot)
     }
 
-    /// A buffer for a page no generation from the mark on uses, zeroed.
+    /// A buffer for a new page, zeroed.
     pub(crate) fn create(
         &mut self,
         ring: &mut RingStore,
         store: &mut dyn TileStore,
         at: u64,
-        pooled: bool,
         keep: &[usize],
     ) -> Result<usize> {
         let (slot, _) = self.take(ring, store, at, keep)?;
         self.bytes[Self::range(slot)].fill(0);
         self.tags[slot].dirty = true;
-        self.tags[slot].mode = Mode::Unused { pooled };
         self.tags[slot].shown = None;
         Ok(slot)
     }
@@ -231,9 +201,8 @@ impl Nodes {
         }
     }
 
-    /// Writes back the segments of a changed buffer whose bytes differ from
-    /// what the file and the ring show (by the checksums taken when they
-    /// were read or last written back).
+    /// Stages a changed buffer whole, when its bytes differ from what the
+    /// file and the ring show.
     fn write_back(
         &mut self,
         ring: &mut RingStore,
@@ -245,23 +214,9 @@ impl Nodes {
             return Ok(());
         }
         let page = &self.bytes[Self::range(slot)];
-        let now = sums(page);
-        for segment in 0..SEGMENTS {
-            let bytes = &page[segment * SEGMENT..(segment + 1) * SEGMENT];
-            let at = tag.at + (segment * SEGMENT) as u64;
-            if tag
-                .shown
-                .is_some_and(|shown| shown[segment] == now[segment])
-            {
-                continue;
-            }
-            let in_place = match tag.mode {
-                Mode::Staged => false,
-                Mode::Unused { pooled } => !(pooled && segment == 0),
-            };
-            if !(in_place && ring.write_unreferenced(store, at, bytes)?) {
-                ring.stage(store, at, bytes)?;
-            }
+        let now = crc32fast::hash(page);
+        if tag.shown != Some(now) {
+            ring.stage(store, tag.at, page)?;
         }
         self.tags[slot].dirty = false;
         self.tags[slot].shown = Some(now);
@@ -272,21 +227,12 @@ impl Nodes {
         self.tags.iter().any(|tag| tag.dirty)
     }
 
-    /// Writes back every changed buffer; after a publication every page is
-    /// one a generation uses.
+    /// Writes back every changed buffer.
     pub(crate) fn flush(&mut self, ring: &mut RingStore, store: &mut dyn TileStore) -> Result<()> {
         for slot in 0..SLOTS {
             self.write_back(ring, store, slot)?;
         }
         Ok(())
-    }
-
-    /// After a publication: every buffered page is now one a generation
-    /// uses.
-    pub(crate) fn published(&mut self) {
-        for tag in &mut self.tags {
-            tag.mode = Mode::Staged;
-        }
     }
 }
 
