@@ -510,6 +510,13 @@ blocks, nor keyed storage and `keyed_offset_chain`.
 - Bucket numbers map to first pages through a radix directory of 4096-byte
   pages (512 entries, 9 bits per level); class pages are mapped the same
   way.
+- A put that leaves more than three quarters of `buckets × 255` slots in
+  use splits the bucket at `split` (its slots whose route has bit `level`
+  set move to bucket `split + 2^level`) and advances `split`; a delete that
+  leaves fewer than a quarter merges the last bucket back into the one it
+  was split from (its chain linked after that bucket's and packed into the
+  fewest pages) and steps `split` back. Bucket pages left over go to the
+  free bucket page list.
 
 ### Writing
 

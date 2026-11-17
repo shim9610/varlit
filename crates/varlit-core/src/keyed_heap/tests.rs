@@ -771,3 +771,59 @@ fn rewriting_every_key_each_round_settles() {
         heap.stats
     );
 }
+
+/// Deleting most keys merges buckets back, down to the table the remaining
+/// keys need; every key left reads back, through a reopen too, and a crash
+/// at any write of the deleting generation keeps the last publication.
+#[test]
+#[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
+fn deletes_merge_buckets_back() {
+    let mut store = MemStore::new();
+    let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
+    let mut model = Model::new();
+    for key in 0..20_000u64 {
+        let bytes = value(20, key);
+        heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
+        model.insert((1, key.to_le_bytes().to_vec()), bytes);
+    }
+    heap.publish(&mut store).unwrap();
+    let peak = heap.state().buckets();
+    let published = model.clone();
+    for key in 0..20_000u64 {
+        if key % 50 != 0 {
+            assert!(heap.delete(&mut store, 1, &key.to_le_bytes()).unwrap());
+            model.remove(&(1, key.to_le_bytes().to_vec()));
+        }
+        if key % 1000 == 0 {
+            consistent(&heap, &store, &format!("delete {key}"));
+        }
+    }
+    assert!(heap.stats.merges > 0, "{:?}", heap.stats);
+    let buckets = heap.state().buckets();
+    assert!(
+        buckets * SLOTS_PER_PAGE as u64 <= 4 * heap.state().keys + SLOTS_PER_PAGE as u64,
+        "{buckets} buckets for {} keys (peak {peak})",
+        heap.state().keys
+    );
+    check(&heap, &store, &model);
+    consistent(&heap, &store, "after the merges");
+    let pending = store.writes_since_sync();
+    for keep in (0..pending).step_by((pending / 40).max(1)) {
+        let mut crashed = store.crashed(keep, 3);
+        let reopened = KeyedHeap::open(&mut crashed, heap.meta, Tuning::DEFAULT).unwrap();
+        check(&reopened, &crashed, &published);
+        consistent(&reopened, &crashed, &format!("crash at write {keep}"));
+    }
+    heap.publish(&mut store).unwrap();
+    let reopened = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
+    check(&reopened, &store, &model);
+    // Growing again splits the merged buckets as before.
+    let mut heap = reopened;
+    for key in 0..20_000u64 {
+        let bytes = value(20, key + 7);
+        heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
+        model.insert((1, key.to_le_bytes().to_vec()), bytes);
+    }
+    check(&heap, &store, &model);
+    consistent(&heap, &store, "after growing again");
+}

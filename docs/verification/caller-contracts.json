@@ -2717,7 +2717,8 @@
         "class_of",
         "chain_shape",
         "keyed_heap::State::bucket_of",
-        "keyed_heap::State::after_split"
+        "keyed_heap::State::after_split",
+        "keyed_heap::State::after_merge"
       ],
       "result_policy": {},
       "callers": {
@@ -2740,6 +2741,11 @@
           {
             "caller": "class_of_fitting(_1: u64) -> usize [body:2b3e9e5975521449]",
             "target": "class_of",
+            "result": "model/caller-specific"
+          },
+          {
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::merge(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:33a2946fb1dc86e5]",
+            "target": "keyed_heap::State::after_merge",
             "result": "model/caller-specific"
           },
           {
@@ -2790,6 +2796,11 @@
             "result": "model/caller-specific"
           },
           {
+            "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::merge(_1: &mut KeyedHeap, _2: &mut dyn TileStore) -> std::result::Result<(), error::Error> [body:33a2946fb1dc86e5]",
+            "target": "keyed_heap::State::after_merge",
+            "result": "model/caller-specific"
+          },
+          {
             "caller": "heap::<impl at crates/varlit-core/src/keyed_heap/heap.rs>::put(_1: &mut KeyedHeap, _2: &mut dyn TileStore, _3: u32, _4: &[u8], _5: &[u8]) -> std::result::Result<(), error::Error> [body:912c8fbb8f3e62ad]",
             "target": "keyed_heap::State::bucket_of",
             "result": "model/caller-specific"
@@ -2819,6 +2830,7 @@
       "required_harnesses": [
         "keyed_heap::heap_proofs::every_route_lands_in_a_bucket_of_the_table",
         "keyed_heap::heap_proofs::a_split_moves_exactly_the_keys_whose_routing_bit_is_set",
+        "keyed_heap::heap_proofs::a_merge_undoes_a_split_and_moves_only_the_merged_keys",
         "keyed_heap::heap_proofs::an_item_goes_to_the_smallest_class_that_holds_it",
         "keyed_heap::heap_proofs::a_record_splits_into_items_that_hold_it",
         "keyed_heap::heap_proofs::item_references_round_trip",

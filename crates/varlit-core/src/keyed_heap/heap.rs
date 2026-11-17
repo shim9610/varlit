@@ -58,6 +58,7 @@ const STEP: usize = lookup::STEP;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeapStats {
     pub splits: u64,
+    pub merges: u64,
     /// Holes filled by a class's last live item, items a class shrank by,
     /// and log entries that named an item already gone or reused.
     pub moves: u64,
@@ -413,6 +414,13 @@ impl KeyedHeap {
         };
         self.remove_slot(store, found.page, found.index)?;
         self.state.keys -= 1;
+        // Merge below a quarter full, split above three quarters: a key
+        // added or removed at either threshold does not undo the last.
+        while self.state.buckets() > 1
+            && self.state.keys * 4 < self.state.buckets() * SLOTS_PER_PAGE as u64
+        {
+            self.merge(store)?;
+        }
         let freed = self.release(store, found.slot.item)?;
         self.fill(store, freed)?;
         Ok(true)
@@ -1212,6 +1220,75 @@ impl KeyedHeap {
         }
         self.state = self.state.after_split();
         self.stats.splits += 1;
+        Ok(())
+    }
+
+    /// Merges the table's last bucket back into the bucket it was split
+    /// from: its chain is linked after that bucket's, the slots are packed
+    /// into the fewest pages from the head, and pages left over go to the
+    /// free list.
+    fn merge(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        let next = self.state.after_merge();
+        let from = next.split + (1u64 << next.level);
+        let into = next.split;
+        let from_head = self.bucket(store, from)?;
+        let into_head = self.bucket(store, into)?;
+        let mut tail = into_head;
+        loop {
+            let after = self.next_bucket_page(store, tail)?;
+            if after == 0 {
+                break;
+            }
+            tail = after;
+        }
+        let page = self.pages.page_mut(&mut self.ring, store, tail)?;
+        let (count, _) = page_header(page)?;
+        set_page_header(page, count, from_head);
+        self.pack(store, into_head)?;
+        let dir = self.state.dir;
+        self.state.dir = self.dir_set(store, dir, from, 0)?;
+        self.state = next;
+        self.stats.merges += 1;
+        Ok(())
+    }
+
+    /// Packs the slots of the chain headed by `head` into its first pages,
+    /// in order, and frees the pages left over.
+    fn pack(&mut self, store: &mut dyn TileStore, head: u64) -> Result<()> {
+        let mut read = [0u8; crate::width::small(BUCKET_PAGE)];
+        let mut stay = [0u8; crate::width::small(BUCKET_PAGE)];
+        let mut stay_count = 0usize;
+        // The packed pages overwrite the chain from its head: never ahead
+        // of the page being read, since they hold no more slots than were
+        // read.
+        let mut stay_at = head;
+        let mut at = head;
+        while at != 0 {
+            self.read(store, at, &mut read)?;
+            let (count, next) = page_header(&read)?;
+            for index in 0..count {
+                if stay_count == SLOTS_PER_PAGE {
+                    let next_page = self.next_bucket_page(store, stay_at)?;
+                    set_page_header(&mut stay, stay_count, next_page);
+                    self.put_page(store, stay_at, &stay)?;
+                    stay_at = next_page;
+                    stay_count = 0;
+                }
+                let start = HEADER_BYTES + index * SLOT_BYTES;
+                put_slot(&mut stay, stay_count, &read[start..start + SLOT_BYTES]);
+                stay_count += 1;
+            }
+            at = next;
+        }
+        let mut spare = self.next_bucket_page(store, stay_at)?;
+        set_page_header(&mut stay, stay_count, 0);
+        zero_slots(&mut stay, stay_count);
+        self.put_page(store, stay_at, &stay)?;
+        while spare != 0 {
+            let next = self.next_bucket_page(store, spare)?;
+            self.free_bucket_page(store, spare)?;
+            spare = next;
+        }
         Ok(())
     }
 

@@ -66,7 +66,8 @@ requirement to `0.13.0` to use it. Schema fingerprints are unchanged.
   declared 1 to 5 % of live data); new values and moved items are written
   straight to the file and only headers, slots and entries go through the
   write-ahead ring,
-  found through linear-hashed slot buckets keyed by a per-file SipHash seed.
+  found through linear-hashed slot buckets keyed by a per-file SipHash seed,
+  which split above three quarters full and merge back below a quarter.
   The pages in use stay within a constant of the data held now, not the
   most ever held.
   Repeated updates no longer grow the file (the growth the security advisory

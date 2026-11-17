@@ -55,6 +55,27 @@ fn a_split_moves_exactly_the_keys_whose_routing_bit_is_set() {
     }
 }
 
+/// A merge undoes a split exactly, and changes the bucket of no key outside
+/// the merged bucket, which all go to the bucket it was split from: what
+/// `heap::merge` does with the slots.
+#[kani::proof]
+fn a_merge_undoes_a_split_and_moves_only_the_merged_keys() {
+    let table = any_table();
+    kani::assume(table.buckets() > 1);
+    let next = table.after_merge();
+    assert_eq!(next.buckets() + 1, table.buckets());
+    assert_eq!(next.after_split(), table);
+    let from = next.split + (1u64 << next.level);
+    let route: u32 = kani::any();
+    let before = table.bucket_of(route);
+    let after = next.bucket_of(route);
+    if before == from {
+        assert_eq!(after, next.split);
+    } else {
+        assert_eq!(after, before);
+    }
+}
+
 /// An item of any length up to the largest goes to the smallest class that
 /// holds it, which wastes at most a sixteenth (or 16 bytes).
 #[kani::proof]

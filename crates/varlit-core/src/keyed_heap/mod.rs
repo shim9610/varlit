@@ -348,6 +348,20 @@ impl State {
         next
     }
 
+    /// The table after its last bucket is merged back into the bucket it
+    /// was split from: the inverse of [`Self::after_split`]. The table must
+    /// have more than one bucket.
+    pub(crate) const fn after_merge(&self) -> Self {
+        let mut next = *self;
+        if next.split == 0 {
+            next.level -= 1;
+            next.split = (1u64 << next.level) - 1;
+        } else {
+            next.split -= 1;
+        }
+        next
+    }
+
     /// The bucket a key whose hash has these low bits belongs to.
     pub(crate) const fn bucket_of(&self, route: u32) -> u64 {
         let route = route as u64;
