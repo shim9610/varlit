@@ -38,8 +38,13 @@ varlit_format! {
         }
     }
 }
+/// Columns per row: an 11 KiB cell's default tile is 2 x 2 cells, so the
+/// keyspace is two cells wide and every tile fills. Cell `n` of the linear
+/// order is row `n / COLS`, column `n % COLS`; runs cross rows in that
+/// order.
+const COLS: usize = 2;
 fn k(n: usize) -> MatrixKey {
-    MatrixKey::new(n as u64, 0)
+    MatrixKey::new((n / COLS) as u64, (n % COLS) as u64)
 }
 fn u64s(b: &[u8]) -> impl Iterator<Item = u64> + '_ {
     b.chunks_exact(8)
@@ -50,7 +55,10 @@ pub struct W(VarlitFile);
 pub fn create(p: &Path) -> Result<Box<dyn Oltp>> {
     let f = BankPacked::spec().create_with_dims(
         p,
-        MatrixDimensions::from_pairs([("entry", ngroups() as u64), ("slot", 1)]),
+        MatrixDimensions::from_pairs([
+            ("entry", ngroups().div_ceil(COLS) as u64),
+            ("slot", COLS as u64),
+        ]),
     )?;
     Ok(Box::new(W(f)))
 }
