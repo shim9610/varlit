@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 
 use super::heap::{KeyedHeap, Tuning};
 use super::{
-    CLASSES, ITEM_HEADER, MAX_ITEM, MIN_BUDGET, PAGE_BYTES, SLOTS_PER_PAGE, chain_bytes,
+    CLASSES, ITEM_HEADER, MAX_ITEM, MIN_BUDGET, PAGE_BYTES, chain_bytes,
     chain_shape, class_of, class_size,
 };
 use crate::matrix_tiles::store::memory::MemStore;
 
 const RING: u64 = 1 << 20;
-const SEED: [u64; 2] = [0x1234_5678, 0x9abc_def0];
 const BUDGET: u64 = super::DEFAULT_BUDGET;
 /// The writer's own work turned down: holes build up as in a large file.
 const SLOW: Tuning = Tuning { fills_per_free: 1 };
@@ -16,7 +15,7 @@ const SLOW: Tuning = Tuning { fills_per_free: 1 };
 type Model = BTreeMap<(u32, Vec<u8>), Vec<u8>>;
 
 fn create(store: &mut MemStore, budget: u64, tuning: Tuning) -> KeyedHeap {
-    KeyedHeap::create(store, RING, 50, budget, SEED, tuning).unwrap()
+    KeyedHeap::create(store, RING, 50, budget, tuning).unwrap()
 }
 
 fn get(heap: &KeyedHeap, store: &MemStore, block: u32, key: &[u8]) -> Option<Vec<u8>> {
@@ -63,9 +62,9 @@ fn bounded(heap: &KeyedHeap, largest: u64, when: &str) {
     let state = heap.state();
     let used = (state.pages - state.pooled) * PAGE_BYTES;
     assert!(
-        used <= state.live + heap.idle_bound(),
+        used <= heap.live_bytes() + heap.idle_bound(),
         "{when}: {used} bytes of pages in use for {} live (bound {}): {:?}",
-        state.live,
+        heap.live_bytes(),
         heap.idle_bound(),
         heap.stats
     );
@@ -75,6 +74,20 @@ fn bounded(heap: &KeyedHeap, largest: u64, when: &str) {
         state.hole_bytes,
         heap.logged_bound(largest),
         heap.stats
+    );
+    assert!(
+        state.leaf_free <= heap.leaf_free_bound(),
+        "{when}: {} bytes free in {} leaves (bound {}): {:?}",
+        state.leaf_free,
+        state.leaves,
+        heap.leaf_free_bound(),
+        heap.stats
+    );
+    assert!(
+        state.interiors <= state.leaves / 8 + state.root.1,
+        "{when}: {} interior pages for {} leaves",
+        state.interiors,
+        state.leaves
     );
 }
 
@@ -143,7 +156,8 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
     let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
     let mut model = Model::new();
     let mut state = 1u64;
-    // Enough keys to split many buckets, values of every size class.
+    // Enough keys to split leaves and interior pages, values of every size
+    // class, inline and chained.
     for round in 0..4u64 {
         for step in 0..1500u64 {
             let key = (random(&mut state) % 3000).to_le_bytes().to_vec();
@@ -165,8 +179,7 @@ fn puts_deletes_and_reopens_match_a_model_across_splits() {
         check(&heap, &store, &model);
         consistent(&heap, &store, &format!("round {round}"));
     }
-    assert!(heap.state().buckets() > 4);
-    assert!(heap.state().keys > SLOTS_PER_PAGE as u64);
+    assert!(heap.state().leaves > 4, "{:?}", heap.state());
 }
 
 #[test]
@@ -406,7 +419,7 @@ fn values_written_into_holes_survive_a_crash() {
     let meta = heap.meta;
     let mut model = Model::new();
     for key in 0..300u64 {
-        let bytes = value(300, key);
+        let bytes = value(5000, key);
         heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
         model.insert((1, key.to_le_bytes().to_vec()), bytes);
     }
@@ -420,7 +433,7 @@ fn values_written_into_holes_survive_a_crash() {
     let moved = heap.stats.moves + heap.stats.taken;
     let mut next = model.clone();
     for key in (1..300u64).step_by(4) {
-        let bytes = value(300, key ^ 0xabcd);
+        let bytes = value(5000, key ^ 0xabcd);
         heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
         next.insert((1, key.to_le_bytes().to_vec()), bytes);
     }
@@ -539,7 +552,7 @@ fn a_reader_never_sees_values_moved_into_space_it_points_at() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
     for key in 0..50u64 {
-        heap.put(&mut store, 1, &key.to_le_bytes(), &value(200, key))
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(5000, key))
             .unwrap();
     }
     heap.publish(&mut store).unwrap();
@@ -551,7 +564,7 @@ fn a_reader_never_sees_values_moved_into_space_it_points_at() {
                 &mut store,
                 1,
                 &(key + 1000 * round).to_le_bytes(),
-                &value(200, round),
+                &value(5000, round),
             )
             .unwrap();
         }
@@ -565,7 +578,7 @@ fn a_reader_never_sees_values_moved_into_space_it_points_at() {
     );
     for key in 0..50u64 {
         match read(&mut reader, &store, &key.to_le_bytes()) {
-            Ok(Some(found)) => assert_eq!(found, value(200, key)),
+            Ok(Some(found)) => assert_eq!(found, value(5000, key)),
             Err(crate::Error::MatrixSnapshotExpired { .. }) => {}
             other => panic!("key {key}: {other:?}"),
         }
@@ -576,19 +589,11 @@ fn a_reader_never_sees_values_moved_into_space_it_points_at() {
 /// any build writes and reads.
 #[test]
 fn layouts_are_the_same_bytes_on_every_platform() {
-    use super::{ClassEntry, Item, Slot, State, item_ref};
-    let slot = Slot {
-        route: 0x0403_0201,
-        item: item_ref(2, 0x0a09),
-    };
-    assert_eq!(
-        slot.encode(),
-        [1, 2, 3, 4, 0, 0, 0, 0, 0x09, 0x0a, 0, 0, 0, 0, 0, 2]
-    );
-    assert_eq!(Slot::decode(&slot.encode()), slot);
+    use super::{ClassEntry, Item, State, item_ref};
     let item = Item {
         len: 0x0102,
         head: false,
+        separator: true,
         block_or_route: 0x0a0b_0c0d,
         key_len: 0,
         crc: 0x1122_3344,
@@ -597,7 +602,7 @@ fn layouts_are_the_same_bytes_on_every_platform() {
         total_or_prev: item_ref(1, 3),
     };
     let bytes = item.encode();
-    assert_eq!(&bytes[..4], &[0x02, 0x01, 0, 0x80]);
+    assert_eq!(&bytes[..4], &[0x02, 0x01, 0, 0xc0]);
     assert_eq!(&bytes[4..8], &[0x0d, 0x0c, 0x0b, 0x0a]);
     assert_eq!(&bytes[12..16], &[0x44, 0x33, 0x22, 0x11]);
     assert_eq!(&bytes[16..24], &7u64.to_le_bytes());
@@ -611,14 +616,16 @@ fn layouts_are_the_same_bytes_on_every_platform() {
     assert_eq!(&entry.encode()[..8], &5u64.to_le_bytes());
     assert_eq!(ClassEntry::decode(&entry.encode()).unwrap(), entry);
     let state = State {
-        dir: (1, 1),
-        level: 3,
+        root: (1, 1),
+        keys: 3,
+        pages: 2,
+        leaves: 1,
         logged: 9,
         ..State::default()
     };
     let encoded = state.encode();
     assert_eq!(&encoded[16..24], &3u64.to_le_bytes());
-    assert_eq!(&encoded[120..128], &9u64.to_le_bytes());
+    assert_eq!(&encoded[96..104], &9u64.to_le_bytes());
     assert_eq!(State::decode(&encoded).unwrap(), state);
 }
 
@@ -710,7 +717,7 @@ fn a_reader_older_than_a_raised_mark_expires() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
     for key in 0..4000u64 {
-        heap.put(&mut store, 1, &key.to_le_bytes(), &value(600, key))
+        heap.put(&mut store, 1, &key.to_le_bytes(), &value(5000, key))
             .unwrap();
     }
     heap.publish(&mut store).unwrap();
@@ -736,7 +743,7 @@ fn a_reader_older_than_a_raised_mark_expires() {
     for key in (1..4000u64).step_by(2) {
         assert_eq!(
             read(&mut reader, &store, &key.to_le_bytes()).unwrap(),
-            Some(value(600, key))
+            Some(value(5000, key))
         );
     }
 }
@@ -772,41 +779,37 @@ fn rewriting_every_key_each_round_settles() {
     );
 }
 
-/// Deleting most keys merges buckets back, down to the table the remaining
-/// keys need; every key left reads back, through a reopen too, and a crash
-/// at any write of the deleting generation keeps the last publication.
+/// Deleting most keys empties leaves, which go back to the pool, and the
+/// tree shrinks; every key left reads back, through a reopen too, and a
+/// crash at any write of the deleting generation keeps the last
+/// publication.
 #[test]
 #[cfg_attr(miri, ignore = "thousands of ring writes; run natively")]
-fn deletes_merge_buckets_back() {
+fn deletes_shrink_the_tree() {
     let mut store = MemStore::new();
     let mut heap = create(&mut store, BUDGET, Tuning::DEFAULT);
     let mut model = Model::new();
     for key in 0..20_000u64 {
         let bytes = value(20, key);
-        heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
-        model.insert((1, key.to_le_bytes().to_vec()), bytes);
+        heap.put(&mut store, 1, &key.to_be_bytes(), &bytes).unwrap();
+        model.insert((1, key.to_be_bytes().to_vec()), bytes);
     }
     heap.publish(&mut store).unwrap();
-    let peak = heap.state().buckets();
+    let peak = heap.state().leaves;
     let published = model.clone();
     for key in 0..20_000u64 {
         if key % 50 != 0 {
-            assert!(heap.delete(&mut store, 1, &key.to_le_bytes()).unwrap());
-            model.remove(&(1, key.to_le_bytes().to_vec()));
+            assert!(heap.delete(&mut store, 1, &key.to_be_bytes()).unwrap());
+            model.remove(&(1, key.to_be_bytes().to_vec()));
         }
         if key % 1000 == 0 {
             consistent(&heap, &store, &format!("delete {key}"));
         }
     }
-    assert!(heap.stats.merges > 0, "{:?}", heap.stats);
-    let buckets = heap.state().buckets();
-    assert!(
-        buckets * SLOTS_PER_PAGE as u64 <= 4 * heap.state().keys + SLOTS_PER_PAGE as u64,
-        "{buckets} buckets for {} keys (peak {peak})",
-        heap.state().keys
-    );
+    let leaves = heap.state().leaves;
+    assert!(leaves * 4 <= peak, "{leaves} leaves, {peak} at the peak: {:?}", heap.stats);
     check(&heap, &store, &model);
-    consistent(&heap, &store, "after the merges");
+    consistent(&heap, &store, "after the deletes");
     let pending = store.writes_since_sync();
     for keep in (0..pending).step_by((pending / 40).max(1)) {
         let mut crashed = store.crashed(keep, 3);
@@ -817,12 +820,11 @@ fn deletes_merge_buckets_back() {
     heap.publish(&mut store).unwrap();
     let reopened = KeyedHeap::open(&mut store, heap.meta, Tuning::DEFAULT).unwrap();
     check(&reopened, &store, &model);
-    // Growing again splits the merged buckets as before.
     let mut heap = reopened;
     for key in 0..20_000u64 {
         let bytes = value(20, key + 7);
-        heap.put(&mut store, 1, &key.to_le_bytes(), &bytes).unwrap();
-        model.insert((1, key.to_le_bytes().to_vec()), bytes);
+        heap.put(&mut store, 1, &key.to_be_bytes(), &bytes).unwrap();
+        model.insert((1, key.to_be_bytes().to_vec()), bytes);
     }
     check(&heap, &store, &model);
     consistent(&heap, &store, "after growing again");

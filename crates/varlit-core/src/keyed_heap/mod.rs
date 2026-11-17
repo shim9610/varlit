@@ -1,5 +1,6 @@
-//! Keyed records stored once per key: size-class item arrays found through
-//! slot buckets (see `docs/design/bounded-keyed-storage.md`).
+//! Keyed records stored once per key, in pages sorted by key, found through
+//! a tree whose interior pages hold one boundary per page, never one entry
+//! per key (see `docs/design/bounded-keyed-storage.md`).
 //!
 //! Every structure lives in internal records of the primary file and
 //! changes through the write-ahead ring of a
@@ -8,24 +9,20 @@
 //! until the ring moves past it.
 //!
 //! - **Metadata** (one record): the ring's place, the free-space ratio, the
-//!   change budget, the per-file hash seed, the mutable state (bucket
-//!   directory, linear hashing, counters, the page pool and the hole log)
-//!   and one entry per size class.
+//!   change budget, the mutable state (the tree's root, counters, the page
+//!   pool and the freed item log) and one entry per size class.
+//! - **Tree pages** ([`node`]): 64 KiB pool pages. Leaves hold records in
+//!   key order; interior pages hold a child and a separator per entry.
 //! - **Size classes**: about a hundred item sizes, 1/16 apart, from 48 bytes
-//!   to 64 KiB. A class is a dense array of fixed-size items over 64 KiB
-//!   pages, mapped through a radix directory; free space is only at its end.
-//! - **Records**: a chain of items, full 64 KiB items then one of the class
-//!   the rest fits. A record's bytes are its key then its payload.
-//! - **Slot buckets**: 4 KiB pages of 16-byte slots (hash low bits, head
-//!   item), found through a radix directory by bucket number; buckets grow
-//!   one at a time by linear hashing.
+//!   to 64 KiB, each a dense array of fixed-size items over 64 KiB pages
+//!   with free space only at its end. A record too large for a leaf, and a
+//!   separator too long for an interior page, is a chain of items.
 //!
-//! A slot is the only thing that makes a record live. An item freed is
+//! A leaf entry is the only thing that makes a record live. An item freed is
 //! marked dead in its header and logged. Once every reader and recovery
 //! shows a generation that no longer uses it (the ring's mark has reached
 //! the generation that freed it), the class's last live item is written into
-//! it once and its referrer repointed, and the class shrinks by one: the
-//! items below a class's end are live, or dead and logged, and nothing else.
+//! it once and its referrer repointed, and the class shrinks by one.
 
 pub(crate) mod heap;
 #[cfg(kani)]
@@ -33,10 +30,9 @@ pub(crate) mod heap;
 mod heap_proofs;
 pub(crate) mod lookup;
 pub(crate) mod node;
-pub(crate) mod pages;
+pub(crate) mod nodes;
 pub(crate) mod radix;
 pub(crate) mod reader;
-pub(crate) mod sip;
 pub(crate) mod tree;
 #[cfg(test)]
 mod tests;
@@ -44,7 +40,7 @@ mod tests;
 use crate::{Error, Result};
 
 pub(crate) const META_MAGIC: &[u8; 4] = b"VKMT";
-pub(crate) const META_VERSION: u16 = 3;
+pub(crate) const META_VERSION: u16 = 4;
 /// The fixed, checksummed part of the metadata record.
 pub(crate) const META_FIXED_LEN: u64 = 64;
 /// Where the ring keeps its overflow list head: the first mutable field.
@@ -75,14 +71,6 @@ pub(crate) const MIN_BUDGET: u64 = 1 << 20;
 pub(crate) const MAX_BUDGET: u64 = 1 << 40;
 /// The change budget when a format declares none.
 pub(crate) const DEFAULT_BUDGET: u64 = 64 << 20;
-
-/// `hash low bits | 0 | head item`.
-pub(crate) const BUCKET_MAGIC: &[u8; 4] = b"VBKT";
-pub(crate) const BUCKET_PAGE: u64 = 4096;
-/// `magic | count | next page`.
-pub(crate) const BUCKET_HEADER: u64 = 16;
-pub(crate) const SLOT_LEN: u64 = 16;
-pub(crate) const SLOTS_PER_PAGE: usize = ((BUCKET_PAGE - BUCKET_HEADER) / SLOT_LEN) as usize;
 
 /// An item reference: class in the top byte, index below.
 pub(crate) const NO_ITEM: u64 = u64::MAX;
@@ -176,7 +164,6 @@ pub(crate) const fn checked_ref(item: u64) -> Result<u64> {
 pub(crate) struct Fixed {
     /// Free-space ratio in thousandths of live bytes.
     pub ratio_permille: u16,
-    pub seed: [u64; 2],
     pub ring: (u64, u64),
     /// Bytes one round may allocate before the writer publishes it.
     pub budget: u64,
@@ -188,8 +175,6 @@ impl Fixed {
         out[0..4].copy_from_slice(META_MAGIC);
         out[4..6].copy_from_slice(&META_VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&self.ratio_permille.to_le_bytes());
-        out[8..16].copy_from_slice(&self.seed[0].to_le_bytes());
-        out[16..24].copy_from_slice(&self.seed[1].to_le_bytes());
         out[24..32].copy_from_slice(&self.ring.0.to_le_bytes());
         out[32..40].copy_from_slice(&self.ring.1.to_le_bytes());
         out[40..48].copy_from_slice(&self.budget.to_le_bytes());
@@ -211,6 +196,8 @@ impl Fixed {
         let ring = (word(24), word(32));
         let budget = word(40);
         if !(10..=50).contains(&ratio_permille)
+            || word(8) != 0
+            || word(16) != 0
             || !(MIN_BUDGET..=MAX_BUDGET).contains(&budget)
             || !(crate::matrix_tiles::wal::MIN_RING..=crate::matrix_tiles::wal::MAX_RING_BYTES)
                 .contains(&ring.1)
@@ -219,7 +206,6 @@ impl Fixed {
         }
         Ok(Self {
             ratio_permille,
-            seed: [word(8), word(16)],
             ring,
             budget,
         })
@@ -229,23 +215,18 @@ impl Fixed {
 /// The mutable state in the metadata record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State {
-    /// Bucket directory root: `(page, height)`.
-    pub dir: (u64, u64),
-    /// Linear hashing: buckets are `2^level + split`.
-    pub level: u64,
-    pub split: u64,
+    /// The tree's root page and height (1: the root is a leaf).
+    pub root: (u64, u64),
     /// Live keys.
     pub keys: u64,
     /// Bytes of live items (whole items: headers and rounding included).
     pub live: u64,
-    /// Item, log and pooled pages, all [`PAGE_BYTES`] long.
+    /// Item, log, tree and pooled pages, all [`PAGE_BYTES`] long.
     pub pages: u64,
-    /// The page pool: pages no class or log uses, oldest first.
+    /// The page pool: pages nothing uses, oldest first.
     pub pool_head: u64,
     pub pool_tail: u64,
     pub pooled: u64,
-    /// Free bucket pages.
-    pub free_buckets: u64,
     /// The log of items freed, oldest first: its first page and entry, its
     /// last page and entry count there, and its entries. An entry is taken
     /// once the ring's mark reaches the generation that freed it.
@@ -256,6 +237,12 @@ pub(crate) struct State {
     pub logged: u64,
     /// Bytes of the items the log names.
     pub hole_bytes: u64,
+    /// Leaf and interior pages.
+    pub leaves: u64,
+    pub interiors: u64,
+    /// Bytes leaf entries and bodies take, and bytes free in leaves.
+    pub leaf_used: u64,
+    pub leaf_free: u64,
 }
 
 impl State {
@@ -263,24 +250,24 @@ impl State {
 
     const fn fields(&self) -> [u64; Self::FIELDS] {
         [
-            self.dir.0,
-            self.dir.1,
-            self.level,
-            self.split,
+            self.root.0,
+            self.root.1,
             self.keys,
             self.live,
             self.pages,
             self.pool_head,
             self.pool_tail,
             self.pooled,
-            self.free_buckets,
             self.log_head,
             self.log_head_at,
             self.log_tail,
             self.log_tail_at,
             self.logged,
             self.hole_bytes,
-            0,
+            self.leaves,
+            self.interiors,
+            self.leaf_used,
+            self.leaf_free,
             0,
         ]
     }
@@ -298,81 +285,37 @@ impl State {
             u64::from_le_bytes(bytes[index * 8..index * 8 + 8].try_into().expect("eight"))
         };
         let state = Self {
-            dir: (word(0), word(1)),
-            level: word(2),
-            split: word(3),
-            keys: word(4),
-            live: word(5),
-            pages: word(6),
-            pool_head: word(7),
-            pool_tail: word(8),
-            pooled: word(9),
-            free_buckets: word(10),
-            log_head: word(11),
-            log_head_at: word(12),
-            log_tail: word(13),
-            log_tail_at: word(14),
-            logged: word(15),
-            hole_bytes: word(16),
+            root: (word(0), word(1)),
+            keys: word(2),
+            live: word(3),
+            pages: word(4),
+            pool_head: word(5),
+            pool_tail: word(6),
+            pooled: word(7),
+            log_head: word(8),
+            log_head_at: word(9),
+            log_tail: word(10),
+            log_tail_at: word(11),
+            logged: word(12),
+            hole_bytes: word(13),
+            leaves: word(14),
+            interiors: word(15),
+            leaf_used: word(16),
+            leaf_free: word(17),
         };
-        if state.level >= 32
-            || state.split >= 1u64 << state.level
+        if state.root.0 == 0
+            || state.root.1 == 0
+            || state.root.1 > tree::MAX_HEIGHT as u64
             || state.pooled > state.pages
-            || state
-                .live
-                .checked_add(state.hole_bytes)
-                .is_none_or(|used| used > state.pages.saturating_mul(PAGE_BYTES))
+            || state.leaves == 0
+            || state.leaves + state.interiors > state.pages
             || state.log_head_at > LOG_ENTRIES
             || state.log_tail_at > LOG_ENTRIES
-            || state.dir.0 == 0
-            || state.dir.1 == 0
-            || state.dir.1 > crate::matrix_tiles::view::DIR_MAX_HEIGHT
+            || word(18) != 0
         {
             return Err(corrupt("keyed storage state"));
         }
         Ok(state)
-    }
-
-    /// Buckets in the table.
-    pub(crate) const fn buckets(&self) -> u64 {
-        (1u64 << self.level) + self.split
-    }
-
-    /// The table after the bucket at the split pointer is split: its slots
-    /// with routing bit `level` set go to bucket `split + 2^level`.
-    pub(crate) const fn after_split(&self) -> Self {
-        let mut next = *self;
-        next.split += 1;
-        if next.split == 1u64 << next.level {
-            next.level += 1;
-            next.split = 0;
-        }
-        next
-    }
-
-    /// The table after its last bucket is merged back into the bucket it
-    /// was split from: the inverse of [`Self::after_split`]. The table must
-    /// have more than one bucket.
-    pub(crate) const fn after_merge(&self) -> Self {
-        let mut next = *self;
-        if next.split == 0 {
-            next.level -= 1;
-            next.split = (1u64 << next.level) - 1;
-        } else {
-            next.split -= 1;
-        }
-        next
-    }
-
-    /// The bucket a key whose hash has these low bits belongs to.
-    pub(crate) const fn bucket_of(&self, route: u32) -> u64 {
-        let route = route as u64;
-        let low = route & ((1u64 << self.level) - 1);
-        if low < self.split {
-            route & ((1u64 << (self.level + 1)) - 1)
-        } else {
-            low
-        }
     }
 }
 
@@ -426,6 +369,8 @@ pub(crate) struct Item {
     /// Record bytes in this item.
     pub len: u32,
     pub head: bool,
+    /// The chain holds an interior page's separator, not a record.
+    pub separator: bool,
     /// A head: the block id; a continuation: the key's route.
     pub block_or_route: u32,
     /// A head: the key's length; a continuation: zero.
@@ -440,17 +385,20 @@ pub(crate) struct Item {
     pub total_or_prev: u64,
 }
 
-/// `len`'s top bit marks a continuation item.
+/// `len`'s top bit marks a continuation item, the next a separator's chain.
 const CONTINUATION: u32 = 1 << 31;
+const SEPARATOR: u32 = 1 << 30;
 
 impl Item {
     pub(crate) fn encode(&self) -> [u8; crate::width::small(ITEM_HEADER)] {
         let mut out = [0u8; crate::width::small(ITEM_HEADER)];
-        let len = if self.head {
-            self.len
-        } else {
-            self.len | CONTINUATION
-        };
+        let mut len = self.len;
+        if !self.head {
+            len |= CONTINUATION;
+        }
+        if self.separator {
+            len |= SEPARATOR;
+        }
         out[0..4].copy_from_slice(&len.to_le_bytes());
         out[4..8].copy_from_slice(&self.block_or_route.to_le_bytes());
         out[8..12].copy_from_slice(&self.key_len.to_le_bytes());
@@ -466,8 +414,9 @@ impl Item {
         let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight"));
         let len = half(0);
         Self {
-            len: len & !CONTINUATION,
+            len: len & !(CONTINUATION | SEPARATOR),
             head: len & CONTINUATION == 0,
+            separator: len & SEPARATOR != 0,
             block_or_route: half(4),
             key_len: half(8),
             crc: half(12),
@@ -519,56 +468,10 @@ pub(crate) const LOG_HEADER: u64 = 16;
 pub(crate) const LOG_ENTRY: u64 = 16;
 pub(crate) const LOG_ENTRIES: u64 = (PAGE_BYTES - LOG_HEADER) / LOG_ENTRY;
 
-// ---- slots ----
-
-/// A slot in a bucket page.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Slot {
-    /// The low 32 bits of the key's hash: they route the key to its bucket
-    /// at every level, and serve as its fingerprint.
-    pub route: u32,
-    /// The record's head item.
-    pub item: u64,
-}
-
-impl Slot {
-    pub(crate) fn encode(&self) -> [u8; crate::width::small(SLOT_LEN)] {
-        let mut out = [0u8; crate::width::small(SLOT_LEN)];
-        out[0..4].copy_from_slice(&self.route.to_le_bytes());
-        out[8..16].copy_from_slice(&self.item.to_le_bytes());
-        out
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Self {
-        Self {
-            route: u32::from_le_bytes(bytes[0..4].try_into().expect("four")),
-            item: u64::from_le_bytes(bytes[8..16].try_into().expect("eight")),
-        }
-    }
-}
-
-/// A bucket page's header: its slot count and the next page of its chain.
-pub(crate) fn page_header(bytes: &[u8]) -> Result<(usize, u64)> {
-    let count = u32::from_le_bytes(bytes[4..8].try_into().expect("four")) as usize;
-    let next = u64::from_le_bytes(bytes[8..16].try_into().expect("eight"));
-    if &bytes[0..4] != BUCKET_MAGIC || count > SLOTS_PER_PAGE {
-        return Err(corrupt("keyed bucket page"));
-    }
-    Ok((count, next))
-}
-
-pub(crate) fn set_page_header(bytes: &mut [u8], count: usize, next: u64) {
-    bytes[0..4].copy_from_slice(BUCKET_MAGIC);
-    bytes[4..8].copy_from_slice(&crate::width::small32(count).to_le_bytes());
-    bytes[8..16].copy_from_slice(&next.to_le_bytes());
-}
-
 pub(crate) const fn corrupt(what: &'static str) -> Error {
     Error::InvalidCanonicalEncoding(what)
 }
 
-// A bucket page is staged whole; its header is one slot long.
-const _: () = assert!(BUCKET_HEADER == SLOT_LEN);
 // The smallest class holds a header and at least one byte.
 const _: () = assert!(class_size(0) > ITEM_HEADER);
 // Every class is a multiple of 16 bytes, the largest exactly one page.

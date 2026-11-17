@@ -3,7 +3,8 @@
 //! moved past gets `MatrixSnapshotExpired` and must follow, never a mixed
 //! answer.
 
-use super::lookup::{self, Ctx, View};
+use super::lookup::{Ctx, View};
+use super::tree::{self, KeySrc};
 use super::{Fixed, META_FIXED_LEN, META_STATE_AT, State};
 use crate::matrix_tiles::store::TileSource;
 use crate::matrix_tiles::view::RingReader;
@@ -11,7 +12,6 @@ use crate::{Error, Result};
 
 pub(crate) struct KeyedReader {
     meta: u64,
-    seed: [u64; 2],
     reader: RingReader,
     state: State,
 }
@@ -25,7 +25,6 @@ impl KeyedReader {
         let fixed = Fixed::decode(&bytes)?;
         let mut reader = Self {
             meta,
-            seed: fixed.seed,
             reader: RingReader::open(source, fixed.ring)?,
             state: State::default(),
         };
@@ -84,7 +83,6 @@ impl KeyedReader {
                 &mut view,
                 source,
                 self.meta,
-                self.seed,
                 &self.state,
                 block_id,
                 buf,
@@ -112,7 +110,6 @@ fn attempt(
     view: &mut Unsettled<'_>,
     source: &dyn TileSource,
     meta: u64,
-    seed: [u64; 2],
     state: &State,
     block_id: u32,
     buf: &mut Vec<u8>,
@@ -120,15 +117,22 @@ fn attempt(
     max_payload: u64,
     encode: &mut dyn FnMut(&mut Vec<u8>) -> Result<()>,
 ) -> Result<bool> {
+    // The tree key is the block id, big-endian, then the key: it goes
+    // into `buf` before the key the caller encodes.
+    buf.clear();
     encode(buf)?;
+    let key_at = key_at.min(buf.len());
+    buf.splice(key_at..key_at, block_id.to_be_bytes());
     let key = buf.get(key_at..).ok_or(Error::InvalidFormatSpec(
         "keyed lookup key starts past its buffer",
     ))?;
     let mut ctx = Ctx::new(view, source, meta, None);
-    let Some(found) = lookup::find(&mut ctx, seed, state, block_id, key)? else {
+    let path = tree::find(&mut ctx, state.root, &KeySrc::Mem(key))?;
+    if !path.found {
         return Ok(false);
-    };
-    let len = found.payload_len();
+    }
+    let body = tree::read_body(&mut ctx, path.pages[0], path.counts[0], path.index[0], false)?;
+    let len = tree::value_len(&body);
     if len > max_payload {
         return Err(Error::LimitExceeded {
             resource: "keyed record payload",
@@ -143,7 +147,7 @@ fn attempt(
         requested: len as u64,
     })?;
     buf.resize(len, 0);
-    lookup::read_payload(&mut ctx, &found, buf)?;
+    tree::read_value(&mut ctx, &body, buf)?;
     Ok(true)
 }
 

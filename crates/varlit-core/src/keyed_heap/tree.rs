@@ -39,29 +39,53 @@ pub(crate) struct KeyLoc {
     pub chain_from: u64,
 }
 
-/// A key to compare: in memory, or where an entry keeps it.
+/// A key to compare: in memory, a block id and key bytes in memory, where
+/// an entry keeps it, or a chain's key (its block id, then the chain's
+/// record bytes).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum KeySrc<'a> {
     Mem(&'a [u8]),
+    Parts([u8; 4], &'a [u8]),
     Loc(KeyLoc),
+    Item { block: [u8; 4], head: u64, len: u64 },
 }
 
 impl KeySrc<'_> {
-    fn len(&self) -> u64 {
+    pub(crate) fn len(&self) -> u64 {
         match self {
             Self::Mem(bytes) => bytes.len() as u64,
+            Self::Parts(_, key) => 4 + key.len() as u64,
             Self::Loc(loc) => loc.len,
+            Self::Item { len, .. } => *len,
         }
     }
 
     /// Reads key bytes `[from, from + buf.len())`.
-    fn read(&self, ctx: &mut Ctx<'_>, from: u64, buf: &mut [u8]) -> Result<()> {
+    pub(crate) fn read(&self, ctx: &mut Ctx<'_>, from: u64, buf: &mut [u8]) -> Result<()> {
+        if from + buf.len() as u64 > self.len() {
+            return Err(corrupt("keyed key range"));
+        }
         match self {
             Self::Mem(bytes) => {
                 let from = crate::width::index(from)?;
                 buf.copy_from_slice(&bytes[from..from + buf.len()]);
                 Ok(())
             }
+            Self::Parts(block, _) | Self::Item { block, .. } if from < 4 => {
+                let n = crate::width::bounded(4 - from, buf.len());
+                let start = crate::width::index(from)?;
+                buf[..n].copy_from_slice(&block[start..start + n]);
+                if n < buf.len() {
+                    self.read(ctx, 4, &mut buf[n..])?;
+                }
+                Ok(())
+            }
+            Self::Parts(_, key) => {
+                let from = crate::width::index(from - 4)?;
+                buf.copy_from_slice(&key[from..from + buf.len()]);
+                Ok(())
+            }
+            Self::Item { head, .. } => read_record(ctx, *head, from - 4, buf),
             Self::Loc(loc) => {
                 let mut done = 0usize;
                 let inline = loc.inline as u64;
@@ -293,7 +317,7 @@ pub(crate) struct Path {
 
 /// Searches the page at `page` for `key`: `(index, found)` as
 /// [`node::search`] gives them.
-fn search_page(
+pub(crate) fn search_page(
     ctx: &mut Ctx<'_>,
     page: u64,
     count: usize,

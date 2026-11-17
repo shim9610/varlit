@@ -34,31 +34,35 @@
 //! entry, an eight-byte directory entry, a page's first sixteen bytes when
 //! it joins the pool.
 
-use super::lookup::{self, Ctx, Located, View, slot_at};
-use super::pages::{HeapView, Pages};
-use super::sip::Sip;
+use super::lookup::{self, Ctx, View};
+use super::node::{self, NODE_BYTES};
+use super::nodes::{HeapView, Nodes};
+use super::tree::{self, Body, KeyLoc, KeySrc, Path};
 use super::{
-    BUCKET_HEADER, BUCKET_PAGE, CLASSES, ClassEntry, Fixed, ITEM_HEADER, ITEM_SPACE, Item,
-    LOG_ENTRIES, LOG_ENTRY, LOG_HEADER, MAX_BUDGET, MAX_CLASSES, MAX_INDEX, META_FIXED_LEN,
-    META_LEN, META_OVERFLOW_HEAD_AT, META_STATE_AT, MIN_BUDGET, NO_ITEM, PAGE_BYTES, PAGE_LINK,
-    RESERVED_BLOCK, SLOT_LEN, SLOTS_PER_PAGE, Slot, State, chain_bytes, chain_shape, checked_ref,
-    class_entry_at, class_size, corrupt, item_ref, page_header, radix, ref_class, ref_index,
-    set_page_header,
+    CLASSES, ClassEntry, Fixed, ITEM_HEADER, ITEM_SPACE, Item, LOG_ENTRIES, LOG_ENTRY, LOG_HEADER,
+    MAX_BUDGET, MAX_CLASSES, MAX_INDEX, META_FIXED_LEN, META_LEN, META_OVERFLOW_HEAD_AT,
+    META_STATE_AT, MIN_BUDGET, NO_ITEM, PAGE_BYTES, PAGE_LINK, RESERVED_BLOCK, State, chain_bytes,
+    chain_shape, checked_ref, class_entry_at, class_size, corrupt, item_ref, radix, ref_class,
+    ref_index,
 };
+use core::cmp::Ordering;
 use crate::matrix_tiles::ring_store::RingStore;
 use crate::matrix_tiles::store::{TileSource, TileStore};
 use crate::matrix_tiles::view::directory_offset;
 use crate::matrix_tiles::{DIR_PAGE_BYTES, RecordKind};
 use crate::{Error, Result};
 
-const HEADER_BYTES: usize = crate::width::small(BUCKET_HEADER);
-const SLOT_BYTES: usize = crate::width::small(SLOT_LEN);
 const STEP: usize = lookup::STEP;
+/// The most record bytes a leaf body holds inline (the ratio caps it lower).
+const INLINE_MAX: usize = 4096;
+/// The most a separator body (without its child) takes.
+const SEP_MAX: usize = 1 + 10 + tree::KEY_PREFIX + 16;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeapStats {
     pub splits: u64,
-    pub merges: u64,
+    /// Leaves emptied by packing.
+    pub packs: u64,
     /// Holes filled by a class's last live item, items a class shrank by,
     /// and log entries that named an item already gone or reused.
     pub moves: u64,
@@ -98,8 +102,10 @@ pub(crate) struct KeyedHeap {
     staged: State,
     classes: [ClassEntry; MAX_CLASSES],
     staged_classes: [ClassEntry; MAX_CLASSES],
-    pages: Pages,
+    nodes: Nodes,
     tuning: Tuning,
+    /// The leaf packing works on next: a child index per interior level.
+    pack_cursor: [usize; tree::MAX_HEIGHT],
     /// Bytes allocated by the open round, against the change budget.
     round_alloc: u64,
     /// Bytes of items freed by the open generation, and by published
@@ -116,13 +122,12 @@ pub(crate) struct KeyedHeap {
 
 impl KeyedHeap {
     /// Lays out empty keyed storage: the metadata record, a ring of
-    /// `ring_len` bytes, one empty bucket and its directory, published.
+    /// `ring_len` bytes and an empty leaf as the root, published.
     pub(crate) fn create(
         store: &mut dyn TileStore,
         ring_len: u64,
         ratio_permille: u16,
         budget: u64,
-        seed: [u64; 2],
         tuning: Tuning,
     ) -> Result<Self> {
         if !(10..=50).contains(&ratio_permille) {
@@ -137,7 +142,6 @@ impl KeyedHeap {
         }
         let mut fixed = Fixed {
             ratio_permille,
-            seed,
             ring: (0, 0),
             budget,
         };
@@ -146,12 +150,8 @@ impl KeyedHeap {
         fixed.ring = (ring.ring.base, ring.ring.len);
         store.write_at(meta, &fixed.encode())?;
         let mut heap = Self::with_parts(meta, fixed, ring, State::default(), tuning)?;
-        let root = heap.new_dir_page(store)?;
-        let bucket = heap.alloc_bucket_page(store)?;
-        let page = heap.pages.page_new(&mut heap.ring, store, bucket)?;
-        set_page_header(page, 0, 0);
-        heap.ring.stage(store, root, &bucket.to_le_bytes())?;
-        heap.state.dir = (root, 1);
+        let (root, _) = heap.new_node(store, node::Kind::Leaf, &[])?;
+        heap.state.root = (root, 1);
         heap.publish(store)?;
         Ok(heap)
     }
@@ -195,8 +195,9 @@ impl KeyedHeap {
             staged: State::default(),
             classes: [ClassEntry::default(); MAX_CLASSES],
             staged_classes: [ClassEntry::default(); MAX_CLASSES],
-            pages: Pages::new()?,
+            nodes: Nodes::new()?,
             tuning,
+            pack_cursor: [0; tree::MAX_HEIGHT],
             round_alloc: 0,
             holes_open: 0,
             holes_waiting: 0,
@@ -223,7 +224,24 @@ impl KeyedHeap {
     #[cfg(test)]
     pub(crate) fn idle_bound(&self) -> u64 {
         let log_pages = self.state.logged.div_ceil(LOG_ENTRIES) + 1;
-        self.state.hole_bytes + (2 * CLASSES as u64 + log_pages) * PAGE_BYTES
+        self.state.hole_bytes
+            + (2 * CLASSES as u64 + log_pages + self.state.interiors) * PAGE_BYTES
+            + self.state.leaf_free
+            + self.state.leaves * node::ENTRIES_AT as u64
+    }
+
+    /// Bytes records take: items and leaf entries.
+    #[cfg(test)]
+    pub(crate) fn live_bytes(&self) -> u64 {
+        self.state.live + self.state.leaves * node::CAPACITY as u64 - self.state.leaf_free
+    }
+
+    /// What the free bytes in leaves may reach: the ratio of what leaves
+    /// hold and a few pages.
+    #[cfg(test)]
+    pub(crate) fn leaf_free_bound(&self) -> u64 {
+        let used = self.state.leaves * node::CAPACITY as u64 - self.state.leaf_free;
+        used / 1000 * u64::from(self.fixed.ratio_permille) + 4 * node::CAPACITY as u64
     }
 
     /// What the logged items may reach. Freed items of the open round are
@@ -263,13 +281,13 @@ impl KeyedHeap {
     /// Whether anything changed since the last publication.
     pub(crate) fn is_dirty(&self) -> bool {
         self.ring.is_dirty()
-            || self.pages.is_dirty()
+            || self.nodes.is_dirty()
             || self.classes != self.staged_classes
             || self.state != self.staged
     }
 
     pub(crate) fn publish(&mut self, store: &mut dyn TileStore) -> Result<u64> {
-        self.pages.flush(&mut self.ring, store)?;
+        self.nodes.flush(&mut self.ring, store)?;
         for class in 0..CLASSES {
             if self.classes[class] != self.staged_classes[class] {
                 self.ring.stage(
@@ -286,6 +304,7 @@ impl KeyedHeap {
             self.staged = self.state;
         }
         let generation = self.ring.publish(store)?;
+        self.nodes.published();
         self.round_alloc = 0;
         self.holes_waiting += std::mem::take(&mut self.holes_open);
         for class in 0..CLASSES {
@@ -299,41 +318,12 @@ impl KeyedHeap {
     fn view(&self) -> HeapView<'_> {
         HeapView {
             ring: &self.ring,
-            pages: &self.pages,
+            nodes: &self.nodes,
         }
     }
 
     fn read(&self, store: &dyn TileSource, at: u64, buf: &mut [u8]) -> Result<()> {
-        self.pages.read(&self.ring, store, at, buf)
-    }
-
-    fn route(&self, block_id: u32, key: &[u8]) -> u32 {
-        lookup::route(self.fixed.seed, block_id, key)
-    }
-
-    /// Finds `key` of `block_id` as this writer sees it.
-    pub(crate) fn find(
-        &self,
-        store: &dyn TileSource,
-        block_id: u32,
-        key: &[u8],
-    ) -> Result<Option<Located>> {
-        let mut view = self.view();
-        let mut ctx = self.ctx(&mut view, store);
-        lookup::find(&mut ctx, self.fixed.seed, &self.state, block_id, key)
-    }
-
-    /// Reads a located record's payload into `out`, which must be its
-    /// length, and checks it.
-    pub(crate) fn read_payload(
-        &self,
-        store: &dyn TileSource,
-        found: &Located,
-        out: &mut [u8],
-    ) -> Result<()> {
-        let mut view = self.view();
-        let mut ctx = self.ctx(&mut view, store);
-        lookup::read_payload(&mut ctx, found, out)
+        self.nodes.read(&self.ring, store, at, buf)
     }
 
     fn ctx<'a>(&'a self, view: &'a mut dyn View, store: &'a dyn TileSource) -> Ctx<'a> {
@@ -364,38 +354,56 @@ impl KeyedHeap {
             actual: key.len() as u64,
             limit: u64::from(u32::MAX),
         })?;
+        let tree_key = 4 + key.len() as u64;
         let total = key.len() as u64 + payload.len() as u64;
-        let bytes = chain_bytes(total);
+        let mut varint = [0u8; 10];
+        let varint_len = node::put_varint(&mut varint, tree_key);
+        let inline_len = 1 + varint_len as u64 + tree_key + payload.len() as u64;
+        let chained = inline_len > self.inline_cap() as u64;
+        let bytes = if chained { chain_bytes(total) } else { inline_len };
         // A round changes at most the change budget (bytes written, moved
         // and freed): past it, the round so far is published and the mark
         // raised to it.
         if self.round_alloc > 0 && self.round_alloc + bytes > self.fixed.budget {
             self.end_round(store)?;
         }
-        let route = self.route(block_id, key);
-        let head = self.write_record(store, block_id, route, key_len, key, payload)?;
+        let block = block_id.to_be_bytes();
+        let mut body = [0u8; INLINE_MAX];
+        body[1..1 + varint_len].copy_from_slice(&varint[..varint_len]);
+        let mut at = 1 + varint_len;
+        if chained {
+            body[0] = tree::FLAG_CHAIN;
+            let head = self.write_chain(store, block_id, key_len, false, &RecSrc::Parts(key, payload))?;
+            self.state.live += bytes;
+            let inline = crate::width::bounded(tree_key, tree::KEY_PREFIX);
+            body[at..at + 4].copy_from_slice(&block);
+            body[at + 4..at + inline].copy_from_slice(&key[..inline - 4]);
+            at += inline;
+            body[at..at + 8].copy_from_slice(&total.to_le_bytes());
+            body[at + 8..at + 16].copy_from_slice(&head.to_le_bytes());
+            at += 16;
+        } else {
+            body[at..at + 4].copy_from_slice(&block);
+            body[at + 4..at + 4 + key.len()].copy_from_slice(key);
+            at += 4 + key.len();
+            body[at..at + payload.len()].copy_from_slice(payload);
+            at += payload.len();
+        }
         self.round_alloc += bytes;
-        self.state.live += bytes;
-        let freed = match self.find(store, block_id, key)? {
-            Some(found) => {
-                // The same key's old record: point the slot at the new one.
-                let old = found.slot.item;
-                self.set_slot(store, found.page, found.index, Slot { route, item: head })?;
-                self.release(store, old)?
+        let leaf_free = self.state.leaf_free;
+        let path = self.find_path(store, &KeySrc::Parts(block, key))?;
+        let mut freed = 0;
+        if path.found {
+            let old = self.body_at(store, path.pages[0], path.index[0], false)?;
+            if old.chained() {
+                freed = self.release(store, old.key.head)?;
             }
-            None => {
-                self.insert_slot(
-                    store,
-                    self.state.bucket_of(route),
-                    Slot { route, item: head },
-                )?;
-                self.state.keys += 1;
-                while self.state.keys * 4 > self.state.buckets() * SLOTS_PER_PAGE as u64 * 3 {
-                    self.split(store)?;
-                }
-                0
-            }
-        };
+        } else {
+            self.state.keys += 1;
+        }
+        self.leaf_set(store, &path, &body[..at], path.found)?;
+        let opened = self.state.leaf_free.saturating_sub(leaf_free);
+        self.pack(store, self.pack_work(opened))?;
         self.fill(store, freed)
     }
 
@@ -409,35 +417,45 @@ impl KeyedHeap {
         if self.round_alloc >= self.fixed.budget {
             self.end_round(store)?;
         }
-        let Some(found) = self.find(store, block_id, key)? else {
+        let path = self.find_path(store, &KeySrc::Parts(block_id.to_be_bytes(), key))?;
+        if !path.found {
             return Ok(false);
-        };
-        self.remove_slot(store, found.page, found.index)?;
-        self.state.keys -= 1;
-        // Merge below a quarter full, split above three quarters: a key
-        // added or removed at either threshold does not undo the last.
-        while self.state.buckets() > 1
-            && self.state.keys * 4 < self.state.buckets() * SLOTS_PER_PAGE as u64
-        {
-            self.merge(store)?;
         }
-        let freed = self.release(store, found.slot.item)?;
+        let old = self.body_at(store, path.pages[0], path.index[0], false)?;
+        let mut freed = 0;
+        if old.chained() {
+            freed = self.release(store, old.key.head)?;
+        }
+        let leaf_free = self.state.leaf_free;
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[0], &[])?;
+        let before = free_of(self.nodes.page(slot));
+        node::remove(self.nodes.page_mut(slot), path.index[0])?;
+        let after = free_of(self.nodes.page(slot));
+        self.state.leaf_free = self.state.leaf_free + after - before;
+        self.round_alloc += after - before;
+        self.state.keys -= 1;
+        if node::count(self.nodes.page(slot)) == 0 && self.state.leaves > 1 {
+            self.remove_child(store, &path, 0)?;
+        }
+        let opened = self.state.leaf_free.saturating_sub(leaf_free);
+        self.pack(store, self.pack_work(opened))?;
         self.fill(store, freed)?;
         Ok(true)
     }
 
-    /// Writes a record's items at the ends of their classes and returns the
-    /// head.
-    fn write_record(
+    /// Writes a chain of items holding the record bytes `src` gives (a
+    /// record's key then payload, or a separator past its block id) at the
+    /// ends of their classes, or into freed items the mark has passed, and
+    /// returns the head.
+    fn write_chain(
         &mut self,
         store: &mut dyn TileStore,
         block_id: u32,
-        route: u32,
         key_len: u32,
-        key: &[u8],
-        payload: &[u8],
+        separator: bool,
+        src: &RecSrc<'_>,
     ) -> Result<u64> {
-        let total = key.len() as u64 + payload.len() as u64;
+        let total = src.len();
         let (full, last) = chain_shape(total);
         let class_at = |index: u64| if index < full { CLASSES - 1 } else { last };
         let (head, mut taken) = self.alloc(store, class_at(0))?;
@@ -455,7 +473,8 @@ impl KeyedHeap {
             let mut header = Item {
                 len: crate::width::small32(crate::width::index(len)?),
                 head: index == 0,
-                block_or_route: if index == 0 { block_id } else { route },
+                separator,
+                block_or_route: if index == 0 { block_id } else { 0 },
                 key_len: if index == 0 { key_len } else { 0 },
                 crc: 0,
                 dead: 0,
@@ -464,22 +483,24 @@ impl KeyedHeap {
             };
             let mut crc = crc32fast::Hasher::new();
             crc.update(&header.crc_prefix());
-            for_parts(key, payload, at, len, &mut |bytes| crc.update(bytes));
+            let mut step = [0u8; STEP];
+            let mut done = 0u64;
+            while done < len {
+                let n = crate::width::bounded(len - done, STEP);
+                self.rec_read(&*store, src, at + done, &mut step[..n])?;
+                crc.update(&step[..n]);
+                done += n as u64;
+            }
             header.crc = crc.finalize();
             // A taken hole is written as a move writes it: its header through
             // the ring, so a crash leaves it dead.
             let in_place = taken || self.in_place(item);
             self.write_header(store, item, &header, !taken && in_place)?;
             // In the units a move writes: STEP pieces from the header on.
-            let mut step = [0u8; STEP];
             let mut done = 0u64;
             while done < len {
                 let n = crate::width::bounded(len - done, STEP);
-                let mut filled = 0usize;
-                for_parts(key, payload, at + done, n as u64, &mut |bytes| {
-                    step[filled..filled + bytes.len()].copy_from_slice(bytes);
-                    filled += bytes.len();
-                });
+                self.rec_read(&*store, src, at + done, &mut step[..n])?;
                 self.write_bytes(store, item, ITEM_HEADER + done, &step[..n], in_place)?;
                 done += n as u64;
             }
@@ -489,6 +510,25 @@ impl KeyedHeap {
             taken = next_taken;
         }
         Ok(head)
+    }
+
+    /// Reads bytes `[at, at + buf.len())` of a chain's record bytes.
+    fn rec_read(&self, store: &dyn TileSource, src: &RecSrc<'_>, at: u64, buf: &mut [u8]) -> Result<()> {
+        match src {
+            RecSrc::Parts(key, payload) => {
+                let mut filled = 0usize;
+                for_parts(key, payload, at, buf.len() as u64, &mut |bytes| {
+                    buf[filled..filled + bytes.len()].copy_from_slice(bytes);
+                    filled += bytes.len();
+                });
+                Ok(())
+            }
+            RecSrc::Key(key, from, _) => {
+                let mut view = self.view();
+                let mut ctx = self.ctx(&mut view, store);
+                key.read(&mut ctx, from + at, buf)
+            }
+        }
     }
 
     /// Whether item `item`, about to be written, may be written in place:
@@ -620,7 +660,7 @@ impl KeyedHeap {
             if radix::get(&mut view, store, self.classes[class].dir, page)? != 0 {
                 continue;
             }
-            let at = self.take_page(store)?;
+            let (at, _) = self.take_page(store)?;
             let root = self.classes[class].dir;
             self.classes[class].dir = self.dir_set(store, root, page, at)?;
         }
@@ -662,7 +702,7 @@ impl KeyedHeap {
     /// patience, the ring is put in place first: a page may go to another
     /// class, whose items start at other offsets, so nothing the ring holds
     /// may still cover it.
-    fn take_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
+    fn take_page(&mut self, store: &mut dyn TileStore) -> Result<(u64, bool)> {
         let head = self.state.pool_head;
         if head != 0 {
             let mut link = [0u8; 16];
@@ -687,13 +727,15 @@ impl KeyedHeap {
                 }
                 self.state.pooled -= 1;
                 self.stats.pages_reused += 1;
-                return Ok(head);
+                return Ok((head, true));
             }
         }
         self.state.pages += 1;
         self.stats.pages_appended += 1;
-        self.ring
-            .place_record(store, RecordKind::Heap, &[], PAGE_BYTES)
+        let at = self
+            .ring
+            .place_record(store, RecordKind::Heap, &[], PAGE_BYTES)?;
+        Ok((at, false))
     }
 
     /// Puts `page` at the end of the pool. Its first sixteen bytes change
@@ -727,7 +769,7 @@ impl KeyedHeap {
         // one: the log only grows at its tail, and a consumed page waits in
         // the pool until the generation that consumed it is in place.
         if self.state.log_tail == 0 || self.state.log_tail_at == LOG_ENTRIES {
-            let page = self.take_page(store)?;
+            let (page, _) = self.take_page(store)?;
             // The new page's link: staged, in the unit the pool uses.
             self.ring.stage(store, page, &[0u8; 16])?;
             let old = self.state.log_tail;
@@ -861,63 +903,41 @@ impl KeyedHeap {
         Ok(())
     }
 
-    /// What points at live item `item`: its slot (a head) or the item
-    /// before it. Only for items not marked dead.
+    /// What points at live item `item`: the leaf entry of its record or the
+    /// interior entry of its separator (a head), or the item before it. Only
+    /// for items not marked dead.
     fn referrer(&self, store: &dyn TileSource, item: u64) -> Result<Option<Referrer>> {
         let header = self.item(store, item)?;
-        if header.head {
-            let route = self.head_route(store, item, &header)?;
-            return Ok(self
-                .slot_with(store, route, |slot, _| Ok(slot.item == item))?
-                .map(|(page, index)| Referrer::Slot(page, index, route)));
+        if !header.head {
+            // A live continuation: the item before it points at it.
+            let prev = checked_ref(header.total_or_prev)?;
+            return Ok((self.item(store, prev)?.next == item).then_some(Referrer::Prev(prev)));
         }
-        // A live continuation: the item before it points at it.
-        let prev = checked_ref(header.total_or_prev)?;
-        Ok((self.item(store, prev)?.next == item).then_some(Referrer::Prev(prev)))
-    }
-
-    /// The route of the record headed by `head`, from its key.
-    fn head_route(&self, store: &dyn TileSource, head: u64, header: &Item) -> Result<u32> {
-        let mut hasher = Sip::new(self.fixed.seed);
-        hasher.write(&header.block_or_route.to_le_bytes());
-        let mut left = u64::from(header.key_len);
-        if left > 0 {
-            let mut view = self.view();
-            let mut ctx = self.ctx(&mut view, store);
-            lookup::stream(&mut ctx, head, &mut |bytes| {
-                let n = crate::width::bounded(left, bytes.len());
-                hasher.write(&bytes[..n]);
-                left -= n as u64;
-                Ok(left > 0)
-            })?;
-        }
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "the low 32 bits route and fingerprint"
-        )]
-        let route = hasher.finish() as u32;
-        Ok(route)
-    }
-
-    /// The first slot of route `route` that `matches`: `(page, index)`.
-    fn slot_with(
-        &self,
-        store: &dyn TileSource,
-        route: u32,
-        mut matches: impl FnMut(&Slot, &Self) -> Result<bool>,
-    ) -> Result<Option<(u64, usize)>> {
-        let mut at = self.bucket(store, self.state.bucket_of(route))?;
-        let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
-        while at != 0 {
-            self.read(store, at, &mut page)?;
-            let (count, next) = page_header(&page)?;
-            for index in 0..count {
-                let slot = slot_at(&page, index);
-                if slot.route == route && matches(&slot, self)? {
-                    return Ok(Some((at, index)));
-                }
+        let key = KeySrc::Item {
+            block: header.block_or_route.to_be_bytes(),
+            head: item,
+            len: 4 + u64::from(header.key_len),
+        };
+        if !header.separator {
+            let path = self.find_path(store, &key)?;
+            if !path.found {
+                return Ok(None);
             }
-            at = next;
+            let body = self.body_at(store, path.pages[0], path.index[0], false)?;
+            return Ok((body.key.head == item).then_some(Referrer::Entry(path.pages[0], path.index[0])));
+        }
+        // A separator: the interior entry holding it, on the way down.
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        let mut page = self.state.root.0;
+        for _ in 1..self.state.root.1 {
+            let (_, count) = tree::read_header(&mut ctx, page)?;
+            let (index, found) = tree::search_page(&mut ctx, page, count, &key, true)?;
+            if found {
+                let body = tree::read_body(&mut ctx, page, count, index, true)?;
+                return Ok((body.key.head == item).then_some(Referrer::Entry(page, index)));
+            }
+            page = tree::read_body(&mut ctx, page, count, index - 1, true)?.child;
         }
         Ok(None)
     }
@@ -950,8 +970,12 @@ impl KeyedHeap {
         }
         self.write_header(store, to, &header, false)?;
         match referrer {
-            Referrer::Slot(page, index, route) => {
-                self.set_slot(store, page, index, Slot { route, item: to })?;
+            Referrer::Entry(page, index) => {
+                // A chained body ends with its head item.
+                let slot = self.nodes.load(&mut self.ring, store, page, &[])?;
+                let bytes = self.nodes.page_mut(slot);
+                let (offset, len) = node::entry(bytes, index)?;
+                bytes[offset + len - 8..offset + len].copy_from_slice(&to.to_le_bytes());
             }
             Referrer::Prev(prev) => {
                 let mut before = self.item(store, prev)?;
@@ -1057,29 +1081,116 @@ impl KeyedHeap {
                 }
             }
         }
-        // Every record a slot reaches is made of live items.
+        // The tree: every page of the right kind, keys in order within the
+        // bounds their separators give, chains made of live items, and the
+        // counts the state keeps.
         let mut reached = 0u64;
-        for bucket in 0..self.state.buckets() {
-            let mut at = self.bucket(store, bucket).map_err(text)?;
-            let mut page = [0u8; crate::width::small(BUCKET_PAGE)];
-            while at != 0 {
-                self.read(store, at, &mut page).map_err(text)?;
-                let (count, next) = page_header(&page).map_err(text)?;
-                for index in 0..count {
-                    let mut item = slot_at(&page, index).item;
-                    while item != NO_ITEM {
-                        let (class, at_index) = (ref_class(item), ref_index(item));
-                        if at_index >= self.classes[class].end
-                            || self.item(store, item).map_err(text)?.dead != 0
-                        {
-                            return Err(format!("a record reaches dead item {item:x}"));
-                        }
-                        reached += class_size(class);
-                        item = self.item(store, item).map_err(text)?.next;
-                    }
+        let (mut leaves, mut interiors, mut keys, mut leaf_free) = (0u64, 0u64, 0u64, 0u64);
+        let mut tree_pages = std::collections::HashSet::new();
+        let mut page_bytes = vec![0u8; NODE_BYTES];
+        let full_key = |loc: KeyLoc| -> std::result::Result<Vec<u8>, String> {
+            let mut view = self.view();
+            let mut ctx = self.ctx(&mut view, store);
+            let mut key = vec![0u8; usize::try_from(loc.len).map_err(|e| e.to_string())?];
+            KeySrc::Loc(loc).read(&mut ctx, 0, &mut key).map_err(text)?;
+            Ok(key)
+        };
+        let mut chain = |head: u64, reached: &mut u64| -> std::result::Result<(), String> {
+            let mut item = head;
+            while item != NO_ITEM {
+                let (class, at_index) = (ref_class(item), ref_index(item));
+                if at_index >= self.classes[class].end
+                    || self.item(store, item).map_err(text)?.dead != 0
+                {
+                    return Err(format!("a record reaches dead item {item:x}"));
                 }
-                at = next;
+                *reached += class_size(class);
+                item = self.item(store, item).map_err(text)?.next;
             }
+            Ok(())
+        };
+        // (page, level, low bound, high bound)
+        let height = usize::try_from(self.state.root.1).map_err(|e| e.to_string())?;
+        let mut stack: Vec<(u64, usize, Option<Vec<u8>>, Option<Vec<u8>>)> =
+            vec![(self.state.root.0, height - 1, None, None)];
+        while let Some((page, level, low, high)) = stack.pop() {
+            if !tree_pages.insert(page) {
+                return Err(format!("tree page {page} reached twice"));
+            }
+            self.read(store, page, &mut page_bytes).map_err(text)?;
+            let kind = node::kind(&page_bytes).map_err(text)?;
+            let interior = level > 0;
+            if (kind == node::Kind::Interior) != interior {
+                return Err(format!("page {page} at level {level} is {kind:?}"));
+            }
+            let count = node::count(&page_bytes);
+            if interior {
+                interiors += 1;
+                if count == 0 {
+                    return Err(format!("interior page {page} is empty"));
+                }
+            } else {
+                leaves += 1;
+                keys += count as u64;
+                leaf_free += free_of(&page_bytes);
+            }
+            let mut previous: Option<Vec<u8>> = None;
+            let mut children = Vec::new();
+            for index in 0..count {
+                let (offset, len) = node::entry(&page_bytes, index).map_err(text)?;
+                let head = &page_bytes[offset..offset + len.min(tree::HEAD_MAX)];
+                let body = tree::parse(head, page + offset as u64, len, interior).map_err(text)?;
+                if body.chained() {
+                    chain(body.key.head, &mut reached)?;
+                }
+                if interior && index == 0 {
+                    if body.key.len != 0 {
+                        return Err(format!("page {page}: the first separator is not empty"));
+                    }
+                    children.push((body.child, low.clone()));
+                    continue;
+                }
+                let key = full_key(body.key)?;
+                if previous.as_ref().is_some_and(|previous| *previous >= key)
+                    || low.as_ref().is_some_and(|low| key < *low)
+                    || high.as_ref().is_some_and(|high| key >= *high)
+                {
+                    return Err(format!("page {page}: entry {index} out of order"));
+                }
+                previous = Some(key.clone());
+                if interior {
+                    children.push((body.child, Some(key)));
+                }
+            }
+            for (index, (child, child_low)) in children.iter().enumerate() {
+                let child_high = children
+                    .get(index + 1)
+                    .map_or_else(|| high.clone(), |next| next.1.clone());
+                stack.push((*child, level - 1, child_low.clone(), child_high));
+            }
+        }
+        if (leaves, interiors, keys, leaf_free)
+            != (
+                self.state.leaves,
+                self.state.interiors,
+                self.state.keys,
+                self.state.leaf_free,
+            )
+        {
+            return Err(format!(
+                "tree holds {leaves} leaves, {interiors} interior pages, {keys} keys, \
+                 {leaf_free} free leaf bytes; state says {:?}",
+                self.state
+            ));
+        }
+        let mut at = self.state.pool_head;
+        while at != 0 {
+            if tree_pages.contains(&at) || mapped.contains(&at) {
+                return Err(format!("pooled page {at} is in use"));
+            }
+            let mut link = [0u8; 16];
+            self.read(store, at, &mut link).map_err(text)?;
+            at = u64::from_le_bytes(link[..8].try_into().expect("eight"));
         }
         if reached != live || live != self.state.live {
             return Err(format!(
@@ -1088,243 +1199,6 @@ impl KeyedHeap {
             ));
         }
         Ok(())
-    }
-
-    // ---- buckets ----
-
-    fn set_slot(
-        &mut self,
-        store: &mut dyn TileStore,
-        page: u64,
-        index: usize,
-        slot: Slot,
-    ) -> Result<()> {
-        let bytes = self.pages.page_mut(&mut self.ring, store, page)?;
-        put_slot(bytes, index, &slot.encode());
-        Ok(())
-    }
-
-    /// Replaces the bucket page at `at` with `page`.
-    fn put_page(
-        &mut self,
-        store: &mut dyn TileStore,
-        at: u64,
-        page: &[u8; crate::width::small(BUCKET_PAGE)],
-    ) -> Result<()> {
-        self.pages
-            .page_new(&mut self.ring, store, at)?
-            .copy_from_slice(page);
-        Ok(())
-    }
-
-    fn insert_slot(&mut self, store: &mut dyn TileStore, bucket: u64, slot: Slot) -> Result<()> {
-        let mut at = self.bucket(store, bucket)?;
-        loop {
-            let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
-            self.read(store, at, &mut header)?;
-            let (count, next) = page_header(&header)?;
-            if count < SLOTS_PER_PAGE {
-                let page = self.pages.page_mut(&mut self.ring, store, at)?;
-                put_slot(page, count, &slot.encode());
-                set_page_header(page, count + 1, next);
-                return Ok(());
-            }
-            if next == 0 {
-                let page_at = self.alloc_bucket_page(store)?;
-                let page = self.pages.page_new(&mut self.ring, store, page_at)?;
-                set_page_header(page, 1, 0);
-                put_slot(page, 0, &slot.encode());
-                let page = self.pages.page_mut(&mut self.ring, store, at)?;
-                set_page_header(page, count, page_at);
-                return Ok(());
-            }
-            at = next;
-        }
-    }
-
-    fn remove_slot(&mut self, store: &mut dyn TileStore, page: u64, index: usize) -> Result<()> {
-        let bytes = self.pages.page_mut(&mut self.ring, store, page)?;
-        let (count, next) = page_header(bytes)?;
-        let last = count.checked_sub(1).ok_or(corrupt("keyed bucket page"))?;
-        if index != last {
-            let from = HEADER_BYTES + last * SLOT_BYTES;
-            let to = HEADER_BYTES + index * SLOT_BYTES;
-            bytes.copy_within(from..from + SLOT_BYTES, to);
-        }
-        set_page_header(bytes, last, next);
-        Ok(())
-    }
-
-    /// Splits the bucket at the split pointer: slots whose next routing bit
-    /// is set move to a new bucket, the rest are packed back into the old
-    /// bucket's pages, and pages left over go to the free list.
-    fn split(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let from = self.state.split;
-        let bit = 1u64 << self.state.level;
-        let to = from + bit;
-        let head = self.bucket(store, from)?;
-        let to_head = self.alloc_bucket_page(store)?;
-        let dir = self.state.dir;
-        self.state.dir = self.dir_set(store, dir, to, to_head)?;
-
-        let mut read = [0u8; crate::width::small(BUCKET_PAGE)];
-        let mut stay = [0u8; crate::width::small(BUCKET_PAGE)];
-        let mut moved = [0u8; crate::width::small(BUCKET_PAGE)];
-        let (mut stay_count, mut moved_count) = (0usize, 0usize);
-        // Stay pages overwrite the old chain from its head: never ahead of
-        // the page being read, since they hold no more slots than were read.
-        let mut stay_at = head;
-        let mut moved_at = to_head;
-        let mut at = head;
-        while at != 0 {
-            self.read(store, at, &mut read)?;
-            let (count, next) = page_header(&read)?;
-            for index in 0..count {
-                let start = HEADER_BYTES + index * SLOT_BYTES;
-                let bytes = &read[start..start + SLOT_BYTES];
-                if u64::from(Slot::decode(bytes).route) & bit != 0 {
-                    if moved_count == SLOTS_PER_PAGE {
-                        let next_page = self.alloc_bucket_page(store)?;
-                        set_page_header(&mut moved, moved_count, next_page);
-                        self.put_page(store, moved_at, &moved)?;
-                        moved_at = next_page;
-                        moved_count = 0;
-                    }
-                    put_slot(&mut moved, moved_count, bytes);
-                    moved_count += 1;
-                } else {
-                    if stay_count == SLOTS_PER_PAGE {
-                        let next_page = self.next_bucket_page(store, stay_at)?;
-                        set_page_header(&mut stay, stay_count, next_page);
-                        self.put_page(store, stay_at, &stay)?;
-                        stay_at = next_page;
-                        stay_count = 0;
-                    }
-                    put_slot(&mut stay, stay_count, bytes);
-                    stay_count += 1;
-                }
-            }
-            at = next;
-        }
-        let mut spare = self.next_bucket_page(store, stay_at)?;
-        set_page_header(&mut stay, stay_count, 0);
-        zero_slots(&mut stay, stay_count);
-        self.put_page(store, stay_at, &stay)?;
-        set_page_header(&mut moved, moved_count, 0);
-        zero_slots(&mut moved, moved_count);
-        self.put_page(store, moved_at, &moved)?;
-        while spare != 0 {
-            let next = self.next_bucket_page(store, spare)?;
-            self.free_bucket_page(store, spare)?;
-            spare = next;
-        }
-        self.state = self.state.after_split();
-        self.stats.splits += 1;
-        Ok(())
-    }
-
-    /// Merges the table's last bucket back into the bucket it was split
-    /// from: its chain is linked after that bucket's, the slots are packed
-    /// into the fewest pages from the head, and pages left over go to the
-    /// free list.
-    fn merge(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        let next = self.state.after_merge();
-        let from = next.split + (1u64 << next.level);
-        let into = next.split;
-        let from_head = self.bucket(store, from)?;
-        let into_head = self.bucket(store, into)?;
-        let mut tail = into_head;
-        loop {
-            let after = self.next_bucket_page(store, tail)?;
-            if after == 0 {
-                break;
-            }
-            tail = after;
-        }
-        let page = self.pages.page_mut(&mut self.ring, store, tail)?;
-        let (count, _) = page_header(page)?;
-        set_page_header(page, count, from_head);
-        self.pack(store, into_head)?;
-        let dir = self.state.dir;
-        self.state.dir = self.dir_set(store, dir, from, 0)?;
-        self.state = next;
-        self.stats.merges += 1;
-        Ok(())
-    }
-
-    /// Packs the slots of the chain headed by `head` into its first pages,
-    /// in order, and frees the pages left over.
-    fn pack(&mut self, store: &mut dyn TileStore, head: u64) -> Result<()> {
-        let mut read = [0u8; crate::width::small(BUCKET_PAGE)];
-        let mut stay = [0u8; crate::width::small(BUCKET_PAGE)];
-        let mut stay_count = 0usize;
-        // The packed pages overwrite the chain from its head: never ahead
-        // of the page being read, since they hold no more slots than were
-        // read.
-        let mut stay_at = head;
-        let mut at = head;
-        while at != 0 {
-            self.read(store, at, &mut read)?;
-            let (count, next) = page_header(&read)?;
-            for index in 0..count {
-                if stay_count == SLOTS_PER_PAGE {
-                    let next_page = self.next_bucket_page(store, stay_at)?;
-                    set_page_header(&mut stay, stay_count, next_page);
-                    self.put_page(store, stay_at, &stay)?;
-                    stay_at = next_page;
-                    stay_count = 0;
-                }
-                let start = HEADER_BYTES + index * SLOT_BYTES;
-                put_slot(&mut stay, stay_count, &read[start..start + SLOT_BYTES]);
-                stay_count += 1;
-            }
-            at = next;
-        }
-        let mut spare = self.next_bucket_page(store, stay_at)?;
-        set_page_header(&mut stay, stay_count, 0);
-        zero_slots(&mut stay, stay_count);
-        self.put_page(store, stay_at, &stay)?;
-        while spare != 0 {
-            let next = self.next_bucket_page(store, spare)?;
-            self.free_bucket_page(store, spare)?;
-            spare = next;
-        }
-        Ok(())
-    }
-
-    fn next_bucket_page(&self, store: &dyn TileSource, page: u64) -> Result<u64> {
-        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
-        self.read(store, page, &mut header)?;
-        Ok(page_header(&header)?.1)
-    }
-
-    fn alloc_bucket_page(&mut self, store: &mut dyn TileStore) -> Result<u64> {
-        let head = self.state.free_buckets;
-        if head != 0 {
-            let mut link = [0u8; 8];
-            self.read(store, head + 8, &mut link)?;
-            self.state.free_buckets = u64::from_le_bytes(link);
-            return Ok(head);
-        }
-        let mut header = [0u8; crate::width::small(BUCKET_HEADER)];
-        set_page_header(&mut header, 0, 0);
-        self.ring
-            .place_record(store, RecordKind::Bucket, &header, BUCKET_PAGE)
-    }
-
-    fn free_bucket_page(&mut self, store: &mut dyn TileStore, page: u64) -> Result<()> {
-        let free = self.state.free_buckets;
-        let bytes = self.pages.page_new(&mut self.ring, store, page)?;
-        set_page_header(bytes, 0, free);
-        self.state.free_buckets = page;
-        Ok(())
-    }
-
-    /// The first page of bucket `bucket`.
-    fn bucket(&self, store: &dyn TileSource, bucket: u64) -> Result<u64> {
-        let mut view = self.view();
-        let mut ctx = self.ctx(&mut view, store);
-        lookup::bucket(&mut ctx, &self.state, bucket)
     }
 
     // ---- directories ----
@@ -1375,13 +1249,533 @@ impl KeyedHeap {
         self.ring
             .place_record(store, RecordKind::Directory, &[], DIR_PAGE_BYTES)
     }
+
+    // ---- the tree ----
+
+    /// Record bytes a leaf may hold inline: half the free-space ratio of a
+    /// page, so a leaf packed record by record leaves at most that much
+    /// free.
+    fn inline_cap(&self) -> usize {
+        (NODE_BYTES * usize::from(self.fixed.ratio_permille) / 2000).clamp(256, INLINE_MAX)
+    }
+
+    /// Packing owed for `opened` bytes left free in leaves: a pass over the
+    /// leaves moves about everything they hold and gathers the free bytes
+    /// into whole pages, so keeping them within half the ratio takes twice
+    /// `opened` divided by the ratio, in bytes of leaves passed.
+    fn pack_work(&self, opened: u64) -> u64 {
+        opened * 2000 / u64::from(self.fixed.ratio_permille) * self.tuning.fills_per_free
+            + node::CAPACITY as u64
+    }
+
+    fn find_path(&self, store: &dyn TileSource, key: &KeySrc<'_>) -> Result<Path> {
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        tree::find(&mut ctx, self.state.root, key)
+    }
+
+    fn body_at(&self, store: &dyn TileSource, page: u64, index: usize, interior: bool) -> Result<Body> {
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        let (_, count) = tree::read_header(&mut ctx, page)?;
+        tree::read_body(&mut ctx, page, count, index, interior)
+    }
+
+    fn compare_keys(&self, store: &dyn TileSource, a: &KeySrc<'_>, b: &KeySrc<'_>) -> Result<Ordering> {
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        tree::compare(&mut ctx, a, b)
+    }
+
+    /// Finds `key` of `block_id` as this writer sees it.
+    pub(crate) fn find(
+        &self,
+        store: &dyn TileSource,
+        block_id: u32,
+        key: &[u8],
+    ) -> Result<Option<Found>> {
+        let path = self.find_path(store, &KeySrc::Parts(block_id.to_be_bytes(), key))?;
+        if !path.found {
+            return Ok(None);
+        }
+        let body = self.body_at(store, path.pages[0], path.index[0], false)?;
+        Ok(Some(Found { body }))
+    }
+
+    /// Reads a found record's payload into `out`, which must be its length.
+    pub(crate) fn read_payload(
+        &self,
+        store: &dyn TileSource,
+        found: &Found,
+        out: &mut [u8],
+    ) -> Result<()> {
+        if out.len() as u64 != found.payload_len() {
+            return Err(Error::BufferTooSmall {
+                resource: "keyed record payload",
+                required: crate::width::index(found.payload_len())?,
+                provided: out.len(),
+            });
+        }
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        tree::read_value(&mut ctx, &found.body, out)
+    }
+
+    /// Sets the leaf body for `key` (a new or replaced record) at `path`.
+    fn leaf_set(
+        &mut self,
+        store: &mut dyn TileStore,
+        path: &Path,
+        body: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        let leaf = path.pages[0];
+        let index = path.index[0];
+        let slot = self.nodes.load(&mut self.ring, store, leaf, &[])?;
+        let before = free_of(self.nodes.page(slot));
+        let fitted = {
+            let (page, scratch) = self.nodes.with_scratch(slot);
+            if replace {
+                node::replace(page, index, body, scratch)?
+            } else {
+                node::insert(page, index, body, scratch)
+            }
+        };
+        if fitted {
+            let after = free_of(self.nodes.page(slot));
+            self.state.leaf_free = self.state.leaf_free + after - before;
+            return Ok(());
+        }
+        if replace {
+            let page = self.nodes.page_mut(slot);
+            node::remove(page, index)?;
+            let after = free_of(self.nodes.page(slot));
+            self.state.leaf_free = self.state.leaf_free + after - before;
+        }
+        self.split_leaf(store, path, index, body)
+    }
+
+    /// A new page for the tree, buffered and laid out empty.
+    fn new_node(&mut self, store: &mut dyn TileStore, kind: node::Kind, keep: &[usize]) -> Result<(u64, usize)> {
+        let (at, pooled) = self.take_page(store)?;
+        let slot = self.nodes.create(&mut self.ring, store, at, pooled, keep)?;
+        node::init(self.nodes.page_mut(slot), kind);
+        match kind {
+            node::Kind::Leaf => {
+                self.state.leaves += 1;
+                self.state.leaf_free += node::CAPACITY as u64;
+            }
+            node::Kind::Interior => self.state.interiors += 1,
+        }
+        Ok((at, slot))
+    }
+
+    /// Frees a tree page that holds nothing any more.
+    fn free_node(&mut self, store: &mut dyn TileStore, at: u64, kind: node::Kind) -> Result<()> {
+        self.nodes.forget(at);
+        match kind {
+            node::Kind::Leaf => {
+                self.state.leaves -= 1;
+                self.state.leaf_free -= node::CAPACITY as u64;
+            }
+            node::Kind::Interior => self.state.interiors -= 1,
+        }
+        self.pool_page(store, at)
+    }
+
+    /// Where entry `index` of the buffered page `slot` keeps its key.
+    fn key_loc(&self, slot: usize, index: usize, interior: bool) -> Result<KeyLoc> {
+        let page = self.nodes.page(slot);
+        let (offset, len) = node::entry(page, index)?;
+        let head = &page[offset..offset + len.min(tree::HEAD_MAX)];
+        Ok(tree::parse(head, self.nodes.at(slot) + offset as u64, len, interior)?.key)
+    }
+
+    /// Splits the full leaf of `path`, then inserts `body` at `index`.
+    fn split_leaf(&mut self, store: &mut dyn TileStore, path: &Path, index: usize, body: &[u8]) -> Result<()> {
+        let left_slot = self.nodes.load(&mut self.ring, store, path.pages[0], &[])?;
+        let before = free_of(self.nodes.page(left_slot));
+        let (right, right_slot) = self.new_node(store, node::Kind::Leaf, &[left_slot])?;
+        let n = node::count(self.nodes.page(left_slot));
+        let m = if index >= n { n } else { split_point(self.nodes.page(left_slot)) };
+        {
+            let (left, right_page, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
+            for moved in m..n {
+                let (offset, len) = node::entry(left, moved)?;
+                let ok = node::insert(right_page, moved - m, &left[offset..offset + len], scratch);
+                debug_assert!(ok, "half a page fits a page");
+            }
+            for moved in (m..n).rev() {
+                node::remove(left, moved)?;
+            }
+            let fitted = if m < n && index <= m {
+                node::insert(left, index, body, scratch)
+            } else {
+                node::insert(right_page, index - m, body, scratch)
+            };
+            if !fitted {
+                return Err(corrupt("keyed leaf split"));
+            }
+        }
+        let after = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
+        // `new_node` counted the new leaf as wholly free.
+        self.state.leaf_free = self.state.leaf_free + after - before - node::CAPACITY as u64;
+        let left_count = node::count(self.nodes.page(left_slot));
+        let low = self.key_loc(left_slot, left_count - 1, false)?;
+        let high = self.key_loc(right_slot, 0, false)?;
+        let sep = self.separator(store, &KeySrc::Loc(low), &KeySrc::Loc(high))?;
+        self.stats.splits += 1;
+        self.insert_entry(store, path, 1, path.index[1] + 1, right, &sep)
+    }
+
+    /// The separator body (without its child) for two neighbouring keys: the
+    /// shortest prefix of `high` greater than `low`, inline, or in a chain
+    /// when longer than [`tree::KEY_PREFIX`].
+    fn separator(&mut self, store: &mut dyn TileStore, low: &KeySrc<'_>, high: &KeySrc<'_>) -> Result<SepBody> {
+        let common = {
+            let mut view = self.view();
+            let mut ctx = self.ctx(&mut view, &*store);
+            tree::common_prefix(&mut ctx, low, high)?
+        };
+        let len = (common + 1).min(high.len());
+        let mut sep = SepBody::default();
+        let inline = crate::width::bounded(len, tree::KEY_PREFIX);
+        let mut prefix = [0u8; tree::KEY_PREFIX];
+        {
+            let mut view = self.view();
+            let mut ctx = self.ctx(&mut view, &*store);
+            high.read(&mut ctx, 0, &mut prefix[..inline])?;
+        }
+        let mut at = 0;
+        sep.bytes[at] = if len > tree::KEY_PREFIX as u64 { tree::FLAG_CHAIN } else { 0 };
+        at += 1;
+        at += node::put_varint(&mut sep.bytes[at..], len);
+        sep.bytes[at..at + inline].copy_from_slice(&prefix[..inline]);
+        at += inline;
+        if len > tree::KEY_PREFIX as u64 {
+            let block = u32::from_be_bytes(prefix[..4].try_into().expect("four"));
+            let key_len = u32::try_from(len - 4).map_err(|_| Error::LimitExceeded {
+                resource: "keyed separator",
+                actual: len,
+                limit: u64::from(u32::MAX),
+            })?;
+            let head = self.write_chain(store, block, key_len, true, &RecSrc::Key(*high, 4, len - 4))?;
+            sep.bytes[at..at + 8].copy_from_slice(&len.to_le_bytes());
+            sep.bytes[at + 8..at + 16].copy_from_slice(&head.to_le_bytes());
+            at += 16;
+        }
+        sep.len = at;
+        Ok(sep)
+    }
+
+    /// Inserts the entry `child | sep` at `index` of the interior page at
+    /// `level` of `path` (a new root past the top), splitting as needed.
+    fn insert_entry(
+        &mut self,
+        store: &mut dyn TileStore,
+        path: &Path,
+        level: usize,
+        index: usize,
+        child: u64,
+        sep: &SepBody,
+    ) -> Result<()> {
+        let mut body = [0u8; 8 + SEP_MAX];
+        body[..8].copy_from_slice(&child.to_le_bytes());
+        body[8..8 + sep.len].copy_from_slice(&sep.bytes[..sep.len]);
+        let body = &body[..8 + sep.len];
+        if level == path.height {
+            if path.height == tree::MAX_HEIGHT {
+                return Err(corrupt("keyed tree height"));
+            }
+            let (root, slot) = self.new_node(store, node::Kind::Interior, &[])?;
+            let mut first = [0u8; 10];
+            first[..8].copy_from_slice(&self.state.root.0.to_le_bytes());
+            let (page, scratch) = self.nodes.with_scratch(slot);
+            if !(node::insert(page, 0, &first, scratch) && node::insert(page, 1, body, scratch)) {
+                return Err(corrupt("keyed tree root"));
+            }
+            self.state.root = (root, self.state.root.1 + 1);
+            return Ok(());
+        }
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let (page, scratch) = self.nodes.with_scratch(slot);
+        if node::insert(page, index, body, scratch) {
+            return Ok(());
+        }
+        self.split_interior(store, path, level, index, body)
+    }
+
+    /// Splits the full interior page at `level` of `path` and inserts
+    /// `body` at `index`: the separator of the first entry moved right goes
+    /// up, and that entry keeps only its child.
+    fn split_interior(
+        &mut self,
+        store: &mut dyn TileStore,
+        path: &Path,
+        level: usize,
+        index: usize,
+        body: &[u8],
+    ) -> Result<()> {
+        let left_slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let (right, right_slot) = self.new_node(store, node::Kind::Interior, &[left_slot])?;
+        let n = node::count(self.nodes.page(left_slot));
+        let m = split_point(self.nodes.page(left_slot)).max(1);
+        let mut up = SepBody::default();
+        {
+            let (left, right_page, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
+            for moved in m..n {
+                let (offset, len) = node::entry(left, moved)?;
+                let entry = &left[offset..offset + len];
+                let ok = if moved == m {
+                    up.len = len - 8;
+                    up.bytes[..up.len].copy_from_slice(&entry[8..]);
+                    let mut first = [0u8; 10];
+                    first[..8].copy_from_slice(&entry[..8]);
+                    node::insert(right_page, 0, &first, scratch)
+                } else {
+                    node::insert(right_page, moved - m, entry, scratch)
+                };
+                debug_assert!(ok, "half a page fits a page");
+            }
+            for moved in (m..n).rev() {
+                node::remove(left, moved)?;
+            }
+            let fitted = if index <= m {
+                node::insert(left, index, body, scratch)
+            } else {
+                node::insert(right_page, index - m, body, scratch)
+            };
+            if !fitted {
+                return Err(corrupt("keyed interior split"));
+            }
+        }
+        self.stats.splits += 1;
+        self.insert_entry(store, path, level + 1, path.index[level + 1] + 1, right, &up)
+    }
+
+    /// Removes the entry pointing at the page at `level` of `path` from its
+    /// parent and frees the page, which holds nothing. A parent left empty
+    /// goes too; a root left with one child is replaced by it.
+    fn remove_child(&mut self, store: &mut dyn TileStore, path: &Path, level: usize) -> Result<()> {
+        let kind = if level == 0 { node::Kind::Leaf } else { node::Kind::Interior };
+        self.free_node(store, path.pages[level], kind)?;
+        let parent = level + 1;
+        let index = path.index[parent];
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+        let old = {
+            let page = self.nodes.page(slot);
+            let (offset, len) = node::entry(page, index)?;
+            tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?
+        };
+        if old.chained() {
+            self.release(store, old.key.head)?;
+        }
+        let next_sep = if index == 0 && node::count(self.nodes.page(slot)) > 1 {
+            let page = self.nodes.page(slot);
+            let (offset, len) = node::entry(page, 1)?;
+            Some(tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?)
+        } else {
+            None
+        };
+        if let Some(next) = next_sep {
+            // The next child becomes the first: it loses its lower bound.
+            if next.chained() {
+                self.release(store, next.key.head)?;
+            }
+            let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+            let mut first = [0u8; 10];
+            first[..8].copy_from_slice(&next.child.to_le_bytes());
+            let (page, scratch) = self.nodes.with_scratch(slot);
+            node::replace(page, 1, &first, scratch)?;
+        }
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[parent], &[])?;
+        node::remove(self.nodes.page_mut(slot), index)?;
+        let left = node::count(self.nodes.page(slot));
+        if parent + 1 == path.height {
+            // The root: replaced by its only child.
+            if left == 1 && path.height > 1 {
+                let child = tree::parse(
+                    node::body(self.nodes.page(slot), 0)?,
+                    0,
+                    node::body(self.nodes.page(slot), 0)?.len(),
+                    true,
+                )?
+                .child;
+                self.free_node(store, path.pages[parent], node::Kind::Interior)?;
+                self.state.root = (child, self.state.root.1 - 1);
+                self.collapse_root(store)?;
+            }
+            return Ok(());
+        }
+        if left == 0 {
+            return self.remove_child(store, path, parent);
+        }
+        Ok(())
+    }
+
+    /// Replaces the separator of entry `index` of the interior page at
+    /// `level` of `path` (its child stays), splitting as needed.
+    fn set_separator(
+        &mut self,
+        store: &mut dyn TileStore,
+        path: &Path,
+        level: usize,
+        index: usize,
+        sep: &SepBody,
+    ) -> Result<()> {
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        let old = {
+            let page = self.nodes.page(slot);
+            let (offset, len) = node::entry(page, index)?;
+            tree::parse(&page[offset..offset + len.min(tree::HEAD_MAX)], 0, len, true)?
+        };
+        if old.chained() {
+            self.release(store, old.key.head)?;
+        }
+        let slot = self.nodes.load(&mut self.ring, store, path.pages[level], &[])?;
+        node::remove(self.nodes.page_mut(slot), index)?;
+        self.insert_entry(store, path, level, index, old.child, sep)
+    }
+
+    // ---- packing ----
+
+    /// The path to the leaf the packing cursor is at.
+    fn cursor_path(&self, store: &dyn TileSource, cursor: &[usize; tree::MAX_HEIGHT]) -> Result<Path> {
+        let mut view = self.view();
+        let mut ctx = self.ctx(&mut view, store);
+        let height = crate::width::index(self.state.root.1)?;
+        let mut path = Path {
+            pages: [0; tree::MAX_HEIGHT],
+            index: [0; tree::MAX_HEIGHT],
+            counts: [0; tree::MAX_HEIGHT],
+            height,
+            found: false,
+        };
+        let mut page = self.state.root.0;
+        for level in (0..height).rev() {
+            let (_, count) = tree::read_header(&mut ctx, page)?;
+            path.pages[level] = page;
+            path.counts[level] = count;
+            if level > 0 {
+                let index = cursor[level].min(count.saturating_sub(1));
+                path.index[level] = index;
+                page = tree::read_body(&mut ctx, page, count, index, true)?.child;
+            }
+        }
+        Ok(path)
+    }
+
+    /// The cursor of the leaf after the one `path` leads to; `None` past the
+    /// last leaf.
+    fn next_cursor(path: &Path) -> Option<[usize; tree::MAX_HEIGHT]> {
+        let mut cursor = path.index;
+        for level in 1..path.height {
+            if cursor[level] + 1 < path.counts[level] {
+                cursor[level] += 1;
+                for lower in 1..level {
+                    cursor[lower] = 0;
+                }
+                return Some(cursor);
+            }
+        }
+        None
+    }
+
+    /// Packs leaves in key order while their free bytes pass the ratio of
+    /// what they hold (and two pages): records move from the leaf after the
+    /// cursor's into its free space, and a leaf left empty goes. Moves at
+    /// least `work` bytes, or stops when nothing is left to pack.
+    fn pack(&mut self, store: &mut dyn TileStore, work: u64) -> Result<()> {
+        let mut work = work;
+        let mut steps = 0u64;
+        while work > 0 && self.leaf_slack() && self.state.leaves > 1 {
+            steps += 1;
+            if steps > 2 * self.state.leaves + 4 {
+                break;
+            }
+            let left_path = self.cursor_path(store, &self.pack_cursor)?;
+            let Some(next) = Self::next_cursor(&left_path) else {
+                self.pack_cursor = [0; tree::MAX_HEIGHT];
+                continue;
+            };
+            let right_path = self.cursor_path(store, &next)?;
+            let left_slot = self.nodes.load(&mut self.ring, store, left_path.pages[0], &[])?;
+            let right_slot = self.nodes.load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
+            let before = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
+            let mut moved = 0u64;
+            {
+                let (left, right, scratch) = self.nodes.pair_with_scratch(left_slot, right_slot);
+                while node::count(right) > 0 {
+                    let (offset, len) = node::entry(right, 0)?;
+                    let end = node::count(left);
+                    if !node::insert(left, end, &right[offset..offset + len], scratch) {
+                        break;
+                    }
+                    node::remove(right, 0)?;
+                    moved += len as u64;
+                }
+            }
+            let after = free_of(self.nodes.page(left_slot)) + free_of(self.nodes.page(right_slot));
+            self.state.leaf_free = self.state.leaf_free + after - before;
+            self.round_alloc += moved;
+            work = work.saturating_sub(node::CAPACITY as u64);
+            if node::count(self.nodes.page(right_slot)) == 0 {
+                self.stats.packs += 1;
+                self.remove_child(store, &right_path, 0)?;
+                continue;
+            }
+            if moved > 0 {
+                // The separator between the two leaves, where their paths
+                // part.
+                let level = (1..right_path.height)
+                    .rev()
+                    .find(|&level| right_path.index[level] != left_path.index[level])
+                    .ok_or(corrupt("keyed tree paths"))?;
+                let left_slot = self.nodes.load(&mut self.ring, store, left_path.pages[0], &[])?;
+                let right_slot =
+                    self.nodes.load(&mut self.ring, store, right_path.pages[0], &[left_slot])?;
+                let low = self.key_loc(left_slot, node::count(self.nodes.page(left_slot)) - 1, false)?;
+                let high = self.key_loc(right_slot, 0, false)?;
+                let sep = self.separator(store, &KeySrc::Loc(low), &KeySrc::Loc(high))?;
+                self.set_separator(store, &right_path, level, right_path.index[level], &sep)?;
+            }
+            self.pack_cursor = next;
+        }
+        Ok(())
+    }
+
+    /// Whether leaves hold more free bytes than the ratio allows.
+    fn leaf_slack(&self) -> bool {
+        let used = self.state.leaves * node::CAPACITY as u64 - self.state.leaf_free;
+        self.state.leaf_free
+            > used / 1000 * u64::from(self.fixed.ratio_permille) + 2 * node::CAPACITY as u64
+    }
+
+    /// Replaces a root with one child by that child, while there is one.
+    fn collapse_root(&mut self, store: &mut dyn TileStore) -> Result<()> {
+        while self.state.root.1 > 1 {
+            let root = self.state.root.0;
+            let body = {
+                let mut view = self.view();
+                let mut ctx = self.ctx(&mut view, &*store);
+                let (_, count) = tree::read_header(&mut ctx, root)?;
+                if count != 1 {
+                    return Ok(());
+                }
+                tree::read_body(&mut ctx, root, count, 0, true)?
+            };
+            self.free_node(store, root, node::Kind::Interior)?;
+            self.state.root = (body.child, self.state.root.1 - 1);
+        }
+        Ok(())
+    }
 }
 
 /// What points at a live item.
 #[derive(Clone, Copy, Debug)]
 enum Referrer {
-    /// Its slot: page, index, route.
-    Slot(u64, usize, u32),
+    /// A tree page's entry: a leaf's record or an interior separator.
+    Entry(u64, usize),
     /// The item before it in its record.
     Prev(u64),
 }
@@ -1400,12 +1794,69 @@ fn for_parts(key: &[u8], payload: &[u8], at: u64, len: u64, visit: &mut dyn FnMu
     }
 }
 
-fn put_slot(page: &mut [u8], index: usize, bytes: &[u8]) {
-    let start = HEADER_BYTES + index * SLOT_BYTES;
-    page[start..start + SLOT_BYTES].copy_from_slice(bytes);
+/// Where a key's record is: its leaf body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Found {
+    pub body: Body,
 }
 
-fn zero_slots(page: &mut [u8], from: usize) {
-    let start = HEADER_BYTES + from * SLOT_BYTES;
-    page[start..].fill(0);
+impl Found {
+    pub(crate) const fn payload_len(&self) -> u64 {
+        tree::value_len(&self.body)
+    }
+}
+
+/// A separator body without its child: flags, length, the key bytes kept in
+/// the page, and a chain's length and head.
+#[derive(Clone, Copy, Debug)]
+struct SepBody {
+    bytes: [u8; SEP_MAX],
+    len: usize,
+}
+
+impl Default for SepBody {
+    fn default() -> Self {
+        Self {
+            bytes: [0; SEP_MAX],
+            len: 0,
+        }
+    }
+}
+
+/// Where a chain's record bytes come from.
+enum RecSrc<'a> {
+    /// A record: its key then its payload.
+    Parts(&'a [u8], &'a [u8]),
+    /// `len` bytes of a key from byte `from`.
+    Key(KeySrc<'a>, u64, u64),
+}
+
+impl RecSrc<'_> {
+    fn len(&self) -> u64 {
+        match self {
+            Self::Parts(key, payload) => key.len() as u64 + payload.len() as u64,
+            Self::Key(_, _, len) => *len,
+        }
+    }
+}
+
+/// The entry to split a full page at: the first whose entries and bodies
+/// before it take half the page's used bytes, and at least one.
+fn split_point(page: &[u8]) -> usize {
+    let n = node::count(page);
+    let used = node::CAPACITY - node::free(page);
+    let mut seen = 0usize;
+    for index in 0..n {
+        if seen * 2 >= used {
+            return index.max(1);
+        }
+        let len = node::entry(page, index).map_or(0, |(_, len)| len);
+        seen += node::cost(len);
+    }
+    n.saturating_sub(1).max(1)
+}
+
+/// A page's free bytes, as the state counts them.
+fn free_of(page: &[u8]) -> u64 {
+    node::free(page) as u64
 }

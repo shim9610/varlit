@@ -1911,15 +1911,18 @@ pub struct KeyedStorageStats {
     /// The published generation the handle shows (a writer: its last).
     pub generation: u64,
     pub keys: u64,
-    /// Bytes of the records stored, headers and padding included.
+    /// Bytes of the records stored: leaf entries and the items of records
+    /// kept outside the leaves, headers and padding included.
     pub live_bytes: u64,
-    /// Bytes of every heap region: live records, holes, free regions and the
-    /// unused end of the region being filled.
+    /// Bytes of every keyed page: leaves, index pages, item pages, the
+    /// freed item log and pooled pages.
     pub heap_bytes: u64,
-    /// Bytes of whole regions emptied and waiting for reuse.
+    /// Bytes of pooled pages waiting for reuse.
     pub free_region_bytes: u64,
-    /// Slot buckets of the key table.
-    pub buckets: u64,
+    /// Leaf pages, and interior pages: the key index, one boundary per
+    /// leaf.
+    pub leaf_pages: u64,
+    pub index_pages: u64,
 }
 
 #[derive(Clone, Copy, Debug)]

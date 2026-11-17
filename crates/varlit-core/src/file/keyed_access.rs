@@ -37,7 +37,6 @@ impl VarlitFile {
             return Ok(());
         };
         let expected = self.keyed_meta_offset()?;
-        let seed = keyed_seed();
         let ring = keyed.ring_bytes.unwrap_or(DEFAULT_RING_BYTES);
         let mut store = FileTiles::new(self);
         let heap = KeyedHeap::create(
@@ -45,7 +44,6 @@ impl VarlitFile {
             ring,
             keyed.free_space_permille,
             keyed.budget(),
-            seed,
             Tuning::DEFAULT,
         )?;
         if heap.meta != expected {
@@ -214,10 +212,13 @@ impl VarlitFile {
         Ok(crate::KeyedStorageStats {
             generation,
             keys: state.keys,
-            live_bytes: state.live,
+            live_bytes: state.live
+                + state.leaves * crate::keyed_heap::node::CAPACITY as u64
+                - state.leaf_free,
             heap_bytes: state.pages * crate::keyed_heap::PAGE_BYTES,
             free_region_bytes: state.pooled * crate::keyed_heap::PAGE_BYTES,
-            buckets: state.buckets(),
+            leaf_pages: state.leaves,
+            index_pages: state.interiors,
         })
     }
 
@@ -262,11 +263,3 @@ fn read_into(
     read(scratch)
 }
 
-/// A fresh random seed for a new file's key hashing.
-fn keyed_seed() -> [u64; 2] {
-    let nonce = fresh_matrix_creation_nonce();
-    [
-        u64::from_le_bytes(nonce[..8].try_into().expect("eight")),
-        u64::from_le_bytes(nonce[8..].try_into().expect("eight")),
-    ]
-}
