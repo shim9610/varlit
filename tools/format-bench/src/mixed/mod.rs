@@ -34,6 +34,8 @@ pub const NA: usize = 1000; // records per 10 ms window
 pub const NB: usize = 100;
 pub const NC: usize = 10;
 const WIN_NS: u64 = 10_000_000;
+/// Most windows one group commit publishes at once.
+const MAX_GROUP: u64 = 16;
 const POLL: Duration = Duration::from_micros(100);
 
 fn env_u64(k: &str, d: u64) -> u64 {
@@ -173,6 +175,10 @@ pub struct Sink {
     pub want: [bool; 3],
     pub seen: [u64; 3],
     pub lags: Vec<f64>,
+    /// When each B window was first seen (`mono_ns`): every follower reads
+    /// B, so these are compared with when the writer made the window
+    /// durable.
+    pub b_seen_ns: Vec<u64>,
     pub inconsistent: u64,
     pub observations: u64,
     pub sum: u64,
@@ -238,7 +244,11 @@ impl Sink {
         self.done(2, t0);
     }
     fn done(&mut self, i: usize, t0: u64) {
-        self.lags.push((mono_ns().saturating_sub(t0)) as f64 / 1e6);
+        let now = mono_ns();
+        if i == 1 {
+            self.b_seen_ns.push(now);
+        }
+        self.lags.push((now.saturating_sub(t0)) as f64 / 1e6);
         self.seen[i] += 1;
     }
     /// Called after a poll that returned data: every wanted type must stand
@@ -413,19 +423,43 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
     let (mut npub, mut ndurable) = (0u64, 0u64);
     let durable_pub = |n: u64, k: u64| n % durable_every() == 0 || k + 1 == windows();
     // A writer error must not leave followers waiting forever.
+    // When each window became durable (`mono_ns`, 0 until then).
+    let mut durable_ns = vec![0u64; windows() as usize];
     let mut write = || -> Result<()> {
-        for k in 0..windows() {
-            if k % pubw() == 0 {
+        // Windows already waiting in the queues (group commit lookahead).
+        let (mut la, mut lb, mut lc) = (None, None, None);
+        let mut first = 0u64; // first window of the open publication
+        let mut k = 0u64;
+        while k < windows() {
+            if k == first {
                 let last = (k + pubw()).min(windows()) - 1;
                 w.will_publish(durable_pub(npub + 1, last));
             }
             let t = Timer::start();
-            let (a, b, c) = (ra.recv()?, rb.recv()?, rc.recv()?);
+            let a = match la.take() { Some(x) => x, None => ra.recv()? };
+            let b = match lb.take() { Some(x) => x, None => rb.recv()? };
+            let c = match lc.take() { Some(x) => x, None => rc.recv()? };
             t_wait += t.secs();
             let t = Timer::start();
             w.append(a, b, c)?;
             t_append += t.secs();
-            if (k + 1) % pubw() == 0 || k + 1 == windows() {
+            let in_pub = k + 1 - first;
+            let last = k + 1 == windows();
+            if in_pub % pubw() == 0 || last {
+                // Group commit: when the writer has fallen behind (the next
+                // window is already waiting), keep appending and publish the
+                // backlog once, instead of one barrier per late window. Never
+                // into the final window, whose publication is always durable,
+                // and at most MAX_GROUP windows per publication.
+                if !last && k + 2 < windows() && in_pub < MAX_GROUP {
+                    la = la.or_else(|| ra.try_recv().ok());
+                    lb = lb.or_else(|| rb.try_recv().ok());
+                    lc = lc.or_else(|| rc.try_recv().ok());
+                    if la.is_some() && lb.is_some() && lc.is_some() {
+                        k += 1;
+                        continue;
+                    }
+                }
                 npub += 1;
                 // The last publication is always durable.
                 let durable = durable_pub(npub, k);
@@ -433,7 +467,15 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
                 w.publish(durable)?;
                 pubs.push(t.secs() * 1e3);
                 ndurable += u64::from(durable);
+                if durable {
+                    let now = mono_ns();
+                    for d in &mut durable_ns[first as usize..=k as usize] {
+                        *d = now;
+                    }
+                }
+                first = k + 1;
             }
+            k += 1;
         }
         Ok(())
     };
@@ -467,6 +509,9 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
     m.set("publish_s", pubs.iter().sum::<f64>() / 1e3);
     m.set("publish_p50_ms", percentile(&pubs, 0.5));
     m.set("publish_p99_ms", percentile(&pubs, 0.99));
+    // Windows a follower saw before the writer had made them durable
+    // (checked when the loss bound is 0: everything seen must be durable).
+    let (mut early, mut early_seen, mut early_ms) = (0u64, 0u64, 0f64);
     // Per role: worst reader's lag percentiles, summed inconsistencies,
     // mean reader CPU, and decode throughput per reader CPU second.
     for role in ["all", "b"] {
@@ -476,6 +521,22 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
         for (i, r) in roles.iter().enumerate() {
             if *r != role {
                 continue;
+            }
+            if loss_ms() == 0 {
+                let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+                    dir.join(format!("mixed-{i}.json")),
+                )?)?;
+                for (w, seen_at) in v["b_seen_ns"].as_array().unwrap().iter().enumerate() {
+                    let seen_at = seen_at.as_u64().unwrap();
+                    let durable_at = durable_ns.get(w).copied().unwrap_or(0);
+                    if durable_at == 0 || seen_at < durable_at {
+                        early += 1;
+                        early_ms = early_ms.max(
+                            durable_at.saturating_sub(seen_at) as f64 / 1e6,
+                        );
+                    }
+                    early_seen += 1;
+                }
             }
             let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
                 dir.join(format!("mixed-{i}.json")),
@@ -515,6 +576,10 @@ pub fn run(fmt: &str, dir: &Path) -> Result<Metrics> {
         m.set(&format!("{role}_cpu_s"), cpu / n);
         m.set(&format!("{role}_MB_per_cpu_s"), bytes / (cpu / n) / 1e6);
         m.set(&format!("{role}_peak_rss_mb"), rss);
+    }
+    if loss_ms() == 0 {
+        m.set("seen_before_durable_frac", early as f64 / early_seen.max(1) as f64);
+        m.set("seen_before_durable_max_ms", early_ms);
     }
     m.set("all_readers", all_readers() as u64);
     m.set("verify", verify());
@@ -567,6 +632,7 @@ pub fn follower_main(fmt: &str, dir: &Path, role: &str, idx: usize) -> Result<()
         want,
         seen: [0; 3],
         lags: Vec::new(),
+        b_seen_ns: Vec::new(),
         inconsistent: 0,
         observations: 0,
         sum: 0,
@@ -582,7 +648,7 @@ pub fn follower_main(fmt: &str, dir: &Path, role: &str, idx: usize) -> Result<()
     }
     let cpu_s = process_cpu_s() - cpu0;
     std::hint::black_box(s.sum);
-    let out = serde_json::json!({ "lags": s.lags, "inconsistent": s.inconsistent, "observations": s.observations,
+    let out = serde_json::json!({ "lags": s.lags, "b_seen_ns": s.b_seen_ns, "inconsistent": s.inconsistent, "observations": s.observations,
         "cpu_s": cpu_s, "peak_rss_mb": peak_rss_mb() });
     std::fs::write(dir.join(format!("mixed-{idx}.json")), out.to_string())?;
     Ok(())

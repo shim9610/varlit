@@ -33,6 +33,7 @@ KEY = {
         ("write s", "write_s", 1, 1), ("MB", "bytes", 1e-6, 0)]),
     "mixed-live": ("mixed-live: the same in real time, 10 ms freshness, every window durable", [
         ("late windows %", "all_late_frac", 100, 2), ("B-only follower late %", "b_late_frac", 100, 2),
+        ("seen before durable %", "seen_before_durable_frac", 100, 2),
         ("inconsistent views", "all_inconsistent", 1, 0), ("publish p99 ms", "publish_p99_ms", 1, 2),
         ("MB", "bytes", 1e-6, 0)]),
     "cells": ("cells: fixed 1 KiB cells updated in place, 64 per atomic update, four followers", [
