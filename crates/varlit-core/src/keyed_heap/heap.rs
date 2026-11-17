@@ -229,10 +229,20 @@ impl KeyedHeap {
         self.raise(store)
     }
 
-    /// Ends the round when it has changed the budget's worth, and raises the
-    /// mark when freed pages have waited past the patience.
+    /// Ring room a round keeps for what it has not staged yet: the page
+    /// buffers, written back at publication. A round that would need more
+    /// ends first, so publications stay in the ring instead of streaming
+    /// into indexes appended to the file (which would grow it).
+    fn ring_reserve(&self) -> u64 {
+        let buffers = (super::nodes::SLOTS as u64 + 2) * (PAGE_BYTES + 64);
+        buffers.min(self.ring.ring_area() / 4)
+    }
+
+    /// Ends the round when it has changed the budget's worth or filled the
+    /// ring but the reserve, and raises the mark when freed pages have
+    /// waited past the patience.
     fn after_change(&mut self, store: &mut dyn TileStore) -> Result<()> {
-        if self.round_bytes >= self.fixed.budget {
+        if self.round_bytes >= self.fixed.budget || self.ring.ring_room() < self.ring_reserve() {
             return self.end_round(store);
         }
         if self.freed_waiting * PAGE_BYTES > self.patience() {

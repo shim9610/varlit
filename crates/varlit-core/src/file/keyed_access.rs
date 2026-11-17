@@ -12,8 +12,11 @@ use super::*;
 use crate::keyed_heap::heap::{KeyedHeap, Tuning};
 use crate::keyed_heap::reader::KeyedReader;
 
-/// The default write-ahead ring of a new file's keyed storage.
-const DEFAULT_RING_BYTES: u64 = 16 << 20;
+/// The default write-ahead ring of a new file's keyed storage. The ring is
+/// a fixed part of the file; the writer ends a round before a publication
+/// outgrows it, so a small ring costs more publications during bulk loads,
+/// not file space.
+const DEFAULT_RING_BYTES: u64 = 2 << 20;
 
 pub(super) enum KeyedEngine {
     Writer(Box<KeyedHeap>),

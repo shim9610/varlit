@@ -521,9 +521,11 @@ and `keyed_offset_chain`.
   changed. Overflow pages are written whole too: past their link, straight
   to the file when they were carved or freed by a generation already in
   place, else through the ring.
-- A round changes at most the change budget: past it the writer publishes
-  the round and raises the mark to it, so a `sync` that changes more is
-  several publications, each atomic.
+- A round changes at most the change budget, and ends before its
+  publication would take more than half the ring less room for the writer's
+  page buffers: past either, the writer publishes the round and raises the
+  mark to it, so a `sync` that changes more is several publications, each
+  atomic. The ring is 2 MiB unless the format declares another size.
 - `sync` publishes the staged changes as one generation; a writer that stops
   without one publishes nothing.
 - Pages freed by deleting most keys stay in the file for new keys to take;

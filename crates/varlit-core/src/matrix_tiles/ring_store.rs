@@ -529,6 +529,17 @@ impl RingStore {
         Ok(())
     }
 
+    /// Ring bytes the open generation may still take before the rest of it
+    /// streams into an index appended to the file.
+    pub(crate) fn ring_room(&self) -> u64 {
+        (self.ring.area() / 2).saturating_sub(self.open_ring_bytes)
+    }
+
+    /// The bytes of the ring's frame area.
+    pub(crate) const fn ring_area(&self) -> u64 {
+        self.ring.area()
+    }
+
     /// The newest generation in place: ranges staged in it or before are no
     /// longer in any overlay.
     pub(crate) const fn checkpointed(&self) -> u64 {

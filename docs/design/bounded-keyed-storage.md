@@ -318,6 +318,10 @@ table, inside varlit blocks.
 - **Changes go through the ring**: a changed page is staged whole, so a
   publication is atomic. Overflow pages no generation uses yet are written
   in place.
+- **The ring is small** (2 MiB by default, a fixed part of the file): a
+  round ends before its publication would outgrow half the ring and stream
+  into an index appended to the file, so bulk loads publish more often
+  instead of growing the file.
 - **Space.** Pages are kept at least half full (splits halve a page;
   merges join neighbours that fit one page), and freed pages are reused
   before the file grows. The strict free-space ratio of the earlier designs
