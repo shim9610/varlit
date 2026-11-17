@@ -6321,6 +6321,33 @@ fn encode_internal_key_payload_into<T>(
 where
     T: VarlitKeyedBlock,
 {
+    encode_key_envelope_into::<T>(spec, spec.endian, key, payload)
+}
+
+/// The key of a keyed-storage record: the internal key envelope with the
+/// declared key fields encoded big-endian, whatever the format's endian, so
+/// that byte order follows the order of unsigned key values and keys put in
+/// increasing order fill the B-tree's pages in order.
+fn encode_keyed_storage_key_into<T>(
+    spec: FormatSpec,
+    key: &T::Key,
+    payload: &mut Vec<u8>,
+) -> Result<()>
+where
+    T: VarlitKeyedBlock,
+{
+    encode_key_envelope_into::<T>(spec, Endian::Big, key, payload)
+}
+
+fn encode_key_envelope_into<T>(
+    spec: FormatSpec,
+    endian: Endian,
+    key: &T::Key,
+    payload: &mut Vec<u8>,
+) -> Result<()>
+where
+    T: VarlitKeyedBlock,
+{
     const ENVELOPE_LEN: u64 = 12;
     let logical_limit = spec
         .read_limits
@@ -6343,7 +6370,7 @@ where
     payload.extend_from_slice(&T::ID.to_le_bytes());
     payload.extend_from_slice(&[0; 8]);
     let mut encoder = crate::codec::Encoder::new_limited_appending(
-        spec.endian,
+        endian,
         key_limit,
         ReadLimitKey::LogicalPayloadLen.resource(),
         std::mem::take(payload),

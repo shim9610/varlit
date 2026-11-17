@@ -1,4 +1,6 @@
 //! Varlit keyed storage, one keyed record per account (key = account id),
+//! declared `fixed`: the record is the packed fields, with no per-field
+//! headers,
 //! in a format that declares `keyed_storage: in_place`: the same shape as
 //! SQLite's table. A transaction reads each touched account by key, puts it
 //! back with the new balance and `sync()`s; the library's B-tree changes the
@@ -17,7 +19,7 @@ varlit_format! {
         integrity: crc32_with_header;
         keyed_storage: in_place;
         blocks {
-            variable Account(id = 1, key = [id]) {
+            fixed Account(id = 1, key = [id]) {
                 id: u64,
                 branch: u32,
                 balance: i64,

@@ -124,7 +124,7 @@ impl VarlitFile {
         let endian = T::ENDIAN.unwrap_or(self.spec.endian);
         let mut buffer = std::mem::take(&mut self.record_buffer);
         let result = (|| {
-            encode_internal_key_payload_into::<T>(self.spec, &block.key(), &mut buffer)?;
+            encode_keyed_storage_key_into::<T>(self.spec, &block.key(), &mut buffer)?;
             let key_end = buffer.len();
             encode_logical_payload_limited_after(self.spec, block, endian, &mut buffer)?;
             let (key, payload) = buffer.split_at(key_end);
@@ -146,7 +146,7 @@ impl VarlitFile {
         self.ensure_user_block::<T>()?;
         let mut buffer = std::mem::take(&mut self.record_buffer);
         let result = (|| {
-            encode_internal_key_payload_into::<T>(self.spec, key, &mut buffer)?;
+            encode_keyed_storage_key_into::<T>(self.spec, key, &mut buffer)?;
             let key = &buffer[KEY_ENVELOPE..];
             self.with_keyed_writer(|heap, store| heap.delete(store, T::ID, key))
         })();
@@ -164,7 +164,7 @@ impl VarlitFile {
         let () = crate::traits::KeyedBlockContract::<T>::OK;
         self.require_keyed_storage()?;
         crate::collections::ensure_registered_block::<T>(self.spec)?;
-        encode_internal_key_payload_into::<T>(self.spec, key, scratch)?;
+        encode_keyed_storage_key_into::<T>(self.spec, key, scratch)?;
         let source = FileTilesRead(&self.file);
         match self.keyed_engine()? {
             KeyedEngine::Writer(heap) => {
@@ -187,7 +187,7 @@ impl VarlitFile {
                     scratch,
                     KEY_ENVELOPE,
                     max_payload,
-                    &mut |buf| encode_internal_key_payload_into::<T>(spec, key, buf),
+                    &mut |buf| encode_keyed_storage_key_into::<T>(spec, key, buf),
                 )?;
                 if !found {
                     return Ok(false);

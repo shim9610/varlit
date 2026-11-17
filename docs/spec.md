@@ -483,8 +483,11 @@ and `keyed_offset_chain`.
 
 ### The Tree (`VKLF`, `VKIN`)
 
-- A tree key is the block id (big-endian `u32`) then the record's key, so
-  byte order is (block, key) order.
+- A tree key is the block id (big-endian `u32`) then the record's declared
+  key fields, encoded big-endian whatever the format's endian. Byte order is
+  (block, key) order for unsigned key fields, so keys put in increasing
+  order fill pages in order. A signed key field orders negative values
+  after positive ones.
 - A tree page: link (16) | header (`magic b"VKLF"` for a leaf or `b"VKIN"`
   for an interior page `| count u16 | high u16 | garbage u16 | six zero
   bytes`) | `count` entries (`offset u16 | length u16`, sorted by key) from
